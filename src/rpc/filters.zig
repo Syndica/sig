@@ -54,8 +54,9 @@ pub const RpcFilterType = union(enum) {
         };
     }
 
-    /// Custom parser for RPC param path (`jsonParseValuesAsParamsArray` in `request.zig`
-    /// calls `std.json.innerParseFromValue`, which dispatches here).
+    /// The default std.json union parser rejects non-object values for void fields,
+    /// but Agave expects `{"tokenAccountState": null}` (serde unit type). We accept
+    /// any value here to be permissive, since only key presence matters for matching.
     /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L12-L18
     pub fn jsonParseFromValue(
         allocator: Allocator,
@@ -71,7 +72,8 @@ pub const RpcFilterType = union(enum) {
         if (obj.get("memcmp")) |val| {
             return .{ .memcmp = try Memcmp.jsonParseFromValue(allocator, val, options) };
         }
-        // [agave] The value for tokenAccountState is ignored — only key presence matters.
+        // [agave] Agave deserializes tokenAccountState as serde unit (`null` in JSON).
+        // We accept any value since only key presence matters for this filter.
         if (obj.contains("tokenAccountState")) {
             return .tokenAccountState;
         }
