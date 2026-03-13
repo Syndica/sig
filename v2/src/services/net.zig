@@ -15,6 +15,8 @@ pub const name = .net;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
+pub const ReadOnly = struct {};
+
 pub const ReadWrite = struct {
     pair: *Pair,
 
@@ -25,7 +27,7 @@ pub const ReadWrite = struct {
     obs_histogram_data: []u64,
 };
 
-pub fn serviceMain(rw: ReadWrite) !noreturn {
+pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     const obs_log_stream = &rw.obs_log_streams[rw.obs_startup.log_streams.fetchAdd(1, .release)];
     obs_log_stream.name.init(@tagName(name));
 
