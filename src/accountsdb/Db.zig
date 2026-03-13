@@ -49,7 +49,7 @@ pub fn initTest(allocator: std.mem.Allocator) !TestContext {
     var buffer: [std.fs.max_path_bytes + 1]u8 = undefined;
     const path = try std.fmt.bufPrintZ(&buffer, "{s}/accounts.db", .{tmp_path});
 
-    var rooted: Rooted = try .init(path, false);
+    var rooted: Rooted = try .init(path, false, false);
     errdefer rooted.deinit();
 
     const db: @This() = try .init(allocator, rooted);
@@ -222,6 +222,29 @@ pub fn ownerQuery(self: *Db, owner: *const Pubkey, ancestors: *const Ancestors) 
     }
 
     const rooted_iter = self.rooted.getByOwner(owner);
+    return .{
+        .rooted_iter = rooted_iter,
+        .unrooted_map = unrooted_map,
+        .allocator = self.allocator,
+    };
+}
+
+pub fn splTokenOwnerQuery(
+    self: *Db,
+    token_owner: *const Pubkey,
+    ancestors: *const Ancestors,
+) !OwnerQuery {
+    var unrooted_map = try self.unrooted.getBySplTokenOwner(
+        self.allocator,
+        token_owner.*,
+        ancestors,
+    );
+    errdefer {
+        for (unrooted_map.values()) |*entry| entry[1].deinit(self.allocator);
+        unrooted_map.deinit(self.allocator);
+    }
+
+    const rooted_iter = self.rooted.getBySplTokenOwner(token_owner);
     return .{
         .rooted_iter = rooted_iter,
         .unrooted_map = unrooted_map,
