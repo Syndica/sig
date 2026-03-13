@@ -70,27 +70,7 @@ pub const RuntimeTransaction = struct {
     accounts: std.MultiArrayList(AccountMeta) = .{},
     compute_budget_instruction_details: ComputeBudgetInstructionDetails = .{},
     num_lookup_tables: u64,
-
-    /// Check if this transaction is a simple vote transaction.
-    /// A simple vote transaction has:
-    /// - Exactly 1 instruction
-    /// - That instruction is a Vote program instruction
-    /// - 1 or 2 signatures
-    /// - No address lookup tables (legacy message)
-    pub fn isSimpleVoteTransaction(self: *const RuntimeTransaction) bool {
-        // Must have exactly 1 instruction
-        if (self.instructions.len != 1) return false;
-
-        // Must have 1 or 2 signatures
-        if (self.signature_count == 0 or self.signature_count > 2) return false;
-
-        // Must be a legacy message (no lookup tables)
-        if (self.num_lookup_tables > 0) return false;
-
-        // First instruction must be vote program
-        const instr = self.instructions[0];
-        return instr.program_meta.pubkey.equals(&sig.runtime.program.vote.ID);
-    }
+    is_simple_vote_transaction: bool,
 };
 
 pub const TransactionExecutionEnvironment = struct {
@@ -845,6 +825,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         }},
         .accounts = accounts,
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
 
     // Set a compute budget that is sufficient for the transaction to succeed

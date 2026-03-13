@@ -6,8 +6,23 @@ const sig = @import("../../sig.zig");
 const account_codec = sig.rpc.account_codec;
 const parse_token = account_codec.parse_token;
 
+const check_transactions = sig.runtime.check_transactions;
+const compute_budget = sig.runtime.program.compute_budget;
+
+const Base64Decoder = std.base64.standard.Decoder;
+const FeeBudgetLimits = check_transactions.FeeBudgetLimits;
+const ComputeBudgetLimits = compute_budget.ComputeBudgetLimits;
+const FeeDetails = check_transactions.FeeDetails;
+const SignatureCounts = check_transactions.SignatureCounts;
+const Message = sig.core.transaction.Message;
+const Version = sig.core.transaction.Version;
+const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
+const Signature = sig.core.Signature;
+const Slot = sig.core.Slot;
+
 const GetAccountInfo = sig.rpc.methods.GetAccountInfo;
 const GetBalance = sig.rpc.methods.GetBalance;
+const GetFeeForMessage = sig.rpc.methods.GetFeeForMessage;
 const GetTokenAccountBalance = sig.rpc.methods.GetTokenAccountBalance;
 const GetTokenSupply = sig.rpc.methods.GetTokenSupply;
 const GetMultipleAccounts = sig.rpc.methods.GetMultipleAccounts;
@@ -289,4 +304,155 @@ pub fn getMultipleAccounts(
         },
         .value = values,
     };
+}
+
+/// Get the fee the network will charge for a particular Message.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L4254-L4278
+pub fn getFeeForMessage(
+    self: AccountHookContext,
+    arena: std.mem.Allocator,
+    params: GetFeeForMessage,
+) !GetFeeForMessage.Response {
+    const config: GetFeeForMessage.Config = params.config orelse .{};
+    const commitment = config.commitment orelse .finalized;
+
+    const slot = self.slot_tracker.commitments.get(commitment);
+    if (config.minContextSlot) |min_slot| {
+        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+    }
+
+    const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    defer slot_ref.release();
+
+    // Decode base64-encoded message.
+    const decoded_len = Base64Decoder.calcSizeForSlice(params.message) catch
+        return error.InvalidBase64Encoding;
+    const decoded_bytes = try arena.alloc(u8, decoded_len);
+    Base64Decoder.decode(decoded_bytes, params.message) catch return error.InvalidBase64Encoding;
+
+    // Deserialize into a VersionedMessage.
+    var fbs = std.io.fixedBufferStream(decoded_bytes);
+    var peekable = sig.utils.io.peekableReader(fbs.reader());
+    const version = Version.deserialize(&peekable) catch return error.InvalidMessageFormat;
+    var limit_allocator = sig.bincode.LimitAllocator.init(
+        arena,
+        sig.core.Transaction.MAX_BYTES,
+    );
+    const message = Message.deserialize(&limit_allocator, peekable.reader(), version) catch
+        return error.InvalidMessageFormat;
+
+    const slot_account_reader = self.account_reader.forSlot(&slot_ref.constants().ancestors);
+
+    const empty_result: GetFeeForMessage.Response = .{
+        .context = .{ .slot = slot },
+        .value = null,
+    };
+
+    const runtime_txn = (messageToRuntimeTransaction(
+        arena,
+        message,
+        version,
+        slot_account_reader,
+        &slot_ref.constants().reserved_accounts,
+        slot,
+    ) catch return empty_result) orelse return empty_result;
+
+    // Look up lamports_per_signature from the blockhash queue, or from nonce account if durable nonce.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2732-L2741
+    const maybe_bq_lps: ?u64 = blk: {
+        const bq, var bq_guard = slot_ref.state().blockhash_queue.readWithLock();
+        defer bq_guard.unlock();
+        break :blk bq.getLamportsPerSignature(message.recent_blockhash);
+    };
+
+    const bq_lps = maybe_bq_lps orelse {
+        const nonce_result = check_transactions.loadMessageNonceAccount(
+            arena,
+            &runtime_txn,
+            slot_account_reader,
+        ) catch return empty_result;
+        if (nonce_result) |r| return .{
+            .context = .{ .slot = slot },
+            .value = r[2].lamports_per_signature,
+        };
+        return empty_result;
+    };
+
+    var fee_details: FeeDetails = FeeDetails.DEFAULT;
+    if (bq_lps != 0) {
+        const feature_set = &slot_ref.constants().feature_set;
+        const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
+
+        // [agave] process_compute_budget_instructions(message.program_instructions_iter(), &self.feature_set).unwrap_or_default()
+        // In Agave, execute+sanitize is a single call; on ANY error, ComputeBudgetLimits::default() is used.
+        var budget_limits = ComputeBudgetLimits.DEFAULT;
+        const details = compute_budget.execute(&message);
+        if (details == .ok) {
+            const sanitized = compute_budget.sanitize(details.ok, feature_set, slot);
+            if (sanitized == .ok) budget_limits = sanitized.ok;
+        }
+        const fee_budget_limits = FeeBudgetLimits.fromComputeBudgetLimits(budget_limits);
+        fee_details = FeeDetails.init(
+            SignatureCounts.fromTransaction(&runtime_txn),
+            5_000,
+            enable_secp256r1,
+            fee_budget_limits.prioritization_fee,
+            budget_limits.compute_unit_price,
+        );
+    }
+
+    return .{
+        .context = .{ .slot = slot },
+        .value = fee_details.total(),
+    };
+}
+
+/// Build a minimal Transaction from a Message for resolution (e.g. nonce lookup).
+/// Caller owns the returned transaction and must call deinit.
+///
+/// IMPORTANT: Signatures are zeroed because it's used only in getFeeForMessage
+/// and there only receives the message (unsigned transaction body)—
+/// the client asks for the fee before signing, so no real signatures
+/// exist. This has no downside: resolveTransaction and loadMessageNonceAccount only use
+/// the message structure (instructions, accounts, blockhash); they never verify or use
+/// the signature bytes. Signer checks use account metas (is_signer flags), not signature
+/// data.
+fn messageToRuntimeTransaction(
+    arena: std.mem.Allocator,
+    message: sig.core.transaction.Message,
+    version: sig.core.transaction.Version,
+    slot_account_reader: sig.accounts_db.SlotAccountReader,
+    reserved_accounts: *const sig.core.ReservedAccounts,
+    slot: Slot,
+) std.mem.Allocator.Error!?RuntimeTransaction {
+    const signatures = try arena.alloc(Signature, message.signature_count);
+    @memset(signatures, Signature.ZEROES);
+    const transaction: sig.core.Transaction = .{
+        .signatures = signatures,
+        .version = version,
+        .msg = message,
+    };
+
+    const slot_hashes = sig.replay.update_sysvar.getSysvarFromAccount(
+        sig.runtime.sysvar.SlotHashes,
+        arena,
+        slot_account_reader,
+    ) catch null orelse sig.runtime.sysvar.SlotHashes.INIT;
+
+    const resolved = sig.replay.resolve_lookup.resolveTransaction(arena, transaction, .{
+        .slot = slot,
+        .account_reader = slot_account_reader,
+        .reserved_accounts = reserved_accounts,
+        .slot_hashes = slot_hashes,
+    }) catch return null;
+
+    const msg_hash = Message.hash(
+        (message.serializeBounded(version) catch return null).constSlice(),
+    );
+    const runtime_txn = resolved.toRuntimeTransaction(
+        msg_hash,
+        .{},
+    );
+
+    return runtime_txn;
 }

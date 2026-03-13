@@ -132,6 +132,20 @@ pub const Client = struct {
         return self.fetch(.null, .getGenesisHash, request);
     }
 
+    pub fn getInflationGovernor(
+        self: *Client,
+        request: rpc.methods.GetInflationGovernor,
+    ) Error!Response(rpc.methods.GetInflationGovernor.Response) {
+        return self.fetch(.null, .getInflationGovernor, request);
+    }
+
+    pub fn getInflationRate(
+        self: *Client,
+        request: rpc.methods.GetInflationRate,
+    ) Error!Response(rpc.methods.GetInflationRate.Response) {
+        return self.fetch(.null, .getInflationRate, request);
+    }
+
     pub fn getLatestBlockhash(
         self: *Client,
         request: rpc.methods.GetLatestBlockhash,
@@ -146,6 +160,13 @@ pub const Client = struct {
         return self.fetch(.null, .getLeaderSchedule, request);
     }
 
+    pub fn getMinimumBalanceForRentExemption(
+        self: *Client,
+        request: rpc.methods.GetMinimumBalanceForRentExemption,
+    ) Error!Response(rpc.methods.GetMinimumBalanceForRentExemption.Response) {
+        return self.fetch(.null, .getMinimumBalanceForRentExemption, request);
+    }
+
     pub fn getSignatureStatuses(
         self: *Client,
         request: rpc.methods.GetSignatureStatuses,
@@ -158,6 +179,27 @@ pub const Client = struct {
         request: rpc.methods.GetSlot,
     ) Error!Response(rpc.methods.GetSlot.Response) {
         return self.fetch(.null, .getSlot, request);
+    }
+
+    pub fn getSlotLeader(
+        self: *Client,
+        request: rpc.methods.GetSlotLeader,
+    ) Error!Response(rpc.methods.GetSlotLeader.Response) {
+        return self.fetch(.null, .getSlotLeader, request);
+    }
+
+    pub fn getSlotLeaders(
+        self: *Client,
+        request: rpc.methods.GetSlotLeaders,
+    ) Error!Response(rpc.methods.GetSlotLeaders.Response) {
+        return self.fetch(.null, .getSlotLeaders, request);
+    }
+
+    pub fn getStakeMinimumDelegation(
+        self: *Client,
+        request: rpc.methods.GetStakeMinimumDelegation,
+    ) Error!Response(rpc.methods.GetStakeMinimumDelegation.Response) {
+        return self.fetch(.null, .getStakeMinimumDelegation, request);
     }
 
     pub fn getTransaction(

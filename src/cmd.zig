@@ -1680,6 +1680,9 @@ fn validator(
     else
         null;
 
+    var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
+    defer prioritization_fee_cache.deinit(allocator);
+
     const rpc_enabled = cfg.rpc_port != null;
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
@@ -1693,6 +1696,7 @@ fn validator(
         .voting_enabled = voting_enabled,
         .vote_account_address = maybe_vote_pubkey,
         .stop_at_slot = cfg.stop_at_slot,
+        .prioritization_fee_cache = &prioritization_fee_cache,
         .rpc_enabled = rpc_enabled,
     });
     defer replay_service_state.deinit(allocator);
@@ -1700,11 +1704,14 @@ fn validator(
     if (rpc_enabled) {
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+            .my_shred_version = &gossip_service.my_shred_version,
             .epoch_tracker = &epoch_tracker,
         });
 
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
             .ledger = &ledger,
+            .epoch_tracker = &epoch_tracker,
             .status_cache = &replay_service_state.replay_state.status_cache,
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
             .block_commitment_cache = &replay_service_state.replay_state.block_commitment_cache.?,
@@ -1714,6 +1721,11 @@ fn validator(
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
             .account_reader = replay_service_state.replay_state.account_store.reader(),
         });
+
+        try app_base.rpc_hooks.set(
+            allocator,
+            sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
+        );
     }
 
     const replay_thread = try replay_service_state.spawnService(
@@ -2231,10 +2243,11 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
             const response = try rpc_client.getLeaderSchedule(.{ .slot = slot });
             defer response.deinit();
 
-            const rpc_schedule = (try response.result()).value;
+            const rpc_schedule = (try response.result()) orelse
+                return error.LeaderScheduleNotAvailable;
             break :blk try sig.core.leader_schedule.computeFromMap(
                 allocator,
-                &rpc_schedule,
+                &rpc_schedule.value,
             );
         };
         break :b leader_schedule;
@@ -2673,15 +2686,6 @@ fn startGossip(
     try app_base.rpc_hooks.set(allocator, struct {
         info: ContactInfo,
 
-        pub fn getHealth(
-            _: @This(),
-            _: std.mem.Allocator,
-            _: anytype,
-        ) !sig.rpc.methods.GetHealth.Response {
-            // TODO: more intricate
-            return .ok;
-        }
-
         pub fn getIdentity(
             self: @This(),
             _: std.mem.Allocator,
@@ -2746,6 +2750,7 @@ const ReplayAndConsensusServiceState = struct {
             voting_enabled: bool,
             vote_account_address: ?Pubkey,
             stop_at_slot: ?Slot,
+            prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
             rpc_enabled: bool,
         },
     ) !ReplayAndConsensusServiceState {
@@ -2804,6 +2809,7 @@ const ReplayAndConsensusServiceState = struct {
                     .hard_forks = hard_forks,
                     .replay_threads = params.replay_threads,
                     .stop_at_slot = params.stop_at_slot,
+                    .prioritization_fee_cache = params.prioritization_fee_cache,
                 },
                 if (params.disable_consensus) .disabled else .enabled,
                 if (params.rpc_enabled) .enabled else .disabled,
@@ -3078,10 +3084,10 @@ const RpcLeaderScheduleService = struct {
     ) !LeaderSchedule {
         const response = try self.rpc_client.getLeaderSchedule(.{ .slot = slot });
         defer response.deinit();
-        const rpc_schedule = (try response.result()).value;
+        const rpc_schedule = (try response.result()) orelse return error.LeaderScheduleNotAvailable;
         var leaders = try sig.core.leader_schedule.computeFromMap(
             self.allocator,
-            &rpc_schedule,
+            &rpc_schedule.value,
         );
         const epoch = epoch_schedule.getEpoch(slot);
         leaders.start = epoch_schedule.getFirstSlotInEpoch(epoch);

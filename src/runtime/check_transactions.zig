@@ -159,6 +159,7 @@ pub fn checkFeePayer(
         5_000,
         enable_secp256r1,
         fee_budget_limits.prioritization_fee,
+        compute_budget_limits.compute_unit_price,
     );
 
     if (validateFeePayer(
@@ -204,7 +205,7 @@ pub fn checkFeePayer(
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/dad81b9b2ecf81ceb518dd9f7cc91e83ba33bda8/fee/src/lib.rs#L85
-const SignatureCounts = struct {
+pub const SignatureCounts = struct {
     num_transaction_signatures: u64,
     num_ed25519_signatures: u64,
     num_secp256k1_signatures: u64,
@@ -225,7 +226,7 @@ const SignatureCounts = struct {
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/eb416825349ca376fa13249a0267cf7b35701938/svm-transaction/src/svm_message.rs#L139
-    fn fromTransaction(transaction: *const RuntimeTransaction) SignatureCounts {
+    pub fn fromTransaction(transaction: *const RuntimeTransaction) SignatureCounts {
         const precompiles = sig.runtime.program.precompiles;
 
         return .{
@@ -240,14 +241,22 @@ const SignatureCounts = struct {
 pub const FeeDetails = struct {
     transaction_fee: u64,
     prioritization_fee: u64,
+    /// The compute unit price in micro-lamports per compute unit.
+    /// Used by PrioritizationFeeCache to track per-slot minimum fees for RPC queries.
+    compute_unit_price: u64,
 
-    const DEFAULT: FeeDetails = .{ .transaction_fee = 0, .prioritization_fee = 0 };
+    pub const DEFAULT: FeeDetails = .{
+        .transaction_fee = 0,
+        .prioritization_fee = 0,
+        .compute_unit_price = 0,
+    };
 
-    fn init(
+    pub fn init(
         sig_counts: SignatureCounts,
         lamports_per_signature: u64,
         enable_secp256r1: bool,
         prioritization_fee: u64,
+        compute_unit_price: u64,
     ) FeeDetails {
         return .{
             .transaction_fee = calculateSignatureFee(
@@ -256,6 +265,7 @@ pub const FeeDetails = struct {
                 enable_secp256r1,
             ),
             .prioritization_fee = prioritization_fee,
+            .compute_unit_price = compute_unit_price,
         };
     }
 
@@ -278,7 +288,7 @@ pub const FeeDetails = struct {
     }
 };
 
-const FeeBudgetLimits = struct {
+pub const FeeBudgetLimits = struct {
     /// non-zero
     loaded_accounts_data_size_limit: u32,
     heap_cost: u64,
@@ -298,7 +308,7 @@ const FeeBudgetLimits = struct {
         ) orelse std.math.maxInt(u64);
     }
 
-    fn fromComputeBudgetLimits(val: ComputeBudgetLimits) FeeBudgetLimits {
+    pub fn fromComputeBudgetLimits(val: ComputeBudgetLimits) FeeBudgetLimits {
         const prioritization_fee = getPrioritizationFee(
             val.compute_unit_price,
             val.compute_unit_limit,
@@ -419,7 +429,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
     };
 }
 
-fn loadMessageNonceAccount(
+pub fn loadMessageNonceAccount(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     account_reader: SlotAccountReader,
@@ -548,6 +558,7 @@ test "checkAge: recent blockhash" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
 
     var blockhash_queue = try BlockhashQueue.initWithSingleEntry(
@@ -684,6 +695,7 @@ test "checkAge: nonce account" {
         }},
         .accounts = accounts,
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
 
     var blockhash_queue = BlockhashQueue{
@@ -750,6 +762,7 @@ test "checkFeePayer: happy path fee payer only" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
     defer transaction.accounts.deinit(allocator);
 
@@ -806,6 +819,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
     defer transaction.accounts.deinit(allocator);
 
@@ -874,6 +888,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
     };
     defer transaction.accounts.deinit(allocator);
 

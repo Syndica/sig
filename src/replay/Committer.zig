@@ -12,7 +12,6 @@ const Logger = sig.trace.Logger("replay.committer");
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
-const Transaction = sig.core.Transaction;
 
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 
@@ -42,6 +41,8 @@ replay_votes_sender: ?*Channel(ParsedVote),
 ledger: ?*Ledger,
 /// Account store for looking up accounts (e.g. mint accounts for token balance resolution)
 account_store: ?SlotAccountStore,
+/// Cache for tracking per-slot prioritization fees for RPC queries
+prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
 
 pub fn commitTransactions(
     self: Committer,
@@ -79,6 +80,19 @@ pub fn commitTransactions(
         transaction_fees += tx_result.fees.transaction_fee;
         priority_fees += tx_result.fees.prioritization_fee;
 
+        const is_simple_vote_tx = transaction.transaction.isSimpleVoteTransaction(
+            transaction.instructions,
+        );
+
+        // Update prioritization fee cache for non-vote transactions
+        if (self.prioritization_fee_cache) |cache| if (!is_simple_vote_tx) try cache.update(
+            persistent_allocator,
+            slot,
+            tx_result.fees.compute_unit_price,
+            transaction.accounts.items(.pubkey),
+            transaction.accounts.items(.is_writable),
+        );
+
         // TODO: fix nesting, this sucks
 
         if (tx_result.outputs != null) {
@@ -87,7 +101,7 @@ pub fn commitTransactions(
             // Skip non successful or non vote transactions.
             // Only send votes if consensus is enabled (sender exists)
             if (self.replay_votes_sender) |sender| {
-                if (tx_result.err == null and isSimpleVoteTransaction(transaction.transaction)) {
+                if (tx_result.err == null and is_simple_vote_tx) {
                     if (try parseSanitizedVoteTransaction(
                         persistent_allocator,
                         transaction,
@@ -427,11 +441,3 @@ const FallbackAccountReader = struct {
         return null;
     }
 };
-
-fn isSimpleVoteTransaction(tx: Transaction) bool {
-    const msg = tx.msg;
-    if (msg.instructions.len == 0) return false;
-    const ix = msg.instructions[0];
-    if (ix.program_index >= msg.account_keys.len) return false;
-    return sig.runtime.program.vote.ID.equals(&msg.account_keys[ix.program_index]);
-}

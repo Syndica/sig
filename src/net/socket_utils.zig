@@ -535,16 +535,19 @@ test "batched sends multiple messages to different addresses" {
     const allocator = std.testing.allocator;
 
     var send_sock = try UdpSocket.create(.ipv4);
-    try send_sock.bindToPort(48278);
+    try send_sock.bindToPort(0);
     defer send_sock.close();
 
     var recv1_sock = try UdpSocket.create(.ipv4);
-    try recv1_sock.bindToPort(48279);
+    try recv1_sock.bindToPort(0);
     defer recv1_sock.close();
 
     var recv2_sock = try UdpSocket.create(.ipv4);
-    try recv2_sock.bindToPort(48280);
+    try recv2_sock.bindToPort(0);
     defer recv2_sock.close();
+
+    const recv1_addr: sig.net.SocketAddr = .initAddress(try recv1_sock.getLocalEndPoint());
+    const recv2_addr: sig.net.SocketAddr = .initAddress(try recv2_sock.getLocalEndPoint());
 
     var chan = try Channel(Packet).init(std.testing.allocator);
     defer chan.deinit();
@@ -564,14 +567,14 @@ test "batched sends multiple messages to different addresses" {
     try chan.send(.{
         .buffer = @splat(1),
         .size = 1,
-        .addr = try .parse("127.0.0.1:48279"),
+        .addr = recv1_addr,
         .flags = .{},
     });
 
     try chan.send(.{
         .buffer = @splat(2),
         .size = 1,
-        .addr = try .parse("127.0.0.1:48280"),
+        .addr = recv2_addr,
         .flags = .{},
     });
 

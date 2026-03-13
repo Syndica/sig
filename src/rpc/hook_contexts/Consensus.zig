@@ -8,21 +8,32 @@ const common = sig.rpc.methods.common;
 const Slot = sig.core.Slot;
 const SlotRef = sig.replay.trackers.SlotTracker.Reference;
 const Commitment = common.Commitment;
-const ClientVersion = sig.version.ClientVersion;
 const BlockhashQueue = sig.core.blockhash_queue.BlockhashQueue;
+const ClientVersion = sig.version.ClientVersion;
 
 const GetSlot = sig.rpc.methods.GetSlot;
+const GetSlotLeader = sig.rpc.methods.GetSlotLeader;
+const GetSlotLeaders = sig.rpc.methods.GetSlotLeaders;
+const GetLeaderSchedule = sig.rpc.methods.GetLeaderSchedule;
 const GetBlockHeight = sig.rpc.methods.GetBlockHeight;
 const GetTransactionCount = sig.rpc.methods.GetTransactionCount;
 const GetHighestSnapshotSlot = sig.rpc.methods.GetHighestSnapshotSlot;
 const GetEpochInfo = sig.rpc.methods.GetEpochInfo;
+const GetEpochSchedule = sig.rpc.methods.GetEpochSchedule;
 const GetLatestBlockhash = sig.rpc.methods.GetLatestBlockhash;
+const GetMinimumBalanceForRentExemption = sig.rpc.methods.GetMinimumBalanceForRentExemption;
+const GetStakeMinimumDelegation = sig.rpc.methods.GetStakeMinimumDelegation;
 const GetVoteAccounts = sig.rpc.methods.GetVoteAccounts;
+const GetClusterNodes = sig.rpc.methods.GetClusterNodes;
+const GetInflationGovernor = sig.rpc.methods.GetInflationGovernor;
+const GetInflationRate = sig.rpc.methods.GetInflationRate;
 const IsBlockhashValid = sig.rpc.methods.IsBlockhashValid;
 
 const ConsensusHookContext = @This();
 
 slot_tracker: *sig.replay.trackers.SlotTracker,
+gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable) = null,
+my_shred_version: ?*const std.atomic.Value(u16) = null,
 epoch_tracker: *sig.core.EpochTracker,
 
 /// Resolves commitment and minContextSlot config to a slot number.
@@ -58,6 +69,78 @@ fn resolveSlot(
 pub fn getSlot(self: ConsensusHookContext, _: std.mem.Allocator, params: GetSlot) !GetSlot.Response {
     const config: common.CommitmentSlotConfig = params.config orelse .{};
     return self.resolveCommitmentSlot(config.commitment, config.minContextSlot);
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L968-L971
+pub fn getSlotLeader(
+    self: ConsensusHookContext,
+    _: std.mem.Allocator,
+    params: GetSlotLeader,
+) !GetSlotLeader.Response {
+    const config: common.CommitmentSlotConfig = params.config orelse .{};
+    const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
+    defer resolved.ref.release();
+    return resolved.ref.constants().collector_id;
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L973-L1007
+pub fn getSlotLeaders(
+    self: ConsensusHookContext,
+    arena: std.mem.Allocator,
+    params: GetSlotLeaders,
+) !GetSlotLeaders.Response {
+    if (params.limit > GetSlotLeaders.MAX_GET_SLOT_LEADERS) {
+        return error.InvalidParams;
+    }
+
+    var leader_schedules_with_infos = try self.epoch_tracker.getLeaderSchedules();
+    defer leader_schedules_with_infos.release();
+
+    const leaders = try arena.alloc(sig.core.Pubkey, params.limit);
+
+    const leader_schedules = &leader_schedules_with_infos.leader_schedules;
+    for (0..params.limit) |i| {
+        const slot = params.start_slot +| i; // saturating add to avoid UB
+        leaders[i] = try leader_schedules.getLeader(slot);
+    }
+
+    return leaders;
+}
+
+/// Returns the leader schedule for an epoch, keyed by validator identity.
+/// [agave] RPC trait: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2767-L2773
+/// [agave] Implementation (get_epoch_leader_schedule + leader_schedule_by_identity):
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2904-L2936
+pub fn getLeaderSchedule(
+    self: ConsensusHookContext,
+    arena: std.mem.Allocator,
+    params: GetLeaderSchedule,
+) !GetLeaderSchedule.Response {
+    const config: GetLeaderSchedule.Config = params.config orelse .{};
+
+    const maybe_filter_identity: ?sig.core.Pubkey = if (config.identity) |identity_str|
+        sig.core.Pubkey.parseRuntime(identity_str) catch return error.InvalidParams
+    else
+        null;
+
+    const slot: Slot = params.slot orelse try self.resolveCommitmentSlot(
+        config.commitment,
+        null,
+    );
+
+    var leader_schedules_infos = self.epoch_tracker.getLeaderSchedules() catch return null;
+    defer leader_schedules_infos.release();
+
+    const schedule = leader_schedules_infos.leader_schedules.getLeaderScheduleForSlot(
+        slot,
+    ) orelse return null;
+
+    const value = try sig.core.leader_schedule.leaderScheduleByIdentity(
+        arena,
+        schedule,
+        maybe_filter_identity,
+    );
+    return .{ .value = value };
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L955-L958
@@ -272,22 +355,12 @@ pub fn isBlockhashValid(
     params: IsBlockhashValid,
 ) !IsBlockhashValid.Response {
     const config = params.config orelse common.CommitmentSlotConfig{};
-    // [agave] Default commitment is finalized:
-    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
-    const commitment = config.commitment orelse .finalized;
-
-    const slot = self.slot_tracker.commitments.get(commitment);
-    if (config.minContextSlot) |min_slot| {
-        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
-
-    // Get slot reference to access blockhash queue
-    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-    defer ref.release();
+    const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
+    defer resolved.ref.release();
 
     // Check if blockhash is valid for processing
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2714
-    const blockhash_queue, var bhq_lg = ref.state().blockhash_queue.readWithLock();
+    const blockhash_queue, var bhq_lg = resolved.ref.state().blockhash_queue.readWithLock();
     defer bhq_lg.unlock();
 
     const is_valid = blockhash_queue.isHashValidForAge(
@@ -297,9 +370,245 @@ pub fn isBlockhashValid(
 
     return .{
         .context = .{
-            .slot = slot,
+            .slot = resolved.slot,
         },
         .value = is_valid,
+    };
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2791-L2799
+pub fn getInflationGovernor(
+    self: ConsensusHookContext,
+    _: std.mem.Allocator,
+    params: GetInflationGovernor,
+) !GetInflationGovernor.Response {
+    const config: GetInflationGovernor.Config = params.config orelse .{};
+    const resolved = try self.resolveSlot(config.commitment, null);
+    defer resolved.ref.release();
+
+    const inflation = &resolved.ref.constants().inflation;
+
+    return .{
+        .initial = inflation.initial,
+        .terminal = inflation.terminal,
+        .taper = inflation.taper,
+        .foundation = inflation.foundation,
+        .foundationTerm = inflation.foundation_term,
+    };
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v2.1.6/rpc/src/rpc.rs#L897-909
+pub fn getInflationRate(
+    self: ConsensusHookContext,
+    _: std.mem.Allocator,
+    _: GetInflationRate,
+) !GetInflationRate.Response {
+    // Agave uses bank(None) which means default commitment (finalized)
+    const resolved = try self.resolveSlot(.finalized, null);
+    defer resolved.ref.release();
+
+    const epoch = self.epoch_tracker.epoch_schedule.getEpoch(resolved.slot);
+    const slots_per_year = self.epoch_tracker.cluster.slotsPerYear();
+
+    const slot_in_years = sig.replay.rewards.inflation_rewards.getSlotInYearsForInflation(
+        resolved.slot,
+        epoch,
+        slots_per_year,
+        &resolved.ref.constants().feature_set,
+        &self.epoch_tracker.epoch_schedule,
+    );
+
+    const inflation = &resolved.ref.constants().inflation;
+
+    return .{
+        .total = inflation.total(slot_in_years),
+        .validator = inflation.validatorRate(slot_in_years),
+        .foundation = inflation.foundationRate(slot_in_years),
+        .epoch = epoch,
+    };
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3634-3695
+pub fn getClusterNodes(
+    self: ConsensusHookContext,
+    arena: std.mem.Allocator,
+    _: GetClusterNodes,
+) !GetClusterNodes.Response {
+    const gossip_table_rw = self.gossip_table_rw orelse
+        return error.GossipTableNotAvailable;
+    const my_shred_version_atomic = self.my_shred_version orelse
+        return error.ShredVersionNotAvailable;
+
+    const my_shred_version = my_shred_version_atomic.load(.monotonic);
+
+    const gossip_table, var gossip_lock = gossip_table_rw.readWithLock();
+    defer gossip_lock.unlock();
+
+    var contact_info_iter = gossip_table.contactInfoIterator(0);
+    var result_list: std.ArrayList(common.RpcContactInfo) = .empty;
+
+    while (contact_info_iter.next()) |contact_info| {
+        if (try contactInfoToRpc(
+            arena,
+            contact_info,
+            gossip_table,
+            my_shred_version,
+        )) |rpc_contact_info| {
+            try result_list.append(arena, rpc_contact_info);
+        }
+    }
+
+    return try result_list.toOwnedSlice(arena);
+}
+
+/// Converts a gossip ContactInfo into RpcContactInfo. Returns null if the contact
+/// should be skipped (shred version mismatch or invalid gossip address).
+fn contactInfoToRpc(
+    arena: std.mem.Allocator,
+    contact_info: *const sig.gossip.ContactInfo,
+    gossip_table: *const sig.gossip.GossipTable,
+    my_shred_version: u16,
+) !?common.RpcContactInfo {
+    // Filter by matching shred version (exclude spy nodes with shred_version 0)
+    // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3643
+    if (contact_info.shred_version != my_shred_version) return null;
+
+    // Check that gossip address is valid (not unspecified)
+    // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3644-3647
+    const gossip_addr = contact_info.getSocket(.gossip);
+    if (gossip_addr == null or gossip_addr.?.isUnspecified()) return null;
+
+    var rpc_contact_info = common.RpcContactInfo{
+        .pubkey = try std.fmt.allocPrint(
+            arena,
+            "{s}",
+            .{contact_info.pubkey.base58String().slice()},
+        ),
+    };
+
+    // Get version info for this node from the gossip table
+    // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3649-3655
+    if (gossip_table.get(.{ .Version = contact_info.pubkey })) |version_data| {
+        const v = version_data.data.Version.version;
+        rpc_contact_info.version = try std.fmt.allocPrint(
+            arena,
+            "{d}.{d}.{d}",
+            .{ v.major, v.minor, v.patch },
+        );
+        rpc_contact_info.featureSet = v.feature_set;
+    }
+
+    rpc_contact_info.shredVersion = my_shred_version;
+    rpc_contact_info.gossip = try formatSocketAddr(arena, gossip_addr);
+    rpc_contact_info.tvu = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.turbine_recv),
+    );
+    rpc_contact_info.tpu = try formatSocketAddr(arena, contact_info.getSocket(.tpu));
+    rpc_contact_info.tpuQuic = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.tpu_quic),
+    );
+    rpc_contact_info.tpuForwards = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.tpu_forwards),
+    );
+    rpc_contact_info.tpuForwardsQuic = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.tpu_forwards_quic),
+    );
+    rpc_contact_info.tpuVote = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.tpu_vote),
+    );
+    rpc_contact_info.serveRepair = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.serve_repair),
+    );
+    rpc_contact_info.rpc = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.rpc),
+    );
+    rpc_contact_info.pubsub = try formatSocketAddr(
+        arena,
+        contact_info.getSocket(.rpc_pubsub),
+    );
+
+    return rpc_contact_info;
+}
+
+fn formatSocketAddr(arena: std.mem.Allocator, addr: ?sig.net.SocketAddr) !?[]const u8 {
+    const socket_addr = addr orelse return null;
+    if (socket_addr.isUnspecified()) return null;
+    return try std.fmt.allocPrint(arena, "{f}", .{socket_addr.toAddress()});
+}
+
+/// Returns the minimum balance required to make account with given data length rent exempt.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L590-L597
+pub fn getMinimumBalanceForRentExemption(
+    self: ConsensusHookContext,
+    _: std.mem.Allocator,
+    params: GetMinimumBalanceForRentExemption,
+) !GetMinimumBalanceForRentExemption.Response {
+    // Validate data_len doesn't exceed maximum allowed account size
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3003-L3004
+    if (params.data_len > sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH) {
+        return error.InvalidRequest;
+    }
+
+    const config = params.config orelse common.CommitmentSlotConfig{};
+    const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
+    defer resolved.ref.release();
+    const rent = resolved.ref.constants().rent_collector.rent;
+
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2719-L2720
+    // minimum_balance returns 0 for empty accounts, but agave returns max(1, min_balance)
+    return @max(1, rent.minimumBalance(params.data_len));
+}
+
+/// Returns the stake minimum delegation, in lamports.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2377-L2384
+pub fn getStakeMinimumDelegation(
+    self: ConsensusHookContext,
+    _: std.mem.Allocator,
+    params: GetStakeMinimumDelegation,
+) !GetStakeMinimumDelegation.Response {
+    const config = params.config orelse common.CommitmentSlotConfig{};
+    const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
+    defer resolved.ref.release();
+    const feature_set = &resolved.ref.constants().feature_set;
+
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2379-L2382
+    const stake_minimum_delegation = sig.runtime.program.stake.getMinimumDelegation(
+        resolved.slot,
+        feature_set,
+    );
+
+    return .{
+        .context = .{
+            .slot = resolved.slot,
+            .apiVersion = ClientVersion.API_VERSION,
+        },
+        .value = stake_minimum_delegation,
+    };
+}
+
+/// Returns the epoch schedule information from this cluster's genesis config.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L911-L916
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3023-L3026
+pub fn getEpochSchedule(
+    self: ConsensusHookContext,
+    _: std.mem.Allocator,
+    _: GetEpochSchedule,
+) !GetEpochSchedule.Response {
+    const epoch_schedule = &self.epoch_tracker.epoch_schedule;
+
+    return .{
+        .slotsPerEpoch = epoch_schedule.slots_per_epoch,
+        .leaderScheduleSlotOffset = epoch_schedule.leader_schedule_slot_offset,
+        .warmup = epoch_schedule.warmup,
+        .firstNormalEpoch = epoch_schedule.first_normal_epoch,
+        .firstNormalSlot = epoch_schedule.first_normal_slot,
     };
 }
 
@@ -340,33 +649,37 @@ fn testSetupSlotTracker(
     });
 }
 
-fn testRpcHookContext(slot_tracker: *sig.replay.trackers.SlotTracker) ConsensusHookContext {
+fn testConsensusHookContext(slot_tracker: *sig.replay.trackers.SlotTracker) ConsensusHookContext {
     return .{
         .slot_tracker = slot_tracker,
+        .gossip_table_rw = null,
+        .my_shred_version = null,
         .epoch_tracker = undefined, // not used by getBlockHeight/getTransactionCount/getHighestSnapshotSlot
     };
 }
 
-fn testRpcHookContextWithEpochTracker(
+fn testConsensusHookContextWithEpochTracker(
     slot_tracker: *sig.replay.trackers.SlotTracker,
     epoch_tracker: *sig.core.EpochTracker,
 ) ConsensusHookContext {
     return .{
         .slot_tracker = slot_tracker,
+        .gossip_table_rw = null,
+        .my_shred_version = null,
         .epoch_tracker = epoch_tracker,
     };
 }
 
-test "RpcHookContext.getBlockHeight - returns block height for finalized slot" {
+test "ConsensusHookContext.getBlockHeight - returns block height for finalized slot" {
     var slot_tracker = try testSetupSlotTracker(42, 100, 0);
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testRpcHookContext(&slot_tracker);
+    const ctx = testConsensusHookContext(&slot_tracker);
     const result = try ctx.getBlockHeight(testing.allocator, .{});
     try testing.expectEqual(@as(u64, 100), result);
 }
 
-test "RpcHookContext.getBlockHeight - respects commitment level" {
+test "ConsensusHookContext.getBlockHeight - respects commitment level" {
     var slot_tracker = try testSetupSlotTracker(10, 50, 0);
     defer slot_tracker.deinit(testing.allocator);
 
@@ -378,7 +691,7 @@ test "RpcHookContext.getBlockHeight - respects commitment level" {
     });
     slot_tracker.latest_processed_slot.set(15);
 
-    const ctx = testRpcHookContext(&slot_tracker);
+    const ctx = testConsensusHookContext(&slot_tracker);
 
     // Finalized (default) should return root slot's block height
     const finalized_result = try ctx.getBlockHeight(testing.allocator, .{});
@@ -391,11 +704,11 @@ test "RpcHookContext.getBlockHeight - respects commitment level" {
     try testing.expectEqual(@as(u64, 55), processed_result);
 }
 
-test "RpcHookContext.getBlockHeight - minContextSlot enforcement" {
+test "ConsensusHookContext.getBlockHeight - minContextSlot enforcement" {
     var slot_tracker = try testSetupSlotTracker(10, 50, 0);
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testRpcHookContext(&slot_tracker);
+    const ctx = testConsensusHookContext(&slot_tracker);
 
     // minContextSlot <= current slot should succeed
     const result = try ctx.getBlockHeight(testing.allocator, .{
@@ -410,27 +723,98 @@ test "RpcHookContext.getBlockHeight - minContextSlot enforcement" {
     try testing.expectError(error.RpcMinContextSlotNotMet, err);
 }
 
-test "RpcHookContext.getBlockHeight - slot not available" {
+test "ConsensusHookContext.getBlockHeight - slot not available" {
     var slot_tracker: sig.replay.trackers.SlotTracker = try .initEmpty(testing.allocator, 10);
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testRpcHookContext(&slot_tracker);
+    const ctx = testConsensusHookContext(&slot_tracker);
 
     // Root slot is 10 but no Element was inserted for it
     const err = ctx.getBlockHeight(testing.allocator, .{});
     try testing.expectError(error.SlotNotAvailable, err);
 }
 
-test "RpcHookContext.getTransactionCount - returns transaction count for finalized slot" {
+test "ConsensusHookContext.getSlotLeader - returns collector_id for slot" {
+    var slot_tracker = try testSetupSlotTracker(42, 100, 0);
+    defer slot_tracker.deinit(testing.allocator);
+
+    const ctx = testConsensusHookContext(&slot_tracker);
+    const result = try ctx.getSlotLeader(testing.allocator, .{});
+    try testing.expect(result.equals(&sig.core.Pubkey.ZEROES));
+}
+
+test "ConsensusHookContext.getSlotLeader - slot not available" {
+    var slot_tracker: sig.replay.trackers.SlotTracker = try .initEmpty(testing.allocator, 10);
+    defer slot_tracker.deinit(testing.allocator);
+
+    const ctx = testConsensusHookContext(&slot_tracker);
+    const err = ctx.getSlotLeader(testing.allocator, .{});
+    try testing.expectError(error.SlotNotAvailable, err);
+}
+
+test "ConsensusHookContext.getSlotLeaders - limit exceeds max returns InvalidParams" {
+    var slot_tracker = try testSetupSlotTracker(42, 100, 0);
+    defer slot_tracker.deinit(testing.allocator);
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        testing.allocator,
+        std.crypto.random,
+        42,
+        sig.core.epoch_schedule.EpochSchedule.INIT,
+    );
+    defer epoch_tracker.deinit();
+
+    const ctx = testConsensusHookContextWithEpochTracker(&slot_tracker, &epoch_tracker);
+    const err = ctx.getSlotLeaders(testing.allocator, .{
+        .start_slot = 0,
+        .limit = GetSlotLeaders.MAX_GET_SLOT_LEADERS + 1,
+    });
+    try testing.expectError(error.InvalidParams, err);
+}
+
+test "ConsensusHookContext.getLeaderSchedule - invalid identity returns InvalidParams" {
+    var slot_tracker = try testSetupSlotTracker(42, 100, 0);
+    defer slot_tracker.deinit(testing.allocator);
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        testing.allocator,
+        std.crypto.random,
+        42,
+        sig.core.epoch_schedule.EpochSchedule.INIT,
+    );
+    defer epoch_tracker.deinit();
+
+    const ctx = testConsensusHookContextWithEpochTracker(&slot_tracker, &epoch_tracker);
+    const err = ctx.getLeaderSchedule(testing.allocator, .{
+        .config = .{ .identity = "invalid" },
+    });
+    try testing.expectError(error.InvalidParams, err);
+}
+
+test "ConsensusHookContext.getLeaderSchedule - slot in far future returns null" {
+    var slot_tracker = try testSetupSlotTracker(42, 100, 0);
+    defer slot_tracker.deinit(testing.allocator);
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        testing.allocator,
+        std.crypto.random,
+        42,
+        sig.core.epoch_schedule.EpochSchedule.INIT,
+    );
+    defer epoch_tracker.deinit();
+
+    const ctx = testConsensusHookContextWithEpochTracker(&slot_tracker, &epoch_tracker);
+    const result = try ctx.getLeaderSchedule(testing.allocator, .{ .slot = 42424242 });
+    try testing.expectEqual(@as(?GetLeaderSchedule.LeaderScheduleValue, null), result);
+}
+
+test "ConsensusHookContext.getTransactionCount - returns transaction count for finalized slot" {
     var slot_tracker = try testSetupSlotTracker(42, 0, 999_999);
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testRpcHookContext(&slot_tracker);
+    const ctx = testConsensusHookContext(&slot_tracker);
     const result = try ctx.getTransactionCount(testing.allocator, .{});
     try testing.expectEqual(@as(u64, 999_999), result);
 }
 
-test "RpcHookContext.getTransactionCount - respects commitment level" {
+test "ConsensusHookContext.getTransactionCount - respects commitment level" {
     var slot_tracker = try testSetupSlotTracker(10, 0, 1000);
     defer slot_tracker.deinit(testing.allocator);
 
@@ -442,7 +826,7 @@ test "RpcHookContext.getTransactionCount - respects commitment level" {
     });
     slot_tracker.latest_processed_slot.set(15);
 
-    const ctx = testRpcHookContext(&slot_tracker);
+    const ctx = testConsensusHookContext(&slot_tracker);
 
     // Finalized (default) should return root slot's transaction count
     const finalized_result = try ctx.getTransactionCount(testing.allocator, .{});
@@ -455,11 +839,11 @@ test "RpcHookContext.getTransactionCount - respects commitment level" {
     try testing.expectEqual(@as(u64, 2000), processed_result);
 }
 
-test "RpcHookContext.getTransactionCount - minContextSlot enforcement" {
+test "ConsensusHookContext.getTransactionCount - minContextSlot enforcement" {
     var slot_tracker = try testSetupSlotTracker(10, 0, 1000);
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testRpcHookContext(&slot_tracker);
+    const ctx = testConsensusHookContext(&slot_tracker);
 
     // minContextSlot <= current slot should succeed
     const result = try ctx.getTransactionCount(testing.allocator, .{
@@ -474,25 +858,25 @@ test "RpcHookContext.getTransactionCount - minContextSlot enforcement" {
     try testing.expectError(error.RpcMinContextSlotNotMet, err);
 }
 
-test "RpcHookContext.getTransactionCount - slot not available" {
+test "ConsensusHookContext.getTransactionCount - slot not available" {
     var slot_tracker: sig.replay.trackers.SlotTracker = try .initEmpty(testing.allocator, 10);
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testRpcHookContext(&slot_tracker);
+    const ctx = testConsensusHookContext(&slot_tracker);
     const err = ctx.getTransactionCount(testing.allocator, .{});
     try testing.expectError(error.SlotNotAvailable, err);
 }
 
-test "RpcHookContext.getHighestSnapshotSlot - returns null" {
+test "ConsensusHookContext.getHighestSnapshotSlot - returns null" {
     var slot_tracker = try testSetupSlotTracker(0, 0, 0);
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testRpcHookContext(&slot_tracker);
+    const ctx = testConsensusHookContext(&slot_tracker);
     const result = try ctx.getHighestSnapshotSlot(testing.allocator, .{});
     try testing.expectEqual(@as(?GetHighestSnapshotSlot.SnapshotSlotInfo, null), result);
 }
 
-test "RpcHookContext.getEpochInfo - returns epoch info for finalized slot" {
+test "ConsensusHookContext.getEpochInfo - returns epoch info for finalized slot" {
     // Use a non-warmup schedule with 32 slots per epoch for simple math.
     const epoch_schedule: sig.core.epoch_schedule.EpochSchedule = .custom(.{
         .slots_per_epoch = 32,
@@ -506,7 +890,7 @@ test "RpcHookContext.getEpochInfo - returns epoch info for finalized slot" {
     var slot_tracker = try testSetupSlotTracker(42, 100, 5000);
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testRpcHookContextWithEpochTracker(&slot_tracker, &epoch_tracker);
+    const ctx = testConsensusHookContextWithEpochTracker(&slot_tracker, &epoch_tracker);
     const result = try ctx.getEpochInfo(testing.allocator, .{});
 
     try testing.expectEqual(@as(u64, 42), result.absoluteSlot);
@@ -517,7 +901,7 @@ test "RpcHookContext.getEpochInfo - returns epoch info for finalized slot" {
     try testing.expectEqual(@as(u64, 5000), result.transactionCount);
 }
 
-test "RpcHookContext.getEpochInfo - respects commitment level" {
+test "ConsensusHookContext.getEpochInfo - respects commitment level" {
     const epoch_schedule: sig.core.epoch_schedule.EpochSchedule = .custom(.{
         .slots_per_epoch = 32,
         .leader_schedule_slot_offset = 32,
@@ -536,7 +920,7 @@ test "RpcHookContext.getEpochInfo - respects commitment level" {
     });
     slot_tracker.latest_processed_slot.set(35);
 
-    const ctx = testRpcHookContextWithEpochTracker(&slot_tracker, &epoch_tracker);
+    const ctx = testConsensusHookContextWithEpochTracker(&slot_tracker, &epoch_tracker);
 
     // Finalized (default) returns root slot's info (slot 10, epoch 0)
     const finalized = try ctx.getEpochInfo(testing.allocator, .{});
@@ -555,7 +939,7 @@ test "RpcHookContext.getEpochInfo - respects commitment level" {
     try testing.expectEqual(@as(u64, 2000), processed.transactionCount);
 }
 
-test "RpcHookContext.getEpochInfo - minContextSlot enforcement" {
+test "ConsensusHookContext.getEpochInfo - minContextSlot enforcement" {
     const epoch_schedule: sig.core.epoch_schedule.EpochSchedule = .custom(.{
         .slots_per_epoch = 32,
         .leader_schedule_slot_offset = 32,
@@ -566,7 +950,7 @@ test "RpcHookContext.getEpochInfo - minContextSlot enforcement" {
     var slot_tracker = try testSetupSlotTracker(10, 50, 1000);
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testRpcHookContextWithEpochTracker(&slot_tracker, &epoch_tracker);
+    const ctx = testConsensusHookContextWithEpochTracker(&slot_tracker, &epoch_tracker);
 
     // minContextSlot <= current slot should succeed
     const result = try ctx.getEpochInfo(testing.allocator, .{
@@ -581,7 +965,7 @@ test "RpcHookContext.getEpochInfo - minContextSlot enforcement" {
     try testing.expectError(error.RpcMinContextSlotNotMet, err);
 }
 
-test "RpcHookContext.getEpochInfo - slot not available" {
+test "ConsensusHookContext.getEpochInfo - slot not available" {
     const epoch_schedule: sig.core.epoch_schedule.EpochSchedule = .custom(.{
         .slots_per_epoch = 32,
         .leader_schedule_slot_offset = 32,
@@ -592,12 +976,12 @@ test "RpcHookContext.getEpochInfo - slot not available" {
     var slot_tracker: sig.replay.trackers.SlotTracker = try .initEmpty(testing.allocator, 10);
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testRpcHookContextWithEpochTracker(&slot_tracker, &epoch_tracker);
+    const ctx = testConsensusHookContextWithEpochTracker(&slot_tracker, &epoch_tracker);
     const err = ctx.getEpochInfo(testing.allocator, .{});
     try testing.expectError(error.SlotNotAvailable, err);
 }
 
-test "RpcHookContext.getLatestBlockhash - returns blockhash and last valid block height" {
+test "ConsensusHookContext.getLatestBlockhash - returns blockhash and last valid block height" {
     var state = testDummySlotState(5000);
     // Insert a hash into the blockhash queue
     const test_hash = sig.core.Hash.ZEROES;
@@ -616,7 +1000,7 @@ test "RpcHookContext.getLatestBlockhash - returns blockhash and last valid block
     });
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testRpcHookContext(&slot_tracker);
+    const ctx = testConsensusHookContext(&slot_tracker);
     const result = try ctx.getLatestBlockhash(testing.allocator, .{});
     defer testing.allocator.free(result.value.blockhash);
 
@@ -634,21 +1018,21 @@ test "RpcHookContext.getLatestBlockhash - returns blockhash and last valid block
     try testing.expectEqual(@as(u64, 250), result.value.lastValidBlockHeight);
 }
 
-test "RpcHookContext.getLatestBlockhash - no blockhash available" {
+test "ConsensusHookContext.getLatestBlockhash - no blockhash available" {
     // Default SlotState has no last_hash (null)
     var slot_tracker = try testSetupSlotTracker(42, 100, 0);
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testRpcHookContext(&slot_tracker);
+    const ctx = testConsensusHookContext(&slot_tracker);
     const err = ctx.getLatestBlockhash(testing.allocator, .{});
     try testing.expectError(error.SlotNotAvailable, err);
 }
 
-test "RpcHookContext.getLatestBlockhash - minContextSlot enforcement" {
+test "ConsensusHookContext.getLatestBlockhash - minContextSlot enforcement" {
     var slot_tracker = try testSetupSlotTracker(10, 50, 0);
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testRpcHookContext(&slot_tracker);
+    const ctx = testConsensusHookContext(&slot_tracker);
 
     // minContextSlot > current slot should fail
     const err = ctx.getLatestBlockhash(testing.allocator, .{
@@ -657,11 +1041,11 @@ test "RpcHookContext.getLatestBlockhash - minContextSlot enforcement" {
     try testing.expectError(error.RpcMinContextSlotNotMet, err);
 }
 
-test "RpcHookContext.getLatestBlockhash - slot not available" {
+test "ConsensusHookContext.getLatestBlockhash - slot not available" {
     var slot_tracker: sig.replay.trackers.SlotTracker = try .initEmpty(testing.allocator, 10);
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testRpcHookContext(&slot_tracker);
+    const ctx = testConsensusHookContext(&slot_tracker);
     const err = ctx.getLatestBlockhash(testing.allocator, .{});
     try testing.expectError(error.SlotNotAvailable, err);
 }

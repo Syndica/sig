@@ -15,9 +15,7 @@ pub fn hashRewardsIntoPartitions(
     parent_blockhash: *const Hash,
     num_partitions: usize,
 ) ![][]const usize {
-    const key: [SipHasher13.key_length]u8 = @splat(0);
-    var seeded_hasher = SipHasher13.init(&key);
-    _ = try seeded_hasher.writer().write(&parent_blockhash.data);
+    const seeded_hasher = initHasher(parent_blockhash);
 
     var indices = try allocator.alloc(std.ArrayListUnmanaged(usize), num_partitions);
     for (indices) |*list| list.* = std.ArrayListUnmanaged(usize).empty;
@@ -27,9 +25,11 @@ pub fn hashRewardsIntoPartitions(
     }
 
     for (stake_rewards, 0..) |reward, index| {
-        var hasher = seeded_hasher;
-        _ = try hasher.writer().write(&reward.stake_pubkey.data);
-        const partition_index = hashToPartition(hasher.finalInt(), num_partitions);
+        const partition_index = hashAddressToPartition(
+            seeded_hasher,
+            &reward.stake_pubkey,
+            num_partitions,
+        );
         try indices[partition_index].append(allocator, index);
     }
 
@@ -39,6 +39,25 @@ pub fn hashRewardsIntoPartitions(
     }
 
     return result;
+}
+
+pub fn initHasher(parent_blockhash: *const Hash) SipHasher13 {
+    const key: [SipHasher13.key_length]u8 = @splat(0);
+    var seeded_hasher = SipHasher13.init(&key);
+    seeded_hasher.update(&parent_blockhash.data);
+    return seeded_hasher;
+}
+
+/// Hashes a pubkey address into a partition index using a pre-seeded hasher.
+/// The hasher should be initialized with the parent blockhash via `initHasher`.
+pub fn hashAddressToPartition(
+    hasher: SipHasher13,
+    address: *const Pubkey,
+    num_partitions: usize,
+) usize {
+    var seeded_hasher = hasher;
+    seeded_hasher.update(&address.data);
+    return hashToPartition(seeded_hasher.finalInt(), num_partitions);
 }
 
 fn hashToPartition(hash: u128, partitions: u128) usize {
@@ -94,6 +113,15 @@ test hashRewardsIntoPartitions {
 
         try std.testing.expectEqual(expected_num, total_hashed);
     }
+}
+
+test hashAddressToPartition {
+    const seed = Hash.parse("4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM");
+    const seeded_hasher = initHasher(&seed);
+    const address = Pubkey.parse("1113eKEmP3gmGaNeoKSVoYwPpyfTmrmizMbi1TqGj2");
+
+    const partition = hashAddressToPartition(seeded_hasher, &address, 10);
+    try std.testing.expectEqual(3, partition);
 }
 
 test hashToPartition {
