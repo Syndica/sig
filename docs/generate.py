@@ -57,6 +57,7 @@ if __name__ == "__main__":
         src_path + "docs", # dont search yourself
         src_path + "data", # this should only include data
         src_path + "conformance/env", # other repositories
+        src_path + "workspace", # CI workspace (e.g. zig toolchain), not source
     ]
 
     for src_path, docs_path in get_markdown_files(src_path, exclude_dirs, code_docs_path):
