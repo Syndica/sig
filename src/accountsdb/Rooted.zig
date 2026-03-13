@@ -113,6 +113,11 @@ pub fn count(self: *const Rooted) u64 {
     return @intCast(sql.sqlite3_column_int64(stmt, 0));
 }
 
+pub const AccountWithModifiedSlot = struct {
+    account: AccountSharedData,
+    modified_slot: Slot,
+};
+
 /// Returns `null` if no such account exists.
 ///
 /// The `data` field in the returned `AccountSharedData` is owned by the caller and is allocated
@@ -125,6 +130,15 @@ pub fn get(
     allocator: std.mem.Allocator,
     address: Pubkey,
 ) error{OutOfMemory}!?AccountSharedData {
+    const result = try self.getWithModifiedSlot(allocator, address) orelse return null;
+    return result.account;
+}
+
+pub fn getWithModifiedSlot(
+    self: *Rooted,
+    allocator: std.mem.Allocator,
+    address: Pubkey,
+) error{OutOfMemory}!?AccountWithModifiedSlot {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.get" });
     defer zone.deinit();
 
@@ -136,7 +150,7 @@ pub fn get(
 
     const stmt: *sql.sqlite3_stmt = if (get_stmt) |stmt| stmt else blk: {
         const query =
-            \\SELECT lamports, data, owner, executable, rent_epoch 
+            \\SELECT lamports, data, owner, executable, rent_epoch, last_modified_slot 
             \\FROM entries WHERE address = ?;
         ;
         self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_stmt, null));
@@ -168,11 +182,14 @@ pub fn get(
     const owner: Pubkey = .{ .data = owner_ptr[0..32].* };
 
     return .{
-        .lamports = @bitCast(sql.sqlite3_column_int64(stmt, 0)),
-        .data = duped,
-        .owner = owner,
-        .executable = sql.sqlite3_column_int(stmt, 3) != 0,
-        .rent_epoch = @bitCast(sql.sqlite3_column_int64(stmt, 4)),
+        .account = .{
+            .lamports = @bitCast(sql.sqlite3_column_int64(stmt, 0)),
+            .data = duped,
+            .owner = owner,
+            .executable = sql.sqlite3_column_int(stmt, 3) != 0,
+            .rent_epoch = @bitCast(sql.sqlite3_column_int64(stmt, 4)),
+        },
+        .modified_slot = @bitCast(sql.sqlite3_column_int64(stmt, 5)),
     };
 }
 
