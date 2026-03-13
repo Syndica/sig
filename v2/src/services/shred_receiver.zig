@@ -26,12 +26,7 @@ pub const std_options = start.options;
 
 pub const ReadWrite = struct {
     pair: *Pair,
-
-    obs_startup: *obs.Startup,
-    obs_log_streams: []obs.log.MessageStream,
-    obs_id_mem: []u8,
-    obs_gauges: []std.atomic.Value(u64),
-    obs_histogram_data: []u64,
+    obs: obs.Regions,
 };
 
 pub const ReadOnly = struct {
@@ -44,31 +39,14 @@ const stub_shred_version: Atomic(u16) = .{ .raw = 29062 }; // TODO: port over ge
 const stub_max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
-    const logger: obs.Logger("main") = .{
-        .sink = .{ .ring = sink: {
-            const obs_log_stream_index = rw.obs_startup.log_streams.fetchAdd(1, .release);
-            const obs_log_stream = &rw.obs_log_streams[obs_log_stream_index];
-            obs_log_stream.name.init(@tagName(name));
-            break :sink &obs_log_stream.ring;
-        } },
-        .max_level = rw.obs_startup.max_log_level,
-    };
+    const logger = rw.obs.acquireLogger(@tagName(name), "main");
 
     {
-        const metric_appender: obs.MetricAppender = .{
-            .id_mem = rw.obs_id_mem,
-            .id_mem_end = &rw.obs_startup.id_mem_end,
-
-            .gauges = rw.obs_gauges,
-            .gauges_end = &rw.obs_startup.gauges_end,
-
-            .histogram_data = rw.obs_histogram_data,
-            .histogram_data_end = &rw.obs_startup.histogram_data_end,
-        };
+        const metric_appender = rw.obs.metricAppender();
         _ = metric_appender;
     }
 
-    rw.obs_startup.signalReady();
+    rw.obs.signalReady();
 
     logger.info().logf("Waiting for shreds on port {}", .{rw.pair.port});
 

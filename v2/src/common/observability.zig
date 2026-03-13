@@ -7,17 +7,50 @@ comptime {
     _ = log;
 }
 
-pub const ReadWrite = struct {
+/// This comprises all the regions exposed by observability for other services to write to.
+pub const Regions = struct {
+    startup: *Startup,
+    log_streams: []log.MessageStream,
+    id_mem: []u8,
+    /// NOTE: Some of these are actually `f64`s.
+    gauges: []std.atomic.Value(u64),
     /// NOTE: some of these actually represent floats, and `std.atomic.Value(T)`s.
     histogram_data: []u64,
-    log_streams: []log.MessageStream,
-};
 
-pub const ReadOnly = struct {
-    startup: *const Startup,
-    id_mem: []const u8,
-    /// NOTE: Some of these are actually `f64`s.
-    gauges: []const std.atomic.Value(u64),
+    /// A service should call this when they want to signal to the observability service
+    /// that it has acquired a logger stream, and has registered all desired metrics.
+    pub fn signalReady(self: Regions) void {
+        std.debug.assert(self.startup.pending_services.fetchSub(1, .release) != 0);
+    }
+
+    pub fn acquireLogger(
+        self: Regions,
+        /// Assumes `str.len <= log.MessageStream.Name.MAX_LEN`.
+        name: []const u8,
+        comptime scope: []const u8,
+    ) Logger(scope) {
+        const obs_log_stream_index = self.startup.log_streams.fetchAdd(1, .release);
+        const stream = &self.log_streams[obs_log_stream_index];
+        stream.name.init(name);
+        return .{
+            .sink = .{ .ring = &stream.ring },
+            .max_level = self.startup.max_log_level,
+        };
+    }
+
+    /// Low-level helper for registering metrics.
+    pub fn metricAppender(self: Regions) MetricAppender {
+        return .{
+            .id_mem = self.id_mem,
+            .id_mem_end = &self.startup.id_mem_end,
+
+            .gauges = self.gauges,
+            .gauges_end = &self.startup.gauges_end,
+
+            .histogram_data = self.histogram_data,
+            .histogram_data_end = &self.startup.histogram_data_end,
+        };
+    }
 };
 
 /// Data that's only relevant during startup.
@@ -68,12 +101,6 @@ pub const Startup = extern struct {
             .histogram_data_end = .init(0),
             .log_streams = .init(0),
         };
-    }
-
-    /// A service should call this when they want to signal to the observability service
-    /// that it has acquired a logger stream, and has registered all desired metrics.
-    pub fn signalReady(self: *Startup) void {
-        std.debug.assert(self.pending_services.fetchSub(1, .release) != 0);
     }
 };
 

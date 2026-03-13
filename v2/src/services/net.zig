@@ -19,39 +19,18 @@ pub const ReadOnly = struct {};
 
 pub const ReadWrite = struct {
     pair: *Pair,
-
-    obs_startup: *obs.Startup,
-    obs_log_streams: []obs.log.MessageStream,
-    obs_id_mem: []u8,
-    obs_gauges: []std.atomic.Value(u64),
-    obs_histogram_data: []u64,
+    obs: obs.Regions,
 };
 
 pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
-    const obs_log_stream = &rw.obs_log_streams[rw.obs_startup.log_streams.fetchAdd(1, .release)];
-    obs_log_stream.name.init(@tagName(name));
+    const logger = rw.obs.acquireLogger(@tagName(name), "main");
 
-    const metric_appender: obs.MetricAppender = .{
-        .id_mem = rw.obs_id_mem,
-        .id_mem_end = &rw.obs_startup.id_mem_end,
-
-        .gauges = rw.obs_gauges,
-        .gauges_end = &rw.obs_startup.gauges_end,
-
-        .histogram_data = rw.obs_histogram_data,
-        .histogram_data_end = &rw.obs_startup.histogram_data_end,
-    };
+    const metric_appender = rw.obs.metricAppender();
     _ = metric_appender;
 
-    rw.obs_startup.signalReady();
+    rw.obs.signalReady();
 
-    try mainInner(
-        .{
-            .sink = .{ .ring = &obs_log_stream.ring },
-            .max_level = rw.obs_startup.max_log_level,
-        },
-        &.{rw.pair},
-    );
+    try mainInner(logger, &.{rw.pair});
 }
 
 const MAX_SOCKETS = 10;

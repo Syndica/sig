@@ -14,8 +14,19 @@ comptime {
 pub const name = .observability;
 pub const panic = start.panic;
 pub const std_options = start.options;
-pub const ReadOnly = api.ReadOnly;
-pub const ReadWrite = api.ReadWrite;
+
+pub const ReadWrite = struct {
+    /// NOTE: some of these actually represent floats, and `std.atomic.Value(T)`s.
+    histogram_data: []u64,
+    log_streams: []api.log.MessageStream,
+};
+
+pub const ReadOnly = struct {
+    startup: *const api.Startup,
+    id_mem: []const u8,
+    /// NOTE: Some of these are actually `f64`s.
+    gauges: []const std.atomic.Value(u64),
+};
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var dba_state: std.heap.DebugAllocator(.{}) = .init;
