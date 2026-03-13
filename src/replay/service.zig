@@ -903,7 +903,7 @@ test "Service clean init and deinit" {
             var dep_stubs = try DependencyStubs.init(allocator, .noop);
             defer dep_stubs.deinit();
 
-            var service = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
+            var service = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .disabled);
             defer {
                 service.deinit();
                 service.epoch_tracker.deinit();
@@ -915,6 +915,23 @@ test "Service clean init and deinit" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, ns.run, .{});
 }
 
+test "Service clean init and deinit with RPC enabled" {
+    const allocator = std.testing.allocator;
+
+    var dep_stubs = try DependencyStubs.init(allocator, .noop);
+    defer dep_stubs.deinit();
+
+    var service = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .enabled);
+    defer {
+        service.deinit();
+        service.epoch_tracker.deinit();
+        allocator.destroy(service.epoch_tracker);
+    }
+
+    // block_commitment_cache should be initialised when rpc_status is .enabled.
+    try std.testing.expect(service.block_commitment_cache != null);
+}
+
 test "process runs without error with no replay results" {
     const allocator = std.testing.allocator;
 
@@ -924,7 +941,7 @@ test "process runs without error with no replay results" {
     var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
     defer dep_stubs.deinit();
 
-    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
+    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .disabled);
     defer {
         replay_state.deinit();
         replay_state.epoch_tracker.deinit();
@@ -989,7 +1006,7 @@ test "advance calls consensus.process with empty replay results" {
     var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
     defer dep_stubs.deinit();
 
-    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
+    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .disabled);
     defer {
         replay_state.deinit();
         replay_state.epoch_tracker.deinit();
@@ -1033,7 +1050,11 @@ test "freezeCompletedSlots handles errors correctly" {
     var dep_stubs = try DependencyStubs.init(allocator, .from(logger.logger("", .warn)));
     defer dep_stubs.deinit();
 
-    var replay_state = try dep_stubs.stubbedState(allocator, .from(logger.logger("", .warn)));
+    var replay_state = try dep_stubs.stubbedState(
+        allocator,
+        .from(logger.logger("", .warn)),
+        .disabled,
+    );
     defer {
         replay_state.deinit();
         replay_state.epoch_tracker.deinit();
@@ -1283,6 +1304,7 @@ pub const DependencyStubs = struct {
         self: *DependencyStubs,
         allocator: Allocator,
         logger: Logger,
+        rpc_status: RPCStatus,
     ) !ReplayState {
         const root_slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
         errdefer root_slot_constants.deinit(allocator);
@@ -1334,7 +1356,7 @@ pub const DependencyStubs = struct {
 
             .replay_threads = 1,
             .stop_at_slot = null,
-        }, .enabled, .disabled);
+        }, .enabled, rpc_status);
     }
 
     // TODO: consider deduplicating with above and similar function in cmd.zig

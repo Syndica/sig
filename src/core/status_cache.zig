@@ -340,6 +340,32 @@ test "status cache getStatusAnyBlockhash finds with root" {
     );
 }
 
+test "status cache getStatusAnyBlockhash returns null when fork does not match" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const signature = sig.core.Signature.ZEROES;
+    const blockhash = Hash.ZEROES;
+
+    // Ancestors contain slot 99, but the entry is stored at slot 5.
+    var ancestors: Ancestors = .{
+        .ancestors = try HashMap(Slot, void).init(allocator, &.{99}, &.{}),
+    };
+    defer ancestors.ancestors.deinit(allocator);
+
+    var status_cache: StatusCache = .DEFAULT;
+    defer status_cache.deinit(allocator);
+
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 5, null);
+
+    // Stored fork (slot 5) is neither in ancestors nor roots → should return null.
+    try std.testing.expectEqual(
+        null,
+        status_cache.getStatusAnyBlockhash(&signature.toBytes(), &ancestors),
+    );
+}
+
 test "status cache find with ancestor fork" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);

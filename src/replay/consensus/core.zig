@@ -1915,7 +1915,7 @@ test "processResult and handleDuplicateConfirmedFork" {
     var stubs = try replay.service.DependencyStubs.init(allocator, .FOR_TESTS);
     defer stubs.deinit();
 
-    var replay_state = try stubs.stubbedState(allocator, .FOR_TESTS);
+    var replay_state = try stubs.stubbedState(allocator, .FOR_TESTS, .disabled);
     defer {
         replay_state.deinit();
         replay_state.epoch_tracker.deinit();
@@ -4958,7 +4958,7 @@ test "edge cases - duplicate slot" {
     var dep_stubs: sig.replay.service.DependencyStubs = try .init(gpa, .FOR_TESTS);
     defer dep_stubs.deinit();
 
-    var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
+    var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS, .disabled);
     defer {
         replay_state.deinit();
         replay_state.epoch_tracker.deinit();
@@ -5138,7 +5138,7 @@ test "edge cases - duplicate confirmed slot" {
     var dep_stubs: sig.replay.service.DependencyStubs = try .init(gpa, .FOR_TESTS);
     defer dep_stubs.deinit();
 
-    var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
+    var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS, .disabled);
     defer {
         replay_state.deinit();
         replay_state.epoch_tracker.deinit();
@@ -5319,7 +5319,7 @@ test "edge cases - gossip verified vote hashes" {
     var dep_stubs: sig.replay.service.DependencyStubs = try .init(gpa, .FOR_TESTS);
     defer dep_stubs.deinit();
 
-    var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS);
+    var replay_state = try dep_stubs.stubbedState(gpa, .FOR_TESTS, .disabled);
     defer {
         replay_state.deinit();
         replay_state.epoch_tracker.deinit();
@@ -7772,4 +7772,98 @@ test "loadTower handles invalid vote state" {
     const result = loadTower(allocator, .noop, .{ .account_map = &account_map }, vote_pubkey);
 
     try std.testing.expectError(error.BincodeError, result);
+}
+
+test "process populates block commitment cache when provided" {
+    const gpa = std.testing.allocator;
+
+    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(gpa);
+    defer registry.deinit();
+
+    var stubs = try sig.replay.service.DependencyStubs.init(gpa, .noop);
+    defer stubs.deinit();
+
+    const root_slot: Slot = 0;
+    const root_consts = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
+    var root_state: sig.core.SlotState = .GENESIS;
+
+    root_state.hash.set(Hash.ZEROES);
+    {
+        var bhq = root_state.blockhash_queue.write();
+        defer bhq.unlock();
+        try bhq.mut().insertGenesisHash(gpa, root_state.hash.readCopy().?, 0);
+    }
+
+    var slot_tracker = try SlotTracker.init(
+        gpa,
+        root_slot,
+        .{
+            .allocator = gpa,
+            .constants = root_consts,
+            .state = root_state,
+        },
+    );
+    defer slot_tracker.deinit(gpa);
+
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        gpa,
+        &.{.EMPTY_WITH_GENESIS},
+    );
+    defer epoch_tracker.deinit();
+
+    var progress = sig.consensus.ProgressMap.INIT;
+    defer progress.deinit(gpa);
+    {
+        const fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
+        try progress.map.put(gpa, root_slot, fork_progress0);
+    }
+
+    var consensus = try TowerConsensus.init(gpa, .{
+        .logger = .noop,
+        .identity = .{
+            .vote_account = null,
+            .validator = .initRandom(prng),
+        },
+        .signing = .{
+            .node = null,
+            .authorized_voters = &.{},
+        },
+        .account_reader = stubs.accountReader(),
+        .ledger = &stubs.ledger,
+        .slot_tracker = &slot_tracker,
+        .now = .EPOCH_ZERO,
+        .registry = &registry,
+    });
+    defer consensus.deinit(gpa);
+
+    var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
+    defer duplicate_confirmed_slots.deinit(gpa);
+
+    var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
+    defer gossip_verified_vote_hashes.deinit(gpa);
+
+    var block_commitment_cache: sig.replay.trackers.BlockCommitmentCache = .DEFAULT;
+    defer block_commitment_cache.deinit(gpa);
+
+    try consensus.process(gpa, .{
+        .account_store = stubs.accountStore(),
+        .ledger = &stubs.ledger,
+        .gossip_votes = null,
+        .gossip_table = null,
+        .slot_tracker = &slot_tracker,
+        .epoch_tracker = &epoch_tracker,
+        .progress_map = &progress,
+        .status_cache = null,
+        .senders = stubs.senders,
+        .receivers = stubs.receivers,
+        .vote_sockets = null,
+        .slot_leaders = null,
+        .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+        .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+        .results = &.{},
+        .block_commitment_cache = &block_commitment_cache,
+    });
 }
