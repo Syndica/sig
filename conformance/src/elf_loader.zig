@@ -1,14 +1,14 @@
 const std = @import("std");
 const sig = @import("sig");
-const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
+const types = @import("elf_types.zig");
 
-const ELFLoaderCtx = pb.ELFLoaderCtx;
-const ElfLoaderEffects = pb.ELFLoaderEffects;
+const ELFLoaderCtx = types.ELFLoaderCtx;
+const ElfLoaderEffects = types.ELFLoaderEffects;
 
 const svm = sig.vm;
 const elf = svm.elf;
 
-export fn sol_compat_elf_loader_v1(
+export fn sol_compat_elf_loader_v2(
     out_ptr: [*]u8,
     out_size: *u64,
     in_ptr: [*]const u8,
@@ -23,29 +23,22 @@ export fn sol_compat_elf_loader_v1(
     var decode_arena = std.heap.ArenaAllocator.init(allocator);
     defer decode_arena.deinit();
 
-    var reader = std.io.Reader.fixed(in_ptr[0..in_size]);
-    var ctx = ELFLoaderCtx.decode(&reader, decode_arena.allocator()) catch return 0;
+    var ctx = ELFLoaderCtx.decode(decode_arena.allocator(), in_ptr[0..in_size]) catch return -1;
     defer ctx.deinit(decode_arena.allocator());
 
-    var elf_effects = executeElfTest(ctx, allocator) catch return 0;
+    var elf_effects = executeElfTest(ctx, allocator) catch return -1;
     defer elf_effects.deinit(allocator);
 
-    var writer: std.io.Writer.Allocating = .init(allocator);
-    defer writer.deinit();
-    try elf_effects.encode(&writer.writer, allocator);
-    const effect_bytes = writer.written();
-
+    const effect_bytes = elf_effects.encode();
     const out_slice = out_ptr[0..out_size.*];
-    if (effect_bytes.len > out_slice.len) return 0;
 
-    @memcpy(out_slice[0..effect_bytes.len], effect_bytes);
+    @memcpy(out_slice[0..effect_bytes.len], &effect_bytes);
     out_size.* = effect_bytes.len;
-    return 1;
+    return 0;
 }
 
 fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEffects {
-    const ctx_elf = ctx.elf orelse return error.Unknown;
-    const elf_bytes = ctx_elf.data;
+    const elf_bytes = ctx.elf orelse return error.Unknown;
 
     var feature_set: sig.core.FeatureSet = .ALL_DISABLED;
     if (ctx.features) |features| for (features.features.items) |id| {
