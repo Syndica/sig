@@ -289,10 +289,6 @@ jobs:
       - restore_cache:
           key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted
       - run:
-          name: Install Python
-          command: |
-            sudo apt-get update -y && sudo apt-get install -y python3 python3-pip
-      - run:
           name: Lint (Zig)
           command: |
             workspace/zig/zig fmt --check src/ build.zig
