@@ -15,7 +15,7 @@ const Ancestors = sig.core.Ancestors;
 const T = ?sig.ledger.transaction_status.TransactionError;
 
 const Fork = struct { slot: Slot, maybe_err: T = null };
-const Status = enum { pending, failed, succeeded };
+pub const Status = enum { pending, failed, succeeded };
 
 /// This is internally locking and thread safe.
 /// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/runtime/src/status_cache.rs#L39
@@ -108,7 +108,7 @@ pub const StatusCache = struct {
         ancestors: *const Ancestors,
     ) Status {
         const fork = self.getFork(key, blockhash, ancestors) orelse return .pending;
-        return if (fork.maybe_err) .failed else .succeeded;
+        return if (fork.maybe_err) |_| .failed else .succeeded;
     }
 
     pub fn insert(

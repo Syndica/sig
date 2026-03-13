@@ -45,7 +45,7 @@ pub fn checkStatusCache(
 ) ?TransactionError {
     return switch (status_cache.getStatus(&msg_hash.data, recent_blockhash, ancestors)) {
         .pending => null,
-        .failed, .suceeded => .AlreadyProcessed,
+        .failed, .succeeded => .AlreadyProcessed,
     };
 }
 

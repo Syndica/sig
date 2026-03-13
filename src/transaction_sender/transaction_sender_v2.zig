@@ -19,10 +19,12 @@ const Status = sig.core.status_cache.Status;
 
 const Packet = sig.net.Packet;
 
+const EpochTracker = sig.core.EpochTracker;
 const SlotTracker = sig.replay.trackers.SlotTracker;
 
 const Channel = sig.sync.Channel;
 const ExitCondition = sig.sync.ExitCondition;
+const RwMux = sig.sync.RwMux;
 
 const Instant = sig.time.Instant;
 const Duration = sig.time.Duration;
@@ -33,19 +35,22 @@ pub const Logger = sig.trace.Logger("transaction_sender");
 
 const NUM_CONSECUTIVE_LEADER_SLOTS = sig.core.leader_schedule.NUM_CONSECUTIVE_LEADER_SLOTS;
 
-pub fn run(
-    gpa: std.mem.Allocator,
+pub const Args = struct {
+    gpa: Allocator,
     config: Config,
     account_store: AccountStore,
-    epoch_tracker: *sig.core.EpochTracker,
-    slot_tracker: *sig.replay.trackers.SlotTracker,
-    status_cache: *sig.core.StatusCache,
-    gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
+    epoch_tracker: *EpochTracker,
+    slot_tracker: *SlotTracker,
+    status_cache: *StatusCache,
+    gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     receiver: *Channel(TransactionInfo),
     logger: Logger,
     exit: ExitCondition,
-) !void {
-    const quic_channel = try Channel(Packet).create(gpa);
+    run_mock_transfers: bool,
+};
+
+pub fn run(args: Args) !void {
+    const quic_channel = try Channel(Packet).create(args.gpa);
     quic_channel.name = "Transaction Sender: Quic Channel";
     errdefer quic_channel.destroy();
 
@@ -53,37 +58,52 @@ pub fn run(
         .{},
         sig.net.quic_client.runClient,
         .{
-            gpa,
+            args.gpa,
             quic_channel,
-            sig.net.quic_client.Logger.from(logger),
-            exit,
+            sig.net.quic_client.Logger.from(args.logger),
+            args.exit,
         },
     );
     defer quic_client_handle.join();
 
+    const mock_transfer_handle = if (args.run_mock_transfers) try std.Thread.spawn(
+        .{},
+        mock.run,
+        .{
+            args.gpa,
+            args.account_store,
+            args.slot_tracker,
+            args.status_cache,
+            args.receiver,
+            mock.MockLogger.from(args.logger),
+            args.exit,
+        },
+    ) else null;
+    defer if (mock_transfer_handle) |handle| handle.join();
+
     try handleTransactions(
-        gpa,
-        config,
-        account_store,
-        epoch_tracker,
-        slot_tracker,
-        status_cache,
-        gossip_table_rw,
-        receiver,
+        args.gpa,
+        args.config,
+        args.account_store,
+        args.epoch_tracker,
+        args.slot_tracker,
+        args.status_cache,
+        args.gossip_table_rw,
+        args.receiver,
         quic_channel,
-        logger,
-        exit,
+        args.logger,
+        args.exit,
     );
 }
 
 pub fn handleTransactions(
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     config: Config,
     account_store: AccountStore,
-    epoch_tracker: *sig.core.EpochTracker,
-    slot_tracker: *sig.replay.trackers.SlotTracker,
-    status_cache: *sig.core.StatusCache,
-    gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
+    epoch_tracker: *EpochTracker,
+    slot_tracker: *SlotTracker,
+    status_cache: *StatusCache,
+    gossip_table_rw: *RwMux(sig.gossip.GossipTable),
     receiver: *Channel(TransactionInfo),
     sender: *Channel(Packet),
     logger: Logger,
@@ -109,6 +129,7 @@ pub fn handleTransactions(
         epoch_tracker,
         gossip_table_rw,
         config.max_leaders,
+        logger,
     );
     defer leader_info.deinit(gpa);
 
@@ -117,7 +138,6 @@ pub fn handleTransactions(
             receiver,
             &txn_pool,
             config.process_interval,
-            logger,
             exit,
         );
 
@@ -151,7 +171,7 @@ pub fn handleTransactions(
 
 fn receiveTransactions(
     receiver: *Channel(TransactionInfo),
-    txn_pool: *std.AutoArrayHashMap(Signature, TransactionInfo),
+    txn_pool: *std.AutoArrayHashMapUnmanaged(Signature, TransactionInfo),
     timeout: Duration,
     exit: ExitCondition,
 ) void {
@@ -175,11 +195,11 @@ fn receiveTransactions(
 
 const ProcessContext = struct {
     root_slot: u64,
-    root_ref: sig.replay.trackers.SlotTracker.Reference,
+    root_ref: SlotTracker.Reference,
     root_ancestors: *const Ancestors,
     root_block_height: u64,
     working_slot: u64,
-    working_ref: sig.replay.trackers.SlotTracker.Reference,
+    working_ref: SlotTracker.Reference,
     working_ancestors: *const Ancestors,
     account_reader: SlotAccountReader,
     leader_addresses: []const ?sig.net.SocketAddr,
@@ -191,9 +211,9 @@ const ProcessContext = struct {
 };
 
 fn loadProcessContext(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     account_store: AccountStore,
-    slot_tracker: SlotTracker,
+    slot_tracker: *SlotTracker,
     leader_info: *LeaderInfo,
 ) !ProcessContext {
     const root_slot = slot_tracker.root.load(.monotonic);
@@ -207,21 +227,21 @@ fn loadProcessContext(
     return .{
         .root_slot = root_slot,
         .root_ref = root_ref,
-        .root_ancestors = root_ref.constants().ancestors,
+        .root_ancestors = &root_ref.constants().ancestors,
         .root_block_height = root_ref.constants().block_height,
         .working_slot = working_slot,
         .working_ref = working_ref,
-        .working_ancestors = working_ref.constants().ancestors,
+        .working_ancestors = &working_ref.constants().ancestors,
         .account_reader = account_store.forSlot(
             working_slot,
-            working_ref.constants().ancestors,
+            &working_ref.constants().ancestors,
         ).reader(),
         .leader_addresses = leader_info.getLeaderAddresses(allocator, working_slot),
     };
 }
 
 fn processTransactions(
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     sender: *Channel(Packet),
     txn_pool: *std.AutoArrayHashMap(Signature, TransactionInfo),
     drop_list: *std.ArrayList(Signature),
@@ -375,8 +395,8 @@ pub const TransactionInfo = struct {
 const LeaderInfo = struct {
     leader_addresses: sig.utils.collections.PubkeyMap(CachedAddress),
     leader_schedules: sig.core.epoch_tracker.LeaderSchedulesWithEpochInfos,
-    gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
-    epoch_tracker: *sig.core.EpochTracker,
+    gossip_table_rw: *RwMux(sig.gossip.GossipTable),
+    epoch_tracker: *EpochTracker,
     logger: Logger,
 
     const MAX_LEADER_ADDRESSES = 2048;
@@ -388,15 +408,15 @@ const LeaderInfo = struct {
         addr: ?sig.net.SocketAddr,
     };
 
-    pub fn deinit(self: *LeaderInfo, gpa: std.mem.Allocator) void {
+    pub fn deinit(self: *LeaderInfo, gpa: Allocator) void {
         self.leader_addresses.deinit(gpa);
         self.leader_schedules.release();
     }
 
     pub fn init(
-        gpa: std.mem.Allocator,
-        epoch_tracker: *sig.core.EpochTracker,
-        gossip_table_rw: *sig.sync.RwMux(sig.gossip.GossipTable),
+        gpa: Allocator,
+        epoch_tracker: *EpochTracker,
+        gossip_table_rw: *RwMux(sig.gossip.GossipTable),
         max_leader_addresses: ?usize,
         logger: Logger,
     ) !LeaderInfo {
@@ -610,7 +630,7 @@ pub const mock = struct {
 
             const account = try self.account_store.forSlot(
                 slot,
-                slot_ref.constants().ancestors,
+                &slot_ref.constants().ancestors,
             ).reader().get(gpa, pubkey) orelse return 0;
             defer account.deinit(gpa);
 
@@ -647,7 +667,7 @@ pub const mock = struct {
         }
     };
 
-    const MockAccount = struct {
+    pub const MockAccount = struct {
         name: []const u8,
         keypair: KeyPair,
         pubkey: Pubkey,
@@ -687,13 +707,15 @@ pub const mock = struct {
         logger: MockLogger,
         exit: ExitCondition,
     ) !void {
-        const accounts: [2]MockAccount = .{ MockAccount.ALICE, MockAccount.BOB };
+        var alice = MockAccount.ALICE;
+        var bob = MockAccount.BOB;
 
         logger.info().log("Initializing accounts for mock transfer");
         var from_account, var to_account = try initAccounts(
             gpa,
             &mode,
-            accounts,
+            &alice,
+            &bob,
             logger,
             exit,
         );
@@ -726,8 +748,18 @@ pub const mock = struct {
                 exit,
             )) {
                 .succeeded => {
+                    from_account.lamports = try mode.getAccountBalance(
+                        gpa,
+                        from_account.pubkey,
+                        .finalized,
+                    );
+                    to_account.lamports = try mode.getAccountBalance(
+                        gpa,
+                        to_account.pubkey,
+                        .finalized,
+                    );
                     logger.info().logf("Transfer success {}/{}: signature={f}", .{
-                        num_successful,
+                        num_successful + 1,
                         num_transfers,
                         txn_info.signature,
                     });
@@ -736,7 +768,7 @@ pub const mock = struct {
                 },
                 .failed => {
                     logger.info().logf("Transfer failure {}/{}: signature={f}", .{
-                        num_successful,
+                        num_successful + 1,
                         num_transfers,
                         txn_info.signature,
                     });
@@ -744,7 +776,7 @@ pub const mock = struct {
                 },
                 .unprocessed => {
                     logger.info().logf("Transfer timeout {}/{}: signature={f}", .{
-                        num_successful,
+                        num_successful + 1,
                         num_transfers,
                         txn_info.signature,
                     });
@@ -754,39 +786,35 @@ pub const mock = struct {
         }
     }
 
-    fn initAccounts(
+    pub fn initAccounts(
         gpa: Allocator,
         mode: *Mode,
-        accounts: [2]MockAccount,
+        account_0: *MockAccount,
+        account_1: *MockAccount,
         logger: MockLogger,
         exit: ExitCondition,
-    ) !struct { MockAccount, MockAccount } {
+    ) !struct { *MockAccount, *MockAccount } {
         while (exit.shouldRun()) {
-            inline for (&accounts) |account| {
+            for (&.{ account_0, account_1 }) |account| {
                 account.lamports = mode.getAccountBalance(
                     gpa,
                     account.pubkey,
                     .finalized,
                 ) catch |err| switch (err) {
-                    error.SlotNotAvailable => {
-                        logger.info().logf(
-                            "Finalized slot not available, waiting for to catch up: {any}\n",
-                            .{err},
-                        );
-                        std.Thread.sleep(10 * std.time.ns_per_s);
-                        continue;
-                    },
+                    error.SlotNotAvailable => break,
                     else => return err,
                 };
-            }
+            } else break;
+            logger.info().log("Finalized slot not available, waiting to catch up...");
+            std.Thread.sleep(10 * std.time.ns_per_s);
         }
-        return if (accounts[0].lamports > accounts[1].lamports)
-            .{ accounts[0], accounts[1] }
+        return if (account_0.lamports > account_1.lamports)
+            .{ account_0, account_1 }
         else
-            .{ accounts[1], accounts[0] };
+            .{ account_1, account_0 };
     }
 
-    fn buildTransfer(
+    pub fn buildTransfer(
         gpa: std.mem.Allocator,
         mode: Mode,
         from_account: *MockAccount,

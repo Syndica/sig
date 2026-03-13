@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("sig");
 
 const KeyPair = sig.identity.KeyPair;
 
@@ -88,38 +88,37 @@ pub fn main() !void {
     );
     defer client_thread.join();
 
-    var accounts = mock.MockAccounts.DEFAULT;
-    accounts.alice.balance = try getBalanceLamports(&rpc_client, accounts.alice.pubkey);
-    accounts.bob.balance = try getBalanceLamports(&rpc_client, accounts.bob.pubkey);
+    var mode = mock.Mode{ .rpc = .{ .client = rpc_client } };
+    var alice = mock.MockAccount.ALICE;
+    var bob = mock.MockAccount.BOB;
 
-    var from_account, var to_account = if (accounts.alice.balance > accounts.bob.balance)
-        .{ &accounts.alice, &accounts.bob }
-    else
-        .{ &accounts.bob, &accounts.alice };
+    logger.info().log("Initializing accounts for mock transfer");
+    var from_account, var to_account = try mock.initAccounts(
+        gpa,
+        &mode,
+        &alice,
+        &bob,
+        .from(logger),
+        exit,
+    );
 
-    var successful_transactions: usize = 0;
-
-    while (exit.shouldRun() and successful_transactions < 10) {
-        if (from_account.balance < mock.TRANSFER_COST and to_account.balance < mock.TRANSFER_COST) {
-            logger.err().logf(
-                "both accounts have insufficient balance (alice={d} bob={d}), exiting",
-                .{ accounts.alice.balance, accounts.bob.balance },
-            );
+    logger.info().logf("Starting mock transfers: {f} -> {f}", .{ from_account, to_account });
+    const num_transfers: usize = 10;
+    var num_successful: usize = 0;
+    while (exit.shouldRun() and num_successful < num_transfers) {
+        if (from_account.lamports < mock.TRANSFER_COST and to_account.lamports < mock.TRANSFER_COST) {
+            logger.info().logf("Insufficient lamports: {f} -> {f}", .{ from_account, to_account });
             return error.InsufficientBalance;
-        } else if (from_account.balance < mock.TRANSFER_COST) {
-            logger.info().logf(
-                "from_account has insufficient balance (balance={d}), switching accounts",
-                .{from_account.balance},
-            );
-            const temp = from_account;
+        } else if (from_account.lamports < mock.TRANSFER_COST) {
+            logger.info().logf("Switching mock transfers: {f} -> {f}", .{ from_account, to_account });
+            const tmp = from_account;
             from_account = to_account;
-            to_account = temp;
+            to_account = tmp;
         }
 
-        logger.info().logf(
-            "Attempting transfer ({}/{} succesful transactions)",
-            .{ successful_transactions + 1, 10 },
-        );
+        logger.info().logf("Attempting transfer {}/{}", .{ num_successful + 1, num_transfers });
+        const txn_info = try mock.buildTransfer(gpa, &mode, from_account, to_account);
+
         const start_slot = blk: {
             var slot_response = try rpc_client.getSlot(
                 .{ .config = .{ .commitment = .processed } },
@@ -129,24 +128,8 @@ pub fn main() !void {
         };
         var current_slot = start_slot;
 
-        const blockhash = try getLatestBlockhash(&rpc_client);
-        var tx = try mock.buildTransferTransaction(
-            arena,
-            from_account.keypair,
-            to_account.pubkey,
-            mock.TRANSFER_AMOUNT,
-            blockhash,
-        );
-        defer tx.deinit(arena);
-
-        var tx_wire: [Packet.DATA_SIZE]u8 = @splat(0);
-        const tx_len = (try bincode.writeToSlice(&tx_wire, tx, .{})).len;
-        if (tx_len == 0 or tx_len > Packet.DATA_SIZE) return error.InvalidTransactionSize;
-
-        const signature = tx.signatures[0];
-        var landed = false;
-
-        while (exit.shouldRun() and current_slot < start_slot + 150 and !landed) {
+        var txn_landed = false;
+        while (exit.shouldRun() and current_slot < start_slot + 150 and !txn_landed) {
             const last_send_slot = current_slot;
             const leader_start_index = current_slot - epoch_start_slot;
             for (0..FORWARD_TO_LEADERS) |leader_num| {
@@ -155,13 +138,17 @@ pub fn main() !void {
                 if (leaders[leader_idx]) |leader| {
                     logger.info().logf(
                         "sending tx={f} slot={d} leader_num={}",
-                        .{ signature, current_slot, leader_num },
+                        .{ txn_info.signature, current_slot, leader_num },
                     );
-                    try quic_channel.send(Packet.init(leader, tx_wire, tx_len));
+                    try quic_channel.send(Packet.init(
+                        leader,
+                        txn_info.tx_wire,
+                        txn_info.tx_len,
+                    ));
                 } else {
                     logger.info().logf(
                         "sending tx={f} slot={d} leader_num={} (no address)",
-                        .{ signature, current_slot, leader_num },
+                        .{ txn_info.signature, current_slot, leader_num },
                     );
                 }
             }
@@ -169,28 +156,28 @@ pub fn main() !void {
             while (exit.shouldRun() and
                 current_slot < last_send_slot + FORWARD_TO_LEADERS * LEADER_WINDOW)
             {
-                switch (try getSignatureState(&rpc_client, signature)) {
+                switch (try mode.getTransactionStatus(&txn_info)) {
                     .succeeded => {
                         logger.info().logf(
                             "succeeded tx={f} slot={d}",
-                            .{ signature, current_slot },
+                            .{ txn_info.signature, current_slot },
                         );
-                        successful_transactions += 1;
-                        landed = true;
+                        num_successful += 1;
+                        txn_landed = true;
                         break;
                     },
                     .failed => {
                         logger.err().logf(
                             "failed tx={f} slot={d}",
-                            .{ signature, current_slot },
+                            .{ txn_info.signature, current_slot },
                         );
-                        landed = true;
+                        txn_landed = true;
                         break;
                     },
                     .pending => {
                         logger.info().logf(
                             "pending tx={f} slot={d}",
-                            .{ signature, current_slot },
+                            .{ txn_info.signature, current_slot },
                         );
                         std.Thread.sleep(std.time.ns_per_s);
                     },
@@ -205,19 +192,15 @@ pub fn main() !void {
                 };
             }
 
-            if (landed) {
-                accounts.alice.balance = try getBalanceLamports(&rpc_client, accounts.alice.pubkey);
-                accounts.bob.balance = try getBalanceLamports(&rpc_client, accounts.bob.pubkey);
-                logger.info().logf(
-                    "current balances: alice={d} bob={d}",
-                    .{ accounts.alice.balance, accounts.bob.balance },
-                );
+            if (txn_landed) {
+                from_account.balance = try mode.getAccountBalance(gpa, from_account.pubkey, .confirmed);
+                to_account.balance = try mode.getAccountBalance(gpa, to_account.pubkey, .confirmed);
                 break;
-            } else logger.info().log("pending for too long, retry...");
+            } else logger.info().log("pending for too long, retrying...");
         }
     }
 
-    logger.info().logf("done (successful transactions: {})", .{successful_transactions});
+    logger.info().logf("done (successful transactions: {})", .{num_successful});
     exit.setExit();
 }
 
