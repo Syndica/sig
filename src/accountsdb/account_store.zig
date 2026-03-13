@@ -257,6 +257,10 @@ pub const SlotAccountStore = union(enum) {
 
 pub const SlotAccountReader = union(enum) {
     accounts_db: struct { *accounts_db.Db, *const Ancestors },
+    /// Like `accounts_db`, but `.get()` returns caller-owned (cloned) data.
+    /// Use this variant in RPC contexts where the caller outlives the lock
+    /// that protects unrooted account data from pruning.
+    accounts_db_owned: struct { *accounts_db.Db, *const Ancestors },
     /// Contains many versions of accounts and becomes fork-aware using
     /// ancestors, like accountsdb.
     thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
@@ -281,6 +285,18 @@ pub const SlotAccountReader = union(enum) {
                 }
                 return account;
             },
+            .accounts_db_owned => |pair| {
+                const account = try pair[0].getOwned(
+                    alloc,
+                    address,
+                    pair[1],
+                ) orelse return null;
+                if (account.lamports == 0) {
+                    account.deinit(alloc);
+                    return null;
+                }
+                return account;
+            },
             .thread_safe_map => |pair| pair[0].get(address, pair[1]),
             .account_map => |pair| pair.get(address),
             .account_shared_data_map => |map| {
@@ -294,6 +310,17 @@ pub const SlotAccountReader = union(enum) {
                 };
             },
             .noop => null,
+        };
+    }
+
+    /// Returns a version of this reader where `.get()` returns caller-owned
+    /// (cloned) data. Use in contexts where the caller outlives the lock that
+    /// protects unrooted account data from pruning (e.g. RPC).
+    pub fn toOwnedReader(self: SlotAccountReader) SlotAccountReader {
+        return switch (self) {
+            .accounts_db => |pair| .{ .accounts_db_owned = pair },
+            .accounts_db_owned => self,
+            else => @panic("TODO: toOwned not yet implemented for this variant"),
         };
     }
 };
@@ -634,6 +661,16 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
         allocator,
         one_lamport_address,
     )).?.lamports);
+
+    // Same checks via the owned reader variant
+    const owned_reader = slot_reader.toOwnedReader();
+
+    try std.testing.expectEqual(null, try owned_reader.get(allocator, zero_lamport_address));
+    {
+        const account = (try owned_reader.get(allocator, one_lamport_address)).?;
+        defer account.deinit(allocator);
+        try std.testing.expectEqual(1, account.lamports);
+    }
 }
 
 test ThreadSafeAccountMap {
@@ -1177,7 +1214,8 @@ fn expectAccountFromStores(
     for (stores) |store| {
         errdefer std.log.err("Occurred with store impl '{s}'", .{@tagName(store)});
         const reader = store.reader();
-        const actual_account = try reader.forSlot(ancestors).get(allocator, address) orelse {
+        const slot_reader = reader.forSlot(ancestors);
+        const actual_account = try slot_reader.get(allocator, address) orelse {
             try std.testing.expectEqual(maybe_expected_account, null);
             continue;
         };
@@ -1188,6 +1226,16 @@ fn expectAccountFromStores(
             continue;
         };
         try actual_account.expectEquals(expected_account);
+
+        // Also test the owned reader variant for accounts_db stores
+        if (store == .accounts_db) {
+            const owned_reader = slot_reader.toOwnedReader();
+            const owned_account = try owned_reader.get(allocator, address) orelse {
+                return error.TestOwnedReaderReturnedNullUnexpectedly;
+            };
+            defer owned_account.deinit(allocator);
+            try owned_account.expectEquals(expected_account);
+        }
     }
 }
 

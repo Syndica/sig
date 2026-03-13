@@ -131,6 +131,22 @@ pub fn get(
     return null;
 }
 
+/// Like `get`, but returns an account with caller-owned data (allocates and copies out the account from both Unrooted and Rooted lookups).
+pub fn getOwned(
+    self: *Db,
+    allocator: std.mem.Allocator,
+    address: Pubkey,
+    ancestors: *const Ancestors,
+) !?Account {
+    if (try self.unrooted.getOwned(allocator, address, ancestors)) |data| {
+        return data;
+    }
+    if (try self.rooted.get(allocator, address)) |data| {
+        return data.toOwnedAccount();
+    }
+    return null;
+}
+
 pub const SlotModifiedIterator = struct {
     slot: *Unrooted.SlotIndex,
     cursor: u64,
