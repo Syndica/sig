@@ -86,7 +86,7 @@ pub const MethodAndParams = union(enum) {
     getStakeMinimumDelegation: GetStakeMinimumDelegation,
     getSupply: noreturn,
     getTokenAccountBalance: GetTokenAccountBalance,
-    getTokenAccountsByDelegate: noreturn,
+    getTokenAccountsByDelegate: GetTokenAccountsByDelegate,
     getTokenAccountsByOwner: GetTokenAccountsByOwner,
     getTokenLargestAccounts: noreturn,
     getTokenSupply: GetTokenSupply,
@@ -1348,7 +1348,25 @@ pub const GetTokenAccountBalance = struct {
     };
 };
 
-// TODO: getTokenAccountsByDelegate
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2132-L2196
+pub const GetTokenAccountsByDelegate = struct {
+    /// The delegate address to query for (SPL token account's delegate field at data[76..108]).
+    delegate: Pubkey,
+    /// Either `{ "mint": "<base58>" }` or `{ "programId": "<base58>" }`.
+    filter: GetTokenAccountsByOwner.TokenAccountsFilter,
+    config: ?GetTokenAccountsByOwner.Config = null,
+
+    /// Same shape as getTokenAccountsByOwner.
+    pub const Value = GetTokenAccountsByOwner.Value;
+
+    /// Always context-wrapped.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2182-L2194
+    pub const Response = struct {
+        context: common.Context,
+        value: []const Value,
+    };
+};
+
 // TODO: getTokenLargestAccounts
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2091-L2130
