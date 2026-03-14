@@ -34,6 +34,7 @@ const GetStakeMinimumDelegation = methods.GetStakeMinimumDelegation;
 const GetTransaction = methods.GetTransaction;
 const GetTransactionCount = methods.GetTransactionCount;
 const GetTokenAccountBalance = methods.GetTokenAccountBalance;
+const GetTokenAccountsByDelegate = methods.GetTokenAccountsByDelegate;
 const GetTokenSupply = methods.GetTokenSupply;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
@@ -778,8 +779,73 @@ test GetTokenAccountBalance {
     );
 }
 
-// TODO: test getTokenAccountsByDelegate()
-// TODO: test getTockenAccountsByOwner()
+test GetTokenAccountsByDelegate {
+    const delegate: Pubkey = .parse("4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T");
+    const mint: Pubkey = .parse("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+    const token_program: Pubkey = .parse("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+
+    // Request: delegate + mint filter (no config)
+    try testRequest(
+        .getTokenAccountsByDelegate,
+        .{ .delegate = delegate, .filter = .{ .mint = mint } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTokenAccountsByDelegate","params":["4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T",{"mint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"}]}
+        ,
+    );
+
+    // Request: delegate + programId filter
+    try testRequest(
+        .getTokenAccountsByDelegate,
+        .{ .delegate = delegate, .filter = .{ .programId = token_program } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTokenAccountsByDelegate","params":["4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T",{"programId":"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"}]}
+        ,
+    );
+
+    // Request: with config
+    try testRequest(
+        .getTokenAccountsByDelegate,
+        .{
+            .delegate = delegate,
+            .filter = .{ .mint = mint },
+            .config = .{ .commitment = .finalized, .encoding = .base64 },
+        },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTokenAccountsByDelegate","params":["4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T",{"mint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"},{"encoding":"base64","dataSlice":null,"commitment":"finalized","minContextSlot":null}]}
+        ,
+    );
+
+    // Response: single account
+    try testResponse(
+        GetTokenAccountsByDelegate,
+        .{ .result = .{
+            .context = .{ .slot = 1114, .apiVersion = "2.1.6" },
+            .value = &.{.{
+                .pubkey = .parse("28YTZEwqtMHWrhWcvv34se7pjS7wctgqzCPB3gReCFKp"),
+                .account = .{
+                    .data = .{ .encoded = .{ "SGVsbG8gV29ybGQ=", .base64 } },
+                    .executable = false,
+                    .lamports = 2039280,
+                    .owner = .parse("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+                    .rentEpoch = 18446744073709551615,
+                    .space = 165,
+                },
+            }},
+        } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":1114},"value":[{"account":{"data":["SGVsbG8gV29ybGQ=","base64"],"executable":false,"lamports":2039280,"owner":"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA","rentEpoch":18446744073709551615,"space":165},"pubkey":"28YTZEwqtMHWrhWcvv34se7pjS7wctgqzCPB3gReCFKp"}]},"id":1}
+        ,
+    );
+
+    // Response: empty value (no matching delegate accounts)
+    try testResponse(
+        GetTokenAccountsByDelegate,
+        .{ .result = .{
+            .context = .{ .slot = 1114, .apiVersion = "2.1.6" },
+            .value = &.{},
+        } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":1114},"value":[]},"id":1}
+        ,
+    );
+}
+
+// TODO: test getTokenAccountsByOwner()
 // TODO: test getTokenLargestAccounts()
 test GetTransaction {
     const tx_sig: Signature = .parse(
