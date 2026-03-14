@@ -118,7 +118,6 @@ fn handleTransactions(self: *Service, gpa: Allocator, quic_sender: *Channel(Pack
         gpa,
         self.ctx.epoch_tracker,
         self.ctx.gossip_table_rw,
-        self.cfg.max_leaders,
         self.logger,
     );
     defer leader_info.deinit(gpa);
@@ -126,10 +125,16 @@ fn handleTransactions(self: *Service, gpa: Allocator, quic_sender: *Channel(Pack
     const leader_addresses = try gpa.alloc(?sig.net.SocketAddr, self.cfg.max_leaders);
     defer gpa.free(leader_addresses);
 
+    var last_metrics_log_time = Instant.EPOCH_ZERO;
+
     while (!self.exit.shouldExit()) {
+        // Receive transactions into the pool.
+        // This will always take approximately `cfg.process_interval`, unless the pool is empty.
         const start_receive = Instant.now();
         self.receiveTransactions(&txn_pool, &metrics);
-        metrics.retry_transactions_millis.set(start_receive.elapsed().asMillis());
+        metrics.receive_transactions_millis.set(start_receive.elapsed().asMillis());
+
+        if (self.exit.shouldExit()) break;
 
         const start_process = Instant.now();
         self.processTransactions(
@@ -148,6 +153,11 @@ fn handleTransactions(self: *Service, gpa: Allocator, quic_sender: *Channel(Pack
             else => return err,
         };
         metrics.process_transactions_millis.set(start_process.elapsed().asMillis());
+
+        if (last_metrics_log_time.elapsed().gt(.fromSecs(30))) {
+            metrics.log(self.logger);
+            last_metrics_log_time = Instant.now();
+        }
     }
 }
 
@@ -157,13 +167,19 @@ fn receiveTransactions(
     metrics: *Metrics,
 ) void {
     var timer = Instant.now();
-    while (self.exit.shouldRun() and
-        timer.elapsed().lt(self.cfg.process_interval) and
-        txn_pool.count() < txn_pool.capacity())
-    {
+    while (self.exit.shouldRun() and timer.elapsed().lt(self.cfg.process_interval)) {
+        // Don't break to process transactions until the pool is populated.
         defer if (txn_pool.count() == 0) {
             timer = Instant.now();
         };
+
+        // Don't break to process transactions until the process interval has elapsed.
+        if (txn_pool.count() == txn_pool.capacity()) {
+            std.Thread.sleep(self.cfg.process_interval.saturatingSub(timer.elapsed()).asNanos());
+            break;
+        }
+
+        // Wait up to 10ms for a new transaction before checking the exit condition.
         self.receiver.event.timedWait(10 * std.time.ns_per_ms) catch continue;
         if (self.receiver.tryReceive()) |txn_info| {
             if (!txn_pool.contains(txn_info.signature)) {
@@ -176,22 +192,6 @@ fn receiveTransactions(
         }
     }
 }
-
-const ProcessContext = struct {
-    root_slot: u64,
-    root_ref: SlotTracker.Reference,
-    root_ancestors: *const Ancestors,
-    root_block_height: u64,
-    working_slot: u64,
-    working_ref: SlotTracker.Reference,
-    working_ancestors: *const Ancestors,
-    account_reader: SlotAccountReader,
-
-    pub fn release(self: *const ProcessContext) void {
-        self.root_ref.release();
-        self.working_ref.release();
-    }
-};
 
 fn processTransactions(
     self: *Service,
@@ -206,12 +206,12 @@ fn processTransactions(
     const root_slot = self.ctx.slot_tracker.root.load(.monotonic);
     const root_ref = self.ctx.slot_tracker.get(root_slot) orelse
         return error.RootSlotNotAvailable;
-    errdefer root_ref.release();
+    defer root_ref.release();
 
     const working_slot = self.ctx.slot_tracker.commitments.processed.load(.monotonic);
     const working_ref = self.ctx.slot_tracker.get(working_slot) orelse
         return error.WorkingSlotNotAvailable;
-    errdefer working_ref.release();
+    defer working_ref.release();
 
     const account_reader = self.ctx.account_store.forSlot(
         working_slot,
@@ -272,10 +272,8 @@ fn processTransactions(
                 false;
 
             const valid = blk: {
-                const account = try account_reader.get(
-                    gpa,
-                    nonce[0],
-                ) orelse break :blk false;
+                const account = try account_reader.get(gpa, nonce[0]) orelse
+                    break :blk false;
                 defer account.deinit(gpa);
 
                 break :blk sig.runtime.check_transactions.verifyNonceAccount(
@@ -388,7 +386,6 @@ const LeaderInfo = struct {
         gpa: Allocator,
         epoch_tracker: *EpochTracker,
         gossip_table_rw: *RwMux(sig.gossip.GossipTable),
-        max_leader_addresses: ?usize,
         logger: Logger,
     ) !LeaderInfo {
         const leader_schedules = try epoch_tracker.getLeaderSchedules();
@@ -396,10 +393,7 @@ const LeaderInfo = struct {
 
         var leader_addresses = PubkeyMap(CachedAddress).empty;
         errdefer leader_addresses.deinit(gpa);
-        try leader_addresses.ensureTotalCapacity(
-            gpa,
-            max_leader_addresses orelse MAX_LEADER_ADDRESSES,
-        );
+        try leader_addresses.ensureTotalCapacity(gpa, MAX_LEADER_ADDRESSES);
 
         return .{
             .leader_addresses = leader_addresses,
@@ -427,13 +421,8 @@ const LeaderInfo = struct {
         };
 
         if (self.leader_addresses.count() >= self.leader_addresses.capacity() - 1) {
-            self.logger.info().logf(
-                "Leader address cache is full ({}/{}), pruning old entries.",
-                .{
-                    self.leader_addresses.count(),
-                    self.leader_addresses.capacity(),
-                },
-            );
+            self.logger.info().log("Leader address cache is full, pruning old entries.");
+
             var threshold = START_PRUNE_THRESHOLD;
             var pruned_count: usize = 0;
             while (pruned_count == 0) : (threshold = .fromSecs(threshold.asSecs() / 2)) {
@@ -487,16 +476,43 @@ pub const Metrics = struct {
     rooted_count: *Counter,
     expired_count: *Counter,
 
+    receive_transactions_millis: *Gauge(u64),
     process_transactions_millis: *Gauge(u64),
-    retry_transactions_millis: *Gauge(u64),
-    get_leader_addresses_millis: *Gauge(u64),
-
-    rpc_block_height_millis: *Gauge(u64),
-    rpc_signature_statuses_millis: *Gauge(u64),
 
     pub const prefix = "TransactionSenderService";
 
     pub fn init() GetMetricError!Metrics {
         return sig.prometheus.globalRegistry().initStruct(Metrics);
+    }
+
+    pub fn log(self: *const Metrics, logger: Logger) void {
+        if (self.pool_size.get() != self.received_count.get() -|
+            self.rooted_count.get() -|
+            self.failed_count.get() -|
+            self.expired_count.get())
+        {
+            logger.warn().logf(
+                "Inconsistent metrics: pool_size={}, received={}, rooted={}, failed={}, expired={}, receive_ms={}, process_ms={}",
+                .{
+                    self.pool_size.get(),
+                    self.received_count.get(),
+                    self.rooted_count.get(),
+                    self.failed_count.get(),
+                    self.expired_count.get(),
+                    self.receive_transactions_millis.get(),
+                    self.process_transactions_millis.get(),
+                },
+            );
+        } else {
+            logger.info().logf("pool_size={}, received={}, rooted={}, failed={}, expired={}, receive_ms={}, process_ms={}", .{
+                self.pool_size.get(),
+                self.received_count.get(),
+                self.rooted_count.get(),
+                self.failed_count.get(),
+                self.expired_count.get(),
+                self.receive_transactions_millis.get(),
+                self.process_transactions_millis.get(),
+            });
+        }
     }
 };
