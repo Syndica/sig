@@ -2,11 +2,9 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
-const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const AccountStore = sig.accounts_db.AccountStore;
-const SlotAccountStore = sig.accounts_db.SlotAccountStore;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const Ancestors = sig.core.Ancestors;
@@ -441,14 +439,10 @@ const LeaderInfo = struct {
         };
 
         if (self.leader_addresses.count() >= self.leader_addresses.capacity() - 1) {
-            self.logger.info().logf("Leader address cache is full, pruning old entries. Count: {}, Capacity: {}", .{
-                self.leader_addresses.count(),
-                self.leader_addresses.capacity(),
-            });
+            self.logger.info().log("Leader address cache is full, pruning old entries.");
             var threshold = START_PRUNE_THRESHOLD;
-            while (self.leader_addresses.count() >=
-                self.leader_addresses.capacity() - 1) : (threshold = .fromSecs(threshold.asSecs() / 2))
-            {
+            var pruned_count: usize = 0;
+            while (pruned_count == 0) : (threshold = .fromSecs(threshold.asSecs() / 2)) {
                 const current_count = self.leader_addresses.count();
                 var i: usize = 0;
                 while (i < self.leader_addresses.count()) {
@@ -458,12 +452,11 @@ const LeaderInfo = struct {
                     else
                         self.leader_addresses.swapRemoveAt(i);
                 }
-                const pruned_count = current_count - self.leader_addresses.count();
-                self.logger.info().logf("Pruned {d} entries from leader address cache with threshold {d} seconds.", .{
-                    pruned_count,
-                    threshold.asSecs(),
-                });
+                pruned_count += current_count - self.leader_addresses.count();
             }
+            self.logger.info().logf("Pruned {d} entries from leader address cache.", .{
+                pruned_count,
+            });
         }
 
         const entry = self.leader_addresses.getOrPutAssumeCapacity(leader_pubkey);

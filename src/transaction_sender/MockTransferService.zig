@@ -2,42 +2,26 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
-const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const AccountStore = sig.accounts_db.AccountStore;
-const SlotAccountStore = sig.accounts_db.SlotAccountStore;
-const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
-const Ancestors = sig.core.Ancestors;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
-const Slot = sig.core.Slot;
-const StatusCache = sig.core.StatusCache;
 const Status = sig.core.status_cache.Status;
-
-const Packet = sig.net.Packet;
-
-const EpochTracker = sig.core.EpochTracker;
-const SlotTracker = sig.replay.trackers.SlotTracker;
 
 const Channel = sig.sync.Channel;
 const ExitCondition = sig.sync.ExitCondition;
-const RwMux = sig.sync.RwMux;
 
 const Instant = sig.time.Instant;
 const Duration = sig.time.Duration;
 
 const TransactionInfo = sig.TransactionSenderService.TransactionInfo;
 
-const PubkeyMap = sig.utils.collections.PubkeyMap;
-
-const NUM_CONSECUTIVE_LEADER_SLOTS = sig.core.leader_schedule.NUM_CONSECUTIVE_LEADER_SLOTS;
-
 const Commitment = sig.rpc.methods.common.Commitment;
 
-const Logger = sig.trace.Logger("mock_transfer");
+const Logger = sig.trace.Logger("mock_transfer_service");
 
 pub const Service = @This();
 
@@ -59,13 +43,45 @@ const TRANSFER_FEE: u64 = 5000;
 const TRANSFER_COST: u64 = TRANSFER_AMOUNT + TRANSFER_FEE;
 
 pub const ACCOUNT_0: Account = .init("account_0", .{ // Pubkey: H67JSziFxAZR1KSQshWfa8Rdpr7LSv1VkT2cFQHL79rd
-    .public_key = .{ .bytes = .{ 3, 140, 214, 34, 176, 145, 149, 13, 169, 145, 117, 3, 98, 140, 206, 183, 20, 52, 35, 97, 89, 82, 55, 162, 13, 26, 172, 9, 77, 242, 217, 211 } },
-    .secret_key = .{ .bytes = .{ 28, 57, 92, 177, 192, 198, 0, 137, 66, 122, 128, 0, 112, 193, 184, 209, 72, 187, 109, 65, 115, 173, 181, 139, 194, 185, 253, 182, 173, 110, 184, 124, 3, 140, 214, 34, 176, 145, 149, 13, 169, 145, 117, 3, 98, 140, 206, 183, 20, 52, 35, 97, 89, 82, 55, 162, 13, 26, 172, 9, 77, 242, 217, 211 } },
+    .public_key = .{ .bytes = .{
+        3,   140, 214, 34, 176, 145, 149, 13,
+        169, 145, 117, 3,  98,  140, 206, 183,
+        20,  52,  35,  97, 89,  82,  55,  162,
+        13,  26,  172, 9,  77,  242, 217, 211,
+    } },
+    .secret_key = .{ .bytes = .{
+        28,  57,  92,  177, 192, 198, 0,   137,
+        66,  122, 128, 0,   112, 193, 184, 209,
+        72,  187, 109, 65,  115, 173, 181, 139,
+        194, 185, 253, 182, 173, 110, 184, 124,
+        3,   140, 214, 34,  176, 145, 149, 13,
+        169, 145, 117, 3,   98,  140, 206, 183,
+        20,  52,  35,  97,  89,  82,  55,  162,
+        13,  26,  172, 9,   77,  242, 217, 211,
+    } },
 });
 pub const ACCOUNT_1: Account = .init("account_1", .{ // Pubkey: ErnDW7vq2XmzstretUJ7NhT95PV6zeXeyXwLssowF6i
-    .public_key = .{ .bytes = .{ 239, 10, 4, 236, 219, 237, 69, 197, 199, 60, 117, 184, 223, 215, 132, 73, 93, 248, 200, 254, 212, 239, 251, 120, 223, 25, 201, 196, 20, 58, 163, 62 } },
-    .secret_key = .{ .bytes = .{ 208, 26, 255, 64, 164, 52, 99, 120, 92, 227, 25, 240, 222, 245, 70, 77, 171, 89, 129, 64, 110, 73, 159, 230, 38, 212, 150, 202, 57, 157, 151, 175, 239, 10, 4, 236, 219, 237, 69, 197, 199, 60, 117, 184, 223, 215, 132, 73, 93, 248, 200, 254, 212, 239, 251, 120, 223, 25, 201, 196, 20, 58, 163, 62 } },
+    .public_key = .{ .bytes = .{
+        239, 10,  4,   236, 219, 237, 69,  197,
+        199, 60,  117, 184, 223, 215, 132, 73,
+        93,  248, 200, 254, 212, 239, 251, 120,
+        223, 25,  201, 196, 20,  58,  163, 62,
+    } },
+    .secret_key = .{ .bytes = .{
+        208, 26,  255, 64,  164, 52,  99,  120,
+        92,  227, 25,  240, 222, 245, 70,  77,
+        171, 89,  129, 64,  110, 73,  159, 230,
+        38,  212, 150, 202, 57,  157, 151, 175,
+        239, 10,  4,   236, 219, 237, 69,  197,
+        199, 60,  117, 184, 223, 215, 132, 73,
+        93,  248, 200, 254, 212, 239, 251, 120,
+        223, 25,  201, 196, 20,  58,  163, 62,
+    } },
 });
+
+pub fn deinit(self: *Service) void {
+    self.mode.deinit();
+}
 
 pub const Mode = union(enum) {
     rpc: RpcMode,
@@ -165,14 +181,20 @@ pub const SigMode = struct {
     slot_tracker: *sig.replay.trackers.SlotTracker,
     status_cache: *sig.core.StatusCache,
 
-    pub fn getAccountBalance(self: *SigMode, gpa: Allocator, pubkey: Pubkey, commitment: Commitment) !u64 {
+    pub fn getAccountBalance(
+        self: *SigMode,
+        gpa: Allocator,
+        pubkey: Pubkey,
+        commitment: Commitment,
+    ) !u64 {
         const slot = switch (commitment) {
             .processed => self.slot_tracker.commitments.processed.load(.monotonic),
             .confirmed => self.slot_tracker.commitments.confirmed.load(.monotonic),
             .finalized => self.slot_tracker.commitments.finalized.load(.monotonic),
         };
 
-        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+        const slot_ref = self.slot_tracker.get(slot) orelse
+            return error.SlotNotAvailable;
         defer slot_ref.release();
 
         const account = try self.account_store.forSlot(
@@ -230,7 +252,11 @@ pub const Account = struct {
     }
 
     pub fn format(self: Account, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        try writer.print("(name={s}, lamports={d}, pubkey={f})", .{ self.name, self.lamports, self.pubkey });
+        try writer.print("(name={s}, lamports={d}, pubkey={f})", .{
+            self.name,
+            self.lamports,
+            self.pubkey,
+        });
     }
 };
 
@@ -241,16 +267,25 @@ pub fn run(self: *Service, gpa: Allocator) !void {
     self.logger.info().logf("Starting mock transfers: {f} -> {f}", .{ from_account, to_account });
     while (!self.exit.shouldExit() and self.successful < self.transfers) {
         if (from_account.lamports < TRANSFER_COST and to_account.lamports < TRANSFER_COST) {
-            self.logger.info().logf("Insufficient lamports: {f} -> {f}", .{ from_account, to_account });
+            self.logger.info().logf("Insufficient lamports: {f} -> {f}", .{
+                from_account,
+                to_account,
+            });
             return error.InsufficientBalance;
         } else if (from_account.lamports < TRANSFER_COST) {
-            self.logger.info().logf("Switching mock transfers: {f} -> {f}", .{ from_account, to_account });
+            self.logger.info().logf("Switching mock transfers: {f} -> {f}", .{
+                from_account,
+                to_account,
+            });
             const tmp = from_account;
             from_account = to_account;
             to_account = tmp;
         }
 
-        self.logger.info().logf("Attempting transfer {}/{}", .{ self.successful + 1, self.transfers });
+        self.logger.info().logf("Attempting transfer {}/{}", .{
+            self.successful + 1,
+            self.transfers,
+        });
         const txn_info = try buildTransfer(self, gpa, from_account, to_account);
 
         self.logger.info().logf("Sending transfer {}/{}: signature={f}", .{
@@ -298,6 +333,7 @@ fn initAccounts(self: *Service, gpa: Allocator) !struct { *Account, *Account } {
             std.Thread.sleep(10 * std.time.ns_per_s);
             continue;
         };
+        break;
     }
     return if (self.account_0.lamports > self.account_1.lamports)
         .{ &self.account_0, &self.account_1 }

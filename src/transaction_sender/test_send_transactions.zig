@@ -2,28 +2,14 @@ const std = @import("std");
 const sig = @import("sig");
 
 const Allocator = std.mem.Allocator;
-const KeyPair = sig.identity.KeyPair;
-
-const bincode = sig.bincode;
-const mock = sig.transaction_sender_v2.mock;
 
 const Pubkey = sig.core.Pubkey;
-const Signature = sig.core.Signature;
-const Hash = sig.core.Hash;
 const Transaction = sig.core.Transaction;
-const TransactionMessage = sig.core.transaction.Message;
-const TransactionInstruction = sig.core.transaction.Instruction;
-const Status = sig.core.status_cache.Status;
 
 const Packet = sig.net.Packet;
 const SocketAddr = sig.net.SocketAddr;
-const QuicClientLogger = sig.net.quic_client.Logger;
-const runQuicClient = sig.net.quic_client.runClient;
 
 const RpcClient = sig.rpc.Client;
-const Commitment = sig.rpc.methods.common.Commitment;
-
-const SYSTEM_PROGRAM_ID = sig.runtime.program.system.ID;
 
 const Channel = sig.sync.Channel;
 const ExitCondition = sig.sync.ExitCondition;
@@ -37,6 +23,7 @@ const PubkeyMap = sig.utils.collections.PubkeyMap;
 
 const Logger = sig.trace.log.Logger("test_send_transactions");
 
+const TRANFERS: u64 = 2;
 const LEADER_WINDOW: u64 = 4;
 const FORWARD_TO_LEADERS: usize = 5;
 const DEFAULT_RPC_URL = "https://api.testnet.solana.com";
@@ -59,12 +46,8 @@ pub fn main() !void {
     defer _ = gpa_state.deinit();
     const gpa = gpa_state.allocator();
 
-    var arena_allocator = std.heap.ArenaAllocator.init(gpa);
-    defer arena_allocator.deinit();
-    const arena = arena_allocator.allocator();
-
-    const args = try std.process.argsAlloc(arena);
-    defer std.process.argsFree(arena, args);
+    const args = try std.process.argsAlloc(gpa);
+    defer std.process.argsFree(gpa, args);
 
     if (args.len > 2) {
         std.debug.print(
@@ -81,16 +64,18 @@ pub fn main() !void {
     const rpc_url = if (args.len == 2) args[1] else DEFAULT_RPC_URL;
 
     var mock_sender_service = try MockSenderService.init(
-        arena,
+        gpa,
         exit,
         .from(logger),
         rpc_url,
         .fromSecs(5), // Approx every 2 leaders
     );
+    defer mock_sender_service.deinit(gpa);
+
     const mock_sender_handle = try std.Thread.spawn(
         .{},
         MockSenderService.run,
-        .{&mock_sender_service},
+        .{ &mock_sender_service, gpa },
     );
     defer mock_sender_handle.join();
 
@@ -99,14 +84,16 @@ pub fn main() !void {
         .logger = .from(logger),
         .mode = try .initRpc(gpa, rpc_url, .noop),
         .sender = mock_sender_service.receiver,
-        .transfers = 100,
+        .transfers = TRANFERS,
     };
-    try mock_transfer_service.run(arena);
+    defer mock_transfer_service.deinit();
+
+    try mock_transfer_service.run(gpa);
+
     exit.setExit();
 }
 
 const MockSenderService = struct {
-    arena: Allocator,
     exit: ExitCondition,
     logger: Logger,
     client: RpcClient,
@@ -116,32 +103,39 @@ const MockSenderService = struct {
     epoch_leaders: []?SocketAddr,
     send_interval: Duration,
 
+    pub fn deinit(self: *MockSenderService, gpa: Allocator) void {
+        self.client.deinit();
+        gpa.free(self.epoch_leaders);
+    }
+
     pub fn init(
-        arena: Allocator,
+        gpa: Allocator,
         exit: ExitCondition,
         logger: Logger,
         rpc_url: []const u8,
         send_interval: Duration,
     ) !MockSenderService {
-        const receiver = try Channel(TransactionInfo).create(arena);
+        const receiver = try Channel(TransactionInfo).create(gpa);
         receiver.name = "TransactionSenderService: TransactionInfo Receiver";
+        errdefer receiver.destroy();
 
-        var rpc_client = try RpcClient.init(
-            arena,
+        var client = try RpcClient.init(
+            gpa,
             rpc_url,
-            .{ .max_retries = 2, .logger = .noop },
+            .{ .max_retries = 3, .logger = .noop },
         );
+        errdefer client.deinit();
 
         const epoch_start_slot, const epoch_leaders = try resolveLeadersFromRpc(
-            arena,
-            &rpc_client,
+            gpa,
+            &client,
         );
+        errdefer gpa.free(epoch_leaders);
 
         return .{
-            .arena = arena,
             .exit = exit,
             .logger = logger,
-            .client = rpc_client,
+            .client = client,
             .receiver = receiver,
             .epoch_start_slot = epoch_start_slot,
             .epoch_leaders = epoch_leaders,
@@ -149,15 +143,16 @@ const MockSenderService = struct {
         };
     }
 
-    pub fn run(self: *MockSenderService) !void {
-        const quic_sender = try Channel(Packet).create(self.arena);
+    pub fn run(self: *MockSenderService, gpa: Allocator) !void {
+        const quic_sender = try Channel(Packet).create(gpa);
         quic_sender.name = "TransactionSenderService: Packet Sender";
+        defer quic_sender.destroy();
 
         const quic_handle = try std.Thread.spawn(
             .{},
             sig.net.quic_client.runClient,
             .{
-                self.arena,
+                gpa,
                 quic_sender,
                 sig.net.quic_client.Logger.from(self.logger),
                 self.exit,
@@ -177,13 +172,17 @@ const MockSenderService = struct {
 
         while (self.exit.shouldRun()) {
             if (self.receiver.tryReceive()) |new_info| {
-                self.logger.info().logf("Received TransactionInfo: signature={f}", .{new_info.signature});
+                self.logger.info().logf("Received TransactionInfo: signature={f}", .{
+                    new_info.signature,
+                });
                 txn_info = new_info;
                 last_sent_time = Instant.EPOCH_ZERO;
             }
 
             if (last_sent_time.elapsed().gt(self.send_interval)) {
-                self.logger.info().logf("Sending Transaction: signature={f}", .{txn_info.signature});
+                self.logger.info().logf("Sending Transaction: signature={f}", .{
+                    txn_info.signature,
+                });
                 try self.sendToLeaders(quic_sender, &txn_info);
                 last_sent_time = Instant.now();
             }
@@ -205,21 +204,17 @@ const MockSenderService = struct {
             const idx = leader_idx + leader_i * LEADER_WINDOW;
             if (idx >= self.epoch_leaders.len) return error.EndOfEpoch;
             if (self.epoch_leaders[idx]) |leader| {
-                self.logger.info().logf("Sending {f} leader {d}", .{ txn_info.signature, idx });
                 try quic_sender.send(Packet.init(
                     leader,
                     txn_info.wire_transaction,
                     txn_info.wire_transaction_size,
                 ));
-            } else self.logger.info().logf("No address for leader {d}", .{idx});
+            }
         }
     }
 };
 
-fn resolveLeadersFromRpc(
-    arena: Allocator,
-    client: *RpcClient,
-) !struct { u64, []?SocketAddr } {
+fn resolveLeadersFromRpc(gpa: Allocator, client: *RpcClient) !struct { u64, []?SocketAddr } {
     var slot_response = try client.getSlot(.{
         .config = .{ .commitment = .processed },
     });
@@ -242,7 +237,7 @@ fn resolveLeadersFromRpc(
     const cluster_nodes = try cluster_nodes_response.result();
 
     var pubkey_to_tpu_quic = std.AutoArrayHashMapUnmanaged(Pubkey, SocketAddr).empty;
-    defer pubkey_to_tpu_quic.deinit(arena);
+    defer pubkey_to_tpu_quic.deinit(gpa);
 
     for (cluster_nodes) |node| {
         const tpu_quic = node.tpuQuic orelse continue;
@@ -256,29 +251,29 @@ fn resolveLeadersFromRpc(
             break :blk gossip_addr;
         };
 
-        try pubkey_to_tpu_quic.put(arena, try Pubkey.parseRuntime(node.pubkey), addr);
+        try pubkey_to_tpu_quic.put(gpa, try Pubkey.parseRuntime(node.pubkey), addr);
     }
 
     var leader_by_slot = std.AutoArrayHashMapUnmanaged(u64, Pubkey).empty;
-    defer leader_by_slot.deinit(arena);
+    defer leader_by_slot.deinit(gpa);
 
     var it = rpc_leader_schedule.value.iterator();
     while (it.next()) |entry| {
         const leader = entry.key_ptr.*;
         for (entry.value_ptr.*) |slot_in_epoch| {
-            try leader_by_slot.put(arena, epoch_start_slot + slot_in_epoch, leader);
+            try leader_by_slot.put(gpa, epoch_start_slot + slot_in_epoch, leader);
         }
     }
 
     var selected = PubkeyMap(void){};
-    defer selected.deinit(arena);
+    defer selected.deinit(gpa);
 
     var leaders: std.ArrayListUnmanaged(SocketAddr) = .empty;
-    errdefer leaders.deinit(arena);
+    errdefer leaders.deinit(gpa);
 
     const start = std.mem.min(u64, leader_by_slot.keys());
     const end = std.mem.max(u64, leader_by_slot.keys());
-    const addresses = try arena.alloc(?SocketAddr, end - start + 1);
+    const addresses = try gpa.alloc(?SocketAddr, end - start + 1);
     var has_address_count: usize = 0;
     for (start..end + 1, 0..) |slot, i| {
         const leader = leader_by_slot.get(slot) orelse return error.MissingLeaderForSlot;
