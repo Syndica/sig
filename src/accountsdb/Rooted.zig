@@ -113,21 +113,34 @@ pub fn init(
     }
 
     if (enable_spl_token_owner_index) {
-        // Migration: add token_owner column if missing. sqlite3_exec returns OK
-        // even if the column already exists (the ALTER fails silently with
-        // "duplicate column name" which we intentionally ignore).
+        // Add nullable token_owner column. Silently ignored if it already exists.
+        // NULL means "not a token account", so non-token rows never match
+        // `WHERE token_owner = ?` queries (SQL NULL != anything).
         _ = sql.sqlite3_exec(
             db,
-            "ALTER TABLE entries ADD COLUMN token_owner BLOB(32) NOT NULL DEFAULT X'" ++
-                ("0" ** 64) ++
-                "'",
+            "ALTER TABLE entries ADD COLUMN token_owner BLOB(32) DEFAULT NULL",
+            null,
+            null,
+            null,
+        );
+        // Backfill: populate token_owner for existing SPL token accounts loaded
+        // from snapshot. Without this, existing token accounts would not be found
+        // until they are re-rooted. Only touches rows owned by TOKEN or TOKEN_2022
+        // with sufficient data length.
+        _ = sql.sqlite3_exec(
+            db,
+            "UPDATE entries SET token_owner = substr(data, 33, 32)" ++
+                " WHERE token_owner IS NULL AND length(data) >= 64" ++
+                " AND (owner = X'" ++ ids.TOKEN_PROGRAM_ID.hexBytesLower() ++ "'" ++
+                " OR owner = X'" ++ ids.TOKEN_2022_PROGRAM_ID.hexBytesLower() ++ "')",
             null,
             null,
             null,
         );
         if (sql.sqlite3_exec(
             db,
-            "CREATE INDEX IF NOT EXISTS rpc_spl_token_owner_idx ON entries(token_owner)",
+            "CREATE INDEX IF NOT EXISTS rpc_spl_token_owner_idx ON entries(token_owner)" ++
+                " WHERE token_owner IS NOT NULL",
             null,
             null,
             null,
@@ -142,14 +155,6 @@ pub fn init(
             null,
         ) != OK)
             return error.FailedToDropIndex;
-        // Drop the column if it exists. Silently ignored if absent.
-        _ = sql.sqlite3_exec(
-            db,
-            "ALTER TABLE entries DROP COLUMN token_owner",
-            null,
-            null,
-            null,
-        );
     }
 
     return self;
@@ -550,7 +555,10 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
         if (self.sqlite_mem_used) |guage| guage.set(@intCast(mem_used));
     }
 
-    if (self.enable_spl_token_owner_index) {
+    if (self.enable_spl_token_owner_index and account.data.len >= 64 and
+        (account.owner.equals(&ids.TOKEN_PROGRAM_ID) or
+        account.owner.equals(&ids.TOKEN_2022_PROGRAM_ID)))
+    {
         self.putWithTokenOwner(address, slot, account);
     } else {
         self.putWithoutTokenOwner(address, slot, account);
@@ -664,17 +672,9 @@ fn putWithTokenOwner(self: *Rooted, address: Pubkey, slot: Slot, account: Accoun
     self.err(sql.sqlite3_bind_int64(stmt, 6, @bitCast(account.rent_epoch)));
     self.err(sql.sqlite3_bind_int64(stmt, 7, @bitCast(slot)));
 
-    // Compute token_owner: if the account is owned by a token program and has
-    // enough data, extract the token-level owner from data[32..64]. Otherwise
-    // store 32 zero bytes (will not match any real owner query).
-    const zero_owner: [Pubkey.SIZE]u8 = .{0} ** Pubkey.SIZE;
-    const token_owner_bytes: *const [Pubkey.SIZE]u8 = if (account.data.len >= 64 and
-        (account.owner.equals(&ids.TOKEN_PROGRAM_ID) or
-            account.owner.equals(&ids.TOKEN_2022_PROGRAM_ID)))
-        account.data.ptr[32..64]
-    else
-        &zero_owner;
-    self.err(sql.sqlite3_bind_blob(stmt, 8, token_owner_bytes, Pubkey.SIZE, sql.SQLITE_STATIC));
+    // Extract the token-level owner from data[32..64]. The caller already
+    // verified this is a token program account with data.len >= 64.
+    self.err(sql.sqlite3_bind_blob(stmt, 8, account.data.ptr + 32, Pubkey.SIZE, sql.SQLITE_STATIC));
 
     const result = sql.sqlite3_step(stmt);
     if (result != DONE) self.err(result);
