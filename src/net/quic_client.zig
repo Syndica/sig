@@ -377,7 +377,12 @@ pub fn Client(
 
                 self.client.logger.debug().logf("onNewConn: {f}", .{self.endpoint});
                 self.lsquic_connection = maybe_lsquic_connection.?;
-                self.client.connections.append(self) catch @panic("reached max connections");
+                self.client.connections.append(self) catch {
+                    self.client.logger.warn().log("max connections reached, evicting oldest");
+                    const evicted = self.client.connections.swapRemove(0);
+                    lsquic.lsquic_conn_close(evicted.lsquic_connection);
+                    self.client.connections.append(self) catch @panic("connections full");
+                };
 
                 return @ptrCast(self);
             }
