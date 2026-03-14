@@ -406,6 +406,7 @@ pub fn Client(
             lsquic_stream: *lsquic.lsquic_stream_t,
             connection: *Connection,
             packet: Packet,
+            bytes_written: usize,
 
             fn onNewStream(
                 _: ?*anyopaque,
@@ -421,6 +422,7 @@ pub fn Client(
                     .lsquic_stream = maybe_lsquic_stream.?,
                     .connection = connection,
                     .packet = connection.packets.pop() catch @panic("new stream without packet"),
+                    .bytes_written = 0,
                 };
 
                 _ = lsquic.lsquic_stream_wantwrite(maybe_lsquic_stream, 1);
@@ -440,17 +442,31 @@ pub fn Client(
             ) callconv(.c) void {
                 const stream: *Stream = @ptrCast(@alignCast(maybe_stream.?));
 
-                if (stream.packet.size != lsquic.lsquic_stream_write(
+                const remaining = stream.packet.buffer[stream.bytes_written..stream.packet.size];
+                const n = lsquic.lsquic_stream_write(
                     maybe_lsquic_stream,
-                    &stream.packet.buffer,
-                    stream.packet.size,
-                )) {
-                    @panic("failed to write complete packet to stream");
-                }
+                    remaining.ptr,
+                    remaining.len,
+                );
 
-                _ = lsquic.lsquic_stream_flush(maybe_lsquic_stream);
-                _ = lsquic.lsquic_stream_wantwrite(maybe_lsquic_stream, 0);
-                _ = lsquic.lsquic_stream_close(maybe_lsquic_stream);
+                if (n < 0) {
+                    stream.connection.client.logger.warn().log(
+                        "stream write failed; closing stream",
+                    );
+                    _ = lsquic.lsquic_stream_wantwrite(maybe_lsquic_stream, 0);
+                    _ = lsquic.lsquic_stream_close(maybe_lsquic_stream);
+                } else if (n > 0) {
+                    stream.bytes_written += @intCast(n);
+
+                    if (stream.bytes_written > stream.packet.size)
+                        @panic("lsquic_stream_write wrote more bytes than requested");
+
+                    if (stream.bytes_written == stream.packet.size) {
+                        _ = lsquic.lsquic_stream_flush(maybe_lsquic_stream);
+                        _ = lsquic.lsquic_stream_wantwrite(maybe_lsquic_stream, 0);
+                        _ = lsquic.lsquic_stream_close(maybe_lsquic_stream);
+                    }
+                }
             }
 
             fn onClose(

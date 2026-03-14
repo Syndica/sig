@@ -311,6 +311,8 @@ fn processTransactions(
 
     for (drop_list.items) |signature| _ = txn_pool.swapRemove(signature);
     drop_list.clearRetainingCapacity();
+
+    metrics.pool_size.set(txn_pool.count());
 }
 
 pub const Config = struct {
