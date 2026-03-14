@@ -8,6 +8,7 @@ const AccountStore = sig.accounts_db.AccountStore;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const Ancestors = sig.core.Ancestors;
+const EpochTracker = sig.core.EpochTracker;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
@@ -17,7 +18,10 @@ const Status = sig.core.status_cache.Status;
 
 const Packet = sig.net.Packet;
 
-const EpochTracker = sig.core.EpochTracker;
+const Counter = sig.prometheus.Counter;
+const Gauge = sig.prometheus.Gauge;
+const GetMetricError = sig.prometheus.GetMetricError;
+
 const SlotTracker = sig.replay.trackers.SlotTracker;
 
 const Channel = sig.sync.Channel;
@@ -31,7 +35,7 @@ const PubkeyMap = sig.utils.collections.PubkeyMap;
 
 const NUM_CONSECUTIVE_LEADER_SLOTS = sig.core.leader_schedule.NUM_CONSECUTIVE_LEADER_SLOTS;
 
-pub const Logger = sig.trace.Logger("TransactionSender");
+pub const Logger = sig.trace.Logger("TransactionSenderService");
 pub const Service = @This();
 
 exit: ExitCondition,
@@ -94,17 +98,13 @@ pub fn run(self: *Service, gpa: Allocator) !void {
     try self.handleTransactions(gpa, quic_sender);
 }
 
-fn handleTransactions(
-    self: *Service,
-    gpa: Allocator,
-    quic_sender: *Channel(Packet),
-) !void {
-    errdefer |err| {
-        self.logger.info().logf("handleTransactions: error={any}\n", .{err});
+fn handleTransactions(self: *Service, gpa: Allocator, quic_sender: *Channel(Packet)) !void {
+    errdefer {
+        self.logger.err().log("handle transactions error");
         if (@errorReturnTrace()) |tr| std.debug.dumpStackTrace(tr.*);
     }
 
-    // const metrics = try Metrics.init();
+    var metrics = try Metrics.init();
 
     var txn_pool = std.AutoArrayHashMapUnmanaged(Signature, TransactionInfo).empty;
     defer txn_pool.deinit(gpa);
@@ -127,40 +127,34 @@ fn handleTransactions(
     defer gpa.free(leader_addresses);
 
     while (!self.exit.shouldExit()) {
-        self.receiveTransactions(&txn_pool);
+        const start_receive = Instant.now();
+        self.receiveTransactions(&txn_pool, &metrics);
+        metrics.retry_transactions_millis.set(start_receive.elapsed().asMillis());
 
-        const process_ctx = loadProcessContext(
-            self.ctx.account_store,
-            self.ctx.slot_tracker,
-        ) catch |err| {
-            self.logger.warn().logf("Failed to load context: err={any}", .{err});
-            std.Thread.sleep(5 * std.time.ns_per_s);
-            continue;
-        };
-        defer process_ctx.release();
-
-        try leader_info.fillLeaderAddresses(process_ctx.working_slot, leader_addresses);
-
-        try processTransactions(
+        const start_process = Instant.now();
+        self.processTransactions(
             gpa,
             quic_sender,
             &txn_pool,
             &drop_list,
-            self.cfg.retry_interval,
-            self.cfg.max_retries,
-            self.ctx.status_cache,
-            process_ctx.root_ancestors,
-            process_ctx.root_block_height,
-            process_ctx.working_ancestors,
-            process_ctx.account_reader,
+            &leader_info,
             leader_addresses,
-        );
+            &metrics,
+        ) catch |err| switch (err) {
+            error.RootSlotNotAvailable, error.WorkingSlotNotAvailable => {
+                self.logger.warn().logf("Root or working slot not available, retrying: err={any}", .{err});
+                std.Thread.sleep(5 * std.time.ns_per_s);
+            },
+            else => return err,
+        };
+        metrics.process_transactions_millis.set(start_process.elapsed().asMillis());
     }
 }
 
 fn receiveTransactions(
     self: *Service,
     txn_pool: *std.AutoArrayHashMapUnmanaged(Signature, TransactionInfo),
+    metrics: *Metrics,
 ) void {
     var timer = Instant.now();
     while (self.exit.shouldRun() and
@@ -172,10 +166,13 @@ fn receiveTransactions(
         };
         self.receiver.event.timedWait(10 * std.time.ns_per_ms) catch continue;
         if (self.receiver.tryReceive()) |txn_info| {
-            if (!txn_pool.contains(txn_info.signature)) txn_pool.putAssumeCapacity(
-                txn_info.signature,
-                txn_info,
-            );
+            if (!txn_pool.contains(txn_info.signature)) {
+                metrics.received_count.inc();
+                txn_pool.putAssumeCapacity(
+                    txn_info.signature,
+                    txn_info,
+                );
+            }
         }
     }
 }
@@ -196,71 +193,59 @@ const ProcessContext = struct {
     }
 };
 
-fn loadProcessContext(
-    account_store: AccountStore,
-    slot_tracker: *SlotTracker,
-) !ProcessContext {
-    const root_slot = slot_tracker.root.load(.monotonic);
-    const root_ref = slot_tracker.get(root_slot) orelse return error.RootSlotNotAvailable;
-    errdefer root_ref.release();
-
-    const working_slot = slot_tracker.commitments.processed.load(.monotonic);
-    const working_ref = slot_tracker.get(working_slot) orelse return error.WorkingSlotNotAvailable;
-    errdefer working_ref.release();
-
-    return .{
-        .root_slot = root_slot,
-        .root_ref = root_ref,
-        .root_ancestors = &root_ref.constants().ancestors,
-        .root_block_height = root_ref.constants().block_height,
-        .working_slot = working_slot,
-        .working_ref = working_ref,
-        .working_ancestors = &working_ref.constants().ancestors,
-        .account_reader = account_store.forSlot(
-            working_slot,
-            &working_ref.constants().ancestors,
-        ).reader(),
-    };
-}
-
 fn processTransactions(
+    self: *Service,
     gpa: Allocator,
     sender: *Channel(Packet),
     txn_pool: *std.AutoArrayHashMapUnmanaged(Signature, TransactionInfo),
     drop_list: *std.ArrayList(Signature),
-    retry_interval: Duration,
-    max_retries: usize,
-    status_cache: *StatusCache,
-    root_ancestors: *const Ancestors,
-    root_block_height: u64,
-    working_ancestors: *const Ancestors,
-    working_account_reader: sig.accounts_db.SlotAccountReader,
-    leader_addresses: []const ?sig.net.SocketAddr,
+    leader_info: *LeaderInfo,
+    leader_addresses: []?sig.net.SocketAddr,
+    metrics: *Metrics,
 ) !void {
+    const root_slot = self.ctx.slot_tracker.root.load(.monotonic);
+    const root_ref = self.ctx.slot_tracker.get(root_slot) orelse
+        return error.RootSlotNotAvailable;
+    errdefer root_ref.release();
+
+    const working_slot = self.ctx.slot_tracker.commitments.processed.load(.monotonic);
+    const working_ref = self.ctx.slot_tracker.get(working_slot) orelse
+        return error.WorkingSlotNotAvailable;
+    errdefer working_ref.release();
+
+    const account_reader = self.ctx.account_store.forSlot(
+        working_slot,
+        &working_ref.constants().ancestors,
+    ).reader();
+
+    try leader_info.fillLeaderAddresses(working_slot, leader_addresses);
+
     for (txn_pool.keys(), txn_pool.values()) |signature, *txn_info| {
-        switch (status_cache.getStatus(
+        switch (self.ctx.status_cache.getStatus(
             &txn_info.message_hash.data,
             &txn_info.recent_blockhash,
-            root_ancestors,
+            &root_ref.constants().ancestors,
         )) {
             // Check for drop or retry
             .pending => {},
             // Drop after rooted
             .failed, .succeeded => {
+                metrics.rooted_count.inc();
                 drop_list.appendAssumeCapacity(signature);
                 continue;
             },
         }
 
-        switch (status_cache.getStatus(
+        switch (self.ctx.status_cache.getStatus(
             &txn_info.message_hash.data,
             &txn_info.recent_blockhash,
-            working_ancestors,
+            &working_ref.constants().ancestors,
         )) {
             // Check for drop or retry
             .pending => {},
             // Drop immediately
             .failed => {
+                metrics.failed_count.inc();
                 drop_list.appendAssumeCapacity(signature);
                 continue;
             },
@@ -268,24 +253,26 @@ fn processTransactions(
             .succeeded => continue,
         }
 
-        if (txn_info.retries >= @min(txn_info.max_retries, max_retries)) {
+        if (txn_info.retries >= @min(txn_info.max_retries, self.cfg.max_retries)) {
+            metrics.expired_count.inc();
             drop_list.appendAssumeCapacity(signature);
             continue;
         }
 
-        if (txn_info.last_valid_block_height < root_block_height) {
+        if (txn_info.last_valid_block_height < root_ref.constants().block_height) {
+            metrics.expired_count.inc();
             drop_list.appendAssumeCapacity(signature);
             continue;
         }
 
         if (txn_info.durable_nonce_info) |nonce| {
             const inflight = if (txn_info.last_sent_time) |last_sent_time|
-                last_sent_time.elapsed().lte(retry_interval)
+                last_sent_time.elapsed().lte(self.cfg.retry_interval)
             else
                 false;
 
             const valid = blk: {
-                const account = try working_account_reader.get(
+                const account = try account_reader.get(
                     gpa,
                     nonce[0],
                 ) orelse break :blk false;
@@ -298,13 +285,14 @@ fn processTransactions(
             };
 
             if (!inflight and !valid) {
+                metrics.expired_count.inc();
                 drop_list.appendAssumeCapacity(signature);
                 continue;
             }
         }
 
         if (txn_info.last_sent_time) |last_sent_time| {
-            if (last_sent_time.elapsed().lt(retry_interval)) continue;
+            if (last_sent_time.elapsed().lt(self.cfg.retry_interval)) continue;
         }
 
         var packet = Packet.init(
@@ -439,7 +427,13 @@ const LeaderInfo = struct {
         };
 
         if (self.leader_addresses.count() >= self.leader_addresses.capacity() - 1) {
-            self.logger.info().log("Leader address cache is full, pruning old entries.");
+            self.logger.info().logf(
+                "Leader address cache is full ({}/{}), pruning old entries.",
+                .{
+                    self.leader_addresses.count(),
+                    self.leader_addresses.capacity(),
+                },
+            );
             var threshold = START_PRUNE_THRESHOLD;
             var pruned_count: usize = 0;
             while (pruned_count == 0) : (threshold = .fromSecs(threshold.asSecs() / 2)) {
@@ -485,415 +479,24 @@ const LeaderInfo = struct {
     }
 };
 
-// const Counter = sig.prometheus.Counter;
-// const Gauge = sig.prometheus.Gauge;
+pub const Metrics = struct {
+    pool_size: *Gauge(u64),
 
-// const Metrics = struct {
-//     pub const prefix = "transaction_sender";
+    received_count: *Counter,
+    failed_count: *Counter,
+    rooted_count: *Counter,
+    expired_count: *Counter,
 
-//     pub fn init() sig.prometheus.GetMetricError!Metrics {
-//         return sig.prometheus.globalRegistry().initStruct(Metrics);
-//     }
+    process_transactions_millis: *Gauge(u64),
+    retry_transactions_millis: *Gauge(u64),
+    get_leader_addresses_millis: *Gauge(u64),
 
-//     pub fn log(self: *const Metrics, logger: Logger) void {
-// std.debug.print("\n", .{});
-//     }
-// };
+    rpc_block_height_millis: *Gauge(u64),
+    rpc_signature_statuses_millis: *Gauge(u64),
 
-// fn logCliSubmitCommand(txn_info: *const TransactionInfo) void {
-//     const wire_txn = txn_info.wire_transaction[0..txn_info.wire_transaction_size];
+    pub const prefix = "TransactionSenderService";
 
-//     var encoded_buf: [std.base64.standard.Encoder.calcSize(sig.net.Packet.DATA_SIZE)]u8 = undefined;
-//     const encoded_len = std.base64.standard.Encoder.calcSize(wire_txn.len);
-//     const encoded_wire_txn = std.base64.standard.Encoder.encode(encoded_buf[0..encoded_len], wire_txn);
-
-//     std.debug.print("(TSS) Transaction wire payload (base64): {s}\n", .{encoded_wire_txn});
-//     std.debug.print(
-//         "(TSS) JSON-RPC submit: curl https://api.testnet.solana.com -H 'Content-Type: application/json' -d '{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"sendTransaction\",\"params\":[\"{s}\",{{\"encoding\":\"base64\"}}]}}'\n",
-//         .{encoded_wire_txn},
-//     );
-// }
-
-// pub const mock = struct {
-//     const Commitment = sig.rpc.methods.common.Commitment;
-
-//     const MockLogger = sig.trace.Logger("mock_transfer");
-
-//     pub const TRANSFER_AMOUNT: u64 = 1e6;
-//     pub const TRANSFER_FEE: u64 = 5000;
-//     pub const TRANSFER_COST: u64 = TRANSFER_AMOUNT + TRANSFER_FEE;
-
-//     pub const Mode = union(enum) {
-//         rpc: RpcMode,
-//         sig: SigMode,
-
-//         pub fn getAccountBalance(
-//             self: *Mode,
-//             gpa: Allocator,
-//             pubkey: Pubkey,
-//             commitment: Commitment,
-//         ) !u64 {
-//             return switch (self.*) {
-//                 .rpc => try self.rpc.getAccountBalance(pubkey, commitment),
-//                 .sig => try self.sig.getAccountBalance(gpa, pubkey, commitment),
-//             };
-//         }
-
-//         pub fn getLatestBlockhash(self: *Mode, commitment: Commitment) !Hash {
-//             return switch (self.*) {
-//                 .rpc => try self.rpc.getLatestBlockhash(commitment),
-//                 .sig => try self.sig.getLatestBlockhash(commitment),
-//             };
-//         }
-
-//         pub fn getTransactionStatus(self: *Mode, txn_info: *const TransactionInfo) !Status {
-//             return switch (self.*) {
-//                 .rpc => try self.rpc.getSignatureStatus(txn_info.signature),
-//                 .sig => try self.sig.getTransactionStatus(txn_info),
-//             };
-//         }
-//     };
-
-//     pub const RpcMode = struct {
-//         client: sig.rpc.Client,
-
-//         pub fn getAccountBalance(self: *RpcMode, pubkey: Pubkey, commitment: Commitment) !u64 {
-//             var response = try self.client.getBalance(
-//                 .{ .pubkey = pubkey, .config = .{ .commitment = commitment } },
-//             );
-//             defer response.deinit();
-//             const result = try response.result();
-//             return result.value;
-//         }
-
-//         pub fn getLatestBlockhash(self: *RpcMode, commitment: Commitment) !Hash {
-//             var response = try self.client.getLatestBlockhash(
-//                 .{ .config = .{ .commitment = commitment } },
-//             );
-//             defer response.deinit();
-//             const result = try response.result();
-//             return try Hash.parseRuntime(result.value.blockhash);
-//         }
-
-//         pub fn getSignatureStatus(self: *RpcMode, signature: Signature) !Status {
-//             var response = try self.client.getSignatureStatuses(.{
-//                 .signatures = &.{signature},
-//                 .config = .{ .searchTransactionHistory = true },
-//             });
-//             defer response.deinit();
-//             const result = try response.result();
-//             if (result.value.len == 0) return .pending;
-
-//             const maybe_status = result.value[0] orelse return .pending;
-//             if (maybe_status.err != null) return .failed;
-//             return .succeeded;
-//         }
-//     };
-
-//     pub const SigMode = struct {
-//         account_store: AccountStore,
-//         slot_tracker: *sig.replay.trackers.SlotTracker,
-//         status_cache: *sig.core.StatusCache,
-
-//         pub fn getAccountBalance(self: *SigMode, gpa: Allocator, pubkey: Pubkey, commitment: Commitment) !u64 {
-//             const slot = switch (commitment) {
-//                 .processed => self.slot_tracker.commitments.processed.load(.monotonic),
-//                 .confirmed => self.slot_tracker.commitments.confirmed.load(.monotonic),
-//                 .finalized => self.slot_tracker.commitments.finalized.load(.monotonic),
-//             };
-
-//             const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-//             defer slot_ref.release();
-
-//             const account = try self.account_store.forSlot(
-//                 slot,
-//                 &slot_ref.constants().ancestors,
-//             ).reader().get(gpa, pubkey) orelse return 0;
-//             defer account.deinit(gpa);
-
-//             return account.lamports;
-//         }
-
-//         pub fn getLatestBlockhash(self: *SigMode, commitment: Commitment) !Hash {
-//             const slot = switch (commitment) {
-//                 .processed => self.slot_tracker.commitments.processed.load(.monotonic),
-//                 .confirmed => self.slot_tracker.commitments.confirmed.load(.monotonic),
-//                 .finalized => self.slot_tracker.commitments.finalized.load(.monotonic),
-//             };
-
-//             const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-//             defer slot_ref.release();
-
-//             const bh_queue, var bh_queue_lg = slot_ref.state().blockhash_queue.readWithLock();
-//             defer bh_queue_lg.unlock();
-
-//             return bh_queue.last_hash orelse return error.BlockhashQueueEmpty;
-//         }
-
-//         pub fn getTransactionStatus(self: *SigMode, txn_info: *const TransactionInfo) !Status {
-//             const slot = self.slot_tracker.commitments.confirmed.load(.monotonic);
-
-//             const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-//             defer slot_ref.release();
-
-//             return self.status_cache.getStatus(
-//                 &txn_info.message_hash.data,
-//                 &txn_info.recent_blockhash,
-//                 &slot_ref.constants().ancestors,
-//             );
-//         }
-//     };
-
-//     pub const MockAccount = struct {
-//         name: []const u8,
-//         keypair: KeyPair,
-//         pubkey: Pubkey,
-//         lamports: u64,
-
-//         // Pubkey: H67JSziFxAZR1KSQshWfa8Rdpr7LSv1VkT2cFQHL79rd
-//         pub const ALICE: MockAccount = .init("alice", .{
-//             .public_key = .{ .bytes = .{ 3, 140, 214, 34, 176, 145, 149, 13, 169, 145, 117, 3, 98, 140, 206, 183, 20, 52, 35, 97, 89, 82, 55, 162, 13, 26, 172, 9, 77, 242, 217, 211 } },
-//             .secret_key = .{ .bytes = .{ 28, 57, 92, 177, 192, 198, 0, 137, 66, 122, 128, 0, 112, 193, 184, 209, 72, 187, 109, 65, 115, 173, 181, 139, 194, 185, 253, 182, 173, 110, 184, 124, 3, 140, 214, 34, 176, 145, 149, 13, 169, 145, 117, 3, 98, 140, 206, 183, 20, 52, 35, 97, 89, 82, 55, 162, 13, 26, 172, 9, 77, 242, 217, 211 } },
-//         });
-
-//         // Pubkey: ErnDW7vq2XmzstretUJ7NhT95PV6zeXeyXwLssowF6i
-//         pub const BOB: MockAccount = .init("bob", .{
-//             .public_key = .{ .bytes = .{ 239, 10, 4, 236, 219, 237, 69, 197, 199, 60, 117, 184, 223, 215, 132, 73, 93, 248, 200, 254, 212, 239, 251, 120, 223, 25, 201, 196, 20, 58, 163, 62 } },
-//             .secret_key = .{ .bytes = .{ 208, 26, 255, 64, 164, 52, 99, 120, 92, 227, 25, 240, 222, 245, 70, 77, 171, 89, 129, 64, 110, 73, 159, 230, 38, 212, 150, 202, 57, 157, 151, 175, 239, 10, 4, 236, 219, 237, 69, 197, 199, 60, 117, 184, 223, 215, 132, 73, 93, 248, 200, 254, 212, 239, 251, 120, 223, 25, 201, 196, 20, 58, 163, 62 } },
-//         });
-
-//         fn init(name: []const u8, keypair: KeyPair) MockAccount {
-//             return .{
-//                 .name = name,
-//                 .keypair = keypair,
-//                 .pubkey = Pubkey.fromPublicKey(&keypair.public_key),
-//                 .lamports = 0,
-//             };
-//         }
-
-//         pub fn format(self: MockAccount, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-//             try writer.print("(name={s}, lamports={d}, pubkey={f})", .{ self.name, self.lamports, self.pubkey });
-//         }
-//     };
-
-//     pub fn run(
-//         gpa: Allocator,
-//         num_transfers: usize,
-//         mode: Mode,
-//         sender: *Channel(TransactionInfo),
-//         logger: MockLogger,
-//         exit: ExitCondition,
-//     ) !void {
-//         var alice = MockAccount.ALICE;
-//         var bob = MockAccount.BOB;
-
-//         logger.info().log("Initializing accounts for mock transfer");
-//         var from_account, var to_account = try initAccounts(
-//             gpa,
-//             &mode,
-//             &alice,
-//             &bob,
-//             logger,
-//             exit,
-//         );
-
-//         logger.info().logf("Starting mock transfers: {f} -> {f}", .{ from_account, to_account });
-//         var num_successful: usize = 0;
-//         while (!exit.shouldExit() and num_successful < num_transfers) {
-//             if (from_account.lamports < TRANSFER_COST and to_account.lamports < TRANSFER_COST) {
-//                 logger.info().logf("Insufficient lamports: {f} -> {f}", .{ from_account, to_account });
-//                 return error.InsufficientBalance;
-//             } else if (from_account.lamports < TRANSFER_COST) {
-//                 logger.info().logf("Switching mock transfers: {f} -> {f}", .{ from_account, to_account });
-//                 const tmp = from_account;
-//                 from_account = to_account;
-//                 to_account = tmp;
-//             }
-
-//             logger.info().logf("Attempting transfer {}/{}", .{ num_successful + 1, num_transfers });
-//             const txn_info = try buildTransfer(gpa, &mode, from_account, to_account);
-
-//             logger.info().logf("Sending transfer {}/{}: signature={f}", .{txn_info.signature});
-//             try sender.send(txn_info);
-
-//             switch (waitForTransfer(
-//                 gpa,
-//                 &mode,
-//                 txn_info,
-//                 .fromSecs(60),
-//                 logger,
-//                 exit,
-//             )) {
-//                 .succeeded => {
-//                     from_account.lamports = try mode.getAccountBalance(
-//                         gpa,
-//                         from_account.pubkey,
-//                         .finalized,
-//                     );
-//                     to_account.lamports = try mode.getAccountBalance(
-//                         gpa,
-//                         to_account.pubkey,
-//                         .finalized,
-//                     );
-//                     logger.info().logf("Transfer success {}/{}: signature={f}", .{
-//                         num_successful + 1,
-//                         num_transfers,
-//                         txn_info.signature,
-//                     });
-//                     num_successful += 1;
-//                     continue;
-//                 },
-//                 .failed => {
-//                     logger.info().logf("Transfer failure {}/{}: signature={f}", .{
-//                         num_successful + 1,
-//                         num_transfers,
-//                         txn_info.signature,
-//                     });
-//                     return error.TransferFailed;
-//                 },
-//                 .unprocessed => {
-//                     logger.info().logf("Transfer timeout {}/{}: signature={f}", .{
-//                         num_successful + 1,
-//                         num_transfers,
-//                         txn_info.signature,
-//                     });
-//                     continue;
-//                 },
-//             }
-//         }
-//     }
-
-//     pub fn initAccounts(
-//         gpa: Allocator,
-//         mode: *Mode,
-//         account_0: *MockAccount,
-//         account_1: *MockAccount,
-//         logger: MockLogger,
-//         exit: ExitCondition,
-//     ) !struct { *MockAccount, *MockAccount } {
-//         while (exit.shouldRun()) {
-//             inline for (&.{ account_0, account_1 }) |account| {
-//                 account.lamports = mode.getAccountBalance(
-//                     gpa,
-//                     account.pubkey,
-//                     .finalized,
-//                 ) catch |err| switch (err) {
-//                     error.SlotNotAvailable => break,
-//                     else => return err,
-//                 };
-//             } else break;
-//             logger.info().log("Finalized slot not available, waiting to catch up...");
-//             std.Thread.sleep(10 * std.time.ns_per_s);
-//         }
-//         return if (account_0.lamports > account_1.lamports)
-//             .{ account_0, account_1 }
-//         else
-//             .{ account_1, account_0 };
-//     }
-
-//     pub fn buildTransfer(
-//         gpa: std.mem.Allocator,
-//         mode: *Mode,
-//         from_account: *MockAccount,
-//         to_account: *MockAccount,
-//     ) !TransactionInfo {
-//         const blockhash = try mode.getLatestBlockhash(.confirmed);
-
-//         const transaction = try buildTransferTansaction(
-//             gpa,
-//             from_account.keypair,
-//             to_account.pubkey,
-//             TRANSFER_AMOUNT,
-//             blockhash,
-//         );
-
-//         const msg_bytes = try transaction.msg.serializeBounded(transaction.version);
-//         const message_hash = sig.core.Hash.init(msg_bytes.constSlice());
-
-//         return try TransactionInfo.init(
-//             transaction,
-//             message_hash,
-//             std.math.maxInt(u64),
-//             null,
-//             null,
-//         );
-//     }
-
-//     fn waitForTransfer(
-//         mode: *Mode,
-//         txn_info: *const TransactionInfo,
-//         timeout: Duration,
-//         logger: MockLogger,
-//         exit: ExitCondition,
-//     ) Status {
-//         const start_time = Instant.now();
-
-//         while (exit.shouldRun() and start_time.elapsed().lt(timeout)) {
-//             const status = mode.getTransactionStatus(txn_info) catch |err| {
-//                 logger.info().logf("Failed to get transaction status: {any}", .{err});
-//                 std.Thread.sleep(1 * std.time.ns_per_s);
-//                 continue;
-//             };
-
-//             switch (status) {
-//                 .failed, .succeeded => return status,
-//                 .unprocessed => std.Thread.sleep(1 * std.time.ns_per_s),
-//             }
-//         }
-
-//         return .unprocessed;
-//     }
-
-//     pub fn buildTransferTansaction(
-//         gpa: std.mem.Allocator,
-//         from_keypair: KeyPair,
-//         to_pubkey: Pubkey,
-//         lamports: u64,
-//         recent_blockhash: Hash,
-//     ) !sig.core.Transaction {
-//         const from_pubkey = Pubkey.fromPublicKey(&from_keypair.public_key);
-
-//         const account_keys = try gpa.dupe(Pubkey, &.{
-//             from_pubkey,
-//             to_pubkey,
-//             sig.runtime.program.system.ID,
-//         });
-//         errdefer gpa.free(account_keys);
-
-//         const account_indexes = try gpa.dupe(u8, &.{ 0, 1 });
-//         errdefer gpa.free(account_indexes);
-
-//         var transfer_data = [_]u8{0} ** 12;
-//         var fbs = std.io.fixedBufferStream(&transfer_data);
-//         const writer = fbs.writer();
-//         try writer.writeInt(u32, 2, .little);
-//         try writer.writeInt(u64, lamports, .little);
-
-//         const instruction_data = try gpa.dupe(u8, &transfer_data);
-//         errdefer gpa.free(instruction_data);
-
-//         const instructions = try gpa.alloc(sig.core.transaction.Instruction, 1);
-//         errdefer gpa.free(instructions);
-//         instructions[0] = .{
-//             .program_index = 2,
-//             .account_indexes = account_indexes,
-//             .data = instruction_data,
-//         };
-
-//         const msg: sig.core.transaction.Message = .{
-//             .signature_count = 1,
-//             .readonly_signed_count = 0,
-//             .readonly_unsigned_count = 1,
-//             .account_keys = account_keys,
-//             .recent_blockhash = recent_blockhash,
-//             .instructions = instructions,
-//         };
-
-//         return try sig.core.Transaction.initOwnedMessageWithSigningKeypairs(
-//             gpa,
-//             .legacy,
-//             msg,
-//             &.{from_keypair},
-//         );
-//     }
-// };
+    pub fn init() GetMetricError!Metrics {
+        return sig.prometheus.globalRegistry().initStruct(Metrics);
+    }
+};

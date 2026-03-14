@@ -21,7 +21,7 @@ const TransactionInfo = sig.TransactionSenderService.TransactionInfo;
 
 const Commitment = sig.rpc.methods.common.Commitment;
 
-const Logger = sig.trace.Logger("mock_transfer_service");
+const Logger = sig.trace.Logger("MockTransferService");
 
 pub const Service = @This();
 
