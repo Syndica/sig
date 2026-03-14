@@ -1744,34 +1744,43 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
-    const transaction_sender_channel = try sig.sync.Channel(
-        sig.transaction_sender_v2.TransactionInfo,
-    ).create(allocator);
-    transaction_sender_channel.name = "Transaction Sender: Input Channel";
-    defer transaction_sender_channel.destroy();
-
-    const transaction_sender_handle = try std.Thread.spawn(
-        .{},
-        sig.transaction_sender_v2.run,
-        .{sig.transaction_sender_v2.Args{
-            .gpa = allocator,
-            .config = .{
-                .process_interval = .fromSecs(1),
-                .retry_interval = .fromSecs(5),
-                .max_pooled = 1_000,
-                .max_retries = 3,
-                .max_leaders = 5,
-            },
+    var transaction_sender_service = try sig.TransactionSenderService.init(
+        allocator,
+        .{ .unordered = app_base.exit },
+        .from(app_base.logger),
+        .{
+            .process_interval = .fromSecs(1),
+            .retry_interval = .fromSecs(5),
+            .max_pooled = 1_000,
+            .max_retries = 3,
+            .max_leaders = 5,
+        },
+        .{
             .account_store = .{ .accounts_db = &new_db },
             .epoch_tracker = &epoch_tracker,
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
             .status_cache = &replay_service_state.replay_state.status_cache,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
-            .receiver = transaction_sender_channel,
-            .exit = .{ .unordered = app_base.exit },
-            .logger = .from(app_base.logger),
-            .run_mock_transfers = true,
-        }},
+        },
+    );
+    defer transaction_sender_service.deinit();
+    const transaction_sender_handle = try std.Thread.spawn(
+        .{},
+        sig.TransactionSenderService.run,
+        .{ &transaction_sender_service, gpa },
+    );
+
+    var mock_transfer_service = sig.MockTransferService{
+        .exit = .{ .unordered = app_base.exit },
+        .logger = .from(app_base.logger),
+        .mode = try .initRpc(gpa, rpc_url, .noop),
+        .sender = transaction_sender_service.receiver,
+        .transfers = 100,
+    };
+    const mock_transfer_handle = try std.Thread.spawn(
+        .{},
+        sig.MockTransferService.run,
+        .{ &mock_transfer_service, gpa },
     );
 
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
@@ -1787,6 +1796,7 @@ fn validator(
 
     if (rpc_server_thread) |thread| thread.join();
     transaction_sender_handle.join();
+    mock_transfer_handle.join();
     replay_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();

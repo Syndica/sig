@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("sig");
 
+const Allocator = std.mem.Allocator;
 const KeyPair = sig.identity.KeyPair;
 
 const bincode = sig.bincode;
@@ -20,11 +21,17 @@ const QuicClientLogger = sig.net.quic_client.Logger;
 const runQuicClient = sig.net.quic_client.runClient;
 
 const RpcClient = sig.rpc.Client;
+const Commitment = sig.rpc.methods.common.Commitment;
 
 const SYSTEM_PROGRAM_ID = sig.runtime.program.system.ID;
 
 const Channel = sig.sync.Channel;
 const ExitCondition = sig.sync.ExitCondition;
+
+const TransactionInfo = sig.TransactionSenderService.TransactionInfo;
+
+const Instant = sig.time.Instant;
+const Duration = sig.time.Duration;
 
 const PubkeyMap = sig.utils.collections.PubkeyMap;
 
@@ -72,160 +79,165 @@ pub fn main() !void {
     }
 
     const rpc_url = if (args.len == 2) args[1] else DEFAULT_RPC_URL;
-    var rpc_client = try sig.rpc.Client.init(arena, rpc_url, .{ .max_retries = 2, .logger = .noop });
-    defer rpc_client.deinit();
 
-    const epoch_start_slot, const leaders = try resolveLeadersFromRpc(arena, &rpc_client);
-    defer arena.free(leaders);
-
-    const quic_channel = try Channel(Packet).create(arena);
-    defer quic_channel.destroy();
-
-    const client_thread = try std.Thread.spawn(
-        .{},
-        runQuicClient,
-        .{ arena, quic_channel, QuicClientLogger.from(logger), exit },
-    );
-    defer client_thread.join();
-
-    var mode = mock.Mode{ .rpc = .{ .client = rpc_client } };
-    var alice = mock.MockAccount.ALICE;
-    var bob = mock.MockAccount.BOB;
-
-    logger.info().log("Initializing accounts for mock transfer");
-    var from_account, var to_account = try mock.initAccounts(
-        gpa,
-        &mode,
-        &alice,
-        &bob,
-        .from(logger),
+    var mock_sender_service = try MockSenderService.init(
+        arena,
         exit,
+        .from(logger),
+        rpc_url,
+        .fromSecs(5), // Approx every 2 leaders
     );
+    const mock_sender_handle = try std.Thread.spawn(
+        .{},
+        MockSenderService.run,
+        .{&mock_sender_service},
+    );
+    defer mock_sender_handle.join();
 
-    logger.info().logf("Starting mock transfers: {f} -> {f}", .{ from_account, to_account });
-    const num_transfers: usize = 10;
-    var num_successful: usize = 0;
-    while (exit.shouldRun() and num_successful < num_transfers) {
-        if (from_account.lamports < mock.TRANSFER_COST and to_account.lamports < mock.TRANSFER_COST) {
-            logger.info().logf("Insufficient lamports: {f} -> {f}", .{ from_account, to_account });
-            return error.InsufficientBalance;
-        } else if (from_account.lamports < mock.TRANSFER_COST) {
-            logger.info().logf("Switching mock transfers: {f} -> {f}", .{ from_account, to_account });
-            const tmp = from_account;
-            from_account = to_account;
-            to_account = tmp;
-        }
-
-        logger.info().logf("Attempting transfer {}/{}", .{ num_successful + 1, num_transfers });
-        const txn_info = try mock.buildTransfer(gpa, &mode, from_account, to_account);
-
-        const start_slot = blk: {
-            var slot_response = try rpc_client.getSlot(
-                .{ .config = .{ .commitment = .processed } },
-            );
-            defer slot_response.deinit();
-            break :blk try slot_response.result();
-        };
-        var current_slot = start_slot;
-
-        var txn_landed = false;
-        while (exit.shouldRun() and current_slot < start_slot + 150 and !txn_landed) {
-            const last_send_slot = current_slot;
-            const leader_start_index = current_slot - epoch_start_slot;
-            for (0..FORWARD_TO_LEADERS) |leader_num| {
-                const leader_idx = leader_start_index + leader_num * LEADER_WINDOW;
-                if (leader_idx >= leaders.len) return error.EndOfEpoch;
-                if (leaders[leader_idx]) |leader| {
-                    logger.info().logf(
-                        "sending tx={f} slot={d} leader_num={}",
-                        .{ txn_info.signature, current_slot, leader_num },
-                    );
-                    try quic_channel.send(Packet.init(
-                        leader,
-                        txn_info.tx_wire,
-                        txn_info.tx_len,
-                    ));
-                } else {
-                    logger.info().logf(
-                        "sending tx={f} slot={d} leader_num={} (no address)",
-                        .{ txn_info.signature, current_slot, leader_num },
-                    );
-                }
-            }
-
-            while (exit.shouldRun() and
-                current_slot < last_send_slot + FORWARD_TO_LEADERS * LEADER_WINDOW)
-            {
-                switch (try mode.getTransactionStatus(&txn_info)) {
-                    .succeeded => {
-                        logger.info().logf(
-                            "succeeded tx={f} slot={d}",
-                            .{ txn_info.signature, current_slot },
-                        );
-                        num_successful += 1;
-                        txn_landed = true;
-                        break;
-                    },
-                    .failed => {
-                        logger.err().logf(
-                            "failed tx={f} slot={d}",
-                            .{ txn_info.signature, current_slot },
-                        );
-                        txn_landed = true;
-                        break;
-                    },
-                    .pending => {
-                        logger.info().logf(
-                            "pending tx={f} slot={d}",
-                            .{ txn_info.signature, current_slot },
-                        );
-                        std.Thread.sleep(std.time.ns_per_s);
-                    },
-                }
-
-                current_slot = blk: {
-                    var slot_response = try rpc_client.getSlot(
-                        .{ .config = .{ .commitment = .processed } },
-                    );
-                    defer slot_response.deinit();
-                    break :blk try slot_response.result();
-                };
-            }
-
-            if (txn_landed) {
-                from_account.balance = try mode.getAccountBalance(gpa, from_account.pubkey, .confirmed);
-                to_account.balance = try mode.getAccountBalance(gpa, to_account.pubkey, .confirmed);
-                break;
-            } else logger.info().log("pending for too long, retrying...");
-        }
-    }
-
-    logger.info().logf("done (successful transactions: {})", .{num_successful});
+    var mock_transfer_service = sig.MockTransferService{
+        .exit = exit,
+        .logger = .from(logger),
+        .mode = try .initRpc(gpa, rpc_url, .noop),
+        .sender = mock_sender_service.receiver,
+        .transfers = 100,
+    };
+    try mock_transfer_service.run(arena);
     exit.setExit();
 }
 
+const MockSenderService = struct {
+    arena: Allocator,
+    exit: ExitCondition,
+    logger: Logger,
+    client: RpcClient,
+    receiver: *Channel(TransactionInfo),
+
+    epoch_start_slot: u64,
+    epoch_leaders: []?SocketAddr,
+    send_interval: Duration,
+
+    pub fn init(
+        arena: Allocator,
+        exit: ExitCondition,
+        logger: Logger,
+        rpc_url: []const u8,
+        send_interval: Duration,
+    ) !MockSenderService {
+        const receiver = try Channel(TransactionInfo).create(arena);
+        receiver.name = "TransactionSenderService: TransactionInfo Receiver";
+
+        var rpc_client = try RpcClient.init(
+            arena,
+            rpc_url,
+            .{ .max_retries = 2, .logger = .noop },
+        );
+
+        const epoch_start_slot, const epoch_leaders = try resolveLeadersFromRpc(
+            arena,
+            &rpc_client,
+        );
+
+        return .{
+            .arena = arena,
+            .exit = exit,
+            .logger = logger,
+            .client = rpc_client,
+            .receiver = receiver,
+            .epoch_start_slot = epoch_start_slot,
+            .epoch_leaders = epoch_leaders,
+            .send_interval = send_interval,
+        };
+    }
+
+    pub fn run(self: *MockSenderService) !void {
+        const quic_sender = try Channel(Packet).create(self.arena);
+        quic_sender.name = "TransactionSenderService: Packet Sender";
+
+        const quic_handle = try std.Thread.spawn(
+            .{},
+            sig.net.quic_client.runClient,
+            .{
+                self.arena,
+                quic_sender,
+                sig.net.quic_client.Logger.from(self.logger),
+                self.exit,
+            },
+        );
+        defer quic_handle.join();
+
+        try self.handleTransactions(quic_sender);
+    }
+
+    fn handleTransactions(
+        self: *MockSenderService,
+        quic_sender: *Channel(Packet),
+    ) !void {
+        var last_sent_time = Instant.EPOCH_ZERO;
+        var txn_info = try self.receiver.receive(self.exit);
+
+        while (self.exit.shouldRun()) {
+            if (self.receiver.tryReceive()) |new_info| {
+                self.logger.info().logf("Received TransactionInfo: signature={f}", .{new_info.signature});
+                txn_info = new_info;
+                last_sent_time = Instant.EPOCH_ZERO;
+            }
+
+            if (last_sent_time.elapsed().gt(self.send_interval)) {
+                self.logger.info().logf("Sending Transaction: signature={f}", .{txn_info.signature});
+                try self.sendToLeaders(quic_sender, &txn_info);
+                last_sent_time = Instant.now();
+            }
+
+            std.Thread.sleep(100 * std.time.ns_per_ms);
+        }
+    }
+
+    fn sendToLeaders(
+        self: *MockSenderService,
+        quic_sender: *Channel(Packet),
+        txn_info: *TransactionInfo,
+    ) !void {
+        var slot_response = try self.client.getSlot(.{ .config = .{ .commitment = .processed } });
+        const slot = try slot_response.result();
+
+        const leader_idx = slot - self.epoch_start_slot;
+        for (0..FORWARD_TO_LEADERS) |leader_i| {
+            const idx = leader_idx + leader_i * LEADER_WINDOW;
+            if (idx >= self.epoch_leaders.len) return error.EndOfEpoch;
+            if (self.epoch_leaders[idx]) |leader| {
+                self.logger.info().logf("Sending {f} leader {d}", .{ txn_info.signature, idx });
+                try quic_sender.send(Packet.init(
+                    leader,
+                    txn_info.wire_transaction,
+                    txn_info.wire_transaction_size,
+                ));
+            } else self.logger.info().logf("No address for leader {d}", .{idx});
+        }
+    }
+};
+
 fn resolveLeadersFromRpc(
-    arena: std.mem.Allocator,
-    rpc_client: *RpcClient,
+    arena: Allocator,
+    client: *RpcClient,
 ) !struct { u64, []?SocketAddr } {
-    var slot_response = try rpc_client.getSlot(.{
+    var slot_response = try client.getSlot(.{
         .config = .{ .commitment = .processed },
     });
     defer slot_response.deinit();
     const current_slot = try slot_response.result();
 
-    var epoch_info_response = try rpc_client.getEpochInfo(
+    var epoch_info_response = try client.getEpochInfo(
         .{ .config = .{ .commitment = .processed } },
     );
     defer epoch_info_response.deinit();
     const epoch_info = try epoch_info_response.result();
     const epoch_start_slot = current_slot - epoch_info.slotIndex;
 
-    var schedule_response = try rpc_client.getLeaderSchedule(.{ .slot = current_slot });
+    var schedule_response = try client.getLeaderSchedule(.{ .slot = current_slot });
     defer schedule_response.deinit();
     var rpc_leader_schedule = try schedule_response.result();
 
-    var cluster_nodes_response = try rpc_client.getClusterNodes(.{});
+    var cluster_nodes_response = try client.getClusterNodes(.{});
     defer cluster_nodes_response.deinit();
     const cluster_nodes = try cluster_nodes_response.result();
 
