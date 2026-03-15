@@ -274,14 +274,14 @@ fn computeLtHashForAccountRange(
             const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 0));
             const slice = ptr[0..@intCast(sql.sqlite3_column_bytes(stmt, 0))];
             std.debug.assert(slice.len == Pubkey.SIZE);
-            break :blk try Pubkey.fromBytes(slice[0..32].*);
+            break :blk Pubkey{ .data = slice[0..32].* };
         };
 
         const owner = blk: {
             const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 1));
             const slice = ptr[0..@intCast(sql.sqlite3_column_bytes(stmt, 1))];
             std.debug.assert(slice.len == Pubkey.SIZE);
-            break :blk try Pubkey.fromBytes(slice[0..32].*);
+            break :blk Pubkey{ .data = slice[0..32].* };
         };
 
         const data = blk: {
@@ -388,4 +388,25 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
 
     const result = sql.sqlite3_step(stmt);
     if (result != DONE) self.err(result);
+}
+
+test "Rooted LtHash accepts non-canonical pubkeys" {
+    const bad_bytes: [Pubkey.SIZE]u8 = .{0xFF} ** Pubkey.SIZE;
+    try std.testing.expectError(error.NonCanonical, Pubkey.fromBytes(bad_bytes));
+
+    var rooted = try Rooted.init(":memory:");
+    defer rooted.deinit();
+    defer Rooted.deinitThreadLocals();
+
+    var data: [1]u8 = .{0};
+
+    rooted.put(.{ .data = bad_bytes }, 0, .{
+        .owner = .{ .data = .{0xEE} ** Pubkey.SIZE },
+        .lamports = 1,
+        .rent_epoch = 0,
+        .data = data[0..],
+        .executable = false,
+    });
+
+    _ = try computeLtHashForAccountRange(&rooted, 0, 1);
 }
