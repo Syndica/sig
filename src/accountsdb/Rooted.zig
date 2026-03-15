@@ -52,7 +52,7 @@ pub fn init(file_path: [:0]const u8) !Rooted {
             \\ PRAGMA locking_mode = EXCLUSIVE;
             \\ PRAGMA temp_store = MEMORY;
             \\ PRAGMA page_size = 65536;
-            \\ PRAGMA cache_spill = OFF;
+            \\ PRAGMA cache_spill = ON;
         ;
 
         if (sql.sqlite3_exec(db, pragmas, null, null, null) != OK) {

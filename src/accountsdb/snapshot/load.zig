@@ -298,6 +298,11 @@ fn insertFromSnapshotArchive(
     if (maybe_rooted_db) |rooted_db| rooted_db.beginTransaction();
     defer if (maybe_rooted_db) |rooted_db| rooted_db.commitTransaction();
 
+    const COMMIT_EVERY_ACCOUNTS: u64 = 1_000_000;
+    const COMMIT_EVERY_BYTES: u64 = 512 * 1024 * 1024;
+    var accounts_since_commit: u64 = 0;
+    var bytes_since_commit: u64 = 0;
+
     const file = try snapshot_dir.openFile(snapshot_path, .{ .mode = .read_only });
     defer file.close();
 
@@ -319,7 +324,7 @@ fn insertFromSnapshotArchive(
         try std.posix.madvise(
             memory.ptr,
             memory.len,
-            std.posix.MADV.SEQUENTIAL | std.posix.MADV.WILLNEED,
+            std.posix.MADV.SEQUENTIAL,
         );
     }
 
@@ -510,6 +515,15 @@ fn insertFromSnapshotArchive(
                         else => return error.InvalidAccount,
                     },
                 });
+
+                accounts_since_commit += 1;
+                bytes_since_commit += header.data_len;
+                if (accounts_since_commit >= COMMIT_EVERY_ACCOUNTS or bytes_since_commit >= COMMIT_EVERY_BYTES) {
+                    rooted_db.commitTransaction();
+                    rooted_db.beginTransaction();
+                    accounts_since_commit = 0;
+                    bytes_since_commit = 0;
+                }
             }
             const remaining_and_pad = (tar_hdr.file_size - info.length) + tar_hdr.pad_len;
             try reader.skipBytes(remaining_and_pad, .{});
