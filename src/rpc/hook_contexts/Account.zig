@@ -28,6 +28,7 @@ const GetBalance = sig.rpc.methods.GetBalance;
 const GetFeeForMessage = sig.rpc.methods.GetFeeForMessage;
 const GetSupply = sig.rpc.methods.GetSupply;
 const GetTokenAccountBalance = sig.rpc.methods.GetTokenAccountBalance;
+const GetTokenLargestAccounts = sig.rpc.methods.GetTokenLargestAccounts;
 const GetTokenSupply = sig.rpc.methods.GetTokenSupply;
 const GetMultipleAccounts = sig.rpc.methods.GetMultipleAccounts;
 const GetProgramAccounts = sig.rpc.methods.GetProgramAccounts;
@@ -697,5 +698,120 @@ pub fn getSupply(
             .nonCirculating = non_circulating_lamports,
             .nonCirculatingAccounts = try non_circulating_accounts.toOwnedSlice(arena),
         },
+    };
+}
+
+/// Returns the 20 largest accounts of a particular SPL Token mint.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2021-L2069
+pub fn getTokenLargestAccounts(
+    self: AccountHookContext,
+    arena: std.mem.Allocator,
+    params: GetTokenLargestAccounts,
+) !GetTokenLargestAccounts.Response {
+    const config: GetTokenLargestAccounts.Config = params.config orelse .{};
+    const commitment = config.commitment orelse .finalized;
+
+    const slot = self.slot_tracker.commitments.get(commitment);
+
+    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    defer ref.release();
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
+
+    // Validate that the mint exists and is owned by a token program.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2030-L2039
+    const maybe_mint_account = try slot_reader.get(arena, params.mint);
+    const mint_account = maybe_mint_account orelse return error.RpcAccountNotFound;
+
+    const mint_owner = mint_account.owner;
+    const is_token_program = mint_owner.equals(&sig.runtime.ids.TOKEN_PROGRAM_ID) or
+        mint_owner.equals(&sig.runtime.ids.TOKEN_2022_PROGRAM_ID);
+    if (!is_token_program) return error.RpcNotATokenAccount;
+
+    // Read mint data into contiguous buffer for parsing and extension extraction.
+    const mint_data_len = mint_account.data.len();
+    const mint_data = try arena.alloc(u8, mint_data_len);
+    var mint_data_iter = mint_account.data.iterator();
+    _ = mint_data_iter.readBytes(mint_data) catch return error.RpcMintUnpackFailed;
+
+    // Validate this is actually a mint account, not a token account or multisig.
+    const detected = parse_token.DetectedType.parse(mint_data) orelse
+        return error.RpcMintUnpackFailed;
+    if (detected != .mint) return error.RpcMintUnpackFailed;
+
+    // Parse mint to validate it's initialized (matching getTokenSupply).
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2028
+    const mint = parse_token.Mint.unpack(mint_data) catch return error.RpcMintUnpackFailed;
+    if (!mint.is_initialized) return error.RpcMintUnpackFailed;
+
+    // Extract decimals, extension configs for UiTokenAmount conversion.
+    const spl_token_data = account_codec.parseMintAdditionalData(
+        arena,
+        mint_data,
+        slot_reader,
+    ) orelse return error.RpcMintUnpackFailed;
+
+    // Scan all token accounts owned by the mint's token program, filtered to this mint.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2035-L2062
+    const N = GetTokenLargestAccounts.NUM_LARGEST_ACCOUNTS;
+    const Entry = struct { address: sig.core.Pubkey, amount: u64 };
+
+    // Min-heap: smallest amount at top for efficient eviction of the smallest entry.
+    // Tiebreak by pubkey for determinism, matching Agave's (u64, Pubkey) tuple ordering.
+    const MinHeap = std.PriorityQueue(Entry, void, struct {
+        fn order(_: void, a: Entry, b: Entry) std.math.Order {
+            const amt_order = std.math.order(a.amount, b.amount);
+            if (amt_order != .eq) return amt_order;
+            return std.mem.order(u8, &a.address.data, &b.address.data);
+        }
+    }.order);
+
+    var heap = MinHeap.init(arena, {});
+    try heap.ensureTotalCapacity(N + 1);
+
+    // Only scan the token program that owns this mint — a mint's token accounts
+    // are always under the same program as the mint itself.
+    var iter = try slot_reader.getByOwner(arena, &mint_owner);
+    defer iter.deinit();
+
+    while (try iter.next()) |entry| {
+        const pubkey, const account = entry;
+
+        // Parse token account data to get mint and amount.
+        var data_buf: [parse_token.TokenAccount.LEN]u8 = undefined;
+        var data_iter = account.data.iterator();
+        const bytes_read = data_iter.readBytes(&data_buf) catch continue;
+        if (bytes_read < parse_token.TokenAccount.LEN) continue;
+
+        const token_account = parse_token.TokenAccount.unpack(&data_buf) catch continue;
+        if (token_account.state == .uninitialized) continue;
+
+        // Filter by the requested mint.
+        if (!token_account.mint.equals(&params.mint)) continue;
+
+        // Insert into min-heap, evict smallest if over capacity.
+        heap.add(.{ .address = pubkey, .amount = token_account.amount }) catch unreachable;
+        if (heap.count() > N) {
+            _ = heap.remove();
+        }
+    }
+
+    // Extract results from heap and sort by amount descending.
+    const count = heap.count();
+    const results = try arena.alloc(GetTokenLargestAccounts.TokenAccountBalancePair, count);
+    var i: usize = count;
+    while (heap.removeOrNull()) |entry| {
+        i -= 1;
+        results[i] = .{
+            .address = entry.address,
+            .ui_token_amount = parse_token.UiTokenAmount.init(
+                entry.amount,
+                spl_token_data,
+            ),
+        };
+    }
+
+    return .{
+        .context = .{ .slot = slot },
+        .value = results,
     };
 }
