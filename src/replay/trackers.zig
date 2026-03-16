@@ -1138,7 +1138,7 @@ test "BlockCommitmentCache getConfirmationCount returns 0 when total stake is ze
     try std.testing.expectEqual(@as(usize, 0), cache.getConfirmationCount(10).?);
 }
 
-test "BlockCommitmentCache getSlotFromConfirmationCount returns highest matching slot" {
+test "BlockCommitmentCache getSlotForConfirmationCount returns highest matching slot" {
     const allocator = std.testing.allocator;
     var cache: BlockCommitmentCache = .DEFAULT;
     defer cache.deinit(allocator);
@@ -1165,11 +1165,11 @@ test "BlockCommitmentCache getSlotFromConfirmationCount returns highest matching
     }
 
     // For confirmation_count = 1, both slots qualify; highest is 10.
-    try std.testing.expectEqual(@as(?Slot, 10), cache.getSlotFromConfirmationCount(1));
+    try std.testing.expectEqual(@as(?Slot, 10), cache.getSlotForConfirmationCount(1));
     // For confirmation_count = 2, only slot 10 qualifies.
-    try std.testing.expectEqual(@as(?Slot, 10), cache.getSlotFromConfirmationCount(2));
+    try std.testing.expectEqual(@as(?Slot, 10), cache.getSlotForConfirmationCount(2));
     // For confirmation_count > 2, none qualify.
-    try std.testing.expectEqual(@as(?Slot, null), cache.getSlotFromConfirmationCount(3));
+    try std.testing.expectEqual(@as(?Slot, null), cache.getSlotForConfirmationCount(3));
 }
 
 test "BlockCommitmentCache Accumulator observeVoteAccount records lockouts" {
