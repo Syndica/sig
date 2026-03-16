@@ -9,7 +9,6 @@ const tracy = @import("tracy");
 const replay = sig.replay;
 
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
-const ClusterType = sig.core.ClusterType;
 const ContactInfo = sig.gossip.ContactInfo;
 const Gauge = sig.prometheus.gauge.Gauge;
 const FullAndIncrementalManifest = sig.accounts_db.snapshot.FullAndIncrementalManifest;
@@ -247,16 +246,6 @@ pub fn main() !void {
             params.accountsdb_download.apply(&current_config);
             try printLeaderSchedule(gpa, current_config);
         },
-        .test_transaction_sender => |params| {
-            current_config.shred_version = params.shred_version;
-            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
-            current_config.test_transaction_sender.n_transactions = params.n_transactions;
-            current_config.test_transaction_sender.n_lamports_per_transaction =
-                params.n_lamports_per_tx;
-            params.gossip_base.apply(&current_config);
-            params.gossip_node.apply(&current_config);
-            try testTransactionSenderService(gpa, gossip_gpa, current_config);
-        },
         // NOTE: mock_rpc_server is disabled because AccountsDB v2 does not yet support:
         // - loadWithDefaults (snapshot loading into AccountsDB)
         // - registerRPCHooks (RPC hooks for snapshot serving)
@@ -326,7 +315,6 @@ const Cmd = struct {
         snapshot_create: SnapshotCreate,
         print_manifest: PrintManifest,
         leader_schedule: LeaderScheduleSubCmd,
-        test_transaction_sender: TestTransactionSender,
         // NOTE: mock_rpc_server is disabled because AccountsDB v2 does not yet support
         // snapshot loading (loadWithDefaults) and RPC hook registration (registerRPCHooks).
         // TODO: Re-enable when v2 implements these features.
@@ -357,7 +345,6 @@ const Cmd = struct {
                 .snapshot_create = SnapshotCreate.cmd_info,
                 .print_manifest = PrintManifest.cmd_info,
                 .leader_schedule = LeaderScheduleSubCmd.cmd_info,
-                .test_transaction_sender = TestTransactionSender.cmd_info,
                 // NOTE: mock_rpc_server is disabled - see MockRpcServer struct below for details.
                 // .mock_rpc_server = MockRpcServer.cmd_info,
                 .agave_migration_tool = AgaveMigrationTool.cmd_info,
@@ -2266,93 +2253,6 @@ fn getLeaderScheduleFromCli(
             )
     else
         null;
-}
-
-fn testTransactionSenderService(
-    allocator: std.mem.Allocator,
-    gossip_value_allocator: std.mem.Allocator,
-    cfg: config.Cmd,
-) !void {
-    var app_base = try AppBase.init(allocator, cfg);
-    defer {
-        if (!app_base.closed) app_base.shutdown(); // we have this incase an error occurs
-        app_base.deinit();
-    }
-
-    // read genesis (used for leader schedule)
-    const genesis_file_path = try ensureGenesis(allocator, cfg, .from(app_base.logger));
-    defer allocator.free(genesis_file_path);
-
-    const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
-
-    // start gossip (used to get TPU ports of leaders)
-    const gossip_service = try startGossip(
-        allocator,
-        gossip_value_allocator,
-        cfg,
-        &app_base,
-        &.{},
-        .{},
-    );
-    defer {
-        gossip_service.deinit();
-        allocator.destroy(gossip_service);
-    }
-
-    // define cluster of where to land transactions
-    const rpc_cluster: ClusterType = try cfg.getCluster() orelse {
-        @panic("cluster option (-c) not provided");
-    };
-    app_base.logger.warn().logf(
-        "Starting transaction sender service on {s}...",
-        .{@tagName(rpc_cluster)},
-    );
-
-    // setup channel for communication to the tx-sender service
-    const transaction_channel =
-        try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(allocator);
-    defer transaction_channel.destroy();
-
-    // this handles transactions and forwards them to leaders TPU ports
-    var transaction_sender_service = try sig.transaction_sender.Service.init(
-        allocator,
-        .from(app_base.logger),
-        .{ .cluster = rpc_cluster, .socket = SocketAddr.init(app_base.my_ip, 0) },
-        transaction_channel,
-        &gossip_service.gossip_table_rw,
-        genesis_config.epoch_schedule,
-        app_base.exit,
-    );
-    const transaction_sender_handle = try std.Thread.spawn(
-        .{},
-        sig.transaction_sender.Service.run,
-        .{&transaction_sender_service},
-    );
-
-    // rpc is used to get blockhashes and other balance information
-    const rpc_url = rpc_cluster.getRpcUrl() orelse @panic("No RPC Url for cluster type!");
-    var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{
-        .logger = .from(app_base.logger),
-    });
-    defer rpc_client.deinit();
-
-    // this sends mock txs to the transaction sender
-    var mock_transfer_service = try sig.transaction_sender.MockTransferService.init(
-        allocator,
-        transaction_channel,
-        rpc_client,
-        app_base.exit,
-        .from(app_base.logger),
-    );
-    // send and confirm mock transactions
-    try mock_transfer_service.run(
-        cfg.test_transaction_sender.n_transactions,
-        cfg.test_transaction_sender.n_lamports_per_transaction,
-    );
-
-    gossip_service.shutdown();
-    app_base.shutdown();
-    transaction_sender_handle.join();
 }
 
 // NOTE: mockRpcServer is disabled because AccountsDB v2 does not yet support:
