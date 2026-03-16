@@ -10,6 +10,7 @@ const Allocator = std.mem.Allocator;
 const Channel = sig.sync.Channel;
 const ThreadPool = sig.sync.ThreadPool;
 
+const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
@@ -104,8 +105,6 @@ pub fn advanceReplay(
     // freeze slots
     const processed_a_slot: bool = try freezeCompletedSlots(replay_state, slot_results);
 
-    const root_before = replay_state.slot_tracker.root.load(.monotonic);
-
     // run consensus
     if (consensus_params) |consensus| {
         var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
@@ -131,25 +130,10 @@ pub fn advanceReplay(
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
             .results = slot_results,
+            .event_sink = replay_state.event_sink,
         });
     } else {
         try bypassConsensus(replay_state);
-    }
-
-    const root_after = replay_state.slot_tracker.root.load(.monotonic);
-    if (root_after != root_before) {
-        if (replay_state.event_sink) |sink| {
-            sink.send(.{
-                .method = .root,
-                .event_data = .{ .root = .{ .root = root_after } },
-            }) catch |err| {
-                // just catch and log error to avoid exiting replay
-                replay_state.logger.err().logf(
-                    "failed to send root event, slot: {}, err: {}",
-                    .{ root_after, err },
-                );
-            };
-        }
     }
 
     if (slot_results.len != 0) {
@@ -219,9 +203,6 @@ pub const ReplayState = struct {
     stop_at_slot: ?sig.core.Slot,
 
     pub fn deinit(self: *ReplayState) void {
-        self.thread_pool.shutdown();
-        self.thread_pool.deinit();
-
         self.slot_tracker.deinit(self.allocator);
         self.progress_map.deinit(self.allocator);
 
@@ -233,6 +214,9 @@ pub const ReplayState = struct {
         self.slot_tree.deinit(self.allocator);
         self.status_cache.deinit(self.allocator);
         self.hard_forks.deinit(self.allocator);
+
+        self.thread_pool.shutdown();
+        self.thread_pool.deinit();
     }
 
     pub fn init(deps: Dependencies, consensus_status: ConsensusStatus) !ReplayState {
@@ -621,6 +605,34 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     state.ledger,
                 ));
                 processed_a_slot = true;
+
+                if (state.event_sink) |event_sink| {
+                    // send out frozen event with modified acconts for slot
+                    const accounts = event_sink.materializeSlotModifiedAccounts(
+                        state.logger,
+                        state.account_store.reader(),
+                        slot,
+                    );
+
+                    if (accounts) |modified_accounts| {
+                        event_sink.send(.{ .slot_frozen = .{
+                            .slot = slot,
+                            .parent = slot_info.constants().parent_slot,
+                            .root = slot_tracker.root.load(.monotonic),
+                            .accounts = modified_accounts,
+                        } }) catch |err| {
+                            state.logger.err().logf(
+                                "failed to send frozen slot event {}: {}",
+                                .{ slot, err },
+                            );
+                        };
+                    } else |err| {
+                        state.logger.err().logf(
+                            "failed to materialize modified accounts for frozen slot {}: {}",
+                            .{ slot, err },
+                        );
+                    }
+                }
             } else {
                 state.logger.info().logf("partially replayed slot: {}", .{slot});
             }
@@ -644,14 +656,26 @@ fn bypassConsensus(state: *ReplayState) !void {
     // See: https://github.com/anza-xyz/agave/blob/5e900421520a10933642d5e9a21e191a70f9b125/core/src/replay_stage.rs#L2683
     //
     // TowerConsensus implements Agave's processed slot semantics when consensus is enabled.
-    state.slot_tracker.latest_processed_slot.set(state.slot_tree.tip());
+    const new_tip = state.slot_tree.tip();
+    const old_tip = state.slot_tracker.latest_processed_slot.get();
+    state.slot_tracker.latest_processed_slot.set(new_tip);
+    if (new_tip != old_tip) {
+        if (state.event_sink) |sink| {
+            sink.send(.{ .tip_changed = new_tip }) catch |err| {
+                state.logger.err().logf(
+                    "failed to send tip_changed event {}: {}",
+                    .{ new_tip, err },
+                );
+            };
+        }
+    }
 
     if (state.slot_tree.reRoot(state.allocator)) |new_root| {
         const slot_tracker = &state.slot_tracker;
+        const old_root = slot_tracker.root.load(.monotonic);
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root.store(new_root, .monotonic);
-        slot_tracker.pruneNonRooted(&state.thread_pool);
 
         try state.status_cache.addRoot(state.allocator, new_root);
 
@@ -661,6 +685,27 @@ fn bypassConsensus(state: *ReplayState) !void {
             new_root,
             &slot_constants.constants().ancestors,
         );
+
+        // Send events for rooted slots
+        if (state.event_sink) |sink| {
+            const rooted_slots = try slot_tracker.rootedPathForward(
+                state.allocator,
+                old_root,
+                new_root,
+            );
+            defer state.allocator.free(rooted_slots);
+
+            for (rooted_slots) |rooted_slot| {
+                sink.send(.{ .slot_rooted = rooted_slot }) catch |err| {
+                    state.logger.err().logf(
+                        "failed to send rooted slot event {}: {}",
+                        .{ rooted_slot, err },
+                    );
+                };
+            }
+        }
+
+        slot_tracker.pruneNonRooted(&state.thread_pool);
     }
 }
 
@@ -947,9 +992,7 @@ test "process runs without error with no replay results" {
     });
     defer consensus.deinit(allocator);
 
-    const vc_senders: sig.consensus.vote_listener.Senders = try .createForTest(allocator, .{
-        .bank_notification = false,
-    });
+    const vc_senders: sig.consensus.vote_listener.Senders = try .createForTest(allocator);
     defer vc_senders.destroyForTest(allocator);
 
     const consensus_senders: TowerConsensus.Senders = try .create(allocator);
@@ -1028,6 +1071,42 @@ test "Execute testnet block multi threaded" {
     });
 }
 
+fn addReplayStateSlotForTest(
+    replay_state: *ReplayState,
+    slot: Slot,
+    parent_slot: Slot,
+    leader: Pubkey,
+    frozen_hash: ?Hash,
+) !void {
+    const parent_ref = replay_state.slot_tracker.get(parent_slot) orelse
+        return error.MissingParentSlot;
+    defer parent_ref.release();
+
+    const constants, var state = try newSlotFromParent(
+        replay_state.allocator,
+        replay_state.account_store.reader(),
+        1,
+        parent_slot,
+        parent_ref.constants(),
+        parent_ref.state(),
+        leader,
+        slot,
+    );
+    errdefer constants.deinit(replay_state.allocator);
+    errdefer state.deinit(replay_state.allocator);
+
+    if (frozen_hash) |slot_hash| {
+        state.hash.set(slot_hash);
+    }
+
+    try replay_state.slot_tracker.put(replay_state.allocator, slot, .{
+        .allocator = replay_state.allocator,
+        .constants = constants,
+        .state = state,
+    });
+    try replay_state.slot_tree.record(replay_state.allocator, slot, parent_slot);
+}
+
 test "freezeCompletedSlots handles errors correctly" {
     const allocator = std.testing.allocator;
 
@@ -1059,6 +1138,109 @@ test "freezeCompletedSlots handles errors correctly" {
     , logger.messages.items[1].content);
 
     try std.testing.expectEqual(false, processed_a_slot);
+}
+
+test "freezeCompletedSlots emits slot_frozen event with slot metadata" {
+    const allocator = std.testing.allocator;
+
+    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
+    defer dep_stubs.deinit();
+
+    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit();
+        allocator.destroy(replay_state.epoch_tracker);
+    }
+
+    const event_sink = try jrpc_types.EventSink.create(allocator);
+    defer event_sink.destroy();
+    replay_state.event_sink = event_sink;
+
+    try addReplayStateSlotForTest(&replay_state, 1, 0, Pubkey.ZEROES, null);
+    const slot_ref = replay_state.slot_tracker.get(1) orelse return error.MissingSlotInTracker;
+    defer slot_ref.release();
+    slot_ref.state().tick_height.store(slot_ref.constants().max_tick_height, .monotonic);
+
+    const processed_a_slot = try freezeCompletedSlots(&replay_state, &.{.{
+        .slot = 1,
+        .output = .{ .last_entry_hash = Hash.ZEROES },
+    }});
+
+    try std.testing.expect(processed_a_slot);
+    const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
+    defer event.deinit(event_sink.channel.allocator);
+    switch (event) {
+        .slot_frozen => |slot_frozen| {
+            try std.testing.expectEqual(@as(Slot, 1), slot_frozen.slot);
+            try std.testing.expectEqual(@as(Slot, 0), slot_frozen.parent);
+            try std.testing.expectEqual(@as(Slot, 0), slot_frozen.root);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(event_sink.channel.tryReceive() == null);
+}
+
+test "bypassConsensus emits tip_changed and rooted chain events" {
+    const allocator = std.testing.allocator;
+
+    var prng_state = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng_state.random();
+
+    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
+    defer dep_stubs.deinit();
+
+    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit();
+        allocator.destroy(replay_state.epoch_tracker);
+    }
+
+    const event_sink = try jrpc_types.EventSink.create(allocator);
+    defer event_sink.destroy();
+    replay_state.event_sink = event_sink;
+
+    for (1..35) |slot_num| {
+        const slot: Slot = @intCast(slot_num);
+        try addReplayStateSlotForTest(
+            &replay_state,
+            slot,
+            slot - 1,
+            Pubkey.ZEROES,
+            Hash.initRandom(random),
+        );
+    }
+
+    try bypassConsensus(&replay_state);
+
+    const tip_event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
+    defer tip_event.deinit(event_sink.channel.allocator);
+    switch (tip_event) {
+        .tip_changed => |slot| try std.testing.expectEqual(@as(Slot, 34), slot),
+        else => return error.TestUnexpectedResult,
+    }
+
+    const rooted_event_1 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
+    defer rooted_event_1.deinit(event_sink.channel.allocator);
+    switch (rooted_event_1) {
+        .slot_rooted => |slot| try std.testing.expectEqual(@as(Slot, 1), slot),
+        else => return error.TestUnexpectedResult,
+    }
+
+    const rooted_event_2 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
+    defer rooted_event_2.deinit(event_sink.channel.allocator);
+    switch (rooted_event_2) {
+        .slot_rooted => |slot| try std.testing.expectEqual(@as(Slot, 2), slot),
+        else => return error.TestUnexpectedResult,
+    }
+
+    try std.testing.expectEqual(
+        @as(Slot, 34),
+        replay_state.slot_tracker.latest_processed_slot.get(),
+    );
+    try std.testing.expectEqual(@as(Slot, 2), replay_state.slot_tracker.root.load(.monotonic));
+    try std.testing.expect(event_sink.channel.tryReceive() == null);
 }
 
 fn testExecuteBlock(allocator: Allocator, config: struct {

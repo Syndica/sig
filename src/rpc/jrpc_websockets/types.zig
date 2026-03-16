@@ -14,37 +14,13 @@ pub const AccountWithPubkey = struct {
     account: Account,
 };
 
-pub const RcAccountWithPubkey = struct {
-    inner: sig.sync.Rc(AccountWithPubkey),
-
-    pub fn init(
-        allocator: std.mem.Allocator,
-        pubkey: Pubkey,
-        account: Account,
-    ) !RcAccountWithPubkey {
-        const rc = try sig.sync.Rc(AccountWithPubkey).create(allocator);
-        rc.payload().* = .{ .pubkey = pubkey, .account = account };
-        return .{ .inner = rc };
-    }
-
-    pub fn acquire(self: RcAccountWithPubkey) RcAccountWithPubkey {
-        return .{ .inner = self.inner.acquire() };
-    }
-
-    pub fn release(self: RcAccountWithPubkey, allocator: std.mem.Allocator) void {
-        if (self.inner.release()) |bytes| {
-            self.inner.payload().account.deinit(allocator);
-            allocator.free(bytes);
-        }
-    }
-
-    pub fn get(self: RcAccountWithPubkey) *const AccountWithPubkey {
-        return self.inner.payload();
-    }
+pub const SlotReadContext = struct {
+    slot_tracker: *sig.replay.trackers.SlotTracker,
+    account_reader: sig.accounts_db.AccountReader,
 };
 
-/// Subscription method families.
-pub const SubMethod = enum {
+/// Subscription families used for subscription identity and fanout.
+pub const SubscriptionKind = enum {
     account,
     logs,
     program,
@@ -53,17 +29,17 @@ pub const SubMethod = enum {
     slot,
 };
 
-/// Canonicalized subscription request key: method + method-specific parameters.
+/// Canonicalized subscription request key: subscription kind + kind-specific parameters.
 /// Determines which NotifQueue a subscription maps to. Two clients subscribing
 /// with the same SubReqKey share one queue and SubId.
 ///
 /// All params that affect message content or shape are identity-determining:
-/// filters, encoding, and commitment all contribute to key equality.
+/// filters, encoding, commitment, and dataSlice all contribute to key equality.
 pub const SubReqKey = struct {
-    method: SubMethod,
+    method: SubscriptionKind,
     params: Params,
 
-    pub const Params = union(SubMethod) {
+    pub const Params = union(SubscriptionKind) {
         account: AccountParams,
         logs: LogsParams,
         program: ProgramParams,
@@ -75,7 +51,8 @@ pub const SubReqKey = struct {
     pub const AccountParams = struct {
         pubkey: Pubkey,
         commitment: methods.Commitment = .finalized,
-        encoding: methods.Encoding = .base64,
+        encoding: methods.AccountEncoding = .base64,
+        data_slice: ?methods.DataSlice = null,
     };
 
     pub const LogsParams = struct {
@@ -87,7 +64,8 @@ pub const SubReqKey = struct {
     pub const ProgramParams = struct {
         program_id: Pubkey,
         commitment: methods.Commitment = .finalized,
-        encoding: methods.Encoding = .base64,
+        encoding: methods.AccountEncoding = .base64,
+        data_slice: ?methods.DataSlice = null,
         /// When heap-allocated, each filter (and memcmp bytes) is owned by the map's allocator.
         filters: ?[]const methods.ProgramSubscribe.Filter = null,
     };
@@ -107,7 +85,8 @@ pub const SubReqKey = struct {
                 const pb = b.params.account;
                 return std.mem.eql(u8, &pa.pubkey.data, &pb.pubkey.data) and
                     pa.commitment == pb.commitment and
-                    pa.encoding == pb.encoding;
+                    pa.encoding == pb.encoding and
+                    dataSliceEql(pa.data_slice, pb.data_slice);
             },
             .logs => |pa| {
                 const pb = b.params.logs;
@@ -119,6 +98,7 @@ pub const SubReqKey = struct {
                 return std.mem.eql(u8, &pa.program_id.data, &pb.program_id.data) and
                     pa.commitment == pb.commitment and
                     pa.encoding == pb.encoding and
+                    dataSliceEql(pa.data_slice, pb.data_slice) and
                     programFiltersEql(pa.filters, pb.filters);
             },
             .root, .slot => return true,
@@ -153,6 +133,12 @@ pub const SubReqKey = struct {
                 return true;
             },
         }
+    }
+
+    fn dataSliceEql(a: ?methods.DataSlice, b: ?methods.DataSlice) bool {
+        const sa = a orelse return b == null;
+        const sb = b orelse return false;
+        return sa.offset == sb.offset and sa.length == sb.length;
     }
 
     const Filter = methods.ProgramSubscribe.Filter;
@@ -203,6 +189,7 @@ pub const SubReqKey = struct {
                         .pubkey = p.pubkey,
                         .commitment = cfg.commitment orelse .finalized,
                         .encoding = cfg.encoding orelse .base64,
+                        .data_slice = cfg.dataSlice,
                     } },
                 };
             },
@@ -224,6 +211,7 @@ pub const SubReqKey = struct {
                         .program_id = p.program_id,
                         .commitment = cfg.commitment orelse .finalized,
                         .encoding = cfg.encoding orelse .base64,
+                        .data_slice = cfg.dataSlice,
                         .filters = cfg.filters,
                     } },
                 };
@@ -306,6 +294,7 @@ pub const SubReqKey = struct {
                         .program_id = pp.program_id,
                         .commitment = pp.commitment,
                         .encoding = pp.encoding,
+                        .data_slice = pp.data_slice,
                         .filters = duped,
                     } };
                 }
@@ -342,15 +331,54 @@ pub const SubReqKey = struct {
 /// Globally unique, monotonically increasing subscription ID.
 pub const SubId = u64;
 
-/// Event from a producer thread to the loop thread.
-pub const EventMsg = struct {
-    method: SubMethod,
-    event_data: EventData,
+pub const SlotModifiedAccounts = struct {
+    accounts: []AccountWithPubkey = &.{},
+    arena: std.heap.ArenaAllocator,
+
+    pub fn empty() SlotModifiedAccounts {
+        return .{
+            .accounts = &.{},
+            .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+        };
+    }
+
+    pub fn deinit(self: *SlotModifiedAccounts) void {
+        self.arena.deinit();
+        self.* = empty();
+    }
+};
+
+pub const SlotFrozenEvent = struct {
+    slot: u64,
+    parent: u64,
+    root: u64,
+    accounts: SlotModifiedAccounts = SlotModifiedAccounts.empty(),
+};
+
+/// Internal runtime input event from producer threads to the websocket loop thread.
+pub const InboundEvent = union(enum) {
+    logs: LogsEventData,
+    slot_frozen: SlotFrozenEvent,
+    slot_confirmed: u64,
+    slot_rooted: u64,
+    tip_changed: u64,
+
+    pub fn deinit(self: InboundEvent, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .slot_frozen => |slot_data| {
+                var accounts = slot_data.accounts;
+                accounts.deinit();
+            },
+            else => {
+                _ = allocator;
+            },
+        }
+    }
 };
 
 /// Sink to push events for jrpc ws runtime broadcasting.
 pub const EventSink = struct {
-    channel: Channel(EventMsg),
+    channel: Channel(InboundEvent),
     /// Used to wake the IO loop.
     loop_async: xev.Async,
     /// Used to avoid spamming IO loop wakes.
@@ -362,22 +390,22 @@ pub const EventSink = struct {
         const self = try allocator.create(EventSink);
         errdefer allocator.destroy(self);
         self.* = .{
-            .channel = try Channel(EventMsg).init(allocator),
+            .channel = try Channel(InboundEvent).init(allocator),
             .loop_async = try xev.Async.init(),
         };
         return self;
     }
 
-    pub fn destroy(self: *EventSink, allocator: std.mem.Allocator) void {
+    pub fn destroy(self: *EventSink) void {
         while (self.channel.tryReceive()) |msg| {
-            msg.event_data.deinit(allocator);
+            msg.deinit(self.channel.allocator);
         }
         self.channel.deinit();
         self.loop_async.deinit();
-        allocator.destroy(self);
+        self.channel.allocator.destroy(self);
     }
 
-    pub fn send(self: *EventSink, msg: EventMsg) !void {
+    pub fn send(self: *EventSink, msg: InboundEvent) !void {
         try self.channel.send(msg);
         const already = self.notify_pending.swap(true, .release);
         if (!already) {
@@ -387,23 +415,42 @@ pub const EventSink = struct {
             };
         }
     }
-};
 
-/// Tagged union of event payloads.
-/// Not all SubMethods have their own event type — e.g. program subscriptions
-/// receive account events (matched by owner in the runtime).
-/// TODO: real event data types
-pub const EventData = union(enum) {
-    account: AccountEventData,
-    logs: LogsEventData,
-    root: RootEventData,
-    slot: SlotEventData,
+    pub fn materializeSlotModifiedAccounts(
+        self: *EventSink,
+        logger: anytype,
+        account_reader: sig.accounts_db.AccountReader,
+        slot: u64,
+    ) !SlotModifiedAccounts {
+        var arena = std.heap.ArenaAllocator.init(self.channel.allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
 
-    pub fn deinit(self: EventData, allocator: std.mem.Allocator) void {
-        switch (self) {
-            .account => |ad| ad.rc.release(allocator),
-            else => {},
+        var iterator = account_reader.slotModifiedIterator(slot) orelse {
+            logger.err().logf(
+                "frozen slot {} had no modified accounts to materialize",
+                .{slot},
+            );
+            return .{
+                .accounts = &.{},
+                .arena = arena,
+            };
+        };
+        defer iterator.unlock();
+
+        const accounts = try arena_allocator.alloc(AccountWithPubkey, iterator.len());
+        var index: usize = 0;
+        while (try iterator.next(arena_allocator)) |account_with_pubkey| {
+            accounts[index] = .{
+                .pubkey = account_with_pubkey[0],
+                .account = account_with_pubkey[1],
+            };
+            index += 1;
         }
+        return .{
+            .accounts = accounts,
+            .arena = arena,
+        };
     }
 };
 
@@ -414,8 +461,12 @@ pub const SlotEventData = struct {
 };
 
 pub const AccountEventData = struct {
-    rc: RcAccountWithPubkey,
+    account: AccountWithPubkey,
     slot: u64,
+
+    pub fn deinit(self: AccountEventData, allocator: std.mem.Allocator) void {
+        self.account.account.deinit(allocator);
+    }
 };
 
 pub const LogsEventData = struct {
@@ -429,14 +480,42 @@ pub const RootEventData = struct {
 };
 
 /// Serialization job: loop thread -> worker thread.
-/// Workers carry sub_id (not key ref/queue pointer) for safe cross-thread identification.
+/// Serialization workers round-trip sub_id to match result back to associated subscription.
 pub const SerializeJob = struct {
     sub_id: SubId,
     index: ?u64,
-    event_data: EventData,
-    encoding: methods.Encoding,
-    sub_method: SubMethod,
+    job_type: JobType,
     submitted_at: std.time.Instant,
+
+    pub const JobType = union(enum) {
+        account: struct {
+            data: AccountEventData,
+            encoding: methods.AccountEncoding,
+            data_slice: ?methods.DataSlice = null,
+            read_ctx: SlotReadContext,
+        },
+        logs: LogsEventData,
+        program: struct {
+            data: AccountEventData,
+            encoding: methods.AccountEncoding,
+            data_slice: ?methods.DataSlice = null,
+            read_ctx: SlotReadContext,
+        },
+        root: RootEventData,
+        slot: SlotEventData,
+
+        pub fn deinit(self: JobType, allocator: std.mem.Allocator) void {
+            switch (self) {
+                .account => |job| job.data.deinit(allocator),
+                .program => |job| job.data.deinit(allocator),
+                else => {},
+            }
+        }
+    };
+
+    pub fn deinit(self: SerializeJob, allocator: std.mem.Allocator) void {
+        self.job_type.deinit(allocator);
+    }
 };
 
 /// Commit result from worker -> loop thread.
@@ -518,6 +597,51 @@ test "SubReqKey equality - account with different commitment" {
         } },
     };
     try std.testing.expect(!a.eql(&b));
+}
+
+test "SubReqKey equality - account data slice matters" {
+    var pk: Pubkey = undefined;
+    @memset(&pk.data, 0xAA);
+    const a: SubReqKey = .{
+        .method = .account,
+        .params = .{ .account = .{
+            .pubkey = pk,
+            .data_slice = .{ .offset = 0, .length = 4 },
+        } },
+    };
+    const b: SubReqKey = .{
+        .method = .account,
+        .params = .{ .account = .{
+            .pubkey = pk,
+            .data_slice = .{ .offset = 1, .length = 4 },
+        } },
+    };
+    try std.testing.expect(!a.eql(&b));
+}
+
+test "SubReqKey equality - program memcmp bytes dedupe across encodings" {
+    const allocator = std.testing.allocator;
+    const program_id = Pubkey.parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
+
+    const base58_method: ws_request.WsMethodAndParams = .{ .programSubscribe = .{
+        .program_id = program_id,
+        .config = .{
+            .filters = &.{.{ .memcmp = .{ .offset = 0, .bytes = "abc" } }},
+        },
+    } };
+
+    const parsed = try std.json.parseFromSlice(
+        ws_request.WsRequest,
+        allocator,
+        \\{"jsonrpc":"2.0","id":1,"method":"programSubscribe","params":["vinesvinesvinesvinesvinesvinesvinesvinesvin",{"filters":[{"memcmp":{"offset":0,"bytes":"YWJj","encoding":"base64"}}]}]}
+    ,
+        .{},
+    );
+    defer parsed.deinit();
+
+    const a = SubReqKey.fromMethod(&base58_method).?;
+    const b = SubReqKey.fromMethod(&parsed.value.method).?;
+    try std.testing.expect(a.eql(&b));
 }
 
 test "SubReqKey equality - void methods" {

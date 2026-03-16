@@ -12,6 +12,9 @@ pub const MapEntry = struct {
     key: SubReqKey,
     sub_id: SubId,
     queue: *NotifQueue,
+    // TODO: maybe this goes somewhere else as it only applies to accountSubscribe method.
+    /// For accountSubscribe for deduplication logic.
+    last_notified_modified_slot: ?u64 = null,
 };
 
 /// Subscription map managing active subscriptions and their notification queues.
@@ -21,7 +24,7 @@ pub const MapEntry = struct {
 /// Lookup patterns:
 /// - getOrCreate(key): subscribe path, dedup by SubReqKey equality
 /// - getById(sub_id): commit resolution path (mapping after serialization via SubId)
-/// - iterating entries filtered by SubReqKey method and params: event dispatch fanout
+/// - iterating entries filtered by subscription kind and params: event dispatch fanout
 ///
 /// All operations are loop-thread only (no locks required).
 pub const RPCSubMap = struct {
@@ -61,7 +64,7 @@ pub const RPCSubMap = struct {
     /// deep-copied into the map's allocator.
     ///
     /// Queue commit path policy:
-    /// - `.slot` and `.root` use `.reserved`
+    /// - `.slot`, `.root`, and `.program` use `.reserved` to preserve event order
     /// - all other methods use `.direct`
     pub fn getOrCreate(
         self: *RPCSubMap,
@@ -75,7 +78,7 @@ pub const RPCSubMap = struct {
 
         const queue = try self.allocator.create(NotifQueue);
         const commit_path: NotifQueue.CommitPath = switch (key.method) {
-            .slot, .root => .reserved,
+            .slot, .root, .program => .reserved,
             else => .direct,
         };
         queue.* = try NotifQueue.init(self.allocator, self.queue_capacity, commit_path);
