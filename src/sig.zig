@@ -19,7 +19,6 @@ pub const vm = @import("vm/lib.zig");
 pub const sync = @import("sync/lib.zig");
 pub const time = @import("time/lib.zig");
 pub const trace = @import("trace/lib.zig");
-pub const transaction_sender = @import("transaction_sender/lib.zig");
 pub const testing = @import("testing.zig");
 pub const utils = @import("utils/lib.zig");
 pub const version = @import("version/version.zig");
