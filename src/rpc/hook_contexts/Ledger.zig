@@ -344,13 +344,9 @@ pub fn minimumLedgerSlot(
     _: Allocator,
     _: MinimumLedgerSlot,
 ) !MinimumLedgerSlot.Response {
-    var meta_iter = try self.ledger.db.iterator(
-        sig.ledger.schema.schema.slot_meta,
-        .forward,
-        0,
-    );
+    var meta_iter = try self.ledger.reader().slotMetaIterator(0);
     defer meta_iter.deinit();
-    return try meta_iter.nextKey() orelse error.InvalidRequest;
+    return try meta_iter.nextKey() orelse 0;
 }
 
 /// Walk from latest_confirmed back to the root, collecting confirmed-but-unrooted slots.
