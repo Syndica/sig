@@ -67,10 +67,6 @@ jobs:
       - run:
           name: Run Tests
           command: zig-out/bin/test 2>&1 | cat
-      - persist_to_workspace:
-          root: workspace
-          paths:
-            - "zig-out/bin/test"
 
   build_linux_release:
     executor: linux-executor
