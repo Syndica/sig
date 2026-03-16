@@ -578,8 +578,10 @@ pub fn getCompleteBlockWithEntries(
     else
         Hash.ZEROES;
 
-    const rewards = try self.ledger.db.get(allocator, schema.rewards, slot) orelse
-        schema.rewards.Value{ .rewards = &.{}, .num_partitions = null };
+    const rewards = try self.getBlockRewards(allocator, slot) orelse schema.rewards.Value{
+        .rewards = &.{},
+        .num_partitions = null,
+    };
 
     // The Blocktime and BlockHeight column families are updated asynchronously; they
     // may not be written by the time the complete slot entries are available. In this
@@ -605,6 +607,19 @@ pub fn getCompleteBlockWithEntries(
         },
         .entries = entries,
     };
+}
+
+/// Helper function for fetching block rewards for a given slot
+pub fn getBlockRewards(
+    self: *const Reader,
+    allocator: Allocator,
+    slot: Slot,
+) !?schema.rewards.Value {
+    return try self.ledger.db.get(
+        allocator,
+        schema.rewards,
+        slot,
+    );
 }
 
 /// Returns a transaction status

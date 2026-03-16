@@ -883,7 +883,7 @@ const Cmd = struct {
                 \\      --no-snapshots
                 \\      --no-snapshot-fetch
                 \\      --use-snapshot-archives-at-startup always
-                \\      --limit-ledger-size 50000000000000 
+                \\      --limit-ledger-size 50000000000000
                 \\
                 \\   After this has processed the ledger, it will be usable from other agave tools.
                 ,
@@ -1255,7 +1255,7 @@ const Cmd = struct {
                                 .default_value = null,
                                 .config = {},
                                 .help =
-                                \\The first slot to retain (inclusive). 
+                                \\The first slot to retain (inclusive).
                                 \\Defaults to min slot in ledger.
                                 ,
                             },
@@ -1266,7 +1266,7 @@ const Cmd = struct {
                                 .default_value = null,
                                 .config = {},
                                 .help =
-                                \\The last slot to retain (inclusive). 
+                                \\The last slot to retain (inclusive).
                                 \\Defaults to max slot in ledger.
                                 ,
                             },
@@ -1378,7 +1378,7 @@ fn ensureGenesis(
     // Determine cluster for genesis
     const cluster = try cfg.getCluster() orelse {
         logger.err().log(
-            \\No genesis file path provided and no cluster specified. 
+            \\No genesis file path provided and no cluster specified.
             \\Use --genesis-file-path or --cluster"
         );
         return error.GenesisPathNotProvided;
@@ -1582,7 +1582,7 @@ fn validator(
     if (cfg.accounts_db.dbg_db_init and !init_db_exists)
         try saveDbInit(snapshot_dir, .from(app_base.logger));
 
-    const static_rpc_ctx: sig.rpc.methods.StaticHookContext = .{
+    const static_rpc_ctx: sig.rpc.hook_contexts.StaticHookContext = .{
         .genesis_hash = loaded_snapshot.genesis_config.hash,
     };
 
@@ -1680,6 +1680,9 @@ fn validator(
     else
         null;
 
+    var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
+    defer prioritization_fee_cache.deinit(allocator);
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db = &new_db },
@@ -1691,30 +1694,37 @@ fn validator(
         .voting_enabled = voting_enabled,
         .vote_account_address = maybe_vote_pubkey,
         .stop_at_slot = cfg.stop_at_slot,
+        .prioritization_fee_cache = &prioritization_fee_cache,
     });
     defer replay_service_state.deinit(allocator);
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.methods.RpcHookContext{
+    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+        .gossip_table_rw = &gossip_service.gossip_table_rw,
+        .my_shred_version = &gossip_service.my_shred_version,
         .epoch_tracker = &epoch_tracker,
     });
 
     var max_retransmit_slot: std.atomic.Value(sig.core.Slot) = .init(0);
     var max_shred_insert_slot: std.atomic.Value(sig.core.Slot) = .init(0);
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.Ledger{
+    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
         .ledger = &ledger,
-        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+        .epoch_schedule = loaded_snapshot.genesis_config.epoch_schedule,
+        .epoch_tracker = &epoch_tracker,
+        .commitments = &replay_service_state.replay_state.slot_tracker.commitments,
         .max_retransmit_slot = &max_retransmit_slot,
         .max_shred_insert_slot = &max_shred_insert_slot,
     });
 
+    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
+        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+        .account_reader = replay_service_state.replay_state.account_store.reader(),
+    });
+
     try app_base.rpc_hooks.set(
         allocator,
-        sig.rpc.hook_contexts.AccountHookContext{
-            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-            .account_reader = replay_service_state.replay_state.account_store.reader(),
-        },
+        sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
     );
 
     const replay_thread = try replay_service_state.spawnService(
@@ -2236,10 +2246,11 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
             const response = try rpc_client.getLeaderSchedule(.{ .slot = slot });
             defer response.deinit();
 
-            const rpc_schedule = (try response.result()).value;
+            const rpc_schedule = (try response.result()) orelse
+                return error.LeaderScheduleNotAvailable;
             break :blk try sig.core.leader_schedule.computeFromMap(
                 allocator,
-                &rpc_schedule,
+                &rpc_schedule.value,
             );
         };
         break :b leader_schedule;
@@ -2678,15 +2689,6 @@ fn startGossip(
     try app_base.rpc_hooks.set(allocator, struct {
         info: ContactInfo,
 
-        pub fn getHealth(
-            _: @This(),
-            _: std.mem.Allocator,
-            _: anytype,
-        ) !sig.rpc.methods.GetHealth.Response {
-            // TODO: more intricate
-            return .ok;
-        }
-
         pub fn getIdentity(
             self: @This(),
             _: std.mem.Allocator,
@@ -2751,6 +2753,7 @@ const ReplayAndConsensusServiceState = struct {
             voting_enabled: bool,
             vote_account_address: ?Pubkey,
             stop_at_slot: ?Slot,
+            prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -2807,6 +2810,7 @@ const ReplayAndConsensusServiceState = struct {
                 .hard_forks = hard_forks,
                 .replay_threads = params.replay_threads,
                 .stop_at_slot = params.stop_at_slot,
+                .prioritization_fee_cache = params.prioritization_fee_cache,
             }, if (params.disable_consensus) .disabled else .enabled);
         };
         errdefer replay_state.deinit();
@@ -3078,10 +3082,10 @@ const RpcLeaderScheduleService = struct {
     ) !LeaderSchedule {
         const response = try self.rpc_client.getLeaderSchedule(.{ .slot = slot });
         defer response.deinit();
-        const rpc_schedule = (try response.result()).value;
+        const rpc_schedule = (try response.result()) orelse return error.LeaderScheduleNotAvailable;
         var leaders = try sig.core.leader_schedule.computeFromMap(
             self.allocator,
-            &rpc_schedule,
+            &rpc_schedule.value,
         );
         const epoch = epoch_schedule.getEpoch(slot);
         leaders.start = epoch_schedule.getFirstSlotInEpoch(epoch);

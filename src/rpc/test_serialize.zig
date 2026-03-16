@@ -13,28 +13,41 @@ const GetAccountInfo = methods.GetAccountInfo;
 const GetBalance = methods.GetBalance;
 const GetBlock = methods.GetBlock;
 const GetBlockCommitment = methods.GetBlockCommitment;
+const GetBlockProduction = methods.GetBlockProduction;
 const GetBlockHeight = methods.GetBlockHeight;
 const GetBlockTime = methods.GetBlockTime;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
+const GetClusterNodes = methods.GetClusterNodes;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
 const GetFirstAvailableBlock = methods.GetFirstAvailableBlock;
+const GetFeeForMessage = methods.GetFeeForMessage;
 const GetGenesisHash = methods.GetGenesisHash;
+const GetInflationGovernor = methods.GetInflationGovernor;
+const GetInflationRate = methods.GetInflationRate;
 const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
+const GetInflationReward = methods.GetInflationReward;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
 const GetMaxRetransmitSlot = methods.GetMaxRetransmitSlot;
 const GetMaxShredInsertSlot = methods.GetMaxShredInsertSlot;
+const GetMultipleAccounts = methods.GetMultipleAccounts;
+const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
+const GetRecentPrioritizationFees = methods.GetRecentPrioritizationFees;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetSlot = methods.GetSlot;
+const GetSlotLeader = methods.GetSlotLeader;
+const GetSlotLeaders = methods.GetSlotLeaders;
+const GetStakeMinimumDelegation = methods.GetStakeMinimumDelegation;
 const GetTransaction = methods.GetTransaction;
 const GetTransactionCount = methods.GetTransactionCount;
 const GetTokenAccountBalance = methods.GetTokenAccountBalance;
 const GetTokenSupply = methods.GetTokenSupply;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
+const GetMinimumBalanceForRentExemption = methods.GetMinimumBalanceForRentExemption;
 const IsBlockhashValid = methods.IsBlockhashValid;
 const MinimumLedgerSlot = methods.MinimumLedgerSlot;
 
@@ -209,6 +222,136 @@ test GetBlockCommitment {
     );
 }
 
+test GetClusterNodes {
+    // getClusterNodes takes no parameters
+    try testRequest(.getClusterNodes, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getClusterNodes","params":[]}
+    );
+    // Test response with full node info
+    try testResponse(GetClusterNodes, .{ .result = &.{.{
+        .pubkey = "9QzsJf7LPLj8GkXbYT3LFDKqsj2hHG7TA3xinJHu8epQ",
+        .gossip = "10.239.6.48:8001",
+        .tvu = "10.239.6.48:8000",
+        .tpu = "10.239.6.48:8003",
+        .tpuQuic = "10.239.6.48:8009",
+        .tpuForwards = "10.239.6.48:8004",
+        .tpuForwardsQuic = "10.239.6.48:8010",
+        .tpuVote = "10.239.6.48:8005",
+        .serveRepair = "10.239.6.48:8008",
+        .rpc = "10.239.6.48:8899",
+        .pubsub = "10.239.6.48:8900",
+        .version = "1.18.15",
+        .featureSet = 3241752014,
+        .shredVersion = 50093,
+    }} },
+        \\{"jsonrpc":"2.0","result":[{"featureSet":3241752014,"gossip":"10.239.6.48:8001","pubkey":"9QzsJf7LPLj8GkXbYT3LFDKqsj2hHG7TA3xinJHu8epQ","pubsub":"10.239.6.48:8900","rpc":"10.239.6.48:8899","serveRepair":"10.239.6.48:8008","shredVersion":50093,"tpu":"10.239.6.48:8003","tpuForwards":"10.239.6.48:8004","tpuForwardsQuic":"10.239.6.48:8010","tpuQuic":"10.239.6.48:8009","tpuVote":"10.239.6.48:8005","tvu":"10.239.6.48:8000","version":"1.18.15"}],"id":1}
+    );
+    // Test response with minimal node info (some fields null)
+    try testResponse(GetClusterNodes, .{ .result = &.{.{
+        .pubkey = "9QzsJf7LPLj8GkXbYT3LFDKqsj2hHG7TA3xinJHu8epQ",
+        .gossip = "10.239.6.48:8001",
+        .tvu = null,
+        .tpu = null,
+        .tpuQuic = null,
+        .tpuForwards = null,
+        .tpuForwardsQuic = null,
+        .tpuVote = null,
+        .serveRepair = null,
+        .rpc = null,
+        .pubsub = null,
+        .version = null,
+        .featureSet = null,
+        .shredVersion = 50093,
+    }} },
+        \\{"jsonrpc":"2.0","result":[{"featureSet":null,"gossip":"10.239.6.48:8001","pubkey":"9QzsJf7LPLj8GkXbYT3LFDKqsj2hHG7TA3xinJHu8epQ","pubsub":null,"rpc":null,"serveRepair":null,"shredVersion":50093,"tpu":null,"tpuForwards":null,"tpuForwardsQuic":null,"tpuQuic":null,"tpuVote":null,"tvu":null,"version":null}],"id":1}
+    );
+}
+
+test GetBlockProduction {
+    // Request: no config (default)
+    try testRequest(.getBlockProduction, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockProduction","params":[]}
+    );
+
+    // Request: with identity filter
+    try testRequest(.getBlockProduction, .{
+        .config = .{ .identity = "85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr" },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockProduction","params":[{"commitment":null,"identity":"85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr","range":null}]}
+    );
+
+    // Request: with range
+    try testRequest(.getBlockProduction, .{
+        .config = .{ .range = .{ .firstSlot = 100, .lastSlot = 200 } },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockProduction","params":[{"commitment":null,"identity":null,"range":{"firstSlot":100,"lastSlot":200}}]}
+    );
+
+    // Request: with commitment and range
+    try testRequest(.getBlockProduction, .{
+        .config = .{
+            .commitment = .finalized,
+            .range = .{ .firstSlot = 0, .lastSlot = 9887 },
+        },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockProduction","params":[{"commitment":"finalized","identity":null,"range":{"firstSlot":0,"lastSlot":9887}}]}
+    );
+
+    // ByIdentity serialization
+    {
+        var map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
+        defer map.deinit(std.testing.allocator);
+        try map.put(std.testing.allocator, .parse("85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr"), .{ 9888, 9886 });
+
+        try expectJsonStringify(
+            \\{"85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr":[9888,9886]}
+        , GetBlockProduction.ByIdentity{ .map = map });
+    }
+
+    // ByIdentity serialization: multiple validators
+    {
+        var map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
+        defer map.deinit(std.testing.allocator);
+        try map.put(std.testing.allocator, .parse("11111111111111111111111111111111"), .{ 100, 90 });
+        try map.put(std.testing.allocator, .parse("11111111111111111111111111111113"), .{ 50, 45 });
+
+        try expectJsonStringify(
+            \\{"11111111111111111111111111111111":[100,90],"11111111111111111111111111111113":[50,45]}
+        , GetBlockProduction.ByIdentity{ .map = map });
+    }
+
+    // ByIdentity serialization: empty map
+    {
+        const map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
+        try expectJsonStringify(
+            \\{}
+        , GetBlockProduction.ByIdentity{ .map = map });
+    }
+
+    // Full response serialization
+    {
+        var map = sig.utils.collections.PubkeyMap(struct { u64, u64 }){};
+        defer map.deinit(std.testing.allocator);
+        try map.put(std.testing.allocator, .parse("85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr"), .{ 9888, 9886 });
+
+        const response = GetBlockProduction.Response{
+            .context = .{ .slot = 9887 },
+            .value = .{
+                .byIdentity = .{ .map = map },
+                .range = .{ .firstSlot = 0, .lastSlot = 9887 },
+            },
+        };
+
+        const actual = try std.json.Stringify.valueAlloc(std.testing.allocator, response, .{});
+        defer std.testing.allocator.free(actual);
+
+        // Verify key structural elements are present
+        try std.testing.expect(std.mem.indexOf(u8, actual, "\"context\":{\"slot\":9887") != null);
+        try std.testing.expect(std.mem.indexOf(u8, actual, "\"byIdentity\":{\"85iYT5RuzRTDgjyRa3cP8SYhM2j21fj7NhfJ3peu1DPr\":[9888,9886]}") != null);
+        try std.testing.expect(std.mem.indexOf(u8, actual, "\"range\":{\"firstSlot\":0,\"lastSlot\":9887}") != null);
+    }
+}
+
 test GetBlocks {
     try testRequest(.getBlocks, .{ .start_slot = 5 },
         \\{"jsonrpc":"2.0","id":1,"method":"getBlocks","params":[5]}
@@ -312,7 +455,40 @@ test GetEpochSchedule {
     );
 }
 
-// TODO: test getFeeForMessage()
+test "getFeeForMessage" {
+    // Request serialization with just the message
+    try testRequest(.getFeeForMessage, .{
+        .message = "AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQA=",
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getFeeForMessage","params":["AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQA="]}
+    );
+
+    // Request serialization with config
+    try testRequest(.getFeeForMessage, .{
+        .message = "AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQA=",
+        .config = .{
+            .commitment = .confirmed,
+        },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getFeeForMessage","params":["AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQA=",{"commitment":"confirmed","minContextSlot":null}]}
+    );
+
+    // Response with fee value
+    try testResponse(GetFeeForMessage, .{ .result = .{
+        .context = .{ .slot = 309275334, .apiVersion = "2.1.6" },
+        .value = 5000,
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275334},"value":5000},"id":1}
+    );
+
+    // Response with null value (blockhash expired)
+    try testResponse(GetFeeForMessage, .{ .result = .{
+        .context = .{ .slot = 309275334, .apiVersion = "2.1.6" },
+        .value = null,
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275334},"value":null},"id":1}
+    );
+}
 
 test GetFirstAvailableBlock {
     try testRequest(.getFirstAvailableBlock, .{},
@@ -354,9 +530,93 @@ test GetHighestSnapshotSlot {
     );
 }
 // TODO: test getIdentity()
-// TODO: test getInflationGovernor()
-// TODO: test getInflationRate()
-// TODO: test getInflationReward()
+
+test GetInflationGovernor {
+    try testRequest(.getInflationGovernor, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getInflationGovernor","params":[]}
+    );
+    try testRequest(.getInflationGovernor, .{ .config = .{ .commitment = .confirmed } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getInflationGovernor","params":[{"commitment":"confirmed"}]}
+    );
+    try testResponse(GetInflationGovernor, .{ .result = .{
+        .initial = 0.08,
+        .terminal = 0.015,
+        .taper = 0.15,
+        .foundation = 0.05,
+        .foundationTerm = 7.0,
+    } },
+        \\{"jsonrpc":"2.0","result":{"foundation":0.05,"foundationTerm":7.0,"initial":0.08,"taper":0.15,"terminal":0.015},"id":1}
+    );
+}
+
+test GetInflationRate {
+    // getInflationRate takes no parameters
+    try testRequest(.getInflationRate, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getInflationRate","params":[]}
+    );
+    try testResponse(GetInflationRate, .{ .result = .{
+        .total = 0.08,
+        .validator = 0.076,
+        .foundation = 0.004,
+        .epoch = 728,
+    } },
+        \\{"jsonrpc":"2.0","result":{"epoch":728,"foundation":0.004,"total":0.08,"validator":0.076},"id":1}
+    );
+}
+
+test GetInflationReward {
+    const addr1: Pubkey = .parse("Vote111111111111111111111111111111111111111");
+
+    // Request with single address, no config
+    try testRequest(.getInflationReward, .{
+        .addresses = &.{addr1},
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getInflationReward","params":[["Vote111111111111111111111111111111111111111"]]}
+    );
+
+    // Request with multiple addresses and config
+    const addr2: Pubkey = .parse("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
+    try testRequest(.getInflationReward, .{
+        .addresses = &.{ addr1, addr2 },
+        .config = .{
+            .commitment = .finalized,
+            .epoch = 100,
+        },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getInflationReward","params":[["Vote111111111111111111111111111111111111111","Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm"],{"commitment":"finalized","epoch":100,"minContextSlot":null}]}
+    );
+
+    // Response with single reward entry
+    try testResponse(GetInflationReward, .{ .result = &.{.{
+        .epoch = 100,
+        .effectiveSlot = 43200,
+        .amount = 2500,
+        .postBalance = 1000002500,
+        .commission = 10,
+    }} },
+        \\{"jsonrpc":"2.0","result":[{"amount":2500,"commission":10,"effectiveSlot":43200,"epoch":100,"postBalance":1000002500}],"id":1}
+    );
+
+    // Response with null entry (address has no reward)
+    try testResponse(GetInflationReward, .{ .result = &.{null} },
+        \\{"jsonrpc":"2.0","result":[null],"id":1}
+    );
+
+    // Response with mixed results (one reward, one null)
+    try testResponse(GetInflationReward, .{ .result = &.{
+        .{
+            .epoch = 100,
+            .effectiveSlot = 43200,
+            .amount = 2500,
+            .postBalance = 1000002500,
+            .commission = null,
+        },
+        null,
+    } },
+        \\{"jsonrpc":"2.0","result":[{"amount":2500,"commission":null,"effectiveSlot":43200,"epoch":100,"postBalance":1000002500},null],"id":1}
+    );
+}
+
 // TODO: test getLargeAccounts()
 
 test GetLatestBlockhash {
@@ -382,7 +642,7 @@ test GetLeaderSchedule {
         \\{"jsonrpc":"2.0","result":{"111uPd5xQyRHSmPzFJuHNUiuHbF55QXsuEbmqxE4ro":[1,3],"123vij84ecQEKUvQ7gYMKxKwKF6PbYSzCzzURYA4xULY":[2,4]},"id":1}
     );
     defer response.deinit();
-    const result: GetLeaderSchedule.Response = try response.result();
+    const result = (try response.result()).?;
     try std.testing.expectEqual(2, result.value.count());
     try std.testing.expectEqualSlices(
         u64,
@@ -404,6 +664,7 @@ test GetMaxRetransmitSlot {
         \\{"jsonrpc":"2.0","result":1234,"id":1}
     );
 }
+
 test GetMaxShredInsertSlot {
     try testRequest(.getMaxShredInsertSlot, .{},
         \\{"jsonrpc":"2.0","id":1,"method":"getMaxShredInsertSlot","params":[]}
@@ -412,11 +673,109 @@ test GetMaxShredInsertSlot {
         \\{"jsonrpc":"2.0","result":1234,"id":1}
     );
 }
-// TODO: test getMinimumBalanceForRentExemption()
-// TODO: test getMultipleAccounts()
+
+test GetMinimumBalanceForRentExemption {
+    try testRequest(.getMinimumBalanceForRentExemption, .{ .data_len = 50 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getMinimumBalanceForRentExemption","params":[50]}
+    );
+    // Response is just a u64 value representing minimum lamports
+    try testResponse(GetMinimumBalanceForRentExemption, .{ .result = 1238880 },
+        \\{"jsonrpc":"2.0","result":1238880,"id":1}
+    );
+}
+
+test GetMultipleAccounts {
+    var pubkeys = try std.testing.allocator.alloc(Pubkey, 2);
+    defer std.testing.allocator.free(pubkeys);
+    pubkeys[0] = .parse("vines1vzrYbzLMRdu58ou5XTby4qAqVRLmqo36NKPTg");
+    pubkeys[1] = .parse("4fYNw3dojWmQ4dXtSGE9epjRGy9pFSx62YypT7avPYvA");
+
+    try testRequest(.getMultipleAccounts, .{ .pubkeys = pubkeys },
+        \\{"jsonrpc":"2.0","id":1,"method":"getMultipleAccounts","params":[["vines1vzrYbzLMRdu58ou5XTby4qAqVRLmqo36NKPTg","4fYNw3dojWmQ4dXtSGE9epjRGy9pFSx62YypT7avPYvA"]]}
+    );
+
+    // Response with one account found and one null
+    try testResponse(GetMultipleAccounts, .{ .result = .{
+        .context = .{ .apiVersion = "2.1.6", .slot = 309275280 },
+        .value = &.{
+            .{
+                .data = .{ .encoded = .{ "SGVsbG8gV29ybGQ=", .base64 } },
+                .executable = false,
+                .lamports = 1000000000,
+                .owner = .parse("11111111111111111111111111111111"),
+                .rentEpoch = 18446744073709551615,
+                .space = 11,
+            },
+            null,
+        },
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275280},"value":[{"data":["SGVsbG8gV29ybGQ=","base64"],"executable":false,"lamports":1000000000,"owner":"11111111111111111111111111111111","rentEpoch":18446744073709551615,"space":11},null]},"id":1}
+    );
+
+    // Response with all nulls
+    try testResponse(GetMultipleAccounts, .{ .result = .{
+        .context = .{ .apiVersion = "2.1.6", .slot = 309275280 },
+        .value = &.{ null, null },
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275280},"value":[null,null]},"id":1}
+    );
+}
+
 // TODO: test getProgramAccounts()
-// TODO: test getRecentPerformanceSamples()
-// TODO: test getRecentPrioritizationFees()
+test GetRecentPerformanceSamples {
+    // Request with no limit
+    try testRequest(
+        .getRecentPerformanceSamples,
+        .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getRecentPerformanceSamples","params":[]}
+        ,
+    );
+
+    // Request with limit
+    try testRequest(
+        .getRecentPerformanceSamples,
+        .{ .limit = 5 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getRecentPerformanceSamples","params":[5]}
+        ,
+    );
+
+    // Response serialization
+    const samples: []const GetRecentPerformanceSamples.RpcPerfSample = &.{.{
+        .slot = 348125,
+        .numTransactions = 150,
+        .numNonVoteTransactions = 45,
+        .numSlots = 2,
+        .samplePeriodSecs = 60,
+    }};
+    try expectJsonStringify(
+        \\[{"slot":348125,"numTransactions":150,"numNonVoteTransactions":45,"numSlots":2,"samplePeriodSecs":60}]
+    , samples);
+}
+
+test GetRecentPrioritizationFees {
+    // Request with no account keys
+    try testRequest(.getRecentPrioritizationFees, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getRecentPrioritizationFees","params":[]}
+    );
+
+    // Request with account keys
+    try testRequest(.getRecentPrioritizationFees, .{
+        .account_keys = &.{
+            .parse("CxELquR1gPP8wHe33gZ4QxqGB3sZ9RSwbn2uHj1vDgAy"),
+            .parse("6D2jqw9hyVCpppZj7GfMMpjStMBKbGBopuBCsJtoaGtv"),
+        },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getRecentPrioritizationFees","params":[["CxELquR1gPP8wHe33gZ4QxqGB3sZ9RSwbn2uHj1vDgAy","6D2jqw9hyVCpppZj7GfMMpjStMBKbGBopuBCsJtoaGtv"]]}
+    );
+
+    // Response
+    try testResponse(GetRecentPrioritizationFees, .{ .result = &.{
+        .{ .slot = 348125, .prioritizationFee = 0 },
+        .{ .slot = 348126, .prioritizationFee = 1000 },
+    } },
+        \\{"jsonrpc":"2.0","result":[{"slot":348125,"prioritizationFee":0},{"slot":348126,"prioritizationFee":1000}],"id":1}
+    );
+}
 
 test GetSignatureStatuses {
     var signatures = try std.testing.allocator.alloc(Signature, 2);
@@ -517,10 +876,43 @@ test GetSlot {
     );
 }
 
-// TODO: test getSlotLeader()
-// TODO: test getSlotLeaders()
+test GetSlotLeader {
+    try testRequest(.getSlotLeader, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getSlotLeader","params":[]}
+    );
+    const leader_pubkey: Pubkey = .parse("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn");
+    try testResponse(GetSlotLeader, .{ .result = leader_pubkey },
+        \\{"jsonrpc":"2.0","result":"2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn","id":1}
+    );
+}
+
+test GetSlotLeaders {
+    try testRequest(.getSlotLeaders, .{ .start_slot = 100, .limit = 3 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getSlotLeaders","params":[100,3]}
+    );
+    const leaders = [_]Pubkey{
+        Pubkey.parse("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn"),
+        Pubkey.parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
+        Pubkey.parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
+    };
+    try testResponse(GetSlotLeaders, .{ .result = &leaders },
+        \\{"jsonrpc":"2.0","result":["2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn","Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk","GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"],"id":1}
+    );
+}
 // TODO: test getStakeActivation()
-// TODO: test getStakeMinimumDelegation()
+
+test GetStakeMinimumDelegation {
+    try testRequest(.getStakeMinimumDelegation, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getStakeMinimumDelegation","params":[]}
+    );
+    try testResponse(GetStakeMinimumDelegation, .{ .result = .{
+        .context = .{ .slot = 501, .apiVersion = "2.0.15" },
+        .value = 1000000000,
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.0.15","slot":501},"value":1000000000},"id":1}
+    );
+}
+
 // TODO: test getSupply()
 
 test GetTokenAccountBalance {
@@ -846,6 +1238,19 @@ test "GetBlock" {
         };
         try expectJsonStringify(
             \\{"blockhash":"11111111111111111111111111111111","parentSlot":99,"previousBlockhash":"11111111111111111111111111111111","signatures":["1111111111111111111111111111111111111111111111111111111111111111"]}
+        , response);
+    }
+
+    // Response serialization - with numRewardPartitions
+    {
+        const response = GetBlock.Response{
+            .previousBlockhash = Hash.ZEROES,
+            .blockhash = Hash.ZEROES,
+            .parentSlot = 99,
+            .numRewardPartitions = 4,
+        };
+        try expectJsonStringify(
+            \\{"blockhash":"11111111111111111111111111111111","numRewardPartitions":4,"parentSlot":99,"previousBlockhash":"11111111111111111111111111111111"}
         , response);
     }
 

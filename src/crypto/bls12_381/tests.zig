@@ -64,6 +64,23 @@ test "g1 val" {
         const result = G1.validate(&in, .little);
         try std.testing.expectEqual(entry.result, !std.meta.isError(result));
     }
+
+    {
+        // Ensure that we disallow commpressed/parity bits. If we didn't then
+        // blst would automatically try decompressing the pooint based off of
+        // the encoding. This would allow the second half of the bytes to be garbage,
+        // as they wouldn't be read, giving malleable points.
+
+        // Take a valid compressed point, and fill the second half with garbage.
+        var in: [96]u8 = undefined;
+        _ = try std.fmt.hexToBytes(in[0..48], "af9ff5448e60bc9a718f463ac102bd6f8772e6460c19076a6c89d5806e5a8ef44b6f3b8af09e37a4e564987a26b9deda");
+        @memset(in[48..96], 0xAA);
+
+        // Give it the compmressed flag.
+        in[0] |= 0x80;
+
+        try std.testing.expectError(error.Failed, G1.validate(&in, .big));
+    }
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/master/bls12-381/src/test_vectors/decompression.rs
@@ -398,6 +415,20 @@ test "g2 val" {
         _ = try std.fmt.hexToBytes(&in, entry.in);
         const result = G2.validate(&in, .little);
         try std.testing.expectEqual(entry.result, !std.meta.isError(result));
+    }
+
+    {
+        // See the commend in "g1 val" test for more context on this edge case.
+
+        // Take a valid compressed point, and fill the second half with garbage.
+        var in: [192]u8 = undefined;
+        _ = try std.fmt.hexToBytes(in[0..96], "8f6a12dc289804e48b236892b34acdac92890b6a4a2a878935f940fbade830d17dde0dd179eeb9b36f6947df2730c3681718aa3b6f6aa733e7bae0b6ac490f12d38f3b0273bec4a36f0b24855660bc871025d8af47b6de1fcf9b10ff704ef26f");
+        @memset(in[96..192], 0xAA);
+
+        // Give it the compmressed flag.
+        in[0] |= 0x80;
+
+        try std.testing.expectError(error.Failed, G2.validate(&in, .big));
     }
 }
 
