@@ -100,7 +100,7 @@ pub fn getBlockTime(
             else => return err,
         };
     } else {
-        return error.BlockNotAvailable;
+        return try reader.getCompleteBlockTime(arena, params.slot);
     }
 }
 

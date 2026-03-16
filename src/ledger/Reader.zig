@@ -299,10 +299,18 @@ pub fn getRootedBlockTime(self: *const Reader, allocator: Allocator, slot: Slot)
     defer lock.unlock();
 
     if (try self.isRoot(allocator, slot)) {
-        return try self.ledger.db.get(allocator, schema.blocktime, slot) orelse
-            error.SlotUnavailable;
+        return try self.getCompleteBlockTime(allocator, slot);
     }
     return error.SlotNotRooted;
+}
+
+/// Returns the block time for a given slot
+pub fn getCompleteBlockTime(
+    self: *const Reader,
+    allocator: Allocator,
+    slot: Slot,
+) !UnixTimestamp {
+    return try self.ledger.db.get(allocator, schema.blocktime, slot) orelse error.SlotUnavailable;
 }
 
 /// Analogous to [get_block_height](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2542)

@@ -851,7 +851,7 @@ pub const GetBlockHeight = struct {
 pub const GetBlockTime = struct {
     slot: Slot,
 
-    pub const Response = ?i64;
+    pub const Response = ?sig.core.UnixTimestamp;
 };
 
 pub const GetBlocks = struct {
