@@ -15,9 +15,6 @@ executors:
   linux-executor:
     machine: true
     resource_class: syndica/r7iz-fleet
-  python-executor:
-    docker:
-      - image: cimg/python:3.10
   macos-executor:
     macos:
       xcode: 15.4.0
