@@ -417,6 +417,54 @@ pub const BlockCommitmentCache = struct {
         return 0;
     }
 
+    /// Returns the highest slot whose confirmation count is at least
+    /// `confirmation_count`, or null if no such slot exists.
+    fn getSlotForConfirmationCount(
+        self: *BlockCommitmentCache,
+        confirmation_count: usize,
+    ) ?Slot {
+        if (confirmation_count == 0 or confirmation_count > MAX_LOCKOUT_HISTORY) {
+            return null;
+        }
+
+        var state = self.state.read();
+        defer state.unlock();
+
+        const total = state.get().total_stake;
+        if (total == 0) return null;
+
+        var best_slot: ?Slot = null;
+
+        const commitments = state.get().block_commitment;
+        for (commitments.keys(), commitments.values()) |slot, commitment| {
+            var sum: u64 = 0;
+            var idx: usize = MAX_LOCKOUT_HISTORY + 1;
+            var count: usize = 0;
+            while (idx > 0) {
+                idx -= 1;
+                sum += commitment[idx];
+                const avg = @as(f64, @floatFromInt(sum)) / @as(f64, @floatFromInt(total));
+                if (avg > VOTE_THRESHOLD_SIZE) {
+                    count = idx + 1;
+                    break;
+                }
+            }
+
+            if (count >= confirmation_count) {
+                if (best_slot == null or slot > best_slot.?) {
+                    best_slot = slot;
+                }
+            }
+        }
+
+        return best_slot;
+    }
+
+    /// Returns the highest slot that has super-majority rooted (confirmation count >= MAX_LOCKOUT_HISTORY).
+    pub fn getFinalizedSlot(self: *BlockCommitmentCache) ?Slot {
+        return self.getSlotForConfirmationCount(MAX_LOCKOUT_HISTORY);
+    }
+
     /// Builder that collects per-slot commitment data from multiple vote
     /// accounts so the cache can be rebuilt in a single atomic swap.
     /// Designed to be fed from `collectClusterVoteState`'s vote-account
@@ -1088,6 +1136,40 @@ test "BlockCommitmentCache getConfirmationCount returns 0 when total stake is ze
     }
 
     try std.testing.expectEqual(@as(usize, 0), cache.getConfirmationCount(10).?);
+}
+
+test "BlockCommitmentCache getSlotFromConfirmationCount returns highest matching slot" {
+    const allocator = std.testing.allocator;
+    var cache: BlockCommitmentCache = .DEFAULT;
+    defer cache.deinit(allocator);
+
+    var commitment1: BlockCommitmentCache.BlockCommitmentArray = std.mem.zeroes(
+        BlockCommitmentCache.BlockCommitmentArray,
+    );
+    var commitment2: BlockCommitmentCache.BlockCommitmentArray = std.mem.zeroes(
+        BlockCommitmentCache.BlockCommitmentArray,
+    );
+
+    // Slot 5: confirmation count 1 (> 2/3 at depth index 0)
+    commitment1[0] = 700;
+
+    // Slot 10: confirmation count 2 (> 2/3 at depth index 1)
+    commitment2[1] = 700;
+
+    {
+        var state = cache.state.write();
+        defer state.unlock();
+        try state.mut().block_commitment.put(allocator, 5, commitment1);
+        try state.mut().block_commitment.put(allocator, 10, commitment2);
+        state.mut().total_stake = 1000;
+    }
+
+    // For confirmation_count = 1, both slots qualify; highest is 10.
+    try std.testing.expectEqual(@as(?Slot, 10), cache.getSlotFromConfirmationCount(1));
+    // For confirmation_count = 2, only slot 10 qualifies.
+    try std.testing.expectEqual(@as(?Slot, 10), cache.getSlotFromConfirmationCount(2));
+    // For confirmation_count > 2, none qualify.
+    try std.testing.expectEqual(@as(?Slot, null), cache.getSlotFromConfirmationCount(3));
 }
 
 test "BlockCommitmentCache Accumulator observeVoteAccount records lockouts" {

@@ -527,6 +527,9 @@ pub const TowerConsensus = struct {
 
         // Commit accumulated commitment data to the cache in one atomic swap.
         if (params.block_commitment_cache) |cache| {
+            if (cache.getFinalizedSlot()) |finalized_slot| {
+                params.slot_tracker.commitments.update(.finalized, finalized_slot);
+            }
             cache.commitAccumulated(&commitment_ctx.acc);
         }
     }
@@ -1688,7 +1691,9 @@ fn checkAndHandleNewRoot(
     // Update the slot tracker.
     // Set new root.
     slot_tracker.root.store(new_root, .monotonic);
-    slot_tracker.commitments.update(.finalized, new_root); // TODO should be supermajority root
+    // this is also updated later using BlockCommitmentCache.getFinalizedSlot()
+    // right after calling executeProtocol()
+    slot_tracker.commitments.update(.finalized, new_root);
     // Prune non rooted slots
     slot_tracker.pruneNonRooted(maybe_thread_pool);
 
