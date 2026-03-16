@@ -158,8 +158,8 @@ pub fn Client(
         }
 
         fn deinit(self: *Self) void {
-            _ = self;
             lsquic.lsquic_global_cleanup();
+            for (self.connections.constSlice()) |conn| self.allocator.destroy(conn);
         }
 
         fn onTick(
@@ -216,23 +216,22 @@ pub fn Client(
             const self = maybe_self.?;
 
             const local_endpoint = try self.socket.getLocalEndPoint();
-            const local_socketaddr = switch (toSocketAddress(local_endpoint)) {
-                .V4 => |addr| addr,
-                .V6 => @panic("add ipv6 support"),
-            };
 
-            const peer_sockaddr = peer_address.in.sa;
-
-            if (0 > lsquic.lsquic_engine_packet_in(
+            const packet_in_result = lsquic.lsquic_engine_packet_in(
                 self.lsquic_engine,
                 xev_read_buffer.slice.ptr,
                 bytes,
-                @ptrCast(&local_socketaddr),
-                @ptrCast(&peer_sockaddr),
-                self,
+                @ptrCast(&local_endpoint.any),
+                @ptrCast(&peer_address.any),
+                self.ssl_ctx,
                 0,
-            )) {
-                @panic("lsquic_engine_packet_in failed");
+            );
+            if (packet_in_result < 0) {
+                self.logger.warn().logf(
+                    "lsquic_engine_packet_in failed with: err={d} source={f}",
+                    .{ packet_in_result, toSocketAddress(peer_address) },
+                );
+                @panic("lsquic_engine_packet_in failed!");
             }
 
             return .rearm;
@@ -268,7 +267,7 @@ pub fn Client(
                 0,
                 null,
                 0,
-                null,
+                @ptrCast(&[_]u8{}),
                 0,
             ) == null) {
                 @panic("lsquic_engine_connect failed");
@@ -378,7 +377,12 @@ pub fn Client(
 
                 self.client.logger.debug().logf("onNewConn: {f}", .{self.endpoint});
                 self.lsquic_connection = maybe_lsquic_connection.?;
-                self.client.connections.append(self) catch @panic("reached max connections");
+                self.client.connections.append(self) catch {
+                    self.client.logger.warn().log("max connections reached, evicting oldest");
+                    const evicted = self.client.connections.swapRemove(0);
+                    lsquic.lsquic_conn_close(evicted.lsquic_connection);
+                    self.client.connections.append(self) catch @panic("connections full");
+                };
 
                 return @ptrCast(self);
             }
@@ -402,6 +406,7 @@ pub fn Client(
             lsquic_stream: *lsquic.lsquic_stream_t,
             connection: *Connection,
             packet: Packet,
+            bytes_written: usize,
 
             fn onNewStream(
                 _: ?*anyopaque,
@@ -417,6 +422,7 @@ pub fn Client(
                     .lsquic_stream = maybe_lsquic_stream.?,
                     .connection = connection,
                     .packet = connection.packets.pop() catch @panic("new stream without packet"),
+                    .bytes_written = 0,
                 };
 
                 _ = lsquic.lsquic_stream_wantwrite(maybe_lsquic_stream, 1);
@@ -436,17 +442,31 @@ pub fn Client(
             ) callconv(.c) void {
                 const stream: *Stream = @ptrCast(@alignCast(maybe_stream.?));
 
-                if (stream.packet.size != lsquic.lsquic_stream_write(
+                const remaining = stream.packet.buffer[stream.bytes_written..stream.packet.size];
+                const n = lsquic.lsquic_stream_write(
                     maybe_lsquic_stream,
-                    &stream.packet.buffer,
-                    stream.packet.size,
-                )) {
-                    @panic("failed to write complete packet to stream");
-                }
+                    remaining.ptr,
+                    remaining.len,
+                );
 
-                _ = lsquic.lsquic_stream_flush(maybe_lsquic_stream);
-                _ = lsquic.lsquic_stream_wantwrite(maybe_lsquic_stream, 0);
-                _ = lsquic.lsquic_stream_close(maybe_lsquic_stream);
+                if (n < 0) {
+                    stream.connection.client.logger.warn().log(
+                        "stream write failed; closing stream",
+                    );
+                    _ = lsquic.lsquic_stream_wantwrite(maybe_lsquic_stream, 0);
+                    _ = lsquic.lsquic_stream_close(maybe_lsquic_stream);
+                } else if (n > 0) {
+                    stream.bytes_written += @intCast(n);
+
+                    if (stream.bytes_written > stream.packet.size)
+                        @panic("lsquic_stream_write wrote more bytes than requested");
+
+                    if (stream.bytes_written == stream.packet.size) {
+                        _ = lsquic.lsquic_stream_flush(maybe_lsquic_stream);
+                        _ = lsquic.lsquic_stream_wantwrite(maybe_lsquic_stream, 0);
+                        _ = lsquic.lsquic_stream_close(maybe_lsquic_stream);
+                    }
+                } else stream.connection.client.logger.warn().log("stream write would block");
             }
 
             fn onClose(
