@@ -504,7 +504,8 @@ pub fn getProgramAccounts(
         });
     }
 
-    if (config.sortResults orelse false) {
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3361
+    if (config.sortResults orelse true) {
         const z = tracy.Zone.init(@src(), .{ .name = "rpc.gPA.sort" });
         defer z.deinit();
         std.mem.sortUnstable(GetProgramAccounts.Value, results.items, {}, struct {
