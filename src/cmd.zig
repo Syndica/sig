@@ -146,6 +146,7 @@ pub fn main() !void {
             current_config.stop_at_slot = params.stop_at_slot;
             current_config.voting_enabled = params.voting_enabled or params.vote_account != null;
             current_config.rpc_port = params.rpc_port;
+            current_config.mock_transfer_transactions = params.mock_transfer_transactions;
             try validator(gpa, gossip_gpa, current_config);
         },
         .replay_offline => |params| {
@@ -481,6 +482,16 @@ const Cmd = struct {
         .default_value = null,
         .config = {},
         .help = "Stop processing at this slot.",
+    };
+
+    const mock_transfer_transactions_arg: cli.ArgumentInfo(?u64) = .{
+        .kind = .named,
+        .name_override = "mock-transfer-transactions",
+        .alias = .none,
+        .default_value = null,
+        .config = {},
+        .help = "Runs the mock transfer service." ++
+            " Sending `n` transfer transactions between two test accounts. ",
     };
 
     const voting_enabled_arg: cli.ArgumentInfo(bool) = .{
@@ -919,6 +930,7 @@ const Cmd = struct {
         stop_at_slot: ?sig.core.Slot,
         voting_enabled: bool,
         rpc_port: ?u16,
+        mock_transfer_transactions: ?u64,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -943,6 +955,7 @@ const Cmd = struct {
                 .voting_enabled = voting_enabled_arg,
                 .rpc_port = rpc_port_arg,
                 .stop_at_slot = stop_at_slot_arg,
+                .mock_transfer_transactions = mock_transfer_transactions_arg,
             },
         };
     };
@@ -1701,6 +1714,56 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
+    var transaction_sender_service = try sig.TransactionSenderService.init(
+        allocator,
+        .{ .unordered = app_base.exit },
+        .from(app_base.logger),
+        .{
+            .process_interval = .fromSecs(1),
+            .retry_interval = .fromSecs(5),
+            .max_pooled = 1_000,
+            .max_retries = 3,
+            .max_leaders = 5,
+        },
+        .{
+            .account_store = .{ .accounts_db = &new_db },
+            .epoch_tracker = &epoch_tracker,
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .status_cache = &replay_service_state.replay_state.status_cache,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+        },
+    );
+    defer transaction_sender_service.deinit();
+    const transaction_sender_handle = try std.Thread.spawn(
+        .{},
+        sig.TransactionSenderService.run,
+        .{ &transaction_sender_service, gpa },
+    );
+
+    var mock_transfer_service: ?sig.MockTransferService = null;
+    defer if (mock_transfer_service) |*service| service.deinit();
+    var mock_transfer_handle: ?std.Thread = null;
+    defer if (mock_transfer_handle) |thread| thread.join();
+
+    if (cfg.mock_transfer_transactions) |n| {
+        if (try cfg.getCluster() == .mainnet)
+            @panic("Cannot run mock transfers on mainnet.");
+
+        mock_transfer_service = sig.MockTransferService{
+            .exit = .{ .unordered = app_base.exit },
+            .logger = .from(app_base.logger),
+            .mode = try .initRpc(gpa, rpc_url, .noop),
+            .sender = transaction_sender_service.receiver,
+            .transfers = n,
+        };
+
+        mock_transfer_handle = try std.Thread.spawn(
+            .{},
+            sig.MockTransferService.run,
+            .{ &mock_transfer_service.?, gpa },
+        );
+    }
+
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
         try std.Thread.spawn(.{}, runRPCServer, .{
             allocator,
@@ -1713,6 +1776,7 @@ fn validator(
         null;
 
     if (rpc_server_thread) |thread| thread.join();
+    transaction_sender_handle.join();
     replay_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
