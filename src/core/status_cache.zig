@@ -15,6 +15,7 @@ const Ancestors = sig.core.Ancestors;
 const T = ?sig.ledger.transaction_status.TransactionError;
 
 const Fork = struct { slot: Slot, maybe_err: T = null };
+pub const Status = enum { pending, failed, succeeded };
 
 /// This is internally locking and thread safe.
 /// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/runtime/src/status_cache.rs#L39
@@ -73,13 +74,13 @@ pub const StatusCache = struct {
         state.mut().slot_deltas.deinit(allocator);
     }
 
-    pub fn getStatus(
+    pub fn getFork(
         self: *StatusCache,
         key: []const u8,
         blockhash: *const Hash,
         ancestors: *const Ancestors,
     ) ?Fork {
-        const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.getStatus" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.getFork" });
         defer zone.deinit();
 
         var state = self.state.read();
@@ -100,6 +101,16 @@ pub const StatusCache = struct {
         } else null;
     }
 
+    pub fn getStatus(
+        self: *StatusCache,
+        key: []const u8,
+        blockhash: *const Hash,
+        ancestors: *const Ancestors,
+    ) Status {
+        const fork = self.getFork(key, blockhash, ancestors) orelse return .pending;
+        return if (fork.maybe_err) |_| .failed else .succeeded;
+    }
+
     pub fn insert(
         self: *StatusCache,
         allocator: std.mem.Allocator,
@@ -107,6 +118,7 @@ pub const StatusCache = struct {
         blockhash: *const Hash,
         key: []const u8,
         slot: Slot,
+        maybe_err: T,
     ) error{OutOfMemory}!void {
         const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.insert" });
         defer zone.deinit();
@@ -137,7 +149,7 @@ pub const StatusCache = struct {
         const lookup_key: [CACHED_KEY_SIZE]u8 = key[key_index..][0..CACHED_KEY_SIZE].*;
 
         const forks = try hash_map.getOrPutValue(allocator, lookup_key, .empty);
-        try forks.value_ptr.append(allocator, .{ .slot = slot });
+        try forks.value_ptr.append(allocator, .{ .slot = slot, .maybe_err = maybe_err });
 
         // Add this key slice to the list of key slices for this slot and blockhash combo.
         const fork_entry = try state.mut().slot_deltas.getOrPutValue(allocator, slot, .empty);
@@ -149,7 +161,7 @@ pub const StatusCache = struct {
             .{ .status = .{}, .key_index = key_index },
         );
         const hash_entry_map: *StatusValues = &hash_entry.value_ptr.status;
-        try hash_entry_map.append(allocator, .{ .key = lookup_key });
+        try hash_entry_map.append(allocator, .{ .key = lookup_key, .maybe_err = maybe_err });
     }
 
     pub fn addRoot(self: *StatusCache, allocator: std.mem.Allocator, fork: Slot) !void {
@@ -245,7 +257,7 @@ test "status cache empty" {
 
     try std.testing.expectEqual(
         null,
-        status_cache.getStatus(
+        status_cache.getFork(
             &signature.toBytes(),
             &block_hash,
             &Ancestors{},
@@ -269,11 +281,11 @@ test "status cache find with ancestor fork" {
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
-    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0);
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0, null);
 
     try std.testing.expectEqual(
         Fork{ .slot = 0 },
-        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
+        status_cache.getFork(&signature.toBytes(), &blockhash, &ancestors),
     );
 }
 
@@ -290,11 +302,11 @@ test "status cache find without ancestor fork" {
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
-    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 1);
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 1, null);
 
     try std.testing.expectEqual(
         null,
-        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
+        status_cache.getFork(&signature.toBytes(), &blockhash, &ancestors),
     );
 }
 
@@ -311,12 +323,12 @@ test "status cache find with root ancestor fork" {
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
-    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0);
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0, null);
     try status_cache.addRoot(allocator, 0);
 
     try std.testing.expectEqual(
         Fork{ .slot = 0 },
-        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
+        status_cache.getFork(&signature.toBytes(), &blockhash, &ancestors),
     );
 }
 
@@ -336,13 +348,13 @@ test "status cache insert picks latest blockhash fork" {
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
-    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0);
-    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 1);
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0, null);
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 1, null);
 
     for (0..StatusCache.MAX_CACHE_ENTRIES + 1) |i| try status_cache.addRoot(allocator, i);
 
     try std.testing.expect(
-        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors) != null,
+        status_cache.getFork(&signature.toBytes(), &blockhash, &ancestors) != null,
     );
 }
 
@@ -359,11 +371,11 @@ test "status cache root expires" {
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
-    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0);
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0, null);
     for (0..StatusCache.MAX_CACHE_ENTRIES + 1) |i| try status_cache.addRoot(allocator, i);
 
     try std.testing.expectEqual(
         null,
-        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
+        status_cache.getFork(&signature.toBytes(), &blockhash, &ancestors),
     );
 }
