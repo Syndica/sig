@@ -104,22 +104,6 @@ pub fn getBlockTime(
     }
 }
 
-pub fn getMaxRetransmitSlot(
-    self: LedgerHookContext,
-    _: Allocator,
-    _: GetMaxRetransmitSlot,
-) !GetMaxRetransmitSlot.Response {
-    return self.max_retransmit_slot.load(.monotonic);
-}
-
-pub fn getMaxShredInsertSlot(
-    self: LedgerHookContext,
-    _: Allocator,
-    _: GetMaxShredInsertSlot,
-) !GetMaxShredInsertSlot.Response {
-    return self.max_shred_insert_slot.load(.monotonic);
-}
-
 pub fn getBlocks(
     self: LedgerHookContext,
     arena: std.mem.Allocator,
@@ -246,6 +230,22 @@ pub fn getFirstAvailableBlock(
     _: GetFirstAvailableBlock,
 ) !GetFirstAvailableBlock.Response {
     return self.ledger.reader().getFirstAvailableBlock() catch 0;
+}
+
+pub fn getMaxRetransmitSlot(
+    self: LedgerHookContext,
+    _: Allocator,
+    _: GetMaxRetransmitSlot,
+) !GetMaxRetransmitSlot.Response {
+    return self.max_retransmit_slot.load(.monotonic);
+}
+
+pub fn getMaxShredInsertSlot(
+    self: LedgerHookContext,
+    _: Allocator,
+    _: GetMaxShredInsertSlot,
+) !GetMaxShredInsertSlot.Response {
+    return self.max_shred_insert_slot.load(.monotonic);
 }
 
 pub fn getSignaturesForAddress(
