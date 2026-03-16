@@ -299,13 +299,9 @@ jobs:
       - run:
           name: Check style
           command: |
-            python3 -m pip install --upgrade pip
             python3 scripts/style.py --check src
             python3 scripts/style.py --check conformance/src
             python3 scripts/style.py --check v2/src
-      - run:
-          name: Install dependencies
-          command: pip install --upgrade pip
       - run:
           name: Check docs
           command: python3 docs/check.py ./
