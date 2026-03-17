@@ -11,6 +11,9 @@ const SlotTrackerReference = sig.replay.trackers.SlotTracker.Reference;
 const Logger = sig.trace.Logger("rpc.jrpc_websockets.slot_state_cache");
 pub const SlotReadContext = types.SlotReadContext;
 
+/// Max tracked slots retained, used to avoid unbounded memory growth if we receive unexpected
+/// event patterns. Under normal operation eviction should occur when slots are rooted.
+const MAX_CACHED_SLOTS: usize = 64;
 const SlotStateCache = @This();
 
 logger: Logger,
@@ -238,12 +241,10 @@ pub fn evictFinalizedThrough(
     self: *SlotStateCache,
     rooted_slot: Slot,
 ) void {
-    // TODO: this just loops over all entries, maybe better to use ordered map or track
-    // existing slots ordered separately to make this more efficient?
     var index: usize = 0;
     while (index < self.cached_slots.count()) {
         if (self.cached_slots.keys()[index] <= rooted_slot) {
-            // TODO: Offload cached frozen-account teardown off the loop thread.
+            // TODO(perf): Offload cached frozen-account teardown off the loop thread.
             self.cached_slots.values()[index].deinit();
             _ = self.cached_slots.swapRemoveAt(index);
         } else {
@@ -294,12 +295,45 @@ fn getOrPutSlot(
     self: *SlotStateCache,
     allocator: std.mem.Allocator,
     slot: Slot,
-) !*CachedSlot {
-    const gop = try self.cached_slots.getOrPut(allocator, slot);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = .{};
+) (std.mem.Allocator.Error || error{IncomingSlotTooOld})!*CachedSlot {
+    if (self.cached_slots.getPtr(slot)) |slot_state| {
+        return slot_state;
     }
+    if (self.cached_slots.count() >= MAX_CACHED_SLOTS) {
+        try self.evictMinimumSlot(slot);
+    }
+
+    const gop = try self.cached_slots.getOrPut(allocator, slot);
+    gop.value_ptr.* = .{};
     return gop.value_ptr;
+}
+
+fn evictMinimumSlot(self: *SlotStateCache, incoming_slot: Slot) error{IncomingSlotTooOld}!void {
+    var min_index: usize = 0;
+    var min_slot = self.cached_slots.keys()[0];
+    for (self.cached_slots.keys()[1..], 1..) |cached_slot, index| {
+        if (cached_slot < min_slot) {
+            min_slot = cached_slot;
+            min_index = index;
+        }
+    }
+
+    if (incoming_slot < min_slot) {
+        self.logger.warn().logf(
+            "slot state cache reached capacity of {}; dropping incoming slot {} " ++
+                "because minimum cached slot is {}",
+            .{ MAX_CACHED_SLOTS, incoming_slot, min_slot },
+        );
+        return error.IncomingSlotTooOld;
+    }
+
+    self.logger.warn().logf(
+        "slot state cache reached capacity of {}; evicting minimum slot {} to insert slot {}",
+        .{ MAX_CACHED_SLOTS, min_slot, incoming_slot },
+    );
+    // TODO(perf): Offload cached frozen-account teardown off the loop thread.
+    self.cached_slots.values()[min_index].deinit();
+    _ = self.cached_slots.swapRemoveAt(min_index);
 }
 
 fn needsConfirmedFlush(slot_state: *const CachedSlot) bool {
@@ -561,6 +595,56 @@ test "SlotStateCache: eviction removes slots at or below rooted slot" {
     try std.testing.expect(state.cached_slots.getPtr(5) == null);
     try std.testing.expect(state.cached_slots.getPtr(10) == null);
     try std.testing.expect(state.cached_slots.getPtr(15) != null);
+}
+
+test "SlotStateCache: capacity eviction removes minimum slot" {
+    const allocator = std.testing.allocator;
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker);
+    var state = SlotStateCache.init(ctx, .noop);
+    defer state.deinit(allocator);
+
+    const slot_limit: Slot = MAX_CACHED_SLOTS;
+    var slot: Slot = 1;
+    while (slot <= slot_limit) : (slot += 1) {
+        _ = try state.onSlotConfirmed(allocator, slot);
+    }
+
+    try std.testing.expectEqual(MAX_CACHED_SLOTS, state.cached_slots.count());
+    try std.testing.expect(state.cached_slots.getPtr(1) != null);
+
+    _ = try state.onSlotConfirmed(allocator, slot_limit + 1);
+
+    try std.testing.expectEqual(MAX_CACHED_SLOTS, state.cached_slots.count());
+    try std.testing.expect(state.cached_slots.getPtr(1) == null);
+    try std.testing.expect(state.cached_slots.getPtr(slot_limit + 1) != null);
+}
+
+test "SlotStateCache: capacity drop keeps minimum slot when incoming is lower" {
+    const allocator = std.testing.allocator;
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker);
+    var state = SlotStateCache.init(ctx, .noop);
+    defer state.deinit(allocator);
+
+    const slot_limit: Slot = MAX_CACHED_SLOTS + 1;
+    var slot: Slot = 2;
+    while (slot <= slot_limit) : (slot += 1) {
+        _ = try state.onSlotConfirmed(allocator, slot);
+    }
+
+    try std.testing.expectEqual(MAX_CACHED_SLOTS, state.cached_slots.count());
+    try std.testing.expect(state.cached_slots.getPtr(2) != null);
+
+    try std.testing.expectError(error.IncomingSlotTooOld, state.onSlotConfirmed(allocator, 1));
+
+    try std.testing.expectEqual(MAX_CACHED_SLOTS, state.cached_slots.count());
+    try std.testing.expect(state.cached_slots.getPtr(1) == null);
+    try std.testing.expect(state.cached_slots.getPtr(2) != null);
 }
 
 test "SlotStateCache: tip change updates processed_tip and fork membership" {
