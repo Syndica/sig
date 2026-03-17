@@ -1,0 +1,39 @@
+.{
+    .shared_memory = .{
+    .net_to_gossip = .{ .net_pair },
+    .net_to_shred = .{ .net_pair },
+    .gossip_to_snapshot = .{ .snapshot_queue = {} },
+    .gossip_constants = .{ .gossip_config = config_args },
+    .shred_constants = .{ leader_schedule = args },
+},
+
+.services = .{
+    .{
+        .name = .net,
+        .access = .{
+            .{ .mem = .net_to_shred, .mode = .rw },
+            .{ .mem = .net_to_gossip, .mode = .rw },
+        },
+    },
+    .{
+        .name = .gossip,
+        .access = .{
+            .{ .mem = .net_to_gossip, .mode = .rw },
+            .{ .mem = .gossip_to_snapshot, .mode = .rw },
+            .{ .mem = .gossip_constants, .mode = .readonly },
+        },
+    },
+    .{
+        .name = .shred,
+        .access = .{
+            .{ .mem = .net_to_shred, .mode = .rw },
+            .{ .mem = .shred_constants, .mode = .readonly },
+        },
+    },
+    .{
+        .name = .snapshot,
+        .access = .{
+            .{ .mem = .gossip_to_snapshot, .mode = .rw },
+        },
+    },
+},
