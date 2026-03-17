@@ -3,7 +3,7 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 
-const quic_client = sig.net.quic_client;
+const QuicClient = sig.net.QuicClient;
 
 const AccountStore = sig.accounts_db.AccountStore;
 
@@ -93,23 +93,24 @@ pub fn init(
 }
 
 pub fn run(self: *Service, gpa: Allocator) !void {
-    const quic_sender = try Channel(Packet).create(gpa);
-    quic_sender.name = "TransactionSenderService: Packet Sender";
-    defer quic_sender.destroy();
+    errdefer |err| {
+        self.logger.err().logf("TransactionSenderService Error: {s}", .{@errorName(err)});
+        if (@errorReturnTrace()) |tr| std.debug.dumpStackTrace(tr.*);
+        self.exit.setExit();
+    }
 
-    const quic_handle = try std.Thread.spawn(
+    const quic_client = try QuicClient.create(
+        gpa,
+        .from(self.logger),
+        self.exit,
         .{},
-        quic_client.runClient,
-        .{
-            gpa,
-            quic_sender,
-            quic_client.Logger.from(self.logger),
-            self.exit,
-        },
     );
+    defer quic_client.destroy();
+
+    const quic_handle = try std.Thread.spawn(.{}, QuicClient.run, .{quic_client});
     defer quic_handle.join();
 
-    try self.handleTransactions(gpa, quic_sender);
+    try self.handleTransactions(gpa, quic_client.receiver);
 }
 
 fn handleTransactions(self: *Service, gpa: Allocator, quic_sender: *Channel(Packet)) !void {

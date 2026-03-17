@@ -8,6 +8,7 @@ const Transaction = sig.core.Transaction;
 
 const Packet = sig.net.Packet;
 const SocketAddr = sig.net.SocketAddr;
+const QuicClient = sig.net.QuicClient;
 
 const RpcClient = sig.rpc.Client;
 
@@ -161,23 +162,18 @@ const MockSenderService = struct {
     }
 
     pub fn run(self: *MockSenderService, gpa: Allocator) !void {
-        const quic_sender = try Channel(Packet).create(gpa);
-        quic_sender.name = "TransactionSenderService: Packet Sender";
-        defer quic_sender.destroy();
-
-        const quic_handle = try std.Thread.spawn(
-            .{},
-            sig.net.quic_client.runClient,
-            .{
-                gpa,
-                quic_sender,
-                sig.net.quic_client.Logger.from(self.logger),
-                self.exit,
-            },
+        const quic_client = try QuicClient.create(
+            gpa,
+            .from(self.logger),
+            self.exit,
+            .{ .log_metrics_interval = .fromSecs(1) },
         );
+        defer quic_client.destroy();
+
+        const quic_handle = try std.Thread.spawn(.{}, QuicClient.run, .{quic_client});
         defer quic_handle.join();
 
-        try self.handleTransactions(gpa, quic_sender);
+        try self.handleTransactions(gpa, quic_client.receiver);
     }
 
     fn handleTransactions(
