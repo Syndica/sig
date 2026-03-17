@@ -366,7 +366,7 @@ fn handleSlotTransition(
                     continue;
                 }
                 const commitment = entry.key.params.program.commitment;
-                if (!transitionMatchesCommitment(transition.commitments, commitment)) {
+                if (!transitionMatchesCommitment(transition.notify_commitments, commitment)) {
                     continue;
                 }
                 switch (commitment) {
@@ -408,7 +408,7 @@ fn handleSlotTransition(
                 //  .tip_changed for processed commitment or via tracked forks avoid
                 //  reevaluating if it's already in slot cache state.
                 if (!transitionMatchesCommitment(
-                    transition.commitments,
+                    transition.notify_commitments,
                     entry.key.params.account.commitment,
                 )) {
                     continue;
@@ -425,7 +425,7 @@ fn handleSlotTransition(
 }
 
 fn transitionMatchesCommitment(
-    commitments: SlotStateCache.CommitmentMask,
+    commitments: SlotStateCache.NotificationCommitments,
     commitment: methods.Commitment,
 ) bool {
     return switch (commitment) {

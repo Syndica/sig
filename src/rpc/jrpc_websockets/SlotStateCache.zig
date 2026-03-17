@@ -14,7 +14,9 @@ pub const SlotReadContext = types.SlotReadContext;
 const SlotStateCache = @This();
 
 logger: Logger,
+/// Tracked latest processed tip slot number.
 processed_tip: Slot = 0,
+/// Cached latest processed tip slot info (for ancestor information).
 processed_tip_info: ?SlotTrackerReference = null,
 cached_slots: std.AutoArrayHashMapUnmanaged(Slot, CachedSlot) = .empty,
 
@@ -23,7 +25,7 @@ pub const CachedSlot = struct {
     root: ?Slot = null,
     state: StateFlags = .{},
     published: PublishedFlags = .{},
-    // Final account states for the accounts modified in this slot, captured at freeze time.
+    /// Final account states for the accounts modified in this slot, captured at freeze time.
     modified_accounts: types.SlotModifiedAccounts = types.SlotModifiedAccounts.empty(),
 
     pub const StateFlags = packed struct {
@@ -32,6 +34,7 @@ pub const CachedSlot = struct {
         rooted: bool = false,
     };
 
+    /// Tracks which commitment levels have been published for this slot
     pub const PublishedFlags = packed struct {
         processed: bool = false,
         confirmed: bool = false,
@@ -43,24 +46,27 @@ pub const CachedSlot = struct {
     }
 };
 
-pub const CommitmentMask = packed struct {
+pub const NotificationCommitments = packed struct {
     processed: bool = false,
     confirmed: bool = false,
     finalized: bool = false,
 };
 
+/// Returned from event methods to indicate what commitment-specific notifications should
+/// be emitted and if any cached slots should be evicted.
 pub const Transition = struct {
     cached_slot: ?*const CachedSlot = null,
-    commitments: CommitmentMask = .{},
+    notify_commitments: NotificationCommitments = .{},
     evict_through: ?Slot = null,
 };
 
-// Parent-chain item used for confirmed backfill and oldest->newest replay in runtime.
+// Parent-chain item used for iterating ancestors of a slot.
 pub const AncestorItem = struct {
     slot: Slot,
     cached_slot: *CachedSlot,
 };
 
+/// Iterator over slot ancestors using the cached slot parent links.
 pub const AncestorIterator = struct {
     state: *SlotStateCache,
     next_slot: ?Slot,
@@ -78,10 +84,11 @@ pub const AncestorIterator = struct {
 
 pub fn init(slot_read_ctx: SlotReadContext, logger: Logger) SlotStateCache {
     const processed_tip = slot_read_ctx.slot_tracker.latest_processed_slot.get();
+    const processed_tip_info = slot_read_ctx.slot_tracker.get(processed_tip);
     return .{
         .logger = .from(logger),
         .processed_tip = processed_tip,
-        .processed_tip_info = slot_read_ctx.slot_tracker.get(processed_tip),
+        .processed_tip_info = processed_tip_info,
     };
 }
 
@@ -95,6 +102,8 @@ pub fn deinit(self: *SlotStateCache, allocator: std.mem.Allocator) void {
     self.cached_slots.deinit(allocator);
 }
 
+/// On tip changed event updates the processed tip and its info, and is used to trigger
+/// processed commitment notifications.
 pub fn onTipChanged(
     self: *SlotStateCache,
     slot_read_ctx: SlotReadContext,
@@ -122,7 +131,7 @@ pub fn onTipChanged(
         );
     }
 
-    return .{ .commitments = .{ .processed = true } };
+    return .{ .notify_commitments = .{ .processed = true } };
 }
 
 /// Freeze is the first point where the slot's final modified accounts are stable,
@@ -153,12 +162,16 @@ pub fn onSlotFrozen(
     slot_state.modified_accounts = slot_data.accounts;
     slot_data.accounts = types.SlotModifiedAccounts.empty();
 
-    var transition: Transition = .{ .cached_slot = slot_state };
-    // Maybe other commitments for slot were waiting for frozen, so try all of them
-    transition.commitments.processed = self.tryMarkProcessedPublished(slot_data.slot, slot_state);
-    transition.commitments.confirmed = needsConfirmedFlush(slot_state);
-    transition.commitments.finalized = tryMarkFinalizedPublished(slot_state);
-    return transition;
+    // Maybe other commitments for slot were waiting for frozen, so try all of them.
+    const notify_commitments: NotificationCommitments = .{
+        .processed = self.tryMarkProcessedPublished(slot_data.slot, slot_state),
+        .confirmed = needsConfirmedFlush(slot_state),
+        .finalized = tryMarkFinalizedPublished(slot_state),
+    };
+    return .{
+        .cached_slot = slot_state,
+        .notify_commitments = notify_commitments,
+    };
 }
 
 pub fn onSlotConfirmed(
@@ -173,7 +186,7 @@ pub fn onSlotConfirmed(
 
     slot_state.state.confirmed = true;
 
-    var transition: Transition = .{ .commitments = .{ .confirmed = true } };
+    var transition: Transition = .{ .notify_commitments = .{ .confirmed = true } };
     if (slot_state.state.frozen) {
         transition.cached_slot = slot_state;
     }
@@ -194,7 +207,7 @@ pub fn onSlotRooted(
     slot_state.state.rooted = true;
 
     var transition: Transition = .{
-        .commitments = .{
+        .notify_commitments = .{
             .confirmed = !slot_state.published.confirmed,
             .finalized = true,
         },
@@ -260,12 +273,17 @@ pub fn collectPublishableConfirmedSlots(
         }
         ancestor.cached_slot.state.confirmed = true;
         if (!ancestor.cached_slot.state.frozen) {
+            // Confirmed but not frozen, just yield no slots as we have to wait for the frozen
+            // event to have the modified accounts and be able to publish in slot order.
+            // We will try again on the next frozen event and eventually be able to flush the
+            // confirmed in slot order.
             slots.clearRetainingCapacity();
             break;
         }
         try slots.append(allocator, ancestor);
     }
 
+    // Mark all the collected slots published for confirmed
     for (slots.items) |item| {
         item.cached_slot.published.confirmed = true;
     }
@@ -392,9 +410,9 @@ test "SlotStateCache: slot frozen returns transition and marks state" {
 
     const transition = try testOnSlotFrozen(&state, allocator, 10, 9, 5);
     try std.testing.expect(transition.cached_slot != null);
-    try std.testing.expect(transition.commitments.processed);
-    try std.testing.expect(!transition.commitments.confirmed);
-    try std.testing.expect(!transition.commitments.finalized);
+    try std.testing.expect(transition.notify_commitments.processed);
+    try std.testing.expect(!transition.notify_commitments.confirmed);
+    try std.testing.expect(!transition.notify_commitments.finalized);
     try std.testing.expect(transition.evict_through == null);
 
     const cached = transition.cached_slot.?;
@@ -418,7 +436,7 @@ test "SlotStateCache: duplicate frozen is ignored" {
 
     const second = try testOnSlotFrozen(&state, allocator, 10, 9, 5);
     try std.testing.expect(second.cached_slot == null);
-    try std.testing.expectEqual(CommitmentMask{}, second.commitments);
+    try std.testing.expectEqual(NotificationCommitments{}, second.notify_commitments);
 }
 
 test "SlotStateCache: confirmed before frozen buffers state" {
@@ -435,16 +453,16 @@ test "SlotStateCache: confirmed before frozen buffers state" {
 
     const confirm_transition = try state.onSlotConfirmed(allocator, 10);
     try std.testing.expect(confirm_transition.cached_slot == null);
-    try std.testing.expect(confirm_transition.commitments.confirmed);
+    try std.testing.expect(confirm_transition.notify_commitments.confirmed);
 
     const cached_before = state.cached_slots.getPtr(10).?;
     try std.testing.expect(cached_before.state.confirmed);
     try std.testing.expect(!cached_before.state.frozen);
 
     const frozen_transition = try testOnSlotFrozen(&state, allocator, 10, 9, 5);
-    try std.testing.expect(frozen_transition.commitments.processed);
-    try std.testing.expect(frozen_transition.commitments.confirmed);
-    try std.testing.expect(!frozen_transition.commitments.finalized);
+    try std.testing.expect(frozen_transition.notify_commitments.processed);
+    try std.testing.expect(frozen_transition.notify_commitments.confirmed);
+    try std.testing.expect(!frozen_transition.notify_commitments.finalized);
 
     const cached_after = state.cached_slots.getPtr(10).?;
     try std.testing.expect(cached_after.state.confirmed);
@@ -465,16 +483,16 @@ test "SlotStateCache: onSlotConfirmed marks confirmed transition only when actio
     defer state.deinit(allocator);
 
     const first = try state.onSlotConfirmed(allocator, 10);
-    try std.testing.expect(first.commitments.confirmed);
+    try std.testing.expect(first.notify_commitments.confirmed);
 
     _ = try testOnSlotFrozen(&state, allocator, 11, 10, 0);
     const second = try state.onSlotConfirmed(allocator, 11);
-    try std.testing.expect(!second.commitments.processed);
-    try std.testing.expect(second.commitments.confirmed);
-    try std.testing.expect(!second.commitments.finalized);
+    try std.testing.expect(!second.notify_commitments.processed);
+    try std.testing.expect(second.notify_commitments.confirmed);
+    try std.testing.expect(!second.notify_commitments.finalized);
 
     const duplicate = try state.onSlotConfirmed(allocator, 11);
-    try std.testing.expectEqual(CommitmentMask{}, duplicate.commitments);
+    try std.testing.expectEqual(NotificationCommitments{}, duplicate.notify_commitments);
 }
 
 test "SlotStateCache: onSlotRooted marks confirmed finalized and eviction" {
@@ -489,9 +507,9 @@ test "SlotStateCache: onSlotRooted marks confirmed finalized and eviction" {
     _ = try testOnSlotFrozen(&state, allocator, 10, 9, 0);
     const transition = try state.onSlotRooted(allocator, 10);
     try std.testing.expect(transition.cached_slot != null);
-    try std.testing.expect(!transition.commitments.processed);
-    try std.testing.expect(transition.commitments.confirmed);
-    try std.testing.expect(transition.commitments.finalized);
+    try std.testing.expect(!transition.notify_commitments.processed);
+    try std.testing.expect(transition.notify_commitments.confirmed);
+    try std.testing.expect(transition.notify_commitments.finalized);
     try std.testing.expectEqual(@as(?Slot, 10), transition.evict_through);
 
     const cached = transition.cached_slot.?;
@@ -512,12 +530,12 @@ test "SlotStateCache: duplicate rooted returns empty transition" {
 
     const first = try state.onSlotRooted(allocator, 10);
     try std.testing.expect(first.cached_slot == null);
-    try std.testing.expect(first.commitments.confirmed);
-    try std.testing.expect(first.commitments.finalized);
+    try std.testing.expect(first.notify_commitments.confirmed);
+    try std.testing.expect(first.notify_commitments.finalized);
 
     const second = try state.onSlotRooted(allocator, 10);
     try std.testing.expect(second.cached_slot == null);
-    try std.testing.expectEqual(CommitmentMask{}, second.commitments);
+    try std.testing.expectEqual(NotificationCommitments{}, second.notify_commitments);
     try std.testing.expect(second.evict_through == null);
 }
 
@@ -566,9 +584,9 @@ test "SlotStateCache: tip change updates processed_tip and fork membership" {
     _ = try testOnSlotFrozen(&state, allocator, 5, 4, 0);
 
     const first = state.onTipChanged(ctx, 3);
-    try std.testing.expect(first.commitments.processed);
-    try std.testing.expect(!first.commitments.confirmed);
-    try std.testing.expect(!first.commitments.finalized);
+    try std.testing.expect(first.notify_commitments.processed);
+    try std.testing.expect(!first.notify_commitments.confirmed);
+    try std.testing.expect(!first.notify_commitments.finalized);
     try std.testing.expect(state.isSlotOnCurrentFork(2));
     try std.testing.expect(state.isSlotOnCurrentFork(3));
     try std.testing.expect(!state.isSlotOnCurrentFork(4));
@@ -576,7 +594,7 @@ test "SlotStateCache: tip change updates processed_tip and fork membership" {
     try std.testing.expectEqual(@as(Slot, 3), state.processed_tip);
 
     const second = state.onTipChanged(ctx, 5);
-    try std.testing.expect(second.commitments.processed);
+    try std.testing.expect(second.notify_commitments.processed);
     try std.testing.expect(!state.isSlotOnCurrentFork(2));
     try std.testing.expect(!state.isSlotOnCurrentFork(3));
     try std.testing.expect(state.isSlotOnCurrentFork(4));
@@ -605,8 +623,8 @@ test "SlotStateCache: off-fork frozen slot is not on current fork" {
 
     try std.testing.expect(state.isSlotOnCurrentFork(2));
     try std.testing.expect(!state.isSlotOnCurrentFork(3));
-    try std.testing.expect(on_fork.commitments.processed);
-    try std.testing.expect(!off_fork.commitments.processed);
+    try std.testing.expect(on_fork.notify_commitments.processed);
+    try std.testing.expect(!off_fork.notify_commitments.processed);
 }
 
 test "SlotStateCache: ancestor iterator walks cached parents" {
@@ -681,7 +699,7 @@ test "SlotStateCache: root jump over multiple slots" {
     for ([_]Slot{ 5, 6, 7, 8 }) |slot| {
         const transition = try state.onSlotRooted(allocator, slot);
         try std.testing.expect(transition.cached_slot != null);
-        try std.testing.expect(transition.commitments.finalized);
+        try std.testing.expect(transition.notify_commitments.finalized);
         try std.testing.expectEqual(@as(?Slot, slot), transition.evict_through);
     }
 
