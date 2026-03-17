@@ -78,7 +78,7 @@ pub const RPCSubMap = struct {
 
         const queue = try self.allocator.create(NotifQueue);
         const commit_path: NotifQueue.CommitPath = switch (key.method) {
-            .slot, .root, .program => .reserved,
+            .slot, .root, .program, .account => .reserved,
             else => .direct,
         };
         queue.* = try NotifQueue.init(self.allocator, self.queue_capacity, commit_path);
