@@ -603,6 +603,7 @@ const TestContext = struct {
         };
     }
 };
+
 test "TransactionInfo.initWithWire:sets fields correctly" {
     const tx = sig.core.transaction.transaction_legacy_example.as_struct;
     var wire: [Packet.DATA_SIZE]u8 = @splat(0);
@@ -730,7 +731,7 @@ test "handleTransactions" {
     );
     defer service.deinit();
 
-    const hande_transactions_handle = try std.Thread.spawn(
+    const handle_transactions_handle = try std.Thread.spawn(
         .{},
         Service.handleTransactions,
         .{ &service, gpa, test_ctx.quic_sender },
@@ -791,12 +792,14 @@ test "handleTransactions" {
     }
 
     const start = Instant.now();
-    while (start.elapsed().lt(.fromSecs(30)) and
-        service.metrics.pool_size.get() != 1 or
-        service.metrics.received_count.get() != 10 or
-        service.metrics.rooted_count.get() != 1 or
-        service.metrics.failed_count.get() != 1 or
-        service.metrics.expired_count.get() != 7) std.Thread.sleep(10 * std.time.ns_per_ms);
+    while (start.elapsed().lt(.fromSecs(1))) {
+        if (service.metrics.pool_size.get() == 1 and
+            service.metrics.received_count.get() == 10 and
+            service.metrics.rooted_count.get() == 1 and
+            service.metrics.failed_count.get() == 1 and
+            service.metrics.expired_count.get() == 7) break;
+        std.Thread.sleep(10 * std.time.ns_per_ms);
+    }
 
     try std.testing.expectEqual(1, service.metrics.pool_size.get());
     try std.testing.expectEqual(10, service.metrics.received_count.get());
@@ -805,7 +808,7 @@ test "handleTransactions" {
     try std.testing.expectEqual(7, service.metrics.expired_count.get());
 
     test_ctx.exit_flag.store(true, .monotonic);
-    hande_transactions_handle.join();
+    handle_transactions_handle.join();
 }
 
 test "fillLeaderAddresses" {

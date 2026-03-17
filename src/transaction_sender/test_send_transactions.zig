@@ -19,8 +19,6 @@ const TransactionInfo = sig.TransactionSenderService.TransactionInfo;
 const Instant = sig.time.Instant;
 const Duration = sig.time.Duration;
 
-const PubkeyMap = sig.utils.collections.PubkeyMap;
-
 const Logger = sig.trace.log.Logger("test_send_transactions");
 
 const LEADER_WINDOW: u64 = 4;
@@ -295,15 +293,13 @@ fn resolveLeadersFromRpc(gpa: Allocator, client: *RpcClient) !struct { u64, []?S
         }
     }
 
-    var selected = PubkeyMap(void){};
-    defer selected.deinit(gpa);
-
     var leaders: std.ArrayListUnmanaged(SocketAddr) = .empty;
     errdefer leaders.deinit(gpa);
 
     const start = std.mem.min(u64, leader_by_slot.keys());
     const end = std.mem.max(u64, leader_by_slot.keys());
     const addresses = try gpa.alloc(?SocketAddr, end - start + 1);
+    errdefer gpa.free(addresses);
     var has_address_count: usize = 0;
     for (start..end + 1, 0..) |slot, i| {
         const leader = leader_by_slot.get(slot) orelse return error.MissingLeaderForSlot;

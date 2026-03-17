@@ -80,7 +80,7 @@ pub const StatusCache = struct {
         blockhash: *const Hash,
         ancestors: *const Ancestors,
     ) ?Fork {
-        const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.getStatus" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.getFork" });
         defer zone.deinit();
 
         var state = self.state.read();
@@ -161,7 +161,7 @@ pub const StatusCache = struct {
             .{ .status = .{}, .key_index = key_index },
         );
         const hash_entry_map: *StatusValues = &hash_entry.value_ptr.status;
-        try hash_entry_map.append(allocator, .{ .key = lookup_key });
+        try hash_entry_map.append(allocator, .{ .key = lookup_key, .maybe_err = maybe_err });
     }
 
     pub fn addRoot(self: *StatusCache, allocator: std.mem.Allocator, fork: Slot) !void {

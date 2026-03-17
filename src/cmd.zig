@@ -1133,48 +1133,6 @@ const Cmd = struct {
         };
     };
 
-    const TestTransactionSender = struct {
-        shred_version: ?u16,
-        genesis_file_path: ?[]const u8,
-        n_transactions: u64,
-        n_lamports_per_tx: u64,
-        gossip_base: GossipArgumentsCommon,
-        gossip_node: GossipArgumentsNode,
-
-        const cmd_info: cli.CommandInfo(@This()) = .{
-            .help = .{
-                .short = "Test transaction sender service.",
-                .long =
-                \\Simulates a stream of transaction being sent to the transaction sender by
-                \\running a mock transaction generator thread. For the moment this just sends
-                \\transfer transactions between to hard coded testnet accounts.
-                ,
-            },
-            .sub = .{
-                .shred_version = shred_version_arg,
-                .genesis_file_path = genesis_file_path_arg,
-                .n_transactions = .{
-                    .kind = .named,
-                    .name_override = "n-transactions",
-                    .alias = .t,
-                    .default_value = 3,
-                    .config = {},
-                    .help = "number of transactions to send",
-                },
-                .n_lamports_per_tx = .{
-                    .kind = .named,
-                    .name_override = "n-lamports-per-tx",
-                    .alias = .l,
-                    .default_value = 1e7,
-                    .config = {},
-                    .help = "number of lamports to send per transaction",
-                },
-                .gossip_base = GossipArgumentsCommon.cmd_info,
-                .gossip_node = GossipArgumentsNode.cmd_info,
-            },
-        };
-    };
-
     // NOTE: MockRpcServer is disabled because AccountsDB v2 does not yet support:
     // - loadWithDefaults (snapshot loading into AccountsDB)
     // - registerRPCHooks (RPC hooks for snapshot serving)
