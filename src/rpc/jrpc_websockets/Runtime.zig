@@ -1,7 +1,4 @@
 //! Shared runtime context passed to all handlers and the loop thread.
-//!
-//! For shutdown you must continue running the RuntimeContext loop and ThreadPool until inflight_jobs
-//! drops to 0, then you can stop the loop and deint the context and threadpool.
 
 const std = @import("std");
 const xev = @import("xev");
@@ -56,11 +53,8 @@ running: bool = true,
 /// Queues that have newly committed notifications this drain cycle.
 /// Built during commit processing; drained immediately after.
 pending_wake_queues: std.ArrayList(*NotifQueue) = .{},
-// TODO: this should probably just be a wait group and have the metric be separate.
-/// Number of serialization jobs submitted but not yet committed.
-/// Incremented on job submit, decremented on commit receive.
-/// Used during shutdown to wait for all in-flight work to complete.
-inflight_jobs: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+/// Waitgroup to track submitted threadpool tasks that must finish before shutdown can complete.
+threadpool_wg: ThreadPool.WaitGroup,
 // TODO: instead of separate channel it should just use a wait group and dispatch to
 // thread pool to free the payloads.
 /// Optional queue for off-loop payload allocator free work.
@@ -94,7 +88,7 @@ pub const Dependencies = struct {
 };
 
 pub fn init(deps: Dependencies) RuntimeContext {
-    return .{
+    var runtime: RuntimeContext = .{
         .allocator = deps.allocator,
         .logger = .from(deps.logger),
         .sub_map = deps.sub_map,
@@ -108,9 +102,12 @@ pub fn init(deps: Dependencies) RuntimeContext {
         .max_batch_bytes = deps.max_batch_bytes,
         .loop = deps.loop,
         .notify_pending = &deps.event_sink.notify_pending,
+        .threadpool_wg = undefined,
         .payload_free_queue = deps.payload_free_queue,
         .wakeup_hook = deps.wakeup_hook,
     };
+    runtime.threadpool_wg.init();
+    return runtime;
 }
 
 const SerializeTask = struct {
@@ -124,18 +121,46 @@ const SerializeTask = struct {
     }
 };
 
-/// Free resources owned directly by RuntimeContext.
-/// IMPORTANT: shutdown the websocket server and wait for inflight_jobs to settle to 0 before calling deinit.
-pub fn deinit(self: *RuntimeContext) void {
-    const inflight_jobs = self.inflight_jobs.load(.acquire);
-    if (inflight_jobs != 0) {
-        self.logger.err().logf(
-            "deinit called with inflight_jobs = {}, wait for it to settle to 0 first",
-            .{inflight_jobs},
+pub const DeinitError = error{Timeout};
+
+/// Free resources owned directly by RuntimeContext. If error is returned then timeout
+/// occured while waiting for threadpool tasks to finish, in that case no resources are
+/// freed.
+///
+/// IMPORTANT: callers must shutdown the websocket server and stop sending messages to the
+/// inbound event channel before calling `deinit()`.
+/// `deinit()` waits up to `timeout_ms` for runtime-submitted threadpool tasks to finish,
+/// drains any remaining commit messages, then releases runtime-owned resources.
+pub fn deinit(self: *RuntimeContext, timeout_ms: u64) DeinitError!void {
+    try self.waitForThreadpoolTasks(timeout_ms);
+    self.drainCommitQueue();
+
+    if (self.metrics.inflight_jobs != 0) {
+        self.logger.warn().logf(
+            "deinit completed with inflight_jobs metric = {}; " ++
+                "metric may be stale after worker send failures",
+            .{self.metrics.inflight_jobs},
         );
     }
+
+    self.threadpool_wg.deinit();
     self.slot_state_cache.deinit(self.allocator);
     self.pending_wake_queues.deinit(self.allocator);
+}
+
+fn waitForThreadpoolTasks(self: *RuntimeContext, timeout_ms: u64) DeinitError!void {
+    var timer = std.time.Timer.start() catch unreachable;
+    const timeout_ns = timeout_ms * std.time.ns_per_ms;
+
+    while (!self.threadpool_wg.isDone()) {
+        const elapsed_ns = timer.read();
+        if (elapsed_ns >= timeout_ns) {
+            return error.Timeout;
+        }
+
+        const remaining_ns = timeout_ns - elapsed_ns;
+        std.Thread.sleep(@min(remaining_ns, 100 * std.time.ns_per_us));
+    }
 }
 
 /// Request an async wake on the loop, coalescing duplicate wakeups.
@@ -180,9 +205,10 @@ fn onAsyncWakeup(
 
 fn executeSerializeTask(task: *ThreadPool.Task) void {
     const serialize_task: *SerializeTask = @alignCast(@fieldParentPtr("task", task));
+    const runtime = serialize_task.runtime;
+    defer runtime.threadpool_wg.finish();
     defer serialize_task.deinit();
 
-    const runtime = serialize_task.runtime;
     const job = serialize_task.job;
     var serialize_timer = std.time.Timer.start() catch unreachable;
 
@@ -232,6 +258,7 @@ fn submitSerialize(self: *RuntimeContext, job: types.SerializeJob) !void {
         .task = .{ .callback = RuntimeContext.executeSerializeTask },
         .job = job,
     };
+    self.threadpool_wg.start();
     // TODO(perf): could maybe be batched.
     self.serialization_pool.schedule(.{
         .head = &serialize_task.task,
@@ -680,7 +707,7 @@ fn submitJobForEntry(
         self.maybeRemoveIdleQueue(entry.sub_id, q);
         return false;
     };
-    _ = self.inflight_jobs.fetchAdd(1, .monotonic);
+    self.metrics.inflight_jobs += 1;
     self.metrics.serialize_tasks_allocated += 1;
     return true;
 }
@@ -703,7 +730,7 @@ fn drainCommitQueue(self: *RuntimeContext) void {
 }
 
 fn handleCommitMsg(self: *RuntimeContext, msg: types.CommitMsg) void {
-    _ = self.inflight_jobs.fetchSub(1, .monotonic);
+    self.metrics.inflight_jobs -= 1;
     self.metrics.serialize_jobs += 1;
     self.metrics.serialize_ns += msg.serialize_ns;
     self.metrics.serialize_pipeline_ns += msg.pipeline_latency_ns;
