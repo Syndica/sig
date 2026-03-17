@@ -15,9 +15,6 @@ executors:
   linux-executor:
     machine: true
     resource_class: syndica/r7iz-fleet
-  python-executor:
-    docker:
-      - image: cimg/python:3.10
   macos-executor:
     macos:
       xcode: 15.4.0
@@ -34,7 +31,7 @@ jobs:
       - run:
           name: Download Zig
           command: |
-            sudo apt update && sudo apt install -y wget unzip xz-utils
+            sudo apt-get update -y && sudo apt-get install -y wget unzip xz-utils
             wget https://ziglang.org/download/0.15.2/zig-<< parameters.target >>-0.15.2.tar.xz
             tar xf zig-<< parameters.target >>-0.15.2.tar.xz
             mkdir -p workspace
@@ -44,65 +41,7 @@ jobs:
           paths:
             - "*"
 
-  lint:
-    executor: linux-executor
-    steps:
-      - checkout
-      - attach_workspace:
-          at: workspace
-      - run:
-          name: Lint
-          command: |
-            workspace/zig/zig fmt --check src/ build.zig
-            cd conformance/
-            ../workspace/zig/zig fmt --check src/ build.zig
-
-  check_style:
-    executor: python-executor
-    steps:
-      - checkout
-      - run:
-          name: Install dependencies
-          command: pip install --upgrade pip
-      - run:
-          name: Check style
-          command: python scripts/style.py --check src
-      - run:
-          name: Check style in conformance
-          command: python scripts/style.py --check conformance/src
-      - run:
-          name: Check style in v2
-          command: python scripts/style.py --check v2/src
-
-  v2_checks:
-    executor: linux-executor
-    steps:
-      - checkout
-      - attach_workspace:
-          at: workspace
-      - run:
-          name: CI
-          command: |
-            sudo apt update && sudo apt install wget -y
-            ./scripts/proxy_workaround.sh workspace/zig/zig
-            cd v2/
-            ../workspace/zig/zig build ci --summary all
-
-  check_docs:
-    executor: python-executor
-    steps:
-      - checkout
-      - run:
-          name: Install dependencies
-          command: pip install --upgrade pip
-      - run:
-          name: Check docs
-          command: python docs/check.py ./
-      - run:
-          name: Check conformance commits
-          command: conformance/scripts/verify-commits.sh
-
-  build_linux:
+  build_and_test_linux:
     executor: linux-executor
     steps:
       - checkout
@@ -113,7 +52,7 @@ jobs:
       - run:
           name: Build
           command: |
-            sudo apt update && sudo apt install wget -y
+            sudo apt-get update -y && sudo apt-get install wget -y
             ./scripts/proxy_workaround.sh workspace/zig/zig
             workspace/zig/zig build -Denable-tsan=true -p workspace/zig-out -Dcpu=x86_64_v3 --summary all
       - save_cache:
@@ -121,10 +60,13 @@ jobs:
           paths:
             - .zig-cache
             - ~/.cache/zig
-      - persist_to_workspace:
-          root: workspace
-          paths:
-            - "zig-out/bin/test"
+      - run:
+          name: Build Tests
+          # Disable network-accessing tests for this job, which behave badly on circleci
+          command: workspace/zig/zig build test -Dno-run -Dlong-tests -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --summary all
+      - run:
+          name: Run Tests
+          command: zig-out/bin/test 2>&1 | cat
 
   build_linux_release:
     executor: linux-executor
@@ -137,7 +79,7 @@ jobs:
       - run:
           name: Build
           command: |
-            sudo apt update && sudo apt install wget -y
+            sudo apt-get update -y && sudo apt-get install wget -y
             ./scripts/proxy_workaround.sh workspace/zig/zig
             workspace/zig/zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p workspace/zig-out-release --summary all
       - run:
@@ -228,53 +170,6 @@ jobs:
             - .zig-cache
             - ~/.cache/zig
 
-  build_and_test_hashmap:
-    executor: linux-executor
-    steps:
-      - checkout
-      - attach_workspace:
-          at: workspace
-      - restore_cache:
-          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted
-      - run:
-          name: Build Tests
-          command: workspace/zig/zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
-      - run:
-          name: Run Tests
-          command: zig-out/bin/test 2>&1 | cat
-
-  test_linux:
-    executor: linux-executor
-    steps:
-      - checkout
-      - attach_workspace:
-          at: workspace
-      # Restore the cache in order to have access to the files which the DWARF info
-      # is referencing when dumping stack traces.
-      - restore_cache:
-          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted
-      - run:
-          name: Build Tests
-          # Disable network-accessing tests for this job, which behave badly on circleci
-          command: workspace/zig/zig build test -Dno-run -Dlong-tests -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --summary all
-      - run:
-          name: Run Tests
-          command: zig-out/bin/test 2>&1 | cat
-
-  test_webzockets:
-    executor: linux-executor
-    steps:
-      - checkout
-      - attach_workspace:
-          at: workspace
-      - restore_cache:
-          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted
-      - run:
-          name: Build and Run Webzockets Tests
-          command: |
-            cd src/rpc/webzockets
-            ../../../workspace/zig/zig build test -Dcpu=x86_64_v3 --summary all
-
   test_webzockets_macos:
     executor: macos-executor
     steps:
@@ -341,7 +236,7 @@ jobs:
               --dir kcov-merged/kcov-merged \
               --commit-sha "$UPLOAD_SHA"
 
-  gossip:
+  gossip_and_fuzz:
     executor: linux-executor
     steps:
       - checkout
@@ -350,43 +245,15 @@ jobs:
       - run:
           name: Run Gossip
           command: bash scripts/gossip_test.sh 120 workspace/zig-out-release/bin/sig
-
-  gossip_service_fuzz:
-    executor: linux-executor
-    steps:
-      - checkout
-      - attach_workspace:
-          at: workspace
       - run:
           name: Run Gossip Service Fuzzer
           command: workspace/zig-out-release/bin/fuzz --seed 19 gossip-service 10000
-
-  gossip_table_fuzz:
-    executor: linux-executor
-    steps:
-      - checkout
-      - attach_workspace:
-          at: workspace
       - run:
           name: Run Gossip Table Fuzzer
           command: workspace/zig-out-release/bin/fuzz --seed 19 gossip-table 100000
-
-  allocators_fuzz:
-    executor: linux-executor
-    steps:
-      - checkout
-      - attach_workspace:
-          at: workspace
       - run:
           name: Run Allocators Fuzzer
           command: workspace/zig-out-release/bin/fuzz --seed 19 allocators 10000
-
-  ledger_fuzz:
-    executor: linux-executor
-    steps:
-      - checkout
-      - attach_workspace:
-          at: workspace
       - run:
           name: Run Ledger Fuzzer
           command: workspace/zig-out-release/bin/fuzz --seed 19 ledger 10000
@@ -406,54 +273,79 @@ jobs:
           name: Run Fixtures
           command: ./conformance/scripts/ci-run.sh
 
+  linux_misc_checks:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted
+      - run:
+          name: Install Python PIP
+          command: |
+            sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -yq update
+            sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -yq install python3 python3-pip
+      - run:
+          name: Lint (Zig)
+          command: |
+            workspace/zig/zig fmt --check src/ build.zig
+            cd conformance/
+            ../workspace/zig/zig fmt --check src/ build.zig
+      - run:
+          name: Check style
+          command: |
+            python3 scripts/style.py --check src
+            python3 scripts/style.py --check conformance/src
+            python3 scripts/style.py --check v2/src
+      - run:
+          name: Check docs
+          command: python3 docs/check.py ./
+      - run:
+          name: Check conformance commits
+          command: conformance/scripts/verify-commits.sh
+      - run:
+          name: V2 checks
+          command: |
+            sudo apt-get update -y && sudo apt-get install wget -y
+            ./scripts/proxy_workaround.sh workspace/zig/zig
+            cd v2/
+            ../workspace/zig/zig build ci --summary all
+      - run:
+          name: Build and test hashmap ledger (linux)
+          command: |
+            workspace/zig/zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
+            zig-out/bin/test 2>&1 | cat
+      - restore_cache:
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted
+      - run:
+          name: Webzockets tests (linux)
+          command: |
+            cd src/rpc/webzockets
+            ../../../workspace/zig/zig build test -Dcpu=x86_64_v3 --summary all
+
 workflows:
   check_linux:
     jobs:
-      - check_style
-      - check_docs
       - setup_zig:
           name: setup_zig_linux
           target: "x86_64-linux"
-      - lint:
-          requires:
-            - setup_zig_linux
-      - v2_checks:
+      - test_kcov_linux:
           requires:
             - setup_zig_linux
       - build_linux_release:
           requires:
             - setup_zig_linux
-      - build_linux:
+      - build_and_test_linux:
           requires:
             - setup_zig_linux
-      - build_and_test_hashmap:
-          requires:
-            - build_linux
-      - test_linux:
-          requires:
-            - build_linux
-      - test_webzockets:
+      - linux_misc_checks:
           requires:
             - setup_zig_linux
-      - test_kcov_linux:
-          requires:
-            - setup_zig_linux
-      - gossip:
-          requires:
-            - build_linux_release
-      - gossip_service_fuzz:
-          requires:
-            - build_linux_release
-      - gossip_table_fuzz:
-          requires:
-            - build_linux_release
-      - allocators_fuzz:
-          requires:
-            - build_linux_release
-      - ledger_fuzz:
-          requires:
-            - build_linux_release
       - solana_conformance:
+          requires:
+            - build_linux_release
+      - gossip_and_fuzz:
           requires:
             - build_linux_release
 

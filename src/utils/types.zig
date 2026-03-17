@@ -349,6 +349,7 @@ pub fn eqlCustom(a: anytype, b: @TypeOf(a), comptime config_: EqlConfig) bool {
     if (@TypeOf(a) == std.mem.Allocator) {
         return true;
     }
+
     if (arrayListInfo(@TypeOf(a))) |_| {
         return eqlCustom(a.items, b.items, config);
     }

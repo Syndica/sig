@@ -16,6 +16,7 @@ const Slot = sig.core.Slot;
 const Ancestors = sig.core.Ancestors;
 const Account = sig.core.Account;
 const AccountSharedData = sig.runtime.AccountSharedData;
+const PubkeyMap = sig.utils.collections.PubkeyMap;
 
 pub const MAX_SLOTS = 4096;
 
@@ -29,7 +30,7 @@ pub const SlotIndex = struct {
     lock: sig.sync.RwLock,
     slot: Slot,
     is_empty: Atomic(bool),
-    entries: sig.utils.collections.PubkeyMap(AccountSharedData),
+    entries: PubkeyMap(AccountSharedData),
 
     const empty: SlotIndex = .{
         .lock = .{},
@@ -123,6 +124,56 @@ pub fn get(
     }
 
     return result;
+}
+
+pub const OwnerEntry = struct { Slot, Account };
+
+/// Returns a map of accounts owned by `owner` visible to the given ancestor set.
+/// Account data is cloned so the caller owns all returned data and is responsible
+/// for deallocating  when done.
+pub fn getByOwner(
+    self: *Unrooted,
+    allocator: std.mem.Allocator,
+    owner: Pubkey,
+    ancestors: *const Ancestors,
+) !PubkeyMap(OwnerEntry) {
+    var map: PubkeyMap(OwnerEntry) = .empty;
+    errdefer {
+        for (map.values()) |*entry| entry[1].deinit(allocator);
+        map.deinit(allocator);
+    }
+
+    for (self.slots) |*index| {
+        if (index.is_empty.load(.acquire)) continue;
+        if (!ancestors.containsSlot(index.slot)) continue;
+
+        index.lock.lockShared();
+        defer index.lock.unlockShared();
+
+        for (index.entries.values(), index.entries.keys()) |*acc, pk| {
+            if (!acc.owner.equals(&owner)) continue;
+            if (acc.lamports == 0) continue;
+
+            // Same pubkey can appear in multiple unrooted slots; keep only the latest (highest slot).
+            const gop = try map.getOrPut(allocator, pk);
+            if (gop.found_existing and index.slot <= gop.value_ptr[0]) continue;
+            if (gop.found_existing) gop.value_ptr[1].deinit(allocator);
+
+            const data = try allocator.dupe(u8, acc.data);
+            gop.value_ptr.* = .{
+                index.slot,
+                .{
+                    .lamports = acc.lamports,
+                    .data = .{ .owned_allocation = data },
+                    .owner = acc.owner,
+                    .executable = acc.executable,
+                    .rent_epoch = acc.rent_epoch,
+                },
+            };
+        }
+    }
+
+    return map;
 }
 
 test "sanity check" {

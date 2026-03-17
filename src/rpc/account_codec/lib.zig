@@ -67,6 +67,16 @@ pub const AccountData = union(enum) {
     /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/lib.rs#L39
     legacy_binary: []const u8,
 
+    pub fn deinit(self: AccountData, allocator: std.mem.Allocator) void {
+        const slice = switch (self) {
+            .encoded => |pair| pair[0],
+            .jsonParsed => |s| s,
+            .json_parsed_base64_fallback => |s| s,
+            .legacy_binary => |s| s,
+        };
+        allocator.free(slice);
+    }
+
     pub fn jsonStringify(
         self: AccountData,
         /// `*std.json.WriteStream(...)`
@@ -121,6 +131,23 @@ pub const AccountData = union(enum) {
         };
     }
 };
+
+/// Encodes account data using the specified encoding.
+/// Dispatches to `encodeJsonParsed` or `encodeStandard` based on the encoding parameter.
+/// This is the common entry point used by `getAccountInfo` and `getProgramAccounts`.
+pub fn encodeAccount(
+    allocator: std.mem.Allocator,
+    pubkey: Pubkey,
+    account: sig.core.Account,
+    encoding: AccountEncoding,
+    slot_reader: sig.accounts_db.SlotAccountReader,
+    data_slice: ?DataSlice,
+) !AccountData {
+    return if (encoding == .jsonParsed)
+        encodeJsonParsed(allocator, pubkey, account, slot_reader, data_slice)
+    else
+        encodeStandard(allocator, account, encoding, data_slice);
+}
 
 /// Handles jsonParsed encoding with fallback to base64.
 /// Attempts program-specific parsing; falls back to base64 if no parser is found.
