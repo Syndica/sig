@@ -226,8 +226,8 @@ pub const OwnerQuery = struct {
     }
 };
 
-pub fn ownerQuery(self: *Db, owner: *const Pubkey, ancestors: *const Ancestors) !OwnerQuery {
-    var unrooted_map = try self.unrooted.getByOwner(
+pub fn ownerQueryOwned(self: *Db, owner: *const Pubkey, ancestors: *const Ancestors) !OwnerQuery {
+    var unrooted_map = try self.unrooted.getByOwnerOwned(
         self.allocator,
         owner.*,
         ancestors,
@@ -442,7 +442,7 @@ test "accounts_db: owner query" {
 
     // Query for owner_x
     {
-        var query = try db.ownerQuery(&owner_x, &ancestors);
+        var query = try db.ownerQueryOwned(&owner_x, &ancestors);
         defer query.deinit();
         // The unified iterator should yield 3 accounts for owner_x:
         // - addr_a (resolved from unrooted, slot 3 version with lamports=150)
@@ -473,7 +473,7 @@ test "accounts_db: owner query" {
 
     // Query for owner_y
     {
-        var query = try db.ownerQuery(&owner_y, &ancestors);
+        var query = try db.ownerQueryOwned(&owner_y, &ancestors);
         defer query.deinit();
         // Should yield just addr_c (rooted, lamports=300)
         const entry = (try query.next()).?;

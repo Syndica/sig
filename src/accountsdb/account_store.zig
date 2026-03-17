@@ -315,9 +315,9 @@ pub const SlotAccountReader = union(enum) {
 
     pub fn getByOwner(self: SlotAccountReader, _: Allocator, owner: *const Pubkey) !OwnerIterator {
         return switch (self) {
-            .accounts_db, .accounts_db_owned => |pair| {
+            .accounts_db_owned => |pair| {
                 const db, const ancestors = pair;
-                return .{ .accounts_db = try db.ownerQuery(owner, ancestors) };
+                return .{ .accounts_db = try db.ownerQueryOwned(owner, ancestors) };
             },
             else => .{ .noop = {} },
         };

@@ -455,38 +455,6 @@ fn messageToRuntimeTransaction(
     return runtime_txn;
 }
 
-/// Load the lamports_per_signature from a durable nonce account, using getOwned()
-/// to avoid the use-after-free race with slot pruning.
-///
-/// This replicates the logic of check_transactions.loadMessageNonceAccount,
-/// but uses getOwned() for the account read. We only need the
-/// lamports_per_signature value for fee estimation.
-fn loadNonceLamportsPerSignature(
-    arena: std.mem.Allocator,
-    transaction: *const RuntimeTransaction,
-    account_reader: sig.accounts_db.SlotAccountReader,
-) ?u64 {
-    const nonce_address = check_transactions.getDurableNonce(transaction) orelse return null;
-    const nonce_account = account_reader.getOwned(
-        arena,
-        nonce_address,
-    ) catch null orelse return null;
-    defer nonce_account.deinit(arena);
-
-    const nonce_data = check_transactions.verifyNonceAccount(
-        nonce_account,
-        &transaction.recent_blockhash,
-    ) orelse return null;
-
-    // Check nonce is authorised (same as check_transactions.loadMessageNonceAccount).
-    const signers = transaction.instructions[0].getSigners(); // 0 = NONCED_TX_MARKER_IX_INDEX
-    for (signers.constSlice()) |signer| {
-        if (signer.equals(&nonce_data.authority)) break;
-    } else return null;
-
-    return nonce_data.lamports_per_signature;
-}
-
 pub fn getProgramAccounts(
     self: AccountHookContext,
     arena: std.mem.Allocator,

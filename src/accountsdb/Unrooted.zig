@@ -169,7 +169,7 @@ pub const OwnerEntry = struct { Slot, Account };
 /// Returns a map of accounts owned by `owner` visible to the given ancestor set.
 /// Account data is cloned so the caller owns all returned data and is responsible
 /// for deallocating  when done.
-pub fn getByOwner(
+pub fn getByOwnerOwned(
     self: *Unrooted,
     allocator: std.mem.Allocator,
     owner: Pubkey,
