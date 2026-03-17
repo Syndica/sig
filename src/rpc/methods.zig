@@ -87,7 +87,7 @@ pub const MethodAndParams = union(enum) {
     getSupply: noreturn,
     getTokenAccountBalance: GetTokenAccountBalance,
     getTokenAccountsByDelegate: noreturn,
-    getTokenAccountsByOwner: noreturn,
+    getTokenAccountsByOwner: GetTokenAccountsByOwner,
     getTokenLargestAccounts: noreturn,
     getTokenSupply: GetTokenSupply,
     getTransaction: GetTransaction,
@@ -1405,7 +1405,112 @@ pub const GetTokenAccountBalance = struct {
 };
 
 // TODO: getTokenAccountsByDelegate
-// TODO: getTokenAccountsByOwner
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2091-L2130
+pub const GetTokenAccountsByOwner = struct {
+    /// The account owner to query for (the SPL token account's owner field at data[32..64]).
+    owner: Pubkey,
+    /// Either `{ "mint": "<base58>" }` or `{ "programId": "<base58>" }`.
+    filter: TokenAccountsFilter,
+    config: ?Config = null,
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/config.rs#L189-L192
+    pub const TokenAccountsFilter = union(enum) {
+        mint: Pubkey,
+        programId: Pubkey,
+
+        pub const Resolved = struct { token_program_id: Pubkey, mint: ?Pubkey };
+
+        /// Resolves a `TokenAccountsFilter` into a token program ID and optional mint pubkey.
+        ///
+        /// For `mint` filters, fetches the mint account to determine which token program owns it.
+        /// For `programId` filters, validates it's a known SPL token program.
+        /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2649-L2673
+        pub fn resolve(
+            self: TokenAccountsFilter,
+            allocator: Allocator,
+            slot_reader: sig.accounts_db.SlotAccountReader,
+        ) !Resolved {
+            const spl_token = sig.runtime.ids.TOKEN_PROGRAM_ID;
+            const token_2022 = sig.runtime.ids.TOKEN_2022_PROGRAM_ID;
+
+            switch (self) {
+                .mint => |mint_pubkey| {
+                    const mint_account = try slot_reader.get(allocator, mint_pubkey) orelse
+                        return error.InvalidParams; // "could not find mint"
+                    defer mint_account.deinit(allocator);
+
+                    if (!mint_account.owner.equals(&spl_token) and
+                        !mint_account.owner.equals(&token_2022))
+                        return error.InvalidParams; // "not a Token mint"
+
+                    return .{ .token_program_id = mint_account.owner, .mint = mint_pubkey };
+                },
+                .programId => |program_id| {
+                    if (!program_id.equals(&spl_token) and
+                        !program_id.equals(&token_2022))
+                        return error.InvalidParams; // "unrecognized Token program id"
+
+                    return .{ .token_program_id = program_id, .mint = null };
+                },
+            }
+        }
+
+        /// Custom parser: the wire format is a JSON object with exactly one key,
+        /// either `"mint"` or `"programId"`, whose value is a base58 pubkey string.
+        /// [agave] Rejects maps with more than one key:
+        /// https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/config.rs#L189-L192
+        pub fn jsonParseFromValue(
+            allocator: Allocator,
+            source: std.json.Value,
+            options: ParseOptions,
+        ) std.json.ParseFromValueError!TokenAccountsFilter {
+            if (source != .object) return error.UnexpectedToken;
+            const obj = source.object;
+            if (obj.count() != 1) return error.UnexpectedToken;
+            if (obj.get("mint")) |val|
+                return .{
+                    .mint = try std.json.innerParseFromValue(
+                        Pubkey,
+                        allocator,
+                        val,
+                        options,
+                    ),
+                };
+            if (obj.get("programId")) |val|
+                return .{
+                    .programId = try std.json.innerParseFromValue(
+                        Pubkey,
+                        allocator,
+                        val,
+                        options,
+                    ),
+                };
+            return error.UnexpectedToken;
+        }
+    };
+
+    /// Uses `RpcAccountInfoConfig` shape — no user-supplied filters,
+    /// no `withContext`, no `sortResults`.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/config.rs#L30-L39
+    pub const Config = struct {
+        encoding: ?common.AccountEncoding = null,
+        dataSlice: ?common.DataSlice = null,
+        commitment: ?common.Commitment = null,
+        minContextSlot: ?u64 = null,
+    };
+
+    /// Same shape as `getProgramAccounts`: `{ pubkey, account }`.
+    pub const Value = GetProgramAccounts.Value;
+
+    /// Always context-wrapped (unlike `getProgramAccounts` which has `OptionalContext`).
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2127-L2130
+    pub const Response = struct {
+        context: common.Context,
+        value: []const Value,
+    };
+};
+
 // TODO: getTokenLargestAccounts
 
 pub const GetTokenSupply = struct {

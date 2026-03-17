@@ -601,7 +601,7 @@ test loadSnapshot {
     const rooted_path = try std.fs.path.joinZ(allocator, &.{ path, "accounts.db" });
     defer allocator.free(rooted_path);
 
-    var rooted_db: Rooted = try .init(rooted_path, false);
+    var rooted_db: Rooted = try .init(rooted_path, false, false);
     defer rooted_db.deinit();
 
     var loaded_snapshot = try loadSnapshot(
