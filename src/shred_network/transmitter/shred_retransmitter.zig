@@ -46,6 +46,7 @@ pub const ShredRetransmitterParams = struct {
     exit: *AtomicBool,
     rand: Random,
     logger: Logger,
+    forward_shreds_to: ?sig.net.SocketAddr = null,
 };
 
 /// Retransmit Service
@@ -96,6 +97,7 @@ pub fn runShredRetransmitter(params: ShredRetransmitterParams) !void {
             params.logger,
             &metrics,
             params.overwrite_stake_for_testing,
+            params.forward_shreds_to,
         },
     ));
 
@@ -140,9 +142,24 @@ fn receiveShreds(
     logger: Logger,
     metrics: *RetransmitServiceMetrics,
     overwrite_stake_for_testing: bool,
+    forward_shreds_to: ?sig.net.SocketAddr,
 ) !void {
     var turbine_tree_cache = TurbineTreeCache.init(allocator);
     defer turbine_tree_cache.deinit();
+
+    const forward_addr: ?std.net.Address = if (forward_shreds_to) |a| a.toAddress() else null;
+    const forward_socket: ?UdpSocket = if (forward_addr) |a| blk: {
+        const family: sig.net.net.AddressFamily = switch (a.any.family) {
+            std.posix.AF.INET => .ipv4,
+            std.posix.AF.INET6 => .ipv6,
+            else => break :blk null,
+        };
+        const sock: UdpSocket = try .create(family);
+        errdefer sock.close();
+        try sock.bindToPort(0);
+        break :blk sock;
+    } else null;
+    defer if (forward_socket) |s| s.close();
 
     var deduper = try ShredDeduper(2).init(
         allocator,
@@ -188,6 +205,15 @@ fn receiveShreds(
         }
 
         if (grouped_shreds.count() > 0) {
+            // Forward deduped shreds for v2 testing.
+            if (forward_addr) |addr| if (forward_socket) |sock| {
+                for (grouped_shreds.values()) |slot_shreds| {
+                    for (slot_shreds.items) |shred_id_and_packet| {
+                        const p = shred_id_and_packet[1];
+                        _ = sock.sendTo(addr, p.buffer[0..p.size]) catch {};
+                    }
+                }
+            };
             try createAndSendRetransmitInfo(
                 allocator,
                 grouped_shreds,

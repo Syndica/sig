@@ -35,6 +35,8 @@ pub const ShredNetworkConfig = struct {
     retransmit: bool,
     dump_shred_tracker: bool,
     log_finished_slots: bool,
+    /// Optional UDP target to forward deduped shreds to.
+    forward_shreds_to: ?sig.net.SocketAddr = null,
 };
 
 /// Resources that are required for the Shred Network to operate.
@@ -159,6 +161,7 @@ pub fn start(
                 .exit = deps.exit,
                 .rand = deps.random,
                 .logger = .from(deps.logger),
+                .forward_shreds_to = conf.forward_shreds_to,
             }},
         );
     }
