@@ -500,6 +500,11 @@ fn submitAccountReevaluation(
     if (!submitted) {
         return;
     }
+    // Assume delivery once the serialization job is accepted. Technically serialization could fail
+    // in which case notification is dropped regardless so it doesn't matter much, e.g.:
+    // Update last modified -> serialization fail -> never deliver
+    // vs.
+    // Serialization fail -> never update last modified -> never deliver
     entry.last_notified_modified_slot = modified_slot;
 }
 
@@ -752,6 +757,8 @@ fn handleCommitMsg(self: *RuntimeContext, msg: types.CommitMsg) void {
 fn markQueueForWaking(self: *RuntimeContext, q: *NotifQueue) void {
     if (!q.wake_pending) {
         self.pending_wake_queues.append(self.allocator, q) catch {
+            // Best-effort only under OOM. There is no reliable local recovery here beyond a
+            // later runtime wake successfully queuing this subscriber wake pass.
             self.logger.warn().log(
                 "pending_wake_queues append failed: OOM; wake skipped for this cycle",
             );
