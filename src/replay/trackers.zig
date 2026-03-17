@@ -77,6 +77,21 @@ pub const SlotTracker = struct {
         pub fn release(self: Reference) void {
             self.element.releaseRef();
         }
+
+        /// Analogous to [Bank::get_blockhash_last_valid_block_height](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/runtime/src/bank.rs#L2765)
+        pub fn getBlockhashLastValidBlockHeight(
+            self: *Reference,
+            blockhash: sig.core.Hash,
+        ) ?Slot {
+            const MAX_PROCESSING_AGE = sig.core.blockhash_queue.BlockhashQueue.MAX_PROCESSING_AGE;
+
+            const blockhash_queue, var lg = self.state().blockhash_queue.readWithLock();
+            defer lg.unlock();
+            if (blockhash_queue.getHashAge(blockhash)) |age|
+                return self.constants().block_height + MAX_PROCESSING_AGE - age
+            else
+                return null;
+        }
     };
 
     pub fn initEmpty(allocator: Allocator, root_slot: Slot) !SlotTracker {

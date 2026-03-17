@@ -36,6 +36,8 @@ const Duration = sig.time.Duration;
 
 const PubkeyMap = sig.utils.collections.PubkeyMap;
 
+pub const TransactionSender = Channel(TransactionInfo);
+
 const NUM_CONSECUTIVE_LEADER_SLOTS = sig.core.leader_schedule.NUM_CONSECUTIVE_LEADER_SLOTS;
 
 pub const Logger = sig.trace.Logger("TransactionSenderService");
@@ -48,7 +50,7 @@ metrics: Metrics,
 cfg: Config,
 ctx: Context,
 
-receiver: *Channel(TransactionInfo),
+receiver: *TransactionSender,
 
 pub const Config = struct {
     process_interval: Duration = .fromSecs(1),
@@ -78,7 +80,7 @@ pub fn init(
     cfg: Config,
     ctx: Context,
 ) !Service {
-    const receiver = try Channel(TransactionInfo).create(gpa);
+    const receiver = try TransactionSender.create(gpa);
     receiver.name = "TransactionSenderService: TransactionInfo Receiver";
     errdefer receiver.destroy();
 
@@ -353,6 +355,26 @@ pub const TransactionInfo = struct {
             transaction,
             .{},
         )).len;
+        return initWithWire(
+            transaction,
+            wire_transaction,
+            wire_transaction_size,
+            message_hash,
+            last_valid_block_height,
+            durable_nonce_info,
+            max_retries,
+        );
+    }
+
+    pub fn initWithWire(
+        transaction: Transaction,
+        wire_transaction: [Packet.DATA_SIZE]u8,
+        wire_transaction_size: usize,
+        message_hash: Hash,
+        last_valid_block_height: u64,
+        durable_nonce_info: ?struct { Pubkey, Hash },
+        max_retries: ?usize,
+    ) TransactionInfo {
         return .{
             .signature = transaction.signatures[0],
             .message_hash = message_hash,
