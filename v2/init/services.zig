@@ -28,10 +28,16 @@ const services_zon = @import("./services.zon");
 
 pub const Service = blk: {
     var fields: []const std.builtin.Type.EnumField = &.{};
-    for (services_zon.services) |service| {
-        fields = fields ++ &[_]std.builtin.Type.EnumField{
-            .{ .name = @tagName(service.name), .value = fields.len },
-        };
+    for (services_zon.services) |instance| {
+        const exists = for (fields) |f| {
+            if (std.mem.eql(u8, f.name, @tagName(instance.name))) break true;
+        } else false;
+
+        if (!exists) {
+            fields = fields ++ &[_]std.builtin.Type.EnumField{
+                .{ .name = @tagName(instance.name), .value = fields.len },
+            };
+        }
     }
 
     break :blk @Type(.{ .@"enum" = .{
@@ -45,10 +51,10 @@ pub const Service = blk: {
 fn getRequiredRegions(service: Service) []const RequiredRegion {
     switch (service) {
         inline else => |s| {
-            inline for (services_zon.services) |svc| {
-                if (comptime std.mem.eql(u8, @tagName(svc.name), @tagName(s))) {
+            inline for (services_zon.services) |instance| {
+                if (comptime std.mem.eql(u8, @tagName(instance.name), @tagName(s))) {
                     comptime var required: []const RequiredRegion = &.{};
-                    inline for (svc.regions) |r| {
+                    inline for (instance.regions) |r| {
                         required = required ++ &[_]RequiredRegion{.{
                             .region = @field(services_zon.regions, @tagName(r.name)),
                             .rw = switch (r.access) {

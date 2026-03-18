@@ -4,6 +4,7 @@ comptime {
     _ = std.testing.refAllDecls(@This());
 }
 
+const services_zon = @import("services.zon");
 const services = @import("services.zig");
 const lib = @import("lib");
 
@@ -65,10 +66,32 @@ pub fn main() !void {
     var reader_buf: [4096]u8 = undefined;
     var reader = schedule_file.reader(&reader_buf);
 
-    const service_instances: []const services.ServiceInstance = &.{
-        .{ .service = .shred_receiver },
-        .{ .service = .net },
-        .{ .service = .gossip },
+    // const service_instances: []const services.ServiceInstance = &.{
+    //     .{ .service = .shred_receiver },
+    //     .{ .service = .net },
+    //     .{ .service = .gossip },
+    // };
+
+    const service_instances: []const services.ServiceInstance = comptime blk: {
+        var map: std.EnumMap(services.Service, usize) = .init(.{});
+        for (services_zon.services) |instance| {
+            if (map.getPtr(instance.name)) |*count| {
+                count.* += 1;
+            } else {
+                map.put(instance.name, 1);
+            }
+        }
+
+        var instances: []const services.ServiceInstance = &.{};
+        var it = map.iterator();
+        while (it.next()) |entry| {
+            for (0..entry.value.*) |n| {
+                instances = instances ++ &[_]services.ServiceInstance{
+                    .{ .service = entry.key, .n = @intCast(n) },
+                };
+            }
+        }
+        break :blk instances;
     };
 
     const shared_regions: []const services.SharedRegion = &.{
