@@ -721,7 +721,6 @@ fn enqueueJobForEntry(
         .reserved => q.reserveUncommitted(),
         .direct => null,
     };
-    q.inflight_sers += 1;
 
     const job = types.SerializeJob{
         .sub_id = entry.sub_id,
@@ -732,11 +731,9 @@ fn enqueueJobForEntry(
 
     self.appendSerializeTask(job, task_batch) catch {
         job.deinit(self.allocator);
-        q.inflight_sers -= 1;
         if (idx) |i| {
             q.cancelReservation(i);
         }
-        self.maybeRemoveIdleQueue(entry.sub_id, q);
         return false;
     };
     self.metrics.inflight_jobs += 1;
@@ -770,22 +767,19 @@ fn handleCommitMsg(self: *RuntimeContext, msg: types.CommitMsg) void {
 
     const entry = self.sub_map.getById(msg.sub_id) orelse {
         switch (msg.result) {
-            .payload => |p| releasePayload(self, p),
-            .serialize_error => {},
+            .payload => |p| {
+                // We can be here if queue was removed due to all clients disconnecting while
+                // serialization was in-flight
+                releasePayload(self, p);
+            },
+            .serialize_error => {
+                self.metrics.serialize_errors += 1;
+            },
         }
-        // this should never happen: queues are not removed until all in-flight jobs finish
-        self.logger.err().log(
-            "orphan commit message: sub_id not found in sub_map (invariant violation)",
-        );
         return;
     };
 
     const q = entry.queue;
-    defer {
-        q.inflight_sers -= 1;
-        self.maybeRemoveIdleQueue(msg.sub_id, q);
-    }
-
     switch (msg.result) {
         .serialize_error => {
             self.metrics.serialize_errors += 1;
@@ -838,7 +832,7 @@ fn wakePendingQueueSubscribers(self: *RuntimeContext) void {
 }
 
 pub fn maybeRemoveIdleQueue(self: *RuntimeContext, sub_id: types.SubId, q: *NotifQueue) void {
-    if (q.subscriberCount() == 0 and q.inflight_sers == 0) {
+    if (q.subscriberCount() == 0) {
         self.sub_map.removeById(sub_id);
     }
 }
@@ -973,7 +967,7 @@ test "releasePayload frees payloads on the threadpool" {
 
     try runtime.waitForThreadpoolTasks(5 * std.time.ms_per_s);
 
-    try std.testing.expectEqual(@as(u64, 1), metrics.payloads_freed.load(.acquire));
+    try std.testing.expectEqual(1, metrics.payloads_freed.load(.acquire));
     try std.testing.expect(allocator_state.free_calls.load(.acquire) > 0);
 }
 
@@ -1034,4 +1028,152 @@ test "shutdown times out while runtime tasks remain unfinished" {
 
     runtime.threadpool_wg.finish();
     try runtime.shutdown(5 * std.time.ms_per_s);
+}
+
+test "handleCommitMsg drops payload for removed queue" {
+    const allocator = std.testing.allocator;
+
+    var commit_queue = try Channel(types.CommitMsg).init(allocator);
+    defer commit_queue.deinit();
+
+    var xev_pool = xev.ThreadPool.init(.{});
+    defer {
+        xev_pool.shutdown();
+        xev_pool.deinit();
+    }
+
+    var loop = try xev.Loop.init(.{ .thread_pool = &xev_pool });
+    defer loop.deinit();
+
+    var threadpool = ThreadPool.init(.{ .max_threads = 1 });
+    defer {
+        threadpool.shutdown();
+        threadpool.deinit();
+    }
+
+    var sub_map = sub_map_mod.RPCSubMap.init(allocator, 8);
+    defer sub_map.deinit();
+
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    var event_sink = try types.EventSink.create(allocator);
+    defer event_sink.destroy();
+
+    var metrics = metrics_mod.Metrics{};
+    const slot_read_ctx: SlotReadContext = .{
+        .slot_tracker = &slot_tracker,
+        .account_reader = .noop,
+    };
+    var runtime = RuntimeContext.init(.{
+        .allocator = allocator,
+        .logger = .FOR_TESTS,
+        .sub_map = &sub_map,
+        .slot_read_ctx = slot_read_ctx,
+        .event_sink = event_sink,
+        .commit_queue = &commit_queue,
+        .threadpool = &threadpool,
+        .metrics = &metrics,
+        .max_batch_bytes = 64 * 1024,
+        .loop = &loop,
+    });
+    defer runtime.deinit();
+
+    const key = types.SubReqKey.slotKey();
+    const result = try sub_map.getOrCreate(&key);
+
+    var subscriber: @import("handler.zig").JRPCHandler = undefined;
+    try result.queue.addSubscriber(&subscriber);
+    const idx = result.queue.reserveUncommitted();
+    result.queue.removeSubscriber(&subscriber, result.queue.head + 1);
+    runtime.maybeRemoveIdleQueue(result.sub_id, result.queue);
+    try std.testing.expect(sub_map.getById(result.sub_id) == null);
+
+    const payload = try NotifPayload.alloc(allocator, 4);
+    @memcpy(payload.payload(), "late");
+
+    metrics.inflight_jobs = 1;
+    runtime.handleCommitMsg(.{
+        .sub_id = result.sub_id,
+        .index = idx,
+        .result = .{ .payload = payload },
+        .payload_bytes = payload.payload().len,
+    });
+    try runtime.waitForThreadpoolTasks(5 * std.time.ms_per_s);
+
+    try std.testing.expectEqual(1, metrics.serialize_jobs);
+    try std.testing.expectEqual(0, metrics.notifications_committed);
+    try std.testing.expectEqual(1, metrics.payloads_freed.load(.acquire));
+    try std.testing.expect(sub_map.getById(result.sub_id) == null);
+}
+
+test "handleCommitMsg ignores serialize error for removed queue" {
+    const allocator = std.testing.allocator;
+
+    var commit_queue = try Channel(types.CommitMsg).init(allocator);
+    defer commit_queue.deinit();
+
+    var xev_pool = xev.ThreadPool.init(.{});
+    defer {
+        xev_pool.shutdown();
+        xev_pool.deinit();
+    }
+
+    var loop = try xev.Loop.init(.{ .thread_pool = &xev_pool });
+    defer loop.deinit();
+
+    var threadpool = ThreadPool.init(.{ .max_threads = 1 });
+    defer {
+        threadpool.shutdown();
+        threadpool.deinit();
+    }
+
+    var sub_map = sub_map_mod.RPCSubMap.init(allocator, 8);
+    defer sub_map.deinit();
+
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    var event_sink = try types.EventSink.create(allocator);
+    defer event_sink.destroy();
+
+    var metrics = metrics_mod.Metrics{};
+    const slot_read_ctx: SlotReadContext = .{
+        .slot_tracker = &slot_tracker,
+        .account_reader = .noop,
+    };
+    var runtime = RuntimeContext.init(.{
+        .allocator = allocator,
+        .logger = .FOR_TESTS,
+        .sub_map = &sub_map,
+        .slot_read_ctx = slot_read_ctx,
+        .event_sink = event_sink,
+        .commit_queue = &commit_queue,
+        .threadpool = &threadpool,
+        .metrics = &metrics,
+        .max_batch_bytes = 64 * 1024,
+        .loop = &loop,
+    });
+    defer runtime.deinit();
+
+    const key = types.SubReqKey.slotKey();
+    const result = try sub_map.getOrCreate(&key);
+
+    var subscriber: @import("handler.zig").JRPCHandler = undefined;
+    try result.queue.addSubscriber(&subscriber);
+    const idx = result.queue.reserveUncommitted();
+    result.queue.removeSubscriber(&subscriber, result.queue.head + 1);
+    runtime.maybeRemoveIdleQueue(result.sub_id, result.queue);
+    try std.testing.expect(sub_map.getById(result.sub_id) == null);
+
+    metrics.inflight_jobs = 1;
+    runtime.handleCommitMsg(.{
+        .sub_id = result.sub_id,
+        .index = idx,
+        .result = .{ .serialize_error = error.TestCommitFailure },
+    });
+
+    try std.testing.expectEqual(1, metrics.serialize_jobs);
+    try std.testing.expectEqual(1, metrics.serialize_errors);
+    try std.testing.expect(sub_map.getById(result.sub_id) == null);
 }
