@@ -274,57 +274,6 @@ pub fn getBySplTokenOwner(
     return map;
 }
 
-/// Returns a map of SPL token accounts where the token-level owner (data bytes 32..64)
-/// matches `token_owner`, visible to the given ancestor set. Only considers accounts
-/// owned by the SPL Token or Token-2022 programs with sufficient data length.
-/// Account data is cloned; the caller owns all returned data.
-pub fn getBySplTokenOwner(
-    self: *Unrooted,
-    allocator: std.mem.Allocator,
-    token_owner: Pubkey,
-    ancestors: *const Ancestors,
-) !PubkeyMap(OwnerEntry) {
-    var map: PubkeyMap(OwnerEntry) = .empty;
-    errdefer {
-        for (map.values()) |*entry| entry[1].deinit(allocator);
-        map.deinit(allocator);
-    }
-
-    for (self.slots) |*index| {
-        if (index.is_empty.load(.acquire)) continue;
-        if (!ancestors.containsSlot(index.slot)) continue;
-
-        index.lock.lockShared();
-        defer index.lock.unlockShared();
-
-        for (index.entries.values(), index.entries.keys()) |*acc, pk| {
-            if (acc.lamports == 0) continue;
-            if (!acc.owner.equals(&ids.TOKEN_PROGRAM_ID) and
-                !acc.owner.equals(&ids.TOKEN_2022_PROGRAM_ID)) continue;
-            if (acc.data.len < 64) continue;
-            if (!std.mem.eql(u8, acc.data[32..64], &token_owner.data)) continue;
-
-            const gop = try map.getOrPut(allocator, pk);
-            if (gop.found_existing and index.slot <= gop.value_ptr[0]) continue;
-            if (gop.found_existing) gop.value_ptr[1].deinit(allocator);
-
-            const cloned = try acc.clone(allocator);
-            gop.value_ptr.* = .{
-                index.slot,
-                .{
-                    .lamports = cloned.lamports,
-                    .data = .{ .owned_allocation = cloned.data },
-                    .owner = cloned.owner,
-                    .executable = cloned.executable,
-                    .rent_epoch = cloned.rent_epoch,
-                },
-            };
-        }
-    }
-
-    return map;
-}
-
 test "sanity check" {
     const allocator = std.testing.allocator;
     var db: Unrooted = try .init(allocator);
