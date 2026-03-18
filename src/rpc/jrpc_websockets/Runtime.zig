@@ -264,7 +264,7 @@ fn appendSerializeTask(
     task_batch: *ThreadPool.Batch,
 ) !void {
     // TODO(perf): we could pool these task structs to avoid allocator churn,
-    // but notably this is quite fast when benchmarked due to same size alloations.
+    // but notably this is quite fast when benchmarked due to same-size allocations.
     const serialize_task = try self.allocator.create(SerializeTask);
     serialize_task.* = .{
         .runtime = self,
@@ -276,7 +276,7 @@ fn appendSerializeTask(
 
 fn submitPayloadFree(self: *RuntimeContext, bytes: ReleasedPayloadBytes) !void {
     // TODO(perf): we could pool these task structs to avoid allocator churn,
-    // but notably this is quite fast when benchmarked due to same size alloations.
+    // but notably this is quite fast when benchmarked due to same-size allocations.
     const free_task = try self.allocator.create(FreePayloadTask);
     free_task.* = .{
         .runtime = self,
@@ -321,7 +321,7 @@ fn handleInboundEvent(
 
     switch (e) {
         .logs => |logs_data| {
-            // TODO: actual logs events and logsSubscribe (this placeholder)
+            // TODO: actual log events and logsSubscribe handling (this placeholder)
             self.enqueueKindMatchedJobs(.logs, .{ .logs = logs_data }, task_batch);
         },
         .slot_frozen => |*slot_data| {
@@ -401,8 +401,8 @@ fn handleSlotTransition(
         slots.deinit(self.allocator);
     };
 
-    // TODO(perf): this is basically just brute force iterate and find matches and it's
-    // running on the IO loop thread, so this wont scale.
+    // TODO(perf): this is basically just brute-force iteration to find matches, and it's
+    // running on the IO loop thread, so this won't scale.
     for (self.sub_map.entries.items) |*entry| {
         switch (entry.key.method) {
             .slot => {
@@ -473,9 +473,9 @@ fn handleSlotTransition(
                 }
             },
             .account => {
-                // TODO(perf): we follow Agave's reevaluate approach and actaully
-                //  here we do it for every slot processed. Actually could just use
-                //  .tip_changed for processed commitment or via tracked forks avoid
+                // TODO(perf): we follow Agave's reevaluate approach, and actually
+                //  here we do it for every processed slot. Could just use
+                //  .tip_changed for processed commitment or, via tracked forks, avoid
                 //  reevaluating if it's already in slot cache state.
                 if (!transitionMatchesCommitment(
                     transition.notify_commitments,
@@ -768,9 +768,9 @@ fn drainCommitQueue(self: *RuntimeContext) void {
     // TODO: this is draining *all* pending, this could overwhelm queue capacity
     // before clients have a chance to consume. I don't think there's really a way
     // around it, the clients must keep up with the commit rate or messages will be
-    // missed. I think what could be done is have large queue size (4096?) to absorb
-    // bursts and give clients time to consume but kick/eject clients that are consistently
-    // not keeping pace to avoid retaining too may payloads due to full queues.
+    // missed. I think what could be done is have a large queue size (4096?) to absorb
+    // bursts and give clients time to consume, but kick/eject clients that are consistently
+    // not keeping pace to avoid retaining too many payloads due to full queues.
     while (self.commit_queue.tryReceive()) |msg| {
         self.handleCommitMsg(msg);
     }
