@@ -711,6 +711,10 @@ fn submitJobForEntry(
     }
 
     const idx: ?u64 = switch (q.commit_path) {
+        // Note: if threadpool fails to send back a response then the reserved position will
+        // never be committed which is not ideal, but if notifications keep getting pushed then
+        // eventually it will roll off the end of the queue ring buffer. More importantly nothing
+        // undefined/illegal happens.
         .reserved => q.reserveUncommitted(),
         .direct => null,
     };
