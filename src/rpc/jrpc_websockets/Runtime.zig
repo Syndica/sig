@@ -55,10 +55,6 @@ running: bool = true,
 pending_wake_queues: std.ArrayList(*NotifQueue) = .{},
 /// Waitgroup to track submitted threadpool tasks that must finish before shutdown can complete.
 threadpool_wg: ThreadPool.WaitGroup,
-// TODO: instead of separate channel it should just use a wait group and dispatch to
-// thread pool to free the payloads.
-/// Optional queue for off-loop payload allocator free work.
-payload_free_queue: ?*Channel(ReleasedPayloadBytes) = null,
 /// Optional callback run on the loop thread whenever the async wake fires.
 /// Used by integrations to drain additional loop-thread-only queues.
 wakeup_hook: ?WakeupHook = null,
@@ -83,7 +79,6 @@ pub const Dependencies = struct {
     metrics: *metrics_mod.Metrics,
     max_batch_bytes: u64,
     loop: *xev.Loop,
-    payload_free_queue: ?*Channel(ReleasedPayloadBytes) = null,
     wakeup_hook: ?WakeupHook = null,
 };
 
@@ -103,7 +98,6 @@ pub fn init(deps: Dependencies) RuntimeContext {
         .loop = deps.loop,
         .notify_pending = &deps.event_sink.notify_pending,
         .threadpool_wg = undefined,
-        .payload_free_queue = deps.payload_free_queue,
         .wakeup_hook = deps.wakeup_hook,
     };
     runtime.threadpool_wg.init();
@@ -121,6 +115,16 @@ const SerializeTask = struct {
     }
 };
 
+const FreePayloadTask = struct {
+    runtime: *RuntimeContext,
+    task: ThreadPool.Task,
+    bytes: ReleasedPayloadBytes,
+
+    fn deinit(self: *FreePayloadTask) void {
+        self.runtime.allocator.destroy(self);
+    }
+};
+
 pub const DeinitError = error{Timeout};
 
 /// Free resources owned directly by RuntimeContext. If error is returned then timeout
@@ -134,6 +138,7 @@ pub const DeinitError = error{Timeout};
 pub fn deinit(self: *RuntimeContext, timeout_ms: u64) DeinitError!void {
     try self.waitForThreadpoolTasks(timeout_ms);
     self.drainCommitQueue();
+    try self.waitForThreadpoolTasks(timeout_ms);
 
     if (self.metrics.inflight_jobs != 0) {
         self.logger.warn().logf(
@@ -251,7 +256,18 @@ fn executeSerializeTask(task: *ThreadPool.Task) void {
     }
 }
 
+fn executeFreePayloadTask(task: *ThreadPool.Task) void {
+    const free_task: *FreePayloadTask = @alignCast(@fieldParentPtr("task", task));
+    const runtime = free_task.runtime;
+    defer runtime.threadpool_wg.finish();
+    defer free_task.deinit();
+
+    freePayloadBytes(runtime, free_task.bytes);
+}
+
 fn submitSerialize(self: *RuntimeContext, job: types.SerializeJob) !void {
+    // TODO(perf): we could pool these task structs to avoid allocator churn,
+    // but notably this is quite fast when benchmarked due to same size alloations.
     const serialize_task = try self.allocator.create(SerializeTask);
     serialize_task.* = .{
         .runtime = self,
@@ -263,6 +279,23 @@ fn submitSerialize(self: *RuntimeContext, job: types.SerializeJob) !void {
     self.serialization_pool.schedule(.{
         .head = &serialize_task.task,
         .tail = &serialize_task.task,
+        .len = 1,
+    });
+}
+
+fn submitPayloadFree(self: *RuntimeContext, bytes: ReleasedPayloadBytes) !void {
+    // TODO(perf): we could pool these task structs to avoid allocator churn,
+    // but notably this is quite fast when benchmarked due to same size alloations.
+    const free_task = try self.allocator.create(FreePayloadTask);
+    free_task.* = .{
+        .runtime = self,
+        .task = .{ .callback = RuntimeContext.executeFreePayloadTask },
+        .bytes = bytes,
+    };
+    self.threadpool_wg.start();
+    self.serialization_pool.schedule(.{
+        .head = &free_task.task,
+        .tail = &free_task.task,
         .len = 1,
     });
 }
@@ -812,18 +845,12 @@ pub fn maybeRemoveIdleQueue(self: *RuntimeContext, sub_id: types.SubId, q: *Noti
 }
 
 /// Release a refcounted notification payload, freeing the backing
-/// allocation when the last reference is dropped. Kept as a helper
-/// to make it easy to to add payload memory metrics or send to another
-/// thread for freeing if desired.
+/// allocation when the last reference is dropped.
 pub fn releasePayload(ctx: *RuntimeContext, payload: NotifPayload) void {
     if (payload.release()) |bytes| {
-        if (ctx.payload_free_queue) |payload_free_queue| {
-            payload_free_queue.send(bytes) catch {
-                freePayloadBytes(ctx, bytes);
-            };
-        } else {
+        ctx.submitPayloadFree(bytes) catch {
             freePayloadBytes(ctx, bytes);
-        }
+        };
     }
 }
 
@@ -834,4 +861,180 @@ fn freePayloadBytes(ctx: *RuntimeContext, bytes: ReleasedPayloadBytes) void {
 
     _ = ctx.metrics.payloads_freed.fetchAdd(1, .monotonic);
     _ = ctx.metrics.payload_free_wall_ns.fetchAdd(elapsed_ns, .monotonic);
+}
+
+test "releasePayload frees payloads on the threadpool" {
+    const CountingAllocator = struct {
+        backing: std.mem.Allocator,
+        free_calls: std.atomic.Value(u32) = .init(0),
+
+        fn allocator(self: *@This()) std.mem.Allocator {
+            return .{
+                .ptr = @ptrCast(self),
+                .vtable = &.{
+                    .alloc = alloc,
+                    .resize = resize,
+                    .remap = remap,
+                    .free = free,
+                },
+            };
+        }
+
+        fn alloc(
+            ctx: *anyopaque,
+            len: usize,
+            alignment: std.mem.Alignment,
+            ret_addr: usize,
+        ) ?[*]u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            return self.backing.rawAlloc(len, alignment, ret_addr);
+        }
+
+        fn resize(
+            ctx: *anyopaque,
+            memory: []u8,
+            alignment: std.mem.Alignment,
+            new_len: usize,
+            ret_addr: usize,
+        ) bool {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            return self.backing.rawResize(memory, alignment, new_len, ret_addr);
+        }
+
+        fn remap(
+            ctx: *anyopaque,
+            memory: []u8,
+            alignment: std.mem.Alignment,
+            new_len: usize,
+            ret_addr: usize,
+        ) ?[*]u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            return self.backing.rawRemap(memory, alignment, new_len, ret_addr);
+        }
+
+        fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            _ = self.free_calls.fetchAdd(1, .monotonic);
+            self.backing.rawFree(memory, alignment, ret_addr);
+        }
+    };
+
+    var allocator_state = CountingAllocator{ .backing = std.testing.allocator };
+    const allocator = allocator_state.allocator();
+
+    var commit_queue = try Channel(types.CommitMsg).init(allocator);
+    defer commit_queue.deinit();
+
+    var xev_pool = xev.ThreadPool.init(.{});
+    defer {
+        xev_pool.shutdown();
+        xev_pool.deinit();
+    }
+
+    var loop = try xev.Loop.init(.{ .thread_pool = &xev_pool });
+    defer loop.deinit();
+
+    var serialization_pool = ThreadPool.init(.{ .max_threads = 1 });
+    defer {
+        serialization_pool.shutdown();
+        serialization_pool.deinit();
+    }
+
+    var sub_map = sub_map_mod.RPCSubMap.init(allocator, 8);
+    defer sub_map.deinit();
+
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    var event_sink = try types.EventSink.create(allocator);
+    defer event_sink.destroy();
+
+    var metrics = metrics_mod.Metrics{};
+    const slot_read_ctx: SlotReadContext = .{
+        .slot_tracker = &slot_tracker,
+        .account_reader = .noop,
+    };
+    var runtime = RuntimeContext.init(.{
+        .allocator = allocator,
+        .logger = .FOR_TESTS,
+        .sub_map = &sub_map,
+        .slot_read_ctx = slot_read_ctx,
+        .event_sink = event_sink,
+        .commit_queue = &commit_queue,
+        .serialization_pool = &serialization_pool,
+        .metrics = &metrics,
+        .max_batch_bytes = 64 * 1024,
+        .loop = &loop,
+    });
+    defer runtime.deinit(5 * std.time.ms_per_s) catch {};
+
+    const payload = try NotifPayload.alloc(allocator, 16);
+    @memset(payload.payload(), 0xAB);
+    releasePayload(&runtime, payload);
+
+    try runtime.waitForThreadpoolTasks(5 * std.time.ms_per_s);
+
+    try std.testing.expectEqual(@as(u64, 1), metrics.payloads_freed.load(.acquire));
+    try std.testing.expect(allocator_state.free_calls.load(.acquire) > 0);
+}
+
+test "deinit times out while runtime tasks remain unfinished" {
+    const allocator = std.testing.allocator;
+
+    var commit_queue = try Channel(types.CommitMsg).init(allocator);
+    defer commit_queue.deinit();
+
+    var xev_pool = xev.ThreadPool.init(.{});
+    defer {
+        xev_pool.shutdown();
+        xev_pool.deinit();
+    }
+
+    var loop = try xev.Loop.init(.{ .thread_pool = &xev_pool });
+    defer loop.deinit();
+
+    var serialization_pool = ThreadPool.init(.{ .max_threads = 1 });
+    defer {
+        serialization_pool.shutdown();
+        serialization_pool.deinit();
+    }
+
+    var sub_map = sub_map_mod.RPCSubMap.init(allocator, 8);
+    defer sub_map.deinit();
+
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    var event_sink = try types.EventSink.create(allocator);
+    defer event_sink.destroy();
+
+    var metrics = metrics_mod.Metrics{};
+    const slot_read_ctx: SlotReadContext = .{
+        .slot_tracker = &slot_tracker,
+        .account_reader = .noop,
+    };
+    var runtime = RuntimeContext.init(.{
+        .allocator = allocator,
+        .logger = .FOR_TESTS,
+        .sub_map = &sub_map,
+        .slot_read_ctx = slot_read_ctx,
+        .event_sink = event_sink,
+        .commit_queue = &commit_queue,
+        .serialization_pool = &serialization_pool,
+        .metrics = &metrics,
+        .max_batch_bytes = 64 * 1024,
+        .loop = &loop,
+    });
+    var runtime_deinited = false;
+    defer if (!runtime_deinited) {
+        runtime.threadpool_wg.finish();
+        runtime.deinit(5 * std.time.ms_per_s) catch {};
+    };
+
+    runtime.threadpool_wg.start();
+    try std.testing.expectError(error.Timeout, runtime.deinit(1));
+
+    runtime.threadpool_wg.finish();
+    try runtime.deinit(5 * std.time.ms_per_s);
+    runtime_deinited = true;
 }
