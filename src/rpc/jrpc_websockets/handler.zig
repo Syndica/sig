@@ -386,6 +386,8 @@ pub const JRPCHandler = struct {
             return;
         };
 
+        // Note: we remove the subscription regardless of serialization error later as we'd prefer
+        // to remove it in such an exceptional event anyways (client just wont get a response).
         const sub = self.active_subs.swapRemove(idx);
         const q = sub.queue;
         q.removeSubscriber(self, sub.next_index);
