@@ -1,9 +1,9 @@
 const std = @import("std");
 
-const common = @import("../common.zig");
+const lib = @import("lib.zig");
 
-const Signature = common.solana.Signature;
-const Pubkey = common.solana.Pubkey;
+const Signature = lib.solana.Signature;
+const Pubkey = lib.solana.Pubkey;
 
 /// Extern struct compatibility for stdlib KeyPair type
 /// TODO: move this to signer service.
@@ -50,7 +50,7 @@ pub const ClusterInfo = extern struct {
         }
     };
 
-    pub fn getFromEcho(gossip_port: u16, cluster: common.solana.ClusterType) !ClusterInfo {
+    pub fn getFromEcho(gossip_port: u16, cluster: lib.solana.ClusterType) !ClusterInfo {
         for (cluster.getEntrypoints()) |entrypoint| {
             const split = std.mem.indexOfScalar(u8, entrypoint, ':') orelse continue;
             const port = std.fmt.parseInt(u16, entrypoint[split + 1 ..], 10) catch continue;

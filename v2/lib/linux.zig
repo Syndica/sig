@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const clone = struct {
+pub const clone3 = struct {
     // zig fmt: off
     pub const Flags = packed struct(u64) {
         _unused_0_6    :u7   = 0    , // 0..=6

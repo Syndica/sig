@@ -5,12 +5,12 @@ comptime {
 }
 
 const services = @import("services.zig");
-const common = @import("common");
+const lib = @import("lib");
 
 const Config = struct {
     sandboxing_mode: SandboxingMode,
 
-    cluster: common.solana.ClusterType,
+    cluster: lib.solana.ClusterType,
 
     /// path to a file containing the output of `solana leader-schedule`
     leader_schedule_file: []const u8,
@@ -57,7 +57,7 @@ pub fn main() !void {
 
     std.log.info("config: {}", .{config});
 
-    const gossip_cluster_info: common.gossip.ClusterInfo =
+    const gossip_cluster_info: lib.gossip.ClusterInfo =
         try .getFromEcho(config.gossip.port, config.cluster);
 
     const schedule_file = try std.fs.cwd().openFile(config.leader_schedule_file, .{});

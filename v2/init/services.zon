@@ -1,39 +1,31 @@
 .{
-    .shared_memory = .{
-    .net_to_gossip = .{ .net_pair },
-    .net_to_shred = .{ .net_pair },
-    .gossip_to_snapshot = .{ .snapshot_queue = {} },
-    .gossip_constants = .{ .gossip_config = config_args },
-    .shred_constants = .{ leader_schedule = args },
-},
-
-.services = .{
-    .{
-        .name = .net,
-        .access = .{
-            .{ .mem = .net_to_shred, .mode = .rw },
-            .{ .mem = .net_to_gossip, .mode = .rw },
+    .regions = .{
+        .net_to_shred = .net_pair,
+        .net_to_gossip = .net_pair,
+        .gossip_config = .gossip_config,
+        .shred_recv_config = .shred_recv_config,
+    },
+    .services = .{
+        .{
+            .name = .net,
+            .regions = .{
+                .{ .mem = .net_to_shred, .access = .rw },
+                .{ .mem = .net_to_gossip, .access = .rw },
+            },
+        },
+        .{
+            .name = .gossip,
+            .regions = .{
+                .{ .mem = .net_to_gossip, .access = .rw },
+                .{ .mem = .gossip_config, .access = .readonly },
+            },
+        },
+        .{
+            .name = .shred_receiver,
+            .regions = .{
+                .{ .mem = .net_to_shred, .access = .rw },
+                .{ .mem = .shred_recv_config, .access = .readonly },
+            },
         },
     },
-    .{
-        .name = .gossip,
-        .access = .{
-            .{ .mem = .net_to_gossip, .mode = .rw },
-            .{ .mem = .gossip_to_snapshot, .mode = .rw },
-            .{ .mem = .gossip_constants, .mode = .readonly },
-        },
-    },
-    .{
-        .name = .shred,
-        .access = .{
-            .{ .mem = .net_to_shred, .mode = .rw },
-            .{ .mem = .shred_constants, .mode = .readonly },
-        },
-    },
-    .{
-        .name = .snapshot,
-        .access = .{
-            .{ .mem = .gossip_to_snapshot, .mode = .rw },
-        },
-    },
-},
+}

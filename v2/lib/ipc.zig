@@ -1,7 +1,6 @@
 const std = @import("std");
 
 pub const Ring = @import("ipc/ring.zig").Ring;
-pub const start_service = @import("ipc/start_service.zig");
 
 pub const ResolvedArgs = extern struct {
     stderr: std.os.linux.fd_t,

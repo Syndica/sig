@@ -32,30 +32,30 @@ pub fn build(b: *Build) !void {
         .tracy_callstack = 6,
     }).module("tracy");
 
-    const common = mod: {
-        const common = b.createModule(.{
-            .root_source_file = b.path("src/common.zig"),
+    const lib = mod: {
+        const lib = b.createModule(.{
+            .root_source_file = b.path("lib/lib.zig"),
             .target = target,
             .optimize = optimize,
         });
-        common.addImport("base58", b.dependency("base58", .{}).module("base58"));
-        common.addImport("binkode", b.dependency("binkode", .{}).module("binkode"));
-        common.addImport("tracy", tracy);
+        lib.addImport("base58", b.dependency("base58", .{}).module("base58"));
+        lib.addImport("binkode", b.dependency("binkode", .{}).module("binkode"));
+        lib.addImport("tracy", tracy);
 
-        const common_tests = b.addTest(.{ .root_module = common, .name = "common" });
-        const common_tests_run = b.addRunArtifact(common_tests);
-        test_step.dependOn(&common_tests_run.step);
+        const lib_tests = b.addTest(.{ .root_module = lib, .name = "lib" });
+        const lib_tests_run = b.addRunArtifact(lib_tests);
+        test_step.dependOn(&lib_tests_run.step);
 
-        break :mod common;
+        break :mod lib;
     };
 
     const sig_init = mod: {
         const sig_init = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("src/main.zig"),
+            .root_source_file = b.path("init/main.zig"),
         });
-        sig_init.addImport("common", common);
+        sig_init.addImport("lib", lib);
         sig_init.addImport("tracy", tracy);
 
         const sig_init_exe = b.addExecutable(.{
@@ -84,9 +84,9 @@ pub fn build(b: *Build) !void {
         const start_service = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("src/start_service.zig"),
+            .root_source_file = b.path("init/start_service.zig"),
         });
-        start_service.addImport("common", common);
+        start_service.addImport("lib", lib);
         start_service.addImport("tracy", tracy);
 
         const start_service_tests = b.addTest(.{
@@ -101,15 +101,16 @@ pub fn build(b: *Build) !void {
     };
 
     // build + link services
-    inline for (@import("src/services.zon")) |service_name| {
+    inline for (@import("init/services.zon").services) |s| {
+        const service_name = @tagName(s.name);
         const service_mod = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("src/services").path(b, service_name ++ ".zig"),
+            .root_source_file = b.path("services").path(b, service_name ++ ".zig"),
             .single_threaded = true,
             .omit_frame_pointer = false,
         });
-        service_mod.addImport("common", common);
+        service_mod.addImport("lib", lib);
         service_mod.addImport("start", start_service);
         service_mod.addImport("tracy", tracy);
 
@@ -124,22 +125,4 @@ pub fn build(b: *Build) !void {
         const service_tests_run = b.addRunArtifact(service_tests);
         test_step.dependOn(&service_tests_run.step);
     }
-
-    const validate_services_list_exe = b.addExecutable(.{
-        .name = "validate_services_list",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("scripts/validate_services_list.zig"),
-            .target = b.graph.host,
-            .optimize = .Debug,
-            .imports = &.{
-                .{
-                    .name = "services",
-                    .module = b.createModule(.{ .root_source_file = b.path("src/services.zon") }),
-                },
-            },
-        }),
-    });
-    const validate_services_list_run = b.addRunArtifact(validate_services_list_exe);
-    validate_services_list_run.addDirectoryArg(b.path("src/services"));
-    b.getInstallStep().dependOn(&validate_services_list_run.step);
 }

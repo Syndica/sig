@@ -5,10 +5,10 @@ comptime {
 }
 
 const builtin = @import("builtin");
-const common = @import("../../common.zig");
+const lib = @import("../lib.zig");
 
-const Signature = common.solana.Signature;
-const Pubkey = common.solana.Pubkey;
+const Signature = lib.solana.Signature;
+const Pubkey = lib.solana.Pubkey;
 
 pub const pippenger = @import("ed25519/pippenger.zig");
 pub const straus = @import("ed25519/straus.zig");
@@ -140,7 +140,7 @@ pub fn verifySignature(
 }
 
 /// Equate two ed25519 points with the assumption that b.z is 1.
-/// b.z == 1 is common when we have just deserialized a point from the wire
+/// b.z == 1 is lib when we have just deserialized a point from the wire
 pub fn affineEqual(a: Edwards25519, b: Edwards25519) bool {
     const x1 = b.x.mul(a.z);
     const y1 = b.y.mul(a.z);
@@ -254,7 +254,7 @@ pub fn mulMultiRuntime(
 }
 
 /// Stores a lookup table of multiplications of a point over radix-16 scalars, which is the most
-/// common usecase for straus' method. table contains 1P, 2P, 3P, 4P, 5P, 6P, 7P, 8P, and
+/// lib usecase for straus' method. table contains 1P, 2P, 3P, 4P, 5P, 6P, 7P, 8P, and
 /// our window for the scalar indexes into it. Since we want radix-16 (i.e one nibble per byte),
 /// we need 16 points, however we can optimize further by centering the radix at 0 (-8..8) and
 /// negating the cached point if the radix is below zero. Thus our initialization for the table

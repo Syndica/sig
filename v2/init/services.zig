@@ -15,14 +15,28 @@ comptime {
 
 const page_size_min = std.heap.page_size_min;
 
-const common = @import("common");
-const ServiceEntrypoint = common.ServiceFn;
+const lib = @import("lib");
+const ServiceEntrypoint = lib.ipc.ServiceFn;
 
 const linux = std.os.linux;
 const sigaction_fn = linux.Sigaction.sigaction_fn;
-const memfd = common.linux.memfd;
+const memfd = lib.linux.memfd;
 const E = linux.E;
 const e = E.init;
+
+pub const ServiceType = blk: {
+    var fields: []const std.builtin.Type.EnumField = &.{}; 
+    for (@import("./services.zon").services) |service| {
+        fields = fields ++ &.{ .{ .name = @tagName(service.name), .value = fields.len } };
+    }
+
+    break :blk @Type(.{ .@"enum" = .{
+        .decls = &.{},
+        .fields = fields,
+        .is_exhaustive = false,
+        .tag_type = u8,
+    } });
+};
 
 pub const Service = enum {
     net,
@@ -66,7 +80,7 @@ pub const Service = enum {
 };
 
 const RequiredRegion = struct {
-    region: RegionType,
+    region: std.meta.Tag(Region),
     rw: bool = false,
 };
 
@@ -85,18 +99,12 @@ pub const SharedRegion = struct {
     }
 };
 
-pub const RegionType = enum {
-    net_pair,
-    gossip_config,
-    shred_recv_config,
-};
-
-pub const Region = union(RegionType) {
+pub const Region = union(enum) {
     net_pair: struct { port: u16 },
     gossip_config: struct {
-        cluster_info: common.gossip.ClusterInfo,
+        cluster_info: lib.gossip.ClusterInfo,
         // TODO: this should live in signing service
-        keypair: common.gossip.KeyPair,
+        keypair: lib.gossip.KeyPair,
         turbine_recv_port: u16,
     },
     shred_recv_config: struct {
@@ -107,37 +115,37 @@ pub const Region = union(RegionType) {
 
     pub fn size(self: Region) usize {
         return switch (self) {
-            .net_pair => @sizeOf(common.net.Pair),
-            .gossip_config => @sizeOf(common.gossip.Config),
-            .shred_recv_config => @sizeOf(common.shred.RecvConfig),
+            .net_pair => @sizeOf(lib.net.Pair),
+            .gossip_config => @sizeOf(lib.gossip.Config),
+            .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
         };
     }
 
     pub fn init(self: Region, buf: []align(page_size_min) u8) !void {
-        std.log.info("Initialising: {}", .{@as(RegionType, self)});
+        std.log.info("Initialising: {}", .{std.meta.activeTag(self)});
 
         return switch (self) {
             .net_pair => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(common.net.Pair));
-                const data: *common.net.Pair = @ptrCast(buf);
+                std.debug.assert(buf.len == @sizeOf(lib.net.Pair));
+                const data: *lib.net.Pair = @ptrCast(buf);
 
                 data.recv.init();
                 data.send.init();
                 data.port = cfg.port;
             },
             .gossip_config => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(common.gossip.Config));
-                const data: *common.gossip.Config = @ptrCast(buf);
+                std.debug.assert(buf.len == @sizeOf(lib.gossip.Config));
+                const data: *lib.gossip.Config = @ptrCast(buf);
 
                 data.keypair = cfg.keypair;
                 data.cluster_info = cfg.cluster_info;
                 data.turbine_recv_port = cfg.turbine_recv_port;
             },
             .shred_recv_config => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(common.shred.RecvConfig));
-                const data: *common.shred.RecvConfig = @ptrCast(buf);
+                std.debug.assert(buf.len == @sizeOf(lib.shred.RecvConfig));
+                const data: *lib.shred.RecvConfig = @ptrCast(buf);
 
-                try common.solana.LeaderSchedule.fromCommand(
+                try lib.solana.LeaderSchedule.fromCommand(
                     &data.leader_schedule,
                     cfg.schedule_string,
                 );
@@ -274,7 +282,7 @@ pub fn spawnAndWait(
         }
     }
 
-    // Creates a memfd for every service, to be used for storing a common.Exit value, which is used
+    // Creates a memfd for every service, to be used for storing a lib.Exit value, which is used
     // for reporting traces+errors back to the main process.
     const exit_memfds: []memfd.RW = try allocator.alloc(memfd.RW, services.len);
     defer allocator.free(exit_memfds);
@@ -287,7 +295,7 @@ pub fn spawnAndWait(
                     "exit_{s}_{}",
                     .{ @tagName(service_instance.service), service_instance.n },
                 ),
-                .size = @sizeOf(common.Exit),
+                .size = @sizeOf(lib.ipc.Exit),
             });
         }
     }
@@ -310,7 +318,7 @@ pub fn spawnAndWait(
 
     const ExitMeta = struct {
         pid: i32,
-        exit: ?*common.Exit,
+        exit: ?*lib.ipc.Exit,
     };
 
     var exit_meta: std.MultiArrayList(ExitMeta) = .{};
@@ -365,7 +373,7 @@ fn spawnService(
 ) !i32 {
     const parent_pid = std.os.linux.getpid();
 
-    const maybe_child_pid = common.linux.clone3.clone3(&.{
+    const maybe_child_pid = lib.linux.clone3.clone3(&.{
         .flags = .{
             // NOTE: all FDs currently open will remain open in the child
             // There is no way around this, except
@@ -427,7 +435,7 @@ fn spawnService(
     // mseal our shared VMAs (essentially making sure their mapping can't be tampered with)
     for (resolved_args.ro, resolved_args.ro_len) |ptr, len| mseal(ptr orelse continue, len);
     for (resolved_args.rw, resolved_args.rw_len) |ptr, len| mseal(ptr orelse continue, len);
-    mseal(resolved_args.exit, @sizeOf(common.Exit));
+    mseal(resolved_args.exit, @sizeOf(lib.ipc.Exit));
 
     closeAllFdsExceptStderr(stderr.handle);
 
@@ -436,8 +444,8 @@ fn spawnService(
 
     // install a basic seccomp filter that bans syscalls except write+sleep
     {
-        const bpf_filters = common.linux.bpf.printSleepExit(stderr.handle);
-        const program: common.linux.bpf.sock_fprog = .{
+        const bpf_filters = lib.linux.bpf.printSleepExit(stderr.handle);
+        const program: lib.linux.bpf.sock_fprog = .{
             .len = bpf_filters.len,
             .sock_filter = &bpf_filters,
         };
@@ -459,8 +467,8 @@ fn resolveArgs(
     exit: memfd.RW,
     stderr: std.fs.File,
     regions: []const LookupResult,
-) !common.ResolvedArgs {
-    var args: common.ResolvedArgs = .{
+) !lib.ipc.ResolvedArgs {
+    var args: lib.ipc.ResolvedArgs = .{
         .stderr = stderr.handle,
         .exit = (try exit.mmap(null)).ptr,
 
@@ -519,7 +527,7 @@ fn closeAllFdsExceptStderr(maybe_stderr: ?linux.fd_t) void {
 }
 
 fn dumpOnExit(
-    meta: *common.Exit,
+    meta: *lib.ipc.Exit,
     service_instance: ServiceInstance,
     pid: i32,
     status: u32,
@@ -590,7 +598,7 @@ pub fn spawnAndWaitNoSandbox(
         }
     }
 
-    // Creates a memfd for every service, to be used for storing a common.Exit value, which is used
+    // Creates a memfd for every service, to be used for storing a lib.ipc.Exit value, which is used
     // for reporting traces+errors back to the main process.
     const exit_memfds: []memfd.RW = try allocator.alloc(memfd.RW, services.len);
     defer allocator.free(exit_memfds);
@@ -603,7 +611,7 @@ pub fn spawnAndWaitNoSandbox(
                     "exit_{s}_{}",
                     .{ @tagName(service_instance.service), service_instance.n },
                 ),
-                .size = @sizeOf(common.Exit),
+                .size = @sizeOf(lib.ipc.Exit),
             });
         }
     }
@@ -651,7 +659,7 @@ pub fn spawnAndWaitNoSandbox(
 fn threadEntry(
     entry_point: ServiceEntrypoint,
     service: Service,
-    args: common.ResolvedArgs,
+    args: lib.ipc.ResolvedArgs,
     service_idx: u16,
     finished_idx: *std.atomic.Value(u16),
     reset_event: *std.Thread.ResetEvent,

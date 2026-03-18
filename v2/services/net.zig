@@ -3,8 +3,8 @@
 
 const std = @import("std");
 const start = @import("start");
-const common = @import("common");
-const Pair = common.net.Pair;
+const lib = @import("lib");
+const Pair = lib.net.Pair;
 
 comptime {
     _ = start;
