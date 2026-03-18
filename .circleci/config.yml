@@ -271,7 +271,10 @@ jobs:
           key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted-release
       - run:
           name: Run Fixtures
-          command: ./conformance/scripts/ci-run.sh
+          command: |
+            curl -fsSL https://install.determinate.systems/nix | sh -s -- install --no-confirm
+            . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+            ./conformance/scripts/ci-run.sh
 
   linux_misc_checks:
     executor: linux-executor
