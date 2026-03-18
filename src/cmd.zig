@@ -2153,11 +2153,9 @@ fn streamLedger(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     );
     defer ledger.deinit();
 
-    const sock: sig.net.UdpSocket = try .create(switch (forward_addr.any.family) {
-        std.posix.AF.INET => .ipv4,
-        std.posix.AF.INET6 => .ipv6,
-        else => .ipv4,
-    });
+    const family = sig.net.net.udpFamilyForAddress(forward_addr) orelse
+        return error.UnsupportedAddressFamily;
+    const sock: sig.net.UdpSocket = try .create(family);
     defer sock.close();
     try sock.bindToPort(0);
 

@@ -16,6 +16,14 @@ pub const AddressFamily = enum(u32) {
     }
 };
 
+pub fn udpFamilyForAddress(addr: std.net.Address) ?AddressFamily {
+    return switch (addr.any.family) {
+        posix.AF.INET => .ipv4,
+        posix.AF.INET6 => .ipv6,
+        else => null,
+    };
+}
+
 pub const UdpSocket = struct {
     family: AddressFamily,
     handle: posix.socket_t,

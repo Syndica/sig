@@ -148,12 +148,9 @@ fn receiveShreds(
     defer turbine_tree_cache.deinit();
 
     const forward_addr: ?std.net.Address = if (forward_shreds_to) |a| a.toAddress() else null;
-    const forward_socket: ?UdpSocket = if (forward_addr) |a| blk: {
-        const family: sig.net.net.AddressFamily = switch (a.any.family) {
-            std.posix.AF.INET => .ipv4,
-            std.posix.AF.INET6 => .ipv6,
-            else => break :blk null,
-        };
+    var forward_socket: ?UdpSocket = if (forward_addr) |a| blk: {
+        const family: sig.net.net.AddressFamily = sig.net.net.udpFamilyForAddress(a) orelse
+            break :blk null;
         const sock: UdpSocket = try .create(family);
         errdefer sock.close();
         try sock.bindToPort(0);
@@ -206,12 +203,9 @@ fn receiveShreds(
 
         if (grouped_shreds.count() > 0) {
             // Forward deduped shreds for v2 testing.
-            if (forward_addr) |addr| if (forward_socket) |sock| {
+            if (forward_addr) |addr| if (forward_socket) |*sock| {
                 for (grouped_shreds.values()) |slot_shreds| {
-                    for (slot_shreds.items) |shred_id_and_packet| {
-                        const p = shred_id_and_packet[1];
-                        _ = sock.sendTo(addr, p.buffer[0..p.size]) catch {};
-                    }
+                    forwardSlotShredsToUdp(sock, addr, slot_shreds.items);
                 }
             };
             try createAndSendRetransmitInfo(
@@ -479,3 +473,70 @@ pub const RetransmitServiceMetrics = struct {
         }
     }
 };
+
+fn forwardSlotShredsToUdp(
+    sock: *const UdpSocket,
+    addr: std.net.Address,
+    slot_shreds: []const ShredIdAndPacket,
+) void {
+    for (slot_shreds) |shred_id_and_packet| {
+        const p = shred_id_and_packet[1];
+        // NOTE:- should we care these errors?
+        _ = sock.sendTo(addr, p.buffer[0..p.size]) catch {};
+    }
+}
+
+test "forward: udp family mapping" {
+    try std.testing.expectEqual(
+        @as(?sig.net.net.AddressFamily, .ipv4),
+        sig.net.net.udpFamilyForAddress(std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 1234)),
+    );
+    try std.testing.expectEqual(
+        @as(?sig.net.net.AddressFamily, .ipv6),
+        sig.net.net.udpFamilyForAddress(std.net.Address.initIp6(.{0} ** 16, 1234, 0, 0)),
+    );
+
+    const unsupported = try std.net.Address.initUnix("/tmp/sig-udpFamilyForAddress.sock");
+    try std.testing.expectEqual(
+        @as(?sig.net.net.AddressFamily, null),
+        sig.net.net.udpFamilyForAddress(unsupported),
+    );
+}
+
+test "forward: sends each packet payload" {
+    var p1: Packet = .ANY_EMPTY;
+    p1.size = 3;
+    p1.buffer[0] = 1;
+    p1.buffer[1] = 2;
+    p1.buffer[2] = 3;
+
+    var p2: Packet = .ANY_EMPTY;
+    p2.size = 1;
+    p2.buffer[0] = 9;
+
+    const shred_id_1: ShredId = .{ .slot = 1, .index = 0, .shred_type = .data };
+    const shred_id_2: ShredId = .{ .slot = 1, .index = 1, .shred_type = .code };
+
+    const slot_shreds: [2]ShredIdAndPacket = .{
+        .{ shred_id_1, p1 },
+        .{ shred_id_2, p2 },
+    };
+
+    var receiver = try sig.net.UdpSocket.create(.ipv4);
+    defer receiver.close();
+    // Bind to loopback so `getLocalEndPoint()` returns a routable address.
+    try receiver.bind(std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0));
+    try receiver.setReadTimeout(250_000); // 250ms
+    const receiver_addr = try receiver.getLocalEndPoint();
+
+    var sender = try sig.net.UdpSocket.create(.ipv4);
+    defer sender.close();
+    try sender.bindToPort(0);
+
+    forwardSlotShredsToUdp(&sender, receiver_addr, slot_shreds[0..]);
+
+    var buf: [Packet.DATA_SIZE]u8 = undefined;
+    const len1, _ = try receiver.receiveFrom(buf[0..]);
+    const len2, _ = try receiver.receiveFrom(buf[0..]);
+    try std.testing.expect(len1 + len2 == 4);
+}
