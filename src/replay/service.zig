@@ -176,6 +176,7 @@ pub const Dependencies = struct {
     replay_threads: u32,
     stop_at_slot: ?Slot,
     event_sink: ?*jrpc_types.EventSink = null,
+    prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
 };
 
 pub const ConsensusStatus = enum {
@@ -201,6 +202,7 @@ pub const ReplayState = struct {
     replay_votes_channel: ?*Channel(ParsedVote),
     event_sink: ?*jrpc_types.EventSink,
     stop_at_slot: ?sig.core.Slot,
+    prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
 
     pub fn deinit(self: *ReplayState) void {
         self.slot_tracker.deinit(self.allocator);
@@ -276,6 +278,7 @@ pub const ReplayState = struct {
             .replay_votes_channel = replay_votes_channel,
             .event_sink = deps.event_sink,
             .stop_at_slot = deps.stop_at_slot,
+            .prioritization_fee_cache = deps.prioritization_fee_cache,
         };
     }
 };
@@ -604,6 +607,9 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     last_entry_hash,
                     state.ledger,
                 ));
+                if (state.prioritization_fee_cache) |cache| {
+                    cache.finalizeSlot(state.allocator, slot);
+                }
                 processed_a_slot = true;
 
                 if (state.event_sink) |event_sink| {
@@ -645,7 +651,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
 /// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
 fn bypassConsensus(state: *ReplayState) !void {
     // NOTE: Processed slot semantics differ from Agave when Sig is in bypass-consensus mode.
-    // In bypass mode, `latest_processed_slot` is set to the highest slot among all fork
+    // In bypass mode, the processed commitment is set to the highest slot among all fork
     // leaves (SlotTree.tip()).
     //
     // This differs from Agave's behavior: the processed slot is only updated
@@ -657,8 +663,8 @@ fn bypassConsensus(state: *ReplayState) !void {
     //
     // TowerConsensus implements Agave's processed slot semantics when consensus is enabled.
     const new_tip = state.slot_tree.tip();
-    const old_tip = state.slot_tracker.latest_processed_slot.get();
-    state.slot_tracker.latest_processed_slot.set(new_tip);
+    const old_tip = state.slot_tracker.commitments.get(.processed);
+    state.slot_tracker.commitments.update(.processed, new_tip);
     if (new_tip != old_tip) {
         if (state.event_sink) |sink| {
             sink.send(.{ .tip_changed = new_tip }) catch |err| {
@@ -676,6 +682,7 @@ fn bypassConsensus(state: *ReplayState) !void {
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root.store(new_root, .monotonic);
+        slot_tracker.commitments.update(.finalized, new_root);
 
         try state.status_cache.addRoot(state.allocator, new_root);
 
@@ -919,8 +926,8 @@ test trackNewSlots {
         &.{ 3, 5 },
     );
 
-    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.processed));
-    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
+    try std.testing.expectEqual(0, slot_tracker.commitments.get(.processed));
+    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
 }
 
 fn expectSlotTracker(
@@ -1237,7 +1244,7 @@ test "bypassConsensus emits tip_changed and rooted chain events" {
 
     try std.testing.expectEqual(
         @as(Slot, 34),
-        replay_state.slot_tracker.latest_processed_slot.get(),
+        replay_state.slot_tracker.commitments.get(.processed),
     );
     try std.testing.expectEqual(@as(Slot, 2), replay_state.slot_tracker.root.load(.monotonic));
     try std.testing.expect(event_sink.channel.tryReceive() == null);

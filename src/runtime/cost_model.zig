@@ -208,7 +208,7 @@ fn calculateTransactionCostInternal(
     // Check if we should remove simple vote cost
     const remove_simple_vote_cost = feature_set.active(.remove_simple_vote_from_cost_model, slot);
 
-    if (transaction.isSimpleVoteTransaction() and !remove_simple_vote_cost) {
+    if (transaction.is_simple_vote_transaction and !remove_simple_vote_cost) {
         return .{ .simple_vote = {} };
     }
 

@@ -8,6 +8,7 @@ const Rooted = @This();
 
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
+const Account = sig.core.Account;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const Gauge = sig.prometheus.Gauge(u64);
 const ThreadPool = sig.sync.ThreadPool;
@@ -27,8 +28,9 @@ sqlite_mem_used: ?*Gauge = null,
 /// on any threads that use put or get.
 threadlocal var put_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_stmt: ?*sql.sqlite3_stmt = null;
+threadlocal var get_by_owner_stmt: ?*sql.sqlite3_stmt = null;
 
-pub fn init(file_path: [:0]const u8) !Rooted {
+pub fn init(file_path: [:0]const u8, enable_owner_index: bool) !Rooted {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.init" });
     defer zone.deinit();
 
@@ -80,6 +82,26 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         }
     }
 
+    if (enable_owner_index) {
+        if (sql.sqlite3_exec(
+            db,
+            "CREATE INDEX IF NOT EXISTS rpc_owner_idx ON entries(owner)",
+            null,
+            null,
+            null,
+        ) != OK)
+            return error.FailedToCreateIndex;
+    } else {
+        if (sql.sqlite3_exec(
+            db,
+            "DROP INDEX IF EXISTS rpc_owner_idx",
+            null,
+            null,
+            null,
+        ) != OK)
+            return error.FailedToDropIndex;
+    }
+
     return self;
 }
 
@@ -96,6 +118,10 @@ pub fn deinitThreadLocals() void {
     if (get_stmt) |stmt| {
         _ = sql.sqlite3_finalize(stmt);
         get_stmt = null;
+    }
+    if (get_by_owner_stmt) |stmt| {
+        _ = sql.sqlite3_finalize(stmt);
+        get_by_owner_stmt = null;
     }
 }
 
@@ -150,7 +176,7 @@ pub fn getWithModifiedSlot(
 
     const stmt: *sql.sqlite3_stmt = if (get_stmt) |stmt| stmt else blk: {
         const query =
-            \\SELECT lamports, data, owner, executable, rent_epoch, last_modified_slot 
+            \\SELECT lamports, data, owner, executable, rent_epoch, last_modified_slot
             \\FROM entries WHERE address = ?;
         ;
         self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_stmt, null));
@@ -168,28 +194,115 @@ pub fn getWithModifiedSlot(
         else => self.err(rc),
     }
 
-    const data = blk: {
-        const len: usize = @intCast(sql.sqlite3_column_bytes(stmt, 1));
-        if (len == 0) break :blk &.{}; // sqlite returns null pointers for 0-len data
-        const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 1));
-        break :blk ptr[0..len];
-    };
+    const fields = readAccountFields(stmt);
 
-    const duped = try allocator.dupe(u8, data);
+    const duped = try allocator.dupe(u8, fields.data);
     errdefer allocator.free(duped);
-
-    const owner_ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 2));
-    const owner: Pubkey = .{ .data = owner_ptr[0..32].* };
 
     return .{
         .account = .{
-            .lamports = @bitCast(sql.sqlite3_column_int64(stmt, 0)),
+            .lamports = fields.lamports,
             .data = duped,
-            .owner = owner,
-            .executable = sql.sqlite3_column_int(stmt, 3) != 0,
-            .rent_epoch = @bitCast(sql.sqlite3_column_int64(stmt, 4)),
+            .owner = fields.owner,
+            .executable = fields.executable,
+            .rent_epoch = fields.rent_epoch,
         },
         .modified_slot = @bitCast(sql.sqlite3_column_int64(stmt, 5)),
+    };
+}
+
+/// Returns an iterator over all accounts with the given `owner`.
+/// The caller must ensure `owner` outlives the returned `OwnerIterator`
+/// (i.e. remains valid through all `next()` calls and `deinit()`),
+/// because the pointer is bound with `SQLITE_STATIC`.
+///
+/// TODO: Accept getProgramAccounts parameters and build a dynamic query that
+/// pushes filters down to the DB level. This would allow:
+/// - Filtering out zero-lamport accounts (`lamports > 0`)
+/// - Applying `dataSize` / `memcmp` filters in SQL
+/// - Fetching only the data slice requested via `dataSlice`
+pub fn getByOwner(self: *Rooted, owner: *const Pubkey) OwnerIterator {
+    const stmt: *sql.sqlite3_stmt = if (get_by_owner_stmt) |stmt| stmt else blk: {
+        const query =
+            \\ SELECT lamports, data, owner, executable, rent_epoch, address
+            \\ FROM entries WHERE owner = ? AND lamports > 0;
+        ;
+        self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_by_owner_stmt, null));
+        break :blk get_by_owner_stmt.?;
+    };
+
+    self.err(sql.sqlite3_bind_blob(
+        stmt,
+        1,
+        owner,
+        Pubkey.SIZE,
+        sql.SQLITE_STATIC,
+    ));
+    return .{ .stmt = stmt, .rooted = self };
+}
+
+pub const OwnerIterator = struct {
+    rooted: *Rooted,
+    stmt: *sql.sqlite3_stmt,
+
+    pub fn next(self: *OwnerIterator) ?struct { Pubkey, Account } {
+        const rc = sql.sqlite3_step(self.stmt);
+        switch (rc) {
+            ROW => {},
+            DONE => return null,
+            else => self.rooted.err(rc),
+        }
+
+        const fields = readAccountFields(self.stmt);
+        const pubkey: Pubkey = .{
+            .data = @as([*]const u8, @ptrCast(sql.sqlite3_column_blob(self.stmt, 5)))[0..32].*,
+        };
+
+        return .{
+            pubkey, .{
+                .lamports = fields.lamports,
+                .data = .{ .unowned_allocation = fields.data },
+                .owner = fields.owner,
+                .executable = fields.executable,
+                .rent_epoch = fields.rent_epoch,
+            },
+        };
+    }
+
+    pub fn deinit(self: *OwnerIterator) void {
+        defer std.debug.assert(sql.sqlite3_reset(self.stmt) == OK);
+    }
+};
+
+/// Reads the common account fields (lamports, data, owner, executable, rent_epoch)
+/// from a sqlite row starting at column `base`. The returned `data` slice borrows
+/// directly from sqlite's internal buffer and is only valid until the statement is
+/// stepped or reset.
+fn readAccountFields(stmt: *sql.sqlite3_stmt) struct {
+    lamports: u64,
+    data: []const u8,
+    owner: Pubkey,
+    executable: bool,
+    rent_epoch: u64,
+} {
+    const lamports: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 0));
+    const data: []const u8 = blk: {
+        const len: usize = @intCast(sql.sqlite3_column_bytes(stmt, 1));
+        if (len == 0) break :blk &.{};
+        const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 1));
+        break :blk ptr[0..len];
+    };
+    const owner: Pubkey = .{
+        .data = @as([*]const u8, @ptrCast(sql.sqlite3_column_blob(stmt, 2)))[0..32].*,
+    };
+    const executable: bool = sql.sqlite3_column_int(stmt, 3) != 0;
+    const rent_epoch: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 4));
+    return .{
+        .lamports = lamports,
+        .data = data,
+        .owner = owner,
+        .executable = executable,
+        .rent_epoch = rent_epoch,
     };
 }
 
@@ -266,7 +379,7 @@ fn computeLtHashForAccountRange(
     defer zone.deinit();
 
     const query =
-        \\SELECT 
+        \\SELECT
         \\address, owner, data, lamports, executable, rent_epoch
         \\FROM entries LIMIT ? OFFSET ?;
     ;
@@ -364,7 +477,7 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
         // Insert or update only if last_modified_slot is greater (excluded = VALUES)
         // https://sqlite.org/lang_upsert.html#examples
         const query =
-            \\INSERT INTO entries 
+            \\INSERT INTO entries
             \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot)
             \\VALUES (?, ?, ?, ?, ?, ?, ?)
             \\ON CONFLICT(address) DO UPDATE SET

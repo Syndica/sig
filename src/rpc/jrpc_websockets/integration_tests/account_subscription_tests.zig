@@ -117,7 +117,7 @@ test "accountSubscribe processed publishes on tip change" {
     waitForMessages(server, &client_env, &handler, 1, 5000);
     try std.testing.expect(handler.received.items.len >= 1);
 
-    server.slot_tracker.latest_processed_slot.set(2);
+    server.slot_tracker.commitments.update(.processed, 2);
     server.injectEvent(.{ .tip_changed = 2 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);

@@ -86,7 +86,7 @@ pub const AncestorIterator = struct {
 };
 
 pub fn init(slot_read_ctx: SlotReadContext, logger: Logger) SlotStateCache {
-    const processed_tip = slot_read_ctx.slot_tracker.latest_processed_slot.get();
+    const processed_tip = slot_read_ctx.slot_tracker.commitments.get(.processed);
     const processed_tip_info = slot_read_ctx.slot_tracker.get(processed_tip);
     return .{
         .logger = .from(logger),
@@ -436,7 +436,7 @@ test "SlotStateCache: slot frozen returns transition and marks state" {
     defer slot_tracker.deinit(allocator);
 
     try testAddTrackedSlot(allocator, &slot_tracker, 10, 9, &.{10});
-    slot_tracker.latest_processed_slot.set(10);
+    slot_tracker.commitments.update(.processed, 10);
 
     const ctx = testSlotReadCtx(&slot_tracker);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
@@ -479,7 +479,7 @@ test "SlotStateCache: confirmed before frozen buffers state" {
     defer slot_tracker.deinit(allocator);
 
     try testAddTrackedSlot(allocator, &slot_tracker, 10, 9, &.{10});
-    slot_tracker.latest_processed_slot.set(10);
+    slot_tracker.commitments.update(.processed, 10);
 
     const ctx = testSlotReadCtx(&slot_tracker);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
@@ -510,7 +510,7 @@ test "SlotStateCache: onSlotConfirmed marks confirmed transition only when actio
     defer slot_tracker.deinit(allocator);
 
     try testAddTrackedSlot(allocator, &slot_tracker, 11, 10, &.{11});
-    slot_tracker.latest_processed_slot.set(11);
+    slot_tracker.commitments.update(.processed, 11);
 
     const ctx = testSlotReadCtx(&slot_tracker);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
@@ -699,7 +699,7 @@ test "SlotStateCache: off-fork frozen slot is not on current fork" {
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
-    slot_tracker.latest_processed_slot.set(2);
+    slot_tracker.commitments.update(.processed, 2);
     _ = state.onTipChanged(ctx, 2);
 
     const on_fork = try testOnSlotFrozen(&state, allocator, 2, 1, 0);

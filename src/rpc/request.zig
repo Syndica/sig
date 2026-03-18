@@ -457,7 +457,7 @@ test "Request parse errors" {
     );
 
     try std.testing.expectError(
-        error.UnexpectedToken, // due to not being implemented
+        error.LengthMismatch, // missing required `message` param
         std.json.parseFromSliceLeaky(Request, std.testing.allocator,
             \\{"jsonrpc":"2.0","id":null,"method":"getFeeForMessage","params":[]}
         , .{}),

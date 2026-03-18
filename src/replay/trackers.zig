@@ -12,33 +12,6 @@ const RwMux = sig.sync.RwMux;
 const ThreadPool = sig.sync.ThreadPool;
 const Commitment = sig.rpc.methods.common.Commitment;
 
-pub const ForkChoiceProcessedSlot = struct {
-    slot: std.atomic.Value(Slot) = .init(0),
-
-    /// Set the current processed slot (heaviest fork tip).
-    /// Uses store() because this can decrease when the fork choice
-    /// switches to a different fork with a lower slot.
-    pub fn set(self: *ForkChoiceProcessedSlot, new_slot: Slot) void {
-        self.slot.store(new_slot, .monotonic);
-    }
-
-    pub fn get(self: *const ForkChoiceProcessedSlot) Slot {
-        return self.slot.load(.monotonic);
-    }
-};
-
-pub const OptimisticallyConfirmedSlot = struct {
-    slot: std.atomic.Value(Slot) = .init(0),
-
-    pub fn update(self: *OptimisticallyConfirmedSlot, new_slot: Slot) void {
-        _ = self.slot.fetchMax(new_slot, .monotonic);
-    }
-
-    pub fn get(self: *const OptimisticallyConfirmedSlot) Slot {
-        return self.slot.load(.monotonic);
-    }
-};
-
 /// Central registry that tracks high-level info about slots and how they fork.
 ///
 /// This is a lean version of `BankForks` from agave, focused on storing the
@@ -49,12 +22,9 @@ pub const OptimisticallyConfirmedSlot = struct {
 ///
 /// This struct is thread safe for concurrent reads / exclusive writes on slots.
 pub const SlotTracker = struct {
-    pub const SlotsMap = std.AutoArrayHashMapUnmanaged(Slot, *Element);
-
-    slots: RwMux(SlotsMap),
-    latest_processed_slot: ForkChoiceProcessedSlot,
-    latest_confirmed_slot: OptimisticallyConfirmedSlot,
+    slots: RwMux(std.AutoArrayHashMapUnmanaged(Slot, *Element)),
     root: std.atomic.Value(Slot),
+    commitments: CommitmentTracker,
     wg: *std.Thread.WaitGroup,
 
     pub const Element = struct {
@@ -114,9 +84,8 @@ pub const SlotTracker = struct {
         wg.* = .{};
         return .{
             .root = .init(root_slot),
-            .slots = RwMux(SlotsMap).init(.empty),
-            .latest_processed_slot = .{},
-            .latest_confirmed_slot = .{},
+            .slots = .init(.empty),
+            .commitments = .init(root_slot),
             .wg = wg,
         };
     }
@@ -176,14 +145,6 @@ pub const SlotTracker = struct {
         defer slots_lg.unlock();
         const elem = slots_lg.get().get(slot) orelse return null;
         return elem.toRef();
-    }
-
-    pub fn getSlotForCommitment(self: *const SlotTracker, commitment: Commitment) Slot {
-        return switch (commitment) {
-            .processed => self.latest_processed_slot.get(),
-            .confirmed => self.latest_confirmed_slot.get(),
-            .finalized => self.root.load(.monotonic),
-        };
     }
 
     pub const GetOrPutResult = struct {
@@ -379,6 +340,47 @@ pub const SlotTracker = struct {
                 index += 1;
             }
         }
+    }
+};
+
+/// Tracks the slot for each commitment level.
+pub const CommitmentTracker = struct {
+    processed: std.atomic.Value(Slot),
+    confirmed: std.atomic.Value(Slot),
+    finalized: std.atomic.Value(Slot),
+
+    /// This function only supports startup from genesis or from a snapshot.
+    ///
+    /// When starting from genesis, all the levels should be zero.
+    ///
+    /// When starting from a snapshot, the snapshot's slot is already processed
+    /// from the perspective of all the other state we initialize on startup. We
+    /// can't safely make any assumptions about any slots being confirmed or
+    /// finalized by the cluster as a whole since the snapshot came only from
+    /// one other node. We can only assume that the genesis slot (0) is
+    /// confirmed and finalized until we start counting votes.
+    pub fn init(start_slot: Slot) CommitmentTracker {
+        return .{
+            .processed = .init(start_slot),
+            .confirmed = .init(0),
+            .finalized = .init(0),
+        };
+    }
+
+    pub fn get(self: *const CommitmentTracker, commitment: Commitment) Slot {
+        return switch (commitment) {
+            .processed => self.processed.load(.monotonic),
+            .confirmed => self.confirmed.load(.monotonic),
+            .finalized => self.finalized.load(.monotonic),
+        };
+    }
+
+    pub fn update(self: *CommitmentTracker, commitment: Commitment, slot: Slot) void {
+        return switch (commitment) {
+            .processed => self.processed.store(slot, .monotonic),
+            .confirmed => _ = self.confirmed.fetchMax(slot, .monotonic),
+            .finalized => _ = self.finalized.fetchMax(slot, .monotonic),
+        };
     }
 };
 
@@ -697,9 +699,10 @@ test "SlotTracker.prune removes all slots less than root" {
         try std.testing.expect(!tracker.contains(2));
         try std.testing.expect(!tracker.contains(3));
 
-        try std.testing.expectEqual(0, tracker.getSlotForCommitment(Commitment.processed));
-        try std.testing.expectEqual(0, tracker.getSlotForCommitment(Commitment.confirmed));
-        try std.testing.expectEqual(4, tracker.getSlotForCommitment(Commitment.finalized));
+        try std.testing.expectEqual(4, tracker.commitments.get(.processed));
+        try std.testing.expectEqual(0, tracker.commitments.get(.confirmed));
+        try std.testing.expectEqual(0, tracker.commitments.get(.finalized));
+        try std.testing.expectEqual(4, tracker.root.load(.monotonic));
     }
 }
 
