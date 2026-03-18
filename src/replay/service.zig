@@ -192,6 +192,7 @@ pub const Dependencies = struct {
     replay_threads: u32,
     stop_at_slot: ?Slot,
     event_sink: ?*jrpc_types.EventSink = null,
+    prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
 };
 
 pub const ConsensusStatus = enum {
@@ -217,6 +218,7 @@ pub const ReplayState = struct {
     replay_votes_channel: ?*Channel(ParsedVote),
     event_sink: ?*jrpc_types.EventSink,
     stop_at_slot: ?sig.core.Slot,
+    prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
 
     pub fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
@@ -292,6 +294,7 @@ pub const ReplayState = struct {
             .replay_votes_channel = replay_votes_channel,
             .event_sink = deps.event_sink,
             .stop_at_slot = deps.stop_at_slot,
+            .prioritization_fee_cache = deps.prioritization_fee_cache,
         };
     }
 };
@@ -620,6 +623,9 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     last_entry_hash,
                     state.ledger,
                 ));
+                if (state.prioritization_fee_cache) |cache| {
+                    cache.finalizeSlot(state.allocator, slot);
+                }
                 processed_a_slot = true;
             } else {
                 state.logger.info().logf("partially replayed slot: {}", .{slot});
@@ -644,13 +650,14 @@ fn bypassConsensus(state: *ReplayState) !void {
     // See: https://github.com/anza-xyz/agave/blob/5e900421520a10933642d5e9a21e191a70f9b125/core/src/replay_stage.rs#L2683
     //
     // TowerConsensus implements Agave's processed slot semantics when consensus is enabled.
-    state.slot_tracker.latest_processed_slot.set(state.slot_tree.tip());
+    state.slot_tracker.commitments.update(.processed, state.slot_tree.tip());
 
     if (state.slot_tree.reRoot(state.allocator)) |new_root| {
         const slot_tracker = &state.slot_tracker;
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root.store(new_root, .monotonic);
+        slot_tracker.commitments.update(.finalized, new_root);
         slot_tracker.pruneNonRooted(&state.thread_pool);
 
         try state.status_cache.addRoot(state.allocator, new_root);
@@ -874,8 +881,8 @@ test trackNewSlots {
         &.{ 3, 5 },
     );
 
-    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.processed));
-    try std.testing.expectEqual(0, slot_tracker.getSlotForCommitment(.confirmed));
+    try std.testing.expectEqual(0, slot_tracker.commitments.get(.processed));
+    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
 }
 
 fn expectSlotTracker(
