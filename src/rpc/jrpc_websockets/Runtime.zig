@@ -374,7 +374,6 @@ const SlotEventKind = union(enum) {
     slot_frozen: types.SlotEventData,
     slot_confirmed,
     slot_rooted: types.RootEventData,
-    // TODO: this case is currently unused.
     tip_changed,
 };
 
