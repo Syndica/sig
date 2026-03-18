@@ -60,7 +60,7 @@ const ThreadPool = sig.sync.ThreadPool;
 const JRPCHandler = handler_mod.JRPCHandler;
 const WebSocketServer = JRPCHandler.WebSocketServer;
 const SlotReadContext = Runtime.SlotReadContext;
-const runtime_deinit_timeout_ms = 5 * std.time.ms_per_s;
+const runtime_shutdown_timeout_ms = 5 * std.time.ms_per_s;
 
 /// Bundles all server-side state needed for an in-process test server.
 pub const TestServer = struct {
@@ -194,7 +194,8 @@ pub const TestServer = struct {
     pub fn deinit(self: *TestServer) void {
         const allocator = self.allocator;
         self.server.deinit();
-        self.ctx.deinit(runtime_deinit_timeout_ms) catch unreachable;
+        self.ctx.shutdown(runtime_shutdown_timeout_ms) catch unreachable;
+        self.ctx.deinit();
         self.slot_tracker.deinit(allocator);
         self.account_db.deinit();
         self.sub_map.deinit();
@@ -440,7 +441,8 @@ pub const IntegratedTestServer = struct {
         const allocator = self.allocator;
 
         self.ws_server.deinit();
-        self.ctx.deinit(runtime_deinit_timeout_ms) catch unreachable;
+        self.ctx.shutdown(runtime_shutdown_timeout_ms) catch unreachable;
+        self.ctx.deinit();
         self.slot_tracker.deinit(allocator);
         self.account_db.deinit();
         self.sub_map.deinit();

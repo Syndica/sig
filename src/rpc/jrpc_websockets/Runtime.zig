@@ -181,34 +181,29 @@ const FreePayloadTask = struct {
     }
 };
 
-pub const DeinitError = error{Timeout};
-
-/// Free resources owned directly by RuntimeContext. If error is returned then timeout
-/// occured while waiting for threadpool tasks to finish, in that case no resources are
-/// freed.
+/// Drain runtime-owned work queues and wait for runtime-submitted threadpool tasks to finish.
 ///
 /// IMPORTANT: callers must shutdown the websocket server and stop sending messages to the
-/// inbound event channel before calling `deinit()`.
-/// `deinit()` waits up to `timeout_ms` for runtime-submitted threadpool tasks to finish,
-/// drains any remaining commit messages, then releases runtime-owned resources.
-pub fn deinit(self: *RuntimeContext, timeout_ms: u64) DeinitError!void {
-    try self.waitForThreadpoolTasks(timeout_ms);
+/// inbound event channel before calling `shutdown()`.
+pub fn shutdown(self: *RuntimeContext, timeout_ms: u64) error{Timeout}!void {
     self.drainCommitQueue();
     try self.waitForThreadpoolTasks(timeout_ms);
 
     if (self.metrics.inflight_jobs != 0) {
         self.logger.warn().logf(
-            "deinit completed with inflight_jobs metric = {}; " ++
+            "shutdown completed with inflight_jobs metric = {}; " ++
                 "metric may be stale after worker send failures",
             .{self.metrics.inflight_jobs},
         );
     }
+}
 
+pub fn deinit(self: *RuntimeContext) void {
     self.slot_state_cache.deinit(self.allocator);
     self.pending_wake_queues.deinit(self.allocator);
 }
 
-fn waitForThreadpoolTasks(self: *RuntimeContext, timeout_ms: u64) DeinitError!void {
+fn waitForThreadpoolTasks(self: *RuntimeContext, timeout_ms: u64) error{Timeout}!void {
     var timer = std.time.Timer.start() catch unreachable;
     const timeout_ns = timeout_ms * std.time.ns_per_ms;
 
@@ -964,7 +959,7 @@ test "releasePayload frees payloads on the threadpool" {
         .max_batch_bytes = 64 * 1024,
         .loop = &loop,
     });
-    defer runtime.deinit(5 * std.time.ms_per_s) catch {};
+    defer runtime.deinit();
 
     const payload = try NotifPayload.alloc(allocator, 16);
     @memset(payload.payload(), 0xAB);
@@ -976,7 +971,7 @@ test "releasePayload frees payloads on the threadpool" {
     try std.testing.expect(allocator_state.free_calls.load(.acquire) > 0);
 }
 
-test "deinit times out while runtime tasks remain unfinished" {
+test "shutdown times out while runtime tasks remain unfinished" {
     const allocator = std.testing.allocator;
 
     var commit_queue = try Channel(types.CommitMsg).init(allocator);
@@ -1023,16 +1018,14 @@ test "deinit times out while runtime tasks remain unfinished" {
         .max_batch_bytes = 64 * 1024,
         .loop = &loop,
     });
-    var runtime_deinited = false;
-    defer if (!runtime_deinited) {
-        runtime.threadpool_wg.finish();
-        runtime.deinit(5 * std.time.ms_per_s) catch {};
-    };
+    defer runtime.deinit();
 
     runtime.threadpool_wg.start();
-    try std.testing.expectError(error.Timeout, runtime.deinit(1));
+    // balance the start on test failure
+    errdefer runtime.threadpool_wg.finish();
+
+    try std.testing.expectError(error.Timeout, runtime.shutdown(1));
 
     runtime.threadpool_wg.finish();
-    try runtime.deinit(5 * std.time.ms_per_s);
-    runtime_deinited = true;
+    try runtime.shutdown(5 * std.time.ms_per_s);
 }

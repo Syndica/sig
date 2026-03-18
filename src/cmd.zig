@@ -1828,9 +1828,7 @@ fn runRPCServer(
         .max_batch_bytes = 64 * 1024,
         .loop = &loop,
     });
-    defer ws_runtime_ctx.deinit(5 * std.time.ms_per_s) catch |err| {
-        logger.err().logf("websocket runtime deinit failed: {}", .{err});
-    };
+    defer ws_runtime_ctx.deinit();
 
     var ws_server = try WSRPCServer.initNoListen(allocator, &loop, .{
         .address = server_addr,
@@ -1904,6 +1902,10 @@ fn runRPCServer(
     logger.info().log("Shutdown requested, waiting for WebSocketBridge to complete shutdown...");
     ws_bridge.shutdown_complete.timedWait(15 * std.time.ns_per_s) catch {
         logger.err().log("Timed out waiting for WebSocketBridge shutdown to complete");
+    };
+
+    ws_runtime_ctx.shutdown(5 * std.time.ms_per_s) catch |err| {
+        logger.err().logf("websocket runtime shutdown failed: {}", .{err});
     };
 
     try serve_result;
