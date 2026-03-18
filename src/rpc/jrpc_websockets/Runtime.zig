@@ -38,8 +38,8 @@ commit_queue: *Channel(types.CommitMsg),
 /// Async handle for waking the loop thread to drain queues.
 loop_async: *xev.Async,
 async_completion: xev.Completion = .{},
-/// Thread pool for running serialization jobs.
-serialization_pool: *ThreadPool,
+/// Thread pool for runtime background tasks.
+threadpool: *ThreadPool,
 /// Metrics counters for monitoring and benchmarking.
 metrics: *metrics_mod.Metrics,
 /// Maximum batch size in bytes for notifications received by clients before ensuring TCP flush.
@@ -75,7 +75,7 @@ pub const Dependencies = struct {
     slot_read_ctx: SlotReadContext,
     event_sink: *types.EventSink,
     commit_queue: *Channel(types.CommitMsg),
-    serialization_pool: *ThreadPool,
+    threadpool: *ThreadPool,
     metrics: *metrics_mod.Metrics,
     max_batch_bytes: u64,
     loop: *xev.Loop,
@@ -92,7 +92,7 @@ pub fn init(deps: Dependencies) RuntimeContext {
         .inbound_event_queue = &deps.event_sink.channel,
         .commit_queue = deps.commit_queue,
         .loop_async = &deps.event_sink.loop_async,
-        .serialization_pool = deps.serialization_pool,
+        .threadpool = deps.threadpool,
         .metrics = deps.metrics,
         .max_batch_bytes = deps.max_batch_bytes,
         .loop = deps.loop,
@@ -109,6 +109,54 @@ const SerializeTask = struct {
     task: ThreadPool.Task,
     job: types.SerializeJob,
 
+    fn execute(threadpool_task: *ThreadPool.Task) void {
+        const serialize_task: *SerializeTask = @alignCast(@fieldParentPtr("task", threadpool_task));
+        const runtime = serialize_task.runtime;
+        defer runtime.threadpool_wg.finish();
+        defer serialize_task.deinit();
+
+        const job = serialize_task.job;
+        var serialize_timer = std.time.Timer.start() catch unreachable;
+
+        const result: types.CommitResult = if (protocol.serializeNotification(
+            runtime.allocator,
+            job.sub_id,
+            job.job_type,
+        )) |p|
+            .{ .payload = p }
+        else |err|
+            .{ .serialize_error = err };
+
+        const serialize_ns = serialize_timer.read();
+        const completed_at = std.time.Instant.now() catch unreachable;
+        const pipeline_latency_ns = completed_at.since(job.submitted_at);
+        const payload_bytes: u64 = switch (result) {
+            .payload => |p| @intCast(p.payload().len),
+            .serialize_error => 0,
+        };
+
+        const commit_msg = types.CommitMsg{
+            .sub_id = job.sub_id,
+            .index = job.index,
+            .result = result,
+            .serialize_ns = serialize_ns,
+            .pipeline_latency_ns = pipeline_latency_ns,
+            .payload_bytes = payload_bytes,
+        };
+
+        runtime.commit_queue.send(commit_msg) catch {
+            result.deinit(runtime.allocator);
+            return;
+        };
+
+        const already_pending = runtime.notify_pending.swap(true, .release);
+        if (!already_pending) {
+            runtime.loop_async.notify() catch {
+                _ = runtime.notify_pending.swap(false, .release);
+            };
+        }
+    }
+
     fn deinit(self: *SerializeTask) void {
         self.job.deinit(self.runtime.allocator);
         self.runtime.allocator.destroy(self);
@@ -119,6 +167,15 @@ const FreePayloadTask = struct {
     runtime: *RuntimeContext,
     task: ThreadPool.Task,
     bytes: ReleasedPayloadBytes,
+
+    fn execute(threadpool_task: *ThreadPool.Task) void {
+        const free_task: *FreePayloadTask = @alignCast(@fieldParentPtr("task", threadpool_task));
+        const runtime = free_task.runtime;
+        defer runtime.threadpool_wg.finish();
+        defer free_task.deinit();
+
+        freePayloadBytes(runtime, free_task.bytes);
+    }
 
     fn deinit(self: *FreePayloadTask) void {
         self.runtime.allocator.destroy(self);
@@ -208,75 +265,18 @@ fn onAsyncWakeup(
     return .disarm;
 }
 
-fn executeSerializeTask(task: *ThreadPool.Task) void {
-    const serialize_task: *SerializeTask = @alignCast(@fieldParentPtr("task", task));
-    const runtime = serialize_task.runtime;
-    defer runtime.threadpool_wg.finish();
-    defer serialize_task.deinit();
-
-    const job = serialize_task.job;
-    var serialize_timer = std.time.Timer.start() catch unreachable;
-
-    const result: types.CommitResult = if (protocol.serializeNotification(
-        runtime.allocator,
-        job.sub_id,
-        job.job_type,
-    )) |p|
-        .{ .payload = p }
-    else |err|
-        .{ .serialize_error = err };
-
-    const serialize_ns = serialize_timer.read();
-    const completed_at = std.time.Instant.now() catch unreachable;
-    const pipeline_latency_ns = completed_at.since(job.submitted_at);
-    const payload_bytes: u64 = switch (result) {
-        .payload => |p| @intCast(p.payload().len),
-        .serialize_error => 0,
-    };
-
-    const commit_msg = types.CommitMsg{
-        .sub_id = job.sub_id,
-        .index = job.index,
-        .result = result,
-        .serialize_ns = serialize_ns,
-        .pipeline_latency_ns = pipeline_latency_ns,
-        .payload_bytes = payload_bytes,
-    };
-
-    runtime.commit_queue.send(commit_msg) catch {
-        result.deinit(runtime.allocator);
-        return;
-    };
-
-    const already_pending = runtime.notify_pending.swap(true, .release);
-    if (!already_pending) {
-        runtime.loop_async.notify() catch {
-            _ = runtime.notify_pending.swap(false, .release);
-        };
-    }
-}
-
-fn executeFreePayloadTask(task: *ThreadPool.Task) void {
-    const free_task: *FreePayloadTask = @alignCast(@fieldParentPtr("task", task));
-    const runtime = free_task.runtime;
-    defer runtime.threadpool_wg.finish();
-    defer free_task.deinit();
-
-    freePayloadBytes(runtime, free_task.bytes);
-}
-
 fn submitSerialize(self: *RuntimeContext, job: types.SerializeJob) !void {
     // TODO(perf): we could pool these task structs to avoid allocator churn,
     // but notably this is quite fast when benchmarked due to same size alloations.
     const serialize_task = try self.allocator.create(SerializeTask);
     serialize_task.* = .{
         .runtime = self,
-        .task = .{ .callback = RuntimeContext.executeSerializeTask },
+        .task = .{ .callback = SerializeTask.execute },
         .job = job,
     };
     self.threadpool_wg.start();
     // TODO(perf): could maybe be batched.
-    self.serialization_pool.schedule(.{
+    self.threadpool.schedule(.{
         .head = &serialize_task.task,
         .tail = &serialize_task.task,
         .len = 1,
@@ -289,11 +289,11 @@ fn submitPayloadFree(self: *RuntimeContext, bytes: ReleasedPayloadBytes) !void {
     const free_task = try self.allocator.create(FreePayloadTask);
     free_task.* = .{
         .runtime = self,
-        .task = .{ .callback = RuntimeContext.executeFreePayloadTask },
+        .task = .{ .callback = FreePayloadTask.execute },
         .bytes = bytes,
     };
     self.threadpool_wg.start();
-    self.serialization_pool.schedule(.{
+    self.threadpool.schedule(.{
         .head = &free_task.task,
         .tail = &free_task.task,
         .len = 1,
@@ -934,10 +934,10 @@ test "releasePayload frees payloads on the threadpool" {
     var loop = try xev.Loop.init(.{ .thread_pool = &xev_pool });
     defer loop.deinit();
 
-    var serialization_pool = ThreadPool.init(.{ .max_threads = 1 });
+    var threadpool = ThreadPool.init(.{ .max_threads = 1 });
     defer {
-        serialization_pool.shutdown();
-        serialization_pool.deinit();
+        threadpool.shutdown();
+        threadpool.deinit();
     }
 
     var sub_map = sub_map_mod.RPCSubMap.init(allocator, 8);
@@ -961,7 +961,7 @@ test "releasePayload frees payloads on the threadpool" {
         .slot_read_ctx = slot_read_ctx,
         .event_sink = event_sink,
         .commit_queue = &commit_queue,
-        .serialization_pool = &serialization_pool,
+        .threadpool = &threadpool,
         .metrics = &metrics,
         .max_batch_bytes = 64 * 1024,
         .loop = &loop,
@@ -993,10 +993,10 @@ test "deinit times out while runtime tasks remain unfinished" {
     var loop = try xev.Loop.init(.{ .thread_pool = &xev_pool });
     defer loop.deinit();
 
-    var serialization_pool = ThreadPool.init(.{ .max_threads = 1 });
+    var threadpool = ThreadPool.init(.{ .max_threads = 1 });
     defer {
-        serialization_pool.shutdown();
-        serialization_pool.deinit();
+        threadpool.shutdown();
+        threadpool.deinit();
     }
 
     var sub_map = sub_map_mod.RPCSubMap.init(allocator, 8);
@@ -1020,7 +1020,7 @@ test "deinit times out while runtime tasks remain unfinished" {
         .slot_read_ctx = slot_read_ctx,
         .event_sink = event_sink,
         .commit_queue = &commit_queue,
-        .serialization_pool = &serialization_pool,
+        .threadpool = &threadpool,
         .metrics = &metrics,
         .max_batch_bytes = 64 * 1024,
         .loop = &loop,

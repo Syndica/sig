@@ -1800,10 +1800,10 @@ fn runRPCServer(
     var loop = try xev.Loop.init(.{ .thread_pool = &xev_pool });
     defer loop.deinit();
 
-    var serialization_pool = sig.sync.ThreadPool.init(.{ .max_threads = 4 });
+    var threadpool = sig.sync.ThreadPool.init(.{ .max_threads = 4 });
     defer {
-        serialization_pool.shutdown();
-        serialization_pool.deinit();
+        threadpool.shutdown();
+        threadpool.deinit();
     }
 
     var metrics = jrpc_ws.metrics.Metrics{};
@@ -1823,7 +1823,7 @@ fn runRPCServer(
         .slot_read_ctx = slot_read_ctx,
         .event_sink = event_sink,
         .commit_queue = &commit_queue,
-        .serialization_pool = &serialization_pool,
+        .threadpool = &threadpool,
         .metrics = &metrics,
         .max_batch_bytes = 64 * 1024,
         .loop = &loop,
