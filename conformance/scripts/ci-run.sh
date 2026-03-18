@@ -16,10 +16,7 @@ conformance_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd $conformance_dir
 
 echo Getting dependencies
-if command -v apt &> /dev/null; then
-    sudo add-apt-repository ppa:deadsnakes/ppa -y
-    sudo apt install -y python3.11 python3.11-dev python3.11-venv rename gcc
-fi
+scripts/install-system-deps.sh solana-conformance
 scripts/setup-env.sh
 
 echo Selecting a subset of fixtures to run
