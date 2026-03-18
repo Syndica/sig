@@ -574,16 +574,10 @@ pub fn getSignatureStatuses(
     const confirmed_slot = self.slot_tracker.commitments.get(.confirmed);
     const finalized_slot = self.slot_tracker.commitments.get(.finalized);
 
-    // Build ancestors from the processed tip for fork-aware StatusCache lookups.
-    // Ancestors = processed slot + all its parents on the current fork.
-    var ancestors: sig.core.Ancestors = .{};
-    const parent_slots = try self.slot_tracker.parents(arena, processed_slot);
-    try ancestors.ancestors.ensureTotalCapacity(arena, @intCast(parent_slots.len + 1));
-    ancestors.ancestors.putAssumeCapacity(processed_slot, {});
-    for (parent_slots) |slot| ancestors.ancestors.putAssumeCapacity(
-        slot,
-        {},
-    );
+    const ancestors: sig.core.Ancestors = if (self.slot_tracker.get(processed_slot)) |info| anc: {
+        defer info.release();
+        break :anc try info.constants().ancestors.clone(arena);
+    } else .{};
 
     const results = try arena.alloc(
         ?GetSignatureStatuses.Response.TransactionStatus,
