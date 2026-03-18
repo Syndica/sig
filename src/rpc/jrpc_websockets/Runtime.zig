@@ -709,6 +709,10 @@ fn enqueueJobForEntry(
 ) bool {
     const q = entry.queue;
     if (q.subscriberCount() == 0) {
+        self.logger.err().logf(
+            "zero-subscriber queue remained in sub_map during enqueue: sub_id={}",
+            .{entry.sub_id},
+        );
         job_type.deinit(self.allocator);
         return false;
     }
@@ -786,6 +790,10 @@ fn handleCommitMsg(self: *RuntimeContext, msg: types.CommitMsg) void {
         },
         .payload => |p| {
             if (q.subscriberCount() == 0) {
+                self.logger.err().logf(
+                    "zero-subscriber queue remained in sub_map during commit: sub_id={}",
+                    .{msg.sub_id},
+                );
                 releasePayload(self, p);
                 return;
             }

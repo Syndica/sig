@@ -15,6 +15,10 @@ const Id = sig.rpc.request.Id;
 const WsRequest = ws_request.WsRequest;
 
 const ErrorCode = protocol.ErrorCode;
+const SubscribeError = error{
+    DuplicateSubscription,
+    Internal,
+};
 
 /// Per-subscription state: tracks next read position in a queue.
 pub const SubState = struct {
@@ -238,7 +242,18 @@ pub const JRPCHandler = struct {
         };
 
         if (SubReqKey.fromMethod(&request.method)) |key| {
-            self.handleSubscribe(id, &key);
+            self.handleSubscribe(id, &key) catch |err| switch (err) {
+                error.DuplicateSubscription => {
+                    self.sendErrorResponse(
+                        id,
+                        ErrorCode.invalid_params,
+                        "duplicate subscription",
+                    );
+                },
+                error.Internal => {
+                    self.sendInternalError(id);
+                },
+            };
             return;
         }
 
@@ -306,57 +321,50 @@ pub const JRPCHandler = struct {
         self: *JRPCHandler,
         request_id: Id,
         key: *const SubReqKey,
-    ) void {
+    ) SubscribeError!void {
         self.ctx.metrics.subscribe_requests += 1;
 
         const result = self.ctx.sub_map.getOrCreate(key) catch |err| {
             log.warn("subscribe getOrCreate failed: {}", .{err});
-            self.sendInternalError(request_id);
-            return;
+            return error.Internal;
         };
+        const q = result.queue;
+        const next_index = q.head + 1;
+        errdefer self.ctx.maybeRemoveIdleQueue(result.sub_id, q);
 
         // Duplicate check: same sub_id means same SubReqKey
         // already active.
         for (self.active_subs.items) |s| {
             if (s.sub_id == result.sub_id) {
                 log.debug("duplicate subscription request for sub_id={d}", .{result.sub_id});
-                self.sendErrorResponse(
-                    request_id,
-                    ErrorCode.invalid_params,
-                    "duplicate subscription",
-                );
-                return;
+                return error.DuplicateSubscription;
             }
         }
 
-        const q = result.queue;
-
         q.addSubscriber(self) catch |err| {
             log.warn("subscribe addSubscriber failed: {}", .{err});
-            self.sendInternalError(request_id);
-            return;
+            return error.Internal;
         };
+        errdefer q.removeSubscriber(self, next_index);
 
-        // Future-only delivery: start at head + 1.
         self.active_subs.append(self.allocator, .{
             .sub_id = result.sub_id,
             .queue = q,
-            .next_index = q.head + 1,
+            .next_index = next_index,
         }) catch |err| {
             log.warn("subscribe active_subs append failed: {}", .{err});
-            q.removeSubscriber(self, q.head + 1);
-            self.sendInternalError(request_id);
-            return;
+            return error.Internal;
         };
+        errdefer _ = self.active_subs.pop();
 
         protocol.serializeSubscribeResponse(
             &self.send_state.response_buf,
             self.allocator,
             request_id,
             result.sub_id,
-        ) catch {
-            log.warn("failed to serialize subscribe response", .{});
-            return;
+        ) catch |err| {
+            log.warn("failed to serialize subscribe response: {}", .{err});
+            return error.Internal;
         };
         self.responseReadyAndSend();
     }
