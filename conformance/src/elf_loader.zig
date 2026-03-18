@@ -17,8 +17,6 @@ export fn sol_compat_elf_loader_v2(
     errdefer |err| std.debug.panic("err: {s}", .{@errorName(err)});
     const allocator = std.heap.c_allocator;
 
-    _ = &allocator;
-
     // zig_protobuf leaks sometimes on invalid input, so we just work around with by using an arena
     var decode_arena = std.heap.ArenaAllocator.init(allocator);
     defer decode_arena.deinit();

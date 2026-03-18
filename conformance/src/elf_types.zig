@@ -61,36 +61,50 @@ pub const ELFLoaderEffects = struct {
 
     /// Encode an ELFLoaderEffects into a 72-byte FlatBuffer.
     pub fn encode(self: *const ELFLoaderEffects) [buf_size]u8 {
-        var buf: [buf_size]u8 = template;
+        const meta: EncodeMeta = .{
+            .rodata_hash = self.rodata.len != 0,
+            .calldests_hash = self.calldests.items.len != 0,
+        };
+        var buf: [buf_size]u8 = template(meta);
 
         buf[28] = @truncate(@as(u32, @bitCast(self.@"error")));
-        writeInt(u64, buf[32..40], xxhash(0, self.rodata), .little);
+        if (meta.rodata_hash) {
+            writeInt(u64, buf[32..40], xxhash(0, self.rodata), .little);
+        }
         writeInt(u64, buf[40..48], self.text_cnt, .little);
         writeInt(u64, buf[48..56], self.text_off, .little);
         writeInt(u64, buf[56..64], self.entry_pc, .little);
-        writeInt(u64, buf[64..72], xxhash(0, std.mem.sliceAsBytes(self.calldests.items)), .little);
+        if (meta.calldests_hash) {
+            const calldests_bytes = std.mem.sliceAsBytes(self.calldests.items);
+            writeInt(u64, buf[64..72], xxhash(0, calldests_bytes), .little);
+        }
 
         return buf;
     }
 
-    const template: [buf_size]u8 = blk: {
-        var buf = [_]u8{0} ** buf_size;
+    const EncodeMeta = struct {
+        rodata_hash: bool,
+        calldests_hash: bool,
+    };
+
+    inline fn template(meta: EncodeMeta) [buf_size]u8 {
+        var buf: [buf_size]u8 = @splat(0);
         // root offset: table at byte 24
         writeInt(u32, buf[0..4], 24, .little);
         // vtable (bytes 4..20): vt_size, table_size, 6 field offsets
         writeInt(u16, buf[4..6], 16, .little); // vt_size  (2+2+6*2 = 16)
         writeInt(u16, buf[6..8], 48, .little); // table inline size
         writeInt(u16, buf[8..10], 4, .little); // field 0: err_code
-        writeInt(u16, buf[10..12], 8, .little); // field 1: rodata_hash
+        writeInt(u16, buf[10..12], if (meta.rodata_hash) 8 else 0, .little); // field 1: rodata_hash
         writeInt(u16, buf[12..14], 16, .little); // field 2: text_cnt
         writeInt(u16, buf[14..16], 24, .little); // field 3: text_off
         writeInt(u16, buf[16..18], 32, .little); // field 4: entry_pc
-        writeInt(u16, buf[18..20], 40, .little); // field 5: calldests_hash
+        writeInt(u16, buf[18..20], if (meta.calldests_hash) 40 else 0, .little); // field 5: calldests_hash
         // bytes 20..24: padding (already zero)
         // soffset: table_pos(24) - vtable_pos(4) = 20
         writeInt(i32, buf[24..28], 20, .little);
-        break :blk buf;
-    };
+        return buf;
+    }
 };
 
 pub const FeatureSet = struct {
