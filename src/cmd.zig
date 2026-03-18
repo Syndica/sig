@@ -608,6 +608,7 @@ const Cmd = struct {
         force_unpack_snapshot: bool,
         skip_snapshot_validation: bool,
         dbg_db_init: bool,
+        rpc_enable_owner_index: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .n_threads_snapshot_load = .{
@@ -654,6 +655,17 @@ const Cmd = struct {
                 \\subsequent runs: copies accounts.db.init -> accounts.db, skipping db population.
                 ,
             },
+            .rpc_enable_owner_index = .{
+                .kind = .named,
+                .name_override = "rpc-enable-owner-index",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "create an index on the owner column of accounts DB, speeding up " ++
+                    "RPC calls that filter by owner at the cost of increased storage and " ++
+                    "slower writes. When disabled, the RPC calls fallback to a full " ++
+                    "table scan - default: false",
+            },
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
@@ -662,6 +674,7 @@ const Cmd = struct {
             cfg.accounts_db.force_unpack_snapshot = args.force_unpack_snapshot;
             cfg.accounts_db.skip_snapshot_validation = args.skip_snapshot_validation;
             cfg.accounts_db.dbg_db_init = args.dbg_db_init;
+            cfg.accounts_db.rpc_enable_owner_index = args.rpc_enable_owner_index;
         }
     };
     const AccountsDbArgumentsDownload = struct {
@@ -1597,7 +1610,10 @@ fn validator(
     else
         false;
 
-    var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
+    var rooted_db: sig.accounts_db.Db.Rooted = try .init(
+        rooted_file,
+        cfg.accounts_db.rpc_enable_owner_index,
+    );
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
 
@@ -1891,7 +1907,10 @@ fn replayOffline(
     else
         false;
 
-    var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
+    var rooted_db: sig.accounts_db.Db.Rooted = try .init(
+        rooted_file,
+        cfg.accounts_db.rpc_enable_owner_index,
+    );
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
 
@@ -2294,12 +2313,18 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         allocator.destroy(geyser);
     };
 
-    const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
+    const snapshot_files = try SnapshotFiles.find(
+        allocator,
+        snapshot_dir,
+    );
 
     const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
     defer allocator.free(rooted_file);
 
-    var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
+    var rooted_db: sig.accounts_db.Db.Rooted = try .init(
+        rooted_file,
+        cfg.accounts_db.rpc_enable_owner_index,
+    );
     defer rooted_db.deinit();
 
     var loaded_snapshot = try loadSnapshot(
