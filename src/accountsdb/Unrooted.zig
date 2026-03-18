@@ -95,7 +95,17 @@ pub fn put(
     entry.is_empty.store(false, .release);
 }
 
-/// Like `get`, but returns an account with caller-owned data (allocates and copies out the account).
+/// Like `get`, but returns an account with caller-owned data (allocates and
+/// copies out the account).
+///
+/// Uses a two-phase approach to avoid cloning on every candidate slot:
+/// 1. Scan all indices to find the best (highest) slot containing the address.
+/// 2. Re-lock the winning index and clone once.
+///
+/// If the winning index was modified between phases (e.g. pruned by
+/// `onSlotRooted`), the scan is retried. Retries are bounded to avoid
+/// unbounded looping. If exhausted, returns null (caller falls through
+/// to rooted storage).
 pub fn getOwned(
     self: *Unrooted,
     allocator: std.mem.Allocator,
@@ -105,31 +115,47 @@ pub fn getOwned(
     const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.getOwned" });
     defer zone.deinit();
 
-    var n_gets: u32 = 0;
-    defer zone.value(n_gets);
+    var retries: u32 = 0;
+    defer zone.value(retries);
 
-    var best_slot: Slot = 0;
-    var result: ?Account = null;
-    errdefer if (result) |*prev| prev.deinit(allocator);
+    for (0..10) |_| {
+        var best_slot: Slot = 0;
+        var best_index: ?*SlotIndex = null;
 
-    for (self.slots) |*index| {
-        if (index.is_empty.load(.acquire)) continue;
+        // Scan to find which index has the best slot (same as get()).
+        for (self.slots) |*index| {
+            if (index.is_empty.load(.acquire)) continue;
 
+            index.lock.lockShared();
+            defer index.lock.unlockShared();
+
+            if (index.slot >= best_slot and ancestors.containsSlot(index.slot)) {
+                if (index.entries.contains(address)) {
+                    best_index = index;
+                    best_slot = index.slot;
+                }
+            }
+        }
+
+        // re-lock the winner and clone.
+        const index = best_index orelse return null;
         index.lock.lockShared();
         defer index.lock.unlockShared();
 
-        if (index.slot >= best_slot and ancestors.containsSlot(index.slot)) {
-            n_gets += 1;
-            const data = index.entries.get(address) orelse continue;
-            // Free previous clone if we found a better slot.
-            if (result) |*prev| prev.deinit(allocator);
-            // Clone data while still holding the shared lock.
-            result = (try data.clone(allocator)).toOwnedAccount();
-            best_slot = index.slot;
+        // If the slot was pruned/reused between phases, retry the scan.
+        if (index.is_empty.load(.acquire) or index.slot != best_slot) {
+            retries += 1;
+            continue;
         }
+        const data = index.entries.get(address) orelse {
+            retries += 1;
+            continue;
+        };
+        return (try data.clone(allocator)).toOwnedAccount();
     }
 
-    return result;
+    // Exhausted retries, slot keeps getting pruned/reused underneath us.
+    return null;
 }
 
 /// Gets the latest state of the account keyed by `address` visible to the given ancestor set.
