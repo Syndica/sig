@@ -2,7 +2,6 @@ const std = @import("std");
 
 const helpers = @import("support/test_helpers.zig");
 const Pubkey = helpers.Pubkey;
-const Signature = helpers.Signature;
 const TestClient = helpers.TestClient;
 const TestClientEnv = helpers.TestClientEnv;
 const TestClientHandler = helpers.TestClientHandler;
@@ -96,24 +95,6 @@ test "client subscribes to account, receives notification, unsubscribes" {
     );
 
     runBothLoops(server, &client_env, &handler, 100);
-}
-
-test "client subscribes to logs, receives notification, unsubscribes" {
-    var sig_bytes: [64]u8 = undefined;
-    @memset(&sig_bytes, 0xBE);
-
-    try subNotifUnsubTest(
-        \\{"jsonrpc":"2.0","id":1,"method":"logsSubscribe","params":["all"]}
-    ,
-        \\{"jsonrpc":"2.0","id":2,"method":"logsUnsubscribe","params":[1]}
-    ,
-        .{ .logs = .{
-            .signature = Signature.fromBytes(sig_bytes),
-            .num_logs = 3,
-            .slot = 77,
-        } },
-        &.{ "\"log line 0\"", "\"log line 1\"", "\"log line 2\"", "\"slot\":77" },
-    );
 }
 
 test "no notifications after unsubscribe" {

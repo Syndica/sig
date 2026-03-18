@@ -320,9 +320,8 @@ fn handleInboundEvent(
     defer e.deinit(self.inbound_event_queue.allocator);
 
     switch (e) {
-        .logs => |logs_data| {
-            // TODO: actual log events and logsSubscribe handling (this placeholder)
-            self.enqueueKindMatchedJobs(.logs, .{ .logs = logs_data }, task_batch);
+        .logs => {
+            // TODO: actual log events and logsSubscribe handling (this is placeholder)
         },
         .slot_frozen => |*slot_data| {
             const transition = self.slot_state_cache.onSlotFrozen(
@@ -587,24 +586,6 @@ fn deletedAccountPlaceholder() sig.core.Account {
         .executable = false,
         .rent_epoch = 0,
     };
-}
-
-// Used when the inbound event already has the final notification payload shape for a subscription kind.
-fn enqueueKindMatchedJobs(
-    self: *RuntimeContext,
-    kind: types.SubscriptionKind,
-    job_type: types.SerializeJob.JobType,
-    task_batch: *ThreadPool.Batch,
-) void {
-    var enqueued = false;
-    for (self.sub_map.entries.items) |entry| {
-        if (entry.key.method == kind) {
-            enqueued = self.enqueueJobForEntry(entry, job_type, task_batch) or enqueued;
-        }
-    }
-    if (!enqueued) {
-        job_type.deinit(self.allocator);
-    }
 }
 
 /// programSubscribe publishes from the cached modified accounts for one slot once that slot

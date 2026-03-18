@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const helpers = @import("support/test_helpers.zig");
-const Signature = helpers.Signature;
 const TestClient = helpers.TestClient;
 const TestClientEnv = helpers.TestClientEnv;
 const TestClientHandler = helpers.TestClientHandler;
@@ -28,7 +27,7 @@ test "multiple clients receive independent notifications" {
     var handler2 = TestClientHandler.init(allocator);
     defer handler2.deinit();
     handler2.queueSend(
-        \\{"jsonrpc":"2.0","id":1,"method":"logsSubscribe","params":["all"]}
+        \\{"jsonrpc":"2.0","id":1,"method":"rootSubscribe","params":[]}
     );
     handler2.close_after = 3;
 
@@ -70,14 +69,7 @@ test "multiple clients receive independent notifications" {
     };
 
     server.injectEvent(.{ .slot_frozen = .{ .slot = 200, .parent = 199, .root = 168 } });
-
-    var sig_bytes: [64]u8 = undefined;
-    @memset(&sig_bytes, 0xAB);
-    server.injectEvent(.{ .logs = .{
-        .signature = Signature.fromBytes(sig_bytes),
-        .num_logs = 1,
-        .slot = 201,
-    } });
+    server.injectEvent(.{ .slot_rooted = 201 });
 
     const deadline_notif = @as(u64, @intCast(std.time.milliTimestamp())) + 5000;
     while (@as(u64, @intCast(std.time.milliTimestamp())) < deadline_notif) {
@@ -97,8 +89,7 @@ test "multiple clients receive independent notifications" {
     try std.testing.expect(std.mem.indexOf(u8, notif1, "\"slot\":200") != null);
 
     const notif2 = handler2.received.items[1];
-    try std.testing.expect(std.mem.indexOf(u8, notif2, "\"log line 0\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif2, "\"slot\":201") != null);
+    try std.testing.expect(std.mem.indexOf(u8, notif2, "\"result\":201") != null);
 
     handler1.queueSendNow(switch (sub_id1) {
         1 =>
@@ -111,10 +102,10 @@ test "multiple clients receive independent notifications" {
     });
     handler2.queueSendNow(switch (sub_id2) {
         1 =>
-        \\{"jsonrpc":"2.0","id":2,"method":"logsUnsubscribe","params":[1]}
+        \\{"jsonrpc":"2.0","id":2,"method":"rootUnsubscribe","params":[1]}
         ,
         2 =>
-        \\{"jsonrpc":"2.0","id":2,"method":"logsUnsubscribe","params":[2]}
+        \\{"jsonrpc":"2.0","id":2,"method":"rootUnsubscribe","params":[2]}
         ,
         else => return error.TestUnexpectedResult,
     });
