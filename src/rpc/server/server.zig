@@ -5,6 +5,7 @@
 //! and any other internal code.
 
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../../sig.zig");
 
 pub const connection = @import("connection.zig");
@@ -111,6 +112,7 @@ pub fn serve(
     /// The pool to dispatch work to.
     work_pool: WorkPool,
 ) ServeError!void {
+    tracy.setThreadName("RPC");
     while (!exit.load(.acquire)) {
         switch (work_pool) {
             .basic => try basic.acceptAndServeConnection(ctx),
@@ -128,7 +130,7 @@ test "serveSpawn hook missing" {
     var rpc_hooks = sig.rpc.Hooks{};
     defer rpc_hooks.deinit(allocator);
 
-    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -170,19 +172,19 @@ test "serveSpawn hook alloc" {
             gpa: std.mem.Allocator,
             _: anytype,
         ) !sig.rpc.methods.GetLeaderSchedule.Response {
-            var resp: sig.rpc.methods.GetLeaderSchedule.Response = .{ .value = .{} };
-            errdefer resp.value.deinit(gpa);
+            var map = sig.utils.collections.PubkeyMap([]const u64){};
+            errdefer map.deinit(gpa);
 
             const buf = try gpa.alloc(u64, 4);
             errdefer gpa.free(buf);
             @memset(buf, 42);
 
-            try resp.value.put(gpa, sig.core.Pubkey.ZEROES, buf);
-            return resp;
+            try map.put(gpa, sig.core.Pubkey.ZEROES, buf);
+            return .{ .value = map };
         }
     }{});
 
-    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -208,7 +210,7 @@ test "serveSpawn hook alloc" {
         allocator.free(resp_str);
     }
 
-    const res = try resp_json.result();
+    const res = (try resp_json.result()).?;
     var it = res.value.iterator();
     const entry = it.next().?;
     try std.testing.expectEqual(entry.key_ptr.*, sig.core.Pubkey.ZEROES);
@@ -244,7 +246,7 @@ test "serveSpawn getSnapshot missing" {
         }
     }{});
 
-    const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -584,4 +586,364 @@ fn testHttpFetchSelf(
     }
 
     return response_content;
+}
+
+test "HTTP GET /health returns ok when hook returns ok status" {
+    if (sig.build_options.no_network_tests) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const logger_unscoped: Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
+
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+
+    // Hook that returns healthy status
+    try rpc_hooks.set(allocator, struct {
+        pub fn getHealth(
+            _: anytype,
+            _: std.mem.Allocator,
+            _: sig.rpc.methods.GetHealth,
+        ) !sig.rpc.methods.GetHealth.Response {
+            return .ok;
+        }
+    }{});
+
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
+    var server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = &rpc_hooks,
+        .socket_addr = sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    var exit = std.atomic.Value(bool).init(false);
+    const serve_thread = try serveSpawn(&exit, &server_ctx, .basic);
+    defer serve_thread.join();
+    defer exit.store(true, .release);
+
+    const localhost_url_bounded = sig.utils.fmt.boundedFmt(
+        "http://localhost:{d}/health",
+        .{server_ctx.tcp.listen_address.getPort()},
+    );
+    const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
+
+    const resp_body = try testHttpFetchSelf(allocator, .GET, localhost_url, .{});
+    defer allocator.free(resp_body);
+
+    try std.testing.expectEqualStrings("ok", resp_body);
+}
+
+test "HTTP GET /health returns behind when hook returns behind status" {
+    if (sig.build_options.no_network_tests) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const logger_unscoped: Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
+
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+
+    // Hook that returns behind status
+    try rpc_hooks.set(allocator, struct {
+        pub fn getHealth(
+            _: anytype,
+            _: std.mem.Allocator,
+            _: sig.rpc.methods.GetHealth,
+        ) !sig.rpc.methods.GetHealth.Response {
+            return .{ .behind = 42 };
+        }
+    }{});
+
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
+    var server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = &rpc_hooks,
+        .socket_addr = sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    var exit = std.atomic.Value(bool).init(false);
+    const serve_thread = try serveSpawn(&exit, &server_ctx, .basic);
+    defer serve_thread.join();
+    defer exit.store(true, .release);
+
+    const localhost_url_bounded = sig.utils.fmt.boundedFmt(
+        "http://localhost:{d}/health",
+        .{server_ctx.tcp.listen_address.getPort()},
+    );
+    const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
+
+    const resp_body = try testHttpFetchSelf(allocator, .GET, localhost_url, .{});
+    defer allocator.free(resp_body);
+
+    try std.testing.expectEqualStrings("behind", resp_body);
+}
+
+test "HTTP GET /health returns unknown when hook returns unknown status" {
+    if (sig.build_options.no_network_tests) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+
+    const logger_unscoped: Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
+
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+
+    // Hook that returns unknown status
+    try rpc_hooks.set(allocator, struct {
+        pub fn getHealth(
+            _: anytype,
+            _: std.mem.Allocator,
+            _: sig.rpc.methods.GetHealth,
+        ) !sig.rpc.methods.GetHealth.Response {
+            return .unknown;
+        }
+    }{});
+
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
+    var server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = &rpc_hooks,
+        .socket_addr = sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    var exit = std.atomic.Value(bool).init(false);
+    const serve_thread = try serveSpawn(&exit, &server_ctx, .basic);
+    defer serve_thread.join();
+    defer exit.store(true, .release);
+
+    const localhost_url_bounded = sig.utils.fmt.boundedFmt(
+        "http://localhost:{d}/health",
+        .{server_ctx.tcp.listen_address.getPort()},
+    );
+    const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
+
+    const resp_body = try testHttpFetchSelf(allocator, .GET, localhost_url, .{});
+    defer allocator.free(resp_body);
+
+    try std.testing.expectEqualStrings("unknown", resp_body);
+}
+
+test "JSON-RPC POST getHealth returns ok result" {
+    const allocator = std.testing.allocator;
+    const logger_unscoped: Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
+
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+
+    // Hook that returns healthy status
+    try rpc_hooks.set(allocator, struct {
+        pub fn getHealth(
+            _: anytype,
+            _: std.mem.Allocator,
+            _: sig.rpc.methods.GetHealth,
+        ) !sig.rpc.methods.GetHealth.Response {
+            return .ok;
+        }
+    }{});
+
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
+    var server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = &rpc_hooks,
+        .socket_addr = sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    var exit = std.atomic.Value(bool).init(false);
+    const serve_thread = try serveSpawn(&exit, &server_ctx, .basic);
+    defer serve_thread.join();
+    defer exit.store(true, .release);
+
+    const localhost_url_bounded = sig.utils.fmt.boundedFmt(
+        "http://localhost:{d}/",
+        .{server_ctx.tcp.listen_address.getPort()},
+    );
+    const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
+
+    const request_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"getHealth","params":[]}
+    ;
+
+    const resp_str = try testHttpFetchSelf(allocator, .POST, localhost_url, .{
+        .body = request_body,
+        .headers = .{
+            .content_type = .{ .override = "application/json" },
+        },
+    });
+    defer allocator.free(resp_str);
+
+    // Parse and verify the response has "ok" as result
+    const parsed = try std.json.parseFromSlice(struct {
+        jsonrpc: []const u8,
+        id: ?u32 = null,
+        result: []const u8,
+    }, allocator, resp_str, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("ok", parsed.value.result);
+}
+
+test "JSON-RPC POST getHealth returns error for unknown status" {
+    const allocator = std.testing.allocator;
+    const logger_unscoped: Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
+
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+
+    // Hook that returns unknown status
+    try rpc_hooks.set(allocator, struct {
+        pub fn getHealth(
+            _: anytype,
+            _: std.mem.Allocator,
+            _: sig.rpc.methods.GetHealth,
+        ) !sig.rpc.methods.GetHealth.Response {
+            return .unknown;
+        }
+    }{});
+
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
+    var server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = &rpc_hooks,
+        .socket_addr = sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    var exit = std.atomic.Value(bool).init(false);
+    const serve_thread = try serveSpawn(&exit, &server_ctx, .basic);
+    defer serve_thread.join();
+    defer exit.store(true, .release);
+
+    const localhost_url_bounded = sig.utils.fmt.boundedFmt(
+        "http://localhost:{d}/",
+        .{server_ctx.tcp.listen_address.getPort()},
+    );
+    const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
+
+    const request_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"getHealth","params":[]}
+    ;
+
+    const resp_str = try testHttpFetchSelf(allocator, .POST, localhost_url, .{
+        .body = request_body,
+        .headers = .{
+            .content_type = .{ .override = "application/json" },
+        },
+    });
+    defer allocator.free(resp_str);
+
+    // Parse and verify the response has error code -32005 (NodeUnhealthy)
+    const parsed = try std.json.parseFromSlice(struct {
+        jsonrpc: []const u8,
+        id: ?u32 = null,
+        @"error": struct {
+            code: i64,
+            message: []const u8,
+            data: ?struct {
+                numSlotsBehind: ?u64 = null,
+            } = null,
+        },
+    }, allocator, resp_str, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(@as(i64, -32005), parsed.value.@"error".code);
+    try std.testing.expectEqualStrings("Node is unhealthy", parsed.value.@"error".message);
+    if (parsed.value.@"error".data) |data| {
+        try std.testing.expectEqual(@as(?u64, null), data.numSlotsBehind);
+    }
+}
+
+test "JSON-RPC POST getHealth returns error for behind status" {
+    const allocator = std.testing.allocator;
+    const logger_unscoped: Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
+
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+
+    // Hook that returns behind status
+    try rpc_hooks.set(allocator, struct {
+        pub fn getHealth(
+            _: anytype,
+            _: std.mem.Allocator,
+            _: sig.rpc.methods.GetHealth,
+        ) !sig.rpc.methods.GetHealth.Response {
+            return .{ .behind = 100 };
+        }
+    }{});
+
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
+    var server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = &rpc_hooks,
+        .socket_addr = sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    var exit = std.atomic.Value(bool).init(false);
+    const serve_thread = try serveSpawn(&exit, &server_ctx, .basic);
+    defer serve_thread.join();
+    defer exit.store(true, .release);
+
+    const localhost_url_bounded = sig.utils.fmt.boundedFmt(
+        "http://localhost:{d}/",
+        .{server_ctx.tcp.listen_address.getPort()},
+    );
+    const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
+
+    const request_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"getHealth","params":[]}
+    ;
+
+    const resp_str = try testHttpFetchSelf(allocator, .POST, localhost_url, .{
+        .body = request_body,
+        .headers = .{
+            .content_type = .{ .override = "application/json" },
+        },
+    });
+    defer allocator.free(resp_str);
+
+    // Parse and verify the response has error code -32005 (NodeUnhealthy) with slots behind
+    const parsed = try std.json.parseFromSlice(struct {
+        jsonrpc: []const u8,
+        id: ?u32 = null,
+        @"error": struct {
+            code: i64,
+            message: []const u8,
+            data: ?struct {
+                numSlotsBehind: ?u64 = null,
+            } = null,
+        },
+    }, allocator, resp_str, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(@as(i64, -32005), parsed.value.@"error".code);
+    try std.testing.expectEqualStrings("Node is behind by 100 slots", parsed.value.@"error".message);
+    if (parsed.value.@"error".data) |data| {
+        try std.testing.expectEqual(@as(?u64, 100), data.numSlotsBehind);
+    }
 }

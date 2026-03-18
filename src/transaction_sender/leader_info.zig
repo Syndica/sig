@@ -207,7 +207,8 @@ pub const LeaderInfo = struct {
         const rpc_leader_schedule_response = try self.rpc_client
             .getLeaderSchedule(.{ .slot = slot });
         defer rpc_leader_schedule_response.deinit();
-        const rpc_leader_schedule = try rpc_leader_schedule_response.result();
+        const rpc_leader_schedule = (try rpc_leader_schedule_response.result()) orelse
+            return error.LeaderScheduleNotAvailable;
         return try sig.core.leader_schedule.computeFromMap(
             self.allocator,
             &rpc_leader_schedule.value,

@@ -13,6 +13,7 @@ if __name__ == "__main__":
     exclude_dirs = [
         os.path.join(args.src_dir, "docs"), # dont search yourself
         os.path.join(args.src_dir, "data"), # this should only include data
+        os.path.join(args.src_dir, "workspace"), # CI workspace (e.g. zig toolchain), not source
     ]
 
     doc_dir_path = os.path.join(args.src_dir, "docs/docusaurus/docs")

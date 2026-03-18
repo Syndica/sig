@@ -24,6 +24,7 @@ const Slot = sig.core.Slot;
 const ClientVersion = sig.version.ClientVersion;
 
 const account_codec = sig.rpc.account_codec;
+const filters = sig.rpc.filters;
 
 pub fn Result(comptime method: MethodAndParams.Tag) type {
     return union(enum) {
@@ -45,14 +46,14 @@ pub const MethodAndParams = union(enum) {
     getBlock: GetBlock,
     getBlockCommitment: GetBlockCommitment,
     getBlockHeight: GetBlockHeight,
-    getBlockProduction: noreturn,
+    getBlockProduction: GetBlockProduction,
     getBlocks: GetBlocks,
     getBlocksWithLimit: GetBlocksWithLimit,
     getBlockTime: noreturn,
     getClusterNodes: GetClusterNodes,
     getEpochInfo: GetEpochInfo,
     getEpochSchedule: GetEpochSchedule,
-    getFeeForMessage: noreturn,
+    getFeeForMessage: GetFeeForMessage,
     getFirstAvailableBlock: noreturn,
 
     /// https://github.com/Syndica/sig/issues/557
@@ -64,25 +65,25 @@ pub const MethodAndParams = union(enum) {
 
     getHighestSnapshotSlot: GetHighestSnapshotSlot,
     getIdentity: GetIdentity,
-    getInflationGovernor: noreturn,
-    getInflationRate: noreturn,
-    getInflationReward: noreturn,
+    getInflationGovernor: GetInflationGovernor,
+    getInflationRate: GetInflationRate,
+    getInflationReward: GetInflationReward,
     getLargestAccounts: noreturn,
     getLatestBlockhash: GetLatestBlockhash,
     getLeaderSchedule: GetLeaderSchedule,
     getMaxRetransmitSlot: noreturn,
     getMaxShredInsertSlot: noreturn,
-    getMinimumBalanceForRentExemption: noreturn,
+    getMinimumBalanceForRentExemption: GetMinimumBalanceForRentExemption,
     getMultipleAccounts: GetMultipleAccounts,
-    getProgramAccounts: noreturn,
-    getRecentPerformanceSamples: noreturn,
-    getRecentPrioritizationFees: noreturn,
+    getRecentPerformanceSamples: GetRecentPerformanceSamples,
+    getRecentPrioritizationFees: GetRecentPrioritizationFees,
+    getProgramAccounts: GetProgramAccounts,
     getSignaturesForAddress: GetSignaturesForAddress,
     getSignatureStatuses: GetSignatureStatuses,
     getSlot: GetSlot,
-    getSlotLeader: noreturn,
-    getSlotLeaders: noreturn,
-    getStakeMinimumDelegation: noreturn,
+    getSlotLeader: GetSlotLeader,
+    getSlotLeaders: GetSlotLeaders,
+    getStakeMinimumDelegation: GetStakeMinimumDelegation,
     getSupply: noreturn,
     getTokenAccountBalance: GetTokenAccountBalance,
     getTokenAccountsByDelegate: noreturn,
@@ -201,7 +202,53 @@ pub const GetAccountInfo = struct {
             owner: Pubkey,
             rentEpoch: u64,
             space: u64,
+
+            pub fn from(
+                account: sig.core.Account,
+                data: account_codec.AccountData,
+            ) Value {
+                return .{
+                    .data = data,
+                    .executable = account.executable,
+                    .lamports = account.lamports,
+                    .owner = account.owner,
+                    .rentEpoch = account.rent_epoch,
+                    .space = account.data.len(),
+                };
+            }
         };
+    };
+};
+
+pub const GetProgramAccounts = struct {
+    program_id: Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        filters: ?[]const filters.RpcFilterType = null,
+        encoding: ?common.AccountEncoding = null,
+        dataSlice: ?common.DataSlice = null,
+        commitment: ?common.Commitment = null,
+        minContextSlot: ?u64 = null,
+        withContext: ?bool = null,
+        sortResults: ?bool = null,
+    };
+
+    pub const Value = struct { pubkey: Pubkey, account: GetAccountInfo.Response.Value };
+
+    pub const Response = union(enum) {
+        list: []const Value,
+        context: struct {
+            context: common.Context,
+            value: []const Value,
+        },
+
+        pub fn jsonStringify(self: Response, jw: anytype) @TypeOf(jw.*).Error!void {
+            switch (self) {
+                .list => |list| try jw.write(list),
+                .context => |ctx| try jw.write(ctx),
+            }
+        }
     };
 };
 
@@ -216,21 +263,21 @@ pub const GetBalance = struct {
 };
 
 pub const GetHealth = struct {
-    pub const Response = union(enum) {
-        ok,
-        err: struct {}, // TODO: Our implementation-specifc error information
+    /// Response carries the health status of the node.
+    ///
+    /// When healthy, the JSON-RPC response is: `{"result": "ok"}`
+    /// When unhealthy, the JSON-RPC response is an error:
+    ///   `{"error": {"code": -32005, "message": "...", "data": {"numSlotsBehind": ...}}}`
+    ///
+    /// The HTTP GET /health endpoint always returns 200 with "ok", "behind", or "unknown".
+    ///
+    /// See agave: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2806-L2818
+    /// See agave: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-api/src/custom_error.rs#L49-L50
+    pub const Response = RpcHealthStatus;
 
-        pub fn jsonStringify(
-            self: Response,
-            /// `*std.json.WriteStream(...)`
-            jw: anytype,
-        ) !void {
-            switch (self) {
-                .ok => try jw.write("ok"),
-                .err => |e| try jw.write(e),
-            }
-        }
-    };
+    /// JSON-RPC error code for NodeUnhealthy, matching agave's JSON_RPC_SERVER_ERROR_NODE_UNHEALTHY.
+    /// See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-api/src/custom_error.rs#L16
+    pub const node_unhealthy_code: i64 = -32005;
 };
 
 pub const GetBlock = struct {
@@ -344,6 +391,10 @@ pub const GetBlock = struct {
             }
             try jw.objectField("blockhash");
             try jw.write(self.blockhash);
+            if (self.numRewardPartitions) |npw| {
+                try jw.objectField("numRewardPartitions");
+                try jw.write(npw);
+            }
             try jw.objectField("parentSlot");
             try jw.write(self.parentSlot);
             try jw.objectField("previousBlockhash");
@@ -844,7 +895,52 @@ pub const GetBlockHeight = struct {
     pub const Response = u64;
 };
 
-// TODO: getBlockProduction
+pub const GetBlockProduction = struct {
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        /// Filter results to a single validator identity (base-58 encoded pubkey)
+        identity: ?[]const u8 = null,
+        range: ?Range = null,
+    };
+
+    pub const Range = struct {
+        firstSlot: Slot,
+        lastSlot: ?Slot = null,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        value: Value,
+    };
+
+    pub const Value = struct {
+        byIdentity: ByIdentity,
+        range: ResponseRange,
+    };
+
+    pub const ResponseRange = struct {
+        firstSlot: Slot,
+        lastSlot: Slot,
+    };
+
+    /// Map of base58 pubkey string -> [leader_slots, blocks_produced]
+    pub const ByIdentity = struct {
+        map: sig.utils.collections.PubkeyMap(struct { u64, u64 }),
+
+        pub fn jsonStringify(self: ByIdentity, jw: anytype) !void {
+            try jw.beginObject();
+            for (self.map.keys(), self.map.values()) |key, value| {
+                const base58string = key.base58String();
+                try jw.objectField(base58string.constSlice());
+                try jw.write(value);
+            }
+            try jw.endObject();
+        }
+    };
+};
+
 // TODO: getBlockTime
 
 pub const GetBlocks = struct {
@@ -994,6 +1090,24 @@ pub const GetGenesisHash = struct {
 
 // TODO: getHealth
 
+/// [agave] https://github.com/anza-xyz/agave/blob/d70b1714b1153674c16e2b15b68790d274dfe953/rpc/src/rpc.rs#L3580-L3586
+pub const GetFeeForMessage = struct {
+    /// Base64-encoded serialized VersionedMessage
+    message: []const u8,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        minContextSlot: ?Slot = null,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        /// Fee in lamports, or null if the blockhash has expired.
+        value: ?u64,
+    };
+};
+
 pub const GetHighestSnapshotSlot = struct {
     pub const Response = ?SnapshotSlotInfo;
 
@@ -1004,9 +1118,55 @@ pub const GetHighestSnapshotSlot = struct {
 };
 
 // TODO: getIdentity
-// TODO: getInflationGovernor
-// TODO: getInflationRate
-// TODO: getInflationReward
+
+pub const GetInflationReward = struct {
+    addresses: []const Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        epoch: ?u64 = null,
+        minContextSlot: ?Slot = null,
+    };
+
+    pub const Response = []const ?InflationReward;
+
+    pub const InflationReward = struct {
+        epoch: u64,
+        effectiveSlot: Slot,
+        amount: u64,
+        postBalance: u64,
+        commission: ?u8,
+    };
+};
+
+pub const GetInflationGovernor = struct {
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+    };
+
+    pub const Response = struct {
+        initial: f64,
+        terminal: f64,
+        taper: f64,
+        foundation: f64,
+        foundationTerm: f64,
+    };
+};
+
+pub const GetInflationRate = struct {
+    // This RPC method takes no parameters (matches Agave behavior)
+
+    pub const Response = struct {
+        total: f64,
+        validator: f64,
+        foundation: f64,
+        epoch: u64,
+    };
+};
+
 // TODO: getLargeAccounts
 
 pub const GetLatestBlockhash = struct {
@@ -1032,10 +1192,13 @@ pub const GetLeaderSchedule = struct {
         identity: ?[]const u8 = null,
     };
 
-    pub const Response = struct {
+    /// [agave] RpcLeaderSchedule = HashMap<String, Vec<usize>>; returns null when epoch not in cache
+    pub const Response = ?LeaderScheduleValue;
+
+    pub const LeaderScheduleValue = struct {
         value: sig.utils.collections.PubkeyMap([]const u64),
 
-        pub fn deinit(self: Response, allocator: std.mem.Allocator) void {
+        pub fn deinit(self: LeaderScheduleValue, allocator: std.mem.Allocator) void {
             self.value.deinit(allocator);
         }
 
@@ -1043,7 +1206,7 @@ pub const GetLeaderSchedule = struct {
             allocator: std.mem.Allocator,
             source: anytype,
             options: std.json.ParseOptions,
-        ) std.json.ParseError(@TypeOf(source.*))!Response {
+        ) std.json.ParseError(@TypeOf(source.*))!LeaderScheduleValue {
             const json_object = switch (try std.json.Value.jsonParse(allocator, source, options)) {
                 .object => |obj| obj,
                 else => return error.UnexpectedToken,
@@ -1063,7 +1226,7 @@ pub const GetLeaderSchedule = struct {
         }
 
         pub fn jsonStringify(
-            self: Response,
+            self: LeaderScheduleValue,
             /// `*std.json.WriteStream(...)`
             jw: anytype,
         ) !void {
@@ -1082,7 +1245,17 @@ pub const GetLeaderSchedule = struct {
 
 // TODO: getMaxRetransmitSlot
 // TODO: getMaxShredInsertSlot
-// TODO: getMinimumBalanceForRentExemption
+
+/// Returns minimum balance required to make account rent exempt.
+/// https://solana.com/docs/rpc/http/getminimumbalanceforrentexemption
+pub const GetMinimumBalanceForRentExemption = struct {
+    /// The Account's data length
+    data_len: usize,
+    config: ?common.CommitmentSlotConfig = null,
+
+    /// Returns minimum lamports required in account to remain rent free.
+    pub const Response = u64;
+};
 
 pub const GetMultipleAccounts = struct {
     pubkeys: []const Pubkey,
@@ -1098,8 +1271,35 @@ pub const GetMultipleAccounts = struct {
 };
 
 // TODO: getProgramAccounts
-// TODO: getRecentPerformanceSamples
-// TODO: getRecentPrioritizationFees
+
+pub const GetRecentPerformanceSamples = struct {
+    /// Number of samples to return (maximum 720).
+    limit: ?u64 = null,
+
+    pub const max_limit = 720;
+
+    pub const Response = []const RpcPerfSample;
+
+    pub const RpcPerfSample = struct {
+        slot: Slot,
+        numTransactions: u64,
+        numNonVoteTransactions: ?u64,
+        numSlots: u64,
+        samplePeriodSecs: u16,
+    };
+};
+
+pub const GetRecentPrioritizationFees = struct {
+    /// Optional list of up to 128 account pubkeys to filter by.
+    account_keys: ?[]const Pubkey = null,
+
+    pub const Response = []const FeeResult;
+
+    pub const FeeResult = struct {
+        slot: u64,
+        prioritizationFee: u64,
+    };
+};
 
 pub const GetSignatureStatuses = struct {
     signatures: []const Signature,
@@ -1159,10 +1359,36 @@ pub const GetSlot = struct {
     pub const Response = Slot;
 };
 
-// TODO: getSlotLeader
-// TODO: getSlotLeaders
+/// Returns the current slot leader.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L968-L971
+pub const GetSlotLeader = struct {
+    config: ?common.CommitmentSlotConfig = null,
+
+    pub const Response = Pubkey;
+};
+
+/// Returns the slot leaders for a range of slots.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L973-L1007
+/// [agave] MAX_GET_SLOT_LEADERS: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L151
+pub const GetSlotLeaders = struct {
+    start_slot: Slot,
+    limit: u64,
+
+    pub const MAX_GET_SLOT_LEADERS: u64 = 5000;
+    pub const Response = []const Pubkey;
+};
+
 // TODO: getStakeActivation
-// TODO: getStakeMinimumDelegation
+
+pub const GetStakeMinimumDelegation = struct {
+    config: ?common.CommitmentSlotConfig = null,
+
+    pub const Response = struct {
+        context: common.Context,
+        value: u64,
+    };
+};
+
 // TODO: getSupply
 pub const GetTokenAccountBalance = struct {
     pubkey: Pubkey,
@@ -1446,6 +1672,66 @@ pub const common = struct {
         signatures,
         none,
     };
+};
+
+/// Health check status for the RPC node.
+/// Analogous to [RpcHealthStatus](https://github.com/anza-xyz/agave/blob/8803776d/rpc/src/rpc_health.rs#L11-L16)
+pub const RpcHealthStatus = union(enum) {
+    /// Node is healthy
+    ok,
+    /// Cannot determine health (unknown state)
+    unknown,
+    /// Node is behind cluster by specified number of slots
+    behind: u64,
+
+    pub fn eql(self: RpcHealthStatus, other: RpcHealthStatus) bool {
+        return switch (self) {
+            .ok => other == .ok,
+            .unknown => other == .unknown,
+            .behind => |n| switch (other) {
+                .behind => |m| n == m,
+                else => false,
+            },
+        };
+    }
+
+    /// Returns the HTTP /health endpoint response string.
+    /// Agave always returns "ok", "behind", or "unknown" with HTTP 200.
+    /// See: https://github.com/anza-xyz/agave/blob/master/rpc/src/rpc_service.rs#L332-L340
+    pub fn httpStatusString(self: RpcHealthStatus) []const u8 {
+        return switch (self) {
+            .ok => "ok",
+            .behind => "behind",
+            .unknown => "unknown",
+        };
+    }
+
+    /// Custom JSON serialization for the JSON-RPC response.
+    ///
+    /// When healthy, serializes as the string "ok" (the JSON-RPC result value).
+    /// When unhealthy, this should NOT be used directly - the server layer must
+    /// intercept and format it as a JSON-RPC error response with code -32005.
+    pub fn jsonStringify(
+        self: RpcHealthStatus,
+        /// `*std.json.WriteStream(...)`
+        jw: anytype,
+    ) !void {
+        switch (self) {
+            .ok => try jw.write("ok"),
+            // These cases shouldn't be serialized via the normal .result path.
+            // They're handled by the server as JSON-RPC errors.
+            // But if they are serialized, output something reasonable.
+            .unknown => try jw.write("unknown"),
+            .behind => |n| {
+                try jw.beginObject();
+                try jw.objectField("status");
+                try jw.write("behind");
+                try jw.objectField("numSlotsBehind");
+                try jw.write(n);
+                try jw.endObject();
+            },
+        }
+    }
 };
 
 fn JsonSkippable(comptime T: type) type {

@@ -601,6 +601,7 @@ const Cmd = struct {
         force_unpack_snapshot: bool,
         skip_snapshot_validation: bool,
         dbg_db_init: bool,
+        rpc_enable_owner_index: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .n_threads_snapshot_load = .{
@@ -647,6 +648,17 @@ const Cmd = struct {
                 \\subsequent runs: copies accounts.db.init -> accounts.db, skipping db population.
                 ,
             },
+            .rpc_enable_owner_index = .{
+                .kind = .named,
+                .name_override = "rpc-enable-owner-index",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "create an index on the owner column of accounts DB, speeding up " ++
+                    "RPC calls that filter by owner at the cost of increased storage and " ++
+                    "slower writes. When disabled, the RPC calls fallback to a full " ++
+                    "table scan - default: false",
+            },
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
@@ -655,6 +667,7 @@ const Cmd = struct {
             cfg.accounts_db.force_unpack_snapshot = args.force_unpack_snapshot;
             cfg.accounts_db.skip_snapshot_validation = args.skip_snapshot_validation;
             cfg.accounts_db.dbg_db_init = args.dbg_db_init;
+            cfg.accounts_db.rpc_enable_owner_index = args.rpc_enable_owner_index;
         }
     };
     const AccountsDbArgumentsDownload = struct {
@@ -1557,7 +1570,10 @@ fn validator(
     else
         false;
 
-    var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
+    var rooted_db: sig.accounts_db.Db.Rooted = try .init(
+        rooted_file,
+        cfg.accounts_db.rpc_enable_owner_index,
+    );
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
 
@@ -1680,6 +1696,9 @@ fn validator(
     else
         null;
 
+    var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
+    defer prioritization_fee_cache.deinit(allocator);
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db = &new_db },
@@ -1691,23 +1710,33 @@ fn validator(
         .voting_enabled = voting_enabled,
         .vote_account_address = maybe_vote_pubkey,
         .stop_at_slot = cfg.stop_at_slot,
+        .prioritization_fee_cache = &prioritization_fee_cache,
     });
     defer replay_service_state.deinit(allocator);
 
     try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+        .gossip_table_rw = &gossip_service.gossip_table_rw,
+        .my_shred_version = &gossip_service.my_shred_version,
         .epoch_tracker = &epoch_tracker,
     });
 
     try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
         .ledger = &ledger,
-        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+        .epoch_schedule = loaded_snapshot.genesis_config.epoch_schedule,
+        .epoch_tracker = &epoch_tracker,
+        .commitments = &replay_service_state.replay_state.slot_tracker.commitments,
     });
 
     try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
         .account_reader = replay_service_state.replay_state.account_store.reader(),
     });
+
+    try app_base.rpc_hooks.set(
+        allocator,
+        sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
+    );
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
@@ -1838,7 +1867,10 @@ fn replayOffline(
     else
         false;
 
-    var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
+    var rooted_db: sig.accounts_db.Db.Rooted = try .init(
+        rooted_file,
+        cfg.accounts_db.rpc_enable_owner_index,
+    );
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
 
@@ -2174,12 +2206,18 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         allocator.destroy(geyser);
     };
 
-    const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
+    const snapshot_files = try SnapshotFiles.find(
+        allocator,
+        snapshot_dir,
+    );
 
     const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
     defer allocator.free(rooted_file);
 
-    var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
+    var rooted_db: sig.accounts_db.Db.Rooted = try .init(
+        rooted_file,
+        cfg.accounts_db.rpc_enable_owner_index,
+    );
     defer rooted_db.deinit();
 
     var loaded_snapshot = try loadSnapshot(
@@ -2222,10 +2260,11 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
             const response = try rpc_client.getLeaderSchedule(.{ .slot = slot });
             defer response.deinit();
 
-            const rpc_schedule = (try response.result()).value;
+            const rpc_schedule = (try response.result()) orelse
+                return error.LeaderScheduleNotAvailable;
             break :blk try sig.core.leader_schedule.computeFromMap(
                 allocator,
-                &rpc_schedule,
+                &rpc_schedule.value,
             );
         };
         break :b leader_schedule;
@@ -2664,15 +2703,6 @@ fn startGossip(
     try app_base.rpc_hooks.set(allocator, struct {
         info: ContactInfo,
 
-        pub fn getHealth(
-            _: @This(),
-            _: std.mem.Allocator,
-            _: anytype,
-        ) !sig.rpc.methods.GetHealth.Response {
-            // TODO: more intricate
-            return .ok;
-        }
-
         pub fn getIdentity(
             self: @This(),
             _: std.mem.Allocator,
@@ -2737,6 +2767,7 @@ const ReplayAndConsensusServiceState = struct {
             voting_enabled: bool,
             vote_account_address: ?Pubkey,
             stop_at_slot: ?Slot,
+            prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -2793,6 +2824,7 @@ const ReplayAndConsensusServiceState = struct {
                 .hard_forks = hard_forks,
                 .replay_threads = params.replay_threads,
                 .stop_at_slot = params.stop_at_slot,
+                .prioritization_fee_cache = params.prioritization_fee_cache,
             }, if (params.disable_consensus) .disabled else .enabled);
         };
         errdefer replay_state.deinit();
@@ -3064,10 +3096,10 @@ const RpcLeaderScheduleService = struct {
     ) !LeaderSchedule {
         const response = try self.rpc_client.getLeaderSchedule(.{ .slot = slot });
         defer response.deinit();
-        const rpc_schedule = (try response.result()).value;
+        const rpc_schedule = (try response.result()) orelse return error.LeaderScheduleNotAvailable;
         var leaders = try sig.core.leader_schedule.computeFromMap(
             self.allocator,
-            &rpc_schedule,
+            &rpc_schedule.value,
         );
         const epoch = epoch_schedule.getEpoch(slot);
         leaders.start = epoch_schedule.getFirstSlotInEpoch(epoch);

@@ -185,6 +185,8 @@ fn addStakeRewardsToDistributedRewards(
 ) !void {
     try distributed_rewards.ensureTotalCapacity(allocator, stake_rewards.len);
     for (stake_rewards) |sr| {
+        // skip zero-lamport stake rewards
+        if (sr.stake_reward_info.lamports == 0) continue;
         distributed_rewards.appendAssumeCapacity(.{
             .pubkey = sr.stake_pubkey,
             .lamports = @intCast(sr.stake_reward_info.lamports),
@@ -424,6 +426,7 @@ test distributePartitionedEpochRewards {
     var epoch_reward_status = EpochRewardStatus{
         .active = .{
             .distribution_start_block_height = 0,
+            .num_partitions = 1,
             .partitioned_indices = try sig.replay.rewards.PartitionedIndices.init(
                 allocator,
                 try allocator.dupe(
