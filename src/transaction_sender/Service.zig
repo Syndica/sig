@@ -57,6 +57,7 @@ pub const Config = struct {
     max_retries: usize = 3,
     max_leaders: usize = 3,
     tpu_cache_size: usize = LeaderInfo.TPU_CACHE_SIZE,
+    log_metrics_interval: ?u64 = null,
 };
 
 pub const Context = struct {
@@ -114,11 +115,6 @@ pub fn run(self: *Service, gpa: Allocator) !void {
 }
 
 fn handleTransactions(self: *Service, gpa: Allocator, quic_sender: *Channel(Packet)) !void {
-    errdefer {
-        self.logger.err().log("handle transactions error");
-        if (@errorReturnTrace()) |tr| std.debug.dumpStackTrace(tr.*);
-    }
-
     var txn_pool = std.AutoArrayHashMapUnmanaged(Signature, TransactionInfo).empty;
     defer txn_pool.deinit(gpa);
     try txn_pool.ensureTotalCapacity(gpa, self.cfg.max_pooled);
@@ -139,17 +135,19 @@ fn handleTransactions(self: *Service, gpa: Allocator, quic_sender: *Channel(Pack
     const leader_addresses = try gpa.alloc(?SocketAddr, self.cfg.max_leaders);
     defer gpa.free(leader_addresses);
 
-    var last_metrics_log_time = Instant.EPOCH_ZERO;
+    var metrics_last_logged = Instant.EPOCH_ZERO;
     while (!self.exit.shouldExit()) {
-        // Receive transactions into the pool.
-        // This will always take approximately `cfg.process_interval`, unless the pool is empty.
-        const start_receive = Instant.now();
-        self.receiveTransactions(&txn_pool);
-        self.metrics.receive_transactions_millis.set(start_receive.elapsed().asMillis());
+        defer if (self.cfg.log_metrics_interval) |interval| {
+            if (metrics_last_logged.elapsed().gt(.fromSecs(interval))) {
+                metrics_last_logged = Instant.now();
+                self.metrics.log(self.logger);
+            }
+        };
+
+        self.receiveTransactions(&txn_pool, self.cfg.process_interval);
 
         if (self.exit.shouldExit()) break;
 
-        const start_process = Instant.now();
         self.processTransactions(
             gpa,
             quic_sender,
@@ -167,29 +165,32 @@ fn handleTransactions(self: *Service, gpa: Allocator, quic_sender: *Channel(Pack
             },
             else => return err,
         };
-        self.metrics.process_transactions_millis.set(start_process.elapsed().asMillis());
-
-        if (last_metrics_log_time.elapsed().gt(.fromSecs(10))) {
-            self.metrics.log(self.logger);
-            last_metrics_log_time = Instant.now();
-        }
     }
 }
 
+/// Receive transactions from the receiver channel into the transaction pool for `timeout` duration.
+/// If the transaction pool is empty, it will wait until a transaction is received before starting the `timeout` countdown.
+/// If the transaction pool is or becomes full, it will wait the remaining `timeout` duration before returning.
 fn receiveTransactions(
     self: *Service,
     txn_pool: *std.AutoArrayHashMapUnmanaged(Signature, TransactionInfo),
+    timeout: Duration,
 ) void {
     var timer = Instant.now();
-    while (self.exit.shouldRun() and timer.elapsed().lt(self.cfg.process_interval)) {
+    defer {
+        self.metrics.receive_transactions_millis.set(timer.elapsed().asMillis());
+        self.metrics.pool_size.set(txn_pool.count());
+    }
+
+    while (self.exit.shouldRun() and timer.elapsed().lt(timeout)) {
         // Don't break to process transactions until the pool is populated.
         defer if (txn_pool.count() == 0) {
             timer = Instant.now();
         };
 
-        // Don't break to process transactions until the process interval has elapsed.
+        // Don't break to process transactions until the timeout has elapsed.
         if (txn_pool.count() == txn_pool.capacity()) {
-            std.Thread.sleep(self.cfg.process_interval.saturatingSub(timer.elapsed()).asNanos());
+            std.Thread.sleep(timeout.saturatingSub(timer.elapsed()).asNanos());
             break;
         }
 
@@ -205,9 +206,11 @@ fn receiveTransactions(
             }
         }
     }
-    self.metrics.pool_size.set(txn_pool.count());
 }
 
+/// Check the status of transactions in the pool.
+/// Resend transactions which are eligible for retry.
+/// Drop transactions which are failed, expired, or rooted.
 fn processTransactions(
     self: *Service,
     gpa: Allocator,
@@ -217,6 +220,12 @@ fn processTransactions(
     leader_info: *LeaderInfo,
     leader_addresses: []?SocketAddr,
 ) !void {
+    const timer = Instant.now();
+    defer {
+        self.metrics.process_transactions_millis.set(timer.elapsed().asMillis());
+        self.metrics.pool_size.set(txn_pool.count());
+    }
+
     const root_slot = self.ctx.slot_tracker.root.load(.monotonic);
     const root_ref = self.ctx.slot_tracker.get(root_slot) orelse
         return error.RootSlotNotAvailable;
@@ -325,8 +334,6 @@ fn processTransactions(
 
     for (drop_list.items) |signature| _ = txn_pool.swapRemove(signature);
     drop_list.clearRetainingCapacity();
-
-    self.metrics.pool_size.set(txn_pool.count());
 }
 
 pub const TransactionInfo = struct {
@@ -638,6 +645,8 @@ test "handleTransactions" {
         Service.handleTransactions,
         .{ &service, gpa, test_ctx.quic_sender },
     );
+    defer handle_transactions_handle.join();
+    defer test_ctx.exit_flag.store(true, .monotonic);
 
     var count: usize = 0;
     for (0..10) |i| {
@@ -694,7 +703,7 @@ test "handleTransactions" {
     }
 
     const start = Instant.now();
-    while (start.elapsed().lt(.fromSecs(1))) {
+    while (start.elapsed().lt(.fromSecs(10))) {
         if (service.metrics.pool_size.get() == 1 and
             service.metrics.received_count.get() == 10 and
             service.metrics.rooted_count.get() == 1 and
@@ -708,9 +717,6 @@ test "handleTransactions" {
     try std.testing.expectEqual(1, service.metrics.rooted_count.get());
     try std.testing.expectEqual(1, service.metrics.failed_count.get());
     try std.testing.expectEqual(7, service.metrics.expired_count.get());
-
-    test_ctx.exit_flag.store(true, .monotonic);
-    handle_transactions_handle.join();
 }
 
 test "fillLeaderAddresses" {
