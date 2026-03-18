@@ -460,7 +460,7 @@ pub fn getProgramAccounts(
     arena: std.mem.Allocator,
     params: GetProgramAccounts,
 ) !GetProgramAccounts.Response {
-    const zone = tracy.Zone.init(@src(), .{ .name = "rpc.gPA" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "rpc.getProgramAccounts" });
     defer zone.deinit();
 
     const config = params.config orelse GetProgramAccounts.Config{};
@@ -480,7 +480,7 @@ pub fn getProgramAccounts(
     const slot_reader = self.account_reader.forSlot(ancestors);
 
     var iter = blk: {
-        const z = tracy.Zone.init(@src(), .{ .name = "rpc.gPA.ownerQuery" });
+        const z = tracy.Zone.init(@src(), .{ .name = "rpc.getProgramAccounts.ownerQuery" });
         defer z.deinit();
         break :blk try slot_reader.getByOwner(arena, &params.program_id);
     };
@@ -508,7 +508,7 @@ pub fn getProgramAccounts(
 
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3361
     if (config.sortResults orelse true) {
-        const z = tracy.Zone.init(@src(), .{ .name = "rpc.gPA.sort" });
+        const z = tracy.Zone.init(@src(), .{ .name = "rpc.getProgramAccounts.sort" });
         defer z.deinit();
         std.mem.sortUnstable(GetProgramAccounts.Value, results.items, {}, struct {
             fn lessThan(_: void, a: GetProgramAccounts.Value, b: GetProgramAccounts.Value) bool {
@@ -529,7 +529,7 @@ pub fn getTokenAccountsByOwner(
     arena: std.mem.Allocator,
     params: GetTokenAccountsByOwner,
 ) !GetTokenAccountsByOwner.Response {
-    const zone = tracy.Zone.init(@src(), .{ .name = "rpc.gTABO" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "rpc.getTokenAccountsByOwner" });
     defer zone.deinit();
 
     const config = params.config orelse GetTokenAccountsByOwner.Config{};
@@ -607,7 +607,7 @@ pub fn getTokenAccountsByOwner(
                 a: GetTokenAccountsByOwner.Value,
                 b: GetTokenAccountsByOwner.Value,
             ) bool {
-                return std.mem.order(u8, &a.pubkey.data, &b.pubkey.data) == .lt;
+                return a.pubkey.order(b.pubkey) == .lt;
             }
         }.lessThan);
     }
