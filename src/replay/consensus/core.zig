@@ -99,9 +99,9 @@ const CommitmentVisitorCtx = struct {
     /// tracking to only these ancestor slots (matching Agave behaviour).
     ancestors: ?[]const Slot,
 
-    fn visit(ctx_ptr: *anyopaque, tower: *const Tower, stake: u64) void {
+    fn visit(ctx_ptr: *anyopaque, tower: *const Tower, stake: u64) error{OutOfMemory}!void {
         const self: *CommitmentVisitorCtx = @ptrCast(@alignCast(ctx_ptr));
-        self.acc.observeVoteAccount(self.allocator, tower, stake, self.ancestors);
+        try self.acc.observeVoteAccount(self.allocator, tower, stake, self.ancestors);
     }
 };
 
@@ -7895,7 +7895,7 @@ test "CommitmentVisitorCtx visit delegates to accumulator" {
     var tower: Tower = .{ .root = null };
     try tower.votes.append(.{ .slot = 42, .confirmation_count = 3 });
 
-    CommitmentVisitorCtx.visit(@ptrCast(&ctx), &tower, 500);
+    try CommitmentVisitorCtx.visit(@ptrCast(&ctx), &tower, 500);
 
     // The accumulator should have recorded the vote.
     try std.testing.expectEqual(@as(u64, 500), ctx.acc.total_stake);

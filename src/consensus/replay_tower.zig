@@ -41,10 +41,10 @@ const MAX_LOCKOUT_HISTORY = sig.consensus.tower.MAX_LOCKOUT_HISTORY;
 /// (before `processNextVoteSlot`) so the caller sees actual on-chain lockouts.
 pub const VoteAccountVisitor = struct {
     context: *anyopaque,
-    visitFn: *const fn (*anyopaque, *const Tower, u64) void,
+    visitFn: *const fn (*anyopaque, *const Tower, u64) error{OutOfMemory}!void,
 
-    pub fn visit(self: VoteAccountVisitor, tower: *const Tower, stake: u64) void {
-        self.visitFn(self.context, tower, stake);
+    pub fn visit(self: VoteAccountVisitor, tower: *const Tower, stake: u64) error{OutOfMemory}!void {
+        try self.visitFn(self.context, tower, stake);
     }
 };
 
@@ -1731,7 +1731,7 @@ pub fn collectClusterVoteState(
 
         // Invoke visitor with the pre-simulation tower state so callers
         // (e.g. BlockCommitmentCache) see actual on-chain lockouts.
-        if (visitor) |v| v.visit(&vote_state, vote.stake);
+        if (visitor) |v| try v.visit(&vote_state, vote.stake);
 
         for (vote_state.votes.constSlice()) |lockout_vote| {
             const interval = try lockout_intervals.map
@@ -5350,7 +5350,7 @@ test "collectClusterVoteState invokes VoteAccountVisitor" {
         total_stake: u64 = 0,
         call_count: u64 = 0,
 
-        fn visit(raw: *anyopaque, _: *const Tower, stake: u64) void {
+        fn visit(raw: *anyopaque, _: *const Tower, stake: u64) error{OutOfMemory}!void {
             const self: *@This() = @ptrCast(@alignCast(raw));
             self.total_stake += stake;
             self.call_count += 1;

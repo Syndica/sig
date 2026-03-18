@@ -1973,6 +1973,7 @@ fn replayOffline(
         .voting_enabled = false,
         .vote_account_address = null,
         .stop_at_slot = cfg.stop_at_slot,
+        .prioritization_fee_cache = &prioritization_fee_cache,
         .rpc_enabled = rpc_enabled,
     });
     defer replay_service_state.deinit(allocator);
