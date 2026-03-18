@@ -54,7 +54,7 @@ running: bool = true,
 /// Built during commit processing; drained immediately after.
 pending_wake_queues: std.ArrayList(*NotifQueue) = .{},
 /// Waitgroup to track submitted threadpool tasks that must finish before shutdown can complete.
-threadpool_wg: ThreadPool.WaitGroup,
+threadpool_wg: std.Thread.WaitGroup,
 /// Optional callback run on the loop thread whenever the async wake fires.
 /// Used by integrations to drain additional loop-thread-only queues.
 wakeup_hook: ?WakeupHook = null,
@@ -83,7 +83,7 @@ pub const Dependencies = struct {
 };
 
 pub fn init(deps: Dependencies) RuntimeContext {
-    var runtime: RuntimeContext = .{
+    const runtime: RuntimeContext = .{
         .allocator = deps.allocator,
         .logger = .from(deps.logger),
         .sub_map = deps.sub_map,
@@ -97,10 +97,9 @@ pub fn init(deps: Dependencies) RuntimeContext {
         .max_batch_bytes = deps.max_batch_bytes,
         .loop = deps.loop,
         .notify_pending = &deps.event_sink.notify_pending,
-        .threadpool_wg = undefined,
+        .threadpool_wg = .{},
         .wakeup_hook = deps.wakeup_hook,
     };
-    runtime.threadpool_wg.init();
     return runtime;
 }
 
@@ -205,7 +204,6 @@ pub fn deinit(self: *RuntimeContext, timeout_ms: u64) DeinitError!void {
         );
     }
 
-    self.threadpool_wg.deinit();
     self.slot_state_cache.deinit(self.allocator);
     self.pending_wake_queues.deinit(self.allocator);
 }
