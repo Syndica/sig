@@ -413,7 +413,7 @@ fn handleSlotTransition(
                 if (transition.cached_slot == null) {
                     continue;
                 }
-                _ = self.enqueueJobForEntry(entry.*, .{ .slot = slot_event }, &task_batch);
+                _ = self.enqueueJobForEntry(entry.*, .{ .slot = slot_event }, task_batch);
             },
             .root => {
                 const root_event = switch (event_kind) {
@@ -423,7 +423,7 @@ fn handleSlotTransition(
                 if (transition.evict_through == null) {
                     continue;
                 }
-                _ = self.enqueueJobForEntry(entry.*, .{ .root = root_event }, &task_batch);
+                _ = self.enqueueJobForEntry(entry.*, .{ .root = root_event }, task_batch);
             },
             .program => {
                 if (event_kind == .tip_changed) {
@@ -457,7 +457,7 @@ fn handleSlotTransition(
                                 entry,
                                 confirmed_slot.cached_slot,
                                 confirmed_slot.slot,
-                                &task_batch,
+                                task_batch,
                             );
                         }
                     },
@@ -467,7 +467,7 @@ fn handleSlotTransition(
                             entry,
                             cached_slot,
                             slot,
-                            &task_batch,
+                            task_batch,
                         );
                     },
                 }
@@ -483,7 +483,7 @@ fn handleSlotTransition(
                 )) {
                     continue;
                 }
-                self.enqueueAccountReevaluation(entry, slot, &task_batch);
+                self.enqueueAccountReevaluation(entry, slot, task_batch);
             },
             else => {},
         }
@@ -599,7 +599,7 @@ fn enqueueKindMatchedJobs(
     var enqueued = false;
     for (self.sub_map.entries.items) |entry| {
         if (entry.key.method == kind) {
-            enqueued = self.enqueueJobForEntry(entry, job_type, &task_batch) or enqueued;
+            enqueued = self.enqueueJobForEntry(entry, job_type, task_batch) or enqueued;
         }
     }
     if (!enqueued) {
