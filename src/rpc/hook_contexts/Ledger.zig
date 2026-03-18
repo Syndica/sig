@@ -12,6 +12,10 @@ const AncestorIterator = sig.ledger.Reader.AncestorIterator;
 const GetBlock = methods.GetBlock;
 const GetBlockProduction = methods.GetBlockProduction;
 const GetBlocks = methods.GetBlocks;
+const GetBlockTime = methods.GetBlockTime;
+const GetFirstAvailableBlock = methods.GetFirstAvailableBlock;
+const GetMaxRetransmitSlot = methods.GetMaxRetransmitSlot;
+const GetMaxShredInsertSlot = methods.GetMaxShredInsertSlot;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetHealth = methods.GetHealth;
 const GetInflationReward = methods.GetInflationReward;
@@ -19,6 +23,7 @@ const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetTransaction = methods.GetTransaction;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
+const MinimumLedgerSlot = methods.MinimumLedgerSlot;
 const Pubkey = sig.core.Pubkey;
 const PubkeyMap = sig.utils.collections.PubkeyMap;
 const ReservedAccounts = sig.core.ReservedAccounts;
@@ -40,6 +45,8 @@ health_check_slot_distance: u64 = DELINQUENT_VALIDATOR_SLOT_DISTANCE,
 epoch_schedule: sig.core.EpochSchedule,
 epoch_tracker: *sig.core.EpochTracker,
 commitments: *const sig.replay.trackers.CommitmentTracker,
+max_retransmit_slot: *const std.atomic.Value(Slot),
+max_shred_insert_slot: *const std.atomic.Value(Slot),
 
 pub fn getBlock(
     self: LedgerHookContext,
@@ -88,48 +95,6 @@ pub fn getBlock(
         .show_rewards = show_rewards,
         .max_supported_version = max_supported_version,
     });
-}
-
-/// Check the health of the node.
-///
-/// A node is considered healthy if the node's latest optimistically confirmed
-/// slot is within `health_check_slot_distance` of the cluster's latest
-/// optimistically confirmed slot.
-///
-/// Returns `RpcHealthStatus` which is then formatted by the server layer:
-/// - JSON-RPC: "ok" result on success, error with code -32005 on failure
-/// - HTTP GET /health: always 200 OK with "ok", "behind", or "unknown"
-///
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2806-L2818
-pub fn getHealth(
-    self: LedgerHookContext,
-    arena: std.mem.Allocator,
-    _: GetHealth,
-) !GetHealth.Response {
-    // Get the node's latest optimistically confirmed slot from replay
-    const latest_optimistically_confirmed_slot = self.commitments.get(.confirmed);
-
-    // Get the cluster's latest optimistically confirmed slot from ledger
-    var optimistic_slots = self.ledger.reader().getLatestOptimisticSlots(arena, 1) catch {
-        return .unknown;
-    };
-    defer optimistic_slots.deinit();
-
-    if (optimistic_slots.items.len == 0) {
-        return .unknown;
-    }
-
-    const cluster_latest_optimistically_confirmed_slot, _, _ = optimistic_slots.items[0];
-
-    if (latest_optimistically_confirmed_slot >=
-        cluster_latest_optimistically_confirmed_slot -| self.health_check_slot_distance)
-    {
-        return .ok;
-    } else {
-        const num_slots_behind = cluster_latest_optimistically_confirmed_slot -|
-            latest_optimistically_confirmed_slot;
-        return .{ .behind = num_slots_behind };
-    }
 }
 
 pub fn getBlocks(
@@ -353,6 +318,77 @@ pub fn getBlockProduction(
     };
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/rpc/src/rpc.rs#L1577-L1609
+pub fn getBlockTime(
+    self: LedgerHookContext,
+    arena: Allocator,
+    params: GetBlockTime,
+) !GetBlockTime.Response {
+    const reader = self.ledger.reader();
+    const highest_root = self.commitments.get(.finalized);
+
+    if (params.slot <= highest_root) {
+        return reader.getRootedBlockTime(arena, params.slot) catch |err| switch (err) {
+            error.SlotNotRooted => return error.BlockNotAvailable,
+            error.SlotUnavailable => return null,
+            error.SlotCleanedUp => return error.SlotCleanedUp,
+            else => return err,
+        };
+    } else {
+        return try reader.getCompleteBlockTime(arena, params.slot);
+    }
+}
+
+pub fn getFirstAvailableBlock(
+    self: LedgerHookContext,
+    _: Allocator,
+    _: GetFirstAvailableBlock,
+) !GetFirstAvailableBlock.Response {
+    return self.ledger.reader().getFirstAvailableBlock() catch 0;
+}
+
+/// Check the health of the node.
+///
+/// A node is considered healthy if the node's latest optimistically confirmed
+/// slot is within `health_check_slot_distance` of the cluster's latest
+/// optimistically confirmed slot.
+///
+/// Returns `RpcHealthStatus` which is then formatted by the server layer:
+/// - JSON-RPC: "ok" result on success, error with code -32005 on failure
+/// - HTTP GET /health: always 200 OK with "ok", "behind", or "unknown"
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2806-L2818
+pub fn getHealth(
+    self: LedgerHookContext,
+    arena: std.mem.Allocator,
+    _: GetHealth,
+) !GetHealth.Response {
+    // Get the node's latest optimistically confirmed slot from replay
+    const latest_optimistically_confirmed_slot = self.commitments.get(.confirmed);
+
+    // Get the cluster's latest optimistically confirmed slot from ledger
+    var optimistic_slots = self.ledger.reader().getLatestOptimisticSlots(arena, 1) catch {
+        return .unknown;
+    };
+    defer optimistic_slots.deinit();
+
+    if (optimistic_slots.items.len == 0) {
+        return .unknown;
+    }
+
+    const cluster_latest_optimistically_confirmed_slot, _, _ = optimistic_slots.items[0];
+
+    if (latest_optimistically_confirmed_slot >=
+        cluster_latest_optimistically_confirmed_slot -| self.health_check_slot_distance)
+    {
+        return .ok;
+    } else {
+        const num_slots_behind = cluster_latest_optimistically_confirmed_slot -|
+            latest_optimistically_confirmed_slot;
+        return .{ .behind = num_slots_behind };
+    }
+}
+
 pub fn getInflationReward(
     self: LedgerHookContext,
     arena: Allocator,
@@ -492,6 +528,22 @@ pub fn getInflationReward(
     return results;
 }
 
+pub fn getMaxRetransmitSlot(
+    self: LedgerHookContext,
+    _: Allocator,
+    _: GetMaxRetransmitSlot,
+) !GetMaxRetransmitSlot.Response {
+    return self.max_retransmit_slot.load(.monotonic);
+}
+
+pub fn getMaxShredInsertSlot(
+    self: LedgerHookContext,
+    _: Allocator,
+    _: GetMaxShredInsertSlot,
+) !GetMaxShredInsertSlot.Response {
+    return self.max_shred_insert_slot.load(.monotonic);
+}
+
 pub fn getRecentPerformanceSamples(
     self: LedgerHookContext,
     arena: Allocator,
@@ -617,6 +669,16 @@ pub fn getTransaction(
         ),
         .block_time = confirmed_tx_with_meta.block_time,
     } };
+}
+
+pub fn minimumLedgerSlot(
+    self: LedgerHookContext,
+    _: Allocator,
+    _: MinimumLedgerSlot,
+) !MinimumLedgerSlot.Response {
+    var meta_iter = try self.ledger.reader().slotMetaIterator(0);
+    defer meta_iter.deinit();
+    return try meta_iter.nextKey() orelse 0;
 }
 
 /// Walk from latest_confirmed back to the root, collecting confirmed-but-unrooted slots.
