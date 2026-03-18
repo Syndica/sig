@@ -64,7 +64,7 @@ pub const RPCSubMap = struct {
     /// deep-copied into the map's allocator.
     ///
     /// Queue commit path policy:
-    /// - `.slot`, `.root`, and `.program` use `.reserved` to preserve event order
+    /// - `.slot`, `.root`, `.program`, and `.account` use `.reserved` to preserve event order
     /// - all other methods use `.direct`
     pub fn getOrCreate(
         self: *RPCSubMap,
@@ -172,8 +172,8 @@ test "RPCSubMap different params get different entries" {
     const e1 = try sm.getOrCreate(&key1);
     const e2 = try sm.getOrCreate(&key2);
     try std.testing.expect(e1.sub_id != e2.sub_id);
-    try std.testing.expectEqual(NotifQueue.CommitPath.direct, e1.queue.commit_path);
-    try std.testing.expectEqual(NotifQueue.CommitPath.direct, e2.queue.commit_path);
+    try std.testing.expectEqual(NotifQueue.CommitPath.reserved, e1.queue.commit_path);
+    try std.testing.expectEqual(NotifQueue.CommitPath.reserved, e2.queue.commit_path);
 
     // Same pubkey returns same entry.
     const e3 = try sm.getOrCreate(&key1);
