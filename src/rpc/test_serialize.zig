@@ -41,6 +41,7 @@ const GetSlot = methods.GetSlot;
 const GetSlotLeader = methods.GetSlotLeader;
 const GetSlotLeaders = methods.GetSlotLeaders;
 const GetStakeMinimumDelegation = methods.GetStakeMinimumDelegation;
+const GetSupply = methods.GetSupply;
 const GetTransaction = methods.GetTransaction;
 const GetTransactionCount = methods.GetTransactionCount;
 const GetTokenAccountBalance = methods.GetTokenAccountBalance;
@@ -913,7 +914,74 @@ test GetStakeMinimumDelegation {
     );
 }
 
-// TODO: test getSupply()
+test GetSupply {
+    // Request without config
+    try testRequest(
+        .getSupply,
+        .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getSupply","params":[]}
+        ,
+    );
+
+    // Request with commitment config
+    try testRequest(
+        .getSupply,
+        .{ .config = .{ .commitment = .finalized } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getSupply","params":[{"commitment":"finalized","excludeNonCirculatingAccountsList":null}]}
+        ,
+    );
+
+    // Request with excludeNonCirculatingAccountsList
+    try testRequest(
+        .getSupply,
+        .{ .config = .{ .excludeNonCirculatingAccountsList = true } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getSupply","params":[{"commitment":null,"excludeNonCirculatingAccountsList":true}]}
+        ,
+    );
+
+    // Request with both config options
+    try testRequest(
+        .getSupply,
+        .{ .config = .{ .commitment = .finalized, .excludeNonCirculatingAccountsList = true } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getSupply","params":[{"commitment":"finalized","excludeNonCirculatingAccountsList":true}]}
+        ,
+    );
+
+    // Response with non-circulating accounts list
+    try testResponse(
+        GetSupply,
+        .{ .result = .{
+            .context = .{ .slot = 1114, .apiVersion = "2.0.15" },
+            .value = .{
+                .total = 1016000000000000000,
+                .circulating = 15000000000000000,
+                .nonCirculating = 1001000000000000000,
+                .nonCirculatingAccounts = &.{
+                    .parse("FEy8pTbP5fEoqMV1GdTz83byuA86iyvT5GkzZKbXvGkB"),
+                    .parse("9huDUZfxoJ7wGMTffUE7vh1xePqef7gyrLJu9NApncqA"),
+                },
+            },
+        } },
+        \\{"jsonrpc":"2.0","result":{"context":{"slot":1114,"apiVersion":"2.0.15"},"value":{"total":1016000000000000000,"circulating":15000000000000000,"nonCirculating":1001000000000000000,"nonCirculatingAccounts":["FEy8pTbP5fEoqMV1GdTz83byuA86iyvT5GkzZKbXvGkB","9huDUZfxoJ7wGMTffUE7vh1xePqef7gyrLJu9NApncqA"]}},"id":1}
+        ,
+    );
+
+    // Response with empty non-circulating accounts list (excludeNonCirculatingAccountsList=true)
+    try testResponse(
+        GetSupply,
+        .{ .result = .{
+            .context = .{ .slot = 1114, .apiVersion = "2.0.15" },
+            .value = .{
+                .total = 1016000000000000000,
+                .circulating = 15000000000000000,
+                .nonCirculating = 1001000000000000000,
+                .nonCirculatingAccounts = &.{},
+            },
+        } },
+        \\{"jsonrpc":"2.0","result":{"context":{"slot":1114,"apiVersion":"2.0.15"},"value":{"total":1016000000000000000,"circulating":15000000000000000,"nonCirculating":1001000000000000000,"nonCirculatingAccounts":[]}},"id":1}
+        ,
+    );
+}
 
 test GetTokenAccountBalance {
     const pubkey: Pubkey = .parse("7fUAJdStEuGbc3sM84cKRL6yYaaSstyLSU4ve5oovLS7");

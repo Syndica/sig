@@ -84,7 +84,7 @@ pub const MethodAndParams = union(enum) {
     getSlotLeader: GetSlotLeader,
     getSlotLeaders: GetSlotLeaders,
     getStakeMinimumDelegation: GetStakeMinimumDelegation,
-    getSupply: noreturn,
+    getSupply: GetSupply,
     getTokenAccountBalance: GetTokenAccountBalance,
     getTokenAccountsByDelegate: noreturn,
     getTokenAccountsByOwner: GetTokenAccountsByOwner,
@@ -1401,7 +1401,27 @@ pub const GetStakeMinimumDelegation = struct {
     };
 };
 
-// TODO: getSupply
+pub const GetSupply = struct {
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        excludeNonCirculatingAccountsList: ?bool = null,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        value: Value,
+
+        pub const Value = struct {
+            total: u64,
+            circulating: u64,
+            nonCirculating: u64,
+            nonCirculatingAccounts: []const Pubkey,
+        };
+    };
+};
+
 pub const GetTokenAccountBalance = struct {
     pubkey: Pubkey,
     config: ?Config = null,
