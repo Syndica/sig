@@ -111,7 +111,7 @@ pub const TestServer = struct {
             .slot_tracker = &self.slot_tracker,
             .account_reader = .{ .accounts_db = &self.account_db.db },
         };
-        const logger: sig.trace.Logger("jrpc_ws_integration_tests") = .FOR_TESTS;
+        const logger: sig.trace.Logger("jrpc_ws_integration_tests") = .noop;
         self.ctx = Runtime.init(.{
             .allocator = allocator,
             .logger = .from(logger),
@@ -152,7 +152,7 @@ pub const TestServer = struct {
             .slot_frozen => |*slot_data| {
                 slot_data.accounts.deinit();
                 slot_data.accounts = self.event_sink.materializeSlotModifiedAccounts(
-                    @as(sig.trace.Logger("jrpc_ws_integration_tests"), .FOR_TESTS),
+                    @as(sig.trace.Logger("jrpc_ws_integration_tests"), .noop),
                     .{ .accounts_db = &self.account_db.db },
                     slot_data.slot,
                 ) catch {
@@ -302,7 +302,7 @@ pub const IntegratedTestServer = struct {
             .slot_tracker = &self.slot_tracker,
             .account_reader = .{ .accounts_db = &self.account_db.db },
         };
-        const logger: sig.trace.Logger("jrpc_ws_integration_tests") = .FOR_TESTS;
+        const logger: sig.trace.Logger("jrpc_ws_integration_tests") = .noop;
         self.ctx = Runtime.init(.{
             .allocator = allocator,
             .logger = .from(logger),
@@ -383,7 +383,7 @@ pub const IntegratedTestServer = struct {
             .slot_frozen => |*slot_data| {
                 slot_data.accounts.deinit();
                 slot_data.accounts = self.event_sink.materializeSlotModifiedAccounts(
-                    @as(sig.trace.Logger("jrpc_ws_integration_tests"), .FOR_TESTS),
+                    @as(sig.trace.Logger("jrpc_ws_integration_tests"), .noop),
                     .{ .accounts_db = &self.account_db.db },
                     slot_data.slot,
                 ) catch {
