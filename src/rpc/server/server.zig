@@ -5,6 +5,7 @@
 //! and any other internal code.
 
 const std = @import("std");
+const tracy = @import("tracy");
 const sig = @import("../../sig.zig");
 
 pub const connection = @import("connection.zig");
@@ -111,6 +112,7 @@ pub fn serve(
     /// The pool to dispatch work to.
     work_pool: WorkPool,
 ) ServeError!void {
+    tracy.setThreadName("RPC");
     while (!exit.load(.acquire)) {
         switch (work_pool) {
             .basic => try basic.acceptAndServeConnection(ctx),

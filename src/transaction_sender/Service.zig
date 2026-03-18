@@ -3,7 +3,7 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 
-const quic_client = sig.net.quic_client;
+const QuicClient = sig.net.QuicClient;
 
 const AccountStore = sig.accounts_db.AccountStore;
 
@@ -95,23 +95,24 @@ pub fn init(
 }
 
 pub fn run(self: *Service, gpa: Allocator) !void {
-    const quic_sender = try Channel(Packet).create(gpa);
-    quic_sender.name = "TransactionSenderService: Packet Sender";
-    defer quic_sender.destroy();
+    errdefer |err| {
+        self.logger.err().logf("TransactionSenderService Error: {s}", .{@errorName(err)});
+        if (@errorReturnTrace()) |tr| std.debug.dumpStackTrace(tr.*);
+        self.exit.setExit();
+    }
 
-    const quic_handle = try std.Thread.spawn(
+    const quic_client = try QuicClient.create(
+        gpa,
+        .from(self.logger),
+        self.exit,
         .{},
-        quic_client.runClient,
-        .{
-            gpa,
-            quic_sender,
-            quic_client.Logger.from(self.logger),
-            self.exit,
-        },
     );
+    defer quic_client.destroy();
+
+    const quic_handle = try std.Thread.spawn(.{}, QuicClient.run, .{quic_client});
     defer quic_handle.join();
 
-    try self.handleTransactions(gpa, quic_sender);
+    try self.handleTransactions(gpa, quic_client.receiver);
 }
 
 fn handleTransactions(self: *Service, gpa: Allocator, quic_sender: *Channel(Packet)) !void {
@@ -434,6 +435,7 @@ const LeaderInfo = struct {
     }
 
     pub fn fillLeaderAddresses(self: *LeaderInfo, slot: Slot, buf: []?SocketAddr) !void {
+        @memset(buf, null);
         for (buf, 0..) |*leader_address, i| {
             const leader_slot = slot + i * NUM_CONSECUTIVE_LEADER_SLOTS;
             leader_address.* = try self.getLeaderAddress(leader_slot);
@@ -441,15 +443,15 @@ const LeaderInfo = struct {
     }
 
     fn getLeaderAddress(self: *LeaderInfo, slot: u64) !?SocketAddr {
-        var leader_schedules = &self.leader_schedules.leader_schedules;
-        const leader_pubkey = leader_schedules.getLeader(slot) catch blk: {
-            self.leader_schedules.release();
+        const leader_pubkey = self.leader_schedules.leader_schedules.getLeader(slot) catch blk: {
+            const old_leader_schedules = self.leader_schedules;
+            defer old_leader_schedules.release();
             self.leader_schedules = try self.epoch_tracker.getLeaderSchedules();
-            leader_schedules = &self.leader_schedules.leader_schedules;
-            break :blk leader_schedules.getLeader(slot) catch return error.NoLeaderForSlot;
+            break :blk self.leader_schedules.leader_schedules.getLeader(slot) catch
+                return error.NoLeaderForSlot;
         };
 
-        if (self.tpu_cache.count() >= self.tpu_cache.capacity() - 1) {
+        if (self.tpu_cache.count() >= self.tpu_cache.capacity() -| 1) {
             self.logger.info().log("tpu cache is full, pruning old entries.");
             var threshold = TPU_REFRESH_INTERVAL;
             var pruned_count: usize = 0;
@@ -514,36 +516,17 @@ pub const Metrics = struct {
     }
 
     pub fn log(self: *const Metrics, logger: Logger) void {
-        if (self.pool_size.get() != self.received_count.get() -|
-            self.rooted_count.get() -|
-            self.failed_count.get() -|
-            self.expired_count.get())
-        {
-            // zig fmt: off
-            logger.warn().logf(
-                "Inconsistent metrics: pool_size={}, received={}, rooted={}, failed={}, expired={}, receive_ms={}, process_ms={}",
-                .{
-                    self.pool_size.get(),
-                    self.received_count.get(),
-                    self.rooted_count.get(),
-                    self.failed_count.get(),
-                    self.expired_count.get(),
-                    self.receive_transactions_millis.get(),
-                    self.process_transactions_millis.get(),
-                },
-            );
-        } else {
-            logger.info().logf("pool_size={}, received={}, rooted={}, failed={}, expired={}, receive_ms={}, process_ms={}", .{
-                self.pool_size.get(),
-                self.received_count.get(),
-                self.rooted_count.get(),
-                self.failed_count.get(),
-                self.expired_count.get(),
-                self.receive_transactions_millis.get(),
-                self.process_transactions_millis.get(),
-            });
-            // zig fmt: on
-        }
+        // zig fmt: off
+        logger.info().logf("pool_size={}, received={}, rooted={}, failed={}, expired={}, receive_ms={}, process_ms={}", .{
+            self.pool_size.get(),
+            self.received_count.get(),
+            self.rooted_count.get(),
+            self.failed_count.get(),
+            self.expired_count.get(),
+            self.receive_transactions_millis.get(),
+            self.process_transactions_millis.get(),
+        });
+        // zig fmt: on
     }
 };
 

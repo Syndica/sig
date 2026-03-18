@@ -17,7 +17,7 @@ pub fn Gauge(comptime T: type) type {
         pub const Data = T;
 
         pub fn inc(self: *Self) void {
-            self.value.fetchAdd(1, .monotonic);
+            _ = self.value.fetchAdd(1, .monotonic);
         }
 
         pub fn reset(self: *Self) void {

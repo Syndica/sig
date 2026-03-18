@@ -261,6 +261,12 @@ pub const Account = struct {
 };
 
 pub fn run(self: *Service, gpa: Allocator) !void {
+    errdefer |err| {
+        self.logger.err().logf("MockTransferService Error: {s}", .{@errorName(err)});
+        if (@errorReturnTrace()) |tr| std.debug.dumpStackTrace(tr.*);
+        self.exit.setExit();
+    }
+
     self.logger.info().log("Initializing accounts for mock transfer");
     var from_account, var to_account = try self.initAccounts(gpa);
 
@@ -372,7 +378,7 @@ fn buildTransfer(
     defer transaction.deinit(gpa);
 
     const msg_bytes = try transaction.msg.serializeBounded(transaction.version);
-    const message_hash = sig.core.Hash.init(msg_bytes.constSlice());
+    const message_hash = sig.core.transaction.Message.hash(msg_bytes.constSlice());
 
     return try TransactionInfo.init(
         transaction,
