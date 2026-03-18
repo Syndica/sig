@@ -258,7 +258,11 @@ fn onAsyncWakeup(
     return .disarm;
 }
 
-fn submitSerialize(self: *RuntimeContext, job: types.SerializeJob) !void {
+fn appendSerializeTask(
+    self: *RuntimeContext,
+    job: types.SerializeJob,
+    task_batch: *ThreadPool.Batch,
+) !void {
     // TODO(perf): we could pool these task structs to avoid allocator churn,
     // but notably this is quite fast when benchmarked due to same size alloations.
     const serialize_task = try self.allocator.create(SerializeTask);
@@ -267,13 +271,7 @@ fn submitSerialize(self: *RuntimeContext, job: types.SerializeJob) !void {
         .task = .{ .callback = SerializeTask.execute },
         .job = job,
     };
-    self.threadpool_wg.start();
-    // TODO(perf): could maybe be batched.
-    self.threadpool.schedule(.{
-        .head = &serialize_task.task,
-        .tail = &serialize_task.task,
-        .len = 1,
-    });
+    task_batch.push(.from(&serialize_task.task));
 }
 
 fn submitPayloadFree(self: *RuntimeContext, bytes: ReleasedPayloadBytes) !void {
@@ -295,15 +293,27 @@ fn submitPayloadFree(self: *RuntimeContext, bytes: ReleasedPayloadBytes) !void {
 
 /// Drain all pending inbound events from producers.
 fn drainInboundEvents(self: *RuntimeContext) void {
+    var task_batch = ThreadPool.Batch{};
+    defer {
+        if (task_batch.len > 0) {
+            self.threadpool_wg.startMany(task_batch.len);
+            self.threadpool.schedule(task_batch);
+        }
+    }
+
     while (self.inbound_event_queue.tryReceive()) |event| {
         self.metrics.events_received += 1;
-        self.handleInboundEvent(event);
+        self.handleInboundEvent(event, &task_batch);
     }
 
     self.metrics.inbound_drain_calls += 1;
 }
 
-fn handleInboundEvent(self: *RuntimeContext, event: types.InboundEvent) void {
+fn handleInboundEvent(
+    self: *RuntimeContext,
+    event: types.InboundEvent,
+    task_batch: *ThreadPool.Batch,
+) void {
     // TODO: review how ownership should flow in Zig for this situation,
     // .slot_frozen case effectively takes ownership of the accounts data
     var e = event;
@@ -312,7 +322,7 @@ fn handleInboundEvent(self: *RuntimeContext, event: types.InboundEvent) void {
     switch (e) {
         .logs => |logs_data| {
             // TODO: actual logs events and logsSubscribe (this placeholder)
-            self.submitKindMatchedJobs(.logs, .{ .logs = logs_data });
+            self.enqueueKindMatchedJobs(.logs, .{ .logs = logs_data }, task_batch);
         },
         .slot_frozen => |*slot_data| {
             const transition = self.slot_state_cache.onSlotFrozen(
@@ -330,7 +340,7 @@ fn handleInboundEvent(self: *RuntimeContext, event: types.InboundEvent) void {
                 .parent = slot_data.parent,
                 .root = slot_data.root,
             } };
-            self.handleSlotTransition(slot_event_kind, slot_data.slot, transition);
+            self.handleSlotTransition(slot_event_kind, slot_data.slot, transition, task_batch);
         },
         .slot_rooted => |rooted_slot| {
             const transition = self.slot_state_cache.onSlotRooted(
@@ -348,6 +358,7 @@ fn handleInboundEvent(self: *RuntimeContext, event: types.InboundEvent) void {
                 slot_event_kind,
                 rooted_slot,
                 transition,
+                task_batch,
             );
         },
         .slot_confirmed => |confirmed_slot| {
@@ -361,11 +372,11 @@ fn handleInboundEvent(self: *RuntimeContext, event: types.InboundEvent) void {
                 );
                 return;
             };
-            self.handleSlotTransition(.slot_confirmed, confirmed_slot, transition);
+            self.handleSlotTransition(.slot_confirmed, confirmed_slot, transition, task_batch);
         },
         .tip_changed => |new_tip| {
             const transition = self.slot_state_cache.onTipChanged(self.slot_read_ctx, new_tip);
-            self.handleSlotTransition(.tip_changed, new_tip, transition);
+            self.handleSlotTransition(.tip_changed, new_tip, transition, task_batch);
         },
     }
 }
@@ -382,6 +393,7 @@ fn handleSlotTransition(
     event_kind: SlotEventKind,
     slot: Slot,
     transition: SlotStateCache.Transition,
+    task_batch: *ThreadPool.Batch,
 ) void {
     // Track confirmed program slots for publishing confirmed commitment notifications
     var publishable_confirmed_slots: ?std.ArrayList(SlotStateCache.AncestorItem) = null;
@@ -401,7 +413,7 @@ fn handleSlotTransition(
                 if (transition.cached_slot == null) {
                     continue;
                 }
-                _ = self.submitJobForEntry(entry.*, .{ .slot = slot_event });
+                _ = self.enqueueJobForEntry(entry.*, .{ .slot = slot_event }, &task_batch);
             },
             .root => {
                 const root_event = switch (event_kind) {
@@ -411,7 +423,7 @@ fn handleSlotTransition(
                 if (transition.evict_through == null) {
                     continue;
                 }
-                _ = self.submitJobForEntry(entry.*, .{ .root = root_event });
+                _ = self.enqueueJobForEntry(entry.*, .{ .root = root_event }, &task_batch);
             },
             .program => {
                 if (event_kind == .tip_changed) {
@@ -445,12 +457,18 @@ fn handleSlotTransition(
                                 entry,
                                 confirmed_slot.cached_slot,
                                 confirmed_slot.slot,
+                                &task_batch,
                             );
                         }
                     },
                     .processed, .finalized => {
                         const cached_slot = transition.cached_slot orelse continue;
-                        self.publishProgramSubscriptionForEntry(entry, cached_slot, slot);
+                        self.publishProgramSubscriptionForEntry(
+                            entry,
+                            cached_slot,
+                            slot,
+                            &task_batch,
+                        );
                     },
                 }
             },
@@ -465,7 +483,7 @@ fn handleSlotTransition(
                 )) {
                     continue;
                 }
-                self.submitAccountReevaluation(entry, slot);
+                self.enqueueAccountReevaluation(entry, slot, &task_batch);
             },
             else => {},
         }
@@ -494,10 +512,11 @@ fn transitionMatchesCommitment(
 /// in theory we could track fork state (slot state cache) to avoid reevaluating unless an
 /// actual fork occurs, and even when a fork occurs we may already have the account in the
 /// slot state cache.
-fn submitAccountReevaluation(
+fn enqueueAccountReevaluation(
     self: *RuntimeContext,
     entry: *sub_map_mod.MapEntry,
     commitment_slot: Slot,
+    task_batch: *ThreadPool.Batch,
 ) void {
     const slot_ref = self.slot_read_ctx.slot_tracker.get(commitment_slot) orelse return;
     defer slot_ref.release();
@@ -535,7 +554,7 @@ fn submitAccountReevaluation(
         account = deletedAccountPlaceholder();
     }
 
-    const submitted = self.submitJobForEntry(entry.*, .{
+    const enqueued = self.enqueueJobForEntry(entry.*, .{
         .account = .{
             .data = .{
                 .account = .{
@@ -548,8 +567,8 @@ fn submitAccountReevaluation(
             .data_slice = entry.key.params.account.data_slice,
             .read_ctx = self.slot_read_ctx,
         },
-    });
-    if (!submitted) {
+    }, task_batch);
+    if (!enqueued) {
         return;
     }
     // Assume delivery once the serialization job is accepted. Technically serialization could fail
@@ -571,18 +590,19 @@ fn deletedAccountPlaceholder() sig.core.Account {
 }
 
 // Used when the inbound event already has the final notification payload shape for a subscription kind.
-fn submitKindMatchedJobs(
+fn enqueueKindMatchedJobs(
     self: *RuntimeContext,
     kind: types.SubscriptionKind,
     job_type: types.SerializeJob.JobType,
+    task_batch: *ThreadPool.Batch,
 ) void {
-    var submitted = false;
+    var enqueued = false;
     for (self.sub_map.entries.items) |entry| {
         if (entry.key.method == kind) {
-            submitted = self.submitJobForEntry(entry, job_type) or submitted;
+            enqueued = self.enqueueJobForEntry(entry, job_type, &task_batch) or enqueued;
         }
     }
-    if (!submitted) {
+    if (!enqueued) {
         job_type.deinit(self.allocator);
     }
 }
@@ -594,6 +614,7 @@ fn publishProgramSubscriptionForEntry(
     entry: *sub_map_mod.MapEntry,
     cached_slot: *const SlotStateCache.CachedSlot,
     slot: Slot,
+    task_batch: *ThreadPool.Batch,
 ) void {
     const program_params = entry.key.params.program;
     // Check owner before touching account data so unrelated modified accounts stay cheap.
@@ -624,7 +645,7 @@ fn publishProgramSubscriptionForEntry(
             );
             continue;
         };
-        _ = self.submitJobForEntry(entry.*, .{
+        _ = self.enqueueJobForEntry(entry.*, .{
             .program = .{
                 .data = .{
                     .account = .{
@@ -637,7 +658,7 @@ fn publishProgramSubscriptionForEntry(
                 .data_slice = program_params.data_slice,
                 .read_ctx = self.slot_read_ctx,
             },
-        });
+        }, task_batch);
     }
 }
 
@@ -699,10 +720,11 @@ fn programAccountMatchesFilters(
     return true;
 }
 
-fn submitJobForEntry(
+fn enqueueJobForEntry(
     self: *RuntimeContext,
     entry: sub_map_mod.MapEntry,
     job_type: types.SerializeJob.JobType,
+    task_batch: *ThreadPool.Batch,
 ) bool {
     const q = entry.queue;
     if (q.subscriberCount() == 0) {
@@ -727,7 +749,7 @@ fn submitJobForEntry(
         .submitted_at = std.time.Instant.now() catch unreachable,
     };
 
-    self.submitSerialize(job) catch {
+    self.appendSerializeTask(job, task_batch) catch {
         job.deinit(self.allocator);
         q.inflight_sers -= 1;
         if (idx) |i| {
