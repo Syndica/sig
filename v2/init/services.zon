@@ -1,9 +1,10 @@
 .{
     .regions = .{
         .net_to_shred = .net_pair,
+        .shred_recv_config = .shred_recv_config,
+
         .net_to_gossip = .net_pair,
         .gossip_config = .gossip_config,
-        .shred_recv_config = .shred_recv_config,
     },
     .services = .{
         .{

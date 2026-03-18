@@ -51,10 +51,10 @@ pub const Service = blk: {
 fn getRequiredRegions(service: Service) []const RequiredRegion {
     switch (service) {
         inline else => |s| {
-            inline for (services_zon.services) |instance| {
-                if (comptime std.mem.eql(u8, @tagName(instance.name), @tagName(s))) {
+            inline for (services_zon.services) |_service| {
+                if (comptime std.mem.eql(u8, @tagName(_service.name), @tagName(s))) {
                     comptime var required: []const RequiredRegion = &.{};
-                    inline for (instance.regions) |r| {
+                    inline for (_service.regions) |r| {
                         required = required ++ &[_]RequiredRegion{.{
                             .region = @field(services_zon.regions, @tagName(r.name)),
                             .rw = switch (r.access) {
@@ -93,6 +93,64 @@ const RequiredRegion = struct {
     region: std.meta.Tag(Region),
     rw: bool = false,
 };
+
+const service_region_fields = std.meta.fields(@TypeOf(services_zon.regions));
+
+pub const SharedRegionInstances = blk: {
+    var fields: []const std.builtin.Type.StructField = &.{};
+    for (service_region_fields) |r| {
+        const RegionType = @TypeOf(@field(
+            @as(Region, undefined),
+            @tagName(@field(services_zon.regions, r.name)),
+        ));
+        fields = fields ++ [_]std.builtin.Type.StructField{.{
+            .name = r.name,
+            .type = RegionType,
+            .default_value_ptr = null,
+            .is_comptime = false,
+            .alignment = @alignOf(RegionType),
+        }};
+    }
+    break :blk @Type(.{ .@"struct" = .{
+        .layout = .auto,
+        .is_tuple = false,
+        .decls = &.{},
+        .fields = fields,
+    } });
+};
+
+pub fn toSharedRegions(
+    instances: SharedRegionInstances,
+) [service_region_fields.len]SharedRegion {
+    var shared_regions: [service_region_fields.len]SharedRegion = undefined;
+    inline for (service_region_fields, 0..) |r, i| {
+        comptime var shares: []const Share = &.{};
+        inline for (services_zon.services) |s| {
+            inline for (s.regions) |s_reg| {
+                if (comptime std.mem.eql(u8, @tagName(s_reg.name), r.name)) {
+                    // TODO: support referencing multiple service instances (.n > 0)
+                    shares = shares ++ &[_]Share{.{
+                        .instance = .{ .service = s.name, .n = 0 },
+                        .rw = switch (s_reg.access) {
+                            .rw => true,
+                            .readonly => false,
+                            else => @compileError("invalid access: " ++ @tagName(s_reg.access)),
+                        },
+                    }};
+                }
+            }
+        }
+        shared_regions[i] = .{
+            .region = @unionInit(
+                Region,
+                @tagName(@field(services_zon.regions, r.name)),
+                @field(instances, r.name),
+            ),
+            .shares = shares,
+        };
+    }
+    return shared_regions;
+}
 
 pub const SharedRegion = struct {
     region: Region,
