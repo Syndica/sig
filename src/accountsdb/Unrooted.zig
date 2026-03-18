@@ -160,17 +160,8 @@ pub fn getByOwner(
             if (gop.found_existing and index.slot <= gop.value_ptr[0]) continue;
             if (gop.found_existing) gop.value_ptr[1].deinit(allocator);
 
-            const data = try allocator.dupe(u8, acc.data);
-            gop.value_ptr.* = .{
-                index.slot,
-                .{
-                    .lamports = acc.lamports,
-                    .data = .{ .owned_allocation = data },
-                    .owner = acc.owner,
-                    .executable = acc.executable,
-                    .rent_epoch = acc.rent_epoch,
-                },
-            };
+            const cloned = try acc.asAccount().cloneOwned(allocator);
+            gop.value_ptr.* = .{ index.slot, cloned };
         }
     }
 
@@ -211,17 +202,8 @@ pub fn getBySplTokenOwner(
             if (gop.found_existing and index.slot <= gop.value_ptr[0]) continue;
             if (gop.found_existing) gop.value_ptr[1].deinit(allocator);
 
-            const cloned = try acc.clone(allocator);
-            gop.value_ptr.* = .{
-                index.slot,
-                .{
-                    .lamports = cloned.lamports,
-                    .data = .{ .owned_allocation = cloned.data },
-                    .owner = cloned.owner,
-                    .executable = cloned.executable,
-                    .rent_epoch = cloned.rent_epoch,
-                },
-            };
+            const cloned = try acc.asAccount().cloneOwned(allocator);
+            gop.value_ptr.* = .{ index.slot, cloned };
         }
     }
 
