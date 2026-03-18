@@ -24,60 +24,64 @@ const memfd = lib.linux.memfd;
 const E = linux.E;
 const e = E.init;
 
-pub const ServiceType = blk: {
-    var fields: []const std.builtin.Type.EnumField = &.{}; 
-    for (@import("./services.zon").services) |service| {
-        fields = fields ++ &.{ .{ .name = @tagName(service.name), .value = fields.len } };
+const services_zon = @import("./services.zon");
+
+pub const Service = blk: {
+    var fields: []const std.builtin.Type.EnumField = &.{};
+    for (services_zon.services) |service| {
+        fields = fields ++ &[_]std.builtin.Type.EnumField{
+            .{ .name = @tagName(service.name), .value = fields.len },
+        };
     }
 
     break :blk @Type(.{ .@"enum" = .{
         .decls = &.{},
         .fields = fields,
-        .is_exhaustive = false,
+        .is_exhaustive = true,
         .tag_type = u8,
     } });
 };
 
-pub const Service = enum {
-    net,
-    gossip,
-    shred_receiver,
-
-    pub fn entrypoint(self: Service) ServiceEntrypoint {
-        return switch (self) {
-            inline else => |s| @extern(
-                ServiceEntrypoint,
-                .{ .name = "svc_main_" ++ @tagName(s) },
-            ),
-        };
+fn getRequiredRegions(service: Service) []const RequiredRegion {
+    switch (service) {
+        inline else => |s| {
+            inline for (services_zon.services) |svc| {
+                if (comptime std.mem.eql(u8, @tagName(svc.name), @tagName(s))) {
+                    comptime var required: []const RequiredRegion = &.{};
+                    inline for (svc.regions) |r| {
+                        required = required ++ &[_]RequiredRegion{.{
+                            .region = @field(services_zon.regions, @tagName(r.name)),
+                            .rw = switch (r.access) {
+                                .rw => true,
+                                .readonly => false,
+                                else => @compileError("invalid access: " ++ @tagName(r.access)),
+                            },
+                        }};
+                    }
+                    return required;
+                }
+            } else comptime unreachable;
+        },
     }
+}
 
-    pub fn faultHandler(self: Service) sigaction_fn {
-        return switch (self) {
-            inline else => |s| @extern(
-                sigaction_fn,
-                .{ .name = "svc_fault_handler_" ++ @tagName(s) },
-            ),
-        };
-    }
+fn getFaultHandler(service: Service) sigaction_fn {
+    return switch (service) {
+        inline else => |s| @extern(
+            sigaction_fn,
+            .{ .name = "svc_fault_handler_" ++ @tagName(s) },
+        ),
+    };
+}
 
-    pub fn requiredRegions(self: Service) []const RequiredRegion {
-        return switch (self) {
-            .net => &.{
-                .{ .region = .net_pair, .rw = true },
-                .{ .region = .net_pair, .rw = true },
-            },
-            .gossip => &.{
-                .{ .region = .net_pair, .rw = true },
-                .{ .region = .gossip_config },
-            },
-            .shred_receiver => &.{
-                .{ .region = .net_pair, .rw = true },
-                .{ .region = .shred_recv_config },
-            },
-        };
-    }
-};
+pub fn getEntrypoint(service: Service) ServiceEntrypoint {
+    return switch (service) {
+        inline else => |s| @extern(
+            ServiceEntrypoint,
+            .{ .name = "svc_main_" ++ @tagName(s) },
+        ),
+    };
+}
 
 const RequiredRegion = struct {
     region: std.meta.Tag(Region),
@@ -209,7 +213,7 @@ fn serviceMap(
 
     // check all service instances request regions which are shared with them
     inline for (services) |instance| {
-        for (instance.service.requiredRegions()) |required_region| {
+        for (getRequiredRegions(instance.service)) |required_region| {
             const found_region: LookupResult = blk: for (
                 regions,
                 region_memfds,
@@ -396,7 +400,7 @@ fn spawnService(
     // register fault handlers
     {
         const act: *const std.os.linux.Sigaction = &.{
-            .handler = .{ .sigaction = service_instance.service.faultHandler() },
+            .handler = .{ .sigaction = getFaultHandler(service_instance.service) },
             .mask = std.os.linux.sigemptyset(),
             .flags = (std.posix.SA.SIGINFO | std.posix.SA.RESTART | std.posix.SA.RESETHAND),
         };
@@ -458,7 +462,7 @@ fn spawnService(
         }
     }
 
-    service_instance.service.entrypoint()(resolved_args);
+    getEntrypoint(service_instance.service)(resolved_args);
     std.process.exit(255);
 }
 
@@ -688,7 +692,7 @@ fn spawnServiceNoSandbox(
         .{},
         threadEntry,
         .{
-            service_instance.service.entrypoint(),
+            getEntrypoint(service_instance.service),
             service_instance.service,
             resolved_args,
             service_idx,
