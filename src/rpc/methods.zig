@@ -1406,7 +1406,7 @@ pub const GetSupply = struct {
 
     pub const Config = struct {
         commitment: ?common.Commitment = null,
-        excludeNonCirculatingAccountsList: ?bool = null,
+        excludeNonCirculatingAccountsList: bool = false,
     };
 
     pub const Response = struct {

@@ -927,7 +927,7 @@ test GetSupply {
     try testRequest(
         .getSupply,
         .{ .config = .{ .commitment = .finalized } },
-        \\{"jsonrpc":"2.0","id":1,"method":"getSupply","params":[{"commitment":"finalized","excludeNonCirculatingAccountsList":null}]}
+        \\{"jsonrpc":"2.0","id":1,"method":"getSupply","params":[{"commitment":"finalized","excludeNonCirculatingAccountsList":false}]}
         ,
     );
 

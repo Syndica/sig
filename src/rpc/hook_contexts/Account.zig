@@ -641,7 +641,7 @@ pub fn getSupply(
 ) !GetSupply.Response {
     const config = params.config orelse GetSupply.Config{};
     const commitment = config.commitment orelse .finalized;
-    const exclude_accounts = config.excludeNonCirculatingAccountsList orelse false;
+    const exclude_accounts = config.excludeNonCirculatingAccountsList;
 
     const slot = self.slot_tracker.commitments.get(commitment);
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;

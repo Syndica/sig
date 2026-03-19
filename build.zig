@@ -593,7 +593,6 @@ fn generateFeatureSetId(b: *Build) Build.LazyPath {
 fn generateNonCirculatingSupply(b: *Build) Build.LazyPath {
     const gen = b.addExecutable(.{
         .name = "gen_non_circulating_supply",
-        .use_llvm = true,
         .root_module = b.createModule(.{
             .target = b.graph.host,
             .optimize = .Debug,
