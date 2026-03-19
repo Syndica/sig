@@ -151,16 +151,7 @@ fn receiveShreds(
     defer turbine_tree_cache.deinit();
 
     const forward_addr: ?std.net.Address = if (forward_shreds_to) |a| a.toAddress() else null;
-    var forward_socket: ?UdpSocket = if (forward_shreds_to) |a| blk: {
-        const family: sig.net.net.AddressFamily = switch (a) {
-            .V4 => .ipv4,
-            .V6 => .ipv6,
-        };
-        const sock: UdpSocket = try .create(family);
-        errdefer sock.close();
-        try sock.bindToPort(0);
-        break :blk sock;
-    } else null;
+    var forward_socket: ?UdpSocket = try createForwardSocket(forward_shreds_to);
     defer if (forward_socket) |s| s.close();
 
     var deduper = try ShredDeduper(2).init(
@@ -494,6 +485,19 @@ fn forwardSlotShredsToUdp(
     }
 }
 
+fn createForwardSocket(forward_shreds_to: ?sig.net.SocketAddr) !?UdpSocket {
+    return if (forward_shreds_to) |addr| blk: {
+        const family: sig.net.net.AddressFamily = switch (addr) {
+            .V4 => .ipv4,
+            .V6 => .ipv6,
+        };
+        const sock: UdpSocket = try .create(family);
+        errdefer sock.close();
+        try sock.bindToPort(0);
+        break :blk sock;
+    } else null;
+}
+
 test "forward: udp family mapping" {
     try std.testing.expectEqual(
         @as(?sig.net.net.AddressFamily, .ipv4),
@@ -509,6 +513,19 @@ test "forward: udp family mapping" {
         @as(?sig.net.net.AddressFamily, null),
         sig.net.net.udpFamilyForAddress(unsupported),
     );
+}
+
+test "forward: createForwardSocket handles null and both families" {
+    const no_socket = try createForwardSocket(null);
+    try std.testing.expect(no_socket == null);
+
+    const v4_addr = sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    var v4_socket = (try createForwardSocket(v4_addr)).?;
+    defer v4_socket.close();
+
+    const v6_addr = sig.net.SocketAddr.initIpv6(.{0} ** 16, 0);
+    var v6_socket = (try createForwardSocket(v6_addr)).?;
+    defer v6_socket.close();
 }
 
 test "forward: sends each packet payload" {
