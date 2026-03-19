@@ -104,14 +104,14 @@ pub fn put(
 ///
 /// If the winning index was modified between phases (e.g. pruned by
 /// `onSlotRooted`), the scan is retried. Retries are bounded to avoid
-/// unbounded looping. If exhausted, returns null (caller falls through
-/// to rooted storage).
+/// unbounded looping. If exhausted, returns `error.RetryLimitExceeded`
+/// because the account exists but could not be read.
 pub fn getOwned(
     self: *Unrooted,
     allocator: std.mem.Allocator,
     address: Pubkey,
     ancestors: *const Ancestors,
-) error{OutOfMemory}!?Account {
+) error{ OutOfMemory, UnrootedGetOwnedMaxRetries }!?Account {
     const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.getOwned" });
     defer zone.deinit();
 
@@ -155,7 +155,8 @@ pub fn getOwned(
     }
 
     // Exhausted retries, slot keeps getting pruned/reused underneath us.
-    return null;
+    // Returning null would incorrectly indicate the account doesn't exist.
+    return error.UnrootedGetOwnedMaxRetries;
 }
 
 /// Gets the latest state of the account keyed by `address` visible to the given ancestor set.
