@@ -46,7 +46,7 @@ pub fn sendTransaction(
     const encoding = config.resolveEncoding() orelse return error.UnsupportedEncoding;
     const skip_preflight = config.skipPreflight orelse false;
 
-    const wire_transaction, const unsanitized_tx = try decodeAndDeserialize(
+    const wire_transaction, const wire_len, const unsanitized_tx = try decodeAndDeserialize(
         arena,
         params.transaction,
         encoding,
@@ -96,6 +96,7 @@ pub fn sendTransaction(
         unsanitized_tx,
         transaction.msg_hash,
         wire_transaction,
+        wire_len,
         last_valid_block_height,
         durable_nonce_info,
         config.maxRetries,
@@ -107,7 +108,7 @@ fn decodeAndDeserialize(
     arena: Allocator,
     encoded: []const u8,
     encoding: methods.common.TransactionBinaryEncoding,
-) !struct { [PACKET_DATA_SIZE]u8, Transaction } {
+) !struct { [PACKET_DATA_SIZE]u8, usize, Transaction } {
     var wire_transaction: [PACKET_DATA_SIZE]u8 = @splat(0);
 
     const wire_len: usize = switch (encoding) {
@@ -148,7 +149,7 @@ fn decodeAndDeserialize(
         // TODO: return a more helpful error here somehow
         return error.InvalidParams;
     };
-    return .{ wire_transaction, unsanitized_tx };
+    return .{ wire_transaction, wire_len, unsanitized_tx };
 }
 
 /// Analogous to [_send_transaction](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L2675)
@@ -157,6 +158,7 @@ fn sendTransactionImpl(
     transaction: Transaction,
     message_hash: Hash,
     wire_transaction: [PACKET_DATA_SIZE]u8,
+    wire_transaction_size: usize,
     last_valid_block_height: u64,
     durable_nonce_info: ?struct { Pubkey, Hash },
     max_retries: ?usize,
@@ -165,7 +167,7 @@ fn sendTransactionImpl(
     const transaction_info: TransactionInfo = .initWithWire(
         transaction,
         wire_transaction,
-        wire_transaction.len,
+        wire_transaction_size,
         message_hash,
         last_valid_block_height,
         durable_nonce_info,
