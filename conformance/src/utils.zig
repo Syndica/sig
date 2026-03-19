@@ -182,7 +182,7 @@ pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
     var feature_set: FeatureSet = .ALL_DISABLED;
     for (pb_features.features.items) |id| {
         // only way for `setSlotId` to fail is if the `id` doesn't exist.
-        feature_set.setSlotId(id, 0) catch std.debug.panic("unknown id: 0x{x}", .{id});
+        feature_set.setSlotId(id, 0) catch std.debug.print("unknown feature id: 0x{x}\n", .{id});
     }
     return feature_set;
 }

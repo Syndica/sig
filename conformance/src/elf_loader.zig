@@ -40,7 +40,7 @@ fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEff
 
     var feature_set: sig.core.FeatureSet = .ALL_DISABLED;
     if (ctx.features) |features| for (features.features.items) |id| {
-        feature_set.setSlotId(id, 0) catch std.debug.panic("unknown id: 0x{x}", .{id});
+        feature_set.setSlotId(id, 0) catch std.debug.print("unknown feature id: 0x{x}\n", .{id});
     };
 
     const env: svm.Environment = .initV1(
