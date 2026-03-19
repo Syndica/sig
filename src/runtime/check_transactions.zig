@@ -7,7 +7,6 @@ const Allocator = std.mem.Allocator;
 
 const Account = sig.core.Account;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
-const SlotAccountStore = sig.accounts_db.SlotAccountStore;
 
 const Hash = sig.core.Hash;
 const Ancestors = sig.core.Ancestors;
@@ -19,6 +18,7 @@ const AccountMeta = sig.core.instruction.InstructionAccount;
 const account_loader = sig.runtime.account_loader;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
+const PreparedAccount = sig.runtime.account_loader.PreparedAccount;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
 const FeatureSet = sig.core.FeatureSet;
 const NonceData = sig.runtime.nonce.Data;
@@ -93,7 +93,7 @@ pub fn checkFeePayer(
     /// same allocator as batch account cache
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
-    accounts: SlotAccountStore,
+    accounts: SlotAccountReader,
     compute_budget_limits: *const ComputeBudgetLimits,
     /// Takes ownership of this
     maybe_nonce: ?LoadedAccount,
@@ -104,6 +104,7 @@ pub fn checkFeePayer(
 ) AccountLoadError!TransactionResult(struct {
     FeeDetails,
     std14.BoundedArray(LoadedAccount, 2),
+    PreparedAccount,
 }) {
     _ = lamports_per_signature; // ignored here - see comment below
 
@@ -115,8 +116,11 @@ pub fn checkFeePayer(
 
     const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
     const fee_payer_key = transaction.accounts.items(.pubkey)[0];
-    const payer_account = try wrapDB(accounts.reader().get(allocator, fee_payer_key)) orelse
+    const payer_account = try wrapDB(accounts.get(allocator, fee_payer_key)) orelse
         return .{ .err = .AccountNotFound };
+    const formalized = feature_set.active(.formalize_loaded_transaction_data_size, slot);
+    const base: u64 = if (formalized) account_loader.TRANSACTION_ACCOUNT_BASE_SIZE else 0;
+    const payer_loaded_size = base +| payer_account.data.len();
     var payer_shared = AccountSharedData{
         .lamports = payer_account.lamports,
         .data = try payer_account.data.readAllAllocate(allocator),
@@ -124,7 +128,7 @@ pub fn checkFeePayer(
         .executable = payer_account.executable,
         .rent_epoch = payer_account.rent_epoch,
     };
-    defer payer_shared.deinit(allocator);
+    errdefer payer_shared.deinit(allocator);
 
     const fee_payer_loaded_rent_epoch = payer_shared.rent_epoch;
 
@@ -170,10 +174,6 @@ pub fn checkFeePayer(
         fee_details.total(),
     )) |validation_error| return .{ .err = validation_error };
 
-    // Store the payer back after being charged, since the transaction needs to
-    // see it with the fees already collected.
-    try wrapDB(accounts.put(fee_payer_key, payer_shared));
-
     var rollbacks = std14.BoundedArray(LoadedAccount, 2){};
     errdefer for (rollbacks.slice()) |rollback| rollback.deinit(allocator);
 
@@ -202,7 +202,11 @@ pub fn checkFeePayer(
         }) catch unreachable;
     }
 
-    return .{ .ok = .{ fee_details, rollbacks } };
+    return .{ .ok = .{ fee_details, rollbacks, .{
+        .account = payer_shared,
+        .loaded_size = payer_loaded_size,
+        .rent_collected = rent_collected,
+    } } };
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/dad81b9b2ecf81ceb518dd9f7cc91e83ba33bda8/fee/src/lib.rs#L85
@@ -786,7 +790,7 @@ test "checkFeePayer: happy path fee payer only" {
     const result = try checkFeePayer(
         allocator,
         &transaction,
-        .{ .account_shared_data_map = .{ allocator, &account_map } },
+        .{ .account_shared_data_map = &account_map },
         &ComputeBudgetLimits.DEFAULT,
         null,
         &sig.core.rent_collector.defaultCollector(10),
@@ -795,7 +799,8 @@ test "checkFeePayer: happy path fee payer only" {
         5000,
     );
 
-    const fee_details, const rollbacks = result.ok;
+    const fee_details, const rollbacks, const prepared_fee_payer = result.ok;
+    defer prepared_fee_payer.account.deinit(allocator);
 
     try std.testing.expectEqual(5000, fee_details.transaction_fee);
     try std.testing.expectEqual(0, fee_details.prioritization_fee);
@@ -851,7 +856,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
     const result = try checkFeePayer(
         allocator,
         &transaction,
-        .{ .account_shared_data_map = .{ allocator, &account_map } },
+        .{ .account_shared_data_map = &account_map },
         &ComputeBudgetLimits.DEFAULT,
         .{
             .pubkey = transaction.fee_payer,
@@ -863,7 +868,8 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         5000,
     );
 
-    const fee_details, const rollbacks = result.ok;
+    const fee_details, const rollbacks, const prepared_fee_payer = result.ok;
+    defer prepared_fee_payer.account.deinit(allocator);
     defer for (rollbacks.slice()) |r| r.deinit(allocator);
 
     try std.testing.expectEqual(1, rollbacks.len);
@@ -920,7 +926,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
     const result = try checkFeePayer(
         allocator,
         &transaction,
-        .{ .account_shared_data_map = .{ allocator, &account_map } },
+        .{ .account_shared_data_map = &account_map },
         &ComputeBudgetLimits.DEFAULT,
         .{
             .pubkey = Pubkey.initRandom(prng.random()),
@@ -932,7 +938,8 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         5000,
     );
 
-    const fee_details, const rollbacks = result.ok;
+    const fee_details, const rollbacks, const prepared_fee_payer = result.ok;
+    defer prepared_fee_payer.account.deinit(allocator);
     defer for (rollbacks.slice()) |r| r.deinit(allocator);
 
     const rollback_nonce_account = rollbacks.get(0).account;
