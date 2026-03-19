@@ -29,23 +29,9 @@
       rev = commits.TEST_VECTORS_COMMIT;
     };
 
-    solana-conformance = pkgs.stdenvNoCC.mkDerivation {
-      pname = "solana-conformance";
-      version = "0";
-      src = builtins.fetchGit {
-        url = "https://github.com/firedancer-io/solana-conformance.git";
-        rev = commits.SOLANA_CONFORMANCE_COMMIT;
-        submodules = true;
-      };
-      nativeBuildInputs = with pkgs; [bash gcc python311];
-      outputHashMode = "recursive";
-      outputHash = "sha256-VthTCGzJI067yTGaXClxuO7YgAC656Ed1BIlKuoCg2k=";
-      installPhase = ''
-        cp -r $src repo && chmod -R +w repo
-        cd repo
-        python3.11 -m venv venv
-        SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 venv/bin/pip wheel --wheel-dir $out '.[dev,octane]'
-      '';
+    solana-conformance = builtins.fetchGit {
+      url = "https://github.com/firedancer-io/solana-conformance.git";
+      rev = commits.SOLANA_CONFORMANCE_COMMIT;
     };
 
     baseShellHook = ''
@@ -55,7 +41,8 @@
 
       python3.11 -m venv env/venv
       source env/venv/bin/activate
-      pip install --no-index --find-links=${solana-conformance} solana-conformance[dev,octane]
+      cp -r ${solana-conformance} env/solana-conformance && chmod +w -R env/solana-conformance
+      SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 pip install env/solana-conformance[dev,octane]
     '';
   in {
     formatter.${system} = pkgs.alejandra;
@@ -75,7 +62,7 @@
             pkgs.llvmPackages_19.libclang.lib
           ]}"
           export LIBCLANG_PATH="${pkgs.llvmPackages_19.libclang.lib}/lib"
-          scripts/setup-env.sh get-solfuzz-agave
+          scripts/get-solfuzz-agave.sh
         '';
       };
     };

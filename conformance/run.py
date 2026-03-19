@@ -18,14 +18,9 @@ except:
     print(
         textwrap.dedent(
             f"""
-          To create the environment:
-
-              {conformance_dir}/scripts/setup-env.sh
-
           To activate the environment:
 
-              source {conformance_dir}/env/pyvenv/bin/activate
-
+              nix develop
           """
         )
     )

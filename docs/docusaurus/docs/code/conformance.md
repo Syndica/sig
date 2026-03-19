@@ -1,51 +1,43 @@
-Dependencies:
-- python 3.11
-- zig 0.15.2
-- git
+# Dependencies
 
-Optional dependencies, for building solfuzz-agave:
-- cmake
-- gcc
-- cargo/rust
-
-# Run tests
-
-Just to run the conformance tests.
+Install [nix](https://nixos.org/download/) if you do not have it.
 
 ```bash
-# install system dependencies
-scripts/install-system-deps.sh solana-conformance
-
-# set up the test environment
-scripts/setup-env.sh
-source env/pyvenv/bin/activate
-
-# compile the sig binary to test
-zig build -Doptimize=ReleaseSafe solfuzz_sig
-
-# re-run conformance tests using test vectors
-./run.py
-
-# for more options
-./run.py --help
+nix develop           # if you only want to run the tests
+nix develop .#full    # if you also want to debug solfuzz-agave
 ```
 
-# Debug Agave
+# Build
 
-If you want to debug solfuzz_agave or manually generate fixtures, you'll need to set up the `full` environment instead of just the basic default.
+To run the conformance tests, you'll need a build of solfuzz_sig. Either Debug or ReleaseSafe builds are fine.
 
 ```bash
-# install system dependencies
-scripts/install-system-deps.sh solana-conformance solfuzz-agave
+zig build solfuzz_sig
+```
 
-# set up the test environment, including solfuzz_agave
-scripts/setup-env.sh full
-source env/pyvenv/bin/activate
 
-# compile the sig binary to test
-zig build -Doptimize=ReleaseSafe solfuzz_sig
+# Run
 
-# create the fixtures from agave, and run the conformance tests 
+**Run all the test vectors**
+
+```bash
+./run.py
+```
+
+For customization, try the `--help` option.
+
+**Run the conformance CI job**
+
+```bash
+scripts/ci-run.sh
+```
+
+**Debug Agave**
+
+If you want to debug solfuzz_agave or manually generate fixtures, you'll need to use the `full` environment (described above). Then you can use some commands like these:
+
+```bash
+# create the fixtures from agave, and run the conformance tests
 ./run.py --create
 
 # re-run conformance tests using your created fixtures
