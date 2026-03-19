@@ -68,7 +68,8 @@ pub fn sendTransaction(
     if (config.minContextSlot) |min_slot| {
         if (preflight_slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
-    var preflight_slot_ref = self.slot_tracker.get(preflight_slot) orelse unreachable;
+    var preflight_slot_ref = self.slot_tracker.get(preflight_slot) orelse
+        return error.SlotNotAvailable;
     defer preflight_slot_ref.release();
 
     const transaction = try sanitizeTransaction(
