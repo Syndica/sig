@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 #
 # This script runs the `solana_conformance` step in CI.
-#
-# To run locally, set these variables:
-#   export SPLIT_TESTS=false
-#   export PREBUILT_LIB_DIR=zig-out/lib
-#
+
 set -euxo pipefail
 
-SPLIT_TESTS=${SPLIT_TESTS:-true}
-PREBUILT_LIB_DIR=${PREBUILT_LIB_DIR:-../workspace/conformance-release/lib}
+SPLIT_TESTS=${SPLIT_TESTS:-false}
+PREBUILT_LIB_DIR=${PREBUILT_LIB_DIR:-zig-out/lib}
 NUM_THREADS=${NUM_THREADS:-$(nproc || sysctl -n hw.ncpu || echo 1)}
 
 conformance_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

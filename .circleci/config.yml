@@ -290,7 +290,10 @@ jobs:
           name: Run Fixtures
           command: |
             cd conformance
-            nix develop -c ./scripts/ci-run.sh
+            nix develop \
+              -s SPLIT_TESTS true \
+              -s PREBUILT_LIB_DIR ../workspace/conformance-release/lib \
+              -c ./scripts/ci-run.sh
       - save_cache:
           key: nix-v1-{{ checksum "conformance/flake.nix" }}-{{ checksum "conformance/flake.lock" }}-{{ checksum "conformance/commits.env" }}
           paths:
