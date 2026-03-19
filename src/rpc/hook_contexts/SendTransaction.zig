@@ -20,6 +20,7 @@ const Transaction = sig.core.Transaction;
 const TransactionInfo = sig.TransactionSenderService.TransactionInfo;
 const TransactionSender = sig.TransactionSenderService.TransactionSender;
 
+const computeBudgetExecute = sig.runtime.program.compute_budget.execute;
 const getDurableNonce = sig.runtime.check_transactions.getDurableNonce;
 const getSysvarFromAccount = sig.replay.update_sysvar.getSysvarFromAccount;
 const resolveTransaction = sig.replay.resolve_lookup.resolveTransaction;
@@ -208,6 +209,11 @@ fn sanitizeTransaction(
         .slot_hashes = slot_hashes,
     });
 
+    const compute_budget_instruction_details = switch (computeBudgetExecute(&tx.msg)) {
+        .ok => |details| details,
+        .err => return error.InvalidParams,
+    };
+
     const msg_hash = Message.hash((try tx.msg.serializeBounded(tx.version)).constSlice());
     return .{
         .signature_count = tx.signatures.len,
@@ -216,7 +222,7 @@ fn sanitizeTransaction(
         .recent_blockhash = tx.msg.recent_blockhash,
         .instructions = resolved.instructions,
         .accounts = resolved.accounts,
-        .compute_budget_instruction_details = .{},
+        .compute_budget_instruction_details = compute_budget_instruction_details,
         .num_lookup_tables = tx.msg.address_lookups.len,
         .is_simple_vote_transaction = false,
     };
