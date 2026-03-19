@@ -27,11 +27,11 @@ comm -23 \
     <(sort scripts/failing.txt) \
     | if [ "$SPLIT_TESTS" == "true" ]; then circleci tests split; else cat; fi \
     | sed 's_^_env/test-vectors/_' \
-    | xargs -d '\n' ln -t env/split-fixtures/
+    | xargs -d '\n' cp -t env/split-fixtures/
 
 echo Running fixtures
-env/pyvenv/bin/solana-conformance exec-fixtures \
+solana-conformance exec-fixtures \
     --num-processes $NUM_THREADS \
     -t ${PREBUILT_LIB_DIR}/libsolfuzz_sig.so \
-    -o test_results/ \
+    -o env/test_results/ \
     -i env/split-fixtures/ | tee /dev/tty | grep -q "Failed: 0,"
