@@ -1775,8 +1775,11 @@ fn validator(
         mock_transfer_service = sig.MockTransferService{
             .exit = .{ .unordered = app_base.exit },
             .logger = .from(app_base.logger),
-            .mode = try .initRpc(gpa, rpc_url, .noop),
-            .sender = transaction_sender_service.receiver,
+            .client = try .init(gpa, rpc_url, .{
+                .max_retries = 5,
+                .logger = .noop,
+            }),
+            .submit = .{ .direct = transaction_sender_service.receiver },
             .transfers = n,
         };
 
