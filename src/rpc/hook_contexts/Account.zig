@@ -835,7 +835,7 @@ pub fn getLargestAccounts(
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
-    const slot_reader = self.account_reader.forSlot(ancestors);
+    const slot_reader = self.account_reader.forSlot(ancestors).toOwnedReader();
 
     const results = try slot_reader.getLargest(arena, GetLargestAccounts.MAX_LARGEST_ACCOUNTS);
 

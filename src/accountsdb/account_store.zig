@@ -330,7 +330,7 @@ pub const SlotAccountReader = union(enum) {
         limit: u32,
     ) ![]const struct { sig.core.Pubkey, u64 } {
         return switch (self) {
-            .accounts_db => |pair| {
+            .accounts_db, .accounts_db_owned => |pair| {
                 const db, const ancestors = pair;
                 return db.getLargest(allocator, ancestors, limit);
             },
