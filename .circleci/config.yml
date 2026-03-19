@@ -41,200 +41,169 @@ jobs:
           paths:
             - "*"
 
-  # build_and_test_linux:
-  #   executor: linux-executor
-  #   steps:
-  #     - checkout
-  #     - attach_workspace:
-  #         at: workspace
-  #     - restore_cache:
-  #         key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted
-  #     - run:
-  #         name: Build
-  #         command: |
-  #           sudo apt-get update -y && sudo apt-get install wget -y
-  #           ./scripts/proxy_workaround.sh workspace/zig/zig
-  #           workspace/zig/zig build -Denable-tsan=true -p workspace/zig-out -Dcpu=x86_64_v3 --summary all
-  #     - save_cache:
-  #         key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted
-  #         paths:
-  #           - .zig-cache
-  #           - ~/.cache/zig
-  #     - run:
-  #         name: Build Tests
-  #         # Disable network-accessing tests for this job, which behave badly on circleci
-  #         command: workspace/zig/zig build test -Dno-run -Dlong-tests -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --summary all
-  #     - run:
-  #         name: Run Tests
-  #         command: zig-out/bin/test 2>&1 | cat
+  build_and_test_linux:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted
+      - run:
+          name: Build
+          command: |
+            sudo apt-get update -y && sudo apt-get install wget -y
+            ./scripts/proxy_workaround.sh workspace/zig/zig
+            workspace/zig/zig build -Denable-tsan=true -p workspace/zig-out -Dcpu=x86_64_v3 --summary all
+      - save_cache:
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted
+          paths:
+            - .zig-cache
+            - ~/.cache/zig
+      - run:
+          name: Build Tests
+          # Disable network-accessing tests for this job, which behave badly on circleci
+          command: workspace/zig/zig build test -Dno-run -Dlong-tests -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --summary all
+      - run:
+          name: Run Tests
+          command: zig-out/bin/test 2>&1 | cat
 
-  # build_linux_release:
-  #   executor: linux-executor
-  #   steps:
-  #     - checkout
-  #     - attach_workspace:
-  #         at: workspace
-  #     - restore_cache:
-  #         key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted-release
-  #     - run:
-  #         name: Build
-  #         command: |
-  #           sudo apt-get update -y && sudo apt-get install wget -y
-  #           ./scripts/proxy_workaround.sh workspace/zig/zig
-  #           workspace/zig/zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p workspace/zig-out-release --summary all
-  #     - run:
-  #         name: Build Conformance
-  #         command: |
-  #           cd conformance
-  #           ../workspace/zig/zig build -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p ../workspace/conformance-release --summary all
-  #     - save_cache:
-  #         key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted-release
-  #         paths:
-  #           - .zig-cache
-  #           - ~/.cache/zig
-  #     - persist_to_workspace:
-  #         root: workspace
-  #         paths:
-  #           - "zig-out-release/bin/sig"
-  #           - "zig-out-release/bin/fuzz"
-  #           - "conformance-release/lib/libsolfuzz_sig.so"
+  build_check_macos:
+    executor: macos-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: macos-aarch64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}
+      - run:
+          name: Build Check
+          command: |
+            ulimit -Hn unlimited
+            ulimit -Sn unlimited
+            export PATH="workspace/zig:$PATH"
 
-  # build_check_macos:
-  #   executor: macos-executor
-  #   steps:
-  #     - checkout
-  #     - attach_workspace:
-  #         at: workspace
-  #     - restore_cache:
-  #         key: macos-aarch64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}
-  #     - run:
-  #         name: Build Check
-  #         command: |
-  #           ulimit -Hn unlimited
-  #           ulimit -Sn unlimited
-  #           export PATH="workspace/zig:$PATH"
+            # it seems that the feature detection is a bit broken in CircleCI's virtual machines
+            # so we will manually say that it's an Apple M4.
 
-  #           # it seems that the feature detection is a bit broken in CircleCI's virtual machines
-  #           # so we will manually say that it's an Apple M4.
+            zig build -Denable-tsan=true -Dcpu=apple_m4 --summary all -Dno-run -Dno-bin
+      - save_cache:
+          key: macos-aarch64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}
+          paths:
+            - .zig-cache
+            - ~/.cache/zig
 
-  #           zig build -Denable-tsan=true -Dcpu=apple_m4 --summary all -Dno-run -Dno-bin
-  #     - save_cache:
-  #         key: macos-aarch64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}
-  #         paths:
-  #           - .zig-cache
-  #           - ~/.cache/zig
+  test_macos:
+    executor: macos-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: macos-aarch64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}
+      - run:
+          name: Build Tests
+          command: workspace/zig/zig build test -Dno-run -Denable-tsan=true -Dcpu=apple_m4 --summary all
+      - run:
+          name: Run Tests
+          command: |
+            ulimit -Hn unlimited
+            ulimit -Sn unlimited
+            zig-out/bin/test 2>&1 | cat
+      - save_cache:
+          key: macos-aarch64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}
+          paths:
+            - .zig-cache
+            - ~/.cache/zig
 
-  # test_macos:
-  #   executor: macos-executor
-  #   steps:
-  #     - checkout
-  #     - attach_workspace:
-  #         at: workspace
-  #     - restore_cache:
-  #         key: macos-aarch64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}
-  #     - run:
-  #         name: Build Tests
-  #         command: workspace/zig/zig build test -Dno-run -Denable-tsan=true -Dcpu=apple_m4 --summary all
-  #     - run:
-  #         name: Run Tests
-  #         command: |
-  #           ulimit -Hn unlimited
-  #           ulimit -Sn unlimited
-  #           zig-out/bin/test 2>&1 | cat
-  #     - save_cache:
-  #         key: macos-aarch64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}
-  #         paths:
-  #           - .zig-cache
-  #           - ~/.cache/zig
+  test_macos_hashmap_ledger:
+    executor: macos-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: macos-aarch64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}
+      - run:
+          name: Build Tests
+          command: workspace/zig/zig build test -Dno-run -Denable-tsan=true -Dcpu=apple_m4 --summary all -Dlong-tests -Dledger=hashmap -Dfilter="ledger"
+      - run:
+          name: Run Tests
+          command: |
+            ulimit -Hn unlimited
+            ulimit -Sn unlimited
+            zig-out/bin/test 2>&1 | cat
+      - save_cache:
+          key: macos-aarch64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}
+          paths:
+            - .zig-cache
+            - ~/.cache/zig
 
-  # test_macos_hashmap_ledger:
-  #   executor: macos-executor
-  #   steps:
-  #     - checkout
-  #     - attach_workspace:
-  #         at: workspace
-  #     - restore_cache:
-  #         key: macos-aarch64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}
-  #     - run:
-  #         name: Build Tests
-  #         command: workspace/zig/zig build test -Dno-run -Denable-tsan=true -Dcpu=apple_m4 --summary all -Dlong-tests -Dledger=hashmap -Dfilter="ledger"
-  #     - run:
-  #         name: Run Tests
-  #         command: |
-  #           ulimit -Hn unlimited
-  #           ulimit -Sn unlimited
-  #           zig-out/bin/test 2>&1 | cat
-  #     - save_cache:
-  #         key: macos-aarch64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}
-  #         paths:
-  #           - .zig-cache
-  #           - ~/.cache/zig
+  test_webzockets_macos:
+    executor: macos-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
+      - run:
+          name: Build and Run Webzockets Tests
+          command: |
+            ulimit -Hn unlimited
+            ulimit -Sn unlimited
+            cd src/rpc/webzockets
+            ../../../workspace/zig/zig build test -Dcpu=apple_m4 --summary all
 
-  # test_webzockets_macos:
-  #   executor: macos-executor
-  #   steps:
-  #     - checkout
-  #     - attach_workspace:
-  #         at: workspace
-  #     - restore_cache:
-  #         key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
-  #     - run:
-  #         name: Build and Run Webzockets Tests
-  #         command: |
-  #           ulimit -Hn unlimited
-  #           ulimit -Sn unlimited
-  #           cd src/rpc/webzockets
-  #           ../../../workspace/zig/zig build test -Dcpu=apple_m4 --summary all
+  test_kcov_linux:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted
+      - run:
+          name: Build
+          command: workspace/zig/zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-network-tests --summary all
+      - docker_as_user
+      - run:
+          name: Test and Collect
+          command: |
+            docker run --security-opt seccomp=unconfined \
+                       $DOCKER_MOUNT \
+                       kcov/kcov \
+                       bash scripts/kcov_ci.sh
+      - run:
+          name: Upload coverage to Codecov
+          command: |
+            # Attempt to fix codecov/patch stuck on "Waiting for status to be reported":
+            # When GitHub's merge queue triggers CircleCI, CIRCLE_SHA1 is the
+            # temporary merge commit — but GitHub expects the status on the PR
+            # head commit. We detect merge commits (two parents) and resolve
+            # back to the actual PR head SHA so Codecov posts to the right commit.
+            # See: https://community.codecov.com/t/codecov-status-stuck-at-waiting-for-status-to-be-reported-on-github/341
+            # See: https://docs.codecov.com/docs/merge-commits
+            echo "=== Codecov SHA debug ==="
+            echo "CIRCLE_SHA1:  $CIRCLE_SHA1"
+            echo "CIRCLE_BRANCH: ${CIRCLE_BRANCH:-unset}"
+            echo "HEAD:         $(git rev-parse HEAD)"
+            echo "HEAD^1:       $(git rev-parse HEAD^1 2>/dev/null || echo 'N/A')"
+            echo "HEAD^2:       $(git rev-parse HEAD^2 2>/dev/null || echo 'N/A (not a merge commit)')"
+            UPLOAD_SHA="$CIRCLE_SHA1"
+            if git rev-parse HEAD^2 >/dev/null 2>&1; then
+              echo "Merge commit detected"
+            else
+              echo "Not a merge commit"
+              echo "Uploading coverage for $UPLOAD_SHA"
+            fi
+            echo "========================="
 
-  # test_kcov_linux:
-  #   executor: linux-executor
-  #   steps:
-  #     - checkout
-  #     - attach_workspace:
-  #         at: workspace
-  #     - restore_cache:
-  #         key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted
-  #     - run:
-  #         name: Build
-  #         command: workspace/zig/zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-network-tests --summary all
-  #     - docker_as_user
-  #     - run:
-  #         name: Test and Collect
-  #         command: |
-  #           docker run --security-opt seccomp=unconfined \
-  #                      $DOCKER_MOUNT \
-  #                      kcov/kcov \
-  #                      bash scripts/kcov_ci.sh
-  #     - run:
-  #         name: Upload coverage to Codecov
-  #         command: |
-  #           # Attempt to fix codecov/patch stuck on "Waiting for status to be reported":
-  #           # When GitHub's merge queue triggers CircleCI, CIRCLE_SHA1 is the
-  #           # temporary merge commit — but GitHub expects the status on the PR
-  #           # head commit. We detect merge commits (two parents) and resolve
-  #           # back to the actual PR head SHA so Codecov posts to the right commit.
-  #           # See: https://community.codecov.com/t/codecov-status-stuck-at-waiting-for-status-to-be-reported-on-github/341
-  #           # See: https://docs.codecov.com/docs/merge-commits
-  #           echo "=== Codecov SHA debug ==="
-  #           echo "CIRCLE_SHA1:  $CIRCLE_SHA1"
-  #           echo "CIRCLE_BRANCH: ${CIRCLE_BRANCH:-unset}"
-  #           echo "HEAD:         $(git rev-parse HEAD)"
-  #           echo "HEAD^1:       $(git rev-parse HEAD^1 2>/dev/null || echo 'N/A')"
-  #           echo "HEAD^2:       $(git rev-parse HEAD^2 2>/dev/null || echo 'N/A (not a merge commit)')"
-  #           UPLOAD_SHA="$CIRCLE_SHA1"
-  #           if git rev-parse HEAD^2 >/dev/null 2>&1; then
-  #             echo "Merge commit detected"
-  #           else
-  #             echo "Not a merge commit"
-  #             echo "Uploading coverage for $UPLOAD_SHA"
-  #           fi
-  #           echo "========================="
-
-  #           curl -fsSLo codecov https://cli.codecov.io/v11.2.6/linux/codecov
-  #           chmod +x codecov
-  #           ./codecov --verbose upload-coverage \
-  #             --dir kcov-merged/kcov-merged \
-  #             --commit-sha "$UPLOAD_SHA"
+            curl -fsSLo codecov https://cli.codecov.io/v11.2.6/linux/codecov
+            chmod +x codecov
+            ./codecov --verbose upload-coverage \
+              --dir kcov-merged/kcov-merged \
+              --commit-sha "$UPLOAD_SHA"
 
   gossip_and_fuzz:
     executor: linux-executor
@@ -284,6 +253,11 @@ jobs:
           command: |
             cd conformance
             ../workspace/zig/zig build -p ../workspace/conformance-release --summary all
+      - save_cache:
+          key: build_conformance-v1-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-{{ checksum "conformance/build.zig" }}-{{ checksum "conformance/build.zig.zon" }}
+          paths:
+            - .zig-cache
+            - ~/.cache/zig
       - persist_to_workspace:
           root: workspace
           paths:
@@ -298,8 +272,6 @@ jobs:
       - checkout
       - attach_workspace:
           at: workspace
-      - restore_cache:
-          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted-release
       - run:
           name: Prepare /nix permissions so cache restore works
           command: |
@@ -315,11 +287,6 @@ jobs:
             echo 'experimental-features = nix-command flakes' > ~/.config/nix/nix.conf
             echo '. /home/circleci/.nix-profile/etc/profile.d/nix.sh' >> "$BASH_ENV"
       - run:
-          name: time nix setup
-          command: |
-            cd conformance
-            nix develop -c true
-      - run:
           name: Run Fixtures
           command: |
             cd conformance
@@ -332,53 +299,53 @@ jobs:
             - /nix/var/nix/profiles
             - ~/.cache/nix
 
-  # linux_misc_checks:
-  #   executor: linux-executor
-  #   steps:
-  #     - checkout
-  #     - attach_workspace:
-  #         at: workspace
-  #     - restore_cache:
-  #         key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted
-  #     - run:
-  #         name: Install Python PIP
-  #         command: |
-  #           sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -yq update
-  #           sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -yq install python3 python3-pip
-  #     - run:
-  #         name: Lint (Zig)
-  #         command: |
-  #           workspace/zig/zig fmt --check src/ build.zig
-  #           cd conformance/
-  #           ../workspace/zig/zig fmt --check src/ build.zig
-  #     - run:
-  #         name: Check style
-  #         command: |
-  #           python3 scripts/style.py --check src
-  #           python3 scripts/style.py --check conformance/src
-  #           python3 scripts/style.py --check v2/src
-  #     - run:
-  #         name: Check docs
-  #         command: python3 docs/check.py ./
-  #     - run:
-  #         name: V2 checks
-  #         command: |
-  #           sudo apt-get update -y && sudo apt-get install wget -y
-  #           ./scripts/proxy_workaround.sh workspace/zig/zig
-  #           cd v2/
-  #           ../workspace/zig/zig build ci --summary all
-  #     - run:
-  #         name: Build and test hashmap ledger (linux)
-  #         command: |
-  #           workspace/zig/zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
-  #           zig-out/bin/test 2>&1 | cat
-  #     - restore_cache:
-  #         key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted
-  #     - run:
-  #         name: Webzockets tests (linux)
-  #         command: |
-  #           cd src/rpc/webzockets
-  #           ../../../workspace/zig/zig build test -Dcpu=x86_64_v3 --summary all
+  linux_misc_checks:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted
+      - run:
+          name: Install Python PIP
+          command: |
+            sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -yq update
+            sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -yq install python3 python3-pip
+      - run:
+          name: Lint (Zig)
+          command: |
+            workspace/zig/zig fmt --check src/ build.zig
+            cd conformance/
+            ../workspace/zig/zig fmt --check src/ build.zig
+      - run:
+          name: Check style
+          command: |
+            python3 scripts/style.py --check src
+            python3 scripts/style.py --check conformance/src
+            python3 scripts/style.py --check v2/src
+      - run:
+          name: Check docs
+          command: python3 docs/check.py ./
+      - run:
+          name: V2 checks
+          command: |
+            sudo apt-get update -y && sudo apt-get install wget -y
+            ./scripts/proxy_workaround.sh workspace/zig/zig
+            cd v2/
+            ../workspace/zig/zig build ci --summary all
+      - run:
+          name: Build and test hashmap ledger (linux)
+          command: |
+            workspace/zig/zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
+            zig-out/bin/test 2>&1 | cat
+      - restore_cache:
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-selfhosted
+      - run:
+          name: Webzockets tests (linux)
+          command: |
+            cd src/rpc/webzockets
+            ../../../workspace/zig/zig build test -Dcpu=x86_64_v3 --summary all
 
 workflows:
   check_linux:
@@ -386,18 +353,18 @@ workflows:
       - setup_zig:
           name: setup_zig_linux
           target: "x86_64-linux"
-      # - test_kcov_linux:
-      #     requires:
-      #       - setup_zig_linux
+      - test_kcov_linux:
+          requires:
+            - setup_zig_linux
       - gossip_and_fuzz:
           requires:
             - setup_zig_linux
-      # - build_and_test_linux:
-      #     requires:
-      #       - setup_zig_linux
-      # - linux_misc_checks:
-      #     requires:
-      #       - setup_zig_linux
+      - build_and_test_linux:
+          requires:
+            - setup_zig_linux
+      - linux_misc_checks:
+          requires:
+            - setup_zig_linux
       - build_conformance:
           requires:
             - setup_zig_linux
@@ -405,20 +372,20 @@ workflows:
           requires:
             - build_conformance
 
-#   check_macos:
-#     jobs:
-#       - setup_zig:
-#           name: setup_zig_macos
-#           target: "aarch64-macos"
-#       - build_check_macos:
-#           requires:
-#             - setup_zig_macos
-#       - test_macos:
-#           requires:
-#             - build_check_macos
-#       - test_macos_hashmap_ledger:
-#           requires:
-#             - build_check_macos
-#       - test_webzockets_macos:
-#           requires:
-#             - setup_zig_macos
+  check_macos:
+    jobs:
+      - setup_zig:
+          name: setup_zig_macos
+          target: "aarch64-macos"
+      - build_check_macos:
+          requires:
+            - setup_zig_macos
+      - test_macos:
+          requires:
+            - build_check_macos
+      - test_macos_hashmap_ledger:
+          requires:
+            - build_check_macos
+      - test_webzockets_macos:
+          requires:
+            - setup_zig_macos
