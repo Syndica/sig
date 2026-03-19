@@ -567,7 +567,7 @@ pub fn getTokenAccountsByOwner(
     var iter = blk: {
         const z = tracy.Zone.init(@src(), .{ .name = "rpc.gTABO.splTokenOwnerQuery" });
         defer z.deinit();
-        break :blk try slot_reader.getBySplTokenOwner(arena, &params.owner);
+        break :blk try slot_reader.getBySplTokenOwner(&params.owner);
     };
     defer iter.deinit();
 

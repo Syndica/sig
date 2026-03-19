@@ -561,7 +561,21 @@ fn putWithoutTokenOwner(
     const stmt: *sql.sqlite3_stmt = if (put_stmt) |stmt| stmt else blk: {
         // Insert or update only if last_modified_slot is greater (excluded = VALUES)
         // https://sqlite.org/lang_upsert.html#examples
-        const query =
+        const query = if (self.enable_spl_token_owner_index)
+            \\INSERT INTO entries
+            \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?)
+            \\ON CONFLICT(address) DO UPDATE SET
+            \\  lamports=excluded.lamports,
+            \\  data=excluded.data,
+            \\  owner=excluded.owner,
+            \\  executable=excluded.executable,
+            \\  rent_epoch=excluded.rent_epoch,
+            \\  last_modified_slot=excluded.last_modified_slot,
+            \\  token_owner=NULL
+            \\WHERE excluded.last_modified_slot > entries.last_modified_slot
+            \\;
+        else
             \\INSERT INTO entries
             \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot)
             \\VALUES (?, ?, ?, ?, ?, ?, ?)

@@ -328,7 +328,6 @@ pub const SlotAccountReader = union(enum) {
 
     pub fn getBySplTokenOwner(
         self: SlotAccountReader,
-        _: Allocator,
         token_owner: *const Pubkey,
     ) !OwnerIterator {
         return switch (self) {
