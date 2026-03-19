@@ -15,11 +15,13 @@ const GetBlock = methods.GetBlock;
 const GetBlockCommitment = methods.GetBlockCommitment;
 const GetBlockProduction = methods.GetBlockProduction;
 const GetBlockHeight = methods.GetBlockHeight;
-const GetClusterNodes = methods.GetClusterNodes;
+const GetBlockTime = methods.GetBlockTime;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
+const GetClusterNodes = methods.GetClusterNodes;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
+const GetFirstAvailableBlock = methods.GetFirstAvailableBlock;
 const GetFeeForMessage = methods.GetFeeForMessage;
 const GetGenesisHash = methods.GetGenesisHash;
 const GetInflationGovernor = methods.GetInflationGovernor;
@@ -28,6 +30,8 @@ const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
 const GetInflationReward = methods.GetInflationReward;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
+const GetMaxRetransmitSlot = methods.GetMaxRetransmitSlot;
+const GetMaxShredInsertSlot = methods.GetMaxShredInsertSlot;
 const GetMultipleAccounts = methods.GetMultipleAccounts;
 const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
 const GetRecentPrioritizationFees = methods.GetRecentPrioritizationFees;
@@ -45,6 +49,7 @@ const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 const GetMinimumBalanceForRentExemption = methods.GetMinimumBalanceForRentExemption;
 const IsBlockhashValid = methods.IsBlockhashValid;
+const MinimumLedgerSlot = methods.MinimumLedgerSlot;
 
 const Response = rpc.response.Response;
 
@@ -183,6 +188,20 @@ test GetBlockHeight {
     );
     try testResponse(GetBlockHeight, .{ .result = 268651537 },
         \\{"jsonrpc":"2.0","result":268651537,"id":1}
+    );
+}
+
+test GetBlockTime {
+    try testRequest(.getBlockTime, .{ .slot = 5 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockTime","params":[5]}
+    );
+    // Response with a timestamp
+    try testResponse(GetBlockTime, .{ .result = 1574721591 },
+        \\{"jsonrpc":"2.0","result":1574721591,"id":1}
+    );
+    // Response with null (block time not available)
+    try testResponse(GetBlockTime, .{ .result = null },
+        \\{"jsonrpc":"2.0","result":null,"id":1}
     );
 }
 
@@ -471,7 +490,14 @@ test "getFeeForMessage" {
     );
 }
 
-// TODO: test getFirstAvailableBlock()
+test GetFirstAvailableBlock {
+    try testRequest(.getFirstAvailableBlock, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getFirstAvailableBlock","params":[]}
+    );
+    try testResponse(GetFirstAvailableBlock, .{ .result = 250000 },
+        \\{"jsonrpc":"2.0","result":250000,"id":1}
+    );
+}
 
 test GetGenesisHash {
     try testRequest(.getGenesisHash, .{},
@@ -630,8 +656,23 @@ test GetLeaderSchedule {
     );
 }
 
-// TODO: test getMaxRetransmitSlot()
-// TODO: test getMaxShredInsertSlot()
+test GetMaxRetransmitSlot {
+    try testRequest(.getMaxRetransmitSlot, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getMaxRetransmitSlot","params":[]}
+    );
+    try testResponse(GetMaxRetransmitSlot, .{ .result = 1234 },
+        \\{"jsonrpc":"2.0","result":1234,"id":1}
+    );
+}
+
+test GetMaxShredInsertSlot {
+    try testRequest(.getMaxShredInsertSlot, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getMaxShredInsertSlot","params":[]}
+    );
+    try testResponse(GetMaxShredInsertSlot, .{ .result = 1234 },
+        \\{"jsonrpc":"2.0","result":1234,"id":1}
+    );
+}
 
 test GetMinimumBalanceForRentExemption {
     try testRequest(.getMinimumBalanceForRentExemption, .{ .data_len = 50 },
@@ -1101,7 +1142,14 @@ test IsBlockhashValid {
     );
 }
 
-// TODO: test minimumLedgerSlot()
+test MinimumLedgerSlot {
+    try testRequest(.minimumLedgerSlot, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"minimumLedgerSlot","params":[]}
+    );
+    try testResponse(MinimumLedgerSlot, .{ .result = 1234 },
+        \\{"jsonrpc":"2.0","result":1234,"id":1}
+    );
+}
 // TODO: test requestAirdrop()
 // TODO: test sendTransaction()
 // TODO: test simulateTransaction()

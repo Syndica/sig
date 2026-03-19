@@ -49,12 +49,12 @@ pub const MethodAndParams = union(enum) {
     getBlockProduction: GetBlockProduction,
     getBlocks: GetBlocks,
     getBlocksWithLimit: GetBlocksWithLimit,
-    getBlockTime: noreturn,
+    getBlockTime: GetBlockTime,
     getClusterNodes: GetClusterNodes,
     getEpochInfo: GetEpochInfo,
     getEpochSchedule: GetEpochSchedule,
+    getFirstAvailableBlock: GetFirstAvailableBlock,
     getFeeForMessage: GetFeeForMessage,
-    getFirstAvailableBlock: noreturn,
 
     /// https://github.com/Syndica/sig/issues/557
     getGenesisHash: GetGenesisHash,
@@ -71,8 +71,8 @@ pub const MethodAndParams = union(enum) {
     getLargestAccounts: noreturn,
     getLatestBlockhash: GetLatestBlockhash,
     getLeaderSchedule: GetLeaderSchedule,
-    getMaxRetransmitSlot: noreturn,
-    getMaxShredInsertSlot: noreturn,
+    getMaxRetransmitSlot: GetMaxRetransmitSlot,
+    getMaxShredInsertSlot: GetMaxShredInsertSlot,
     getMinimumBalanceForRentExemption: GetMinimumBalanceForRentExemption,
     getMultipleAccounts: GetMultipleAccounts,
     getRecentPerformanceSamples: GetRecentPerformanceSamples,
@@ -95,7 +95,7 @@ pub const MethodAndParams = union(enum) {
     getVersion: GetVersion,
     getVoteAccounts: GetVoteAccounts,
     isBlockhashValid: IsBlockhashValid,
-    minimumLedgerSlot: noreturn,
+    minimumLedgerSlot: MinimumLedgerSlot,
     requestAirdrop: RequestAirdrop,
     sendTransaction: SendTransaction,
     simulateTransaction: noreturn,
@@ -941,7 +941,11 @@ pub const GetBlockProduction = struct {
     };
 };
 
-// TODO: getBlockTime
+pub const GetBlockTime = struct {
+    slot: Slot,
+
+    pub const Response = ?sig.core.UnixTimestamp;
+};
 
 pub const GetBlocks = struct {
     start_slot: Slot,
@@ -1059,7 +1063,10 @@ pub const GetEpochSchedule = struct {
 };
 
 // TODO: getFeeForMessage
-// TODO: getFirstAvailableBlock
+
+pub const GetFirstAvailableBlock = struct {
+    pub const Response = Slot;
+};
 
 pub const GetGenesisHash = struct {
     pub const Response = struct {
@@ -1243,8 +1250,13 @@ pub const GetLeaderSchedule = struct {
     };
 };
 
-// TODO: getMaxRetransmitSlot
-// TODO: getMaxShredInsertSlot
+pub const GetMaxRetransmitSlot = struct {
+    pub const Response = Slot;
+};
+
+pub const GetMaxShredInsertSlot = struct {
+    pub const Response = Slot;
+};
 
 /// Returns minimum balance required to make account rent exempt.
 /// https://solana.com/docs/rpc/http/getminimumbalanceforrentexemption
@@ -1577,7 +1589,9 @@ pub const IsBlockhashValid = struct {
     };
 };
 
-// TODO: minimumLedgerSlot
+pub const MinimumLedgerSlot = struct {
+    pub const Response = Slot;
+};
 
 pub const RequestAirdrop = struct {
     pubkey: Pubkey,
