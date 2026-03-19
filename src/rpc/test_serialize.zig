@@ -1794,7 +1794,7 @@ test SendTransaction {
     // Response with transaction signature
     try testResponse(
         SendTransaction,
-        .{ .result = .parse("2id3YC2jK9G5Wo2phDx4gJVAew8DcY5NAojnVuao8rkxwPYPe8cSwE5GzhEgJA2y8fVjDEo6iR7FPjmm9Pmhk87") },
+        .{ .result = .{ .signature = .parse("2id3YC2jK9G5Wo2phDx4gJVAew8DcY5NAojnVuao8rkxwPYPe8cSwE5GzhEgJA2y8fVjDEo6iR7FPjmm9Pmhk87") } },
         \\{"jsonrpc":"2.0","result":"2id3YC2jK9G5Wo2phDx4gJVAew8DcY5NAojnVuao8rkxwPYPe8cSwE5GzhEgJA2y8fVjDEo6iR7FPjmm9Pmhk87","id":1}
         ,
     );

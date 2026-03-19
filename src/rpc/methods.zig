@@ -1608,7 +1608,36 @@ pub const SendTransaction = struct {
         }
     };
 
-    pub const Response = Signature;
+    pub const Response = union(enum) {
+        signature: Signature,
+        preflight_failure: PreflightFailure,
+
+        pub fn jsonParse(allocator: Allocator, source: anytype, options: std.json.ParseOptions) !Response {
+            // On the wire, a successful sendTransaction result is just a signature string.
+            return .{ .signature = try std.json.innerParse(Signature, allocator, source, options) };
+        }
+
+        pub fn jsonStringify(self: Response, jw: anytype) !void {
+            switch (self) {
+                // On success, serialize just the signature (matching agave's response format).
+                .signature => |s| try jw.write(s),
+                // preflight_failure is handled by the server layer as a JSON-RPC error,
+                // not serialized through the normal result path.
+                .preflight_failure => unreachable,
+            }
+        }
+    };
+
+    /// Agave's JSON_RPC_SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE.
+    /// See: https://github.com/anza-xyz/agave/blob/master/rpc-client-api/src/custom_error.rs#L16
+    pub const preflight_failure_code: i64 = -32002;
+
+    pub const PreflightFailure = struct {
+        err: sig.ledger.transaction_status.TransactionError,
+        logs: []const []const u8,
+        units_consumed: u64,
+        loaded_accounts_data_size: u32,
+    };
 };
 
 // TODO: simulateTransaction

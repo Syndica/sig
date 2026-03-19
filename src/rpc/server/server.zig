@@ -947,3 +947,92 @@ test "JSON-RPC POST getHealth returns error for behind status" {
         try std.testing.expectEqual(@as(?u64, 100), data.numSlotsBehind);
     }
 }
+
+test "JSON-RPC POST sendTransaction returns -32002 error on preflight failure" {
+    const allocator = std.testing.allocator;
+    const logger_unscoped: Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
+
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+
+    // Hook that returns a preflight failure
+    try rpc_hooks.set(allocator, struct {
+        pub fn sendTransaction(
+            _: anytype,
+            _: std.mem.Allocator,
+            _: sig.rpc.methods.SendTransaction,
+        ) !sig.rpc.methods.SendTransaction.Response {
+            return .{ .preflight_failure = .{
+                .err = .SignatureFailure,
+                .logs = &.{},
+                .units_consumed = 0,
+                .loaded_accounts_data_size = 0,
+            } };
+        }
+    }{});
+
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
+    var server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = &rpc_hooks,
+        .socket_addr = sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    var exit = std.atomic.Value(bool).init(false);
+    const serve_thread = try serveSpawn(&exit, &server_ctx, .basic);
+    defer serve_thread.join();
+    defer exit.store(true, .release);
+
+    const localhost_url_bounded = sig.utils.fmt.boundedFmt(
+        "http://localhost:{d}/",
+        .{server_ctx.tcp.listen_address.getPort()},
+    );
+    const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
+
+    // Send a sendTransaction request (the hook ignores the actual transaction data)
+    const request_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"sendTransaction","params":["AAAA"]}
+    ;
+
+    const resp_str = try testHttpFetchSelf(allocator, .POST, localhost_url, .{
+        .body = request_body,
+        .headers = .{
+            .content_type = .{ .override = "application/json" },
+        },
+    });
+    defer allocator.free(resp_str);
+
+    // Parse and verify the response has error code -32002 (SendTransactionPreflightFailure)
+    const parsed = try std.json.parseFromSlice(struct {
+        jsonrpc: []const u8,
+        id: ?u32 = null,
+        @"error": struct {
+            code: i64,
+            message: []const u8,
+            data: ?struct {
+                err: []const u8,
+                logs: ?[]const []const u8 = null,
+                unitsConsumed: ?u64 = null,
+                loadedAccountsDataSize: ?u32 = null,
+            } = null,
+        },
+    }, allocator, resp_str, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(@as(i64, -32002), parsed.value.@"error".code);
+    try std.testing.expectEqualStrings(
+        "Transaction simulation failed: SignatureFailure",
+        parsed.value.@"error".message,
+    );
+    if (parsed.value.@"error".data) |data| {
+        try std.testing.expectEqualStrings("SignatureFailure", data.err);
+        try std.testing.expectEqual(@as(?u64, 0), data.unitsConsumed);
+    } else {
+        return error.TestExpectedData;
+    }
+}

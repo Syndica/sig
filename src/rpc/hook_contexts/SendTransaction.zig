@@ -19,10 +19,18 @@ const SlotTracker = sig.replay.trackers.SlotTracker;
 const Transaction = sig.core.Transaction;
 const TransactionInfo = sig.TransactionSenderService.TransactionInfo;
 const TransactionSender = sig.TransactionSenderService.TransactionSender;
+const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
+const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
+const SvmGateway = sig.replay.svm_gateway.SvmGateway;
+const TransactionError = sig.ledger.transaction_status.TransactionError;
+const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
+const InstructionTrace = sig.runtime.TransactionContext.InstructionTrace;
 
 const getDurableNonce = sig.runtime.check_transactions.getDurableNonce;
 const getSysvarFromAccount = sig.replay.update_sysvar.getSysvarFromAccount;
 const resolveTransaction = sig.replay.resolve_lookup.resolveTransaction;
+const preprocessTransaction = sig.replay.preprocess_transaction.preprocessTransaction;
+const executeTransaction = sig.replay.svm_gateway.executeTransaction;
 
 /// Analogous to [MAX_BASE58_SIZE](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4341)
 const MAX_BASE58_SIZE: usize = 1683;
@@ -34,8 +42,10 @@ const PACKET_DATA_SIZE = sig.net.Packet.DATA_SIZE;
 const SendTransactionHookContext = @This();
 
 slot_tracker: *SlotTracker,
-account_reader: sig.accounts_db.AccountReader,
+account_store: sig.accounts_db.AccountStore,
 tx_svc_channel: *TransactionSender,
+epoch_tracker: *sig.core.EpochTracker,
+status_cache: *sig.core.StatusCache,
 
 pub fn sendTransaction(
     self: SendTransactionHookContext,
@@ -68,7 +78,7 @@ pub fn sendTransaction(
         unsanitized_tx,
         preflight_slot,
         &preflight_slot_ref,
-        self.account_reader.forSlot(&preflight_slot_ref.constants().ancestors),
+        self.account_store.reader().forSlot(&preflight_slot_ref.constants().ancestors),
     );
 
     const durable_nonce_info: ?struct { Pubkey, Hash } = if (getDurableNonce(&transaction)) |nonce|
@@ -88,10 +98,31 @@ pub fn sendTransaction(
     };
 
     if (!skip_preflight) {
-        @panic("TODO");
+        const result: SimulateTransactionResult = blk: {
+            unsanitized_tx.verify() catch break :blk .{ .err = .SignatureFailure };
+            // TODO: Health Check
+            // Agave json rpc config specifies a health check which checks node health before servicing requests.
+            // We should consider the same.
+            // [agave] https://github.com/anza-xyz/agave/blob/2a61a3ecd417b0515c0b2f322d0128394f20626b/rpc/src/rpc.rs#L3867-L3886
+            break :blk try self.simulateTransaction(
+                arena,
+                transaction,
+                preflight_slot,
+                &preflight_slot_ref,
+            );
+        };
+
+        if (result.err) |err| {
+            return .{ .preflight_failure = .{
+                .err = err,
+                .logs = result.logs,
+                .units_consumed = result.units_consumed,
+                .loaded_accounts_data_size = result.loaded_accounts_data_size,
+            } };
+        }
     }
 
-    return try sendTransactionImpl(
+    return .{ .signature = try sendTransactionImpl(
         self.tx_svc_channel,
         unsanitized_tx,
         transaction.msg_hash,
@@ -99,7 +130,7 @@ pub fn sendTransaction(
         last_valid_block_height,
         durable_nonce_info,
         config.maxRetries,
-    );
+    ) };
 }
 
 /// Analogous to [decode_and_deserialize](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4343)
@@ -160,7 +191,7 @@ fn sendTransactionImpl(
     last_valid_block_height: u64,
     durable_nonce_info: ?struct { Pubkey, Hash },
     max_retries: ?usize,
-) !SendTransaction.Response {
+) !sig.core.Signature {
     const signature = transaction.signatures[0];
     const transaction_info: TransactionInfo = .initWithWire(
         transaction,
@@ -217,6 +248,99 @@ fn sanitizeTransaction(
         .compute_budget_instruction_details = .{},
         .num_lookup_tables = tx.msg.address_lookups.len,
         .is_simple_vote_transaction = false,
+    };
+}
+
+const SimulateTransactionResult = struct {
+    err: ?TransactionError,
+    logs: []const []const u8 = &[_][]const u8{},
+    post_simulation_accounts: ProcessedTransaction.Writes = .{},
+    units_consumed: u64 = 0,
+    loaded_accounts_data_size: u32 = 0,
+    return_data: ?TransactionReturnData = null,
+    inner_instructions: ?InstructionTrace = null,
+    fee: ?u64 = null,
+    pre_balances: ProcessedTransaction.PreBalances = .{},
+    post_balances: ProcessedTransaction.PreBalances = .{},
+    pre_token_balances: ProcessedTransaction.PreTokenBalances = .{},
+    post_token_balances: ProcessedTransaction.PreTokenBalances = .{},
+};
+
+fn simulateTransaction(
+    self: *const SendTransactionHookContext,
+    arena: Allocator,
+    transaction: RuntimeTransaction,
+    preflight_slot: Slot,
+    preflight_slot_ref: *const SlotTracker.Reference,
+    // TODO: enable_cpi_recording.
+) !SimulateTransactionResult {
+    const slot_state = preflight_slot_ref.state();
+    const slot_constants = preflight_slot_ref.constants();
+
+    const epoch_info = try self.epoch_tracker.getEpochInfo(preflight_slot);
+
+    var svm_gateway = try SvmGateway.init(arena, .{
+        .slot = preflight_slot,
+        .max_age = sig.core.BlockhashQueue.MAX_PROCESSING_AGE / 2,
+        .lamports_per_signature = slot_constants.fee_rate_governor.lamports_per_signature,
+        .blockhash_queue = &slot_state.blockhash_queue,
+        .account_store = self.account_store.forSlot(preflight_slot, &slot_constants.ancestors),
+        .ancestors = &slot_constants.ancestors,
+        .feature_set = slot_constants.feature_set,
+        .rent_collector = &slot_constants.rent_collector,
+        .epoch_stakes = &epoch_info.stakes,
+        .status_cache = self.status_cache,
+    });
+
+    const processed_transaction = switch (try executeTransaction(
+        // NOTE: We use the arena for both the programs allocator and the tmp allocator since the
+        // SvmGateway only exists for this transaction simulation and all associated resources are
+        // released after simulation.
+        arena,
+        arena,
+        &svm_gateway,
+        &transaction,
+    )) {
+        .ok => |processed_transaction| processed_transaction,
+        .err => |err| return .{ .err = err },
+    };
+
+    const outputs = processed_transaction.outputs;
+
+    return .{
+        .err = processed_transaction.err,
+        .logs = if (outputs) |out| if (out.log_collector) |lc| blk: {
+            const log_messages = try arena.alloc([]const u8, lc.message_indices.items.len);
+            var it = lc.iterator();
+            var i: usize = 0;
+            while (it.next()) |msg| : (i += 1) {
+                log_messages[i] = msg;
+            }
+            break :blk log_messages;
+        } else &[_][]const u8{} else &[_][]const u8{},
+        .post_simulation_accounts = processed_transaction.writes,
+        .units_consumed = if (outputs) |out| out.compute_limit - out.compute_meter else 0,
+        .loaded_accounts_data_size = processed_transaction.loaded_accounts_data_size,
+        .return_data = if (outputs) |out| out.return_data else null,
+        .inner_instructions = if (outputs) |out| out.instruction_trace else null,
+        .fee = processed_transaction.fees.total(),
+        .pre_balances = processed_transaction.pre_balances,
+        .post_balances = blk: {
+            var post = processed_transaction.pre_balances;
+            for (processed_transaction.writes.constSlice()) |*written_account| {
+                for (transaction.accounts.items(.pubkey), 0..) |pubkey, idx| {
+                    if (pubkey.equals(&written_account.pubkey)) {
+                        post.set(idx, written_account.account.lamports);
+                        break;
+                    }
+                }
+            }
+            break :blk post;
+        },
+        .pre_token_balances = processed_transaction.pre_token_balances,
+        .post_token_balances = sig.runtime.spl_token.collectRawTokenBalances(
+            processed_transaction.writes.constSlice(),
+        ),
     };
 }
 
