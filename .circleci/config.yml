@@ -300,6 +300,7 @@ jobs:
             sh <(curl --proto '=https' --tlsv1.2 -L https://nixos.org/nix/install) --no-daemon
             mkdir -p ~/.config/nix
             echo 'experimental-features = nix-command flakes' > ~/.config/nix/nix.conf
+            echo '. /home/circleci/.nix-profile/etc/profile.d/nix.sh' >> "$BASH_ENV"
       - run:
           name: time nix setup
           command: |
