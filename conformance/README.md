@@ -24,12 +24,24 @@ zig build solfuzz_sig
 ./run.py
 ```
 
-For customization, try the `--help` option.
+For customization, try `--help`.
 
 **Run the conformance CI job**
 
 ```bash
 scripts/ci-run.sh
+```
+
+**Run solana-conformance directly**
+
+run.py is a helper script to make this process easier. But in some cases when debugging, it's useful to interact directly with solana-conformance. Here's an example of how to run the zk_sdk tests with solana-conformance:
+
+```bash
+solana-conformance \
+    exec-fixtures \
+    -i env/test-vectors/instr/fixtures/zk_sdk \
+    -t zig-out/lib/libsolfuzz_sig.so \
+    -o env/test-outputs/
 ```
 
 **Debug Agave**
