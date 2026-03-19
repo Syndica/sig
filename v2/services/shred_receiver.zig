@@ -5,6 +5,7 @@ const std = @import("std");
 const start = @import("start");
 const lib = @import("lib");
 const tracy = @import("tracy");
+const rs_table = common.reed_solomon_table;
 
 // const shred = common.shred;
 // const layout = shred.layout;
@@ -187,7 +188,7 @@ const Shred = extern struct {
         /// returns a code variant as a data variant (or vice versa), preserving its fields
         fn swapType(self: Variant) Variant {
             // swaps bit 4 and 5, swaps bit 6 and 7
-            return .{ .inner = ((self.inner & 0x50) << 1) | ((self.inner & 0xA0) >> 1) };
+            return .{ .inner = ((self.inner & 0x50) << 1) | ((self.inner & 0xA0) >> 1) | (self.inner & 0x0F) };
         }
 
         // upper 4 bits
@@ -297,32 +298,34 @@ const Shred = extern struct {
 
     // This is combined with fragments from other shreds in the erasure set to
     // reconstruct a collection of entries.
-    fn erasureFragment(shred: *const Shred) []const u8 {
-        _ = shred;
+    fn erasureFragment(shred: *const Shred) ?[]const u8 {
+        const packet: *const Packet = @ptrCast(@alignCast(shred));
+        const header_size = shred.variant.headerSize();
+        if (header_size == 0) unreachable; // we should have gotten rid of this shred earlier?
+
+        // capacity = payload_size - headers_size - chained_merkle_root - merkle_proof - retransmitter_sig
+        const payload_size: usize = if (shred.variant.isData()) min_size else max_size;
+        const chained_size: usize = if (shred.variant.isChained()) merkle_root_size else 0;
+        const proof_size: usize = @as(usize, shred.variant.merkleCount()) * merkle_node_size;
+        const resign_size: usize = if (shred.variant.isResigned()) Signature.SIZE else 0;
+        const trailer = chained_size + proof_size + resign_size;
+
+        if (payload_size < header_size + trailer) return null;
+        const cap = payload_size - header_size - trailer;
+
+        const end = header_size + cap;
+        if (end > packet.data.len) return null;
+
+        // Data shreds: erasure shard starts after signature (offset 64)
+        // Code shreds: erasure shard starts after header
+        const start_off: usize = if (shred.variant.isData()) Signature.SIZE else header_size;
+        return packet.data[start_off..end];
     }
 
     // This is the Merkle root for the previous erasure set.
     fn chainedMerkleRoot(shred: *const Shred) *const [32]u8 {
         _ = shred;
     }
-
-    // fn capacity(packet: *const Packet) u16 {
-    //     const shred = fromPacketUnchecked(packet);
-    //     // NOTE: ported this check from v1, isn't this a tautology?
-    //     std.debug.assert(shred.variant.isChained() or !shred.variant.isResigned() );
-
-    //     return shred.
-
-    // // return std.math.sub(
-    // //     usize,
-    // //     constants.payload_size,
-    // //     constants.headers_size +
-    // //         (if (variant.chained) SIZE_OF_MERKLE_ROOT else 0) +
-    // //         variant.proof_size * merkle_proof_entry_size +
-    // //         (if (variant.resigned) Signature.SIZE else 0),
-    // // ) catch error.InvalidProofSize;
-    //     _ = shred;
-    // }
 
     fn size(shred: *const Shred) u16 {
         const packet: *const Packet = @ptrCast(@alignCast(shred));
@@ -356,18 +359,20 @@ const Shred = extern struct {
     // does not include: retransmit signature + proof nodes
     // [firedancer] https://github.com/firedancer-io/firedancer/blob/9f7770af997a1443e7903113fc03ca1ce3b0ad73/src/ballet/shred/fd_shred.c#L109
     fn merkleProtected(shred: *const Shred) []const u8 {
-        const erasure_protected_size = 1115 + @sizeOf(DataHeader) -
+        const erasure_protected_size = 1115 + @offsetOf(Shred, "code_or_data") + @sizeOf(DataHeader) -
             Signature.SIZE -
             merkle_node_size * shred.variant.merkleCount() -
             @intFromBool(shred.variant.isChained()) * @as(usize, merkle_root_size) -
             @intFromBool(shred.variant.isResigned()) * Signature.SIZE;
+
+        std.log.info("erasure_protected_size: {}", .{erasure_protected_size});
 
         const data_merkle_protected_size = erasure_protected_size +
             @as(usize, merkle_root_size) * @intFromBool(shred.variant.isChained());
 
         const code_merkle_protected_size = erasure_protected_size +
             @as(usize, merkle_root_size) * @intFromBool(shred.variant.isChained()) +
-            @sizeOf(CodeHeader) -
+            @offsetOf(Shred, "code_or_data") + @sizeOf(CodeHeader) -
             Signature.SIZE;
 
         const merkle_protected_size = if (shred.variant.isData())
@@ -375,7 +380,7 @@ const Shred = extern struct {
         else
             code_merkle_protected_size;
 
-        return @as(*const Packet, @ptrCast(@alignCast(shred))).data[Signature.SIZE..merkle_protected_size];
+        return @as(*const Packet, @ptrCast(@alignCast(shred))).data[Signature.SIZE..][0..merkle_protected_size];
     }
 
     // Added by the node who retransmitted the shred to us over Turbine.
@@ -388,8 +393,8 @@ const Shred = extern struct {
 
     // Reconstructs the merkle root from a shred
     fn merkleRoot(shred: *const Shred, out: *Hash) !void {
-        const zone = tracy.Zone.init(@src(), .{ .name = "merkleRoot" });
-        defer zone.deinit();
+        // const zone = tracy.Zone.init(@src(), .{ .name = "merkleRoot" });
+        // defer zone.deinit();
 
         std.debug.assert(shred.variant.isMerkle());
 
@@ -421,7 +426,7 @@ const Shred = extern struct {
         out.* = Hash.initMany(&.{ MERKLE_HASH_PREFIX_LEAF, merkle_protected_data });
     }
 
-    fn joinNodes(out: *Hash, lhs: []const u8, rhs: []const u8) void {
+    fn joinNodes(out: *Hash, lhs: *const [20]u8, rhs: *const [20]u8) void {
         const t = Hash.initMany(&.{ MERKLE_HASH_PREFIX_NODE, lhs, rhs });
         out.* = t;
     }
@@ -437,8 +442,8 @@ const Shred = extern struct {
 
         for (proof_nodes) |*node| {
             switch (idx % 2) {
-                0 => joinNodes(out, &out.data, &node.data),
-                1 => joinNodes(out, &node.data, &out.data),
+                0 => joinNodes(out, out.data[0..merkle_node_size], &node.data),
+                1 => joinNodes(out, &node.data, out.data[0..merkle_node_size]),
                 else => unreachable,
             }
             idx >>= 1;
@@ -478,6 +483,130 @@ test "Shred layout" {
 
     if (@alignOf(Shred) != 1) @compileError("Shred should be align(1)");
 }
+
+/// GF(2^8) arithmetic and Reed-Solomon encoding matrix for erasure coding.
+/// All operations use pre-computed lookup tables from reed_solomon_table.zig.
+const field = struct {
+    inline fn add(a: u8, b: u8) u8 {
+        return a ^ b;
+    }
+
+    inline fn mul(a: u8, b: u8) u8 {
+        return rs_table.mul[a][b];
+    }
+
+    inline fn div(a: u8, b: u8) u8 {
+        if (a == 0) return 0;
+        const log_a = rs_table.log[a];
+        const log_b = rs_table.log[b];
+        const log_result: i16 = @as(i16, log_a) - @as(i16, log_b);
+        return rs_table.exp[@intCast(if (log_result < 0) log_result + 255 else log_result)];
+    }
+
+    fn exp(a: u8, n: usize) u8 {
+        if (n == 0) return 1;
+        if (a == 0) return 0;
+        var log_result: usize = @as(usize, rs_table.log[a]) * n;
+        while (log_result >= 255) {
+            log_result -= 255;
+        }
+        return rs_table.exp[log_result];
+    }
+};
+
+/// Comptime-generated 64x32 encoding matrix for Reed-Solomon with data_count=32, code_count=32.
+/// Top 32 rows = identity matrix (for data shreds), bottom 32 rows = parity coefficients.
+/// Derived from: Vandermonde(64x32) * inverse(Vandermonde_top(32x32))
+const encoding_matrix: [64][32]u8 = blk: {
+    @setEvalBranchQuota(1_000_000);
+
+    const total = 64;
+    const data = 32;
+
+    // Step 1: Build 64x32 Vandermonde matrix
+    var vandermonde: [total][data]u8 = undefined;
+    for (0..total) |r| {
+        for (0..data) |c| {
+            vandermonde[r][c] = field.exp(@intCast(r), c);
+        }
+    }
+
+    // Step 2: Extract top 32x32 submatrix and invert via Gaussian elimination
+    // Build augmented matrix [top | identity]
+    var aug: [data][data * 2]u8 = undefined;
+    for (0..data) |r| {
+        for (0..data) |c| {
+            aug[r][c] = vandermonde[r][c];
+        }
+        for (0..data) |c| {
+            aug[r][data + c] = if (r == c) 1 else 0;
+        }
+    }
+
+    // Gaussian elimination (forward)
+    for (0..data) |r| {
+        // Find pivot
+        if (aug[r][r] == 0) {
+            for (r + 1..data) |r_below| {
+                if (aug[r_below][r] != 0) {
+                    const tmp = aug[r];
+                    aug[r] = aug[r_below];
+                    aug[r_below] = tmp;
+                    break;
+                }
+            }
+        }
+        // Scale pivot row
+        if (aug[r][r] != 1) {
+            const scale = field.div(1, aug[r][r]);
+            for (0..data * 2) |c| {
+                aug[r][c] = field.mul(scale, aug[r][c]);
+            }
+        }
+        // Eliminate below
+        for (r + 1..data) |r_below| {
+            if (aug[r_below][r] != 0) {
+                const scale = aug[r_below][r];
+                for (0..data * 2) |c| {
+                    aug[r_below][c] = field.add(aug[r_below][c], field.mul(scale, aug[r][c]));
+                }
+            }
+        }
+    }
+    // Back-substitution (eliminate above)
+    for (0..data) |d| {
+        for (0..d) |r_above| {
+            if (aug[r_above][d] != 0) {
+                const scale = aug[r_above][d];
+                for (0..data * 2) |c| {
+                    aug[r_above][c] = field.add(aug[r_above][c], field.mul(scale, aug[d][c]));
+                }
+            }
+        }
+    }
+
+    // Extract inverted top matrix from right half of augmented matrix
+    var inv_top: [data][data]u8 = undefined;
+    for (0..data) |r| {
+        for (0..data) |c| {
+            inv_top[r][c] = aug[r][data + c];
+        }
+    }
+
+    // Step 3: Multiply Vandermonde(64x32) * inv_top(32x32) = encoding_matrix(64x32)
+    var result: [total][data]u8 = undefined;
+    for (0..total) |r| {
+        for (0..data) |c| {
+            var val: u8 = 0;
+            for (0..data) |i| {
+                val = field.add(val, field.mul(vandermonde[r][i], inv_top[i][c]));
+            }
+            result[r][c] = val;
+        }
+    }
+
+    break :blk result;
+};
 
 const FecSetCtx = extern struct {
     data_shreds_received: std.StaticBitSet(data_shreds_max),
@@ -742,19 +871,20 @@ fn FixedArrayMap(
 }
 
 const State = struct {
+    // NOTE: we don't need a VerifiedMerkleRoots cache, as our ProgressMap already handles this
     in_progress: ProgressMap,
     done: DoneMap,
-    verified_merkle_roots: VerifiedMerkleRoots,
+    // verified_merkle_roots: VerifiedMerkleRoots,
 
     const empty: State = .{
         .in_progress = .empty,
         .done = .empty,
-        .verified_merkle_roots = .empty,
+        // .verified_merkle_roots = .empty,
     };
 
     // const ProgressMap = FixedArrayMap(Signature, FecSetCtx, SignatureHash, hashSignature, Signature.eql, 256);
     const DoneMap = FixedArrayMap(FecSetId, SignatureHash, void, null, FecSetId.eql, 256);
-    const VerifiedMerkleRoots = FixedArrayMap(Hash, void, MerkleRootHash, hashMerkleRoot, Hash.eql, 128);
+    // const VerifiedMerkleRoots = FixedArrayMap(Hash, void, MerkleRootHash, hashMerkleRoot, Hash.eql, 128);
 
     const SignatureHash = u32;
     const MerkleRootHash = u32;
@@ -768,6 +898,204 @@ const State = struct {
     }
 };
 
+// Reconstructs data shreds when 32/64 shreds have been received
+fn reconstructFecSet(fec_set_ctx: *FecSetCtx) void {
+    const data_count = FecSetCtx.fec_shred_cnt;
+    const code_count = FecSetCtx.fec_shred_cnt;
+    const total_count = data_count + code_count;
+
+    // Build present[] mask and collect erasure shard length from first present shred
+    var present: [total_count]bool = @splat(false);
+    var shard_len: usize = 0;
+
+    for (0..data_count) |i| {
+        if (fec_set_ctx.data_shreds_received.isSet(i)) {
+            present[i] = true;
+            if (shard_len == 0) {
+                const shred = Shred.fromPacketUnchecked(&fec_set_ctx.data_shreds_buf[i]);
+                if (shred.erasureFragment()) |frag| {
+                    shard_len = frag.len;
+                }
+            }
+        }
+    }
+    for (0..code_count) |i| {
+        if (fec_set_ctx.code_shreds_received.isSet(i)) {
+            present[data_count + i] = true;
+            if (shard_len == 0) {
+                const shred = Shred.fromPacketUnchecked(&fec_set_ctx.code_shreds_buf[i]);
+                if (shred.erasureFragment()) |frag| {
+                    shard_len = frag.len;
+                }
+            }
+        }
+    }
+
+    if (shard_len == 0) return; // no valid shreds found
+
+    // Collect 32 valid indices (indices of present shreds in encoding_matrix row order)
+    var valid_indices: [data_count]u8 = undefined;
+    var valid_count: u8 = 0;
+    for (0..total_count) |i| {
+        if (present[i]) {
+            valid_indices[valid_count] = @intCast(i);
+            valid_count += 1;
+            if (valid_count == data_count) break;
+        }
+    }
+
+    if (valid_count < data_count) return; // not enough shreds
+
+    // Build 32x32 sub-matrix by picking rows from encoding_matrix
+    var sub_matrix: [data_count][data_count]u8 = undefined;
+    for (0..data_count) |r| {
+        sub_matrix[r] = encoding_matrix[valid_indices[r]];
+    }
+
+    // Invert sub_matrix via Gaussian elimination on augmented [sub_matrix | identity]
+    var aug: [data_count][data_count * 2]u8 = undefined;
+    for (0..data_count) |r| {
+        for (0..data_count) |c| {
+            aug[r][c] = sub_matrix[r][c];
+            aug[r][data_count + c] = if (r == c) @as(u8, 1) else @as(u8, 0);
+        }
+    }
+
+    // Forward elimination
+    for (0..data_count) |r| {
+        if (aug[r][r] == 0) {
+            for (r + 1..data_count) |r_below| {
+                if (aug[r_below][r] != 0) {
+                    const tmp = aug[r];
+                    aug[r] = aug[r_below];
+                    aug[r_below] = tmp;
+                    break;
+                }
+            }
+        }
+        if (aug[r][r] == 0) {
+            std.log.warn("FEC reconstruction: singular matrix at row {}", .{r});
+            return;
+        }
+        if (aug[r][r] != 1) {
+            const scale = field.div(1, aug[r][r]);
+            for (0..data_count * 2) |c| {
+                aug[r][c] = field.mul(scale, aug[r][c]);
+            }
+        }
+        for (r + 1..data_count) |r_below| {
+            if (aug[r_below][r] != 0) {
+                const scale = aug[r_below][r];
+                for (0..data_count * 2) |c| {
+                    aug[r_below][c] = field.add(aug[r_below][c], field.mul(scale, aug[r][c]));
+                }
+            }
+        }
+    }
+    // Back-substitution
+    for (0..data_count) |d| {
+        for (0..d) |r_above| {
+            if (aug[r_above][d] != 0) {
+                const scale = aug[r_above][d];
+                for (0..data_count * 2) |c| {
+                    aug[r_above][c] = field.add(aug[r_above][c], field.mul(scale, aug[d][c]));
+                }
+            }
+        }
+    }
+
+    // Extract inverted matrix from right half
+    var inv: [data_count][data_count]u8 = undefined;
+    for (0..data_count) |r| {
+        for (0..data_count) |c| {
+            inv[r][c] = aug[r][data_count + c];
+        }
+    }
+
+    // Find leader signature from any present data or code shred (first 64 bytes)
+    var leader_sig: [Signature.SIZE]u8 = undefined;
+    var have_sig = false;
+    for (0..data_count) |i| {
+        if (fec_set_ctx.data_shreds_received.isSet(i)) {
+            @memcpy(&leader_sig, fec_set_ctx.data_shreds_buf[i].data[0..Signature.SIZE]);
+            have_sig = true;
+            break;
+        }
+    }
+    if (!have_sig) {
+        for (0..code_count) |i| {
+            if (fec_set_ctx.code_shreds_received.isSet(i)) {
+                @memcpy(&leader_sig, fec_set_ctx.code_shreds_buf[i].data[0..Signature.SIZE]);
+                have_sig = true;
+                break;
+            }
+        }
+    }
+
+    // Collect pointers to erasure shards for the 32 valid indices
+    var shard_ptrs: [data_count][*]const u8 = undefined;
+    for (0..data_count) |k| {
+        const idx = valid_indices[k];
+        if (idx < data_count) {
+            const shred = Shred.fromPacketUnchecked(&fec_set_ctx.data_shreds_buf[idx]);
+            shard_ptrs[k] = (shred.erasureFragment() orelse return).ptr;
+        } else {
+            const shred = Shred.fromPacketUnchecked(&fec_set_ctx.code_shreds_buf[idx - data_count]);
+            shard_ptrs[k] = (shred.erasureFragment() orelse return).ptr;
+        }
+    }
+
+    // For each missing data shred, reconstruct its erasure shard
+    for (0..data_count) |i| {
+        if (present[i]) continue; // already have this data shred
+
+        // We need the i-th row of the inverted matrix to recover data shard i
+        const inv_row = &inv[i];
+
+        // Destination: write directly into the packet buffer
+        var dest_packet = &fec_set_ctx.data_shreds_buf[i];
+
+        // First, copy leader signature into bytes 0..64
+        if (have_sig) {
+            @memcpy(dest_packet.data[0..Signature.SIZE], &leader_sig);
+        }
+
+        // For data shreds, erasure shard starts at offset 64 (after signature)
+        // and ends at headers_size + capacity. We compute it the same way.
+        // The erasure shard for data shreds covers bytes [64 .. 64 + shard_len]
+        const dest_start = Signature.SIZE; // 64
+        const dest_end = dest_start + shard_len;
+        if (dest_end > dest_packet.data.len) return;
+
+        var dest = dest_packet.data[dest_start..dest_end];
+
+        // Multiply: dest[byte] = sum over k of (inv_row[k] * shard_ptrs[k][byte])
+        // First pass: dest = inv_row[0] * shard_ptrs[0]
+        const coeff0 = inv_row[0];
+        for (0..shard_len) |b| {
+            dest[b] = field.mul(coeff0, shard_ptrs[0][b]);
+        }
+        // Remaining passes: dest += inv_row[k] * shard_ptrs[k]
+        for (1..data_count) |k| {
+            const coeff = inv_row[k];
+            if (coeff == 0) continue;
+            for (0..shard_len) |b| {
+                dest[b] = field.add(dest[b], field.mul(coeff, shard_ptrs[k][b]));
+            }
+        }
+
+        // Set the packet size appropriately for a data shred
+        dest_packet.size = @intCast(Shred.min_size);
+
+        // Mark this data shred as received
+        fec_set_ctx.data_shreds_received.set(i);
+
+        std.log.info("FEC: recovered data shred index {}", .{i});
+    }
+}
+
+var state: State = .empty;
+
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
 
@@ -780,22 +1108,27 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
     logger.info().logf("Waiting for shreds on port {}", .{rw.net_pair.port});
 
-    var state: State = .empty;
+    // @compileLog(@sizeOf(State));
 
     while (true) {
         const packet = it.next() orelse continue;
         defer it.markUsed();
 
-        const zone = tracy.Zone.init(@src(), .{ .name = "shred recv" });
-        defer zone.deinit();
+        // const zone = tracy.Zone.init(@src(), .{ .name = "shred recv" });
+        // defer zone.deinit();
 
         const packet = slice.get(0);
         defer slice.markUsed(1);
+        defer std.log.info("", .{});
+
+        std.log.info("Got packet", .{});
 
         const shred = Shred.fromPacketChecked(packet) catch |err| {
             std.log.info("bad packet, err {}\n", .{err});
             continue; // TODO: report reasons for rejecting/ignoring shreds in all cases
         };
+
+        // std.log.info("Got valid shred", .{});
 
         // ignore shred from a slot that's too old
         if (shred.slot < stub_root_slot) continue;
@@ -811,9 +1144,14 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         }
         if (shred.variant.isLegacy()) continue; // ignore legacy
 
+        // std.log.info("Got valid shred passing checks", .{});
+
         // is fec set already being built?
+
         const maybe_fec_set = state.in_progress.getFecSetCtx(&shred.signature);
         if (maybe_fec_set == null) {
+            std.log.info("got shred in unknown fec set", .{});
+
             // fec set is not currently being built (likely finished already)
 
             const fec_set_id: FecSetId = .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot };
@@ -822,25 +1160,35 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             if (state.done.get(&fec_set_id)) |finished_set| {
                 const signature_hash = State.hashSignature(&shred.signature);
                 if (signature_hash == finished_set.*) {
+                    std.log.info("found equivocated shred?", .{});
+
                     // likely equivocation
                     continue;
                 } else {
+                    std.log.info("got shred from finished fec set", .{});
+
                     continue;
                 }
             }
 
             // if we have this FecSetId with a different signature, this means equivocation has occured
-            if (state.in_progress.containsFecSetId(&fec_set_id)) continue;
+            if (state.in_progress.containsFecSetId(&fec_set_id)) {
+                std.log.info("found equivocated shred", .{});
+
+                continue;
+            }
         }
 
         // at
 
-        std.log.info("packet_shred: {}\n", .{shred});
+        // std.log.info("packet_shred: {}\n", .{shred});
 
         const in_type_idx = if (shred.variant.isData())
             shred.slot_idx - shred.fec_set_idx
         else
             shred.code_or_data.code.code_shred_idx;
+
+        std.log.info("in_type_idx: {}", .{in_type_idx});
 
         // const shred_idx = if (shred.variant.isData())
         //     in_type_idx
@@ -850,15 +1198,25 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         if (shred.fec_set_idx % FecSetCtx.fec_shred_cnt != 0) continue;
         if (in_type_idx >= FecSetCtx.fec_shred_cnt) continue;
 
+        std.log.info("shred {} ({s}) validated + passing checks + index not too high", .{
+            @as(FecSetId, .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot }),
+            if (shred.variant.isCode()) "code" else "data",
+        });
+
         if (shred.variant.isData()) {
             // data shreds marked as complete must be the last shred in the fec set.
             const slot_complete = 0x80; // hm
-            if ((shred.code_or_data.data.flags & slot_complete != 0) and (((shred.slot_idx + 1) % FecSetCtx.fec_shred_cnt) != 0))
+            if ((shred.code_or_data.data.flags & slot_complete != 0) and (((shred.slot_idx + 1) % FecSetCtx.fec_shred_cnt) != 0)) {
+                std.log.info("data shred marked as complete isn't the last shred in the set", .{});
                 continue;
+            }
         }
 
         const merkle_layer_count = 7;
-        if (shred.variant.merkleCount() > merkle_layer_count - 1) continue;
+        if (shred.variant.merkleCount() > merkle_layer_count - 1) {
+            std.log.info("merkleCount too large", .{});
+            continue;
+        }
 
         var shred_merkle_root: Hash = undefined;
         try shred.merkleRoot(&shred_merkle_root);
@@ -866,11 +1224,25 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         const fec_set_ctx: *FecSetCtx = if (maybe_fec_set) |fec_set_ctx| blk: {
             @branchHint(.likely); // fec set is being constructed, and this is not the first shred
 
-            // variant should match that of the first recorded shred in the fec set
-            if (shred.variant.isData() and !shred.variant.eql(fec_set_ctx.data_variant)) continue;
-            if (!shred.variant.isData() and !shred.variant.eql(fec_set_ctx.code_variant)) continue;
+            std.log.info("got shred in in-progress fec set", .{});
 
-            if (!fec_set_ctx.merkle_root.eql(&shred_merkle_root)) continue; // merkle root mismatch
+            // variant should match that of the first recorded shred in the fec set
+            if ((shred.variant.isData() and !shred.variant.eql(fec_set_ctx.data_variant)) or
+                (shred.variant.isCode() and !shred.variant.eql(fec_set_ctx.code_variant)))
+            {
+                std.log.info("dropping shred with variant mismatch, found {}, found_but_swapped: {}, expected_data: {}, expected_code: {}", .{
+                    shred.variant,
+                    shred.variant.swapType(),
+                    fec_set_ctx.data_variant,
+                    fec_set_ctx.code_variant,
+                });
+                continue;
+            }
+
+            if (!fec_set_ctx.merkle_root.eql(&shred_merkle_root)) {
+                std.log.info("merkle root mismatch\n", .{});
+                continue; // merkle root mismatch
+            }
             // TODO: check against prev and next shred if present
             // TODO: update in_progress state
             // TODO: check for duplicates?
@@ -878,10 +1250,22 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             break :blk fec_set_ctx;
         } else blk: {
             @branchHint(.unlikely); // this is the first shred of a new in-progress fec set
+            std.log.info("got shred in new fec set", .{});
+
             shred.signature.verify(
-                ro.leader_schedule.get(shred.slot) orelse continue, // unknown leader
+                ro.leader_schedule.get(shred.slot) orelse {
+                    std.log.info("unknown leader: {}", .{shred.slot});
+
+                    continue; // unknown leader
+                },
                 &shred_merkle_root.data,
-            ) catch continue; // invalid signature, or failed verification
+            ) catch |err| {
+                std.log.info("verification failed: {}", .{err});
+
+                continue; // invalid signature, or failed verification
+            };
+
+            std.log.info("got verified shred in new fec set", .{});
 
             // shred looks good, let's add a new ctx to in_progress
 
@@ -903,6 +1287,13 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
                 // .code_shred_count = shred.code_or_data.code,
             };
 
+            const fec_set_id: FecSetId = .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot };
+
+            state.in_progress.used[new_fec_set_idx] = true;
+            state.in_progress.ids[new_fec_set_idx] = fec_set_id;
+            state.in_progress.signatures[new_fec_set_idx] = shred.signature;
+            state.in_progress.sig_hashes[new_fec_set_idx] = hashSignature(&shred.signature);
+
             std.debug.assert(state.in_progress.contexts[new_fec_set_idx].totalShredsReceived() == 0);
 
             break :blk &state.in_progress.contexts[new_fec_set_idx];
@@ -913,11 +1304,15 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         // We now have a new shred that has passed validation
 
         if (shred.variant.isCode()) {
+            // TODO: this is a bad assert, remove it
+
             std.debug.assert(!fec_set_ctx.code_shreds_received.isSet(in_type_idx)); // assert shred not received before
             fec_set_ctx.code_shreds_received.set(in_type_idx); // track shred as received
             fec_set_ctx.code_shreds_buf[in_type_idx] = packet.*; // persist packet to our state
         }
         if (shred.variant.isData()) {
+            // TODO: this is a bad assert, remove it
+
             std.debug.assert(!fec_set_ctx.data_shreds_received.isSet(in_type_idx)); // assert shred not received before
             fec_set_ctx.data_shreds_received.set(in_type_idx); // track shred as received
             fec_set_ctx.data_shreds_buf[in_type_idx] = packet.*; // persist packet to our state
@@ -925,209 +1320,22 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
         std.debug.assert(fec_set_ctx.totalShredsReceived() >= 1); // we just received one
 
-        if (fec_set_ctx.totalShredsReceived() < FecSetCtx.fec_shred_cnt)
+        std.log.info("got {}/32 shreds", .{fec_set_ctx.totalShredsReceived()});
+
+        if (fec_set_ctx.totalShredsReceived() < FecSetCtx.fec_shred_cnt) {
             continue; // we're all good, but we haven't received enough to reconstruct the fec set yet
-
+        }
         // starting fec set reconstruction now
+        reconstructFecSet(fec_set_ctx);
 
-        // const merkle_tree = shred.variant.merkleCount()
+        var complete: bool = false;
+        for (&fec_set_ctx.data_shreds_buf) |*data_packet| {
+            const data_shred: *const Shred = .fromPacketUnchecked(data_packet);
 
-        // const reedsol
+            complete = complete or data_shred.code_or_data.data.flags & 0x40 != 0;
+            if (complete) break;
+        }
 
-        // // packet.size
-
-        // _ = Shred.fromPacketChecked(packet) orelse continue;
-
-        // validateShred(packet, stub_root_slot, &stub_shred_version, stub_max_slot) catch |err| {
-        //     std.log.info("invalid shred: {}", .{err});
-        //     continue;
-        // };
-
-        // verifyShred(packet, ro.leader_schedule, &verified_roots) catch |err| {
-        //     _ = err catch {};
-        //     std.log.info("failed to verify shred: {}", .{err});
-        //     continue;
-        // };
-
-        // // TODO: this is where we might retransmit
-
-        // const payload = layout.getShred(packet, false) orelse {
-        //     std.log.info("failed to get shred", .{});
-        //     continue;
-        // };
-
-        // const packet_shred = shred.Shred.fromPayload(payload) catch |err| {
-        //     std.log.info(
-        //         "failed to deserialize verified shred {?}.{?}: {}",
-        //         .{ layout.getSlot(payload), layout.getIndex(payload), err },
-        //     );
-        //     continue;
-        // };
-
-        // // try verified_shred_packets.append(verified_shred_packets_allocator, packet.*);
-        // // var verifed_shred = packet_shred;
-        // // switch (verifed_shred) {
-        // //     inline else => |*code_or_data_shred| {
-        // //         code_or_data_shred.payload = @ptrCast(verified_shred_packets.at(verified_shred_packets.len - 1));
-        // //     },
-        // // }
-
-        // // try verified_shreds.append(verified_shreds_allocator, verifed_shred);
-
-        // const verified_shred_header: *align(1) const Shred = @ptrCast(packet);
-        // std.log.info("verified_shred_header.fec_set_idx: {}\n", .{verified_shred_header.fec_set_idx});
-
-        // std.log.info(
-        //     \\slot: {}
-        //     \\erasure_set_index: {}
-        //     \\index: {}
-        //     \\shred_type: {}
-        //     \\
-        // , .{
-        //     packet_shred.commonHeader().slot,
-        //     packet_shred.commonHeader().erasure_set_index,
-        //     packet_shred.commonHeader().index,
-        //     packet_shred.commonHeader().variant.shred_type,
-        // });
+        std.log.info("complete? {}", .{complete});
     }
 }
-
-// /// A set of Merkle Roots which we have already verified (and therefore don't have to verify again).
-// /// Keeps up to `max_count` Merkle Roots. When full, removes the least recently inserted.
-// const VerifiedMerkleRoots = struct {
-//     map: Map,
-//     max_count: u32,
-
-//     const Map = std.ArrayHashMapUnmanaged(Hash, void, MapContext, true);
-
-//     const MapContext = struct {
-//         pub fn hash(_: MapContext, merkle_root: Hash) u32 {
-//             return @bitCast(merkle_root.data[0..4].*);
-//         }
-
-//         pub fn eql(_: MapContext, a: Hash, b: Hash, _: usize) bool {
-//             return a.eql(&b);
-//         }
-//     };
-
-//     fn init(allocator: std.mem.Allocator, max_count: u32) !VerifiedMerkleRoots {
-//         var map: Map = .{};
-//         errdefer map.deinit(allocator);
-
-//         try map.ensureTotalCapacity(allocator, max_count);
-
-//         return .{ .map = map, .max_count = max_count };
-//     }
-
-//     fn deinit(self: *VerifiedMerkleRoots, allocator: std.mem.Allocator) void {
-//         self.map.deinit(allocator);
-//     }
-
-//     fn wasVerified(self: *VerifiedMerkleRoots, hash: *const Hash) bool {
-//         return self.map.contains(hash.*);
-//     }
-
-//     fn insert(self: *VerifiedMerkleRoots, hash: *const Hash) void {
-//         if (self.map.count() == self.max_count) self.map.orderedRemoveAt(0);
-//         self.map.putAssumeCapacityNoClobber(hash.*, {});
-//     }
-// };
-
-// fn validateShred(
-//     packet: *const Packet,
-//     root: Slot,
-//     shred_version: *const Atomic(u16),
-//     max_slot: Slot,
-// ) ShredValidationError!void {
-//     const packet_shred = layout.getShred(packet, false) orelse return error.InsufficientShredSize;
-//     const version = layout.getVersion(packet_shred) orelse return error.MissingVersion;
-//     const slot = layout.getSlot(packet_shred) orelse return error.SlotMissing;
-//     const index = layout.getIndex(packet_shred) orelse return error.IndexMissing;
-//     const variant = layout.getShredVariant(packet_shred) orelse return error.VariantMissing;
-
-//     if (version != shred_version.load(.acquire)) return error.WrongVersion;
-//     if (slot > max_slot) return error.SlotTooNew;
-//     switch (variant.shred_type) {
-//         .code => {
-//             if (index >= shred.CodeShred.constants.max_per_slot) {
-//                 return error.CodeIndexTooHigh;
-//             }
-//             if (slot <= root) return error.RootedSlot;
-//         },
-//         .data => {
-//             if (index >= shred.DataShred.constants.max_per_slot) {
-//                 return error.DataIndexTooHigh;
-//             }
-//             const parent_slot_offset = layout.getParentSlotOffset(packet_shred) orelse {
-//                 return error.ParentSlotOffsetMissing;
-//             };
-//             const parent = slot -| @as(Slot, @intCast(parent_slot_offset));
-//             if (!verifyShredSlots(slot, parent, root)) return error.SlotVerificationFailed;
-//         },
-//     }
-
-//     // TODO: check for feature activation of enable_chained_merkle_shreds
-//     // 7uZBkJXJ1HkuP6R3MJfZs7mLwymBcDbKdqbF51ZWLier
-//     // https://github.com/solana-labs/solana/pull/34916
-//     // https://github.com/solana-labs/solana/pull/35076
-// }
-
-// fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
-//     if (slot == 0 and parent == 0 and root == 0) {
-//         return true; // valid write to slot zero.
-//     }
-//     // Ignore shreds that chain to slots before the root,
-//     // or have invalid parent >= slot.
-//     return root <= parent and parent < slot;
-// }
-
-// /// Analogous to [verify_shred_cpu](https://github.com/anza-xyz/agave/blob/83e7d84bcc4cf438905d07279bc07e012a49afd9/ledger/src/sigverify_shreds.rs#L35)
-// pub fn verifyShred(
-//     packet: *const Packet,
-//     leader_schedule: *const common.solana.LeaderSchedule,
-//     verified_merkle_roots: *VerifiedMerkleRoots,
-// ) ShredVerificationFailure!void {
-//     const zone = tracy.Zone.init(@src(), .{ .name = "verifyShred" });
-//     defer zone.deinit();
-
-//     const shred_ = layout.getShred(packet, false) orelse return error.InsufficientShredSize;
-//     const slot = layout.getSlot(shred_) orelse return error.SlotMissing;
-//     const signature = layout.getLeaderSignature(shred_) orelse return error.SignatureMissing;
-//     const signed_data = layout.merkleRoot(shred_) orelse return error.SignedDataMissing;
-
-//     if (verified_merkle_roots.wasVerified(&signed_data)) return;
-
-//     const leader = leader_schedule.get(slot) orelse return error.LeaderUnknown;
-
-//     signature.verify(leader, &signed_data.data) catch return error.FailedVerification;
-
-//     verified_merkle_roots.insert(&signed_data);
-// }
-
-pub const ShredVerificationFailure = error{
-    InsufficientShredSize,
-    SlotMissing,
-    SignatureMissing,
-    SignedDataMissing,
-    LeaderUnknown,
-    FailedVerification,
-    FailedCaching,
-};
-
-/// Something about the shred was unexpected, so we will discard it.
-pub const ShredValidationError = error{
-    InsufficientShredSize,
-    MissingVersion,
-    SlotMissing,
-    IndexMissing,
-    VariantMissing,
-    WrongVersion,
-    SlotTooNew,
-    CodeIndexTooHigh,
-    RootedSlot,
-    DataIndexTooHigh,
-    ParentSlotOffsetMissing,
-    SlotVerificationFailed,
-    SignatureMissing,
-    SignedDataMissing,
-};
