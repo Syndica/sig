@@ -147,7 +147,6 @@ pub fn main() !void {
             current_config.voting_enabled = params.voting_enabled or params.vote_account != null;
             current_config.rpc_port = params.rpc_port;
             current_config.mock_transfer_transactions = params.mock_transfer_transactions;
-            current_config.mock_submit_url = params.mock_submit_url;
             try validator(gpa, gossip_gpa, current_config);
         },
         .replay_offline => |params| {
@@ -493,18 +492,7 @@ const Cmd = struct {
         .config = {},
         .help = "Runs the mock transfer service," ++
             " sending `n` transfer transactions between two test accounts." ++
-            " Submits directly to the transaction sender unless --mock-submit-url is specified.",
-    };
-
-    const mock_submit_url_arg: cli.ArgumentInfo(?[]const u8) = .{
-        .kind = .named,
-        .name_override = "mock-submit-url",
-        .alias = .none,
-        .default_value = null,
-        .config = .string,
-        .help = "RPC URL for the mock transfer service to submit transactions" ++
-            " via sendTransaction. When set, transactions are submitted via RPC instead of" ++
-            " directly to the transaction sender. Requires --mock-transfer-transactions.",
+            " Submits directly to the transaction sender.",
     };
 
     const voting_enabled_arg: cli.ArgumentInfo(bool) = .{
@@ -957,7 +945,6 @@ const Cmd = struct {
         voting_enabled: bool,
         rpc_port: ?u16,
         mock_transfer_transactions: ?u64,
-        mock_submit_url: ?[]const u8,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -983,7 +970,6 @@ const Cmd = struct {
                 .rpc_port = rpc_port_arg,
                 .stop_at_slot = stop_at_slot_arg,
                 .mock_transfer_transactions = mock_transfer_transactions_arg,
-                .mock_submit_url = mock_submit_url_arg,
             },
         };
     };
@@ -1785,20 +1771,9 @@ fn validator(
     var mock_transfer_handle: ?std.Thread = null;
     defer if (mock_transfer_handle) |thread| thread.join();
 
-    if (cfg.mock_submit_url != null and cfg.mock_transfer_transactions == null)
-        @panic("--mock-submit-url requires --mock-transfer-transactions.");
-
     if (cfg.mock_transfer_transactions) |n| {
         if (try cfg.getCluster() == .mainnet)
             @panic("Cannot run mock transfers on mainnet.");
-
-        const submit: sig.MockTransferService.SubmitMode = if (cfg.mock_submit_url) |url|
-            .{ .rpc = try .init(gpa, url, .{
-                .max_retries = 5,
-                .logger = .noop,
-            }) }
-        else
-            .{ .direct = transaction_sender_service.receiver };
 
         mock_transfer_service = sig.MockTransferService{
             .exit = .{ .unordered = app_base.exit },
@@ -1807,7 +1782,7 @@ fn validator(
                 .max_retries = 5,
                 .logger = .noop,
             }),
-            .submit = submit,
+            .submit = .{ .direct = transaction_sender_service.receiver },
             .transfers = n,
         };
 

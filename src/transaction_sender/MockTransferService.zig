@@ -30,6 +30,7 @@ exit: ExitCondition,
 
 client: RpcClient,
 submit: SubmitMode,
+skip_preflight: bool = false,
 
 account_0: Account = ACCOUNT_0,
 account_1: Account = ACCOUNT_1,
@@ -204,15 +205,32 @@ fn submitTransaction(self: *Service, txn_info: TransactionInfo) !void {
 
             var response = try rpc_client.sendTransaction(.{
                 .transaction = encoded,
-                .config = .{ .encoding = .base64 },
+                .config = .{
+                    .encoding = .base64,
+                    .skipPreflight = self.skip_preflight,
+                    // Match the commitment used to fetch the blockhash.
+                    .preflightCommitment = .confirmed,
+                },
             });
             defer response.deinit();
 
-            switch (try response.result()) {
-                .signature => {},
-                .preflight_failure => |failure| {
-                    self.logger.err().logf("Preflight failure: {any}", .{failure.err});
-                    return error.PreflightFailure;
+            switch (response.payload) {
+                .result => |result| switch (result) {
+                    .signature => {},
+                    .preflight_failure => |failure| {
+                        self.logger.err().logf("Preflight failure: {any}", .{failure.err});
+                        return error.PreflightFailure;
+                    },
+                },
+                .err => |rpc_err| {
+                    self.logger.err().logf("RPC error: code={any} message={s}", .{
+                        rpc_err.code,
+                        rpc_err.message,
+                    });
+                    if (rpc_err.data) |data| {
+                        self.logger.err().logf("RPC error data: {any}", .{data});
+                    }
+                    return error.RpcRequestFailed;
                 },
             }
         },
