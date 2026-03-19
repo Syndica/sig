@@ -325,6 +325,19 @@ pub const SlotAccountReader = union(enum) {
             }
         }
     };
+
+    pub fn getBySplTokenOwner(
+        self: SlotAccountReader,
+        token_owner: *const Pubkey,
+    ) !OwnerIterator {
+        return switch (self) {
+            .accounts_db => |pair| {
+                const db, const ancestors = pair;
+                return .{ .accounts_db = try db.splTokenOwnerQuery(token_owner, ancestors) };
+            },
+            else => .{ .noop = {} },
+        };
+    }
 };
 
 /// Simple implementation of AccountReader and AccountStore, used for tests
