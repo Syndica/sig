@@ -21,7 +21,7 @@
       inherit system;
       overlays = [rust-overlay.overlays.default zig-overlay.overlays.default];
     };
-    baseDeps = with pkgs; [zigpkgs."0.15.2" python311 git alejandra];
+    baseDeps = with pkgs; [zigpkgs."0.15.2" python313 git alejandra];
     commits = builtins.fromTOML (builtins.readFile ./commits.env);
 
     test-vectors = builtins.fetchGit {
@@ -39,7 +39,7 @@
       mkdir -p env
       ln -sfn ${test-vectors} env/test-vectors
 
-      python3.11 -m venv env/venv
+      python3.13 -m venv env/venv
       source env/venv/bin/activate
       cp -r ${solana-conformance} env/solana-conformance && chmod +w -R env/solana-conformance
       SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 pip install env/solana-conformance[dev,octane]
