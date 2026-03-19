@@ -69,6 +69,8 @@ pub const ShredReceiver = struct {
 
         /// Handler for duplicate slot detection and reporting
         duplicate_handler: DuplicateShredHandler,
+
+        max_shred_insert_slot: *Atomic(u64),
     };
 
     pub fn init(
@@ -198,6 +200,14 @@ pub const ShredReceiver = struct {
         );
         self.metrics.passed_to_inserter_count.add(self.shred_batch.len);
 
+        var current_max_insert_slot = self.params.max_shred_insert_slot.load(.monotonic);
+        for (self.shred_batch.items(.shred)) |shred| {
+            if (shred.id().slot > current_max_insert_slot) {
+                current_max_insert_slot = shred.id().slot;
+                self.params.max_shred_insert_slot.store(current_max_insert_slot, .monotonic);
+            }
+        }
+
         try self.params.duplicate_handler.handleDuplicateSlots(allocator, &result);
 
         result.deinit();
@@ -323,6 +333,7 @@ test "handleBatch/handlePacket" {
 
     var exit: Atomic(bool) = .init(false);
     const shred_version: Atomic(u16) = .init(0);
+    var max_shred_insert_slot: Atomic(u64) = .init(0);
 
     var shred_receiver = try ShredReceiver.init(allocator, .noop, &registry, .{
         .keypair = &keypair,
@@ -343,6 +354,7 @@ test "handleBatch/handlePacket" {
             .keypair = &keypair,
             .logger = .noop,
         },
+        .max_shred_insert_slot = &max_shred_insert_slot,
     });
     defer shred_receiver.deinit(allocator);
 
@@ -374,6 +386,88 @@ test "handleBatch/handlePacket" {
     }
 
     try shred_receiver.handleBatch(allocator);
+}
+
+test "handleBatch updates max_shred_insert_slot" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const keypair = try sig.identity.KeyPair.generateDeterministic(.{1} ** 32);
+    const root_slot = 0;
+    const invalid_socket: sig.net.UdpSocket = .{
+        .family = .ipv4,
+        .handle = -1,
+    };
+
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        random,
+        root_slot,
+        .INIT,
+    );
+    defer epoch_tracker.deinit();
+
+    var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer ledger.deinit();
+
+    var shred_tracker: BasicShredTracker = undefined;
+    try shred_tracker.init(allocator, root_slot + 1, .noop, &registry, false);
+    defer shred_tracker.deinit();
+
+    var exit: Atomic(bool) = .init(false);
+    const shred_version: Atomic(u16) = .init(0);
+    var max_shred_insert_slot: Atomic(u64) = .init(0);
+
+    var shred_receiver = try ShredReceiver.init(allocator, .noop, &registry, .{
+        .keypair = &keypair,
+        .exit = &exit,
+        .repair_socket = invalid_socket,
+        .turbine_socket = invalid_socket,
+        .shred_version = &shred_version,
+        .maybe_retransmit_shred_sender = null,
+        .epoch_tracker = &epoch_tracker,
+        .tracker = &shred_tracker,
+        .inserter = ledger.shredInserter(),
+        .duplicate_handler = .{
+            .ledger_reader = ledger.reader(),
+            .result_writer = ledger.resultWriter(),
+            .epoch_tracker = &epoch_tracker,
+            .duplicate_slots_sender = null,
+            .push_msg_queue_mux = null,
+            .keypair = &keypair,
+            .logger = .noop,
+        },
+        .max_shred_insert_slot = &max_shred_insert_slot,
+    });
+    defer shred_receiver.deinit(allocator);
+
+    // Load a test shred and pre-populate the merkle root cache so it
+    // bypasses signature verification in verifyShred.
+    const shreds = try sig.ledger.tests.loadShredsFromFile(
+        allocator,
+        sig.TEST_DATA_DIR ++ "shreds/merkle_root_metas_coding_test_shreds_3_1228.bin",
+    );
+    defer sig.ledger.tests.deinitShreds(allocator, shreds);
+    const shred_data = shreds[0].payload();
+
+    const merkle_root = layout.merkleRoot(shred_data) orelse return error.MissingMerkleRoot;
+    try shred_receiver.verified_merkle_roots.insert(merkle_root, {});
+
+    var packet: Packet = undefined;
+    @memcpy(packet.buffer[0..shred_data.len], shred_data);
+    packet.size = @intCast(shred_data.len);
+    packet.addr = .initIpv4(.{ 0, 0, 0, 0 }, 0);
+    packet.flags = .{};
+
+    try shred_receiver.incoming_shreds.send(packet);
+    try shred_receiver.handleBatch(allocator);
+
+    // The shred should have been processed and max_shred_insert_slot updated.
+    try std.testing.expect(max_shred_insert_slot.load(.monotonic) > 0);
 }
 
 test "handlePing" {

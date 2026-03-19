@@ -157,6 +157,11 @@ pub const AccountsDB = struct {
     /// - first run (no accounts.db.init): loads snapshot normally, then copies accounts.db -> accounts.db.init
     /// - subsequent runs (accounts.db.init exists): copies accounts.db.init -> accounts.db, skips db population
     dbg_db_init: bool = false,
+    /// if enabled, an index is created on the `owner` column of accounts DB. This speeds up certain
+    /// RPC calls that filter by owner at the cost of increased storage space and slower writes.
+    /// RPC requests that would otherwise benefit from the index will still function, but with worse
+    /// performance. Not enabled by default.
+    rpc_enable_owner_index: bool = false,
 };
 
 pub const Gossip = struct {

@@ -47,6 +47,7 @@ pub const ShredRetransmitterParams = struct {
     rand: Random,
     logger: Logger,
     forward_shreds_to: ?sig.net.SocketAddr = null,
+    max_retransmit_slot: *AtomicU64,
 };
 
 /// Retransmit Service
@@ -98,6 +99,7 @@ pub fn runShredRetransmitter(params: ShredRetransmitterParams) !void {
             &metrics,
             params.overwrite_stake_for_testing,
             params.forward_shreds_to,
+            params.max_retransmit_slot,
         },
     ));
 
@@ -143,6 +145,7 @@ fn receiveShreds(
     metrics: *RetransmitServiceMetrics,
     overwrite_stake_for_testing: bool,
     forward_shreds_to: ?sig.net.SocketAddr,
+    max_retransmit_slot: *AtomicU64,
 ) !void {
     var turbine_tree_cache = TurbineTreeCache.init(allocator);
     defer turbine_tree_cache.deinit();
@@ -220,6 +223,7 @@ fn receiveShreds(
                 sender,
                 metrics,
                 overwrite_stake_for_testing,
+                max_retransmit_slot,
             );
         }
 
@@ -280,12 +284,14 @@ fn createAndSendRetransmitInfo(
     retransmit_shred_sender: *Channel(RetransmitShredInfo),
     metrics: *RetransmitServiceMetrics,
     overwrite_stake_for_testing: bool,
+    max_retransmit_slot: *AtomicU64,
 ) !void {
     var create_and_send_retransmit_info_timer = sig.time.Timer.start();
     const leader_schedules_with_infos = epoch_tracker.getLeaderSchedules() catch return;
     defer leader_schedules_with_infos.release();
     const leader_schedule = leader_schedules_with_infos.leader_schedules;
     for (shreds.keys(), shreds.values()) |slot, slot_shreds| {
+        _ = max_retransmit_slot.fetchMax(slot, .monotonic);
         // NOTE: On transition boundaries we might want ancestors here so that we can get stakes
         // for the new epoch which will be unrooted for a period of time.
         const epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
@@ -560,4 +566,82 @@ test "forward: no packets does not send data" {
 
     var buf: [Packet.DATA_SIZE]u8 = undefined;
     try std.testing.expectError(error.WouldBlock, receiver.receiveFrom(buf[0..]));
+}
+
+test "createAndSendRetransmitInfo" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        random,
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit();
+
+    const gossip_table = try sig.gossip.GossipTable.init(allocator, allocator);
+    var gossip_table_rw: RwMux(sig.gossip.GossipTable) = .init(gossip_table);
+    defer {
+        const ptr: *sig.gossip.GossipTable, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        ptr.deinit();
+    }
+
+    var turbine_tree_cache = TurbineTreeCache.init(allocator);
+    defer {
+        // Save heap-allocated TurbineTree pointers before releasing references,
+        // so we can free the allocations after the cache clears them.
+        var ptrs: [8]*TurbineTree = undefined;
+        var count: usize = 0;
+        for (turbine_tree_cache.cache.values()) |entry| {
+            ptrs[count] = entry.turbine_tree;
+            count += 1;
+        }
+        turbine_tree_cache.deinit();
+        for (ptrs[0..count]) |ptr| allocator.destroy(ptr);
+    }
+
+    var retransmit_channel = try Channel(RetransmitShredInfo).init(allocator);
+    defer {
+        while (retransmit_channel.tryReceive()) |info| info.turbine_tree.releaseUnsafe();
+        retransmit_channel.deinit();
+    }
+
+    var metrics = try RetransmitServiceMetrics.init();
+
+    const my_pubkey = Pubkey.initRandom(random);
+    const my_contact_info = ThreadSafeContactInfo.initRandom(random, my_pubkey, 0);
+
+    // Build input: one shred at slot 1
+    var slot_shreds = std.array_list.Managed(ShredIdAndPacket).init(allocator);
+    defer slot_shreds.deinit();
+    try slot_shreds.append(.{
+        ShredId{ .slot = 1, .index = 0, .shred_type = .data },
+        Packet.init(.initIpv4(.{ 0, 0, 0, 0 }, 0), .{0} ** Packet.DATA_SIZE, 64),
+    });
+
+    var shreds_map: std.AutoArrayHashMap(Slot, std.array_list.Managed(ShredIdAndPacket)) = .init(
+        allocator,
+    );
+    defer shreds_map.deinit();
+    try shreds_map.put(1, slot_shreds);
+
+    var max_retransmit_slot: AtomicU64 = .init(0);
+
+    try createAndSendRetransmitInfo(
+        allocator,
+        shreds_map,
+        my_contact_info,
+        &epoch_tracker,
+        &gossip_table_rw,
+        &turbine_tree_cache,
+        &retransmit_channel,
+        &metrics,
+        true, // overwrite_stake_for_testing
+        &max_retransmit_slot,
+    );
+
+    try std.testing.expectEqual(@as(u64, 1), max_retransmit_slot.load(.monotonic));
 }

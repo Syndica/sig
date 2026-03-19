@@ -60,6 +60,9 @@ pub const ShredNetworkDependencies = struct {
     n_retransmit_threads: ?usize,
     overwrite_turbine_stake_for_testing: bool,
 
+    max_retransmit_slot: *Atomic(u64),
+    max_shred_insert_slot: *Atomic(u64),
+
     /// RPC Observability
     rpc_hooks: ?*sig.rpc.Hooks = null,
     duplicate: ?struct {
@@ -137,6 +140,7 @@ pub fn start(
         .tracker = shred_tracker,
         .inserter = deps.ledger.shredInserter(),
         .duplicate_handler = duplicate_handler,
+        .max_shred_insert_slot = deps.max_shred_insert_slot,
     });
     try defers.deferCall(ShredReceiver.deinit, .{ shred_receiver, deps.allocator });
     try service_manager.spawn(
@@ -162,6 +166,7 @@ pub fn start(
                 .rand = deps.random,
                 .logger = .from(deps.logger),
                 .forward_shreds_to = conf.forward_shreds_to,
+                .max_retransmit_slot = deps.max_retransmit_slot,
             }},
         );
     }
@@ -279,6 +284,9 @@ test "start and stop gracefully" {
     var epoch_tracker: sig.core.EpochTracker = .init(.default, 0, .INIT);
     defer epoch_tracker.deinit();
 
+    var max_retransmit_slot: Atomic(u64) = .init(0);
+    var max_shred_insert_slot: Atomic(u64) = .init(0);
+
     const config: ShredNetworkConfig = .{
         .root_slot = 0,
         .repair_port = 50304,
@@ -302,6 +310,8 @@ test "start and stop gracefully" {
         .n_retransmit_threads = 1,
         .overwrite_turbine_stake_for_testing = true,
         .epoch_tracker = &epoch_tracker,
+        .max_retransmit_slot = &max_retransmit_slot,
+        .max_shred_insert_slot = &max_shred_insert_slot,
         .duplicate = .{
             .shred_receiver = &duplicate_shred_receiver,
             .slots_sender = null,
