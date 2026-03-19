@@ -1,6 +1,18 @@
 const std = @import("std");
 
-pub const Ring = @import("ipc/ring.zig").Ring;
+comptime {
+    _ = std.testing.refAllDecls(@This());
+}
+
+pub const linux = @import("common/linux.zig");
+pub const Ring = @import("common/ring.zig").Ring;
+pub const net = @import("common/net.zig");
+pub const crypto = @import("common/crypto.zig");
+pub const solana = @import("common/solana.zig");
+pub const shred = @import("common/shred.zig");
+pub const reed_solomon_table = @import("common/reed_solomon_table.zig");
+
+pub const test_data_dir = "../data/test-data/";
 
 pub const ResolvedArgs = extern struct {
     stderr: std.os.linux.fd_t,
