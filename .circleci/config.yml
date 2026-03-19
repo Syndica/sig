@@ -269,17 +269,30 @@ jobs:
           at: workspace
       - restore_cache:
           key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted-release
+      - run:
+          name: Prepare /nix permissions so cache restore works
+          command: |
+            sudo mkdir -p /nix
+            sudo chown "$USER" /nix
       - restore_cache:
-          key: linux-x86_64-0.15.2-{{ checksum "conformance/flake.nix" }}-{{ checksum "conformance/flake.lock" }}-selfhosted-release
+          key: nix-v1-{{ checksum "conformance/flake.nix" }}-{{ checksum "conformance/flake.lock" }}-{{ checksum "conformance/commits.env" }}
+      - run:
+          name: Install nix
+          command: |
+            sh <(curl --proto '=https' --tlsv1.2 -L https://nixos.org/nix/install) --no-daemon
+            echo 'experimental-features = nix-command flakes' > ~/.config/nix/nix.conf
+      - run:
+          name: time nix setup
+          command: |
+            cd conformance
+            nix develop -c true
       - run:
           name: Run Fixtures
           command: |
-            curl -fsSL https://install.determinate.systems/nix | sh -s -- install --no-confirm
-            . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
             cd conformance
             nix develop -c ./scripts/ci-run.sh
       - save_cache:
-          key: linux-x86_64-0.15.2-{{ checksum "conformance/flake.nix" }}-{{ checksum "conformance/flake.lock" }}-selfhosted-release
+          key: nix-v1-{{ checksum "conformance/flake.nix" }}-{{ checksum "conformance/flake.lock" }}-{{ checksum "conformance/commits.env" }}
           paths:
             - /nix/store
             - /nix/var/nix/db
