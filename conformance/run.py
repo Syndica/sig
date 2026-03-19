@@ -21,6 +21,7 @@ except:
           To activate the environment:
 
               nix develop
+
           """
         )
     )
