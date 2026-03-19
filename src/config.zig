@@ -34,6 +34,7 @@ pub const Cmd = struct {
     vote_account: ?[]const u8 = null,
     stop_at_slot: ?sig.core.Slot = null,
     mock_transfer_transactions: ?u64 = null,
+    mock_submit_url: ?[]const u8 = null,
 
     pub fn getCluster(self: Cmd) error{UnknownCluster}!?sig.core.ClusterType {
         return if (self.cluster) |cluster_str|

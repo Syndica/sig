@@ -196,7 +196,26 @@ pub fn run(self: *Service, gpa: Allocator) !void {
 fn submitTransaction(self: *Service, txn_info: TransactionInfo) !void {
     switch (self.submit) {
         .direct => |channel| try channel.send(txn_info),
-        .rpc => @panic("unimplemented: rpc submit mode"),
+        .rpc => |*rpc_client| {
+            const Encoder = std.base64.standard.Encoder;
+            const wire_bytes = txn_info.wire_transaction[0..txn_info.wire_transaction_size];
+            var encode_buf: [Encoder.calcSize(sig.net.Packet.DATA_SIZE)]u8 = undefined;
+            const encoded = Encoder.encode(&encode_buf, wire_bytes);
+
+            var response = try rpc_client.sendTransaction(.{
+                .transaction = encoded,
+                .config = .{ .encoding = .base64 },
+            });
+            defer response.deinit();
+
+            switch (try response.result()) {
+                .signature => {},
+                .preflight_failure => |failure| {
+                    self.logger.err().logf("Preflight failure: {any}", .{failure.err});
+                    return error.PreflightFailure;
+                },
+            }
+        },
     }
 }
 

@@ -1612,7 +1612,11 @@ pub const SendTransaction = struct {
         signature: Signature,
         preflight_failure: PreflightFailure,
 
-        pub fn jsonParse(allocator: Allocator, source: anytype, options: std.json.ParseOptions) !Response {
+        pub fn jsonParse(
+            allocator: Allocator,
+            source: anytype,
+            options: std.json.ParseOptions,
+        ) !Response {
             // On the wire, a successful sendTransaction result is just a signature string.
             return .{ .signature = try std.json.innerParse(Signature, allocator, source, options) };
         }

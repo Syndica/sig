@@ -19,7 +19,6 @@ const SlotTracker = sig.replay.trackers.SlotTracker;
 const Transaction = sig.core.Transaction;
 const TransactionInfo = sig.TransactionSenderService.TransactionInfo;
 const TransactionSender = sig.TransactionSenderService.TransactionSender;
-const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 const SvmGateway = sig.replay.svm_gateway.SvmGateway;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
@@ -29,7 +28,6 @@ const InstructionTrace = sig.runtime.TransactionContext.InstructionTrace;
 const getDurableNonce = sig.runtime.check_transactions.getDurableNonce;
 const getSysvarFromAccount = sig.replay.update_sysvar.getSysvarFromAccount;
 const resolveTransaction = sig.replay.resolve_lookup.resolveTransaction;
-const preprocessTransaction = sig.replay.preprocess_transaction.preprocessTransaction;
 const executeTransaction = sig.replay.svm_gateway.executeTransaction;
 
 /// Analogous to [MAX_BASE58_SIZE](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4341)
