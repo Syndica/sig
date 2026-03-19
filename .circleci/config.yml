@@ -277,7 +277,7 @@ jobs:
             curl -fsSL https://install.determinate.systems/nix | sh -s -- install --no-confirm
             . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
             cd conformance
-            nix develop --ignore-environment -c ./scripts/ci-run.sh
+            nix develop -c ./scripts/ci-run.sh
       - save_cache:
           key: linux-x86_64-0.15.2-{{ checksum "conformance/flake.nix" }}-{{ checksum "conformance/flake.lock" }}-selfhosted-release
           paths:
