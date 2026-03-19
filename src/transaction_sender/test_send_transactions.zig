@@ -111,8 +111,11 @@ pub fn main() !void {
     var mock_transfer_service = sig.MockTransferService{
         .exit = exit,
         .logger = .from(logger),
-        .mode = try .initRpc(gpa, rpc_url, .noop),
-        .sender = mock_sender_service.receiver,
+        .client = try .init(gpa, rpc_url, .{
+            .max_retries = 5,
+            .logger = .noop,
+        }),
+        .submit = .{ .direct = mock_sender_service.receiver },
         .transfers = transfers,
     };
     defer mock_transfer_service.deinit();

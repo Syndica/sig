@@ -4,12 +4,12 @@ const sig = @import("../sig.zig");
 const Allocator = std.mem.Allocator;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
-const AccountStore = sig.accounts_db.AccountStore;
-
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Status = sig.core.status_cache.Status;
+
+const RpcClient = sig.rpc.Client;
 
 const Channel = sig.sync.Channel;
 const ExitCondition = sig.sync.ExitCondition;
@@ -28,8 +28,8 @@ pub const Service = @This();
 logger: Logger,
 exit: ExitCondition,
 
-mode: Mode,
-sender: *Channel(TransactionInfo),
+client: RpcClient,
+submit: SubmitMode,
 
 account_0: Account = ACCOUNT_0,
 account_1: Account = ACCOUNT_1,
@@ -80,160 +80,21 @@ pub const ACCOUNT_1: Account = .init("account_1", .{ // Pubkey: ErnDW7vq2Xmzstre
 });
 
 pub fn deinit(self: *Service) void {
-    self.mode.deinit();
+    self.client.deinit();
+    switch (self.submit) {
+        .rpc => self.submit.rpc.deinit(),
+        .direct => {},
+    }
 }
 
-pub const Mode = union(enum) {
-    rpc: RpcMode,
-    sig: SigMode,
-
-    pub fn deinit(self: *Mode) void {
-        switch (self.*) {
-            .rpc => self.rpc.client.deinit(),
-            .sig => {},
-        }
-    }
-
-    pub fn initRpc(gpa: Allocator, url: []const u8, logger: Logger) !Mode {
-        return .{ .rpc = .{ .client = try .init(gpa, url, .{
-            .max_retries = 5,
-            .logger = .from(logger),
-        }) } };
-    }
-
-    pub fn initSig(
-        account_store: AccountStore,
-        slot_tracker: *sig.replay.trackers.SlotTracker,
-        status_cache: *sig.core.StatusCache,
-    ) Mode {
-        return .{ .sig = .{
-            .account_store = account_store,
-            .slot_tracker = slot_tracker,
-            .status_cache = status_cache,
-        } };
-    }
-
-    pub fn getAccountBalance(
-        self: *Mode,
-        gpa: Allocator,
-        pubkey: Pubkey,
-        commitment: Commitment,
-    ) !u64 {
-        return switch (self.*) {
-            .rpc => try self.rpc.getAccountBalance(pubkey, commitment),
-            .sig => try self.sig.getAccountBalance(gpa, pubkey, commitment),
-        };
-    }
-
-    pub fn getLatestBlockhash(self: *Mode, commitment: Commitment) !Hash {
-        return switch (self.*) {
-            .rpc => try self.rpc.getLatestBlockhash(commitment),
-            .sig => try self.sig.getLatestBlockhash(commitment),
-        };
-    }
-
-    pub fn getTransactionStatus(self: *Mode, txn_info: *const TransactionInfo) !Status {
-        return switch (self.*) {
-            .rpc => try self.rpc.getSignatureStatus(txn_info.signature),
-            .sig => try self.sig.getTransactionStatus(txn_info),
-        };
-    }
-};
-
-pub const RpcMode = struct {
-    client: sig.rpc.Client,
-
-    pub fn getAccountBalance(self: *RpcMode, pubkey: Pubkey, commitment: Commitment) !u64 {
-        var response = try self.client.getBalance(
-            .{ .pubkey = pubkey, .config = .{ .commitment = commitment } },
-        );
-        defer response.deinit();
-        const result = try response.result();
-        return result.value;
-    }
-
-    pub fn getLatestBlockhash(self: *RpcMode, commitment: Commitment) !Hash {
-        var response = try self.client.getLatestBlockhash(
-            .{ .config = .{ .commitment = commitment } },
-        );
-        defer response.deinit();
-        const result = try response.result();
-        return try Hash.parseRuntime(result.value.blockhash);
-    }
-
-    pub fn getSignatureStatus(self: *RpcMode, signature: Signature) !Status {
-        var response = try self.client.getSignatureStatuses(.{
-            .signatures = &.{signature},
-            .config = .{ .searchTransactionHistory = true },
-        });
-        defer response.deinit();
-        const result = try response.result();
-        if (result.value.len == 0) return .pending;
-
-        const maybe_status = result.value[0] orelse return .pending;
-        if (maybe_status.err != null) return .failed;
-        return .succeeded;
-    }
-};
-
-pub const SigMode = struct {
-    account_store: AccountStore,
-    slot_tracker: *sig.replay.trackers.SlotTracker,
-    status_cache: *sig.core.StatusCache,
-
-    pub fn getAccountBalance(
-        self: *SigMode,
-        gpa: Allocator,
-        pubkey: Pubkey,
-        commitment: Commitment,
-    ) !u64 {
-        const slot = switch (commitment) {
-            .processed => self.slot_tracker.commitments.processed.load(.monotonic),
-            .confirmed => self.slot_tracker.commitments.confirmed.load(.monotonic),
-            .finalized => self.slot_tracker.commitments.finalized.load(.monotonic),
-        };
-
-        const slot_ref = self.slot_tracker.get(slot) orelse
-            return error.SlotNotAvailable;
-        defer slot_ref.release();
-
-        const account = try self.account_store.forSlot(
-            slot,
-            &slot_ref.constants().ancestors,
-        ).reader().get(gpa, pubkey) orelse return 0;
-        defer account.deinit(gpa);
-
-        return account.lamports;
-    }
-
-    pub fn getLatestBlockhash(self: *SigMode, commitment: Commitment) !Hash {
-        const slot = switch (commitment) {
-            .processed => self.slot_tracker.commitments.processed.load(.monotonic),
-            .confirmed => self.slot_tracker.commitments.confirmed.load(.monotonic),
-            .finalized => self.slot_tracker.commitments.finalized.load(.monotonic),
-        };
-
-        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-        defer slot_ref.release();
-
-        const bh_queue, var bh_queue_lg = slot_ref.state().blockhash_queue.readWithLock();
-        defer bh_queue_lg.unlock();
-
-        return bh_queue.last_hash orelse return error.BlockhashQueueEmpty;
-    }
-
-    pub fn getTransactionStatus(self: *SigMode, txn_info: *const TransactionInfo) !Status {
-        const slot = self.slot_tracker.commitments.confirmed.load(.monotonic);
-
-        const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
-        defer slot_ref.release();
-
-        return self.status_cache.getStatus(
-            &txn_info.message_hash.data,
-            &txn_info.recent_blockhash,
-            &slot_ref.constants().ancestors,
-        );
-    }
+pub const SubmitMode = union(enum) {
+    /// Submit transactions directly to the TransactionSenderService channel,
+    /// bypassing the RPC layer.
+    direct: *Channel(TransactionInfo),
+    /// Submit transactions via sendTransaction RPC requests to the validator.
+    /// Uses a separate client since the target validator may differ from the
+    /// client used for state queries.
+    rpc: RpcClient,
 };
 
 pub const Account = struct {
@@ -292,14 +153,14 @@ pub fn run(self: *Service, gpa: Allocator) !void {
             self.successful + 1,
             self.transfers,
         });
-        const txn_info = try buildTransfer(self, gpa, from_account, to_account);
+        const txn_info = try self.buildTransfer(gpa, from_account, to_account);
 
         self.logger.info().logf("Sending transfer {}/{}: signature={f}", .{
             self.successful + 1,
             self.transfers,
             txn_info.signature,
         });
-        try self.sender.send(txn_info);
+        try self.submitTransaction(txn_info);
 
         switch (self.waitForTransfer(&txn_info, .fromSecs(60))) {
             .succeeded => {
@@ -332,6 +193,13 @@ pub fn run(self: *Service, gpa: Allocator) !void {
     }
 }
 
+fn submitTransaction(self: *Service, txn_info: TransactionInfo) !void {
+    switch (self.submit) {
+        .direct => |channel| try channel.send(txn_info),
+        .rpc => @panic("unimplemented: rpc submit mode"),
+    }
+}
+
 fn initAccounts(self: *Service, gpa: Allocator) !struct { *Account, *Account } {
     while (self.exit.shouldRun()) {
         self.resetAccountBalances(gpa, .finalized) catch |err| {
@@ -348,16 +216,48 @@ fn initAccounts(self: *Service, gpa: Allocator) !struct { *Account, *Account } {
 }
 
 fn resetAccountBalances(self: *Service, gpa: Allocator, commitment: Commitment) !void {
-    self.account_0.lamports = try self.mode.getAccountBalance(
+    self.account_0.lamports = try self.getAccountBalance(
         gpa,
         self.account_0.pubkey,
         commitment,
     );
-    self.account_1.lamports = try self.mode.getAccountBalance(
+    self.account_1.lamports = try self.getAccountBalance(
         gpa,
         self.account_1.pubkey,
         commitment,
     );
+}
+
+fn getAccountBalance(self: *Service, _: Allocator, pubkey: Pubkey, commitment: Commitment) !u64 {
+    var response = try self.client.getBalance(
+        .{ .pubkey = pubkey, .config = .{ .commitment = commitment } },
+    );
+    defer response.deinit();
+    const result = try response.result();
+    return result.value;
+}
+
+fn getLatestBlockhash(self: *Service, commitment: Commitment) !Hash {
+    var response = try self.client.getLatestBlockhash(
+        .{ .config = .{ .commitment = commitment } },
+    );
+    defer response.deinit();
+    const result = try response.result();
+    return try Hash.parseRuntime(result.value.blockhash);
+}
+
+fn getSignatureStatus(self: *Service, signature: Signature) !Status {
+    var response = try self.client.getSignatureStatuses(.{
+        .signatures = &.{signature},
+        .config = .{ .searchTransactionHistory = true },
+    });
+    defer response.deinit();
+    const result = try response.result();
+    if (result.value.len == 0) return .pending;
+
+    const maybe_status = result.value[0] orelse return .pending;
+    if (maybe_status.err != null) return .failed;
+    return .succeeded;
 }
 
 fn buildTransfer(
@@ -366,7 +266,7 @@ fn buildTransfer(
     from_account: *Account,
     to_account: *Account,
 ) !TransactionInfo {
-    const blockhash = try self.mode.getLatestBlockhash(.confirmed);
+    const blockhash = try self.getLatestBlockhash(.confirmed);
 
     const transaction = try buildTransferTransaction(
         gpa,
@@ -399,7 +299,7 @@ fn waitForTransfer(
     const start_time = Instant.now();
 
     while (self.exit.shouldRun() and start_time.elapsed().lt(timeout)) {
-        const status = self.mode.getTransactionStatus(transfer) catch |err| {
+        const status = self.getSignatureStatus(transfer.signature) catch |err| {
             self.logger.info().logf("Failed to get transaction status: {any}", .{err});
             std.Thread.sleep(1 * std.time.ns_per_s);
             continue;
