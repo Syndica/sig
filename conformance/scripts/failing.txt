@@ -1,5 +1,3 @@
-
-instr/fixtures/bpf-loader-v3-programs/f0fbc9e7-32f9-477d-9c89-2e7a2675f7b7.fix
 instr/fixtures/bpf-loader-v3/7d17b624b75a988a5ce30d2ae187800b93a65965_2.fix
 instr/fixtures/vote/00a44dc50eee61f0b1d38dbd505398f49a634085_3247128.fix
 instr/fixtures/vote/0231a48ba8f372da88bcc63837a2eaf8093f0e1b.fix
@@ -138,7 +136,6 @@ instr/fixtures/vote/ad880396b601e053f8c0ba7151b596d5b38a8362_3157971.fix
 instr/fixtures/vote/aeedd60c825f82e8a2de8b05ea15f44bbf12b86f_3157971.fix
 instr/fixtures/vote/b07524357168dce5d5edf5fd9da8e529dd2f2fac_3247128.fix
 instr/fixtures/vote/b1a4ec345127c05c9fe765b945651bcd84190f4c_3247128.fix
-instr/fixtures/vote/b2a93396a0ec892bee071bee1b8a0244d7be4df9_2.fix
 instr/fixtures/vote/b35c5f873976ffe8f625342af7a6e152e8839322_3247128.fix
 instr/fixtures/vote/b3612d9a66f812eeb82d5baa3c30dac40fbe1559_3247128.fix
 instr/fixtures/vote/b59cce7fa65efe4cf777670a210249b975001f07.fix
@@ -2083,8 +2080,6 @@ txn/fixtures/ffa46950755b08e86d98c678d4ee042d59e4ef4d_265678.fix
 txn/fixtures/ffdc55b81039969dd81e130f312ed9889468364c_2237040.fix
 txn/fixtures/fff87aff2cbaee9cdb9489c98db0adcc0309b97f_2202462.fix
 txn/fixtures/is_signer_err_handling.fix
-txn/fixtures/poc_348-processed-sibling.fix
-txn/fixtures/poc_348-sysvar-instructions.fix
 txn/fixtures/txn-21V6e59cxaU8WcB7RDqGoJqfzrP7gdUhvC9wAfokeRUdbyC7Wy2ML1ptinGWmyFbNazSDNZHCzxiUDXDGY18DRAM.fix
 txn/fixtures/txn-2vxNaM7VAooMJnt84LcbqfJRTaCrVcvHcDBw5JDeuTbsqYipAyLo2pfVtBEDFLCeczRcpKRHBfSgwC3MpMLTwVtR.fix
 txn/fixtures/txn-3eDdfZE6HswPxFKrtnQPsEmTkyL1iP57gRPEXwaqNGAqF1paGXCYYMwh7z4uQDUMgFor742sikVSQZW1gFRDhPNh.fix

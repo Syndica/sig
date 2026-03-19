@@ -47,7 +47,6 @@ def main():
     parser.add_argument("--no-run", action="store_true", help="Don't exec fixtures (only create)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Print commands and output")
     parser.add_argument("--filter", help="Filter for fixture to execute")
-    parser.add_argument("--save", help="File to save results in json")
     parser.add_argument(
         "--create-lib",
         default=create_lib,
@@ -101,9 +100,19 @@ def main():
     print(f"\tFailed:  {total_failed}")
     print(f"\tSkipped: {total_skipped}")
 
-    if config.save:
-        with open(config.save, "w") as f:
-            json.dump(results, f, indent=4)
+    with open("env/test-outputs/results.json", "w") as f:
+        json.dump(results, f, indent=4)
+
+    failures = []
+    for result in results:
+        for fixture in result.get("failed_fixtures", []):
+            failures.append(os.path.join(result["name"], fixture + ".fix\n"))
+    failures.sort()
+    
+    with open("env/test-outputs/failures.txt", "w") as f:
+        f.writelines(failures)
+
+    print(f"\nDetailed test results saved to env/test-outputs/\n")
 
 
 def path(path):
