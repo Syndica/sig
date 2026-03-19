@@ -269,6 +269,8 @@ jobs:
           at: workspace
       - restore_cache:
           key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted-release
+      - restore_cache:
+          key: linux-x86_64-0.15.2-{{ checksum "conformance/flake.nix" }}-{{ checksum "conformance/flake.lock" }}-selfhosted-release
       - run:
           name: Run Fixtures
           command: |
@@ -276,6 +278,13 @@ jobs:
             . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
             cd conformance
             nix develop --ignore-environment -c ./scripts/ci-run.sh
+      - save_cache:
+          key: linux-x86_64-0.15.2-{{ checksum "conformance/flake.nix" }}-{{ checksum "conformance/flake.lock" }}-selfhosted-release
+          paths:
+            - /nix/store
+            - /nix/var/nix/db
+            - /nix/var/nix/profiles
+            - ~/.cache/nix
 
   linux_misc_checks:
     executor: linux-executor
