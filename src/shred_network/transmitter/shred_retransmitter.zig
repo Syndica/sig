@@ -148,9 +148,11 @@ fn receiveShreds(
     defer turbine_tree_cache.deinit();
 
     const forward_addr: ?std.net.Address = if (forward_shreds_to) |a| a.toAddress() else null;
-    var forward_socket: ?UdpSocket = if (forward_addr) |a| blk: {
-        const family: sig.net.net.AddressFamily = sig.net.net.udpFamilyForAddress(a) orelse
-            break :blk null;
+    var forward_socket: ?UdpSocket = if (forward_shreds_to) |a| blk: {
+        const family: sig.net.net.AddressFamily = switch (a) {
+            .V4 => .ipv4,
+            .V6 => .ipv6,
+        };
         const sock: UdpSocket = try .create(family);
         errdefer sock.close();
         try sock.bindToPort(0);
@@ -539,4 +541,23 @@ test "forward: sends each packet payload" {
     const len1, _ = try receiver.receiveFrom(buf[0..]);
     const len2, _ = try receiver.receiveFrom(buf[0..]);
     try std.testing.expect(len1 + len2 == 4);
+}
+
+test "forward: no packets does not send data" {
+    const empty: [0]ShredIdAndPacket = .{};
+
+    var receiver = try sig.net.UdpSocket.create(.ipv4);
+    defer receiver.close();
+    try receiver.bind(std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0));
+    try receiver.setReadTimeout(50_000); // 50ms
+    const receiver_addr = try receiver.getLocalEndPoint();
+
+    var sender = try sig.net.UdpSocket.create(.ipv4);
+    defer sender.close();
+    try sender.bindToPort(0);
+
+    forwardSlotShredsToUdp(&sender, receiver_addr, empty[0..]);
+
+    var buf: [Packet.DATA_SIZE]u8 = undefined;
+    try std.testing.expectError(error.WouldBlock, receiver.receiveFrom(buf[0..]));
 }
