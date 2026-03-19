@@ -47,6 +47,9 @@ pub const ShredNetworkDependencies = struct {
     /// Shared exit indicator, used to shutdown the Shred Network.
     exit: *Atomic(bool),
 
+    /// Gossip entrypoints — used for NAT hole punching on turbine/repair sockets.
+    entrypoints: []const sig.net.SocketAddr = &.{},
+
     /// This validator's keypair
     my_keypair: *const KeyPair,
     /// Shared state that is read from gossip
@@ -95,6 +98,17 @@ pub fn start(
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
     const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
+
+    // NAT hole punch: send a probe from turbine and repair sockets to each entrypoint.
+    // This creates NAT mappings (external:8002 → internal:8002, external:8003 → internal:8003)
+    // so that inbound turbine shreds and repair responses can reach us through NAT.
+    // Without this, behind a home NAT, turbine shreds are silently dropped (no inbound mapping).
+    const hole_punch_probe = [_]u8{ 0, 0, 0, 0 };
+    for (deps.entrypoints) |ep| {
+        const ep_addr = ep.toAddress();
+        turbine_socket.sendTo(ep_addr, &hole_punch_probe) catch {};
+        repair_socket.sendTo(ep_addr, &hole_punch_probe) catch {};
+    }
 
     // tracker (shared state, internal to Shred Network)
     const shred_tracker = try arena.create(BasicShredTracker);

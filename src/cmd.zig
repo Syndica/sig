@@ -136,6 +136,7 @@ pub fn main() !void {
             current_config.cli_provided_genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
+            current_config.accounts_db.force_new_snapshot_download = params.force_new_snapshot_download;
             params.geyser.apply(&current_config);
             current_config.geyser.pipe_path = try current_config.derivePathFromValidatorDir(
                 gpa,
@@ -187,6 +188,12 @@ pub fn main() !void {
                 params.overwrite_stake_for_testing;
             current_config.shred_network.no_retransmit = params.no_retransmit;
             current_config.accounts_db.snapshot_metadata_only = params.snapshot_metadata_only;
+            params.geyser.apply(&current_config);
+            current_config.geyser.pipe_path = try current_config.derivePathFromValidatorDir(
+                gpa,
+                current_config.geyser.pipe_path,
+                "geyser.pipe",
+            );
             try shredNetwork(gpa, gossip_gpa, current_config);
         },
         .snapshot_download => |params| {
@@ -971,6 +978,7 @@ const Cmd = struct {
         overwrite_stake_for_testing: bool,
         no_retransmit: bool,
         snapshot_metadata_only: bool,
+        geyser: GeyserArgumentsBase,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -1019,6 +1027,7 @@ const Cmd = struct {
                     .config = {},
                     .help = "load only the snapshot metadata",
                 },
+                .geyser = GeyserArgumentsBase.cmd_info,
             },
         };
     };
@@ -1691,6 +1700,7 @@ fn validator(
         .voting_enabled = voting_enabled,
         .vote_account_address = maybe_vote_pubkey,
         .stop_at_slot = cfg.stop_at_slot,
+        .geyser_writer = geyser_writer,
     });
     defer replay_service_state.deinit(allocator);
 
@@ -2000,13 +2010,10 @@ fn shredNetwork(
     );
     defer epoch_tracker.deinit();
 
-    var rpc_epoch_ctx_service = RpcLeaderScheduleService
-        .init(allocator, .from(app_base.logger), &epoch_tracker, rpc_client);
-    const rpc_epoch_ctx_service_thread = try std.Thread.spawn(
-        .{},
-        RpcLeaderScheduleService.run,
-        .{ &rpc_epoch_ctx_service, app_base.exit },
-    );
+    // NOTE: RpcLeaderScheduleService skipped — std.http.Client.fetch panics in Zig 0.15.2
+    // for certain network responses (dev build bug). Sig handles "no leader schedule" gracefully
+    // (continues after 30s wait). For a spy node parsing PumpFun instructions, turbine routing
+    // accuracy is not required — shreds arrive via repair regardless.
 
     var start = sig.time.Timer.start();
     while (start.read().asSecs() < 30) {
@@ -2037,6 +2044,21 @@ fn shredNetwork(
     const my_contact_info: sig.gossip.data.ThreadSafeContactInfo =
         .fromContactInfo(gossip_service.my_contact_info);
 
+    // geyser writer (same flags as full validator — --enable-geyser + --geyser-pipe-path)
+    const geyser_writer: ?*GeyserWriter = if (!cfg.geyser.enable)
+        null
+    else
+        try createGeyserWriter(
+            allocator,
+            cfg.geyser.pipe_path,
+            cfg.geyser.writer_fba_bytes,
+        );
+    defer if (geyser_writer) |geyser| {
+        geyser.deinit();
+        allocator.destroy(geyser.exit);
+        allocator.destroy(geyser);
+    };
+
     // shred networking
     var shred_network_manager = try sig.shred_network.start(shred_network_conf, .{
         .allocator = allocator,
@@ -2045,6 +2067,7 @@ fn shredNetwork(
         .random = prng.random(),
         .ledger = &ledger,
         .exit = app_base.exit,
+        .entrypoints = app_base.entrypoints,
         .my_keypair = &app_base.my_keypair,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .my_shred_version = &gossip_service.my_shred_version,
@@ -2059,7 +2082,28 @@ fn shredNetwork(
     });
     defer shred_network_manager.deinit();
 
-    rpc_epoch_ctx_service_thread.join();
+    // Fetch a fresh slot right before spawning the watcher — shred_network setup takes
+    // time (gossip connect, leader schedule wait), so root_slot may be many slots stale.
+    // Starting the watcher at the current live slot minimizes the dead-slot catchup gap.
+    const watcher_start_slot: sig.core.Slot = blk: {
+        const response = rpc_client.getSlot(.{}) catch break :blk shred_network_conf.root_slot;
+        defer response.deinit();
+        break :blk response.result() catch shred_network_conf.root_slot;
+    };
+    app_base.logger.info().logf("shred_slot_watcher: using start slot {} (root={})", .{
+        watcher_start_slot, shred_network_conf.root_slot,
+    });
+
+    // slot watcher: reads completed slots from ledger, parses PumpFun instructions, emits to geyser pipe
+    const slot_watcher_thread = try std.Thread.spawn(.{}, sig.geyser.shred_slot_watcher.run, .{
+        allocator,
+        &ledger,
+        geyser_writer,
+        app_base.exit,
+        watcher_start_slot,
+    });
+    defer slot_watcher_thread.join();
+
     gossip_service.service_manager.join();
     shred_network_manager.join();
     ledger_cleanup_service.join();
@@ -2740,6 +2784,7 @@ const ReplayAndConsensusServiceState = struct {
             voting_enabled: bool,
             vote_account_address: ?Pubkey,
             stop_at_slot: ?Slot,
+            geyser_writer: ?*GeyserWriter = null,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -2796,6 +2841,7 @@ const ReplayAndConsensusServiceState = struct {
                 .hard_forks = hard_forks,
                 .replay_threads = params.replay_threads,
                 .stop_at_slot = params.stop_at_slot,
+                .geyser_writer = params.geyser_writer,
             }, if (params.disable_consensus) .disabled else .enabled);
         };
         errdefer replay_state.deinit();
