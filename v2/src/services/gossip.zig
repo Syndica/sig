@@ -318,7 +318,7 @@ const Gossip = struct {
         switch (msg) {
             .pull_request => |pr| {
                 const from, const shred_version = switch (pr.contact_info.data) {
-                    inline .legacy_contact_info, .contact_info => |v| .{ v.from, v.shred_version },
+                    .contact_info => |v| .{ v.from, v.shred_version },
                     else => return error.InvalidPullRequestContactInfo,
                 };
 
@@ -755,9 +755,10 @@ const Gossip = struct {
         var data = data_;
         switch (std.meta.activeTag(data)) {
             .contact_info => data.contact_info.wallclock = .{ .value = now },
-            inline else => |tag| {
+            inline .vote, .lowest_slot, .epoch_slots, .duplicate_shred, .snapshot_hashes => |tag| {
                 @field(data, @tagName(tag)).wallclock = now;
             },
+            else => return error.SigningDeprecatedValue,
         }
 
         // TODO: serialize directly table.
@@ -782,23 +783,18 @@ const Gossip = struct {
         caller: enum { us, pull, push },
         value: GossipValue,
     ) !?struct { Key, u8 } {
-        var deprecated = false;
-
         // Extract key information from the data.
         const from: Pubkey, const wallclock: u64, const index: u16 = switch (value.data) {
             inline .vote, .lowest_slot, .epoch_slots, .duplicate_shred => |v| blk: {
                 break :blk .{ v.from, v.wallclock, v.index };
             },
-            inline .snapshot_hashes, .restart_last_voted_fork, .restart_heaviest_fork => |v| blk: {
+            .snapshot_hashes => |v| blk: {
                 break :blk .{ v.from, v.wallclock, 0 };
             },
             .contact_info => |ci| blk: {
                 break :blk .{ ci.from, ci.wallclock.value, 0 };
             },
-            inline else => |v| blk: {
-                deprecated = true;
-                break :blk .{ v.from, v.wallclock, 0 };
-            },
+            else => unreachable,
         };
 
         // Serialize the value & validate its signature.
@@ -832,14 +828,12 @@ const Gossip = struct {
                     threshold = 432_000 * 400; // slots_in_epoch * slot_ms
                 }
 
-                if (!deprecated) {
-                    if (now <= wallclock +| threshold) break :blk true;
-                    if (value.data == .contact_info) break :blk false;
-                    try self.onDiscoveredValue(now, key, value);
-                }
+                if (now <= wallclock +| threshold) break :blk true;
+                if (value.data == .contact_info) break :blk false;
 
-                // Value is deprecated, or too old while not being a ContactInfo.
+                // Value is too old while not being a ContactInfo.
                 // Record that we've seen it, but dont insert it.
+                try self.onDiscoveredValue(now, key, value);
                 self.addExpired(now, hash);
                 return null;
             },
@@ -911,9 +905,9 @@ const Gossip = struct {
     }
 
     fn onDiscoveredValue(self: *Gossip, now: u64, key: Key, value: GossipValue) !void {
-        std.log.debug("Discovered {f}", .{key});
-
         if (!key.from.equals(&self.identity())) {
+            std.log.debug("Discovered {f}", .{key});
+
             switch (value.data) {
                 .vote => {}, // TODO: send to consensus service
                 .lowest_slot => {}, // TODO: send to repair service
@@ -953,9 +947,7 @@ const Gossip = struct {
                     // TODO: if map.get(.tpu_vote): send to consensus service
                     // TODO: if map.get(.rpc): send to snapshot service
                 },
-                .restart_last_voted_fork => {}, // TODO: implement wen-restart protocol (SIMD-0046).
-                .restart_heaviest_fork => {}, // TODO: implement wen-restart protocol (SIMD-0046).
-                else => {},
+                else => unreachable,
             }
         }
     }
@@ -1049,6 +1041,7 @@ const Gossip = struct {
 };
 
 const bincode = struct {
+    const Deprecated = void; // noreturn here crashes the compiler
     const read_func_overload = "bincodeRead";
     const write_func_overload = "bincodeWrite";
 
@@ -1081,6 +1074,7 @@ const bincode = struct {
                 inline for (info.fields) |f| @field(value, f.name) = try read(fba, reader, f.type);
                 return value;
             },
+            .void => return error.Deprecated,
             else => @compileError("unsupported type: " ++ @typeName(T)),
         }
     }
@@ -1110,6 +1104,7 @@ const bincode = struct {
                     return @field(T, write_func_overload)(&value, writer);
                 inline for (info.fields) |f| try write(writer, @field(value, f.name));
             },
+            .void => return error.Deprecated,
             else => @compileError("unsupported type: " ++ @typeName(T)),
         }
     }
@@ -1295,21 +1290,7 @@ const GossipValue = struct {
 };
 
 const GossipData = union(enum(u32)) {
-    legacy_contact_info: struct {
-        from: Pubkey,
-        gossip: SocketAddr,
-        tvu: SocketAddr,
-        tvu_quic: SocketAddr,
-        serve_repair_quic: SocketAddr,
-        tpu: SocketAddr,
-        tpu_forwards: SocketAddr,
-        tpu_vote: SocketAddr,
-        rpc: SocketAddr,
-        rpc_pubsub: SocketAddr,
-        serve_repair: SocketAddr,
-        wallclock: u64,
-        shred_version: u16,
-    },
+    legacy_contact_info: bincode.Deprecated,
     vote: struct {
         index: u8,
         from: Pubkey,
@@ -1347,8 +1328,8 @@ const GossipData = union(enum(u32)) {
         }),
         wallclock: u64,
     },
-    legacy_snapshot_hashes: AccountHashes,
-    account_hashes: AccountHashes,
+    legacy_snapshot_hashes: bincode.Deprecated,
+    account_hashes: bincode.Deprecated,
     epoch_slots: struct {
         index: u8,
         from: Pubkey,
@@ -1366,33 +1347,16 @@ const GossipData = union(enum(u32)) {
         }),
         wallclock: u64,
     },
-    legacy_version: struct {
-        from: Pubkey,
-        wallclock: u64,
-        version: Version,
-    },
-    version: struct {
-        from: Pubkey,
-        wallclock: u64,
-        version: Version,
-        feature_set: u32,
-    },
-    node_instance: struct {
-        from: Pubkey,
-        wallclock: u64,
-        created: u64,
-        token: u64,
-    },
+    legacy_version: bincode.Deprecated,
+    version: bincode.Deprecated,
+    node_instance: bincode.Deprecated,
     duplicate_shred: struct {
         index: u16,
         from: Pubkey,
         wallclock: u64,
         slot: Slot,
         _unused: u32,
-        _shred_type: enum(u8) {
-            data = 0b10100101,
-            code = 0b01011010,
-        },
+        _unused_shred_type: u8, // explicitly not an enum to avoid specific tag checks
         num_chunks: u8,
         chunk_idx: u8,
         chunk: Vec(u8),
@@ -1424,23 +1388,8 @@ const GossipData = union(enum(u32)) {
             bytes: ShortVec(u8),
         }),
     },
-    restart_last_voted_fork: struct {
-        from: Pubkey,
-        wallclock: u64,
-        offsets: Vec(union(enum(u32)) {
-            rle: Vec(VarInt(u16)),
-            raw: BitVec(u8),
-        }),
-        last_voted: SlotAndHash,
-        shred_version: u16,
-    },
-    restart_heaviest_fork: struct {
-        from: Pubkey,
-        wallclock: u64,
-        last_slot: SlotAndHash,
-        observed_stake: u64,
-        shred_version: u16,
-    },
+    restart_last_voted_fork: bincode.Deprecated,
+    restart_heaviest_fork: bincode.Deprecated,
 
     const SocketKey = enum(u8) {
         gossip,
