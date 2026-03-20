@@ -10,7 +10,7 @@ const common = @import("common");
 const Config = struct {
     sandboxing_mode: SandboxingMode,
 
-    cluster: common.solana.ClusterType,
+    cluster: common.solana.Cluster,
 
     /// path to a file containing the output of `solana leader-schedule`
     leader_schedule_file: []const u8,

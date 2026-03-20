@@ -50,7 +50,7 @@ pub const ClusterInfo = extern struct {
         }
     };
 
-    pub fn getFromEcho(gossip_port: u16, cluster: common.solana.ClusterType) !ClusterInfo {
+    pub fn getFromEcho(gossip_port: u16, cluster: common.solana.Cluster) !ClusterInfo {
         for (cluster.getEntrypoints()) |entrypoint| {
             const split = std.mem.indexOfScalar(u8, entrypoint, ':') orelse continue;
             const port = std.fmt.parseInt(u16, entrypoint[split + 1 ..], 10) catch continue;
