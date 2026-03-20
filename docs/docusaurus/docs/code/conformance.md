@@ -58,3 +58,13 @@ If you want to debug solfuzz_agave or manually generate fixtures, you'll need to
 # for more options
 ./run.py --help
 ```
+
+# Interpreting results
+
+The expected and actual results for all tests are in env/test-outputs. You can use `parseout` to interpret the results.
+
+```bash
+parseout txn
+```
+
+See [parseout/README.md] for more info.
