@@ -95,6 +95,70 @@ pub fn put(
     entry.is_empty.store(false, .release);
 }
 
+/// Like `get`, but returns an account with caller-owned data (allocates and
+/// copies out the account).
+///
+/// Uses a two-phase approach to avoid cloning on every candidate slot:
+/// 1. Scan all indices to find the best (highest) slot containing the address.
+/// 2. Re-lock the winning index and clone once.
+///
+/// If the winning index was modified between phases (e.g. pruned by
+/// `onSlotRooted`), the scan is retried. Retries are bounded to avoid
+/// unbounded looping. If exhausted, returns `error.RetryLimitExceeded`
+/// because the account exists but could not be read.
+pub fn getOwned(
+    self: *Unrooted,
+    allocator: std.mem.Allocator,
+    address: Pubkey,
+    ancestors: *const Ancestors,
+) error{ OutOfMemory, UnrootedGetOwnedMaxRetries }!?Account {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.getOwned" });
+    defer zone.deinit();
+
+    var retries: u32 = 0;
+    defer zone.value(retries);
+
+    for (0..10) |_| {
+        var best_slot: Slot = 0;
+        var best_index: ?*SlotIndex = null;
+
+        // Scan to find which index has the best slot (same as get()).
+        for (self.slots) |*index| {
+            if (index.is_empty.load(.acquire)) continue;
+
+            index.lock.lockShared();
+            defer index.lock.unlockShared();
+
+            if (index.slot >= best_slot and ancestors.containsSlot(index.slot)) {
+                if (index.entries.contains(address)) {
+                    best_index = index;
+                    best_slot = index.slot;
+                }
+            }
+        }
+
+        // re-lock the winner and clone.
+        const index = best_index orelse return null;
+        index.lock.lockShared();
+        defer index.lock.unlockShared();
+
+        // If the slot was pruned/reused between phases, retry the scan.
+        if (index.is_empty.load(.acquire) or index.slot != best_slot) {
+            retries += 1;
+            continue;
+        }
+        const data = index.entries.get(address) orelse {
+            retries += 1;
+            continue;
+        };
+        return (try data.clone(allocator)).toOwnedAccount();
+    }
+
+    // Exhausted retries, slot keeps getting pruned/reused underneath us.
+    // Returning null would incorrectly indicate the account doesn't exist.
+    return error.UnrootedGetOwnedMaxRetries;
+}
+
 /// Gets the latest state of the account keyed by `address` visible to the given ancestor set.
 pub fn get(
     self: *Unrooted,
@@ -132,7 +196,7 @@ pub const OwnerEntry = struct { Slot, Account };
 /// Returns a map of accounts owned by `owner` visible to the given ancestor set.
 /// Account data is cloned so the caller owns all returned data and is responsible
 /// for deallocating  when done.
-pub fn getByOwner(
+pub fn getByOwnerOwned(
     self: *Unrooted,
     allocator: std.mem.Allocator,
     owner: Pubkey,
@@ -261,7 +325,9 @@ test "sanity check" {
     defer ancestors.deinit(allocator);
 
     const result = db.get(account_a, &ancestors).?;
+    const result_owned = (try db.getOwned(allocator, account_a, &ancestors)).?;
     try std.testing.expectEqual(result.lamports, 250_000); // should return slot 3
+    try std.testing.expectEqual(result_owned.lamports, 250_000); // should return slot 3
 }
 
 test "forked behaviour" {
@@ -316,7 +382,9 @@ test "forked behaviour" {
     defer ancestors.deinit(allocator);
 
     const result = db.get(account_a, &ancestors).?;
+    const result_owned = (try db.getOwned(allocator, account_a, &ancestors)).?;
     try std.testing.expectEqual(result.lamports, 750_000);
+    try std.testing.expectEqual(result_owned.lamports, 750_000);
 }
 
 test "account not in ancestor set" {
@@ -345,7 +413,13 @@ test "account not in ancestor set" {
     defer ancestors.deinit(allocator);
 
     const result = db.get(account_a, &ancestors);
+    const result_owned = try db.getOwned(
+        allocator,
+        account_a,
+        &ancestors,
+    );
     try std.testing.expectEqual(result, null);
+    try std.testing.expectEqual(result_owned, null);
 }
 
 test "multiple accounts across slots" {
@@ -414,19 +488,43 @@ test "multiple accounts across slots" {
         defer ancestors.deinit(allocator);
 
         const result_a = db.get(account_a, &ancestors).?;
+        const result_a_owned = (try db.getOwned(
+            allocator,
+            account_a,
+            &ancestors,
+        )).?;
         try std.testing.expectEqual(result_a.lamports, 500_000);
+        try std.testing.expectEqual(result_a_owned.lamports, 500_000);
 
         const result_b = db.get(account_b, &ancestors).?;
+        const result_b_owned = (try db.getOwned(
+            allocator,
+            account_b,
+            &ancestors,
+        )).?;
         try std.testing.expectEqual(result_b.lamports, 2_000_000);
+        try std.testing.expectEqual(result_b_owned.lamports, 2_000_000);
 
         const result_c = db.get(account_c, &ancestors).?;
+        const result_c_owned = (try db.getOwned(
+            allocator,
+            account_c,
+            &ancestors,
+        )).?;
         try std.testing.expectEqual(result_c.lamports, 3_000_000);
+        try std.testing.expectEqual(result_c_owned.lamports, 3_000_000);
     }
     {
         var ancestors: Ancestors = try .initWithSlots(allocator, &.{ 1, 2 });
         defer ancestors.deinit(allocator);
 
         const result_a = db.get(account_a, &ancestors).?;
+        const result_a_owned = (try db.getOwned(
+            allocator,
+            account_a,
+            &ancestors,
+        )).?;
         try std.testing.expectEqual(result_a.lamports, 1_000_000);
+        try std.testing.expectEqual(result_a_owned.lamports, 1_000_000);
     }
 }

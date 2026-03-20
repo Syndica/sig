@@ -132,6 +132,22 @@ pub fn get(
     return null;
 }
 
+/// Like `get`, but returns an account with caller-owned data (allocates and copies out the account from both Unrooted and Rooted lookups).
+pub fn getOwned(
+    self: *Db,
+    allocator: std.mem.Allocator,
+    address: Pubkey,
+    ancestors: *const Ancestors,
+) !?Account {
+    if (try self.unrooted.getOwned(allocator, address, ancestors)) |data| {
+        return data;
+    }
+    if (try self.rooted.get(allocator, address)) |data| {
+        return data.toOwnedAccount();
+    }
+    return null;
+}
+
 pub const SlotModifiedIterator = struct {
     slot: *Unrooted.SlotIndex,
     cursor: u64,
@@ -210,8 +226,8 @@ pub const OwnerQuery = struct {
     }
 };
 
-pub fn ownerQuery(self: *Db, owner: *const Pubkey, ancestors: *const Ancestors) !OwnerQuery {
-    var unrooted_map = try self.unrooted.getByOwner(
+pub fn ownerQueryOwned(self: *Db, owner: *const Pubkey, ancestors: *const Ancestors) !OwnerQuery {
+    var unrooted_map = try self.unrooted.getByOwnerOwned(
         self.allocator,
         owner.*,
         ancestors,
@@ -426,7 +442,7 @@ test "accounts_db: owner query" {
 
     // Query for owner_x
     {
-        var query = try db.ownerQuery(&owner_x, &ancestors);
+        var query = try db.ownerQueryOwned(&owner_x, &ancestors);
         defer query.deinit();
         // The unified iterator should yield 3 accounts for owner_x:
         // - addr_a (resolved from unrooted, slot 3 version with lamports=150)
@@ -457,7 +473,7 @@ test "accounts_db: owner query" {
 
     // Query for owner_y
     {
-        var query = try db.ownerQuery(&owner_y, &ancestors);
+        var query = try db.ownerQueryOwned(&owner_y, &ancestors);
         defer query.deinit();
         // Should yield just addr_c (rooted, lamports=300)
         const entry = (try query.next()).?;

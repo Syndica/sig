@@ -62,7 +62,7 @@ pub fn getAccountInfo(
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
-    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
     const account = try slot_reader.get(arena, params.pubkey) orelse return .{
         .context = .{ .slot = slot },
         .value = null,
@@ -107,7 +107,7 @@ pub fn getBalance(
     // Get slot reference to access ancestors
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
-    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
 
     // Look up account
     const maybe_account = try slot_reader.get(arena, params.pubkey);
@@ -136,7 +136,7 @@ pub fn getTokenAccountBalance(
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
-    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
     const maybe_account = try slot_reader.get(arena, params.pubkey);
 
     const account = maybe_account orelse return error.RpcAccountNotFound;
@@ -194,7 +194,7 @@ pub fn getTokenSupply(
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
-    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
 
     // Fetch mint account
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1989-L1991
@@ -262,7 +262,7 @@ pub fn getMultipleAccounts(
     }
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
-    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
     const values = try arena.alloc(?GetAccountInfo.Response.Value, params.pubkeys.len);
 
     for (params.pubkeys, values) |pubkey, *value| {
@@ -339,7 +339,7 @@ pub fn getFeeForMessage(
     const message = Message.deserialize(&limit_allocator, peekable.reader(), version) catch
         return error.InvalidMessageFormat;
 
-    const slot_account_reader = self.account_reader.forSlot(&slot_ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&slot_ref.constants().ancestors).toOwnedReader();
 
     const empty_result: GetFeeForMessage.Response = .{
         .context = .{ .slot = slot },
@@ -350,7 +350,7 @@ pub fn getFeeForMessage(
         arena,
         message,
         version,
-        slot_account_reader,
+        slot_reader,
         &slot_ref.constants().reserved_accounts,
         slot,
     ) catch return empty_result) orelse return empty_result;
@@ -367,7 +367,7 @@ pub fn getFeeForMessage(
         const nonce_result = check_transactions.loadMessageNonceAccount(
             arena,
             &runtime_txn,
-            slot_account_reader,
+            slot_reader,
         ) catch return empty_result;
         if (nonce_result) |r| return .{
             .context = .{ .slot = slot },
@@ -477,7 +477,7 @@ pub fn getProgramAccounts(
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
-    const slot_reader = self.account_reader.forSlot(ancestors);
+    const slot_reader = self.account_reader.forSlot(ancestors).toOwnedReader();
 
     var iter = blk: {
         const z = tracy.Zone.init(@src(), .{ .name = "rpc.getProgramAccounts.ownerQuery" });
@@ -546,7 +546,7 @@ pub fn getTokenAccountsByOwner(
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
-    const slot_reader = self.account_reader.forSlot(ancestors);
+    const slot_reader = self.account_reader.forSlot(ancestors).toOwnedReader();
 
     // Resolve filter -> token program ID + optional mint.
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2649-L2673
