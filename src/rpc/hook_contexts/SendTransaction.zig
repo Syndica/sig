@@ -6,6 +6,7 @@ const base58 = @import("base58");
 const methods = @import("../methods.zig");
 
 const Allocator = std.mem.Allocator;
+const Channel = sig.sync.Channel;
 const Base64Decoder = std.base64.standard.Decoder;
 const Hash = sig.core.Hash;
 const Message = sig.core.transaction.Message;
@@ -18,7 +19,6 @@ const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const Transaction = sig.core.Transaction;
 const TransactionInfo = sig.TransactionSenderService.TransactionInfo;
-const TransactionSender = sig.TransactionSenderService.TransactionSender;
 
 const computeBudgetExecute = sig.runtime.program.compute_budget.execute;
 const getDurableNonce = sig.runtime.check_transactions.getDurableNonce;
@@ -36,7 +36,7 @@ const SendTransactionHookContext = @This();
 
 slot_tracker: *SlotTracker,
 account_reader: sig.accounts_db.AccountReader,
-tx_svc_channel: *TransactionSender,
+tx_svc_channel: *Channel(TransactionInfo),
 
 pub fn sendTransaction(
     self: SendTransactionHookContext,
@@ -155,7 +155,7 @@ fn decodeAndDeserialize(
 
 /// Analogous to [_send_transaction](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L2675)
 fn sendTransactionImpl(
-    transaction_sender: *TransactionSender,
+    transaction_sender: *Channel(TransactionInfo),
     transaction: Transaction,
     message_hash: Hash,
     wire_transaction: [PACKET_DATA_SIZE]u8,
@@ -310,7 +310,7 @@ test "decodeAndDeserialize: wire_transaction contains decoded bytes" {
 }
 
 test "sendTransactionImpl: sends transaction and returns signature" {
-    const channel = try TransactionSender.create(std.testing.allocator);
+    const channel = try Channel(TransactionInfo).create(std.testing.allocator);
     defer channel.destroy();
 
     const tx = sig.core.transaction.transaction_legacy_example.as_struct;
@@ -339,7 +339,7 @@ test "sendTransactionImpl: sends transaction and returns signature" {
 }
 
 test "sendTransactionImpl: with durable nonce info" {
-    const channel = try TransactionSender.create(std.testing.allocator);
+    const channel = try Channel(TransactionInfo).create(std.testing.allocator);
     defer channel.destroy();
 
     const tx = sig.core.transaction.transaction_legacy_example.as_struct;
