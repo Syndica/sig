@@ -601,7 +601,7 @@ test GetLatestBlockhash {
     try testResponse(GetLatestBlockhash, .{ .result = .{
         .context = .{ .slot = 309275334, .apiVersion = "2.1.6" },
         .value = .{
-            .blockhash = "9hH9qYcmBSZqHa4MyCxEz7P3wPuoo1mDAqrmgmnYF2hZ",
+            .blockhash = .parse("9hH9qYcmBSZqHa4MyCxEz7P3wPuoo1mDAqrmgmnYF2hZ"),
             .lastValidBlockHeight = 268651708,
         },
     } },

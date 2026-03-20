@@ -243,7 +243,7 @@ fn getLatestBlockhash(self: *Service, commitment: Commitment) !Hash {
     );
     defer response.deinit();
     const result = try response.result();
-    return try Hash.parseRuntime(result.value.blockhash);
+    return result.value.blockhash;
 }
 
 fn getSignatureStatus(self: *Service, signature: Signature) !Status {
