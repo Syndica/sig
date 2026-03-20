@@ -290,15 +290,21 @@ fn simulateTransaction(
         .epoch_stakes = &epoch_info.stakes,
         .status_cache = self.status_cache,
     });
+    defer svm_gateway.deinit(arena);
 
-    const processed_transaction = switch (try executeTransaction(
-        // NOTE: We use the arena for both the programs allocator and the tmp allocator since the
-        // SvmGateway only exists for this transaction simulation and all associated resources are
-        // released after simulation.
+    // For simulation/preflight, call loadAndExecuteTransaction directly
+    // instead of executeTransaction, because we must NOT write results back
+    // to the account store — the preflight slot may be finalized/rooted,
+    // and writing to a rooted slot would fail with CannotWriteRootedSlot.
+    const environment = try svm_gateway.environment();
+    const processed_transaction = switch (try sig.runtime.transaction_execution.loadAndExecuteTransaction(
         arena,
         arena,
-        &svm_gateway,
         &transaction,
+        svm_gateway.params.account_store.reader(),
+        &environment,
+        &.{ .log = true, .log_messages_byte_limit = null },
+        &svm_gateway.state.programs,
     )) {
         .ok => |processed_transaction| processed_transaction,
         .err => |err| return .{ .err = err },
