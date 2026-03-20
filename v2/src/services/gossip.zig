@@ -567,19 +567,19 @@ const Gossip = struct {
 
                 // TODO: if staked & rng.change(1/16), then skip checks below
 
-                // Past the ping check
+                // Passes the ping check
                 if (peer.last_pong == null)
                     continue;
 
-                // TODO: enable this? matching shred_version
-                // if (peer.shred_version != self.config.contact_info.contact_info.shred_version)
-                //     continue;
+                // matching shred_version
+                if (peer.shred_version != self.config.contact_info.contact_info.shred_version)
+                    continue;
 
-                // TODO: enable this? active-enough ContactInfo
-                // const ci_key: Key = .{ .from = from, .tag = .contact_info, .index = 0 };
-                // const ci = self.table.getPtr(ci_key) orelse continue;
-                // if (ci.last_updated <= now -| ACTIVE_VALUE_THRESHOLD_MS)
-                //     continue;
+                // active-enough ContactInfo
+                const ci_key: Key = .{ .from = from, .tag = .contact_info, .index = 0 };
+                const ci = self.table.getPtr(ci_key) orelse continue;
+                if (ci.last_updated <= now -| ACTIVE_VALUE_THRESHOLD_MS)
+                    continue;
 
                 self.push_active_set.appendAssumeCapacity(from);
                 if (self.push_active_set.items.len == self.push_active_set.capacity) break;
@@ -599,47 +599,66 @@ const Gossip = struct {
         if (pushed_keys.len == 0) return;
         defer self.push_buf.clearRetainingCapacity();
 
+        // No active_set peers. Try to send PushMessages to entrypoint to get us into the cluster.
+        if (self.push_active_set.items.len == 0) {
+            try self.sendPushMessagesTo(self.config.entry_addr, pushed_keys, null);
+            return;
+        }
+
         self.push_alloc_buf.clearRetainingCapacity();
         for (self.push_active_set.items) |pubkey| {
             const peer = self.peers.getPtr(pubkey) orelse continue;
             const ignored = peer.ignoring.asBloomFilter(null, null);
+            try self.sendPushMessagesTo(peer.addr, pushed_keys, &ignored);
+        }
+    }
 
-            var value_buf: [PUSH_BUFFER_MAX]GossipValue = undefined;
-            var values: std.ArrayListUnmanaged(GossipValue) = .initBuffer(&value_buf);
-            assert(pushed_keys.len <= value_buf.len);
+    fn sendPushMessagesTo(
+        self: *Gossip,
+        addr: std.net.Address,
+        pushed_keys: []const Key,
+        maybe_ignore_filter: ?*const BloomFilter,
+    ) !void {
+        var value_buf: [PUSH_BUFFER_MAX]GossipValue = undefined;
+        var values: std.ArrayListUnmanaged(GossipValue) = .initBuffer(&value_buf);
+        assert(pushed_keys.len <= value_buf.len);
 
-            var packet_size: usize = 4 + 32 + 8;
-            for (pushed_keys) |key| {
+        var packet_size: usize = 4 + 32 + 8;
+        self.push_alloc_buf.clearRetainingCapacity();
+        for (pushed_keys) |key| {
+            if (maybe_ignore_filter) |ignored| {
                 if (ignored.contains(&key.from.data)) continue;
-                const v = self.table.getPtr(key) orelse continue;
-
-                // Would overflow push message. Send one out with whats collected so far.
-                if (packet_size + v.size > Packet.len) {
-                    try self.sendMessage(peer.addr, .{ .push_message = .{
-                        .from = self.identity(),
-                        .values = .{ .items = values.items },
-                    } });
-                    self.push_alloc_buf.clearRetainingCapacity();
-                    values.clearRetainingCapacity();
-                    packet_size = 4 + 32 + 8;
-                }
-
-                // TODO: no need to actually deserialize here. Ideally, just write the v.values
-                // directly into the PushMessage packet being sent out.
-                const alloc_buf = self.push_alloc_buf.addManyAsSliceAssumeCapacity(16 * 1024);
-                var fba = std.heap.FixedBufferAllocator.init(alloc_buf);
-                var reader: std.Io.Reader = .fixed(v.value[0..v.size]);
-                const value = try bincode.read(&fba, &reader, GossipValue);
-                values.appendAssumeCapacity(value);
             }
 
-            // Send out remaining push message.
-            if (values.items.len > 0) {
-                try self.sendMessage(peer.addr, .{ .push_message = .{
+            // Key may have been removed from the table in the mean time: that's fine.
+            const v = self.table.getPtr(key) orelse continue;
+
+            // Would overflow push message. Send one out with whats collected so far.
+            if (packet_size + v.size > Packet.len) {
+                try self.sendMessage(addr, .{ .push_message = .{
                     .from = self.identity(),
                     .values = .{ .items = values.items },
                 } });
+                self.push_alloc_buf.clearRetainingCapacity();
+                values.clearRetainingCapacity();
+                packet_size = 4 + 32 + 8;
             }
+
+            // TODO: no need to actually deserialize here. Ideally, just write the v.values
+            // directly into the PushMessage packet being sent out.
+            const alloc_buf = self.push_alloc_buf.addManyAsSliceAssumeCapacity(16 * 1024);
+            var fba = std.heap.FixedBufferAllocator.init(alloc_buf);
+            var reader: std.Io.Reader = .fixed(v.value[0..v.size]);
+            const value = try bincode.read(&fba, &reader, GossipValue);
+            values.appendAssumeCapacity(value);
+        }
+
+        // Send out remaining push message.
+        if (values.items.len > 0) {
+            try self.sendMessage(addr, .{ .push_message = .{
+                .from = self.identity(),
+                .values = .{ .items = values.items },
+            } });
         }
     }
 
