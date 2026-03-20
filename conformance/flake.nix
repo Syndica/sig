@@ -43,6 +43,7 @@
       source env/venv/bin/activate
       cp -r ${solana-conformance} env/solana-conformance && chmod +w -R env/solana-conformance
       SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 pip install env/solana-conformance[dev,octane]
+      SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 pip install -e parseout[dev]
     '';
   in {
     formatter.${system} = pkgs.alejandra;
