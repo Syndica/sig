@@ -400,6 +400,9 @@ fn handleInboundEvent(
             const transition = self.slot_state_cache.onTipChanged(self.slot_read_ctx, new_tip);
             self.handleSlotTransition(.tip_changed, new_tip, transition, task_batch);
         },
+        .vote => |vote_data| {
+            self.handleVoteEvent(vote_data, task_batch);
+        },
     }
 }
 
@@ -575,6 +578,35 @@ fn handleSlotTransition(
 
     if (transition.evict_through) |evict_through| {
         self.slot_state_cache.evictFinalizedThrough(self.allocator, evict_through);
+    }
+}
+
+/// Handle a vote event by fanning out to all vote subscriptions.
+/// Vote events are independent of the slot transition pipeline.
+fn handleVoteEvent(
+    self: *RuntimeContext,
+    vote_data: types.VoteEventData,
+    task_batch: *ThreadPool.Batch,
+) void {
+    for (self.sub_map.entries.items) |*entry| {
+        if (entry.key.method != .vote) continue;
+
+        // Clone the vote slots for each subscription's serialize job since
+        // each job takes ownership of the data.
+        const cloned_slots = self.allocator.dupe(u64, vote_data.slots) catch |err| {
+            self.logger.err().logf("failed to clone vote slots for subscription: {}", .{err});
+            continue;
+        };
+
+        _ = self.enqueueJobForEntry(entry.*, .{
+            .vote = .{
+                .vote_pubkey = vote_data.vote_pubkey,
+                .slots = cloned_slots,
+                .hash = vote_data.hash,
+                .timestamp = vote_data.timestamp,
+                .signature = vote_data.signature,
+            },
+        }, task_batch);
     }
 }
 

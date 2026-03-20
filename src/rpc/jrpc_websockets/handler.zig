@@ -256,6 +256,7 @@ pub const JRPCHandler = struct {
             .rootUnsubscribe,
             .signatureUnsubscribe,
             .slotUnsubscribe,
+            .voteUnsubscribe,
             => |unsub| {
                 self.handleUnsubscribe(id, unsub.sub_id);
             },

@@ -71,9 +71,8 @@ pub const RPCSubMap = struct {
     /// retained. On new entry, heap fields are deep-copied into the map's allocator.
     ///
     /// Queue commit path policy:
-    /// - `.slot`, `.root`, `.program`, `.account`, and `.logs` use `.reserved`
-    ///   to preserve event order
-    /// - all other methods use `.direct`
+    /// - `.slot`, `.root`, `.program`, and `.account` use `.reserved` to preserve event order
+    /// - all other methods (`.logs`, `.vote`, `.signature`) use `.direct`
     pub fn getOrCreate(
         self: *RPCSubMap,
         key: *const SubReqKey,

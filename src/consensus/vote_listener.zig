@@ -78,6 +78,7 @@ pub const Senders = struct {
     verified_vote: *sig.sync.Channel(VerifiedVote),
     gossip_verified_vote_hashes: *std.ArrayListUnmanaged(GossipVerifiedVoteHash),
     duplicate_confirmed_slots: *std.ArrayListUnmanaged(ThresholdConfirmedSlot),
+    event_sink: ?*sig.rpc.jrpc_websockets.types.EventSink = null,
 
     const test_setup_enabled = @import("builtin").is_test;
 
@@ -823,9 +824,33 @@ fn trackNewVotesAndNotifyConfirmations(
     latest_vote_slot.* = @max(latest_vote_slot.*, last_vote_slot);
 
     if (is_new_vote) {
-        // TODO: here is where Agave notifies new vote for RPC websocket voteSubscribe
-        // (signature is included in the notification)
-        _ = vote_transaction_signature;
+        // Notify RPC websocket voteSubscribe subscribers about the new vote.
+        // Slots are duped here because the event sink takes ownership; the runtime
+        // loop frees them via InboundEvent.deinit after dispatching to subscribers
+        // (see Runtime.handleInboundEvent). Each subscriber gets its own clone of
+        // the slots via handleVoteEvent.
+        if (senders.event_sink) |event_sink| {
+            // Allocation failure is treated as best-effort: vote notifications are
+            // non-critical and should not disrupt consensus. The send catch frees
+            // the duped slots on channel failure (e.g. channel closed).
+            // TODO: add error logging here (for both dupe and send failures) once
+            // a logger is threaded through to this function -- consistent with how
+            // other event emission sites handle errors (see replay/service.zig:629).
+            const event_slots = allocator.dupe(Slot, vote_slots) catch null;
+            if (event_slots) |duped_slots| {
+                event_sink.send(.{
+                    .vote = .{
+                        .vote_pubkey = vote_pubkey,
+                        .slots = duped_slots,
+                        .hash = last_vote_hash,
+                        .timestamp = vote.timestamp(),
+                        .signature = vote_transaction_signature,
+                    },
+                }) catch {
+                    allocator.free(duped_slots);
+                };
+            }
+        }
         errdefer allocator.free(vote_slots);
         // TODO: Uncomment when our RepairService implements vote-weighted repair heuristic.
         //
