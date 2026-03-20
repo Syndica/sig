@@ -609,6 +609,7 @@ const Cmd = struct {
         skip_snapshot_validation: bool,
         dbg_db_init: bool,
         rpc_enable_owner_index: bool,
+        rpc_enable_spl_token_owner_index: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .n_threads_snapshot_load = .{
@@ -666,6 +667,17 @@ const Cmd = struct {
                     "slower writes. When disabled, the RPC calls fallback to a full " ++
                     "table scan - default: false",
             },
+            .rpc_enable_spl_token_owner_index = .{
+                .kind = .named,
+                .name_override = "rpc-enable-spl-token-owner-index",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "create an indexed token_owner column in accounts DB derived from " ++
+                    "SPL Token account data, speeding up getTokenAccountsByOwner RPC calls " ++
+                    "at the cost of increased storage and slower writes. When disabled, " ++
+                    "falls back to a full table scan - default: false",
+            },
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
@@ -675,6 +687,7 @@ const Cmd = struct {
             cfg.accounts_db.skip_snapshot_validation = args.skip_snapshot_validation;
             cfg.accounts_db.dbg_db_init = args.dbg_db_init;
             cfg.accounts_db.rpc_enable_owner_index = args.rpc_enable_owner_index;
+            cfg.accounts_db.rpc_enable_spl_token_owner_index = args.rpc_enable_spl_token_owner_index;
         }
     };
     const AccountsDbArgumentsDownload = struct {
@@ -1613,6 +1626,7 @@ fn validator(
     var rooted_db: sig.accounts_db.Db.Rooted = try .init(
         rooted_file,
         cfg.accounts_db.rpc_enable_owner_index,
+        cfg.accounts_db.rpc_enable_spl_token_owner_index,
     );
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
@@ -1917,6 +1931,7 @@ fn replayOffline(
     var rooted_db: sig.accounts_db.Db.Rooted = try .init(
         rooted_file,
         cfg.accounts_db.rpc_enable_owner_index,
+        cfg.accounts_db.rpc_enable_spl_token_owner_index,
     );
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
@@ -2335,6 +2350,7 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     var rooted_db: sig.accounts_db.Db.Rooted = try .init(
         rooted_file,
         cfg.accounts_db.rpc_enable_owner_index,
+        cfg.accounts_db.rpc_enable_spl_token_owner_index,
     );
     defer rooted_db.deinit();
 

@@ -162,6 +162,10 @@ pub const AccountsDB = struct {
     /// RPC requests that would otherwise benefit from the index will still function, but with worse
     /// performance. Not enabled by default.
     rpc_enable_owner_index: bool = false,
+    /// When enabled, maintains an indexed `token_owner` column in the accounts DB derived from
+    /// SPL Token account data (bytes 32..64), speeding up `getTokenAccountsByOwner` RPC calls.
+    /// When disabled, falls back to a full table scan with `substr()`. Not enabled by default.
+    rpc_enable_spl_token_owner_index: bool = false,
 };
 
 pub const Gossip = struct {
