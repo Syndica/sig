@@ -393,8 +393,8 @@ const Shred = extern struct {
 
     // Reconstructs the merkle root from a shred
     fn merkleRoot(shred: *const Shred, out: *Hash) !void {
-        // const zone = tracy.Zone.init(@src(), .{ .name = "merkleRoot" });
-        // defer zone.deinit();
+        const zone = tracy.Zone.init(@src(), .{ .name = "merkleRoot" });
+        defer zone.deinit();
 
         std.debug.assert(shred.variant.isMerkle());
 
@@ -662,7 +662,7 @@ const FecSetId = extern struct {
     }
 };
 
-const FinishedFecSets = std.AutoArrayHashMapUnmanaged(FecSetId, FinishedFecSetCtx);
+// const FinishedFecSets = std.AutoArrayHashMapUnmanaged(FecSetId, FinishedFecSetCtx);
 
 const FinishedFecSetCtx = struct {
     signature: Signature,
@@ -734,10 +734,33 @@ const ProgressMap = extern struct {
         return null;
     }
 
-    fn allocFecSetCtx(self: *ProgressMap) Idx {
+    // NOTE: this function only sets the entry's id and sets used to true.
+    // caller must populate all other fields before calling any ProgressMap functions again.
+    fn allocFecSetCtx(self: *ProgressMap, fec_set_id: FecSetId) Idx {
+        const zone = tracy.Zone.init(@src(), .{ .name = "allocFecSetCtx" });
+        defer zone.deinit();
+
+        {
+            var eviction_queue = self.evictionQueue();
+
+            tracy.plot(u16, "eviction queue count", @intCast(eviction_queue.count()));
+        }
+
         const unused_idx = for (&self.used, 0..) |used, i| {
             if (!used) break i;
         } else self.evict() orelse unreachable; // safe: we can always evict if there's entries
+
+        self.used[unused_idx] = true;
+        self.ids[unused_idx] = fec_set_id;
+
+        var eviction_queue = self.evictionQueue();
+
+        eviction_queue.add(@intCast(unused_idx)) catch unreachable;
+        self.eviction_queue_len += 1;
+
+        tracy.plot(u16, "eviction queue count", @intCast(eviction_queue.count()));
+
+        std.log.info(">--- eviction queue count: {}", .{eviction_queue.count()});
 
         return @intCast(unused_idx);
     }
@@ -750,14 +773,17 @@ const ProgressMap = extern struct {
         return false;
     }
 
-    fn peekEviction(self: *const ProgressMap) ?Idx {
-        return self.eviction_queue.peek();
-    }
-
     fn evict(self: *ProgressMap) ?Idx {
+        const zone = tracy.Zone.init(@src(), .{ .name = "evict" });
+        defer zone.deinit();
+
         var eviction_queue = self.evictionQueue();
 
+        tracy.plot(u16, "eviction queue count", @intCast(eviction_queue.count()));
+
         const evict_idx = eviction_queue.removeOrNull() orelse return null;
+        self.eviction_queue_len -= 1;
+        tracy.plot(u16, "eviction queue count", @intCast(eviction_queue.count()));
 
         self.used[evict_idx] = false;
 
@@ -832,20 +858,20 @@ fn FixedArrayMap(
         fn getIdxUnused(self: *const Self) ?u32 {
             for (&self.used, 0..) |used, i| {
                 if (!used) continue;
-                return i;
+                return @intCast(i);
             }
             return null;
         }
 
-        fn getOrInsert(self: *Self, key: *const Key, or_insert: *const Value) !void {
-            if (self.getIdx(key)) |get_idx| return &self.vals[get_idx];
+        // fn getOrInsert(self: *Self, key: *const Key, or_insert: *const Value) !void {
+        //     if (self.getIdx(key)) |get_idx| return &self.vals[get_idx];
 
-            const insert_idx = self.getIdxUnused() orelse return error.MapFull;
-            const hashed = if (maybeHashFn) |hashFn| hashFn(key) else key;
+        //     const insert_idx = self.getIdxUnused() orelse return error.MapFull;
+        //     const hashed = if (maybeHashFn) |hashFn| hashFn(key) else key;
 
-            self.hash[insert_idx] = hashed;
-            self.vals[insert_idx] = or_insert.*;
-        }
+        //     self.hash[insert_idx] = hashed;
+        //     self.vals[insert_idx] = or_insert.*;
+        // }
 
         fn insertRemovingFirst(self: *Self, key: *const Key, insert: *const Value) void {
             const hashed = if (maybeHashFn) |hashFn| hashFn(key) else {};
@@ -858,8 +884,8 @@ fn FixedArrayMap(
                 break :idx n - 1;
             };
 
-            self.keys[target_idx] = key;
-            self.vals[target_idx] = insert;
+            self.keys[target_idx] = key.*;
+            self.vals[target_idx] = insert.*;
             self.hash[target_idx] = hashed;
         }
 
@@ -887,11 +913,11 @@ const State = struct {
     // const VerifiedMerkleRoots = FixedArrayMap(Hash, void, MerkleRootHash, hashMerkleRoot, Hash.eql, 128);
 
     const SignatureHash = u32;
-    const MerkleRootHash = u32;
+    // const MerkleRootHash = u32;
 
-    fn hashMerkleRoot(a: *const Hash) MerkleRootHash {
-        return @bitCast(a.data[0..4]);
-    }
+    // fn hashMerkleRoot(a: *const Hash) MerkleRootHash {
+    //     return @bitCast(a.data[0..4]);
+    // }
 
     fn hashSignature(a: *const Signature) SignatureHash {
         return @bitCast((a.r[0..2] ++ a.s[0..2]).*);
@@ -900,6 +926,9 @@ const State = struct {
 
 // Reconstructs data shreds when 32/64 shreds have been received
 fn reconstructFecSet(fec_set_ctx: *FecSetCtx) void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "reconstructFecSet" });
+    defer zone.deinit();
+
     const data_count = FecSetCtx.fec_shred_cnt;
     const code_count = FecSetCtx.fec_shred_cnt;
     const total_count = data_count + code_count;
@@ -1114,8 +1143,8 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         const packet = it.next() orelse continue;
         defer it.markUsed();
 
-        // const zone = tracy.Zone.init(@src(), .{ .name = "shred recv" });
-        // defer zone.deinit();
+        const zone = tracy.Zone.init(@src(), .{ .name = "shred recv" });
+        defer zone.deinit();
 
         const packet = slice.get(0);
         defer slice.markUsed(1);
@@ -1221,6 +1250,8 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         var shred_merkle_root: Hash = undefined;
         try shred.merkleRoot(&shred_merkle_root);
 
+        const fec_set_id: FecSetId = .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot };
+
         const fec_set_ctx: *FecSetCtx = if (maybe_fec_set) |fec_set_ctx| blk: {
             @branchHint(.likely); // fec set is being constructed, and this is not the first shred
 
@@ -1269,7 +1300,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
             // shred looks good, let's add a new ctx to in_progress
 
-            const new_fec_set_idx = state.in_progress.allocFecSetCtx();
+            const new_fec_set_idx = state.in_progress.allocFecSetCtx(fec_set_id);
 
             state.in_progress.contexts[new_fec_set_idx] = .{
                 // we will check against these for equality in later received shreds
@@ -1287,8 +1318,6 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
                 // .code_shred_count = shred.code_or_data.code,
             };
 
-            const fec_set_id: FecSetId = .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot };
-
             state.in_progress.used[new_fec_set_idx] = true;
             state.in_progress.ids[new_fec_set_idx] = fec_set_id;
             state.in_progress.signatures[new_fec_set_idx] = shred.signature;
@@ -1304,16 +1333,20 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         // We now have a new shred that has passed validation
 
         if (shred.variant.isCode()) {
-            // TODO: this is a bad assert, remove it
+            if (fec_set_ctx.code_shreds_received.isSet(in_type_idx)) {
+                std.log.info("shred already in fec set, skipping", .{});
+                continue;
+            }
 
-            std.debug.assert(!fec_set_ctx.code_shreds_received.isSet(in_type_idx)); // assert shred not received before
             fec_set_ctx.code_shreds_received.set(in_type_idx); // track shred as received
             fec_set_ctx.code_shreds_buf[in_type_idx] = packet.*; // persist packet to our state
         }
         if (shred.variant.isData()) {
-            // TODO: this is a bad assert, remove it
+            if (fec_set_ctx.data_shreds_received.isSet(in_type_idx)) {
+                std.log.info("shred already in fec set, skipping", .{});
+                continue;
+            }
 
-            std.debug.assert(!fec_set_ctx.data_shreds_received.isSet(in_type_idx)); // assert shred not received before
             fec_set_ctx.data_shreds_received.set(in_type_idx); // track shred as received
             fec_set_ctx.data_shreds_buf[in_type_idx] = packet.*; // persist packet to our state
         }
@@ -1325,6 +1358,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         if (fec_set_ctx.totalShredsReceived() < FecSetCtx.fec_shred_cnt) {
             continue; // we're all good, but we haven't received enough to reconstruct the fec set yet
         }
+
         // starting fec set reconstruction now
         reconstructFecSet(fec_set_ctx);
 
@@ -1337,5 +1371,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         }
 
         std.log.info("complete? {}", .{complete});
+
+        state.done.insertRemovingFirst(&fec_set_id, &hashSignature(&shred.signature));
     }
 }
