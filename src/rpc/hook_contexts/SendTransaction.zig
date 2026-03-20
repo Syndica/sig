@@ -6,9 +6,12 @@ const base58 = @import("base58");
 const methods = @import("../methods.zig");
 
 const Allocator = std.mem.Allocator;
+const Channel = sig.sync.Channel;
 const Base64Decoder = std.base64.standard.Decoder;
 const Hash = sig.core.Hash;
+const InstructionTrace = sig.runtime.TransactionContext.InstructionTrace;
 const Message = sig.core.transaction.Message;
+const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 const Pubkey = sig.core.Pubkey;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const SendTransaction = methods.SendTransaction;
@@ -16,15 +19,13 @@ const Slot = sig.core.Slot;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const SlotTracker = sig.replay.trackers.SlotTracker;
+const SvmGateway = sig.replay.svm_gateway.SvmGateway;
 const Transaction = sig.core.Transaction;
 const TransactionInfo = sig.TransactionSenderService.TransactionInfo;
-const TransactionSender = sig.TransactionSenderService.TransactionSender;
-const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
-const SvmGateway = sig.replay.svm_gateway.SvmGateway;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
-const InstructionTrace = sig.runtime.TransactionContext.InstructionTrace;
 
+const computeBudgetExecute = sig.runtime.program.compute_budget.execute;
 const getDurableNonce = sig.runtime.check_transactions.getDurableNonce;
 const getSysvarFromAccount = sig.replay.update_sysvar.getSysvarFromAccount;
 const resolveTransaction = sig.replay.resolve_lookup.resolveTransaction;
@@ -41,9 +42,9 @@ const SendTransactionHookContext = @This();
 
 slot_tracker: *SlotTracker,
 account_store: sig.accounts_db.AccountStore,
-tx_svc_channel: *TransactionSender,
 epoch_tracker: *sig.core.EpochTracker,
 status_cache: *sig.core.StatusCache,
+tx_svc_channel: *Channel(TransactionInfo),
 
 pub fn sendTransaction(
     self: SendTransactionHookContext,
@@ -54,7 +55,7 @@ pub fn sendTransaction(
     const encoding = config.resolveEncoding() orelse return error.UnsupportedEncoding;
     const skip_preflight = config.skipPreflight orelse false;
 
-    const wire_transaction, const unsanitized_tx = try decodeAndDeserialize(
+    const wire_transaction, const wire_len, const unsanitized_tx = try decodeAndDeserialize(
         arena,
         params.transaction,
         encoding,
@@ -68,8 +69,7 @@ pub fn sendTransaction(
     if (config.minContextSlot) |min_slot| {
         if (preflight_slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
-    var preflight_slot_ref = self.slot_tracker.get(preflight_slot) orelse
-        return error.SlotNotAvailable;
+    const preflight_slot_ref = self.slot_tracker.get(preflight_slot) orelse unreachable;
     defer preflight_slot_ref.release();
 
     const transaction = try sanitizeTransaction(
@@ -126,6 +126,7 @@ pub fn sendTransaction(
         unsanitized_tx,
         transaction.msg_hash,
         wire_transaction,
+        wire_len,
         last_valid_block_height,
         durable_nonce_info,
         config.maxRetries,
@@ -137,7 +138,7 @@ fn decodeAndDeserialize(
     arena: Allocator,
     encoded: []const u8,
     encoding: methods.common.TransactionBinaryEncoding,
-) !struct { [PACKET_DATA_SIZE]u8, Transaction } {
+) !struct { [PACKET_DATA_SIZE]u8, usize, Transaction } {
     var wire_transaction: [PACKET_DATA_SIZE]u8 = @splat(0);
 
     const wire_len: usize = switch (encoding) {
@@ -178,15 +179,16 @@ fn decodeAndDeserialize(
         // TODO: return a more helpful error here somehow
         return error.InvalidParams;
     };
-    return .{ wire_transaction, unsanitized_tx };
+    return .{ wire_transaction, wire_len, unsanitized_tx };
 }
 
 /// Analogous to [_send_transaction](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L2675)
 fn sendTransactionImpl(
-    transaction_sender: *TransactionSender,
+    transaction_sender: *Channel(TransactionInfo),
     transaction: Transaction,
     message_hash: Hash,
     wire_transaction: [PACKET_DATA_SIZE]u8,
+    wire_transaction_size: usize,
     last_valid_block_height: u64,
     durable_nonce_info: ?struct { Pubkey, Hash },
     max_retries: ?usize,
@@ -195,7 +197,7 @@ fn sendTransactionImpl(
     const transaction_info: TransactionInfo = .initWithWire(
         transaction,
         wire_transaction,
-        wire_transaction.len,
+        wire_transaction_size,
         message_hash,
         last_valid_block_height,
         durable_nonce_info,
@@ -236,6 +238,11 @@ fn sanitizeTransaction(
         .slot_hashes = slot_hashes,
     });
 
+    const compute_budget_instruction_details = switch (computeBudgetExecute(&tx.msg)) {
+        .ok => |details| details,
+        .err => return error.InvalidParams,
+    };
+
     const msg_hash = Message.hash((try tx.msg.serializeBounded(tx.version)).constSlice());
     return .{
         .signature_count = tx.signatures.len,
@@ -244,7 +251,7 @@ fn sanitizeTransaction(
         .recent_blockhash = tx.msg.recent_blockhash,
         .instructions = resolved.instructions,
         .accounts = resolved.accounts,
-        .compute_budget_instruction_details = .{},
+        .compute_budget_instruction_details = compute_budget_instruction_details,
         .num_lookup_tables = tx.msg.address_lookups.len,
         .is_simple_vote_transaction = false,
     };
@@ -431,7 +438,7 @@ test "decodeAndDeserialize: wire_transaction contains decoded bytes" {
 }
 
 test "sendTransactionImpl: sends transaction and returns signature" {
-    const channel = try TransactionSender.create(std.testing.allocator);
+    const channel = try Channel(TransactionInfo).create(std.testing.allocator);
     defer channel.destroy();
 
     const tx = sig.core.transaction.transaction_legacy_example.as_struct;
@@ -460,7 +467,7 @@ test "sendTransactionImpl: sends transaction and returns signature" {
 }
 
 test "sendTransactionImpl: with durable nonce info" {
-    const channel = try TransactionSender.create(std.testing.allocator);
+    const channel = try Channel(TransactionInfo).create(std.testing.allocator);
     defer channel.destroy();
 
     const tx = sig.core.transaction.transaction_legacy_example.as_struct;

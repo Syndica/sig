@@ -1177,7 +1177,7 @@ pub const GetLatestBlockhash = struct {
         value: Value,
 
         pub const Value = struct {
-            blockhash: []const u8,
+            blockhash: Hash,
             lastValidBlockHeight: u64,
         };
     };

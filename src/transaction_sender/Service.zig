@@ -36,8 +36,6 @@ const Duration = sig.time.Duration;
 
 const PubkeyMap = sig.utils.collections.PubkeyMap;
 
-pub const TransactionSender = Channel(TransactionInfo);
-
 const NUM_CONSECUTIVE_LEADER_SLOTS = sig.core.leader_schedule.NUM_CONSECUTIVE_LEADER_SLOTS;
 
 pub const Logger = sig.trace.Logger("TransactionSenderService");
@@ -50,7 +48,7 @@ metrics: Metrics,
 cfg: Config,
 ctx: Context,
 
-receiver: *TransactionSender,
+receiver: *Channel(TransactionInfo),
 
 pub const Config = struct {
     process_interval: Duration = .fromSecs(1),
@@ -81,7 +79,7 @@ pub fn init(
     cfg: Config,
     ctx: Context,
 ) !Service {
-    const receiver = try TransactionSender.create(gpa);
+    const receiver = try Channel(TransactionInfo).create(gpa);
     receiver.name = "TransactionSenderService: TransactionInfo Receiver";
     errdefer receiver.destroy();
 
