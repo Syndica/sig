@@ -15,11 +15,13 @@ const GetBlock = methods.GetBlock;
 const GetBlockCommitment = methods.GetBlockCommitment;
 const GetBlockProduction = methods.GetBlockProduction;
 const GetBlockHeight = methods.GetBlockHeight;
-const GetClusterNodes = methods.GetClusterNodes;
+const GetBlockTime = methods.GetBlockTime;
 const GetBlocks = methods.GetBlocks;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
+const GetClusterNodes = methods.GetClusterNodes;
 const GetEpochInfo = methods.GetEpochInfo;
 const GetEpochSchedule = methods.GetEpochSchedule;
+const GetFirstAvailableBlock = methods.GetFirstAvailableBlock;
 const GetFeeForMessage = methods.GetFeeForMessage;
 const GetGenesisHash = methods.GetGenesisHash;
 const GetInflationGovernor = methods.GetInflationGovernor;
@@ -28,12 +30,16 @@ const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
 const GetInflationReward = methods.GetInflationReward;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
+const GetMaxRetransmitSlot = methods.GetMaxRetransmitSlot;
+const GetMaxShredInsertSlot = methods.GetMaxShredInsertSlot;
 const GetMultipleAccounts = methods.GetMultipleAccounts;
 const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
 const GetRecentPrioritizationFees = methods.GetRecentPrioritizationFees;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetSlot = methods.GetSlot;
+const GetSlotLeader = methods.GetSlotLeader;
+const GetSlotLeaders = methods.GetSlotLeaders;
 const GetStakeMinimumDelegation = methods.GetStakeMinimumDelegation;
 const GetTransaction = methods.GetTransaction;
 const GetTransactionCount = methods.GetTransactionCount;
@@ -43,6 +49,7 @@ const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 const GetMinimumBalanceForRentExemption = methods.GetMinimumBalanceForRentExemption;
 const IsBlockhashValid = methods.IsBlockhashValid;
+const MinimumLedgerSlot = methods.MinimumLedgerSlot;
 
 const Response = rpc.response.Response;
 
@@ -181,6 +188,20 @@ test GetBlockHeight {
     );
     try testResponse(GetBlockHeight, .{ .result = 268651537 },
         \\{"jsonrpc":"2.0","result":268651537,"id":1}
+    );
+}
+
+test GetBlockTime {
+    try testRequest(.getBlockTime, .{ .slot = 5 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockTime","params":[5]}
+    );
+    // Response with a timestamp
+    try testResponse(GetBlockTime, .{ .result = 1574721591 },
+        \\{"jsonrpc":"2.0","result":1574721591,"id":1}
+    );
+    // Response with null (block time not available)
+    try testResponse(GetBlockTime, .{ .result = null },
+        \\{"jsonrpc":"2.0","result":null,"id":1}
     );
 }
 
@@ -469,7 +490,14 @@ test "getFeeForMessage" {
     );
 }
 
-// TODO: test getFirstAvailableBlock()
+test GetFirstAvailableBlock {
+    try testRequest(.getFirstAvailableBlock, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getFirstAvailableBlock","params":[]}
+    );
+    try testResponse(GetFirstAvailableBlock, .{ .result = 250000 },
+        \\{"jsonrpc":"2.0","result":250000,"id":1}
+    );
+}
 
 test GetGenesisHash {
     try testRequest(.getGenesisHash, .{},
@@ -614,7 +642,7 @@ test GetLeaderSchedule {
         \\{"jsonrpc":"2.0","result":{"111uPd5xQyRHSmPzFJuHNUiuHbF55QXsuEbmqxE4ro":[1,3],"123vij84ecQEKUvQ7gYMKxKwKF6PbYSzCzzURYA4xULY":[2,4]},"id":1}
     );
     defer response.deinit();
-    const result: GetLeaderSchedule.Response = try response.result();
+    const result = (try response.result()).?;
     try std.testing.expectEqual(2, result.value.count());
     try std.testing.expectEqualSlices(
         u64,
@@ -628,8 +656,23 @@ test GetLeaderSchedule {
     );
 }
 
-// TODO: test getMaxRetransmitSlot()
-// TODO: test getMaxShredInsertSlot()
+test GetMaxRetransmitSlot {
+    try testRequest(.getMaxRetransmitSlot, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getMaxRetransmitSlot","params":[]}
+    );
+    try testResponse(GetMaxRetransmitSlot, .{ .result = 1234 },
+        \\{"jsonrpc":"2.0","result":1234,"id":1}
+    );
+}
+
+test GetMaxShredInsertSlot {
+    try testRequest(.getMaxShredInsertSlot, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getMaxShredInsertSlot","params":[]}
+    );
+    try testResponse(GetMaxShredInsertSlot, .{ .result = 1234 },
+        \\{"jsonrpc":"2.0","result":1234,"id":1}
+    );
+}
 
 test GetMinimumBalanceForRentExemption {
     try testRequest(.getMinimumBalanceForRentExemption, .{ .data_len = 50 },
@@ -833,8 +876,29 @@ test GetSlot {
     );
 }
 
-// TODO: test getSlotLeader()
-// TODO: test getSlotLeaders()
+test GetSlotLeader {
+    try testRequest(.getSlotLeader, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getSlotLeader","params":[]}
+    );
+    const leader_pubkey: Pubkey = .parse("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn");
+    try testResponse(GetSlotLeader, .{ .result = leader_pubkey },
+        \\{"jsonrpc":"2.0","result":"2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn","id":1}
+    );
+}
+
+test GetSlotLeaders {
+    try testRequest(.getSlotLeaders, .{ .start_slot = 100, .limit = 3 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getSlotLeaders","params":[100,3]}
+    );
+    const leaders = [_]Pubkey{
+        Pubkey.parse("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn"),
+        Pubkey.parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
+        Pubkey.parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
+    };
+    try testResponse(GetSlotLeaders, .{ .result = &leaders },
+        \\{"jsonrpc":"2.0","result":["2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn","Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk","GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"],"id":1}
+    );
+}
 // TODO: test getStakeActivation()
 
 test GetStakeMinimumDelegation {
@@ -1022,7 +1086,14 @@ test IsBlockhashValid {
     );
 }
 
-// TODO: test minimumLedgerSlot()
+test MinimumLedgerSlot {
+    try testRequest(.minimumLedgerSlot, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"minimumLedgerSlot","params":[]}
+    );
+    try testResponse(MinimumLedgerSlot, .{ .result = 1234 },
+        \\{"jsonrpc":"2.0","result":1234,"id":1}
+    );
+}
 // TODO: test requestAirdrop()
 // TODO: test sendTransaction()
 // TODO: test simulateTransaction()

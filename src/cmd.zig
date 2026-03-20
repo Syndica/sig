@@ -601,6 +601,8 @@ const Cmd = struct {
         force_unpack_snapshot: bool,
         skip_snapshot_validation: bool,
         dbg_db_init: bool,
+        rpc_enable_owner_index: bool,
+        rpc_enable_spl_token_owner_index: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .n_threads_snapshot_load = .{
@@ -647,6 +649,28 @@ const Cmd = struct {
                 \\subsequent runs: copies accounts.db.init -> accounts.db, skipping db population.
                 ,
             },
+            .rpc_enable_owner_index = .{
+                .kind = .named,
+                .name_override = "rpc-enable-owner-index",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "create an index on the owner column of accounts DB, speeding up " ++
+                    "RPC calls that filter by owner at the cost of increased storage and " ++
+                    "slower writes. When disabled, the RPC calls fallback to a full " ++
+                    "table scan - default: false",
+            },
+            .rpc_enable_spl_token_owner_index = .{
+                .kind = .named,
+                .name_override = "rpc-enable-spl-token-owner-index",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "create an indexed token_owner column in accounts DB derived from " ++
+                    "SPL Token account data, speeding up getTokenAccountsByOwner RPC calls " ++
+                    "at the cost of increased storage and slower writes. When disabled, " ++
+                    "falls back to a full table scan - default: false",
+            },
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
@@ -655,6 +679,8 @@ const Cmd = struct {
             cfg.accounts_db.force_unpack_snapshot = args.force_unpack_snapshot;
             cfg.accounts_db.skip_snapshot_validation = args.skip_snapshot_validation;
             cfg.accounts_db.dbg_db_init = args.dbg_db_init;
+            cfg.accounts_db.rpc_enable_owner_index = args.rpc_enable_owner_index;
+            cfg.accounts_db.rpc_enable_spl_token_owner_index = args.rpc_enable_spl_token_owner_index;
         }
     };
     const AccountsDbArgumentsDownload = struct {
@@ -1557,7 +1583,11 @@ fn validator(
     else
         false;
 
-    var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
+    var rooted_db: sig.accounts_db.Db.Rooted = try .init(
+        rooted_file,
+        cfg.accounts_db.rpc_enable_owner_index,
+        cfg.accounts_db.rpc_enable_spl_token_owner_index,
+    );
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
 
@@ -1705,11 +1735,16 @@ fn validator(
         .epoch_tracker = &epoch_tracker,
     });
 
+    var max_retransmit_slot: std.atomic.Value(sig.core.Slot) = .init(0);
+    var max_shred_insert_slot: std.atomic.Value(sig.core.Slot) = .init(0);
+
     try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
         .ledger = &ledger,
         .epoch_schedule = loaded_snapshot.genesis_config.epoch_schedule,
         .epoch_tracker = &epoch_tracker,
         .commitments = &replay_service_state.replay_state.slot_tracker.commitments,
+        .max_retransmit_slot = &max_retransmit_slot,
+        .max_shred_insert_slot = &max_shred_insert_slot,
     });
 
     try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
@@ -1746,6 +1781,8 @@ fn validator(
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = turbine_config.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
+            .max_retransmit_slot = &max_retransmit_slot,
+            .max_shred_insert_slot = &max_shred_insert_slot,
             .rpc_hooks = null,
             .duplicate = if (replay_service_state.consensus) |consensus| .{
                 .shred_receiver = &duplicate_shreds,
@@ -1851,7 +1888,11 @@ fn replayOffline(
     else
         false;
 
-    var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
+    var rooted_db: sig.accounts_db.Db.Rooted = try .init(
+        rooted_file,
+        cfg.accounts_db.rpc_enable_owner_index,
+        cfg.accounts_db.rpc_enable_spl_token_owner_index,
+    );
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
 
@@ -2048,6 +2089,8 @@ fn shredNetwork(
         .fromContactInfo(gossip_service.my_contact_info);
 
     // shred networking
+    var max_retransmit_slot_standalone: std.atomic.Value(sig.core.Slot) = .init(0);
+    var max_shred_insert_slot_standalone: std.atomic.Value(sig.core.Slot) = .init(0);
     var shred_network_manager = try sig.shred_network.start(shred_network_conf, .{
         .allocator = allocator,
         .logger = .from(app_base.logger),
@@ -2062,6 +2105,8 @@ fn shredNetwork(
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
+        .max_retransmit_slot = &max_retransmit_slot_standalone,
+        .max_shred_insert_slot = &max_shred_insert_slot_standalone,
         .rpc_hooks = null,
         // No consensus in the standalone mode, so duplicate slots are not reported.
         .duplicate = null,
@@ -2187,12 +2232,19 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         allocator.destroy(geyser);
     };
 
-    const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
+    const snapshot_files = try SnapshotFiles.find(
+        allocator,
+        snapshot_dir,
+    );
 
     const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
     defer allocator.free(rooted_file);
 
-    var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
+    var rooted_db: sig.accounts_db.Db.Rooted = try .init(
+        rooted_file,
+        cfg.accounts_db.rpc_enable_owner_index,
+        cfg.accounts_db.rpc_enable_spl_token_owner_index,
+    );
     defer rooted_db.deinit();
 
     var loaded_snapshot = try loadSnapshot(
@@ -2235,10 +2287,11 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
             const response = try rpc_client.getLeaderSchedule(.{ .slot = slot });
             defer response.deinit();
 
-            const rpc_schedule = (try response.result()).value;
+            const rpc_schedule = (try response.result()) orelse
+                return error.LeaderScheduleNotAvailable;
             break :blk try sig.core.leader_schedule.computeFromMap(
                 allocator,
-                &rpc_schedule,
+                &rpc_schedule.value,
             );
         };
         break :b leader_schedule;
@@ -3070,10 +3123,10 @@ const RpcLeaderScheduleService = struct {
     ) !LeaderSchedule {
         const response = try self.rpc_client.getLeaderSchedule(.{ .slot = slot });
         defer response.deinit();
-        const rpc_schedule = (try response.result()).value;
+        const rpc_schedule = (try response.result()) orelse return error.LeaderScheduleNotAvailable;
         var leaders = try sig.core.leader_schedule.computeFromMap(
             self.allocator,
-            &rpc_schedule,
+            &rpc_schedule.value,
         );
         const epoch = epoch_schedule.getEpoch(slot);
         leaders.start = epoch_schedule.getFirstSlotInEpoch(epoch);
