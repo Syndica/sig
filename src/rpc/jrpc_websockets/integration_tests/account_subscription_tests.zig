@@ -13,6 +13,20 @@ const putAccountAtSlot = helpers.putAccountAtSlot;
 const runBothLoops = helpers.runBothLoops;
 const waitForMessages = helpers.waitForMessages;
 
+const AccountNotification = struct {
+    method: []const u8,
+    params: struct {
+        result: struct {
+            context: struct {
+                slot: u64,
+            },
+            value: struct {
+                lamports: u64,
+            },
+        },
+    },
+};
+
 test "accountSubscribe confirmed publishes on rooted without confirmed event" {
     const allocator = std.testing.allocator;
 
@@ -60,10 +74,18 @@ test "accountSubscribe confirmed publishes on rooted without confirmed event" {
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
-    const notif = handler.received.items[1];
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"accountNotification\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"lamports\":42000") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"slot\":2") != null);
+    const parsed_notif = try std.json.parseFromSlice(
+        AccountNotification,
+        allocator,
+        handler.received.items[1],
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
+
+    try std.testing.expectEqualStrings("accountNotification", notification.method);
+    try std.testing.expectEqual(42_000, notification.params.result.value.lamports);
+    try std.testing.expectEqual(2, notification.params.result.context.slot);
 
     handler.queueSendNow(
         \\{"jsonrpc":"2.0","id":2,"method":"accountUnsubscribe","params":[1]}
@@ -73,7 +95,7 @@ test "accountSubscribe confirmed publishes on rooted without confirmed event" {
     try std.testing.expect(handler.received.items.len >= 3);
 }
 
-test "accountSubscribe processed publishes on tip change" {
+test "accountSubscribe processed publishes when tip change makes a frozen slot current" {
     const allocator = std.testing.allocator;
 
     var server = try TestServer.start(allocator);
@@ -115,17 +137,29 @@ test "accountSubscribe processed publishes on tip change" {
     try client.connect();
 
     waitForMessages(server, &client_env, &handler, 1, 5000);
-    try std.testing.expect(handler.received.items.len >= 1);
+    try std.testing.expectEqual(1, handler.received.items.len);
+
+    server.injectEvent(.{ .slot_frozen = .{ .slot = 2, .parent = 1, .root = 0 } });
+    runBothLoops(server, &client_env, &handler, 300);
+    try std.testing.expectEqual(1, handler.received.items.len);
 
     server.slot_tracker.commitments.update(.processed, 2);
     server.injectEvent(.{ .tip_changed = 2 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
-    try std.testing.expect(handler.received.items.len >= 2);
-    const notif = handler.received.items[1];
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"accountNotification\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"lamports\":50000") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"slot\":2") != null);
+    try std.testing.expectEqual(2, handler.received.items.len);
+    const parsed_notif = try std.json.parseFromSlice(
+        AccountNotification,
+        allocator,
+        handler.received.items[1],
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
+
+    try std.testing.expectEqualStrings("accountNotification", notification.method);
+    try std.testing.expectEqual(50_000, notification.params.result.value.lamports);
+    try std.testing.expectEqual(2, notification.params.result.context.slot);
 
     handler.queueSendNow(
         \\{"jsonrpc":"2.0","id":2,"method":"accountUnsubscribe","params":[1]}
@@ -184,13 +218,21 @@ test "accountSubscribe dedups unchanged commitment advances" {
     server.injectEvent(.{ .slot_rooted = 2 });
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
-    try std.testing.expect(
-        std.mem.indexOf(u8, handler.received.items[1], "\"accountNotification\"") != null,
+    const parsed_notif = try std.json.parseFromSlice(
+        AccountNotification,
+        allocator,
+        handler.received.items[1],
+        .{ .ignore_unknown_fields = true },
     );
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
+
+    try std.testing.expectEqualStrings("accountNotification", notification.method);
+    try std.testing.expectEqual(42_000, notification.params.result.value.lamports);
 
     server.injectEvent(.{ .slot_rooted = 3 });
     runBothLoops(server, &client_env, &handler, 300);
-    try std.testing.expectEqual(@as(usize, 2), handler.received.items.len);
+    try std.testing.expectEqual(2, handler.received.items.len);
 
     if (handler.conn_ref) |c| {
         c.close(.normal, "");
@@ -239,9 +281,17 @@ test "accountSubscribe deleted account returns zero-lamport placeholder" {
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
-    const notif = handler.received.items[1];
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"accountNotification\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"lamports\":0") != null);
+    const parsed_notif = try std.json.parseFromSlice(
+        AccountNotification,
+        allocator,
+        handler.received.items[1],
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
+
+    try std.testing.expectEqualStrings("accountNotification", notification.method);
+    try std.testing.expectEqual(0, notification.params.result.value.lamports);
 
     handler.queueSendNow(
         \\{"jsonrpc":"2.0","id":2,"method":"accountUnsubscribe","params":[1]}

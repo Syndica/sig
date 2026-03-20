@@ -226,7 +226,7 @@ pub const JRPCHandler = struct {
         };
         const id = request.id;
 
-        request.method.verify() catch |err| switch (err) {
+        request.method.validate() catch |err| switch (err) {
             error.MethodNotImplemented => {
                 self.sendErrorResponse(
                     id,

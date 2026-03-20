@@ -699,80 +699,62 @@ pub fn waitForMessages(
     }
 }
 
+pub const JsonRpcResultU64 = struct {
+    result: u64,
+};
+
+pub const JsonRpcResultBool = struct {
+    result: bool,
+};
+
+pub const JsonRpcResultString = struct {
+    result: []const u8,
+};
+
+pub const SlotNotification = struct {
+    method: []const u8,
+    params: struct {
+        result: struct {
+            slot: u64,
+            parent: u64,
+            root: u64,
+        },
+    },
+};
+
+pub const RootNotification = struct {
+    method: []const u8,
+    params: struct {
+        result: u64,
+    },
+};
+
 pub fn parseResultU64(response: []const u8) ?u64 {
-    const needle = "\"result\":";
-    const start = std.mem.indexOf(u8, response, needle) orelse {
+    const parsed = std.json.parseFromSlice(
+        JsonRpcResultU64,
+        std.testing.allocator,
+        response,
+        .{ .ignore_unknown_fields = true },
+    ) catch {
         return null;
     };
+    defer parsed.deinit();
 
-    var i = start + needle.len;
-    while (i < response.len and std.ascii.isWhitespace(response[i])) : (i += 1) {}
-
-    var end = i;
-    while (end < response.len and std.ascii.isDigit(response[end])) : (end += 1) {}
-    if (end == i) {
-        return null;
-    }
-
-    return std.fmt.parseUnsigned(u64, response[i..end], 10) catch null;
+    return parsed.value.result;
 }
 
-/// Parameterized e2e test: subscribe → inject event → verify notification → unsubscribe.
-pub fn subNotifUnsubTest(
-    subscribe_msg: []const u8,
-    unsubscribe_msg: []const u8,
-    event: types.InboundEvent,
-    expected_in_notif: []const []const u8,
-) !void {
-    const allocator = std.testing.allocator;
+pub fn parseResultBool(response: []const u8) ?bool {
+    const parsed = std.json.parseFromSlice(
+        JsonRpcResultBool,
+        std.testing.allocator,
+        response,
+        .{ .ignore_unknown_fields = true },
+    ) catch {
+        return null;
+    };
+    defer parsed.deinit();
 
-    var server = try TestServer.start(allocator);
-    defer {
-        server.stop();
-        server.deinit();
-    }
-
-    var handler = TestClientHandler.init(allocator);
-    defer handler.deinit();
-
-    handler.queueSend(subscribe_msg);
-    handler.close_after = 3;
-
-    var client_env: TestClientEnv = undefined;
-    try client_env.start();
-    defer client_env.deinit();
-
-    var conn: TestClient.Conn = undefined;
-    var client = initTestClient(allocator, &client_env, &handler, &conn, server.port);
-    try client.connect();
-
-    waitForMessages(server, &client_env, &handler, 1, 5000);
-    try std.testing.expect(handler.received.items.len >= 1);
-    try std.testing.expect(
-        std.mem.indexOf(u8, handler.received.items[0], "\"result\":") != null,
-    );
-
-    server.injectEvent(event);
-
-    waitForMessages(server, &client_env, &handler, 2, 5000);
-    try std.testing.expect(handler.received.items.len >= 2);
-    const notif = handler.received.items[1];
-    try std.testing.expect(
-        std.mem.indexOf(u8, notif, "Notification\"") != null,
-    );
-    for (expected_in_notif) |needle| {
-        try std.testing.expect(std.mem.indexOf(u8, notif, needle) != null);
-    }
-
-    handler.queueSendNow(unsubscribe_msg);
-
-    waitForMessages(server, &client_env, &handler, 3, 5000);
-    try std.testing.expect(handler.received.items.len >= 3);
-    try std.testing.expect(
-        std.mem.indexOf(u8, handler.received.items[2], "\"result\":true") != null,
-    );
-
-    runBothLoops(server, &client_env, &handler, 100);
+    return parsed.value.result;
 }
 
 fn trackedSlotConstants(

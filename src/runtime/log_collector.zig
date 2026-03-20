@@ -59,6 +59,10 @@ pub const LogCollector = struct {
         message_indices: []const usize,
         index: usize,
 
+        pub fn count(it: Iterator) usize {
+            return it.message_indices.len - it.index;
+        }
+
         pub fn next(it: *Iterator) ?[:0]const u8 {
             if (it.index >= it.message_indices.len) return null;
             const end_idx = blk: {
@@ -134,6 +138,36 @@ test "bytes_limit" {
             msg_iter.message_pool.len - LOG_TRUNCATE_MSG.len + 1,
         );
     }
+}
+
+test "iterator count" {
+    const allocator = std.testing.allocator;
+
+    var log_collector = try LogCollector.init(allocator, null);
+    defer log_collector.deinit(allocator);
+
+    try log_collector.log(allocator, "Hello", .{});
+    try log_collector.log(allocator, "World", .{});
+
+    var iterator = log_collector.iterator();
+    try std.testing.expectEqual(2, iterator.count());
+    try std.testing.expectEqualStrings("Hello", iterator.next().?);
+    try std.testing.expectEqual(1, iterator.count());
+    try std.testing.expectEqualStrings("World", iterator.next().?);
+    try std.testing.expectEqual(0, iterator.count());
+    try std.testing.expectEqual(null, iterator.next());
+}
+
+test "iterator count empty collector" {
+    const allocator = std.testing.allocator;
+
+    var log_collector = try LogCollector.init(allocator, null);
+    defer log_collector.deinit(allocator);
+
+    var iterator = log_collector.iterator();
+    try std.testing.expectEqual(0, iterator.count());
+    try std.testing.expectEqual(null, iterator.next());
+    try std.testing.expectEqual(0, iterator.count());
 }
 
 fn expectEqualLogs(expected: []const []const u8, actual: []const []const u8) !void {

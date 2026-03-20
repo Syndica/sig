@@ -8,6 +8,7 @@ const ws_request = @import("ws_request.zig");
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Account = sig.core.Account;
+const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 pub const AccountWithPubkey = struct {
     pubkey: Pubkey,
@@ -51,12 +52,11 @@ pub const SubReqKey = struct {
     pub const AccountParams = struct {
         pubkey: Pubkey,
         commitment: methods.Commitment = .finalized,
-        encoding: methods.AccountEncoding = .base64,
+        encoding: methods.AccountEncoding = .binary,
         data_slice: ?methods.DataSlice = null,
     };
 
     pub const LogsParams = struct {
-        /// When heap-allocated (mentions variant), owned by the map's allocator.
         filter: methods.LogsFilter,
         commitment: methods.Commitment = .finalized,
     };
@@ -64,7 +64,7 @@ pub const SubReqKey = struct {
     pub const ProgramParams = struct {
         program_id: Pubkey,
         commitment: methods.Commitment = .finalized,
-        encoding: methods.AccountEncoding = .base64,
+        encoding: methods.AccountEncoding = .binary,
         data_slice: ?methods.DataSlice = null,
         /// When heap-allocated, each filter (and memcmp bytes) is owned by the map's allocator.
         filters: ?[]const methods.ProgramSubscribe.Filter = null,
@@ -122,15 +122,7 @@ pub const SubReqKey = struct {
             .all, .allWithVotes => return true,
             .mentions => |va| {
                 const vb = b.mentions;
-                if (va.mentions.len != vb.mentions.len) {
-                    return false;
-                }
-                for (va.mentions, vb.mentions) |pa, pb| {
-                    if (!std.mem.eql(u8, &pa.data, &pb.data)) {
-                        return false;
-                    }
-                }
-                return true;
+                return std.mem.eql(u8, &va.mentions[0].data, &vb.mentions[0].data);
             },
         }
     }
@@ -188,7 +180,7 @@ pub const SubReqKey = struct {
                     .params = .{ .account = .{
                         .pubkey = p.pubkey,
                         .commitment = cfg.commitment orelse .finalized,
-                        .encoding = cfg.encoding orelse .base64,
+                        .encoding = cfg.encoding orelse .binary,
                         .data_slice = cfg.dataSlice,
                     } },
                 };
@@ -210,7 +202,7 @@ pub const SubReqKey = struct {
                     .params = .{ .program = .{
                         .program_id = p.program_id,
                         .commitment = cfg.commitment orelse .finalized,
-                        .encoding = cfg.encoding orelse .base64,
+                        .encoding = cfg.encoding orelse .binary,
                         .data_slice = cfg.dataSlice,
                         .filters = cfg.filters,
                     } },
@@ -256,17 +248,6 @@ pub const SubReqKey = struct {
     pub fn clone(self: *const SubReqKey, allocator: std.mem.Allocator) !SubReqKey {
         var result = self.*;
         switch (self.params) {
-            .logs => |lp| switch (lp.filter) {
-                .mentions => |m| {
-                    result.params = .{ .logs = .{
-                        .filter = .{ .mentions = .{
-                            .mentions = try allocator.dupe(Pubkey, m.mentions),
-                        } },
-                        .commitment = lp.commitment,
-                    } };
-                },
-                else => {},
-            },
             .program => |pp| {
                 if (pp.filters) |filters| {
                     const duped = try allocator.alloc(methods.ProgramSubscribe.Filter, filters.len);
@@ -304,14 +285,10 @@ pub const SubReqKey = struct {
         return result;
     }
 
-    /// Free heap-allocated data in the key. Only `logs.mentions` and
-    /// `program.filters` (including memcmp bytes) have heap data.
+    /// Free heap-allocated data in the key. Only `program.filters`
+    /// (including memcmp bytes) have heap data.
     pub fn deinit(self: *SubReqKey, allocator: std.mem.Allocator) void {
         switch (self.params) {
-            .logs => |lp| switch (lp.filter) {
-                .mentions => |m| allocator.free(m.mentions),
-                else => {},
-            },
             .program => |pp| {
                 if (pp.filters) |filters| {
                     for (filters) |f| {
@@ -332,6 +309,7 @@ pub const SubReqKey = struct {
 pub const SubId = u64;
 
 pub const SlotModifiedAccounts = struct {
+    /// All accounts modified in a frozen slot, owned by `arena`.
     accounts: []AccountWithPubkey = &.{},
     arena: std.heap.ArenaAllocator,
 
@@ -357,21 +335,24 @@ pub const SlotFrozenEvent = struct {
 
 /// Internal runtime input event from producer threads to the websocket loop thread.
 pub const InboundEvent = union(enum) {
-    logs: LogsEventData,
+    logs: SlotTransactionLogs,
     slot_frozen: SlotFrozenEvent,
     slot_confirmed: u64,
     slot_rooted: u64,
     tip_changed: u64,
 
     pub fn deinit(self: InboundEvent, allocator: std.mem.Allocator) void {
+        _ = allocator;
         switch (self) {
+            .logs => |slot_logs| {
+                var logs = slot_logs;
+                logs.deinit();
+            },
             .slot_frozen => |slot_data| {
                 var accounts = slot_data.accounts;
                 accounts.deinit();
             },
-            else => {
-                _ = allocator;
-            },
+            else => {},
         }
     }
 };
@@ -469,11 +450,126 @@ pub const AccountEventData = struct {
     }
 };
 
-pub const LogsEventData = struct {
-    signature: sig.core.Signature,
-    num_logs: u32,
-    slot: u64,
+pub const SlotTransactionLogs = struct {
+    /// Slot whose transaction logs this batch belongs to.
+    slot: u64 = 0,
+    /// Batch of transaction log entries owned by `arena`.
+    entries: []const TransactionLogsEntry = &.{},
+    arena: std.heap.ArenaAllocator,
+
+    pub fn empty() SlotTransactionLogs {
+        return .{
+            .slot = 0,
+            .entries = &.{},
+            .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+        };
+    }
+
+    pub fn deinit(self: *SlotTransactionLogs) void {
+        self.arena.deinit();
+        self.* = empty();
+    }
 };
+
+pub const TransactionLogsEntry = struct {
+    signature: Signature,
+    err: ?TransactionError,
+    is_vote: bool,
+    logs: []const []const u8,
+    mentioned_pubkeys: []const Pubkey,
+
+    pub fn toOwnedNotificationData(
+        self: *const TransactionLogsEntry,
+        allocator: std.mem.Allocator,
+        slot: u64,
+    ) !LogsNotificationData {
+        const cloned_logs = try cloneLogLines(allocator, self.logs);
+        errdefer freeLogLines(allocator, cloned_logs);
+
+        const cloned_mentions = try allocator.dupe(Pubkey, self.mentioned_pubkeys);
+        errdefer allocator.free(cloned_mentions);
+
+        const cloned_err = try cloneTransactionError(self.err, allocator);
+        errdefer if (cloned_err) |tx_err| tx_err.deinit(allocator);
+
+        return .{
+            .slot = slot,
+            .signature = self.signature,
+            .err = cloned_err,
+            .is_vote = self.is_vote,
+            .logs = cloned_logs,
+            .mentioned_pubkeys = cloned_mentions,
+        };
+    }
+};
+
+pub const LogsNotificationData = struct {
+    slot: u64,
+    signature: Signature,
+    err: ?TransactionError,
+    is_vote: bool,
+    logs: []const []const u8,
+    mentioned_pubkeys: []const Pubkey,
+
+    pub fn deinit(self: LogsNotificationData, allocator: std.mem.Allocator) void {
+        freeLogLines(allocator, self.logs);
+        if (self.mentioned_pubkeys.len > 0) {
+            allocator.free(self.mentioned_pubkeys);
+        }
+        if (self.err) |tx_err| {
+            tx_err.deinit(allocator);
+        }
+    }
+};
+
+fn cloneLogLines(
+    allocator: std.mem.Allocator,
+    log_lines: []const []const u8,
+) ![]const []const u8 {
+    const cloned = try allocator.alloc([]const u8, log_lines.len);
+    var copied: usize = 0;
+    errdefer {
+        for (cloned[0..copied]) |line| {
+            allocator.free(line);
+        }
+        allocator.free(cloned);
+    }
+
+    for (log_lines, 0..) |line, i| {
+        cloned[i] = try allocator.dupe(u8, line);
+        copied = i + 1;
+    }
+    return cloned;
+}
+
+fn freeLogLines(allocator: std.mem.Allocator, log_lines: []const []const u8) void {
+    for (log_lines) |line| {
+        allocator.free(line);
+    }
+    if (log_lines.len > 0) {
+        allocator.free(log_lines);
+    }
+}
+
+fn cloneTransactionError(
+    tx_err: ?TransactionError,
+    allocator: std.mem.Allocator,
+) !?TransactionError {
+    const tx_err_value = tx_err orelse return null;
+    if (tx_err_value != .InstructionError) {
+        return tx_err_value;
+    }
+
+    const instruction_error = tx_err_value.InstructionError;
+    if (instruction_error.@"1" != .BorshIoError) {
+        return tx_err_value;
+    }
+
+    return .{ .InstructionError = .{
+        instruction_error.@"0",
+        .{ .BorshIoError = try allocator.dupe(u8, instruction_error.@"1".BorshIoError) },
+    } };
+}
 
 pub const RootEventData = struct {
     root: u64,
@@ -494,7 +590,7 @@ pub const SerializeJob = struct {
             data_slice: ?methods.DataSlice = null,
             read_ctx: SlotReadContext,
         },
-        logs: LogsEventData,
+        logs: LogsNotificationData,
         program: struct {
             data: AccountEventData,
             encoding: methods.AccountEncoding,
@@ -507,6 +603,7 @@ pub const SerializeJob = struct {
         pub fn deinit(self: JobType, allocator: std.mem.Allocator) void {
             switch (self) {
                 .account => |job| job.data.deinit(allocator),
+                .logs => |job| job.deinit(allocator),
                 .program => |job| job.data.deinit(allocator),
                 else => {},
             }
@@ -540,6 +637,26 @@ pub const CommitMsg = struct {
     pipeline_latency_ns: u64 = 0,
     payload_bytes: u64 = 0,
 };
+
+test "SubReqKey fromMethod defaults accountSubscribe encoding to binary" {
+    const pubkey = Pubkey.parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
+    const method: ws_request.WsMethodAndParams = .{ .accountSubscribe = .{
+        .pubkey = pubkey,
+    } };
+
+    const key = SubReqKey.fromMethod(&method).?;
+    try std.testing.expectEqual(methods.AccountEncoding.binary, key.params.account.encoding);
+}
+
+test "SubReqKey fromMethod defaults programSubscribe encoding to binary" {
+    const program_id = Pubkey.parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
+    const method: ws_request.WsMethodAndParams = .{ .programSubscribe = .{
+        .program_id = program_id,
+    } };
+
+    const key = SubReqKey.fromMethod(&method).?;
+    try std.testing.expectEqual(methods.AccountEncoding.binary, key.params.program.encoding);
+}
 
 test "SubReqKey equality - slot" {
     const a = SubReqKey.slotKey();
@@ -663,17 +780,16 @@ test "SubReqKey clone - slot has same value" {
     try std.testing.expect(key.eql(&cloned));
 }
 
-test "SubReqKey clone - logs mentions deep copies mentions slice" {
+test "SubReqKey clone - logs mentions copies by value" {
     const allocator = std.testing.allocator;
 
     var pk: Pubkey = undefined;
     @memset(&pk.data, 0xAB);
 
-    var mentions: [1]Pubkey = .{pk};
-    const key: SubReqKey = .{
+    var key: SubReqKey = .{
         .method = .logs,
         .params = .{ .logs = .{
-            .filter = .{ .mentions = .{ .mentions = mentions[0..] } },
+            .filter = .{ .mentions = .{ .mentions = .{pk} } },
         } },
     };
 
@@ -682,9 +798,8 @@ test "SubReqKey clone - logs mentions deep copies mentions slice" {
 
     try std.testing.expect(key.eql(&cloned));
     try std.testing.expect(cloned.params.logs.filter == .mentions);
-    try std.testing.expect(cloned.params.logs.filter.mentions.mentions.ptr != mentions[0..].ptr);
 
-    @memset(&mentions[0].data, 0xCD);
+    @memset(&key.params.logs.filter.mentions.mentions[0].data, 0xCD);
     try std.testing.expect(!key.eql(&cloned));
 }
 
@@ -720,4 +835,63 @@ test "SubReqKey clone - program filters deep copy memcmp bytes" {
 
     memcmp_bytes[0] = 9;
     try std.testing.expect(!key.eql(&cloned));
+}
+
+test "LogsNotificationData deinit accepts empty static slices" {
+    const allocator = std.testing.allocator;
+
+    const data = LogsNotificationData{
+        .slot = 1,
+        .signature = Signature.ZEROES,
+        .err = null,
+        .is_vote = false,
+        .logs = &.{},
+        .mentioned_pubkeys = &.{},
+    };
+
+    data.deinit(allocator);
+}
+
+test "TransactionLogsEntry toOwnedNotificationData deep copies into logs notification data" {
+    const allocator = std.testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    const logs = try arena_allocator.alloc([]const u8, 1);
+    logs[0] = try arena_allocator.dupe(u8, "slot log line");
+
+    var mention: Pubkey = undefined;
+    @memset(&mention.data, 0xEF);
+
+    const entry = TransactionLogsEntry{
+        .signature = Signature.ZEROES,
+        .err = .{ .InstructionError = .{
+            4,
+            .{ .BorshIoError = try arena_allocator.dupe(u8, "arena err") },
+        } },
+        .is_vote = true,
+        .logs = logs,
+        .mentioned_pubkeys = try arena_allocator.dupe(Pubkey, &.{mention}),
+    };
+
+    var cloned = try entry.toOwnedNotificationData(allocator, 99);
+    defer cloned.deinit(allocator);
+
+    try std.testing.expectEqual(99, cloned.slot);
+    try std.testing.expect(cloned.logs.ptr != entry.logs.ptr);
+    try std.testing.expect(cloned.logs[0].ptr != entry.logs[0].ptr);
+    try std.testing.expect(cloned.mentioned_pubkeys.ptr != entry.mentioned_pubkeys.ptr);
+    try std.testing.expectEqualStrings("slot log line", cloned.logs[0]);
+    try std.testing.expectEqual(0xEF, cloned.mentioned_pubkeys[0].data[0]);
+    try std.testing.expectEqualStrings(
+        "arena err",
+        cloned.err.?.InstructionError.@"1".BorshIoError,
+    );
+}
+
+test "SlotTransactionLogs deinit accepts empty static slices" {
+    var data = SlotTransactionLogs.empty();
+    data.deinit();
 }
