@@ -18,10 +18,14 @@ zig build solfuzz_sig
 
 # Run
 
-**Run all the test vectors**
+**Run the test vectors**
 
 ```bash
+# run all
 ./run.py
+
+# run only the transaction harness tests
+./run.py txn
 ```
 
 For customization, try `--help`.
@@ -46,7 +50,7 @@ solana-conformance \
 
 **Debug Agave**
 
-If you want to debug solfuzz_agave or manually generate fixtures from agave, you'll need to set up the agave environment with `nix develop .#agave`.
+If you want to debug agave or manually generate fixtures from agave, you'll need to set up the agave environment with `nix develop .#agave`.
 
 You can edit any of the agave code in the env/ folder to debug agave. To run the conformance tests against this code, you'll need to compile solfuzz_agave:
 
@@ -61,14 +65,11 @@ Then you can use some commands like these:
 # run the tests against agave
 ./run.py --exec-lib env/solfuzz-agave/target/release/libsolfuzz_agave.so
 
-# create the fixtures based on agave, and run the conformance tests
+# create the fixtures based on agave, and run the conformance tests against sig
 ./run.py --create
 
-# re-run conformance tests using your created fixtures
+# re-run conformance tests against sig using your created fixtures
 ./run.py --use-created
-
-# for more options
-./run.py --help
 ```
 
 # Interpreting results
