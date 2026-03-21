@@ -655,6 +655,9 @@ pub fn getSupply(
         return error.SlotNotAvailable;
 
     var non_circulating_lamports: u64 = 0;
+    var non_circulating_accounts = std.ArrayListUnmanaged(sig.core.Pubkey){};
+    if (!exclude_accounts) try non_circulating_accounts
+        .ensureUnusedCapacity(arena, non_circulating_supply.non_circulating_accounts.len);
 
     // Sum lamports for the static non-circulating accounts.
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L24-L29
@@ -662,11 +665,11 @@ pub fn getSupply(
         if (slot_reader.get(arena, .{ .data = raw.* }) catch null) |account| {
             non_circulating_lamports += account.lamports;
         }
+        if (!exclude_accounts) non_circulating_accounts.appendAssumeCapacity(.{ .data = raw.* });
     }
 
     // Iterate all stake accounts and collect non-circulating ones not already in the static set.
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L30-L46
-    var extras = std.ArrayListUnmanaged(sig.core.Pubkey){};
     var owner_iter = try slot_reader.getByOwner(arena, &sig.runtime.program.stake.ID);
     defer owner_iter.deinit();
 
@@ -677,7 +680,7 @@ pub fn getSupply(
             // Dedup against the static set via perfect hash lookup.
             if (NonCirculatingSet.get(&pubkey) == null) {
                 non_circulating_lamports += account.lamports;
-                try extras.append(arena, pubkey);
+                if (!exclude_accounts) try non_circulating_accounts.append(arena, pubkey);
             }
         }
     }
@@ -686,33 +689,13 @@ pub fn getSupply(
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1121
     const total = ref.state().capitalization.load(.monotonic);
 
-    // Build the response account list: static accounts + dynamically discovered extras.
-    // [agave] All accounts are included regardless of balance; only the lamport sum
-    // is affected by actual balances.
-    // https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L48-L58
-    var non_circulating_accounts: []const sig.core.Pubkey = &.{};
-    if (!exclude_accounts) {
-        const static_len = non_circulating_supply.non_circulating_accounts.len;
-        const accounts = try arena.alloc(sig.core.Pubkey, static_len + extras.items.len);
-        for (
-            &non_circulating_supply.non_circulating_accounts,
-            accounts[0..static_len],
-        ) |*raw, *dest| {
-            dest.* = .{ .data = raw.* };
-        }
-        @memcpy(accounts[static_len..], extras.items);
-        non_circulating_accounts = accounts;
-    }
-
     return .{
-        .context = .{
-            .slot = slot,
-        },
+        .context = .{ .slot = slot },
         .value = .{
             .total = total,
             .circulating = total -| non_circulating_lamports,
             .nonCirculating = non_circulating_lamports,
-            .nonCirculatingAccounts = non_circulating_accounts,
+            .nonCirculatingAccounts = try non_circulating_accounts.toOwnedSlice(arena),
         },
     };
 }
