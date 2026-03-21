@@ -44,6 +44,7 @@ fn parseLogsNotification(
 
 const types = lib.types;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
+const Transaction = sig.core.Transaction;
 
 fn signatureWithFill(fill: u8) Signature {
     var sig_value = Signature.ZEROES;
@@ -87,25 +88,53 @@ fn makeLogsEvent(
 ) !types.InboundEvent {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
-    const arena_allocator = arena.allocator();
+    const a = arena.allocator();
 
-    const entries = try arena_allocator.alloc(types.TransactionLogsEntry, specs.len);
+    const entries = try a.alloc(
+        types.TransactionEntry,
+        specs.len,
+    );
     for (specs, 0..) |spec, index| {
-        const owned_logs = try arena_allocator.alloc([]const u8, spec.log_lines.len);
-        for (spec.log_lines, 0..) |line, log_index| {
-            owned_logs[log_index] = try arena_allocator.dupe(u8, line);
+        const owned_logs = try a.alloc(
+            []const u8,
+            spec.log_lines.len,
+        );
+        for (spec.log_lines, 0..) |line, li| {
+            owned_logs[li] = try a.dupe(u8, line);
         }
 
         entries[index] = .{
-            .signature = signatureWithFill(spec.signature_fill),
-            .err = try cloneTransactionError(spec.tx_err, arena_allocator),
+            .signature = signatureWithFill(
+                spec.signature_fill,
+            ),
+            .transaction = Transaction.EMPTY,
             .is_vote = spec.is_vote,
-            .logs = owned_logs,
-            .mentioned_pubkeys = try arena_allocator.dupe(Pubkey, spec.mentioned_pubkeys),
+            .err = try cloneTransactionError(
+                spec.tx_err,
+                a,
+            ),
+            .fee = 0,
+            .compute_units_consumed = null,
+            .cost_units = 0,
+            .pre_balances = &.{},
+            .post_balances = &.{},
+            .pre_token_balances = null,
+            .post_token_balances = null,
+            .inner_instructions = null,
+            .log_messages = owned_logs,
+            .return_data = null,
+            .loaded_addresses = .{
+                .writable = &.{},
+                .readonly = &.{},
+            },
+            .mentioned_pubkeys = try a.dupe(
+                Pubkey,
+                spec.mentioned_pubkeys,
+            ),
         };
     }
 
-    return .{ .logs = .{
+    return .{ .transaction_batch = .{
         .slot = slot,
         .entries = entries,
         .arena = arena,

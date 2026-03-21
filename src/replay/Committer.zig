@@ -73,13 +73,13 @@ pub fn commitTransactions(
     var transaction_fees: u64 = 0;
     var priority_fees: u64 = 0;
 
-    var maybe_logs_batch_event: ?jrpc_types.SlotTransactionLogs = null;
-    defer if (maybe_logs_batch_event) |*logs_batch_event| {
-        logs_batch_event.deinit();
-    };
-    var batch_log_entries: ArrayListUnmanaged(jrpc_types.TransactionLogsEntry) = .{};
+    // When an event sink is present, build a rich transaction batch event.
+    // The arena owns all TransactionEntry data.
+    var maybe_batch_event: ?jrpc_types.SlotTransactionBatch = null;
+    defer if (maybe_batch_event) |*ev| ev.deinit();
+    var batch_entries: ArrayListUnmanaged(jrpc_types.TransactionEntry) = .{};
     if (self.event_sink != null) {
-        maybe_logs_batch_event = .{
+        maybe_batch_event = .{
             .slot = slot,
             .arena = std.heap.ArenaAllocator.init(persistent_allocator),
         };
@@ -101,38 +101,23 @@ pub fn commitTransactions(
             transaction.instructions,
         );
 
-        // Update prioritization fee cache for non-vote transactions
-        if (self.prioritization_fee_cache) |cache| if (!is_simple_vote_tx) try cache.update(
-            persistent_allocator,
-            slot,
-            tx_result.fees.compute_unit_price,
-            transaction.accounts.items(.pubkey),
-            transaction.accounts.items(.is_writable),
-        );
+        // Update prioritization fee cache for non-votes
+        if (self.prioritization_fee_cache) |cache| {
+            if (!is_simple_vote_tx) {
+                try cache.update(
+                    persistent_allocator,
+                    slot,
+                    tx_result.fees.compute_unit_price,
+                    transaction.accounts.items(.pubkey),
+                    transaction.accounts.items(.is_writable),
+                );
+            }
+        }
 
-        // TODO: fix nesting, this sucks
-
-        if (tx_result.outputs) |outputs| {
+        if (tx_result.outputs != null) {
             rent_collected += tx_result.rent;
 
-            if (maybe_logs_batch_event) |*logs_batch_event| {
-                appendSlotTransactionLogsEntry(
-                    logs_batch_event.arena.allocator(),
-                    &batch_log_entries,
-                    transaction,
-                    tx_result.err,
-                    outputs.log_collector,
-                    is_simple_vote_tx,
-                ) catch |err| {
-                    self.logger.err().logf(
-                        "failed to build transaction logs batch for slot {} transaction {}: {}",
-                        .{ slot, transaction_index, err },
-                    );
-                };
-            }
-
-            // Skip non successful or non vote transactions.
-            // Only send votes if consensus is enabled (sender exists)
+            // Parse and forward vote transactions
             if (self.replay_votes_sender) |sender| {
                 if (tx_result.err == null and is_simple_vote_tx) {
                     if (try parseSanitizedVoteTransaction(
@@ -152,12 +137,10 @@ pub fn commitTransactions(
         const recent_blockhash = &transaction.transaction.msg.recent_blockhash;
         const signature = transaction.transaction.signatures[0];
         {
-            const status_cache_zone = tracy.Zone.init(
-                @src(),
-                .{ .name = "status_cache.insert: message_hash.data" },
-            );
-            defer status_cache_zone.deinit();
-
+            const z = tracy.Zone.init(@src(), .{
+                .name = "status_cache.insert: message_hash.data",
+            });
+            defer z.deinit();
             try self.status_cache.insert(
                 persistent_allocator,
                 rng.random(),
@@ -168,12 +151,10 @@ pub fn commitTransactions(
             );
         }
         {
-            const status_cache_zone = tracy.Zone.init(
-                @src(),
-                .{ .name = "status_cache.insert: signature.toBytes()" },
-            );
-            defer status_cache_zone.deinit();
-
+            const z = tracy.Zone.init(@src(), .{
+                .name = "status_cache.insert: signature.toBytes()",
+            });
+            defer z.deinit();
             try self.status_cache.insert(
                 persistent_allocator,
                 rng.random(),
@@ -184,17 +165,49 @@ pub fn commitTransactions(
             );
         }
 
-        // Write transaction status to ledger for RPC (getBlock, getTransaction)
-        if (self.ledger) |ledger| {
-            try writeTransactionStatus(
+        // When subscribers are present, build a rich
+        // TransactionEntry in the arena, then also use
+        // it for the ledger write (avoiding duplicate
+        // metadata computation).
+        if (maybe_batch_event) |*batch_event| {
+            const arena_alloc = batch_event.arena.allocator();
+            const entry = try buildTransactionEntry(
+                arena_alloc,
                 temp_allocator,
-                ledger,
-                slot,
                 transaction,
                 tx_result.*,
-                transaction_index,
+                is_simple_vote_tx,
                 self.account_store,
             );
+
+            try batch_entries.append(arena_alloc, entry);
+
+            // Write to ledger from the entry (borrows
+            // arena data, no extra allocations).
+            if (self.ledger) |ledger| {
+                try writeTransactionStatusFromEntry(
+                    temp_allocator,
+                    ledger,
+                    slot,
+                    transaction,
+                    &entry,
+                    transaction_index,
+                );
+            }
+        } else {
+            // No subscribers, use the original
+            // ledger-only path (no entry allocation).
+            if (self.ledger) |ledger| {
+                try writeTransactionStatus(
+                    temp_allocator,
+                    ledger,
+                    slot,
+                    transaction,
+                    tx_result.*,
+                    transaction_index,
+                    self.account_store,
+                );
+            }
         }
     }
 
@@ -214,80 +227,18 @@ pub fn commitTransactions(
     }
 
     if (self.event_sink) |event_sink| {
-        if (maybe_logs_batch_event) |*logs_batch_event| {
+        if (maybe_batch_event) |*batch_event| {
             // NOTE: it's fine to just assign the slice here since the arena allocator will free
             // everything, so we don't need to track actual capacity of the ArrayList
-            logs_batch_event.entries = batch_log_entries.items;
+            batch_event.entries = batch_entries.items;
 
-            const event: jrpc_types.InboundEvent = .{ .logs = logs_batch_event.* };
-            maybe_logs_batch_event = null;
+            const event: jrpc_types.InboundEvent = .{ .transaction_batch = batch_event.* };
+            maybe_batch_event = null;
             errdefer event.deinit();
 
             try event_sink.send(event);
         }
     }
-}
-
-fn appendSlotTransactionLogsEntry(
-    allocator: Allocator,
-    batch_log_entries: *ArrayListUnmanaged(jrpc_types.TransactionLogsEntry),
-    transaction: ResolvedTransaction,
-    tx_err: ?TransactionError,
-    maybe_log_collector: ?LogCollector,
-    is_vote: bool,
-) !void {
-    const log_collector = maybe_log_collector orelse return;
-    const log_messages = try cloneLogMessages(allocator, log_collector);
-    if (log_messages.len == 0) {
-        return;
-    }
-    errdefer {
-        for (log_messages) |log_message| {
-            allocator.free(log_message);
-        }
-        allocator.free(log_messages);
-    }
-
-    const mentioned_pubkeys = try allocator.dupe(Pubkey, transaction.accounts.items(.pubkey));
-    errdefer allocator.free(mentioned_pubkeys);
-
-    const cloned_err = if (tx_err) |err_value| try err_value.clone(allocator) else null;
-    errdefer if (cloned_err) |err_value| err_value.deinit(allocator);
-
-    try batch_log_entries.append(allocator, .{
-        .signature = transaction.transaction.signatures[0],
-        .err = cloned_err,
-        .is_vote = is_vote,
-        .logs = log_messages,
-        .mentioned_pubkeys = mentioned_pubkeys,
-    });
-}
-
-fn cloneLogMessages(
-    allocator: Allocator,
-    log_collector: LogCollector,
-) ![]const []const u8 {
-    var iterator = log_collector.iterator();
-    const count = iterator.count();
-    if (count == 0) {
-        return &.{};
-    }
-
-    const log_messages = try allocator.alloc([]const u8, count);
-    var copied: usize = 0;
-    errdefer {
-        for (log_messages[0..copied]) |log_message| {
-            allocator.free(log_message);
-        }
-        allocator.free(log_messages);
-    }
-
-    while (iterator.next()) |message| {
-        log_messages[copied] = try allocator.dupe(u8, message);
-        copied += 1;
-    }
-
-    return log_messages;
 }
 
 /// Build and write TransactionStatusMeta to the ledger for a single transaction.
@@ -456,7 +407,227 @@ fn writeTransactionStatus(
     );
 }
 
-/// Collect post-execution token balances from transaction writes.
+/// Build a rich TransactionEntry in the given arena allocator.
+///
+/// Computes all the same metadata that `writeTransactionStatus`
+/// does (balances, token balances, loaded addresses, inner
+/// instructions, logs, return data) but stores them into a
+/// `TransactionEntry` that can be cached and reused for both
+/// ledger writes and notification construction.
+fn buildTransactionEntry(
+    arena: Allocator,
+    temp_allocator: Allocator,
+    transaction: ResolvedTransaction,
+    tx_result: ProcessedTransaction,
+    is_vote: bool,
+    account_store: ?SlotAccountStore,
+) !jrpc_types.TransactionEntry {
+    const zone = tracy.Zone.init(@src(), .{ .name = "buildTransactionEntry" });
+    defer zone.deinit();
+
+    const num_accounts = transaction.accounts.len;
+
+    // Pre-balances
+    const pre_balances = try arena.alloc(u64, num_accounts);
+    if (tx_result.pre_balances.len == num_accounts) {
+        @memcpy(pre_balances, tx_result.pre_balances.constSlice());
+    } else {
+        @memset(pre_balances, 0);
+    }
+
+    // Post-balances
+    const post_balances = try arena.alloc(u64, num_accounts);
+    @memcpy(post_balances, pre_balances);
+    for (tx_result.writes.constSlice()) |*written| {
+        for (transaction.accounts.items(.pubkey), 0..) |pubkey, idx| {
+            if (pubkey.equals(&written.pubkey)) {
+                post_balances[idx] = written.account.lamports;
+                break;
+            }
+        }
+    }
+
+    // Loaded addresses
+    const num_static = transaction.transaction.msg.account_keys.len;
+    var num_loaded_w: usize = 0;
+    var num_loaded_r: usize = 0;
+    for (transaction.transaction.msg.address_lookups) |l| {
+        num_loaded_w += l.writable_indexes.len;
+        num_loaded_r += l.readonly_indexes.len;
+    }
+    var loaded_w = try ArrayListUnmanaged(Pubkey).initCapacity(arena, num_loaded_w);
+    var loaded_r = try ArrayListUnmanaged(Pubkey).initCapacity(arena, num_loaded_r);
+    for (
+        transaction.accounts.items(.pubkey),
+        transaction.accounts.items(.is_writable),
+        0..,
+    ) |pubkey, is_writable, index| {
+        if (index >= num_static) {
+            if (is_writable) {
+                loaded_w.appendAssumeCapacity(pubkey);
+            } else {
+                loaded_r.appendAssumeCapacity(pubkey);
+            }
+        }
+    }
+    const loaded_addresses = LoadedAddresses{
+        .writable = loaded_w.items,
+        .readonly = loaded_r.items,
+    };
+
+    // Token balances
+    var mint_cache = spl_token.MintDecimalsCache.init(temp_allocator);
+    defer mint_cache.deinit();
+    for (tx_result.writes.constSlice()) |*written| {
+        if (written.account.data.len >= spl_token.MINT_ACCOUNT_SIZE) {
+            if (spl_token.ParsedMint.parse(
+                written.account.data[0..spl_token.MINT_ACCOUNT_SIZE],
+            )) |mint| {
+                try mint_cache.put(
+                    written.pubkey,
+                    mint.decimals,
+                );
+            }
+        }
+    }
+    const mint_reader = FallbackAccountReader{
+        .writes = tx_result.writes.constSlice(),
+        .account_store_reader = if (account_store) |s| s.reader() else null,
+    };
+    const pre_token_balances = try spl_token.resolveTokenBalances(
+        arena,
+        tx_result.pre_token_balances,
+        &mint_cache,
+        FallbackAccountReader,
+        mint_reader,
+    );
+
+    const post_raw = collectPostTokenBalances(transaction, tx_result);
+    const post_token_balances = try spl_token.resolveTokenBalances(
+        arena,
+        post_raw,
+        &mint_cache,
+        FallbackAccountReader,
+        mint_reader,
+    );
+
+    // Build TransactionStatusMeta for inner
+    // instructions, logs, return data, compute
+    // We use the arena allocator so that all the
+    // converted data lives in the batch arena.
+    const meta = try TransactionStatusMetaBuilder.build(
+        arena,
+        tx_result,
+        pre_balances,
+        post_balances,
+        loaded_addresses,
+        pre_token_balances,
+        post_token_balances,
+    );
+    // Do NOT deinit `meta` the arena owns the data.
+
+    // Clone transaction into arena
+    const cloned_tx = try transaction.transaction.clone(arena);
+
+    // Mentioned pubkeys
+    const mentioned = try arena.dupe(Pubkey, transaction.accounts.items(.pubkey));
+
+    // Error: clone into arena if it has heap data
+    const cloned_err: ?TransactionError = if (tx_result.err) |err| try err.clone(arena) else null;
+
+    return .{
+        .signature = transaction.transaction.signatures[0],
+        .transaction = cloned_tx,
+        .is_vote = is_vote,
+        .err = cloned_err,
+        .fee = meta.fee,
+        .compute_units_consumed = meta.compute_units_consumed,
+        .cost_units = tx_result.cost_units,
+        .pre_balances = meta.pre_balances,
+        .post_balances = meta.post_balances,
+        .pre_token_balances = meta.pre_token_balances,
+        .post_token_balances = meta.post_token_balances,
+        .inner_instructions = meta.inner_instructions,
+        .log_messages = meta.log_messages,
+        .return_data = meta.return_data,
+        .loaded_addresses = meta.loaded_addresses,
+        .mentioned_pubkeys = mentioned,
+    };
+}
+
+/// Write transaction status to the ledger using data from
+/// a previously built `TransactionEntry`. Constructs a
+/// borrowing `TransactionStatusMeta` from the entry's
+/// arena-owned fields, no extra allocations needed for
+/// the metadata itself.
+fn writeTransactionStatusFromEntry(
+    temp_allocator: Allocator,
+    ledger: *Ledger,
+    slot: Slot,
+    transaction: ResolvedTransaction,
+    entry: *const jrpc_types.TransactionEntry,
+    transaction_index: usize,
+) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "writeTransactionStatusFromEntry" });
+    defer zone.deinit();
+
+    // Classify keys into writable/readonly for the
+    // address-signatures index.
+    var writable_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
+        temp_allocator,
+        transaction.accounts.len,
+    );
+    defer writable_keys.deinit(temp_allocator);
+    var readonly_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
+        temp_allocator,
+        transaction.accounts.len,
+    );
+    defer readonly_keys.deinit(temp_allocator);
+
+    for (
+        transaction.accounts.items(.pubkey),
+        transaction.accounts.items(.is_writable),
+    ) |pubkey, is_writable| {
+        if (is_writable) {
+            writable_keys.appendAssumeCapacity(pubkey);
+        } else {
+            readonly_keys.appendAssumeCapacity(pubkey);
+        }
+    }
+
+    // Build a borrowing TransactionStatusMeta that
+    // points into the arena-owned entry data.
+    const status = TransactionStatusMeta{
+        .status = entry.err,
+        .fee = entry.fee,
+        .pre_balances = entry.pre_balances,
+        .post_balances = entry.post_balances,
+        .inner_instructions = entry.inner_instructions,
+        .log_messages = entry.log_messages,
+        .pre_token_balances = entry.pre_token_balances,
+        .post_token_balances = entry.post_token_balances,
+        // Per-transaction rewards are always empty in Agave.
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/rpc/src/transaction_status_service.rs#L190
+        .rewards = &.{},
+        .loaded_addresses = entry.loaded_addresses,
+        .return_data = entry.return_data,
+        .compute_units_consumed = entry.compute_units_consumed,
+        .cost_units = entry.cost_units,
+    };
+    // Do NOT defer status.deinit(), it borrows from
+    // the arena.
+
+    const result_writer = ledger.resultWriter();
+    try result_writer.writeTransactionStatus(
+        slot,
+        entry.signature,
+        writable_keys.items,
+        readonly_keys.items,
+        status,
+        transaction_index,
+    );
+}
+
 fn collectPostTokenBalances(
     transaction: ResolvedTransaction,
     tx_result: ProcessedTransaction,
@@ -703,11 +874,11 @@ test "commitTransactions emits transaction logs batch with transaction metadata"
     defer event.deinit();
 
     switch (event) {
-        .logs => |logs_event| {
-            try std.testing.expectEqual(42, logs_event.slot);
-            try std.testing.expectEqual(3, logs_event.entries.len);
+        .transaction_batch => |batch_event| {
+            try std.testing.expectEqual(42, batch_event.slot);
+            try std.testing.expectEqual(3, batch_event.entries.len);
 
-            const borsh_entry = logs_event.entries[0];
+            const borsh_entry = batch_event.entries[0];
             try std.testing.expect(borsh_entry.signature.eql(
                 &resolved_transactions[0].transaction.signatures[0],
             ));
@@ -719,9 +890,10 @@ test "commitTransactions emits transaction logs batch with transaction metadata"
             try std.testing.expect(err.BorshIoError.ptr != borsh_io_error.ptr);
             try std.testing.expectEqualStrings("borsh io", err.BorshIoError);
             try std.testing.expect(!borsh_entry.is_vote);
-            try std.testing.expectEqual(2, borsh_entry.logs.len);
-            try std.testing.expectEqualStrings("Program log: hello", borsh_entry.logs[0]);
-            try std.testing.expectEqualStrings("Program log: world", borsh_entry.logs[1]);
+            const logs_0 = borsh_entry.log_messages orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(2, logs_0.len);
+            try std.testing.expectEqualStrings("Program log: hello", logs_0[0]);
+            try std.testing.expectEqualStrings("Program log: world", logs_0[1]);
             try std.testing.expectEqual(
                 resolved_transactions[0].accounts.items(.pubkey).len,
                 borsh_entry.mentioned_pubkeys.len,
@@ -730,38 +902,37 @@ test "commitTransactions emits transaction logs batch with transaction metadata"
                 &resolved_transactions[0].accounts.items(.pubkey)[0],
             ));
 
-            const account_not_found_entry = logs_event.entries[1];
-            try std.testing.expect(account_not_found_entry.signature.eql(
+            const anf_entry = batch_event.entries[1];
+            try std.testing.expect(anf_entry.signature.eql(
                 &resolved_transactions[1].transaction.signatures[0],
             ));
-            try std.testing.expectEqual(.AccountNotFound, account_not_found_entry.err);
-            try std.testing.expect(!account_not_found_entry.is_vote);
-            try std.testing.expectEqual(1, account_not_found_entry.logs.len);
-            try std.testing.expectEqualStrings(
-                "Program log: account missing",
-                account_not_found_entry.logs[0],
-            );
+            try std.testing.expectEqual(.AccountNotFound, anf_entry.err);
+            try std.testing.expect(!anf_entry.is_vote);
+            const logs_1 = anf_entry.log_messages orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(1, logs_1.len);
+            try std.testing.expectEqualStrings("Program log: account missing", logs_1[0]);
             try std.testing.expectEqual(
                 resolved_transactions[1].accounts.items(.pubkey).len,
-                account_not_found_entry.mentioned_pubkeys.len,
+                anf_entry.mentioned_pubkeys.len,
             );
-            try std.testing.expect(account_not_found_entry.mentioned_pubkeys[0].equals(
+            try std.testing.expect(anf_entry.mentioned_pubkeys[0].equals(
                 &resolved_transactions[1].accounts.items(.pubkey)[0],
             ));
 
-            const success_entry = logs_event.entries[2];
-            try std.testing.expect(success_entry.signature.eql(
+            const ok_entry = batch_event.entries[2];
+            try std.testing.expect(ok_entry.signature.eql(
                 &resolved_transactions[2].transaction.signatures[0],
             ));
-            try std.testing.expectEqual(null, success_entry.err);
-            try std.testing.expect(!success_entry.is_vote);
-            try std.testing.expectEqual(1, success_entry.logs.len);
-            try std.testing.expectEqualStrings("Program log: success", success_entry.logs[0]);
+            try std.testing.expectEqual(null, ok_entry.err);
+            try std.testing.expect(!ok_entry.is_vote);
+            const logs_2 = ok_entry.log_messages orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(1, logs_2.len);
+            try std.testing.expectEqualStrings("Program log: success", logs_2[0]);
             try std.testing.expectEqual(
                 resolved_transactions[2].accounts.items(.pubkey).len,
-                success_entry.mentioned_pubkeys.len,
+                ok_entry.mentioned_pubkeys.len,
             );
-            try std.testing.expect(success_entry.mentioned_pubkeys[0].equals(
+            try std.testing.expect(ok_entry.mentioned_pubkeys[0].equals(
                 &resolved_transactions[2].accounts.items(.pubkey)[0],
             ));
         },
@@ -832,9 +1003,11 @@ test "commitTransactions emits empty transaction logs batch when execution has n
     defer event.deinit();
 
     switch (event) {
-        .logs => |logs_event| {
-            try std.testing.expectEqual(43, logs_event.slot);
-            try std.testing.expectEqual(0, logs_event.entries.len);
+        .transaction_batch => |batch_event| {
+            try std.testing.expectEqual(43, batch_event.slot);
+            // One transaction was submitted, so we should get one entry
+            // (even without logs, the entry carries balances etc.).
+            try std.testing.expectEqual(1, batch_event.entries.len);
         },
         else => return error.TestUnexpectedResult,
     }

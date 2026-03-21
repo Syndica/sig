@@ -53,9 +53,13 @@ pub const TransactionStatusMeta = struct {
     };
 
     pub fn deinit(self: @This(), allocator: Allocator) void {
+        if (self.status) |status| status.deinit(allocator);
         allocator.free(self.pre_balances);
         allocator.free(self.post_balances);
-        if (self.log_messages) |log_messages| allocator.free(log_messages);
+        if (self.log_messages) |log_messages| {
+            for (log_messages) |m| allocator.free(m);
+            allocator.free(log_messages);
+        }
         if (self.inner_instructions) |inner| {
             for (inner) |item| item.deinit(allocator);
             allocator.free(inner);
@@ -207,7 +211,10 @@ pub const TransactionStatusMetaBuilder = struct {
             }
             break :blk null;
         } else null;
-        errdefer if (log_messages) |logs| allocator.free(logs);
+        errdefer if (log_messages) |logs| {
+            for (logs) |m| allocator.free(m);
+            allocator.free(logs);
+        };
 
         // Convert inner instructions from InstructionTrace
         const inner_instructions = if (processed_tx.outputs) |outputs| blk: {
@@ -288,13 +295,15 @@ pub const TransactionStatusMetaBuilder = struct {
         if (count == 0) return &.{};
 
         const messages = try allocator.alloc([]const u8, count);
-        errdefer allocator.free(messages);
+        var i: usize = 0;
+        errdefer {
+            for (messages[0..i]) |m| allocator.free(m);
+            allocator.free(messages);
+        }
 
         iter = log_collector.iterator();
-        var i: usize = 0;
         while (iter.next()) |msg| : (i += 1) {
-            // The log collector returns sentinel-terminated strings, we just store the slice
-            messages[i] = msg;
+            messages[i] = try allocator.dupe(u8, msg);
         }
 
         return messages;
@@ -681,7 +690,10 @@ test "TransactionStatusMetaBuilder.extractLogMessages" {
             allocator,
             log_collector,
         );
-        defer allocator.free(messages);
+        defer {
+            for (messages) |m| allocator.free(m);
+            allocator.free(messages);
+        }
 
         try std.testing.expectEqual(@as(usize, 2), messages.len);
         try std.testing.expectEqualStrings("Program log: Hello", messages[0]);

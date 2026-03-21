@@ -8,8 +8,14 @@ const ws_request = @import("ws_request.zig");
 
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
+const Transaction = sig.core.Transaction;
 const Account = sig.core.Account;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
+const InnerInstructions = sig.ledger.transaction_status.InnerInstructions;
+const TransactionTokenBalance = sig.ledger.transaction_status.TransactionTokenBalance;
+const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
+const TransactionReturnData = sig.ledger.transaction_status.TransactionReturnData;
+const DistributedRewards = sig.replay.freeze.DistributedRewards;
 
 pub const AccountWithPubkey = struct {
     pubkey: Pubkey,
@@ -25,6 +31,7 @@ pub const SlotReadContext = struct {
 /// Subscription families used for subscription identity and fanout.
 pub const SubscriptionKind = enum {
     account,
+    block,
     logs,
     program,
     root,
@@ -44,6 +51,7 @@ pub const SubReqKey = struct {
 
     pub const Params = union(SubscriptionKind) {
         account: AccountParams,
+        block: BlockParams,
         logs: LogsParams,
         program: ProgramParams,
         root: void,
@@ -56,6 +64,15 @@ pub const SubReqKey = struct {
         commitment: methods.Commitment = .finalized,
         encoding: methods.AccountEncoding = .binary,
         data_slice: ?methods.DataSlice = null,
+    };
+
+    pub const BlockParams = struct {
+        filter: methods.BlockFilter = .all,
+        commitment: methods.Commitment = .finalized,
+        encoding: methods.TransactionEncoding = .json,
+        transaction_details: methods.TransactionDetails = .full,
+        max_supported_transaction_version: ?u64 = null,
+        show_rewards: bool = true,
     };
 
     pub const LogsParams = struct {
@@ -89,6 +106,15 @@ pub const SubReqKey = struct {
                     pa.commitment == pb.commitment and
                     pa.encoding == pb.encoding and
                     dataSliceEql(pa.data_slice, pb.data_slice);
+            },
+            .block => |pa| {
+                const pb = b.params.block;
+                return blockFilterEql(pa.filter, pb.filter) and
+                    pa.commitment == pb.commitment and
+                    pa.encoding == pb.encoding and
+                    pa.transaction_details == pb.transaction_details and
+                    pa.max_supported_transaction_version == pb.max_supported_transaction_version and
+                    pa.show_rewards == pb.show_rewards;
             },
             .logs => |pa| {
                 const pb = b.params.logs;
@@ -125,6 +151,25 @@ pub const SubReqKey = struct {
             .mentions => |va| {
                 const vb = b.mentions;
                 return std.mem.eql(u8, &va.mentions[0].data, &vb.mentions[0].data);
+            },
+        }
+    }
+
+    fn blockFilterEql(a: methods.BlockFilter, b: methods.BlockFilter) bool {
+        const tag_a: std.meta.Tag(methods.BlockFilter) = a;
+        const tag_b: std.meta.Tag(methods.BlockFilter) = b;
+        if (tag_a != tag_b) {
+            return false;
+        }
+        switch (a) {
+            .all => return true,
+            .mentionsAccountOrProgram => |va| {
+                const vb = b.mentionsAccountOrProgram;
+                return std.mem.eql(
+                    u8,
+                    &va.mentionsAccountOrProgram.data,
+                    &vb.mentionsAccountOrProgram.data,
+                );
             },
         }
     }
@@ -185,6 +230,24 @@ pub const SubReqKey = struct {
                         .encoding = cfg.encoding orelse .binary,
                         .data_slice = cfg.dataSlice,
                     } },
+                };
+            },
+            .blockSubscribe => |p| blk: {
+                const cfg: methods.BlockSubscribe.Config = p.config orelse .{};
+                break :blk .{
+                    .method = .block,
+                    .params = .{
+                        .block = .{
+                            .filter = p.filter,
+                            .commitment = cfg.commitment orelse .finalized,
+                            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/rpc/src/rpc_pubsub.rs#L558
+                            .encoding = cfg.encoding orelse .base64,
+                            .transaction_details = cfg.transactionDetails orelse .full,
+                            .max_supported_transaction_version = cfg.maxSupportedTransactionVersion,
+                            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/rpc/src/rpc_pubsub.rs#L569
+                            .show_rewards = cfg.showRewards orelse false,
+                        },
+                    },
                 };
             },
             .logsSubscribe => |p| blk: {
@@ -333,11 +396,20 @@ pub const SlotFrozenEvent = struct {
     parent: u64,
     root: u64,
     accounts: SlotModifiedAccounts = SlotModifiedAccounts.empty(),
+    /// Block-level metadata populated at freeze time.
+    blockhash: sig.core.Hash = .ZEROES,
+    previous_blockhash: sig.core.Hash = .ZEROES,
+    block_height: ?u64 = null,
+    block_time: ?i64 = null,
+    /// Rewards and partitions for this slot. Owns an arena
+    /// that backs the rewards slice; freed in deinit.
+    distributed_rewards: DistributedRewards = DistributedRewards.empty(),
 };
 
-/// Internal runtime input event from producer threads to the websocket loop thread.
+/// Internal runtime input event from producer threads
+/// to the websocket loop thread.
 pub const InboundEvent = union(enum) {
-    logs: SlotTransactionLogs,
+    transaction_batch: SlotTransactionBatch,
     slot_frozen: SlotFrozenEvent,
     slot_confirmed: u64,
     slot_rooted: u64,
@@ -345,17 +417,16 @@ pub const InboundEvent = union(enum) {
 
     pub fn deinit(self: InboundEvent) void {
         switch (self) {
-            .logs => |slot_logs| {
-                var logs = slot_logs;
-                logs.deinit();
+            .transaction_batch => |batch| {
+                var b = batch;
+                b.deinit();
             },
             .slot_frozen => |slot_data| {
-                var accounts = slot_data.accounts;
-                accounts.deinit();
+                var data = slot_data;
+                data.accounts.deinit();
+                data.distributed_rewards.deinit();
             },
-            .slot_confirmed => {},
-            .slot_rooted => {},
-            .tip_changed => {},
+            .slot_confirmed, .slot_rooted, .tip_changed => {},
         }
     }
 };
@@ -459,14 +530,19 @@ pub const AccountEventData = struct {
     }
 };
 
-pub const SlotTransactionLogs = struct {
-    /// Slot whose transaction logs this batch belongs to.
+/// A batch of full transaction metadata for a single slot,
+/// streamed from the Committer at commit time. Carries
+/// everything needed to build block, log, and future
+/// transaction notifications from cache (no ledger read).
+/// Owns all referenced data through an arena allocator.
+pub const SlotTransactionBatch = struct {
+    /// Slot this batch belongs to.
     slot: u64 = 0,
-    /// Batch of transaction log entries owned by `arena`.
-    entries: []const TransactionLogsEntry = &.{},
+    /// Transaction entries, arena-owned.
+    entries: []const TransactionEntry = &.{},
     arena: std.heap.ArenaAllocator,
 
-    pub fn empty() SlotTransactionLogs {
+    pub fn empty() SlotTransactionBatch {
         return .{
             .slot = 0,
             .entries = &.{},
@@ -474,44 +550,52 @@ pub const SlotTransactionLogs = struct {
         };
     }
 
-    pub fn deinit(self: *SlotTransactionLogs) void {
+    pub fn deinit(self: *SlotTransactionBatch) void {
         self.arena.deinit();
         self.* = empty();
     }
 };
 
-pub const TransactionLogsEntry = struct {
+/// Full per-transaction metadata, arena-owned inside a
+/// `SlotTransactionBatch`. Contains everything previously
+/// spread across `TransactionStatusMeta`, the transaction
+/// itself, vote flag, and log-subscribe filter keys.
+///
+/// Fields mirror `TransactionStatusMeta` + identity data so
+/// both `blockSubscribe` and `logSubscribe` (and future
+/// `transactionSubscribe`) can be served from this single
+/// cached structure.
+pub const TransactionEntry = struct {
+    // Identity
     signature: Signature,
-    err: ?TransactionError,
+    /// Full transaction (signatures + versioned message).
+    /// Arena-owned; the `Transaction` itself does NOT own
+    /// the inner slices, the batch arena does.
+    transaction: Transaction,
     is_vote: bool,
-    logs: []const []const u8,
+
+    // Execution result
+    err: ?TransactionError,
+    fee: u64,
+    compute_units_consumed: ?u64,
+    cost_units: u64,
+
+    // Balance snapshots
+    pre_balances: []const u64,
+    post_balances: []const u64,
+    pre_token_balances: ?[]const TransactionTokenBalance,
+    post_token_balances: ?[]const TransactionTokenBalance,
+
+    // Execution trace
+    inner_instructions: ?[]const InnerInstructions,
+    log_messages: ?[]const []const u8,
+    return_data: ?TransactionReturnData,
+
+    // Address lookup table resolution
+    loaded_addresses: LoadedAddresses,
+
+    // For logSubscribe filter matching
     mentioned_pubkeys: []const Pubkey,
-
-    /// Returns a deep-cloned LogsNotificationData, allocated using the provided allocator,
-    /// caller must call deinit.
-    pub fn toOwnedNotificationData(
-        self: *const TransactionLogsEntry,
-        allocator: std.mem.Allocator,
-        slot: u64,
-    ) !LogsNotificationData {
-        const cloned_logs = try cloneLogLines(allocator, self.logs);
-        errdefer freeLogLines(allocator, cloned_logs);
-
-        const cloned_mentions = try allocator.dupe(Pubkey, self.mentioned_pubkeys);
-        errdefer allocator.free(cloned_mentions);
-
-        const cloned_err = if (self.err) |tx_err| try tx_err.clone(allocator) else null;
-        errdefer if (cloned_err) |tx_err| tx_err.deinit(allocator);
-
-        return .{
-            .slot = slot,
-            .signature = self.signature,
-            .err = cloned_err,
-            .is_vote = self.is_vote,
-            .logs = cloned_logs,
-            .mentioned_pubkeys = cloned_mentions,
-        };
-    }
 };
 
 pub const LogsNotificationData = struct {
@@ -533,7 +617,7 @@ pub const LogsNotificationData = struct {
     }
 };
 
-fn cloneLogLines(
+pub fn cloneLogLines(
     allocator: std.mem.Allocator,
     log_lines: []const []const u8,
 ) ![]const []const u8 {
@@ -566,6 +650,21 @@ pub const RootEventData = struct {
     root: u64,
 };
 
+/// Data carried by a block serialization job.
+/// The block is pre-built from cached transaction data
+/// on the IO loop thread; the arena owns all block data
+/// and is freed in `JobType.deinit`.
+pub const BlockJobData = struct {
+    slot: u64,
+    filter: methods.BlockFilter,
+    encoding: methods.TransactionEncoding,
+    transaction_details: methods.TransactionDetails,
+    max_supported_transaction_version: ?u64,
+    show_rewards: bool,
+    block: sig.ledger.Reader.VersionedConfirmedBlock,
+    arena: std.heap.ArenaAllocator,
+};
+
 /// Serialization job: loop thread -> worker thread.
 /// Serialization workers round-trip sub_id to match result back to associated subscription.
 pub const SerializeJob = struct {
@@ -581,6 +680,7 @@ pub const SerializeJob = struct {
             data_slice: ?methods.DataSlice = null,
             read_ctx: SlotReadContext,
         },
+        block: BlockJobData,
         logs: LogsNotificationData,
         program: struct {
             data: AccountEventData,
@@ -594,6 +694,10 @@ pub const SerializeJob = struct {
         pub fn deinit(self: JobType, allocator: std.mem.Allocator) void {
             switch (self) {
                 .account => |job| job.data.deinit(allocator),
+                .block => |job| {
+                    var arena = job.arena;
+                    arena.deinit();
+                },
                 .logs => |job| job.deinit(allocator),
                 .program => |job| job.data.deinit(allocator),
                 else => {},
@@ -843,46 +947,138 @@ test "LogsNotificationData deinit accepts empty static slices" {
     data.deinit(allocator);
 }
 
-test "TransactionLogsEntry toOwnedNotificationData deep copies into logs notification data" {
-    const allocator = std.testing.allocator;
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    const logs = try arena_allocator.alloc([]const u8, 1);
-    logs[0] = try arena_allocator.dupe(u8, "slot log line");
-
-    var mention: Pubkey = undefined;
-    @memset(&mention.data, 0xEF);
-
-    const entry = TransactionLogsEntry{
-        .signature = Signature.ZEROES,
-        .err = .{ .InstructionError = .{
-            4,
-            .{ .BorshIoError = try arena_allocator.dupe(u8, "arena err") },
-        } },
-        .is_vote = true,
-        .logs = logs,
-        .mentioned_pubkeys = try arena_allocator.dupe(Pubkey, &.{mention}),
-    };
-
-    var cloned = try entry.toOwnedNotificationData(allocator, 99);
-    defer cloned.deinit(allocator);
-
-    try std.testing.expectEqual(99, cloned.slot);
-    try std.testing.expect(cloned.logs.ptr != entry.logs.ptr);
-    try std.testing.expect(cloned.logs[0].ptr != entry.logs[0].ptr);
-    try std.testing.expect(cloned.mentioned_pubkeys.ptr != entry.mentioned_pubkeys.ptr);
-    try std.testing.expectEqualStrings("slot log line", cloned.logs[0]);
-    try std.testing.expectEqual(0xEF, cloned.mentioned_pubkeys[0].data[0]);
-    try std.testing.expectEqualStrings(
-        "arena err",
-        cloned.err.?.InstructionError.@"1".BorshIoError,
-    );
+test "blockFilterEql - both all" {
+    const a: methods.BlockFilter = .all;
+    const b: methods.BlockFilter = .all;
+    try std.testing.expect(SubReqKey.blockFilterEql(a, b));
 }
 
-test "SlotTransactionLogs deinit accepts empty static slices" {
-    var data = SlotTransactionLogs.empty();
-    data.deinit();
+test "blockFilterEql - same mentionsAccountOrProgram" {
+    var pk: Pubkey = undefined;
+    @memset(&pk.data, 0xAA);
+    const a: methods.BlockFilter = .{
+        .mentionsAccountOrProgram = .{ .mentionsAccountOrProgram = pk },
+    };
+    const b: methods.BlockFilter = .{
+        .mentionsAccountOrProgram = .{ .mentionsAccountOrProgram = pk },
+    };
+    try std.testing.expect(SubReqKey.blockFilterEql(a, b));
+}
+
+test "blockFilterEql - different mentionsAccountOrProgram pubkeys" {
+    var pk1: Pubkey = undefined;
+    @memset(&pk1.data, 0xAA);
+    var pk2: Pubkey = undefined;
+    @memset(&pk2.data, 0xBB);
+    const a: methods.BlockFilter = .{
+        .mentionsAccountOrProgram = .{ .mentionsAccountOrProgram = pk1 },
+    };
+    const b: methods.BlockFilter = .{
+        .mentionsAccountOrProgram = .{ .mentionsAccountOrProgram = pk2 },
+    };
+    try std.testing.expect(!SubReqKey.blockFilterEql(a, b));
+}
+
+test "blockFilterEql - different tags" {
+    var pk: Pubkey = undefined;
+    @memset(&pk.data, 0xAA);
+    const a: methods.BlockFilter = .all;
+    const b: methods.BlockFilter = .{
+        .mentionsAccountOrProgram = .{ .mentionsAccountOrProgram = pk },
+    };
+    try std.testing.expect(!SubReqKey.blockFilterEql(a, b));
+}
+
+test "SubReqKey equality - block same params" {
+    const a: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{} },
+    };
+    const b: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{} },
+    };
+    try std.testing.expect(a.eql(&b));
+}
+
+test "SubReqKey equality - block different commitment" {
+    const a: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .commitment = .finalized } },
+    };
+    const b: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .commitment = .confirmed } },
+    };
+    try std.testing.expect(!a.eql(&b));
+}
+
+test "SubReqKey equality - block different encoding" {
+    const a: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .encoding = .json } },
+    };
+    const b: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .encoding = .base64 } },
+    };
+    try std.testing.expect(!a.eql(&b));
+}
+
+test "SubReqKey equality - block different transaction_details" {
+    const a: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .transaction_details = .full } },
+    };
+    const b: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .transaction_details = .none } },
+    };
+    try std.testing.expect(!a.eql(&b));
+}
+
+test "SubReqKey equality - block different max_supported_transaction_version" {
+    const a: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{
+            .max_supported_transaction_version = 0,
+        } },
+    };
+    const b: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{
+            .max_supported_transaction_version = null,
+        } },
+    };
+    try std.testing.expect(!a.eql(&b));
+}
+
+test "SubReqKey equality - block different show_rewards" {
+    const a: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .show_rewards = true } },
+    };
+    const b: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .show_rewards = false } },
+    };
+    try std.testing.expect(!a.eql(&b));
+}
+
+test "SubReqKey equality - block different filter" {
+    var pk: Pubkey = undefined;
+    @memset(&pk.data, 0xAA);
+    const a: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .filter = .all } },
+    };
+    const b: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .filter = .{
+            .mentionsAccountOrProgram = .{
+                .mentionsAccountOrProgram = pk,
+            },
+        } } },
+    };
+    try std.testing.expect(!a.eql(&b));
 }
