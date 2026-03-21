@@ -28,10 +28,43 @@
       url = "https://github.com/firedancer-io/test-vectors.git";
       rev = commits.TEST_VECTORS_COMMIT;
     };
-
     solana-conformance = builtins.fetchGit {
       url = "https://github.com/firedancer-io/solana-conformance.git";
       rev = commits.SOLANA_CONFORMANCE_COMMIT;
+    };
+    solfuzz-agave = builtins.fetchGit {
+      url = "https://github.com/firedancer-io/solfuzz-agave.git";
+      rev = commits.SOLFUZZ_AGAVE_COMMIT;
+    };
+    protosol = builtins.fetchGit {
+      url = "https://github.com/firedancer-io/protosol.git";
+      rev = commits.AGAVE_PROTOSOL_COMMIT;
+      submodules = true;
+    };
+    agave = builtins.fetchGit {
+      url = "https://github.com/firedancer-io/agave.git";
+      rev = commits.AGAVE_COMMIT;
+    };
+    sbpf = builtins.fetchGit {
+      url = "https://github.com/firedancer-io/sbpf.git";
+      rev = commits.SBPF_COMMIT;
+    };
+
+    # protoc and flatc need to be the exact versions built by protosol
+    protosol-toolchain = pkgs.stdenvNoCC.mkDerivation {
+      pname = "protosol-toolchain";
+      version = commits.AGAVE_PROTOSOL_COMMIT;
+      src = protosol;
+      nativeBuildInputs = with pkgs; [ cmake gcc ];
+      dontConfigure = true;
+      buildPhase = ''
+        patchShebangs ./deps.sh
+        ./deps.sh
+      '';
+      installPhase = ''
+        mkdir -p "$out"
+        cp -r opt/bin/* "$out"
+      '';
     };
 
     baseShellHook = ''
@@ -42,8 +75,9 @@
       python3.13 -m venv env/venv
       source env/venv/bin/activate
       cp -r ${solana-conformance} env/solana-conformance && chmod +w -R env/solana-conformance
-      SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 pip install env/solana-conformance[dev,octane]
-      SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 pip install -e parseout[dev]
+      export SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
+      pip install -e env/solana-conformance[dev,octane]
+      pip install -e parseout[dev]
     '';
   in {
     formatter.${system} = pkgs.alejandra;
@@ -56,14 +90,25 @@
 
       full = pkgs.mkShell {
         packages = baseDeps ++ (with pkgs; [clang cmake gcc pkgs.rust-bin.stable."1.93.0".default]);
-        shellHook = ''
-          ${baseShellHook}
+        shellHook = baseShellHook + ''
+          export LIBCLANG_PATH="${pkgs.llvmPackages_22.libclang.lib}/lib"
           export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [
             pkgs.stdenv.cc.cc.lib
-            pkgs.llvmPackages_19.libclang.lib
+            pkgs.llvmPackages_22.libclang.lib
+            pkgs.llvmPackages_22.libllvm
           ]}"
-          export LIBCLANG_PATH="${pkgs.llvmPackages_19.libclang.lib}/lib"
-          scripts/get-solfuzz-agave.sh
+          
+          export PROTOC_EXECUTABLE="${protosol-toolchain}/protoc"
+          export FLATC_EXECUTABLE="${protosol-toolchain}/flatc"
+          
+          cp -r ${agave} env/agave && chmod +w -R env/agave
+          cp -r ${sbpf} env/sbpf && chmod +w -R env/sbpf
+          cp -r ${solfuzz-agave} env/solfuzz-agave && chmod +w -R env/solfuzz-agave
+          cp -r ${protosol} env/solfuzz-agave/protosol && chmod +w -R env/solfuzz-agave/protosol
+
+          pushd env/solfuzz-agave
+          python scripts/generate_local_cargo.py --agave-path ../agave --sbpf-path ../sbpf
+          popd
         '';
       };
     };

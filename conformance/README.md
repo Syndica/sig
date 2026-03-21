@@ -3,8 +3,8 @@
 Install [nix](https://nixos.org/download/) if you do not have it.
 
 ```bash
-nix develop           # if you only want to run the tests
-nix develop .#full    # if you also want to debug solfuzz-agave
+nix develop            # if you only want to run the tests
+nix develop .#agave    # if you also want to run the test vectors against agave
 ```
 
 # Build
@@ -46,10 +46,22 @@ solana-conformance \
 
 **Debug Agave**
 
-If you want to debug solfuzz_agave or manually generate fixtures, you'll need to use the `full` environment (described above). Then you can use some commands like these:
+If you want to debug solfuzz_agave or manually generate fixtures from agave, you'll need to set up the agave environment with `nix develop .#agave`.
+
+You can edit any of the agave code in the env/ folder to debug agave. To run the conformance tests against this code, you'll need to compile solfuzz_agave:
 
 ```bash
-# create the fixtures from agave, and run the conformance tests
+cd env/solfuzz-agave
+cargo build --lib --release
+```
+
+Then you can use some commands like these:
+
+```bash
+# run the tests against agave
+./run.py --exec-lib env/solfuzz-agave/target/release/libsolfuzz_agave.so
+
+# create the fixtures based on agave, and run the conformance tests
 ./run.py --create
 
 # re-run conformance tests using your created fixtures
