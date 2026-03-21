@@ -90,7 +90,7 @@ pub const Hooks = struct {
             const method = if (@hasField(Method, decl.name))
                 @field(Method, decl.name)
             else
-                @compileError("No RPC method named: " ++ decl.name);
+                continue;
 
             const callback = @field(Context, decl.name);
             if (self.map.contains(method)) {

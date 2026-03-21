@@ -79,6 +79,9 @@ pub const RPCSubMap = struct {
         const queue = try self.allocator.create(NotifQueue);
         const commit_path: NotifQueue.CommitPath = switch (key.method) {
             .slot, .root, .program, .account, .logs => .reserved,
+            // Block notifications are unique per slot and produced once per
+            // slot transition, so ordering through reservation is unnecessary.
+            .block => .direct,
             else => .direct,
         };
         queue.* = try NotifQueue.init(self.allocator, self.queue_capacity, commit_path);

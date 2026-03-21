@@ -77,8 +77,22 @@ pub const TestServer = struct {
     ctx: Runtime,
     server: WebSocketServer,
     port: u16,
+    ledger: ?*sig.ledger.Ledger = null,
+    ledger_tmp_dir: ?std.testing.TmpDir = null,
 
     pub fn start(allocator: std.mem.Allocator) !*TestServer {
+        return startInternal(allocator, null);
+    }
+
+    pub fn startWithLedger(allocator: std.mem.Allocator) !*TestServer {
+        var ledger_and_tmp = try sig.ledger.Ledger.initForTest(allocator);
+        return startInternal(allocator, &ledger_and_tmp);
+    }
+
+    fn startInternal(
+        allocator: std.mem.Allocator,
+        ledger_and_tmp: ?*struct { sig.ledger.Ledger, std.testing.TmpDir },
+    ) !*TestServer {
         const self = try allocator.create(TestServer);
         errdefer allocator.destroy(self);
 
@@ -107,6 +121,14 @@ pub const TestServer = struct {
         self.slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
         errdefer self.slot_tracker.deinit(allocator);
 
+        if (ledger_and_tmp) |lat| {
+            self.ledger = &lat[0];
+            self.ledger_tmp_dir = lat[1];
+        } else {
+            self.ledger = null;
+            self.ledger_tmp_dir = null;
+        }
+
         const slot_read_ctx: SlotReadContext = .{
             .slot_tracker = &self.slot_tracker,
             .account_reader = .{ .accounts_db = &self.account_db.db },
@@ -123,6 +145,7 @@ pub const TestServer = struct {
             .metrics = &self.metrics,
             .max_batch_bytes = 64 * 1024,
             .loop = &self.loop,
+            .ledger = self.ledger,
         });
         self.ctx.armAsyncWait();
 
@@ -206,6 +229,8 @@ pub const TestServer = struct {
         self.loop.deinit();
         self.commit_queue.deinit();
         self.event_sink.destroy();
+        if (self.ledger) |ledger| ledger.deinit();
+        if (self.ledger_tmp_dir) |*tmp| tmp.cleanup();
         allocator.destroy(self);
     }
 };

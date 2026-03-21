@@ -642,7 +642,7 @@ fn getConfirmedUnrootedSlots(
 
 /// Encode transactions and/or signatures based on the requested options.
 /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L332
-fn encodeBlockWithOptions(
+pub fn encodeBlockWithOptions(
     arena: Allocator,
     block: sig.ledger.Reader.VersionedConfirmedBlock,
     encoding: TransactionEncoding,
@@ -1629,8 +1629,8 @@ test "validateVersion: v0 without max_supported_version errors" {
 }
 
 test "buildSimpleUiTransactionStatusMeta: basic" {
-    const arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
     const allocator = arena.allocator();
 
     const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
@@ -1647,8 +1647,8 @@ test "buildSimpleUiTransactionStatusMeta: basic" {
 }
 
 test "buildSimpleUiTransactionStatusMeta: show_rewards true with empty rewards" {
-    const arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
     const allocator = arena.allocator();
 
     const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
@@ -1659,8 +1659,8 @@ test "buildSimpleUiTransactionStatusMeta: show_rewards true with empty rewards" 
 }
 
 test "encodeLegacyTransactionMessage: json encoding" {
-    const arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
     const allocator = arena.allocator();
 
     const msg = sig.core.transaction.Message{
@@ -1687,8 +1687,8 @@ test "encodeLegacyTransactionMessage: json encoding" {
 }
 
 test "jsonEncodeV0TransactionMessage: with address lookups" {
-    const arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
     const allocator = arena.allocator();
 
     const msg = sig.core.transaction.Message{
@@ -1718,19 +1718,11 @@ test "jsonEncodeV0TransactionMessage: with address lookups" {
         raw.address_table_lookups.?[0].writableIndexes,
     );
     try std.testing.expectEqualSlices(u8, &.{2}, raw.address_table_lookups.?[0].readonlyIndexes);
-
-    // Clean up
-    arena.free(raw.account_keys);
-    for (raw.address_table_lookups.?) |atl| {
-        arena.free(atl.writableIndexes);
-        arena.free(atl.readonlyIndexes);
-    }
-    arena.free(raw.address_table_lookups.?);
 }
 
 test "encodeLegacyTransactionMessage: base64 encoding" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
+    defer _ = arena.reset(.free_all);
     const allocator = arena.allocator();
 
     const msg = sig.core.transaction.Message{
@@ -1750,13 +1742,11 @@ test "encodeLegacyTransactionMessage: base64 encoding" {
     try std.testing.expectEqual(@as(u8, 1), raw.header.numRequiredSignatures);
     try std.testing.expectEqual(@as(usize, 2), raw.account_keys.len);
     try std.testing.expect(raw.address_table_lookups == null);
-
-    arena.free(raw.account_keys);
 }
 
 test "encodeTransactionWithoutMeta: base64 encoding" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
+    defer _ = arena.reset(.free_all);
     const allocator = arena.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
@@ -1770,7 +1760,7 @@ test "encodeTransactionWithoutMeta: base64 encoding" {
 
 test "encodeTransactionWithoutMeta: json encoding" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
+    defer _ = arena.reset(.free_all);
     const allocator = arena.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
@@ -1787,7 +1777,7 @@ test "encodeTransactionWithoutMeta: json encoding" {
 
 test "encodeTransactionWithoutMeta: base58 encoding" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
+    defer _ = arena.reset(.free_all);
     const allocator = arena.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
@@ -1800,7 +1790,7 @@ test "encodeTransactionWithoutMeta: base58 encoding" {
 
 test "encodeTransactionWithoutMeta: legacy binary encoding" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
+    defer _ = arena.reset(.free_all);
     const allocator = arena.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
@@ -1812,7 +1802,7 @@ test "encodeTransactionWithoutMeta: legacy binary encoding" {
 
 test "parseUiTransactionStatusMetaFromLedger: always includes loadedAddresses" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
+    defer _ = arena.reset(.free_all);
     const allocator = arena.allocator();
     const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
     const result = try parseUiTransactionStatusMetaFromLedger(
@@ -1820,21 +1810,13 @@ test "parseUiTransactionStatusMetaFromLedger: always includes loadedAddresses" {
         meta,
         true,
     );
-    defer {
-        arena.free(result.preBalances);
-        arena.free(result.postBalances);
-        if (result.loadedAddresses == .value) {
-            arena.free(result.loadedAddresses.value.writable);
-            arena.free(result.loadedAddresses.value.readonly);
-        }
-    }
     // loadedAddresses should always have a value
     try std.testing.expect(result.loadedAddresses == .value);
 }
 
 test "parseUiTransactionStatusMetaFromLedger: show_rewards false skips rewards" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
+    defer _ = arena.reset(.free_all);
     const allocator = arena.allocator();
     const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
     const result = try parseUiTransactionStatusMetaFromLedger(
@@ -1842,17 +1824,13 @@ test "parseUiTransactionStatusMetaFromLedger: show_rewards false skips rewards" 
         meta,
         false,
     );
-    defer {
-        arena.free(result.preBalances);
-        arena.free(result.postBalances);
-    }
     // Rewards should be .none (serialized as null) when show_rewards is false
     try std.testing.expect(result.rewards == .none);
 }
 
 test "parseUiTransactionStatusMetaFromLedger: show_rewards true includes rewards" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
+    defer _ = arena.reset(.free_all);
     const allocator = arena.allocator();
     const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
     const result = try parseUiTransactionStatusMetaFromLedger(
@@ -1860,17 +1838,13 @@ test "parseUiTransactionStatusMetaFromLedger: show_rewards true includes rewards
         meta,
         true,
     );
-    defer {
-        arena.free(result.preBalances);
-        arena.free(result.postBalances);
-    }
     // Rewards should be present (as value) when show_rewards is true
     try std.testing.expect(result.rewards != .skip);
 }
 
 test "parseUiTransactionStatusMetaFromLedger: compute_units_consumed present" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
+    defer _ = arena.reset(.free_all);
     const allocator = arena.allocator();
 
     var meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
@@ -1886,7 +1860,7 @@ test "parseUiTransactionStatusMetaFromLedger: compute_units_consumed present" {
 
 test "parseUiTransactionStatusMetaFromLedger: compute_units_consumed absent" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
+    defer _ = arena.reset(.free_all);
     const allocator = arena.allocator();
 
     const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;

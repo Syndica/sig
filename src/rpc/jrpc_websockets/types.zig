@@ -23,6 +23,7 @@ pub const SlotReadContext = struct {
 /// Subscription families used for subscription identity and fanout.
 pub const SubscriptionKind = enum {
     account,
+    block,
     logs,
     program,
     root,
@@ -42,6 +43,7 @@ pub const SubReqKey = struct {
 
     pub const Params = union(SubscriptionKind) {
         account: AccountParams,
+        block: BlockParams,
         logs: LogsParams,
         program: ProgramParams,
         root: void,
@@ -54,6 +56,15 @@ pub const SubReqKey = struct {
         commitment: methods.Commitment = .finalized,
         encoding: methods.AccountEncoding = .binary,
         data_slice: ?methods.DataSlice = null,
+    };
+
+    pub const BlockParams = struct {
+        filter: methods.BlockFilter = .all,
+        commitment: methods.Commitment = .finalized,
+        encoding: methods.TransactionEncoding = .json,
+        transaction_details: methods.TransactionDetails = .full,
+        max_supported_transaction_version: ?u64 = null,
+        show_rewards: bool = true,
     };
 
     pub const LogsParams = struct {
@@ -87,6 +98,15 @@ pub const SubReqKey = struct {
                     pa.commitment == pb.commitment and
                     pa.encoding == pb.encoding and
                     dataSliceEql(pa.data_slice, pb.data_slice);
+            },
+            .block => |pa| {
+                const pb = b.params.block;
+                return blockFilterEql(pa.filter, pb.filter) and
+                    pa.commitment == pb.commitment and
+                    pa.encoding == pb.encoding and
+                    pa.transaction_details == pb.transaction_details and
+                    pa.max_supported_transaction_version == pb.max_supported_transaction_version and
+                    pa.show_rewards == pb.show_rewards;
             },
             .logs => |pa| {
                 const pb = b.params.logs;
@@ -123,6 +143,25 @@ pub const SubReqKey = struct {
             .mentions => |va| {
                 const vb = b.mentions;
                 return std.mem.eql(u8, &va.mentions[0].data, &vb.mentions[0].data);
+            },
+        }
+    }
+
+    fn blockFilterEql(a: methods.BlockFilter, b: methods.BlockFilter) bool {
+        const tag_a: std.meta.Tag(methods.BlockFilter) = a;
+        const tag_b: std.meta.Tag(methods.BlockFilter) = b;
+        if (tag_a != tag_b) {
+            return false;
+        }
+        switch (a) {
+            .all => return true,
+            .mentionsAccountOrProgram => |va| {
+                const vb = b.mentionsAccountOrProgram;
+                return std.mem.eql(
+                    u8,
+                    &va.mentionsAccountOrProgram.data,
+                    &vb.mentionsAccountOrProgram.data,
+                );
             },
         }
     }
@@ -182,6 +221,20 @@ pub const SubReqKey = struct {
                         .commitment = cfg.commitment orelse .finalized,
                         .encoding = cfg.encoding orelse .binary,
                         .data_slice = cfg.dataSlice,
+                    } },
+                };
+            },
+            .blockSubscribe => |p| blk: {
+                const cfg: methods.BlockSubscribe.Config = p.config orelse .{};
+                break :blk .{
+                    .method = .block,
+                    .params = .{ .block = .{
+                        .filter = p.filter,
+                        .commitment = cfg.commitment orelse .finalized,
+                        .encoding = cfg.encoding orelse .json,
+                        .transaction_details = cfg.transactionDetails orelse .full,
+                        .max_supported_transaction_version = cfg.maxSupportedTransactionVersion,
+                        .show_rewards = cfg.showRewards orelse true,
                     } },
                 };
             },
@@ -575,6 +628,19 @@ pub const RootEventData = struct {
     root: u64,
 };
 
+/// Data carried by a block serialization job.
+/// The ledger pointer is used to read block data on the threadpool worker,
+/// avoiding caching large blocks in memory (matches Agave's approach).
+pub const BlockJobData = struct {
+    slot: u64,
+    filter: methods.BlockFilter,
+    encoding: methods.TransactionEncoding,
+    transaction_details: methods.TransactionDetails,
+    max_supported_transaction_version: ?u64,
+    show_rewards: bool,
+    ledger: *sig.ledger.Ledger,
+};
+
 /// Serialization job: loop thread -> worker thread.
 /// Serialization workers round-trip sub_id to match result back to associated subscription.
 pub const SerializeJob = struct {
@@ -590,6 +656,7 @@ pub const SerializeJob = struct {
             data_slice: ?methods.DataSlice = null,
             read_ctx: SlotReadContext,
         },
+        block: BlockJobData,
         logs: LogsNotificationData,
         program: struct {
             data: AccountEventData,

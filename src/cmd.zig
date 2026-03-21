@@ -1796,6 +1796,7 @@ fn validator(
             &replay_service_state.replay_state.slot_tracker,
             replay_service_state.replay_state.account_store.reader(),
             event_sink.?,
+            &ledger,
         })
     else
         null;
@@ -1816,6 +1817,7 @@ fn runRPCServer(
     slot_tracker: *sig.replay.trackers.SlotTracker,
     account_reader: sig.accounts_db.AccountReader,
     event_sink: *jrpc_ws.types.EventSink,
+    ledger: *sig.ledger.Ledger,
 ) !void {
     var commit_queue = try sig.sync.Channel(jrpc_ws.types.CommitMsg).init(allocator);
     defer commit_queue.deinit();
@@ -1856,6 +1858,7 @@ fn runRPCServer(
         .metrics = &metrics,
         .max_batch_bytes = 64 * 1024,
         .loop = &loop,
+        .ledger = ledger,
     });
     defer ws_runtime_ctx.deinit();
 

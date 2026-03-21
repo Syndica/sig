@@ -304,6 +304,124 @@ pub fn serializeLogsNotification(
     });
 }
 
+const LedgerHookContext = sig.rpc.hook_contexts.LedgerHookContext;
+const GetBlock = sig.rpc.methods.GetBlock;
+const Reader = sig.ledger.Reader;
+const Pubkey = sig.core.Pubkey;
+
+/// Convert WS TransactionEncoding to the HTTP/common TransactionEncoding
+/// used by encodeBlockWithOptions.
+fn toCommonEncoding(enc: methods.TransactionEncoding) sig.rpc.methods.common.TransactionEncoding {
+    return switch (enc) {
+        .base58 => .base58,
+        .base64 => .base64,
+        .json => .json,
+        .jsonParsed => .jsonParsed,
+    };
+}
+
+/// Convert WS TransactionDetails to the HTTP/common TransactionDetails
+/// used by encodeBlockWithOptions.
+fn toCommonTxDetails(td: methods.TransactionDetails) sig.rpc.methods.common.TransactionDetails {
+    return switch (td) {
+        .full => .full,
+        .accounts => .accounts,
+        .signatures => .signatures,
+        .none => .none,
+    };
+}
+
+/// Checks whether a transaction mentions a given pubkey. Inspects both static
+/// account keys and loaded addresses (writable + readonly from address lookup tables).
+fn transactionMentionsPubkey(
+    tx: Reader.VersionedTransactionWithStatusMeta,
+    target: *const Pubkey,
+) bool {
+    for (tx.transaction.msg.account_keys) |key| {
+        if (key.equals(target)) return true;
+    }
+    for (tx.meta.loaded_addresses.writable) |key| {
+        if (key.equals(target)) return true;
+    }
+    for (tx.meta.loaded_addresses.readonly) |key| {
+        if (key.equals(target)) return true;
+    }
+    return false;
+}
+
+/// blockNotification value when the block was successfully read and encoded.
+const BlockNotificationValue = struct {
+    slot: u64,
+    block: ?GetBlock.Response,
+    err: ?[]const u8,
+};
+
+pub fn serializeBlockNotification(
+    allocator: std.mem.Allocator,
+    sub_id: types.SubId,
+    data: types.BlockJobData,
+) !NotifPayload {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const reader = data.ledger.reader();
+    const block_result = reader.getCompleteBlock(arena, data.slot, true);
+
+    const value: BlockNotificationValue = if (block_result) |raw_block| blk: {
+        // Apply mentionsAccountOrProgram filter: rebuild the block with only
+        // transactions that mention the target pubkey. If no transactions
+        // match, skip this notification entirely (return error to drop it).
+        const block = switch (data.filter) {
+            .all => raw_block,
+            .mentionsAccountOrProgram => |f| filtered: {
+                var filtered_txns: std.ArrayList(Reader.VersionedTransactionWithStatusMeta) = .{};
+                for (raw_block.transactions) |tx| {
+                    if (transactionMentionsPubkey(tx, &f.mentionsAccountOrProgram)) {
+                        try filtered_txns.append(arena, tx);
+                    }
+                }
+                if (filtered_txns.items.len == 0) {
+                    // No matching transactions — Agave sends no notification at all.
+                    return error.NoMatchingTransactions;
+                }
+                var filtered_block = raw_block;
+                filtered_block.transactions = filtered_txns.items;
+                break :filtered filtered_block;
+            },
+        };
+
+        const max_version: ?u8 = if (data.max_supported_transaction_version) |v|
+            std.math.cast(u8, v)
+        else
+            null;
+
+        const response = try LedgerHookContext.encodeBlockWithOptions(
+            arena,
+            block,
+            toCommonEncoding(data.encoding),
+            .{
+                .tx_details = toCommonTxDetails(data.transaction_details),
+                .show_rewards = data.show_rewards,
+                .max_supported_version = max_version,
+            },
+        );
+        break :blk .{ .slot = data.slot, .block = response, .err = null };
+    } else |_| .{ .slot = data.slot, .block = null, .err = "Block not available" };
+
+    return serializeToPayload(allocator, .{
+        .jsonrpc = "2.0",
+        .method = "blockNotification",
+        .params = .{
+            .result = .{
+                .context = .{ .slot = data.slot },
+                .value = value,
+            },
+            .subscription = sub_id,
+        },
+    });
+}
+
 pub fn serializeNotification(
     allocator: std.mem.Allocator,
     sub_id: types.SubId,
@@ -313,6 +431,7 @@ pub fn serializeNotification(
         .slot => |data| serializeSlotNotification(allocator, sub_id, data),
         .root => |data| serializeRootNotification(allocator, sub_id, data),
         .logs => |data| serializeLogsNotification(allocator, sub_id, data),
+        .block => |data| serializeBlockNotification(allocator, sub_id, data),
         .account => |job| serializeAccountNotification(
             allocator,
             sub_id,

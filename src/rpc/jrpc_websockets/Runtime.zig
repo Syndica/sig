@@ -58,6 +58,9 @@ threadpool_wg: std.Thread.WaitGroup,
 /// Optional callback run on the loop thread whenever the async wake fires.
 /// Used by integrations to drain additional loop-thread-only queues.
 wakeup_hook: ?WakeupHook = null,
+/// Ledger handle for block subscriptions. Optional because not all deployments
+/// have a ledger available (e.g. tests).
+ledger: ?*sig.ledger.Ledger = null,
 
 pub const WakeupHook = struct {
     ptr: *anyopaque,
@@ -80,6 +83,8 @@ pub const Dependencies = struct {
     max_batch_bytes: u64,
     loop: *xev.Loop,
     wakeup_hook: ?WakeupHook = null,
+    /// Ledger handle for block subscriptions. Optional so tests can omit it.
+    ledger: ?*sig.ledger.Ledger = null,
 };
 
 pub fn init(deps: Dependencies) RuntimeContext {
@@ -99,6 +104,7 @@ pub fn init(deps: Dependencies) RuntimeContext {
         .notify_pending = &deps.event_sink.notify_pending,
         .threadpool_wg = .{},
         .wakeup_hook = deps.wakeup_hook,
+        .ledger = deps.ledger,
     };
     return runtime;
 }
@@ -554,6 +560,34 @@ fn handleSlotTransition(
                 }
                 self.enqueueAccountReevaluation(entry, slot, task_batch);
             },
+            .block => {
+                const ledger = self.ledger orelse continue;
+                const commitment = entry.key.params.block.commitment;
+                // blockSubscribe only supports confirmed and finalized.
+                if (commitment == .processed) continue;
+                if (!transitionMatchesCommitment(transition.notify_commitments, commitment)) {
+                    continue;
+                }
+                switch (commitment) {
+                    .confirmed => {
+                        var confirmed_slots =
+                            publishable_confirmed_slots.iterator() orelse continue;
+                        while (confirmed_slots.next()) |confirmed_slot| {
+                            self.enqueueBlockJob(
+                                entry,
+                                confirmed_slot.slot,
+                                ledger,
+                                task_batch,
+                            );
+                        }
+                    },
+                    .processed => unreachable,
+                    .finalized => {
+                        if (transition.publishable_slot == null) continue;
+                        self.enqueueBlockJob(entry, slot, ledger, task_batch);
+                    },
+                }
+            },
             else => {},
         }
     }
@@ -656,6 +690,27 @@ fn deletedAccountPlaceholder() sig.core.Account {
         .executable = false,
         .rent_epoch = 0,
     };
+}
+
+fn enqueueBlockJob(
+    self: *RuntimeContext,
+    entry: *sub_map_mod.MapEntry,
+    slot: Slot,
+    ledger: *sig.ledger.Ledger,
+    task_batch: *ThreadPool.Batch,
+) void {
+    const bp = entry.key.params.block;
+    _ = self.enqueueJobForEntry(entry.*, .{
+        .block = .{
+            .slot = slot,
+            .filter = bp.filter,
+            .encoding = bp.encoding,
+            .transaction_details = bp.transaction_details,
+            .max_supported_transaction_version = bp.max_supported_transaction_version,
+            .show_rewards = bp.show_rewards,
+            .ledger = ledger,
+        },
+    }, task_batch);
 }
 
 fn publishLogsSubscriptionForEntry(
