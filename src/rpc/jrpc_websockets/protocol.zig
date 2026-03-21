@@ -1100,3 +1100,160 @@ test "serializeNotification dispatches program job type" {
     try std.testing.expectEqual(1000, notification.params.result.value.account.lamports);
     try std.testing.expectEqual(42, notification.params.result.context.slot);
 }
+
+test "toCommonEncoding maps all variants" {
+    const common = sig.rpc.methods.common;
+    try std.testing.expectEqual(common.TransactionEncoding.base58, toCommonEncoding(.base58));
+    try std.testing.expectEqual(common.TransactionEncoding.base64, toCommonEncoding(.base64));
+    try std.testing.expectEqual(common.TransactionEncoding.json, toCommonEncoding(.json));
+    try std.testing.expectEqual(
+        common.TransactionEncoding.jsonParsed,
+        toCommonEncoding(.jsonParsed),
+    );
+}
+
+test "toCommonTxDetails maps all variants" {
+    const common = sig.rpc.methods.common;
+    try std.testing.expectEqual(common.TransactionDetails.full, toCommonTxDetails(.full));
+    try std.testing.expectEqual(
+        common.TransactionDetails.accounts,
+        toCommonTxDetails(.accounts),
+    );
+    try std.testing.expectEqual(
+        common.TransactionDetails.signatures,
+        toCommonTxDetails(.signatures),
+    );
+    try std.testing.expectEqual(common.TransactionDetails.none, toCommonTxDetails(.none));
+}
+
+test "transactionMentionsPubkey finds match in static account keys" {
+    var target: Pubkey = undefined;
+    @memset(&target.data, 0xAA);
+
+    var other: Pubkey = undefined;
+    @memset(&other.data, 0xBB);
+
+    const tx: Reader.VersionedTransactionWithStatusMeta = .{
+        .transaction = .{
+            .signatures = &.{},
+            .version = .legacy,
+            .msg = .{
+                .signature_count = 0,
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 0,
+                .account_keys = &.{ other, target },
+                .recent_blockhash = .{ .data = [_]u8{0} ** 32 },
+                .instructions = &.{},
+                .address_lookups = &.{},
+            },
+        },
+        .meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST,
+    };
+    try std.testing.expect(transactionMentionsPubkey(tx, &target));
+}
+
+test "transactionMentionsPubkey finds match in loaded writable addresses" {
+    var target: Pubkey = undefined;
+    @memset(&target.data, 0xCC);
+
+    const tx: Reader.VersionedTransactionWithStatusMeta = .{
+        .transaction = .{
+            .signatures = &.{},
+            .version = .legacy,
+            .msg = .{
+                .signature_count = 0,
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 0,
+                .account_keys = &.{},
+                .recent_blockhash = .{ .data = [_]u8{0} ** 32 },
+                .instructions = &.{},
+                .address_lookups = &.{},
+            },
+        },
+        .meta = .{
+            .status = null,
+            .fee = 0,
+            .pre_balances = &.{},
+            .post_balances = &.{},
+            .inner_instructions = null,
+            .log_messages = null,
+            .pre_token_balances = null,
+            .post_token_balances = null,
+            .rewards = null,
+            .loaded_addresses = .{
+                .writable = &.{target},
+                .readonly = &.{},
+            },
+            .return_data = null,
+            .compute_units_consumed = null,
+            .cost_units = null,
+        },
+    };
+    try std.testing.expect(transactionMentionsPubkey(tx, &target));
+}
+
+test "transactionMentionsPubkey finds match in loaded readonly addresses" {
+    var target: Pubkey = undefined;
+    @memset(&target.data, 0xDD);
+
+    const tx: Reader.VersionedTransactionWithStatusMeta = .{
+        .transaction = .{
+            .signatures = &.{},
+            .version = .legacy,
+            .msg = .{
+                .signature_count = 0,
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 0,
+                .account_keys = &.{},
+                .recent_blockhash = .{ .data = [_]u8{0} ** 32 },
+                .instructions = &.{},
+                .address_lookups = &.{},
+            },
+        },
+        .meta = .{
+            .status = null,
+            .fee = 0,
+            .pre_balances = &.{},
+            .post_balances = &.{},
+            .inner_instructions = null,
+            .log_messages = null,
+            .pre_token_balances = null,
+            .post_token_balances = null,
+            .rewards = null,
+            .loaded_addresses = .{
+                .writable = &.{},
+                .readonly = &.{target},
+            },
+            .return_data = null,
+            .compute_units_consumed = null,
+            .cost_units = null,
+        },
+    };
+    try std.testing.expect(transactionMentionsPubkey(tx, &target));
+}
+
+test "transactionMentionsPubkey returns false when no match" {
+    var target: Pubkey = undefined;
+    @memset(&target.data, 0xEE);
+
+    var other: Pubkey = undefined;
+    @memset(&other.data, 0xFF);
+
+    const tx: Reader.VersionedTransactionWithStatusMeta = .{
+        .transaction = .{
+            .signatures = &.{},
+            .version = .legacy,
+            .msg = .{
+                .signature_count = 0,
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 0,
+                .account_keys = &.{other},
+                .recent_blockhash = .{ .data = [_]u8{0} ** 32 },
+                .instructions = &.{},
+                .address_lookups = &.{},
+            },
+        },
+        .meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST,
+    };
+    try std.testing.expect(!transactionMentionsPubkey(tx, &target));
+}

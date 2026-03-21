@@ -962,3 +962,139 @@ test "SlotTransactionLogs deinit accepts empty static slices" {
     var data = SlotTransactionLogs.empty();
     data.deinit();
 }
+
+test "blockFilterEql - both all" {
+    const a: methods.BlockFilter = .all;
+    const b: methods.BlockFilter = .all;
+    try std.testing.expect(SubReqKey.blockFilterEql(a, b));
+}
+
+test "blockFilterEql - same mentionsAccountOrProgram" {
+    var pk: Pubkey = undefined;
+    @memset(&pk.data, 0xAA);
+    const a: methods.BlockFilter = .{
+        .mentionsAccountOrProgram = .{ .mentionsAccountOrProgram = pk },
+    };
+    const b: methods.BlockFilter = .{
+        .mentionsAccountOrProgram = .{ .mentionsAccountOrProgram = pk },
+    };
+    try std.testing.expect(SubReqKey.blockFilterEql(a, b));
+}
+
+test "blockFilterEql - different mentionsAccountOrProgram pubkeys" {
+    var pk1: Pubkey = undefined;
+    @memset(&pk1.data, 0xAA);
+    var pk2: Pubkey = undefined;
+    @memset(&pk2.data, 0xBB);
+    const a: methods.BlockFilter = .{
+        .mentionsAccountOrProgram = .{ .mentionsAccountOrProgram = pk1 },
+    };
+    const b: methods.BlockFilter = .{
+        .mentionsAccountOrProgram = .{ .mentionsAccountOrProgram = pk2 },
+    };
+    try std.testing.expect(!SubReqKey.blockFilterEql(a, b));
+}
+
+test "blockFilterEql - different tags" {
+    var pk: Pubkey = undefined;
+    @memset(&pk.data, 0xAA);
+    const a: methods.BlockFilter = .all;
+    const b: methods.BlockFilter = .{
+        .mentionsAccountOrProgram = .{ .mentionsAccountOrProgram = pk },
+    };
+    try std.testing.expect(!SubReqKey.blockFilterEql(a, b));
+}
+
+test "SubReqKey equality - block same params" {
+    const a: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{} },
+    };
+    const b: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{} },
+    };
+    try std.testing.expect(a.eql(&b));
+}
+
+test "SubReqKey equality - block different commitment" {
+    const a: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .commitment = .finalized } },
+    };
+    const b: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .commitment = .confirmed } },
+    };
+    try std.testing.expect(!a.eql(&b));
+}
+
+test "SubReqKey equality - block different encoding" {
+    const a: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .encoding = .json } },
+    };
+    const b: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .encoding = .base64 } },
+    };
+    try std.testing.expect(!a.eql(&b));
+}
+
+test "SubReqKey equality - block different transaction_details" {
+    const a: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .transaction_details = .full } },
+    };
+    const b: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .transaction_details = .none } },
+    };
+    try std.testing.expect(!a.eql(&b));
+}
+
+test "SubReqKey equality - block different max_supported_transaction_version" {
+    const a: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{
+            .max_supported_transaction_version = 0,
+        } },
+    };
+    const b: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{
+            .max_supported_transaction_version = null,
+        } },
+    };
+    try std.testing.expect(!a.eql(&b));
+}
+
+test "SubReqKey equality - block different show_rewards" {
+    const a: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .show_rewards = true } },
+    };
+    const b: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .show_rewards = false } },
+    };
+    try std.testing.expect(!a.eql(&b));
+}
+
+test "SubReqKey equality - block different filter" {
+    var pk: Pubkey = undefined;
+    @memset(&pk.data, 0xAA);
+    const a: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .filter = .all } },
+    };
+    const b: SubReqKey = .{
+        .method = .block,
+        .params = .{ .block = .{ .filter = .{
+            .mentionsAccountOrProgram = .{
+                .mentionsAccountOrProgram = pk,
+            },
+        } } },
+    };
+    try std.testing.expect(!a.eql(&b));
+}
