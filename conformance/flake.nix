@@ -88,7 +88,7 @@
         shellHook = baseShellHook;
       };
 
-      full = pkgs.mkShell {
+      agave = pkgs.mkShell {
         packages = baseDeps ++ (with pkgs; [clang cmake gcc pkgs.rust-bin.stable."1.93.0".default]);
         shellHook = baseShellHook + ''
           export LIBCLANG_PATH="${pkgs.llvmPackages_22.libclang.lib}/lib"
@@ -101,10 +101,10 @@
           export PROTOC_EXECUTABLE="${protosol-toolchain}/protoc"
           export FLATC_EXECUTABLE="${protosol-toolchain}/flatc"
           
-          cp -r ${agave} env/agave && chmod +w -R env/agave
-          cp -r ${sbpf} env/sbpf && chmod +w -R env/sbpf
-          cp -r ${solfuzz-agave} env/solfuzz-agave && chmod +w -R env/solfuzz-agave
-          cp -r ${protosol} env/solfuzz-agave/protosol && chmod +w -R env/solfuzz-agave/protosol
+          [ ! -d env/agave ] && cp -r ${agave} env/agave && chmod +w -R env/agave
+          [ ! -d env/sbpf ] && cp -r ${sbpf} env/sbpf && chmod +w -R env/sbpf
+          [ ! -d env/solfuzz-agave ] && cp -r ${solfuzz-agave} env/solfuzz-agave && chmod +w -R env/solfuzz-agave
+          [ ! -d env/solfuzz-agave/protosol ] && cp -r ${protosol} env/solfuzz-agave/protosol && chmod +w -R env/solfuzz-agave/protosol
 
           pushd env/solfuzz-agave
           python scripts/generate_local_cargo.py --agave-path ../agave --sbpf-path ../sbpf
