@@ -179,7 +179,11 @@ const Shred = extern struct {
         /// returns a code variant as a data variant (or vice versa), preserving its fields
         fn swapType(self: Variant) Variant {
             // swaps bit 4 and 5, swaps bit 6 and 7
-            return .{ .inner = ((self.inner & 0x50) << 1) | ((self.inner & 0xA0) >> 1) | (self.inner & 0x0F) };
+            return .{
+                .inner = ((self.inner & 0x50) << 1) |
+                    ((self.inner & 0xA0) >> 1) |
+                    (self.inner & 0x0F),
+            };
         }
 
         // upper 4 bits
@@ -202,7 +206,7 @@ const Shred = extern struct {
     const merkle_root_size = 32;
 
     // [firedancer] https://github.com/firedancer-io/firedancer/commit/7cbb71919ec9b8045c247957280e5b15d1e0cb85
-    /// Makes sure that the layout of the Shred is valid.
+    /// Makes sure that the *layout* of the Shred is valid.
     fn fromPacketChecked(packet: *const Packet) !*const Shred {
         if (packet.size < min_header_size) return error.PacketUnderMinHeaderSize;
 
@@ -466,130 +470,7 @@ test "Shred layout" {
     if (@alignOf(Shred) != 1) @compileError("Shred should be align(1)");
 }
 
-// GF(2^8) arithmetic and Reed-Solomon encoding matrix for erasure coding.
-// All operations use pre-computed lookup tables from reed_solomon_table.zig.
-const field = struct {
-    inline fn add(a: u8, b: u8) u8 {
-        return a ^ b;
-    }
-
-    inline fn mul(a: u8, b: u8) u8 {
-        return rs_table.mul[a][b];
-    }
-
-    inline fn div(a: u8, b: u8) u8 {
-        if (a == 0) return 0;
-        const log_a = rs_table.log[a];
-        const log_b = rs_table.log[b];
-        const log_result: i16 = @as(i16, log_a) - @as(i16, log_b);
-        return rs_table.exp[@intCast(if (log_result < 0) log_result + 255 else log_result)];
-    }
-
-    fn exp(a: u8, n: usize) u8 {
-        if (n == 0) return 1;
-        if (a == 0) return 0;
-        var log_result: usize = @as(usize, rs_table.log[a]) * n;
-        while (log_result >= 255) {
-            log_result -= 255;
-        }
-        return rs_table.exp[log_result];
-    }
-};
-
-/// Comptime-generated 64x32 encoding matrix for Reed-Solomon with data_count=32, code_count=32.
-/// Top 32 rows = identity matrix (for data shreds), bottom 32 rows = parity coefficients.
-/// Derived from: Vandermonde(64x32) * inverse(Vandermonde_top(32x32))
-const encoding_matrix: [64][32]u8 = blk: {
-    @setEvalBranchQuota(1_000_000);
-
-    const total = 64;
-    const data = 32;
-
-    // Step 1: Build 64x32 Vandermonde matrix
-    var vandermonde: [total][data]u8 = undefined;
-    for (0..total) |r| {
-        for (0..data) |c| {
-            vandermonde[r][c] = field.exp(@intCast(r), c);
-        }
-    }
-
-    // Step 2: Extract top 32x32 submatrix and invert via Gaussian elimination
-    // Build augmented matrix [top | identity]
-    var aug: [data][data * 2]u8 = undefined;
-    for (0..data) |r| {
-        for (0..data) |c| {
-            aug[r][c] = vandermonde[r][c];
-        }
-        for (0..data) |c| {
-            aug[r][data + c] = if (r == c) 1 else 0;
-        }
-    }
-
-    // Gaussian elimination (forward)
-    for (0..data) |r| {
-        // Find pivot
-        if (aug[r][r] == 0) {
-            for (r + 1..data) |r_below| {
-                if (aug[r_below][r] != 0) {
-                    const tmp = aug[r];
-                    aug[r] = aug[r_below];
-                    aug[r_below] = tmp;
-                    break;
-                }
-            }
-        }
-        // Scale pivot row
-        if (aug[r][r] != 1) {
-            const scale = field.div(1, aug[r][r]);
-            for (0..data * 2) |c| {
-                aug[r][c] = field.mul(scale, aug[r][c]);
-            }
-        }
-        // Eliminate below
-        for (r + 1..data) |r_below| {
-            if (aug[r_below][r] != 0) {
-                const scale = aug[r_below][r];
-                for (0..data * 2) |c| {
-                    aug[r_below][c] = field.add(aug[r_below][c], field.mul(scale, aug[r][c]));
-                }
-            }
-        }
-    }
-    // Back-substitution (eliminate above)
-    for (0..data) |d| {
-        for (0..d) |r_above| {
-            if (aug[r_above][d] != 0) {
-                const scale = aug[r_above][d];
-                for (0..data * 2) |c| {
-                    aug[r_above][c] = field.add(aug[r_above][c], field.mul(scale, aug[d][c]));
-                }
-            }
-        }
-    }
-
-    // Extract inverted top matrix from right half of augmented matrix
-    var inv_top: [data][data]u8 = undefined;
-    for (0..data) |r| {
-        for (0..data) |c| {
-            inv_top[r][c] = aug[r][data + c];
-        }
-    }
-
-    // Step 3: Multiply Vandermonde(64x32) * inv_top(32x32) = encoding_matrix(64x32)
-    var result: [total][data]u8 = undefined;
-    for (0..total) |r| {
-        for (0..data) |c| {
-            var val: u8 = 0;
-            for (0..data) |i| {
-                val = field.add(val, field.mul(vandermonde[r][i], inv_top[i][c]));
-            }
-            result[r][c] = val;
-        }
-    }
-
-    break :blk result;
-};
-
+// Represents a FEC (Forward Error Correction) set which has yet to be reconstructed.
 const FecSetCtx = extern struct {
     data_shreds_received: std.StaticBitSet(data_shreds_max),
     code_shreds_received: std.StaticBitSet(code_shreds_max),
@@ -645,13 +526,6 @@ const FecSetId = extern struct {
         std.debug.assert(a.fec_set_idx == b.fec_set_idx);
         return .eq;
     }
-};
-
-// const FinishedFecSets = std.AutoArrayHashMapUnmanaged(FecSetId, FinishedFecSetCtx);
-
-const FinishedFecSetCtx = struct {
-    signature: Signature,
-    merkle_root: Hash,
 };
 
 fn hashSignature(a: *const Signature) u32 {
@@ -885,7 +759,6 @@ const State = struct {
         // .verified_merkle_roots = .empty,
     };
 
-    // const ProgressMap = FixedArrayMap(Signature, FecSetCtx, SignatureHash, hashSignature, Signature.eql, 256);
     const DoneMap = FixedArrayMap(FecSetId, SignatureHash, void, null, FecSetId.eql, 256);
     // const VerifiedMerkleRoots = FixedArrayMap(Hash, void, MerkleRootHash, hashMerkleRoot, Hash.eql, 128);
 
@@ -895,211 +768,10 @@ const State = struct {
     // fn hashMerkleRoot(a: *const Hash) MerkleRootHash {
     //     return @bitCast(a.data[0..4]);
     // }
-
-    fn hashSignature(a: *const Signature) SignatureHash {
-        return @bitCast((a.r[0..2] ++ a.s[0..2]).*);
-    }
 };
 
-// Reconstructs data shreds when 32/64 shreds have been received
-fn reconstructFecSet(fec_set_ctx: *FecSetCtx) void {
-    const zone = tracy.Zone.init(@src(), .{ .name = "reconstructFecSet" });
-    defer zone.deinit();
-
-    const data_count = FecSetCtx.fec_shred_cnt;
-    const code_count = FecSetCtx.fec_shred_cnt;
-    const total_count = data_count + code_count;
-
-    // Build present[] mask and collect erasure shard length from first present shred
-    var present: [total_count]bool = @splat(false);
-    var shard_len: usize = 0;
-
-    for (0..data_count) |i| {
-        if (fec_set_ctx.data_shreds_received.isSet(i)) {
-            present[i] = true;
-            if (shard_len == 0) {
-                const shred = Shred.fromPacketUnchecked(&fec_set_ctx.data_shreds_buf[i]);
-                if (shred.erasureFragment()) |frag| {
-                    shard_len = frag.len;
-                }
-            }
-        }
-    }
-    for (0..code_count) |i| {
-        if (fec_set_ctx.code_shreds_received.isSet(i)) {
-            present[data_count + i] = true;
-            if (shard_len == 0) {
-                const shred = Shred.fromPacketUnchecked(&fec_set_ctx.code_shreds_buf[i]);
-                if (shred.erasureFragment()) |frag| {
-                    shard_len = frag.len;
-                }
-            }
-        }
-    }
-
-    if (shard_len == 0) return; // no valid shreds found
-
-    // Collect 32 valid indices (indices of present shreds in encoding_matrix row order)
-    var valid_indices: [data_count]u8 = undefined;
-    var valid_count: u8 = 0;
-    for (0..total_count) |i| {
-        if (present[i]) {
-            valid_indices[valid_count] = @intCast(i);
-            valid_count += 1;
-            if (valid_count == data_count) break;
-        }
-    }
-
-    if (valid_count < data_count) return; // not enough shreds
-
-    // Build 32x32 sub-matrix by picking rows from encoding_matrix
-    var sub_matrix: [data_count][data_count]u8 = undefined;
-    for (0..data_count) |r| {
-        sub_matrix[r] = encoding_matrix[valid_indices[r]];
-    }
-
-    // Invert sub_matrix via Gaussian elimination on augmented [sub_matrix | identity]
-    var aug: [data_count][data_count * 2]u8 = undefined;
-    for (0..data_count) |r| {
-        for (0..data_count) |c| {
-            aug[r][c] = sub_matrix[r][c];
-            aug[r][data_count + c] = if (r == c) @as(u8, 1) else @as(u8, 0);
-        }
-    }
-
-    // Forward elimination
-    for (0..data_count) |r| {
-        if (aug[r][r] == 0) {
-            for (r + 1..data_count) |r_below| {
-                if (aug[r_below][r] != 0) {
-                    const tmp = aug[r];
-                    aug[r] = aug[r_below];
-                    aug[r_below] = tmp;
-                    break;
-                }
-            }
-        }
-        if (aug[r][r] == 0) {
-            std.log.warn("FEC reconstruction: singular matrix at row {}", .{r});
-            return;
-        }
-        if (aug[r][r] != 1) {
-            const scale = field.div(1, aug[r][r]);
-            for (0..data_count * 2) |c| {
-                aug[r][c] = field.mul(scale, aug[r][c]);
-            }
-        }
-        for (r + 1..data_count) |r_below| {
-            if (aug[r_below][r] != 0) {
-                const scale = aug[r_below][r];
-                for (0..data_count * 2) |c| {
-                    aug[r_below][c] = field.add(aug[r_below][c], field.mul(scale, aug[r][c]));
-                }
-            }
-        }
-    }
-    // Back-substitution
-    for (0..data_count) |d| {
-        for (0..d) |r_above| {
-            if (aug[r_above][d] != 0) {
-                const scale = aug[r_above][d];
-                for (0..data_count * 2) |c| {
-                    aug[r_above][c] = field.add(aug[r_above][c], field.mul(scale, aug[d][c]));
-                }
-            }
-        }
-    }
-
-    // Extract inverted matrix from right half
-    var inv: [data_count][data_count]u8 = undefined;
-    for (0..data_count) |r| {
-        for (0..data_count) |c| {
-            inv[r][c] = aug[r][data_count + c];
-        }
-    }
-
-    // Find leader signature from any present data or code shred (first 64 bytes)
-    var leader_sig: [Signature.SIZE]u8 = undefined;
-    var have_sig = false;
-    for (0..data_count) |i| {
-        if (fec_set_ctx.data_shreds_received.isSet(i)) {
-            @memcpy(&leader_sig, fec_set_ctx.data_shreds_buf[i].data[0..Signature.SIZE]);
-            have_sig = true;
-            break;
-        }
-    }
-    if (!have_sig) {
-        for (0..code_count) |i| {
-            if (fec_set_ctx.code_shreds_received.isSet(i)) {
-                @memcpy(&leader_sig, fec_set_ctx.code_shreds_buf[i].data[0..Signature.SIZE]);
-                have_sig = true;
-                break;
-            }
-        }
-    }
-
-    // Collect pointers to erasure shards for the 32 valid indices
-    var shard_ptrs: [data_count][*]const u8 = undefined;
-    for (0..data_count) |k| {
-        const idx = valid_indices[k];
-        if (idx < data_count) {
-            const shred = Shred.fromPacketUnchecked(&fec_set_ctx.data_shreds_buf[idx]);
-            shard_ptrs[k] = (shred.erasureFragment() orelse return).ptr;
-        } else {
-            const shred = Shred.fromPacketUnchecked(&fec_set_ctx.code_shreds_buf[idx - data_count]);
-            shard_ptrs[k] = (shred.erasureFragment() orelse return).ptr;
-        }
-    }
-
-    // For each missing data shred, reconstruct its erasure shard
-    for (0..data_count) |i| {
-        if (present[i]) continue; // already have this data shred
-
-        // We need the i-th row of the inverted matrix to recover data shard i
-        const inv_row = &inv[i];
-
-        // Destination: write directly into the packet buffer
-        var dest_packet = &fec_set_ctx.data_shreds_buf[i];
-
-        // First, copy leader signature into bytes 0..64
-        if (have_sig) {
-            @memcpy(dest_packet.data[0..Signature.SIZE], &leader_sig);
-        }
-
-        // For data shreds, erasure shard starts at offset 64 (after signature)
-        // and ends at headers_size + capacity. We compute it the same way.
-        // The erasure shard for data shreds covers bytes [64 .. 64 + shard_len]
-        const dest_start = Signature.SIZE; // 64
-        const dest_end = dest_start + shard_len;
-        if (dest_end > dest_packet.data.len) return;
-
-        var dest = dest_packet.data[dest_start..dest_end];
-
-        // Multiply: dest[byte] = sum over k of (inv_row[k] * shard_ptrs[k][byte])
-        // First pass: dest = inv_row[0] * shard_ptrs[0]
-        const coeff0 = inv_row[0];
-        for (0..shard_len) |b| {
-            dest[b] = field.mul(coeff0, shard_ptrs[0][b]);
-        }
-        // Remaining passes: dest += inv_row[k] * shard_ptrs[k]
-        for (1..data_count) |k| {
-            const coeff = inv_row[k];
-            if (coeff == 0) continue;
-            for (0..shard_len) |b| {
-                dest[b] = field.add(dest[b], field.mul(coeff, shard_ptrs[k][b]));
-            }
-        }
-
-        // Set the packet size appropriately for a data shred
-        dest_packet.size = @intCast(Shred.min_size);
-
-        // Mark this data shred as received
-        fec_set_ctx.data_shreds_received.set(i);
-
-        std.log.info("FEC: recovered data shred index {}", .{i});
-    }
-}
-
+// NOTE: as of writing, @sizeOf(State) ~= 22MB. This is why it is defined here rather than inside
+// of serviceMain.
 var state: State = .empty;
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
@@ -1113,8 +785,6 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     rw.tel.signalReady();
 
     logger.info().logf("Waiting for shreds on port {}", .{rw.net_pair.port});
-
-    // @compileLog(@sizeOf(State));
 
     while (true) {
         const packet = it.next() orelse continue;
@@ -1134,22 +804,34 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             continue; // TODO: report reasons for rejecting/ignoring shreds in all cases
         };
 
-        // Legacy (non-merkle), and non-chained shreds are deprecated
-        // https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0313-drop-unchained-merkle-shreds.md
-        if (!shred.variant.isMerkle()) continue;
-        if (!shred.variant.isChained()) continue;
-
         // ignore shred from a slot that's too old
         if (shred.slot < stub_root_slot) continue;
 
-        // ignore any with wrong version
+        // ignore shred with wrong version
         if (shred.version != stub_shred_version.load(.monotonic)) continue;
 
+        // ignore any with bad counts or indices (SIMD 0317 enforces this)
         if (shred.variant.isCode()) {
-            // ignore any with bad counts or indices
             if (shred.code_or_data.code.data_count != FecSetCtx.fec_shred_cnt) continue;
             if (shred.code_or_data.code.code_count != FecSetCtx.fec_shred_cnt) continue;
             if (shred.code_or_data.code.code_shred_idx >= FecSetCtx.fec_shred_cnt) continue;
+        }
+
+        const in_type_idx = if (shred.variant.isData())
+            shred.slot_idx - shred.fec_set_idx
+        else
+            shred.code_or_data.code.code_shred_idx;
+
+        if (shred.fec_set_idx % FecSetCtx.fec_shred_cnt != 0) continue;
+        if (in_type_idx >= FecSetCtx.fec_shred_cnt) continue;
+
+        if (shred.variant.isData()) {
+            // data shreds marked as complete must be the last shred in the fec set.
+            const slot_complete = 0x80; // hm
+            if (((shred.code_or_data.data.flags & slot_complete) != 0) and (((shred.slot_idx + 1) % FecSetCtx.fec_shred_cnt) != 0)) {
+                std.log.info("data shred marked as complete isn't the last shred in the set", .{});
+                continue;
+            }
         }
 
         // is fec set already being built?
@@ -1163,7 +845,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
             // ignore shreds from already finished fec sets
             if (state.done.get(&fec_set_id)) |finished_set| {
-                const signature_hash = State.hashSignature(&shred.signature);
+                const signature_hash = hashSignature(&shred.signature);
                 if (signature_hash == finished_set.*) {
                     std.log.info("got shred from finished fec set", .{});
 
@@ -1183,29 +865,10 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             }
         }
 
-        const in_type_idx = if (shred.variant.isData())
-            shred.slot_idx - shred.fec_set_idx
-        else
-            shred.code_or_data.code.code_shred_idx;
-
-        std.log.info("in_type_idx: {}", .{in_type_idx});
-
-        if (shred.fec_set_idx % FecSetCtx.fec_shred_cnt != 0) continue;
-        if (in_type_idx >= FecSetCtx.fec_shred_cnt) continue;
-
         std.log.info("shred {} ({s}) validated + passing checks + index not too high", .{
             @as(FecSetId, .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot }),
             if (shred.variant.isCode()) "code" else "data",
         });
-
-        if (shred.variant.isData()) {
-            // data shreds marked as complete must be the last shred in the fec set.
-            const slot_complete = 0x80; // hm
-            if (((shred.code_or_data.data.flags & slot_complete) != 0) and (((shred.slot_idx + 1) % FecSetCtx.fec_shred_cnt) != 0)) {
-                std.log.info("data shred marked as complete isn't the last shred in the set", .{});
-                continue;
-            }
-        }
 
         const merkle_layer_count = 7;
         if (shred.variant.merkleCount() > merkle_layer_count - 1) {
@@ -1321,7 +984,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         }
 
         // starting fec set reconstruction now
-        reconstructFecSet(fec_set_ctx);
+        reedsol.reconstructFecSet(fec_set_ctx);
 
         std.debug.assert(fec_set_ctx.data_shreds_received.count() == FecSetCtx.data_shreds_max);
 
@@ -1358,7 +1021,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             var bincode_fba = std.heap.FixedBufferAllocator.init(&bincode_buf);
             const bincode_fba_allocator = bincode_fba.allocator();
 
-            const entries, const consumed = Entry.slice_config.decodeSlice(
+            const entries, const consumed = bincode.Entry.slice_config.decodeSlice(
                 deshredded_bytes,
                 bincode_fba_allocator,
                 .{ .endian = .little, .int = .fixint },
@@ -1391,306 +1054,359 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     }
 }
 
-// This isn't quite a bincode fixed int, nor a varint. It's some custom Solana thing used in
-// Agave's `short_vec`. I think it's supposed to be smaller than a fixed or varint for a u16.
-const compact_u16: bk.Codec(u16) = .implement(void, void, struct {
-    pub fn encode(
-        writer: *std.Io.Writer,
-        _: bk.Config,
-        values: []const u16,
-        _: ?*[encode_stack_size]u64,
-        limit: std.Io.Limit,
-        _: void,
-    ) bk.EncodeToWriterError!bk.EncodedCounts {
-        const max_count = limit.max(values.len);
-        var byte_count: usize = 0;
-        for (values[0..max_count]) |val| {
-            var rem: u16 = val;
-            while (true) {
-                var elem: u8 = @truncate(rem & 0x7f);
-                rem >>= 7;
-                if (rem == 0) {
-                    writer.writeByte(elem) catch return error.EncodeFailed;
-                    byte_count += 1;
-                    break;
-                } else {
-                    elem |= 0x80;
-                    writer.writeByte(elem) catch return error.EncodeFailed;
-                    byte_count += 1;
+const reedsol = struct {
+    // Reconstructs data shreds when 32/64 shreds have been received
+    fn reconstructFecSet(fec_set_ctx: *FecSetCtx) void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "reconstructFecSet" });
+        defer zone.deinit();
+
+        const data_count = FecSetCtx.fec_shred_cnt;
+        const code_count = FecSetCtx.fec_shred_cnt;
+        const total_count = data_count + code_count;
+
+        // Build present[] mask and collect erasure shard length from first present shred
+        var present: [total_count]bool = @splat(false);
+        var shard_len: usize = 0;
+
+        for (0..data_count) |i| {
+            if (fec_set_ctx.data_shreds_received.isSet(i)) {
+                present[i] = true;
+                if (shard_len == 0) {
+                    const shred = Shred.fromPacketUnchecked(&fec_set_ctx.data_shreds_buf[i]);
+                    if (shred.erasureFragment()) |frag| {
+                        shard_len = frag.len;
+                    }
                 }
             }
         }
-        return .{ .value_count = max_count, .byte_count = byte_count };
-    }
-
-    pub const encode_min_size: usize = 1;
-    pub const encode_stack_size: usize = 0;
-    pub const decodeInit = null;
-
-    pub fn decode(
-        reader: *std.Io.Reader,
-        _: bk.Config,
-        _: ?std.mem.Allocator,
-        values: []u16,
-        decoded_count: *usize,
-        _: void,
-    ) bk.DecodeFromReaderError!void {
-        for (values, 0..) |*value, i| {
-            errdefer decoded_count.* = i;
-
-            var result: u16 = 0;
-            var shift: u4 = 0;
-            for (0..3) |_| {
-                const byte = try reader.takeByte();
-                result |= @as(u16, byte & 0x7f) << shift;
-                if (byte & 0x80 == 0) break;
-                shift += 7;
-            } else {
-                // Fourth byte would be needed → overflow for u16
-                return error.DecodeFailed;
-            }
-            value.* = result;
-        }
-        decoded_count.* = values.len;
-    }
-
-    pub fn decodeSkip(
-        reader: *std.Io.Reader,
-        _: bk.Config,
-        value_count: usize,
-        decoded_count: *usize,
-        _: void,
-    ) bk.DecodeSkipError!void {
-        for (0..value_count) |i| {
-            errdefer decoded_count.* = i;
-            for (0..3) |_| {
-                const byte = try reader.takeByte();
-                if (byte & 0x80 == 0) break;
-            } else {
-                return error.DecodeFailed;
+        for (0..code_count) |i| {
+            if (fec_set_ctx.code_shreds_received.isSet(i)) {
+                present[data_count + i] = true;
+                if (shard_len == 0) {
+                    const shred = Shred.fromPacketUnchecked(&fec_set_ctx.code_shreds_buf[i]);
+                    if (shred.erasureFragment()) |frag| {
+                        shard_len = frag.len;
+                    }
+                }
             }
         }
-        decoded_count.* = value_count;
+
+        if (shard_len == 0) return; // no valid shreds found
+
+        // Collect 32 valid indices (indices of present shreds in encoding_matrix row order)
+        var valid_indices: [data_count]u8 = undefined;
+        var valid_count: u8 = 0;
+        for (0..total_count) |i| {
+            if (present[i]) {
+                valid_indices[valid_count] = @intCast(i);
+                valid_count += 1;
+                if (valid_count == data_count) break;
+            }
+        }
+
+        if (valid_count < data_count) return; // not enough shreds
+
+        // Build 32x32 sub-matrix by picking rows from encoding_matrix
+        var sub_matrix: [data_count][data_count]u8 = undefined;
+        for (0..data_count) |r| {
+            sub_matrix[r] = encoding_matrix[valid_indices[r]];
+        }
+
+        // Invert sub_matrix via Gaussian elimination on augmented [sub_matrix | identity]
+        var aug: [data_count][data_count * 2]u8 = undefined;
+        for (0..data_count) |r| {
+            for (0..data_count) |c| {
+                aug[r][c] = sub_matrix[r][c];
+                aug[r][data_count + c] = if (r == c) @as(u8, 1) else @as(u8, 0);
+            }
+        }
+
+        // Forward elimination
+        for (0..data_count) |r| {
+            if (aug[r][r] == 0) {
+                for (r + 1..data_count) |r_below| {
+                    if (aug[r_below][r] != 0) {
+                        const tmp = aug[r];
+                        aug[r] = aug[r_below];
+                        aug[r_below] = tmp;
+                        break;
+                    }
+                }
+            }
+            if (aug[r][r] == 0) {
+                std.log.warn("FEC reconstruction: singular matrix at row {}", .{r});
+                return;
+            }
+            if (aug[r][r] != 1) {
+                const scale = field.div(1, aug[r][r]);
+                for (0..data_count * 2) |c| {
+                    aug[r][c] = field.mul(scale, aug[r][c]);
+                }
+            }
+            for (r + 1..data_count) |r_below| {
+                if (aug[r_below][r] != 0) {
+                    const scale = aug[r_below][r];
+                    for (0..data_count * 2) |c| {
+                        aug[r_below][c] = field.add(aug[r_below][c], field.mul(scale, aug[r][c]));
+                    }
+                }
+            }
+        }
+        // Back-substitution
+        for (0..data_count) |d| {
+            for (0..d) |r_above| {
+                if (aug[r_above][d] != 0) {
+                    const scale = aug[r_above][d];
+                    for (0..data_count * 2) |c| {
+                        aug[r_above][c] = field.add(aug[r_above][c], field.mul(scale, aug[d][c]));
+                    }
+                }
+            }
+        }
+
+        // Extract inverted matrix from right half
+        var inv: [data_count][data_count]u8 = undefined;
+        for (0..data_count) |r| {
+            for (0..data_count) |c| {
+                inv[r][c] = aug[r][data_count + c];
+            }
+        }
+
+        // Find leader signature from any present data or code shred (first 64 bytes)
+        var leader_sig: [Signature.SIZE]u8 = undefined;
+        var have_sig = false;
+        for (0..data_count) |i| {
+            if (fec_set_ctx.data_shreds_received.isSet(i)) {
+                @memcpy(&leader_sig, fec_set_ctx.data_shreds_buf[i].data[0..Signature.SIZE]);
+                have_sig = true;
+                break;
+            }
+        }
+        if (!have_sig) {
+            for (0..code_count) |i| {
+                if (fec_set_ctx.code_shreds_received.isSet(i)) {
+                    @memcpy(&leader_sig, fec_set_ctx.code_shreds_buf[i].data[0..Signature.SIZE]);
+                    have_sig = true;
+                    break;
+                }
+            }
+        }
+
+        // Collect pointers to erasure shards for the 32 valid indices
+        var shard_ptrs: [data_count][*]const u8 = undefined;
+        for (0..data_count) |k| {
+            const idx = valid_indices[k];
+            if (idx < data_count) {
+                const shred = Shred.fromPacketUnchecked(&fec_set_ctx.data_shreds_buf[idx]);
+                shard_ptrs[k] = (shred.erasureFragment() orelse return).ptr;
+            } else {
+                const shred = Shred.fromPacketUnchecked(&fec_set_ctx.code_shreds_buf[idx - data_count]);
+                shard_ptrs[k] = (shred.erasureFragment() orelse return).ptr;
+            }
+        }
+
+        // For each missing data shred, reconstruct its erasure shard
+        for (0..data_count) |i| {
+            if (present[i]) continue; // already have this data shred
+
+            // We need the i-th row of the inverted matrix to recover data shard i
+            const inv_row = &inv[i];
+
+            // Destination: write directly into the packet buffer
+            var dest_packet = &fec_set_ctx.data_shreds_buf[i];
+
+            // First, copy leader signature into bytes 0..64
+            if (have_sig) {
+                @memcpy(dest_packet.data[0..Signature.SIZE], &leader_sig);
+            }
+
+            // For data shreds, erasure shard starts at offset 64 (after signature)
+            // and ends at headers_size + capacity. We compute it the same way.
+            // The erasure shard for data shreds covers bytes [64 .. 64 + shard_len]
+            const dest_start = Signature.SIZE; // 64
+            const dest_end = dest_start + shard_len;
+            if (dest_end > dest_packet.data.len) return;
+
+            var dest = dest_packet.data[dest_start..dest_end];
+
+            // Multiply: dest[byte] = sum over k of (inv_row[k] * shard_ptrs[k][byte])
+            // First pass: dest = inv_row[0] * shard_ptrs[0]
+            const coeff0 = inv_row[0];
+            for (0..shard_len) |b| {
+                dest[b] = field.mul(coeff0, shard_ptrs[0][b]);
+            }
+            // Remaining passes: dest += inv_row[k] * shard_ptrs[k]
+            for (1..data_count) |k| {
+                const coeff = inv_row[k];
+                if (coeff == 0) continue;
+                for (0..shard_len) |b| {
+                    dest[b] = field.add(dest[b], field.mul(coeff, shard_ptrs[k][b]));
+                }
+            }
+
+            // Set the packet size appropriately for a data shred
+            dest_packet.size = @intCast(Shred.min_size);
+
+            // Mark this data shred as received
+            fec_set_ctx.data_shreds_received.set(i);
+
+            std.log.info("FEC: recovered data shred index {}", .{i});
+        }
     }
 
-    pub const free = null;
-});
+    // GF(2^8) arithmetic and Reed-Solomon encoding matrix for erasure coding.
+    // All operations use pre-computed lookup tables from reed_solomon_table.zig.
+    const field = struct {
+        inline fn add(a: u8, b: u8) u8 {
+            return a ^ b;
+        }
 
-// For slices that have a u16 length rather than a u64
-fn shortVec(comptime Element: type, comptime element: bk.Codec(Element)) bk.Codec([]Element) {
-    return comptime .implement(element.EncodeCtx, element.DecodeCtx, struct {
+        inline fn mul(a: u8, b: u8) u8 {
+            return rs_table.mul[a][b];
+        }
+
+        inline fn div(a: u8, b: u8) u8 {
+            if (a == 0) return 0;
+            const log_a = rs_table.log[a];
+            const log_b = rs_table.log[b];
+            const log_result: i16 = @as(i16, log_a) - @as(i16, log_b);
+            return rs_table.exp[@intCast(if (log_result < 0) log_result + 255 else log_result)];
+        }
+
+        fn exp(a: u8, n: usize) u8 {
+            if (n == 0) return 1;
+            if (a == 0) return 0;
+            var log_result: usize = @as(usize, rs_table.log[a]) * n;
+            while (log_result >= 255) {
+                log_result -= 255;
+            }
+            return rs_table.exp[log_result];
+        }
+    };
+
+    /// Comptime-generated 64x32 encoding matrix for Reed-Solomon with data_count=32, code_count=32.
+    /// Top 32 rows = identity matrix (for data shreds), bottom 32 rows = parity coefficients.
+    /// Derived from: Vandermonde(64x32) * inverse(Vandermonde_top(32x32))
+    const encoding_matrix: [64][32]u8 = blk: {
+        @setEvalBranchQuota(1_000_000);
+
+        const total = 64;
+        const data = 32;
+
+        // Step 1: Build 64x32 Vandermonde matrix
+        var vandermonde: [total][data]u8 = undefined;
+        for (0..total) |r| {
+            for (0..data) |c| {
+                vandermonde[r][c] = field.exp(@intCast(r), c);
+            }
+        }
+
+        // Step 2: Extract top 32x32 submatrix and invert via Gaussian elimination
+        // Build augmented matrix [top | identity]
+        var aug: [data][data * 2]u8 = undefined;
+        for (0..data) |r| {
+            for (0..data) |c| {
+                aug[r][c] = vandermonde[r][c];
+            }
+            for (0..data) |c| {
+                aug[r][data + c] = if (r == c) 1 else 0;
+            }
+        }
+
+        // Gaussian elimination (forward)
+        for (0..data) |r| {
+            // Find pivot
+            if (aug[r][r] == 0) {
+                for (r + 1..data) |r_below| {
+                    if (aug[r_below][r] != 0) {
+                        const tmp = aug[r];
+                        aug[r] = aug[r_below];
+                        aug[r_below] = tmp;
+                        break;
+                    }
+                }
+            }
+            // Scale pivot row
+            if (aug[r][r] != 1) {
+                const scale = field.div(1, aug[r][r]);
+                for (0..data * 2) |c| {
+                    aug[r][c] = field.mul(scale, aug[r][c]);
+                }
+            }
+            // Eliminate below
+            for (r + 1..data) |r_below| {
+                if (aug[r_below][r] != 0) {
+                    const scale = aug[r_below][r];
+                    for (0..data * 2) |c| {
+                        aug[r_below][c] = field.add(aug[r_below][c], field.mul(scale, aug[r][c]));
+                    }
+                }
+            }
+        }
+        // Back-substitution (eliminate above)
+        for (0..data) |d| {
+            for (0..d) |r_above| {
+                if (aug[r_above][d] != 0) {
+                    const scale = aug[r_above][d];
+                    for (0..data * 2) |c| {
+                        aug[r_above][c] = field.add(aug[r_above][c], field.mul(scale, aug[d][c]));
+                    }
+                }
+            }
+        }
+
+        // Extract inverted top matrix from right half of augmented matrix
+        var inv_top: [data][data]u8 = undefined;
+        for (0..data) |r| {
+            for (0..data) |c| {
+                inv_top[r][c] = aug[r][data + c];
+            }
+        }
+
+        // Step 3: Multiply Vandermonde(64x32) * inv_top(32x32) = encoding_matrix(64x32)
+        var result: [total][data]u8 = undefined;
+        for (0..total) |r| {
+            for (0..data) |c| {
+                var val: u8 = 0;
+                for (0..data) |i| {
+                    val = field.add(val, field.mul(vandermonde[r][i], inv_top[i][c]));
+                }
+                result[r][c] = val;
+            }
+        }
+
+        break :blk result;
+    };
+};
+
+const bincode = struct {
+    // This isn't quite a bincode fixed int, nor a varint. It's some custom Solana thing used in
+    // Agave's `short_vec`. I think it's supposed to be smaller than a fixed or varint for a u16.
+    const compact_u16: bk.Codec(u16) = .implement(void, void, struct {
         pub fn encode(
             writer: *std.Io.Writer,
-            config: bk.Config,
-            values: []const []Element,
-            _: ?*[encode_stack_size]u64,
-            limit: std.Io.Limit,
-            ctx: element.EncodeCtx,
-        ) bk.EncodeToWriterError!bk.EncodedCounts {
-            const max_count = limit.max(values.len);
-            var byte_count: usize = 0;
-            for (values[0..max_count]) |slice_val| {
-                // Write compact-u16 length
-                const len: u16 = std.math.cast(u16, slice_val.len) orelse return error.EncodeFailed;
-                const len_counts = try compact_u16.encodeOnePartialRaw(writer, config, &len, null, .unlimited, {});
-                byte_count += len_counts.byte_count;
-
-                // Write elements
-                const elem_counts = try element.encodeManyPartialRaw(writer, config, slice_val, null, .unlimited, ctx);
-                byte_count += elem_counts.byte_count;
-            }
-            return .{ .value_count = max_count, .byte_count = byte_count };
-        }
-
-        pub const encode_min_size: usize = 1;
-        pub const encode_stack_size: usize = 0;
-
-        pub fn decodeInit(
-            gpa_opt: ?std.mem.Allocator,
-            values: [][]Element,
-            _: element.DecodeCtx,
-        ) std.mem.Allocator.Error!void {
-            _ = gpa_opt.?;
-            @memset(values, &.{});
-        }
-
-        pub fn decode(
-            reader: *std.Io.Reader,
-            config: bk.Config,
-            gpa_opt: ?std.mem.Allocator,
-            values: [][]Element,
-            decoded_count: *usize,
-            ctx: element.DecodeCtx,
-        ) bk.DecodeFromReaderError!void {
-            const gpa = gpa_opt.?;
-            for (values, 0..) |*value, i| {
-                errdefer decoded_count.* = i;
-
-                const len = try compact_u16.decode(reader, null, .default, {});
-
-                const elems = try gpa.alloc(Element, len);
-                errdefer gpa.free(elems);
-
-                // decode into elems
-                try element.decodeInitMany(gpa, elems, ctx);
-                errdefer element.freeMany(gpa, elems, ctx);
-
-                try element.decodeIntoMany(reader, gpa, config, elems, ctx);
-
-                value.* = elems;
-            }
-            decoded_count.* = values.len;
-        }
-
-        pub fn decodeSkip(
-            reader: *std.Io.Reader,
-            config: bk.Config,
-            value_count: usize,
-            decoded_count: *usize,
-            ctx: element.DecodeCtx,
-        ) bk.DecodeSkipError!void {
-            for (0..value_count) |i| {
-                errdefer decoded_count.* = i;
-                const len = try compact_u16.decode(reader, null, .default, null);
-                try element.decodeSkip(reader, config, len, ctx);
-            }
-            decoded_count.* = value_count;
-        }
-
-        pub fn free(
-            gpa_opt: ?std.mem.Allocator,
-            slice_list: []const []Element,
-            ctx: element.DecodeCtx,
-        ) void {
-            const gpa = gpa_opt.?;
-            for (slice_list) |slice_value| {
-                element.freeMany(gpa, slice_value, ctx);
-                gpa.free(slice_value);
-            }
-        }
-    });
-}
-
-const hash_codec: bk.Codec(Hash) = .standard(.tuple(.{
-    .data = .array(.fixint),
-}));
-
-const pubkey_codec: bk.Codec(Pubkey) = .standard(.tuple(.{
-    .data = .array(.fixint),
-}));
-
-const MessageHeader = struct {
-    num_required_signatures: u8,
-    num_readonly_signed_accounts: u8,
-    num_readonly_unsigned_accounts: u8,
-
-    const bk_config: bk.Codec(MessageHeader) = .standard(.tuple(.{
-        .num_required_signatures = .fixint,
-        .num_readonly_signed_accounts = .fixint,
-        .num_readonly_unsigned_accounts = .fixint,
-    }));
-};
-
-const CompiledInstruction = struct {
-    program_id_index: u8,
-    accounts: []u8,
-    data: []u8,
-
-    const bk_config: bk.Codec(CompiledInstruction) = .standard(.tuple(.{
-        .program_id_index = .fixint,
-        .accounts = .from(shortVec(u8, bk.StdCodec(u8).fixint.codec)),
-        .data = .from(shortVec(u8, bk.StdCodec(u8).fixint.codec)),
-    }));
-};
-
-const AddressLookup = struct {
-    account_key: Pubkey,
-    writable_indexes: []u8,
-    readonly_indexes: []u8,
-
-    const bk_config: bk.Codec(AddressLookup) = .standard(.tuple(.{
-        .account_key = .from(pubkey_codec),
-        .writable_indexes = .from(shortVec(u8, bk.StdCodec(u8).fixint.codec)),
-        .readonly_indexes = .from(shortVec(u8, bk.StdCodec(u8).fixint.codec)),
-    }));
-};
-
-const LegacyMessage = struct {
-    header: MessageHeader,
-    account_keys: []Pubkey,
-    recent_blockhash: Hash,
-    instructions: []CompiledInstruction,
-
-    const bk_config: bk.Codec(LegacyMessage) = .standard(.tuple(.{
-        .header = .from(MessageHeader.bk_config),
-        .account_keys = .from(shortVec(Pubkey, pubkey_codec)),
-        .recent_blockhash = .from(hash_codec),
-        .instructions = .from(shortVec(CompiledInstruction, CompiledInstruction.bk_config)),
-    }));
-};
-
-const V0Message = struct {
-    header: MessageHeader,
-    account_keys: []Pubkey,
-    recent_blockhash: Hash,
-    instructions: []CompiledInstruction,
-    address_table_lookups: []AddressLookup,
-
-    const bk_config: bk.Codec(V0Message) = .standard(.tuple(.{
-        .header = .from(MessageHeader.bk_config),
-        .account_keys = .from(shortVec(Pubkey, pubkey_codec)),
-        .recent_blockhash = .from(hash_codec),
-        .instructions = .from(shortVec(CompiledInstruction, CompiledInstruction.bk_config)),
-        .address_table_lookups = .from(shortVec(AddressLookup, AddressLookup.bk_config)),
-    }));
-};
-
-const VersionedMessage = union(enum) {
-    // first byte & 0x80 == 0
-    legacy: LegacyMessage,
-    // first byte & 0x80 != 0
-    v0: V0Message,
-
-    const bk_config: bk.Codec(VersionedMessage) = .implement(void, void, struct {
-        pub fn encode(
-            writer: *std.Io.Writer,
-            config: bk.Config,
-            values: []const VersionedMessage,
+            _: bk.Config,
+            values: []const u16,
             _: ?*[encode_stack_size]u64,
             limit: std.Io.Limit,
             _: void,
         ) bk.EncodeToWriterError!bk.EncodedCounts {
             const max_count = limit.max(values.len);
             var byte_count: usize = 0;
-            for (values[0..max_count]) |value| {
-                switch (value) {
-                    .legacy => |msg| {
-                        // Legacy: no version prefix byte; MessageHeader.num_required_signatures
-                        // is the first byte on the wire (written by LegacyMessage codec).
-                        const counts = LegacyMessage.bk_config.encodeOnePartialRaw(
-                            writer,
-                            config,
-                            &msg,
-                            null,
-                            .unlimited,
-                            {},
-                        ) catch return error.EncodeFailed;
-                        byte_count += counts.byte_count;
-                    },
-                    .v0 => |msg| {
-                        // V0: write version prefix byte (0x80 | 0x00 = 0x80), then V0Message.
-                        writer.writeByte(0x80) catch return error.EncodeFailed;
+            for (values[0..max_count]) |val| {
+                var rem: u16 = val;
+                while (true) {
+                    var elem: u8 = @truncate(rem & 0x7f);
+                    rem >>= 7;
+                    if (rem == 0) {
+                        writer.writeByte(elem) catch return error.EncodeFailed;
                         byte_count += 1;
-                        const counts = V0Message.bk_config.encodeOnePartialRaw(
-                            writer,
-                            config,
-                            &msg,
-                            null,
-                            .unlimited,
-                            {},
-                        ) catch return error.EncodeFailed;
-                        byte_count += counts.byte_count;
-                    },
+                        break;
+                    } else {
+                        elem |= 0x80;
+                        writer.writeByte(elem) catch return error.EncodeFailed;
+                        byte_count += 1;
+                    }
                 }
             }
             return .{ .value_count = max_count, .byte_count = byte_count };
@@ -1702,127 +1418,401 @@ const VersionedMessage = union(enum) {
 
         pub fn decode(
             reader: *std.Io.Reader,
-            config: bk.Config,
-            gpa_opt: ?std.mem.Allocator,
-            values: []VersionedMessage,
+            _: bk.Config,
+            _: ?std.mem.Allocator,
+            values: []u16,
             decoded_count: *usize,
             _: void,
         ) bk.DecodeFromReaderError!void {
             for (values, 0..) |*value, i| {
                 errdefer decoded_count.* = i;
 
-                // Peek the first byte to determine version.
-                const first_byte = try reader.takeByte();
-
-                if (first_byte & 0x80 == 0) {
-                    // Legacy message. The byte we just read is num_required_signatures.
-                    // We need to "put it back" — reconstruct by reading the remaining
-                    // MessageHeader fields (2 more bytes), then the rest of the message.
-                    const num_readonly_signed = try reader.takeByte();
-                    const num_readonly_unsigned = try reader.takeByte();
-                    const header: MessageHeader = .{
-                        .num_required_signatures = first_byte,
-                        .num_readonly_signed_accounts = num_readonly_signed,
-                        .num_readonly_unsigned_accounts = num_readonly_unsigned,
-                    };
-
-                    // Decode the remaining fields of LegacyMessage (account_keys, recent_blockhash, instructions)
-                    const account_keys_codec = shortVec(Pubkey, pubkey_codec);
-                    const account_keys = try account_keys_codec.decode(reader, gpa_opt, config, null);
-
-                    var recent_blockhash: Hash = undefined;
-                    try hash_codec.decodeIntoOne(reader, null, config, &recent_blockhash, null);
-
-                    const instructions_codec = shortVec(CompiledInstruction, CompiledInstruction.bk_config);
-                    const instructions = try instructions_codec.decode(reader, gpa_opt, config, null);
-
-                    value.* = .{ .legacy = .{
-                        .header = header,
-                        .account_keys = account_keys,
-                        .recent_blockhash = recent_blockhash,
-                        .instructions = instructions,
-                    } };
+                var result: u16 = 0;
+                var shift: u4 = 0;
+                for (0..3) |_| {
+                    const byte = try reader.takeByte();
+                    result |= @as(u16, byte & 0x7f) << shift;
+                    if (byte & 0x80 == 0) break;
+                    shift += 7;
                 } else {
-                    // Versioned message. The byte was consumed. Check version.
-                    const version = first_byte & 0x7F;
-                    if (version != 0) {
-                        return error.DecodeFailed; // unsupported version
-                    }
-
-                    // Decode V0Message
-                    const msg = try V0Message.bk_config.decode(reader, gpa_opt, config, null);
-                    value.* = .{ .v0 = msg };
+                    // Fourth byte would be needed → overflow for u16
+                    return error.DecodeFailed;
                 }
+                value.* = result;
             }
             decoded_count.* = values.len;
         }
 
         pub fn decodeSkip(
             reader: *std.Io.Reader,
-            config: bk.Config,
+            _: bk.Config,
             value_count: usize,
             decoded_count: *usize,
             _: void,
         ) bk.DecodeSkipError!void {
             for (0..value_count) |i| {
                 errdefer decoded_count.* = i;
-                const first_byte = try reader.takeByte();
-
-                if (first_byte & 0x80 == 0) {
-                    // Legacy: skip remaining 2 header bytes + fields
-                    try reader.discardAll(2);
-                    // Skip account_keys (shortVec of 32-byte pubkeys)
-                    const ak_len = try compact_u16.decode(reader, null, .default, null);
-                    try reader.discardAll(ak_len * Pubkey.SIZE);
-                    // Skip recent_blockhash
-                    try reader.discardAll(Hash.SIZE);
-                    // Skip instructions
-                    const ix_len = try compact_u16.decode(reader, null, .default, null);
-                    try CompiledInstruction.bk_config.decodeSkip(reader, config, ix_len, {});
+                for (0..3) |_| {
+                    const byte = try reader.takeByte();
+                    if (byte & 0x80 == 0) break;
                 } else {
-                    // V0: version byte already consumed. Skip V0Message.
-                    try V0Message.bk_config.decodeSkip(reader, config, 1, {});
+                    return error.DecodeFailed;
                 }
             }
             decoded_count.* = value_count;
         }
 
-        pub fn free(
-            gpa_opt: ?std.mem.Allocator,
-            values: []const VersionedMessage,
-            _: void,
-        ) void {
-            for (values) |value| {
-                switch (value) {
-                    .legacy => |msg| LegacyMessage.bk_config.free(gpa_opt, &msg, null),
-                    .v0 => |msg| V0Message.bk_config.free(gpa_opt, &msg, null),
+        pub const free = null;
+    });
+
+    // For slices that have a u16 length rather than a u64
+    fn shortVec(comptime Element: type, comptime element: bk.Codec(Element)) bk.Codec([]Element) {
+        return comptime .implement(element.EncodeCtx, element.DecodeCtx, struct {
+            pub fn encode(
+                writer: *std.Io.Writer,
+                config: bk.Config,
+                values: []const []Element,
+                _: ?*[encode_stack_size]u64,
+                limit: std.Io.Limit,
+                ctx: element.EncodeCtx,
+            ) bk.EncodeToWriterError!bk.EncodedCounts {
+                const max_count = limit.max(values.len);
+                var byte_count: usize = 0;
+                for (values[0..max_count]) |slice_val| {
+                    // Write compact-u16 length
+                    const len: u16 = std.math.cast(u16, slice_val.len) orelse return error.EncodeFailed;
+                    const len_counts = try compact_u16.encodeOnePartialRaw(writer, config, &len, null, .unlimited, {});
+                    byte_count += len_counts.byte_count;
+
+                    // Write elements
+                    const elem_counts = try element.encodeManyPartialRaw(writer, config, slice_val, null, .unlimited, ctx);
+                    byte_count += elem_counts.byte_count;
+                }
+                return .{ .value_count = max_count, .byte_count = byte_count };
+            }
+
+            pub const encode_min_size: usize = 1;
+            pub const encode_stack_size: usize = 0;
+
+            pub fn decodeInit(
+                gpa_opt: ?std.mem.Allocator,
+                values: [][]Element,
+                _: element.DecodeCtx,
+            ) std.mem.Allocator.Error!void {
+                _ = gpa_opt.?;
+                @memset(values, &.{});
+            }
+
+            pub fn decode(
+                reader: *std.Io.Reader,
+                config: bk.Config,
+                gpa_opt: ?std.mem.Allocator,
+                values: [][]Element,
+                decoded_count: *usize,
+                ctx: element.DecodeCtx,
+            ) bk.DecodeFromReaderError!void {
+                const gpa = gpa_opt.?;
+                for (values, 0..) |*value, i| {
+                    errdefer decoded_count.* = i;
+
+                    const len = try compact_u16.decode(reader, null, .default, {});
+
+                    const elems = try gpa.alloc(Element, len);
+                    errdefer gpa.free(elems);
+
+                    // decode into elems
+                    try element.decodeInitMany(gpa, elems, ctx);
+                    errdefer element.freeMany(gpa, elems, ctx);
+
+                    try element.decodeIntoMany(reader, gpa, config, elems, ctx);
+
+                    value.* = elems;
+                }
+                decoded_count.* = values.len;
+            }
+
+            pub fn decodeSkip(
+                reader: *std.Io.Reader,
+                config: bk.Config,
+                value_count: usize,
+                decoded_count: *usize,
+                ctx: element.DecodeCtx,
+            ) bk.DecodeSkipError!void {
+                for (0..value_count) |i| {
+                    errdefer decoded_count.* = i;
+                    const len = try compact_u16.decode(reader, null, .default, null);
+                    try element.decodeSkip(reader, config, len, ctx);
+                }
+                decoded_count.* = value_count;
+            }
+
+            pub fn free(
+                gpa_opt: ?std.mem.Allocator,
+                slice_list: []const []Element,
+                ctx: element.DecodeCtx,
+            ) void {
+                const gpa = gpa_opt.?;
+                for (slice_list) |slice_value| {
+                    element.freeMany(gpa, slice_value, ctx);
+                    gpa.free(slice_value);
                 }
             }
-        }
-    });
-};
+        });
+    }
 
-const VersionedTransaction = struct {
-    signatures: []Signature,
-    message: VersionedMessage,
-
-    const bk_config: bk.Codec(VersionedTransaction) = .standard(.tuple(.{
-        .signatures = .from(shortVec(Signature, Signature.bk_config)),
-        .message = .from(VersionedMessage.bk_config),
-    }));
-};
-
-const Entry = struct {
-    num_hashes: u64,
-    hash: Hash,
-    transactions: []VersionedTransaction,
-
-    const bk_config: bk.Codec(Entry) = .standard(.tuple(.{
-        .num_hashes = .fixint,
-        .hash = .from(hash_codec),
-        .transactions = .sliceNonStd(VersionedTransaction.bk_config),
+    const hash_codec: bk.Codec(Hash) = .standard(.tuple(.{
+        .data = .array(.fixint),
     }));
 
-    // slice of entries
-    const slice_config: bk.Codec([]Entry) = .standard(.sliceNonStd(Entry.bk_config));
+    const pubkey_codec: bk.Codec(Pubkey) = .standard(.tuple(.{
+        .data = .array(.fixint),
+    }));
+
+    const MessageHeader = struct {
+        num_required_signatures: u8,
+        num_readonly_signed_accounts: u8,
+        num_readonly_unsigned_accounts: u8,
+
+        const bk_config: bk.Codec(MessageHeader) = .standard(.tuple(.{
+            .num_required_signatures = .fixint,
+            .num_readonly_signed_accounts = .fixint,
+            .num_readonly_unsigned_accounts = .fixint,
+        }));
+    };
+
+    const CompiledInstruction = struct {
+        program_id_index: u8,
+        accounts: []u8,
+        data: []u8,
+
+        const bk_config: bk.Codec(CompiledInstruction) = .standard(.tuple(.{
+            .program_id_index = .fixint,
+            .accounts = .from(shortVec(u8, bk.StdCodec(u8).fixint.codec)),
+            .data = .from(shortVec(u8, bk.StdCodec(u8).fixint.codec)),
+        }));
+    };
+
+    const AddressLookup = struct {
+        account_key: Pubkey,
+        writable_indexes: []u8,
+        readonly_indexes: []u8,
+
+        const bk_config: bk.Codec(AddressLookup) = .standard(.tuple(.{
+            .account_key = .from(pubkey_codec),
+            .writable_indexes = .from(shortVec(u8, bk.StdCodec(u8).fixint.codec)),
+            .readonly_indexes = .from(shortVec(u8, bk.StdCodec(u8).fixint.codec)),
+        }));
+    };
+
+    const LegacyMessage = struct {
+        header: MessageHeader,
+        account_keys: []Pubkey,
+        recent_blockhash: Hash,
+        instructions: []CompiledInstruction,
+
+        const bk_config: bk.Codec(LegacyMessage) = .standard(.tuple(.{
+            .header = .from(MessageHeader.bk_config),
+            .account_keys = .from(shortVec(Pubkey, pubkey_codec)),
+            .recent_blockhash = .from(hash_codec),
+            .instructions = .from(shortVec(CompiledInstruction, CompiledInstruction.bk_config)),
+        }));
+    };
+
+    const V0Message = struct {
+        header: MessageHeader,
+        account_keys: []Pubkey,
+        recent_blockhash: Hash,
+        instructions: []CompiledInstruction,
+        address_table_lookups: []AddressLookup,
+
+        const bk_config: bk.Codec(V0Message) = .standard(.tuple(.{
+            .header = .from(MessageHeader.bk_config),
+            .account_keys = .from(shortVec(Pubkey, pubkey_codec)),
+            .recent_blockhash = .from(hash_codec),
+            .instructions = .from(shortVec(CompiledInstruction, CompiledInstruction.bk_config)),
+            .address_table_lookups = .from(shortVec(AddressLookup, AddressLookup.bk_config)),
+        }));
+    };
+
+    const VersionedMessage = union(enum) {
+        // first byte & 0x80 == 0
+        legacy: LegacyMessage,
+        // first byte & 0x80 != 0
+        v0: V0Message,
+
+        const bk_config: bk.Codec(VersionedMessage) = .implement(void, void, struct {
+            pub fn encode(
+                writer: *std.Io.Writer,
+                config: bk.Config,
+                values: []const VersionedMessage,
+                _: ?*[encode_stack_size]u64,
+                limit: std.Io.Limit,
+                _: void,
+            ) bk.EncodeToWriterError!bk.EncodedCounts {
+                const max_count = limit.max(values.len);
+                var byte_count: usize = 0;
+                for (values[0..max_count]) |value| {
+                    switch (value) {
+                        .legacy => |msg| {
+                            // Legacy: no version prefix byte; MessageHeader.num_required_signatures
+                            // is the first byte on the wire (written by LegacyMessage codec).
+                            const counts = LegacyMessage.bk_config.encodeOnePartialRaw(
+                                writer,
+                                config,
+                                &msg,
+                                null,
+                                .unlimited,
+                                {},
+                            ) catch return error.EncodeFailed;
+                            byte_count += counts.byte_count;
+                        },
+                        .v0 => |msg| {
+                            // V0: write version prefix byte (0x80 | 0x00 = 0x80), then V0Message.
+                            writer.writeByte(0x80) catch return error.EncodeFailed;
+                            byte_count += 1;
+                            const counts = V0Message.bk_config.encodeOnePartialRaw(
+                                writer,
+                                config,
+                                &msg,
+                                null,
+                                .unlimited,
+                                {},
+                            ) catch return error.EncodeFailed;
+                            byte_count += counts.byte_count;
+                        },
+                    }
+                }
+                return .{ .value_count = max_count, .byte_count = byte_count };
+            }
+
+            pub const encode_min_size: usize = 1;
+            pub const encode_stack_size: usize = 0;
+            pub const decodeInit = null;
+
+            pub fn decode(
+                reader: *std.Io.Reader,
+                config: bk.Config,
+                gpa_opt: ?std.mem.Allocator,
+                values: []VersionedMessage,
+                decoded_count: *usize,
+                _: void,
+            ) bk.DecodeFromReaderError!void {
+                for (values, 0..) |*value, i| {
+                    errdefer decoded_count.* = i;
+
+                    // Peek the first byte to determine version.
+                    const first_byte = try reader.takeByte();
+
+                    if (first_byte & 0x80 == 0) {
+                        // Legacy message. The byte we just read is num_required_signatures.
+                        // We need to "put it back" — reconstruct by reading the remaining
+                        // MessageHeader fields (2 more bytes), then the rest of the message.
+                        const num_readonly_signed = try reader.takeByte();
+                        const num_readonly_unsigned = try reader.takeByte();
+                        const header: MessageHeader = .{
+                            .num_required_signatures = first_byte,
+                            .num_readonly_signed_accounts = num_readonly_signed,
+                            .num_readonly_unsigned_accounts = num_readonly_unsigned,
+                        };
+
+                        // Decode the remaining fields of LegacyMessage (account_keys, recent_blockhash, instructions)
+                        const account_keys_codec = shortVec(Pubkey, pubkey_codec);
+                        const account_keys = try account_keys_codec.decode(reader, gpa_opt, config, null);
+
+                        var recent_blockhash: Hash = undefined;
+                        try hash_codec.decodeIntoOne(reader, null, config, &recent_blockhash, null);
+
+                        const instructions_codec = shortVec(CompiledInstruction, CompiledInstruction.bk_config);
+                        const instructions = try instructions_codec.decode(reader, gpa_opt, config, null);
+
+                        value.* = .{ .legacy = .{
+                            .header = header,
+                            .account_keys = account_keys,
+                            .recent_blockhash = recent_blockhash,
+                            .instructions = instructions,
+                        } };
+                    } else {
+                        // Versioned message. The byte was consumed. Check version.
+                        const version = first_byte & 0x7F;
+                        if (version != 0) {
+                            return error.DecodeFailed; // unsupported version
+                        }
+
+                        // Decode V0Message
+                        const msg = try V0Message.bk_config.decode(reader, gpa_opt, config, null);
+                        value.* = .{ .v0 = msg };
+                    }
+                }
+                decoded_count.* = values.len;
+            }
+
+            pub fn decodeSkip(
+                reader: *std.Io.Reader,
+                config: bk.Config,
+                value_count: usize,
+                decoded_count: *usize,
+                _: void,
+            ) bk.DecodeSkipError!void {
+                for (0..value_count) |i| {
+                    errdefer decoded_count.* = i;
+                    const first_byte = try reader.takeByte();
+
+                    if (first_byte & 0x80 == 0) {
+                        // Legacy: skip remaining 2 header bytes + fields
+                        try reader.discardAll(2);
+                        // Skip account_keys (shortVec of 32-byte pubkeys)
+                        const ak_len = try compact_u16.decode(reader, null, .default, null);
+                        try reader.discardAll(ak_len * Pubkey.SIZE);
+                        // Skip recent_blockhash
+                        try reader.discardAll(Hash.SIZE);
+                        // Skip instructions
+                        const ix_len = try compact_u16.decode(reader, null, .default, null);
+                        try CompiledInstruction.bk_config.decodeSkip(reader, config, ix_len, {});
+                    } else {
+                        // V0: version byte already consumed. Skip V0Message.
+                        try V0Message.bk_config.decodeSkip(reader, config, 1, {});
+                    }
+                }
+                decoded_count.* = value_count;
+            }
+
+            pub fn free(
+                gpa_opt: ?std.mem.Allocator,
+                values: []const VersionedMessage,
+                _: void,
+            ) void {
+                for (values) |value| {
+                    switch (value) {
+                        .legacy => |msg| LegacyMessage.bk_config.free(gpa_opt, &msg, null),
+                        .v0 => |msg| V0Message.bk_config.free(gpa_opt, &msg, null),
+                    }
+                }
+            }
+        });
+    };
+
+    const VersionedTransaction = struct {
+        signatures: []Signature,
+        message: VersionedMessage,
+
+        const bk_config: bk.Codec(VersionedTransaction) = .standard(.tuple(.{
+            .signatures = .from(shortVec(Signature, Signature.bk_config)),
+            .message = .from(VersionedMessage.bk_config),
+        }));
+    };
+
+    const Entry = struct {
+        num_hashes: u64,
+        hash: Hash,
+        transactions: []VersionedTransaction,
+
+        const bk_config: bk.Codec(Entry) = .standard(.tuple(.{
+            .num_hashes = .fixint,
+            .hash = .from(hash_codec),
+            .transactions = .sliceNonStd(VersionedTransaction.bk_config),
+        }));
+
+        // slice of entries
+        const slice_config: bk.Codec([]Entry) = .standard(.sliceNonStd(Entry.bk_config));
+    };
 };
