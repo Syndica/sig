@@ -2,6 +2,7 @@
 //! shreds.
 
 const std = @import("std");
+const bk = @import("binkode");
 const start = @import("start");
 const lib = @import("lib");
 const tracy = @import("tracy");
@@ -15,6 +16,7 @@ const Packet = common.net.Packet;
 const Slot = common.solana.Slot;
 const Hash = common.solana.Hash;
 const Signature = common.solana.Signature;
+const Pubkey = common.solana.Pubkey;
 const Atomic = std.atomic.Value;
 
 comptime {
@@ -353,6 +355,16 @@ const Shred = extern struct {
         return merkle_proof_ptr[0..shred.variant.merkleCount()];
     }
 
+    // The payload of a data shred. Asserts shred is a data shred.
+    fn dataPayload(shred: *const Shred) []const u8 {
+        std.debug.assert(shred.variant.isData());
+        const packet: *const Packet = @ptrCast(@alignCast(shred));
+
+        std.log.info("shred slot{} idx{} variant{}", .{ shred.slot, shred.slot_idx, shred.variant });
+
+        return packet.data[@offsetOf(Shred, "code_or_data") + @sizeOf(DataHeader) .. shred.code_or_data.data.size];
+    }
+
     // The bytes which are checked against the merkle root.
     // includes: header (excluding signature) + code/data payload + chained root + maybe padding
     // does not include: retransmit signature + proof nodes
@@ -626,6 +638,9 @@ const FecSetCtx = extern struct {
 
     // https://github.com/firedancer-io/firedancer/blob/ecd2d6d8f5b9f926d0b9aa9360efe36ea1550ad6/src/ballet/reedsol/fd_reedsol.h#L23
     // https://github.com/solana-foundation/specs/blob/main/p2p/shred.md
+
+    // TODO: should these all be 32?
+
     const data_shreds_max = 67;
     const code_shreds_max = 67;
     const fec_shred_cnt = 32;
@@ -636,7 +651,7 @@ const FecSetCtx = extern struct {
         const code_recv: u8 = @intCast(self.code_shreds_received.count());
         std.debug.assert(code_recv <= code_shreds_max);
 
-        comptime if (data_recv + code_recv >= 256) unreachable;
+        comptime std.debug.assert(data_shreds_max + code_shreds_max < 256);
 
         return data_recv + code_recv;
     }
@@ -1123,6 +1138,7 @@ fn reconstructFecSet(fec_set_ctx: *FecSetCtx) void {
 }
 
 var state: State = .empty;
+var bincode_buf: [1024 * 1024 * 1024]u8 = undefined;
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     std.log.info("Waiting for shreds on port {}", .{rw.pair.port});
@@ -1352,8 +1368,10 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         // starting fec set reconstruction now
         reconstructFecSet(fec_set_ctx);
 
+        std.debug.assert(fec_set_ctx.data_shreds_received.count() == 32);
+
         var complete: bool = false;
-        for (&fec_set_ctx.data_shreds_buf) |*data_packet| {
+        for (fec_set_ctx.data_shreds_buf[0..32]) |*data_packet| {
             const data_shred: *const Shred = .fromPacketUnchecked(data_packet);
 
             complete = complete or data_shred.code_or_data.data.flags & 0x40 != 0;
@@ -1363,5 +1381,598 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         std.log.info("complete? {}", .{complete});
 
         state.done.insertRemovingFirst(&fec_set_id, &hashSignature(&shred.signature));
+
+        if (complete) {
+            var deshredded_buf: [64 * 1024]u8 = undefined;
+            var bytes_written: u16 = 0;
+
+            for (fec_set_ctx.data_shreds_buf[0..32]) |*data_shred| {
+                const data_payload = Shred.fromPacketUnchecked(data_shred).dataPayload();
+                @memcpy(deshredded_buf[bytes_written..][0..data_payload.len], data_payload);
+                bytes_written += @intCast(data_payload.len);
+            }
+
+            std.log.info("deshredded!", .{});
+
+            const deshredded_bytes = deshredded_buf[0..bytes_written];
+
+            const n_entries: u64 = @bitCast(deshredded_bytes[0..8].*);
+            std.log.info("n_entries: {}", .{n_entries});
+
+            var bincode_fba = std.heap.FixedBufferAllocator.init(&bincode_buf);
+            const bincode_fba_allocator = bincode_fba.allocator();
+
+            const entries, const consumed = Entry.slice_config.decodeSlice(
+                deshredded_bytes,
+                bincode_fba_allocator,
+                bincode_config,
+                null,
+            ) catch |err| {
+                std.log.info("decode failed with err {}", .{err});
+                continue;
+            };
+            _ = consumed;
+
+            for (entries) |entry| {
+                for (entry.transactions) |tx| {
+                    switch (tx.message) {
+                        .legacy => |msg| {
+                            for (msg.account_keys) |key| {
+                                std.log.info("(legacy) key: {f}", .{key});
+                            }
+                        },
+                        .v0 => |msg| {
+                            for (msg.account_keys) |key| {
+                                std.log.info("(v0) key: {f}", .{key});
+                            }
+                        },
+                    }
+                }
+            }
+        }
     }
 }
+
+// ---- Entry / Transaction types and binkode codecs ----
+//
+// These types represent the deserialized contents of deshredded data shred payloads.
+// The deshredded buffer is a bincode-serialized Vec<Entry>.
+//
+// Serialization format:
+//   - Outer Vec<Entry> length and Entry.transactions length: standard bincode u64 LE prefix
+//   - Transaction.signatures, Message.account_keys, Message.instructions,
+//     CompiledInstruction.accounts, CompiledInstruction.data,
+//     AddressLookup.writable_indexes, AddressLookup.readonly_indexes: compact-u16 (ShortVec) prefix
+//   - VersionedMessage version detection: peek first byte after signatures;
+//     if byte & 0x80 == 0 → legacy (byte is num_required_signatures, NOT consumed);
+//     if byte & 0x80 != 0 → consume byte, version = byte & 0x7F (0 = v0)
+
+const bincode_config: bk.Config = .{ .endian = .little, .int = .fixint };
+
+/// Solana compact-u16 (ShortVec) codec.
+/// Encodes a u16 in 1-3 bytes using a continuation-bit scheme:
+///   byte & 0x80 set → more bytes follow; payload is the low 7 bits.
+///   Third byte may only use the 2 least-significant bits (max value 0x3FFFF masks to u16).
+const compact_u16: bk.Codec(u16) = .implement(void, void, struct {
+    pub fn encode(
+        writer: *std.Io.Writer,
+        _: bk.Config,
+        values: []const u16,
+        _: ?*[encode_stack_size]u64,
+        limit: std.Io.Limit,
+        _: void,
+    ) bk.EncodeToWriterError!bk.EncodedCounts {
+        const max_count = limit.max(values.len);
+        var byte_count: usize = 0;
+        for (values[0..max_count]) |val| {
+            var rem: u16 = val;
+            while (true) {
+                var elem: u8 = @truncate(rem & 0x7f);
+                rem >>= 7;
+                if (rem == 0) {
+                    writer.writeByte(elem) catch return error.EncodeFailed;
+                    byte_count += 1;
+                    break;
+                } else {
+                    elem |= 0x80;
+                    writer.writeByte(elem) catch return error.EncodeFailed;
+                    byte_count += 1;
+                }
+            }
+        }
+        return .{ .value_count = max_count, .byte_count = byte_count };
+    }
+
+    pub const encode_min_size: usize = 1;
+    pub const encode_stack_size: usize = 0;
+    pub const decodeInit = null;
+
+    pub fn decode(
+        reader: *std.Io.Reader,
+        _: bk.Config,
+        _: ?std.mem.Allocator,
+        values: []u16,
+        decoded_count: *usize,
+        _: void,
+    ) bk.DecodeFromReaderError!void {
+        for (values, 0..) |*value, i| {
+            var result: u16 = 0;
+            var shift: u4 = 0;
+            for (0..3) |_| {
+                const byte = reader.takeByte() catch |err| {
+                    decoded_count.* = i;
+                    return err;
+                };
+                result |= @as(u16, byte & 0x7f) << shift;
+                if (byte & 0x80 == 0) break;
+                shift += 7;
+            } else {
+                // Fourth byte would be needed → overflow for u16
+                decoded_count.* = i;
+                return error.DecodeFailed;
+            }
+            value.* = result;
+        }
+        decoded_count.* = values.len;
+    }
+
+    pub fn decodeSkip(
+        reader: *std.Io.Reader,
+        _: bk.Config,
+        value_count: usize,
+        decoded_count: *usize,
+        _: void,
+    ) bk.DecodeSkipError!void {
+        for (0..value_count) |i| {
+            for (0..3) |_| {
+                const byte = reader.takeByte() catch |err| {
+                    decoded_count.* = i;
+                    return err;
+                };
+                if (byte & 0x80 == 0) break;
+            } else {
+                decoded_count.* = i;
+                return error.DecodeFailed;
+            }
+        }
+        decoded_count.* = value_count;
+    }
+
+    pub const free = null;
+});
+
+/// Returns a binkode codec for a slice type `[]T` where the length is encoded as a compact-u16
+/// (ShortVec) rather than the standard bincode u64 prefix.
+/// This mirrors Solana's ShortVec encoding used for transaction sub-arrays.
+fn ShortVec(comptime Element: type, comptime element: bk.Codec(Element)) bk.Codec([]Element) {
+    return comptime .implement(element.EncodeCtx, element.DecodeCtx, struct {
+        pub fn encode(
+            writer: *std.Io.Writer,
+            config: bk.Config,
+            values: []const []Element,
+            _: ?*[encode_stack_size]u64,
+            limit: std.Io.Limit,
+            ctx: element.EncodeCtx,
+        ) bk.EncodeToWriterError!bk.EncodedCounts {
+            const max_count = limit.max(values.len);
+            var byte_count: usize = 0;
+            for (values[0..max_count]) |slice_val| {
+                // Write compact-u16 length
+                const len: u16 = std.math.cast(u16, slice_val.len) orelse return error.EncodeFailed;
+                const len_counts = compact_u16.encodeOnePartialRaw(writer, config, &len, null, .unlimited, {}) catch
+                    return error.EncodeFailed;
+                byte_count += len_counts.byte_count;
+
+                // Write elements
+                const elem_counts = element.encodeManyPartialRaw(writer, config, slice_val, null, .unlimited, ctx) catch |err| switch (err) {
+                    error.WriteFailed => |e| return e,
+                    error.EncodeFailed => |e| return e,
+                };
+                byte_count += elem_counts.byte_count;
+            }
+            return .{ .value_count = max_count, .byte_count = byte_count };
+        }
+
+        pub const encode_min_size: usize = 1;
+        pub const encode_stack_size: usize = 0;
+
+        pub fn decodeInit(
+            gpa_opt: ?std.mem.Allocator,
+            values: [][]Element,
+            _: element.DecodeCtx,
+        ) std.mem.Allocator.Error!void {
+            _ = gpa_opt.?;
+            @memset(values, &.{});
+        }
+
+        pub fn decode(
+            reader: *std.Io.Reader,
+            config: bk.Config,
+            gpa_opt: ?std.mem.Allocator,
+            values: [][]Element,
+            decoded_count: *usize,
+            ctx: element.DecodeCtx,
+        ) bk.DecodeFromReaderError!void {
+            const gpa = gpa_opt.?;
+            for (values, 0..) |*value, i| {
+                errdefer decoded_count.* = i;
+
+                // Read compact-u16 length
+                const len = compact_u16.decode(reader, null, .default, {}) catch |err| switch (err) {
+                    error.OutOfMemory => unreachable,
+                    else => |e| return e,
+                };
+
+                // Allocate slice for elements
+                const elems = try gpa.alloc(Element, len);
+                errdefer gpa.free(elems);
+
+                // Decode elements into the allocated slice
+                element.decodeInitMany(gpa, elems, ctx) catch |err| {
+                    gpa.free(elems);
+                    return err;
+                };
+                element.decodeIntoMany(reader, gpa, config, elems, ctx) catch |err| {
+                    element.freeMany(gpa, elems, ctx);
+                    gpa.free(elems);
+                    return err;
+                };
+
+                value.* = elems;
+            }
+            decoded_count.* = values.len;
+        }
+
+        pub fn decodeSkip(
+            reader: *std.Io.Reader,
+            config: bk.Config,
+            value_count: usize,
+            decoded_count: *usize,
+            ctx: element.DecodeCtx,
+        ) bk.DecodeSkipError!void {
+            for (0..value_count) |i| {
+                errdefer decoded_count.* = i;
+                const len = compact_u16.decode(reader, null, .default, null) catch |err| switch (err) {
+                    error.OutOfMemory => unreachable,
+                    else => |e| return e,
+                };
+                element.decodeSkip(reader, config, len, ctx) catch |err| {
+                    return err;
+                };
+            }
+            decoded_count.* = value_count;
+        }
+
+        pub fn free(
+            gpa_opt: ?std.mem.Allocator,
+            slice_list: []const []Element,
+            ctx: element.DecodeCtx,
+        ) void {
+            const gpa = gpa_opt.?;
+            for (slice_list) |slice_value| {
+                element.freeMany(gpa, slice_value, ctx);
+                gpa.free(slice_value);
+            }
+        }
+    });
+}
+
+const hash_codec: bk.Codec(Hash) = .standard(.tuple(.{
+    .data = .array(.fixint),
+}));
+
+const pubkey_codec: bk.Codec(Pubkey) = .standard(.tuple(.{
+    .data = .array(.fixint),
+}));
+
+const MessageHeader = struct {
+    num_required_signatures: u8,
+    num_readonly_signed_accounts: u8,
+    num_readonly_unsigned_accounts: u8,
+
+    const bk_config: bk.Codec(MessageHeader) = .standard(.tuple(.{
+        .num_required_signatures = .fixint,
+        .num_readonly_signed_accounts = .fixint,
+        .num_readonly_unsigned_accounts = .fixint,
+    }));
+};
+
+const CompiledInstruction = struct {
+    program_id_index: u8,
+    accounts: []u8,
+    data: []u8,
+
+    const bk_config: bk.Codec(CompiledInstruction) = .standard(.tuple(.{
+        .program_id_index = .fixint,
+        .accounts = .from(ShortVec(u8, bk.StdCodec(u8).fixint.codec)),
+        .data = .from(ShortVec(u8, bk.StdCodec(u8).fixint.codec)),
+    }));
+};
+
+const AddressLookup = struct {
+    account_key: Pubkey,
+    writable_indexes: []u8,
+    readonly_indexes: []u8,
+
+    const bk_config: bk.Codec(AddressLookup) = .standard(.tuple(.{
+        .account_key = .from(pubkey_codec),
+        .writable_indexes = .from(ShortVec(u8, bk.StdCodec(u8).fixint.codec)),
+        .readonly_indexes = .from(ShortVec(u8, bk.StdCodec(u8).fixint.codec)),
+    }));
+};
+
+const LegacyMessage = struct {
+    header: MessageHeader,
+    account_keys: []Pubkey,
+    recent_blockhash: Hash,
+    instructions: []CompiledInstruction,
+
+    const bk_config: bk.Codec(LegacyMessage) = .standard(.tuple(.{
+        .header = .from(MessageHeader.bk_config),
+        .account_keys = .from(ShortVec(Pubkey, pubkey_codec)),
+        .recent_blockhash = .from(hash_codec),
+        .instructions = .from(ShortVec(CompiledInstruction, CompiledInstruction.bk_config)),
+    }));
+};
+
+const V0Message = struct {
+    header: MessageHeader,
+    account_keys: []Pubkey,
+    recent_blockhash: Hash,
+    instructions: []CompiledInstruction,
+    address_table_lookups: []AddressLookup,
+
+    const bk_config: bk.Codec(V0Message) = .standard(.tuple(.{
+        .header = .from(MessageHeader.bk_config),
+        .account_keys = .from(ShortVec(Pubkey, pubkey_codec)),
+        .recent_blockhash = .from(hash_codec),
+        .instructions = .from(ShortVec(CompiledInstruction, CompiledInstruction.bk_config)),
+        .address_table_lookups = .from(ShortVec(AddressLookup, AddressLookup.bk_config)),
+    }));
+};
+
+/// VersionedMessage uses a custom codec because the version detection is non-standard:
+/// - Peek the first byte (do NOT consume it yet).
+/// - If byte & 0x80 == 0 → legacy message. The byte is the first field of MessageHeader
+///   (num_required_signatures). Leave it in the stream and decode a LegacyMessage.
+/// - If byte & 0x80 != 0 → consume the byte. version = byte & 0x7F.
+///   Only version 0 is supported. Then decode a V0Message.
+const VersionedMessage = union(enum) {
+    legacy: LegacyMessage,
+    v0: V0Message,
+
+    const bk_config: bk.Codec(VersionedMessage) = .implement(void, void, struct {
+        pub fn encode(
+            writer: *std.Io.Writer,
+            config: bk.Config,
+            values: []const VersionedMessage,
+            _: ?*[encode_stack_size]u64,
+            limit: std.Io.Limit,
+            _: void,
+        ) bk.EncodeToWriterError!bk.EncodedCounts {
+            const max_count = limit.max(values.len);
+            var byte_count: usize = 0;
+            for (values[0..max_count]) |value| {
+                switch (value) {
+                    .legacy => |msg| {
+                        // Legacy: no version prefix byte; MessageHeader.num_required_signatures
+                        // is the first byte on the wire (written by LegacyMessage codec).
+                        const counts = LegacyMessage.bk_config.encodeOnePartialRaw(
+                            writer,
+                            config,
+                            &msg,
+                            null,
+                            .unlimited,
+                            {},
+                        ) catch return error.EncodeFailed;
+                        byte_count += counts.byte_count;
+                    },
+                    .v0 => |msg| {
+                        // V0: write version prefix byte (0x80 | 0x00 = 0x80), then V0Message.
+                        writer.writeByte(0x80) catch return error.EncodeFailed;
+                        byte_count += 1;
+                        const counts = V0Message.bk_config.encodeOnePartialRaw(
+                            writer,
+                            config,
+                            &msg,
+                            null,
+                            .unlimited,
+                            {},
+                        ) catch return error.EncodeFailed;
+                        byte_count += counts.byte_count;
+                    },
+                }
+            }
+            return .{ .value_count = max_count, .byte_count = byte_count };
+        }
+
+        pub const encode_min_size: usize = 1;
+        pub const encode_stack_size: usize = 0;
+        pub const decodeInit = null;
+
+        pub fn decode(
+            reader: *std.Io.Reader,
+            config: bk.Config,
+            gpa_opt: ?std.mem.Allocator,
+            values: []VersionedMessage,
+            decoded_count: *usize,
+            _: void,
+        ) bk.DecodeFromReaderError!void {
+            for (values, 0..) |*value, i| {
+                errdefer decoded_count.* = i;
+
+                // Peek the first byte to determine version.
+                const first_byte = reader.takeByte() catch |err| {
+                    decoded_count.* = i;
+                    return err;
+                };
+
+                if (first_byte & 0x80 == 0) {
+                    // Legacy message. The byte we just read is num_required_signatures.
+                    // We need to "put it back" — reconstruct by reading the remaining
+                    // MessageHeader fields (2 more bytes), then the rest of the message.
+                    const num_readonly_signed = reader.takeByte() catch |err| {
+                        decoded_count.* = i;
+                        return err;
+                    };
+                    const num_readonly_unsigned = reader.takeByte() catch |err| {
+                        decoded_count.* = i;
+                        return err;
+                    };
+
+                    const header = MessageHeader{
+                        .num_required_signatures = first_byte,
+                        .num_readonly_signed_accounts = num_readonly_signed,
+                        .num_readonly_unsigned_accounts = num_readonly_unsigned,
+                    };
+
+                    // Decode the remaining fields of LegacyMessage (account_keys, recent_blockhash, instructions)
+                    const account_keys_codec = ShortVec(Pubkey, pubkey_codec);
+                    const account_keys = account_keys_codec.decode(reader, gpa_opt, config, null) catch |err| {
+                        decoded_count.* = i;
+                        return err;
+                    };
+
+                    var recent_blockhash: Hash = undefined;
+                    hash_codec.decodeIntoOne(reader, null, config, &recent_blockhash, null) catch |err| {
+                        decoded_count.* = i;
+                        return err;
+                    };
+
+                    const instructions_codec = ShortVec(CompiledInstruction, CompiledInstruction.bk_config);
+                    const instructions = instructions_codec.decode(reader, gpa_opt, config, null) catch |err| {
+                        decoded_count.* = i;
+                        return err;
+                    };
+
+                    value.* = .{ .legacy = .{
+                        .header = header,
+                        .account_keys = account_keys,
+                        .recent_blockhash = recent_blockhash,
+                        .instructions = instructions,
+                    } };
+                } else {
+                    // Versioned message. The byte was consumed. Check version.
+                    const version = first_byte & 0x7F;
+                    if (version != 0) {
+                        decoded_count.* = i;
+                        return error.DecodeFailed; // unsupported version
+                    }
+
+                    // Decode V0Message
+                    const msg = V0Message.bk_config.decode(reader, gpa_opt, config, null) catch |err| {
+                        decoded_count.* = i;
+                        return err;
+                    };
+
+                    value.* = .{ .v0 = msg };
+                }
+            }
+            decoded_count.* = values.len;
+        }
+
+        pub fn decodeSkip(
+            reader: *std.Io.Reader,
+            config: bk.Config,
+            value_count: usize,
+            decoded_count: *usize,
+            _: void,
+        ) bk.DecodeSkipError!void {
+            // To skip, we must parse the structure to know how many bytes to advance.
+            // We decode into throwaway values without allocation concern (skip mode).
+            for (0..value_count) |i| {
+                errdefer decoded_count.* = i;
+                const first_byte = reader.takeByte() catch |err| {
+                    decoded_count.* = i;
+                    return err;
+                };
+
+                if (first_byte & 0x80 == 0) {
+                    // Legacy: skip remaining 2 header bytes + fields
+                    reader.discardAll(2) catch |err| {
+                        decoded_count.* = i;
+                        return err;
+                    };
+                    // Skip account_keys (shortVec of 32-byte pubkeys)
+                    const ak_len = compact_u16.decode(reader, null, .default, null) catch |err| switch (err) {
+                        error.OutOfMemory => unreachable,
+                        else => |e| {
+                            decoded_count.* = i;
+                            return e;
+                        },
+                    };
+                    reader.discardAll(ak_len * Pubkey.SIZE) catch |err| {
+                        decoded_count.* = i;
+                        return err;
+                    };
+                    // Skip recent_blockhash
+                    reader.discardAll(Hash.SIZE) catch |err| {
+                        decoded_count.* = i;
+                        return err;
+                    };
+                    // Skip instructions
+                    const ix_len = compact_u16.decode(reader, null, .default, null) catch |err| switch (err) {
+                        error.OutOfMemory => unreachable,
+                        else => |e| {
+                            decoded_count.* = i;
+                            return e;
+                        },
+                    };
+                    CompiledInstruction.bk_config.decodeSkip(reader, config, ix_len, {}) catch |err| {
+                        decoded_count.* = i;
+                        return err;
+                    };
+                } else {
+                    // V0: version byte already consumed. Skip V0Message.
+                    V0Message.bk_config.decodeSkip(reader, config, 1, {}) catch |err| {
+                        decoded_count.* = i;
+                        return err;
+                    };
+                }
+            }
+            decoded_count.* = value_count;
+        }
+
+        pub fn free(
+            gpa_opt: ?std.mem.Allocator,
+            values: []const VersionedMessage,
+            _: void,
+        ) void {
+            for (values) |value| {
+                switch (value) {
+                    .legacy => |msg| LegacyMessage.bk_config.free(gpa_opt, &msg, null),
+                    .v0 => |msg| V0Message.bk_config.free(gpa_opt, &msg, null),
+                }
+            }
+        }
+    });
+};
+
+const VersionedTransaction = struct {
+    signatures: []Signature,
+    message: VersionedMessage,
+
+    const bk_config: bk.Codec(VersionedTransaction) = .standard(.tuple(.{
+        .signatures = .from(ShortVec(Signature, Signature.bk_config)),
+        .message = .from(VersionedMessage.bk_config),
+    }));
+};
+
+const Entry = struct {
+    num_hashes: u64,
+    hash: Hash,
+    transactions: []VersionedTransaction,
+
+    /// Codec for a single Entry. Fields are serialized as a bincode tuple:
+    ///   [u64 LE: num_hashes] [32 bytes: hash] [u64 LE: tx_count] [tx_0] [tx_1] ...
+    /// Note: transactions uses standard u64 length prefix (not ShortVec).
+    const bk_config: bk.Codec(Entry) = .standard(.tuple(.{
+        .num_hashes = .fixint,
+        .hash = .from(hash_codec),
+        .transactions = .sliceNonStd(VersionedTransaction.bk_config),
+    }));
+
+    /// Codec for a Vec<Entry> (the top-level deshredded payload format).
+    /// [u64 LE: entry_count] [entry_0] [entry_1] ...
+    const slice_config: bk.Codec([]Entry) = .standard(.sliceNonStd(Entry.bk_config));
+};
