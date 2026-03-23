@@ -1047,7 +1047,8 @@ pub const DuplicateShred = struct {
     wallclock: u64,
     slot: Slot,
     shred_index: u32,
-    shred_type: ShredType,
+    // Should be ShredType, but is deprecated and allowed to be any u8
+    shred_type: u8,
     // Serialized DuplicateSlotProof split into chunks.
     num_chunks: u8,
     chunk_index: u8,
