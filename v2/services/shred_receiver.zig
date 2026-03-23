@@ -744,34 +744,250 @@ fn FixedArrayMap(
 }
 
 const State = struct {
-    // NOTE: we don't need a VerifiedMerkleRoots cache, as our ProgressMap already handles this
     in_progress: ProgressMap,
     done: DoneMap,
-    // verified_merkle_roots: VerifiedMerkleRoots,
 
-    const empty: State = .{
-        .in_progress = .empty,
-        .done = .empty,
-        // .verified_merkle_roots = .empty,
-    };
+    const empty: State = .{ .in_progress = .empty, .done = .empty };
 
     const DoneMap = FixedArrayMap(FecSetId, SignatureHash, void, null, FecSetId.eql, 256);
-    // const VerifiedMerkleRoots = FixedArrayMap(Hash, void, MerkleRootHash, hashMerkleRoot, Hash.eql, 128);
-
     const SignatureHash = u32;
-    // const MerkleRootHash = u32;
-
-    // fn hashMerkleRoot(a: *const Hash) MerkleRootHash {
-    //     return @bitCast(a.data[0..4]);
-    // }
 };
 
-// NOTE: as of writing, @sizeOf(State) ~= 22MB. This is why it is defined here rather than inside
-// of serviceMain.
-var state: State = .empty;
+const FinishedFecSet = struct {
+    data_shreds: *[FecSetCtx.data_shreds_max]Packet.Buffer,
+};
+
+const NonErrorStatus = union(enum) {
+    unfinished_fec_set: struct {
+        total_shreds_received: u5, // 0..=31 (if it had 32, it would be finished)
+    },
+    fec_set_finished: FinishedFecSet,
+    fec_set_already_finished,
+    shred_already_seen,
+};
+
+fn processPacket(
+    state: *State,
+    leader_schedule: *const common.solana.LeaderSchedule,
+    packet: *const Packet,
+) !NonErrorStatus {
+    const zone = tracy.Zone.init(@src(), .{ .name = "processPacket" });
+    defer zone.deinit();
+
+    // check that the shred variant is supported and the header is valid
+    const shred = try Shred.fromPacketChecked(packet);
+
+    const in_type_idx = if (shred.variant.isData())
+        shred.slot_idx - shred.fec_set_idx
+    else
+        shred.code_or_data.code.code_shred_idx;
+
+    // some additional "free" filtering + sanity checks
+    {
+        // ignore shred from a slot that's too old or too new
+        if (shred.slot < stub_root_slot) return error.ShredOlderThanRoot;
+        if (shred.slot > stub_max_slot) return error.ShredTooNew;
+
+        // ignore shred with wrong version
+        if (shred.version != stub_shred_version.load(.monotonic)) return error.ShredVersionMismatch;
+
+        // ignore any with bad counts or indices (SIMD 0317 enforces this)
+        if (shred.variant.isCode()) {
+            if (shred.code_or_data.code.data_count != FecSetCtx.fec_shred_cnt)
+                return error.BadDataShredCount;
+            if (shred.code_or_data.code.code_count != FecSetCtx.fec_shred_cnt)
+                return error.BadCodeShredCount;
+            if (shred.code_or_data.code.code_shred_idx >= FecSetCtx.fec_shred_cnt)
+                return error.BadCodeShredIdx;
+        }
+
+        if (shred.fec_set_idx % FecSetCtx.fec_shred_cnt != 0) return error.InvalidFecSetIdx;
+        if (in_type_idx >= FecSetCtx.fec_shred_cnt) return error.ShredIdxTooLarge;
+
+        if (shred.variant.isData()) {
+            // data shreds marked as complete must be the last shred in the fec set.
+            const slot_complete = 0x80; // hm
+            if (((shred.code_or_data.data.flags & slot_complete) != 0) and
+                (((shred.slot_idx + 1) % FecSetCtx.fec_shred_cnt) != 0))
+            {
+                return error.ShredMarkedCompleteIsNotLastInSet;
+            }
+        }
+
+        const merkle_layer_count = 7;
+        if (shred.variant.merkleCount() > merkle_layer_count - 1) {
+            return error.MerkleCountTooLarge;
+        }
+    }
+
+    std.log.info("shred {} ({s}) passing baseline checks", .{
+        @as(FecSetId, .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot }),
+        if (shred.variant.isCode()) "code" else "data",
+    });
+
+    const fec_set_id: FecSetId = .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot };
+
+    // is fec set already being built?
+    const maybe_fec_set = state.in_progress.getFecSetCtx(&shred.signature);
+    if (maybe_fec_set == null) {
+        std.log.info("got shred in unknown fec set", .{});
+
+        // fec set is not currently being built (likely finished already)
+
+        // ignore shreds from already finished fec sets
+        if (state.done.get(&fec_set_id)) |finished_set| {
+            const signature_hash = hashSignature(&shred.signature);
+            if (signature_hash == finished_set.*) {
+                std.log.info("got shred from finished fec set", .{});
+
+                return .fec_set_already_finished;
+            } else {
+                // we got a different hash, for the same FecSetId, this is equivocation
+                std.log.info("found equivocated shred?", .{});
+                return error.EquivocationDifferentHashForSameFecSetId;
+            }
+        }
+
+        // if we have this FecSetId with a different signature, this means equivocation has occured
+        if (state.in_progress.containsFecSetId(&fec_set_id)) {
+            return error.EquivocationMatchingFecSetWithDifferentSignatureAlreadyInProgress;
+        }
+    }
+
+    var shred_merkle_root: Hash = undefined;
+    try shred.merkleRoot(&shred_merkle_root);
+
+    const fec_set_ctx: *FecSetCtx = if (maybe_fec_set) |fec_set_ctx| blk: {
+        @branchHint(.likely); // fec set is being constructed, and this is not the first shred
+
+        std.log.info("got shred in in-progress fec set", .{});
+
+        // variant should match that of the first recorded shred in the fec set
+        if ((shred.variant.isData() and !shred.variant.eql(fec_set_ctx.data_variant)) or
+            (shred.variant.isCode() and !shred.variant.eql(fec_set_ctx.code_variant)))
+        {
+            std.log.info(
+                "dropping shred with variant mismatch, found {}, found_but_swapped: {}, expected_data: {}, expected_code: {}",
+                .{
+                    shred.variant,
+                    shred.variant.swapType(),
+                    fec_set_ctx.data_variant,
+                    fec_set_ctx.code_variant,
+                },
+            );
+            return error.VariantMismatchFromFecSet;
+        }
+
+        if (!fec_set_ctx.merkle_root.eql(&shred_merkle_root)) {
+            return error.MerkleRootMismatchFromFecSet;
+        }
+        // TODO: check against prev and next shred if present
+        // TODO: update in_progress state
+        // TODO: check for duplicates?
+
+        break :blk fec_set_ctx;
+    } else blk: {
+        @branchHint(.unlikely); // this is the first shred of a new in-progress fec set
+        std.log.info("got shred in new fec set", .{});
+
+        {
+            const verify_zone = tracy.Zone.init(@src(), .{ .name = "sig verify" });
+            defer verify_zone.deinit();
+
+            try shred.signature.verify(
+                leader_schedule.get(shred.slot) orelse return error.UnknownLeader,
+                &shred_merkle_root.data,
+            );
+        }
+
+        std.log.info("got verified shred in new fec set", .{});
+        // shred looks good, let's add a new ctx to in_progress
+
+        const new_fec_set_idx = state.in_progress.allocFecSetCtx(fec_set_id);
+
+        state.in_progress.contexts[new_fec_set_idx] = .{
+            // we will check against these for equality in later received shreds
+            .data_variant = if (shred.variant.isData())
+                shred.variant
+            else
+                shred.variant.swapType(),
+
+            .code_variant = if (shred.variant.isCode())
+                shred.variant
+            else
+                shred.variant.swapType(),
+
+            .merkle_root = shred_merkle_root,
+
+            .data_shreds_received = .initEmpty(),
+            .code_shreds_received = .initEmpty(),
+
+            .data_shreds_buf = undefined,
+            .code_shreds_buf = undefined,
+        };
+
+        state.in_progress.used[new_fec_set_idx] = true;
+        state.in_progress.ids[new_fec_set_idx] = fec_set_id;
+        state.in_progress.signatures[new_fec_set_idx] = shred.signature;
+        state.in_progress.sig_hashes[new_fec_set_idx] = hashSignature(&shred.signature);
+
+        std.debug.assert(state.in_progress.contexts[new_fec_set_idx].totalShredsReceived() == 0);
+
+        break :blk &state.in_progress.contexts[new_fec_set_idx];
+
+        // TODO: handle resigned shreds?
+    };
+
+    // We now have a new shred that has passed validation
+
+    if (shred.variant.isCode()) {
+        if (fec_set_ctx.code_shreds_received.isSet(in_type_idx)) {
+            std.log.info("shred already in fec set, skipping", .{});
+            return .shred_already_seen;
+        }
+
+        fec_set_ctx.code_shreds_received.set(in_type_idx); // track shred as received
+        fec_set_ctx.code_shreds_buf[in_type_idx] = packet.data; // persist packet to our state
+    }
+    if (shred.variant.isData()) {
+        if (fec_set_ctx.data_shreds_received.isSet(in_type_idx)) {
+            std.log.info("shred already in fec set, skipping", .{});
+            return .shred_already_seen;
+        }
+
+        fec_set_ctx.data_shreds_received.set(in_type_idx); // track shred as received
+        fec_set_ctx.data_shreds_buf[in_type_idx] = packet.data; // persist packet to our state
+    }
+
+    std.debug.assert(fec_set_ctx.totalShredsReceived() >= 1); // we just received one
+
+    std.log.info("got {}/32 shreds", .{fec_set_ctx.totalShredsReceived()});
+
+    if (fec_set_ctx.totalShredsReceived() < FecSetCtx.fec_shred_cnt) {
+        // we're all good, but we haven't received enough to reconstruct the fec set yet
+        return .{
+            .unfinished_fec_set = .{
+                .total_shreds_received = @intCast(fec_set_ctx.totalShredsReceived()),
+            },
+        };
+    }
+
+    // starting fec set reconstruction now
+    reedsol.reconstructFecSet(fec_set_ctx);
+
+    std.debug.assert(fec_set_ctx.data_shreds_received.count() == FecSetCtx.data_shreds_max);
+
+    return .{ .fec_set_finished = .{ .data_shreds = &fec_set_ctx.data_shreds_buf } };
+}
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     std.log.info("Waiting for shreds on port {}", .{rw.pair.port});
+
+    const global = struct {
+        // NOTE: as of writing, @sizeOf(State) ~= 22MB. This is why it is defined in this way - it
+        // is too large for the stack.
+        var state: State = .empty;
+    };
 
     while (true) {
         const packet = it.next() orelse continue;
@@ -782,271 +998,73 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
         const packet = slice.get(0);
         defer slice.markUsed(1);
-        defer std.log.info("", .{});
 
-        std.log.info("Got packet", .{});
-
-        // check that the shred variant is supported and the header is valid
-        const shred = Shred.fromPacketChecked(packet) catch |err| {
-            std.log.info("bad packet, err {}\n", .{err});
-            continue; // TODO: report reasons for rejecting/ignoring shreds in all cases
-        };
-
-        // ignore shred from a slot that's too old or too new
-        if (shred.slot < stub_root_slot) continue;
-        if (shred.slot > stub_max_slot) continue;
-
-        // ignore shred with wrong version
-        if (shred.version != stub_shred_version.load(.monotonic)) continue;
-
-        // ignore any with bad counts or indices (SIMD 0317 enforces this)
-        if (shred.variant.isCode()) {
-            if (shred.code_or_data.code.data_count != FecSetCtx.fec_shred_cnt) continue;
-            if (shred.code_or_data.code.code_count != FecSetCtx.fec_shred_cnt) continue;
-            if (shred.code_or_data.code.code_shred_idx >= FecSetCtx.fec_shred_cnt) continue;
-        }
-
-        const in_type_idx = if (shred.variant.isData())
-            shred.slot_idx - shred.fec_set_idx
-        else
-            shred.code_or_data.code.code_shred_idx;
-
-        if (shred.fec_set_idx % FecSetCtx.fec_shred_cnt != 0) continue;
-        if (in_type_idx >= FecSetCtx.fec_shred_cnt) continue;
-
-        if (shred.variant.isData()) {
-            // data shreds marked as complete must be the last shred in the fec set.
-            const slot_complete = 0x80; // hm
-            if (((shred.code_or_data.data.flags & slot_complete) != 0) and
-                (((shred.slot_idx + 1) % FecSetCtx.fec_shred_cnt) != 0))
-            {
-                std.log.info("data shred marked as complete isn't the last shred in the set", .{});
-                continue;
-            }
-        }
-
-        const merkle_layer_count = 7;
-        if (shred.variant.merkleCount() > merkle_layer_count - 1) {
-            std.log.info("merkleCount too large", .{});
+        const result = processPacket(&global.state, ro.leader_schedule, packet) catch |err| {
+            std.log.warn("packet failed with {}", .{err});
+            zone.color(0x0000FF); // a nice red
             continue;
-        }
-
-        std.log.info("shred {} ({s}) passing baseline checks", .{
-            @as(FecSetId, .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot }),
-            if (shred.variant.isCode()) "code" else "data",
-        });
-
-        // is fec set already being built?
-        const maybe_fec_set = state.in_progress.getFecSetCtx(&shred.signature);
-        if (maybe_fec_set == null) {
-            std.log.info("got shred in unknown fec set", .{});
-
-            // fec set is not currently being built (likely finished already)
-
-            const fec_set_id: FecSetId = .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot };
-
-            // ignore shreds from already finished fec sets
-            if (state.done.get(&fec_set_id)) |finished_set| {
-                const signature_hash = hashSignature(&shred.signature);
-                if (signature_hash == finished_set.*) {
-                    std.log.info("got shred from finished fec set", .{});
-
-                    continue;
-                } else {
-                    // we got a different hash, for the same slot + idx, this is likely equivocation
-                    std.log.info("found equivocated shred?", .{});
-                    continue;
-                }
-            }
-
-            // if we have this FecSetId with a different signature, this means equivocation has occured
-            if (state.in_progress.containsFecSetId(&fec_set_id)) {
-                std.log.info("found equivocated shred", .{});
-
-                continue;
-            }
-        }
-
-        var shred_merkle_root: Hash = undefined;
-        try shred.merkleRoot(&shred_merkle_root);
-
-        const fec_set_id: FecSetId = .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot };
-
-        const fec_set_ctx: *FecSetCtx = if (maybe_fec_set) |fec_set_ctx| blk: {
-            @branchHint(.likely); // fec set is being constructed, and this is not the first shred
-
-            std.log.info("got shred in in-progress fec set", .{});
-
-            // variant should match that of the first recorded shred in the fec set
-            if ((shred.variant.isData() and !shred.variant.eql(fec_set_ctx.data_variant)) or
-                (shred.variant.isCode() and !shred.variant.eql(fec_set_ctx.code_variant)))
-            {
-                std.log.info(
-                    "dropping shred with variant mismatch, found {}, found_but_swapped: {}, expected_data: {}, expected_code: {}",
-                    .{
-                        shred.variant,
-                        shred.variant.swapType(),
-                        fec_set_ctx.data_variant,
-                        fec_set_ctx.code_variant,
-                    },
-                );
-                continue;
-            }
-
-            if (!fec_set_ctx.merkle_root.eql(&shred_merkle_root)) {
-                std.log.info("merkle root mismatch\n", .{});
-                continue;
-            }
-            // TODO: check against prev and next shred if present
-            // TODO: update in_progress state
-            // TODO: check for duplicates?
-
-            break :blk fec_set_ctx;
-        } else blk: {
-            @branchHint(.unlikely); // this is the first shred of a new in-progress fec set
-            std.log.info("got shred in new fec set", .{});
-
-            shred.signature.verify(
-                ro.leader_schedule.get(shred.slot) orelse {
-                    std.log.info("unknown leader: {}", .{shred.slot});
-                    continue;
-                },
-                &shred_merkle_root.data,
-            ) catch |err| {
-                std.log.info("verification failed: {}", .{err});
-                continue;
-            };
-
-            std.log.info("got verified shred in new fec set", .{});
-            // shred looks good, let's add a new ctx to in_progress
-
-            const new_fec_set_idx = state.in_progress.allocFecSetCtx(fec_set_id);
-
-            state.in_progress.contexts[new_fec_set_idx] = .{
-                // we will check against these for equality in later received shreds
-                .data_variant = if (shred.variant.isData())
-                    shred.variant
-                else
-                    shred.variant.swapType(),
-
-                .code_variant = if (shred.variant.isCode())
-                    shred.variant
-                else
-                    shred.variant.swapType(),
-
-                .merkle_root = shred_merkle_root,
-
-                .data_shreds_received = .initEmpty(),
-                .code_shreds_received = .initEmpty(),
-
-                .data_shreds_buf = undefined,
-                .code_shreds_buf = undefined,
-            };
-
-            state.in_progress.used[new_fec_set_idx] = true;
-            state.in_progress.ids[new_fec_set_idx] = fec_set_id;
-            state.in_progress.signatures[new_fec_set_idx] = shred.signature;
-            state.in_progress.sig_hashes[new_fec_set_idx] = hashSignature(&shred.signature);
-
-            std.debug.assert(state.in_progress.contexts[new_fec_set_idx].totalShredsReceived() == 0);
-
-            break :blk &state.in_progress.contexts[new_fec_set_idx];
-
-            // TODO: handle resigned shreds?
         };
 
-        // We now have a new shred that has passed validation
+        std.log.info("Got packet, result: {}", .{result});
 
-        if (shred.variant.isCode()) {
-            if (fec_set_ctx.code_shreds_received.isSet(in_type_idx)) {
-                std.log.info("shred already in fec set, skipping", .{});
-                continue;
-            }
+        // var complete: bool = false;
+        // for (&fec_set_ctx.data_shreds_buf) |*data_packet| {
+        //     const data_shred: *const Shred = .fromBufferUnchecked(data_packet);
 
-            fec_set_ctx.code_shreds_received.set(in_type_idx); // track shred as received
-            fec_set_ctx.code_shreds_buf[in_type_idx] = packet.data; // persist packet to our state
-        }
-        if (shred.variant.isData()) {
-            if (fec_set_ctx.data_shreds_received.isSet(in_type_idx)) {
-                std.log.info("shred already in fec set, skipping", .{});
-                continue;
-            }
+        //     complete = complete or (data_shred.code_or_data.data.flags & 0x40) != 0;
+        //     if (complete) break;
+        // }
 
-            fec_set_ctx.data_shreds_received.set(in_type_idx); // track shred as received
-            fec_set_ctx.data_shreds_buf[in_type_idx] = packet.data; // persist packet to our state
-        }
+        // std.log.info("complete? {}", .{complete});
 
-        std.debug.assert(fec_set_ctx.totalShredsReceived() >= 1); // we just received one
+        // state.done.insertRemovingFirst(&fec_set_id, &hashSignature(&shred.signature));
 
-        std.log.info("got {}/32 shreds", .{fec_set_ctx.totalShredsReceived()});
+        // if (complete) {
+        //     var deshredded_buf: [64 * 1024]u8 = undefined;
+        //     var bytes_written: u16 = 0;
 
-        if (fec_set_ctx.totalShredsReceived() < FecSetCtx.fec_shred_cnt) {
-            continue; // we're all good, but we haven't received enough to reconstruct the fec set yet
-        }
+        //     for (&fec_set_ctx.data_shreds_buf) |*data_shred| {
+        //         const data_payload = Shred.fromBufferUnchecked(data_shred).dataPayload();
+        //         @memcpy(deshredded_buf[bytes_written..][0..data_payload.len], data_payload);
+        //         bytes_written += @intCast(data_payload.len);
+        //     }
 
-        // starting fec set reconstruction now
-        reedsol.reconstructFecSet(fec_set_ctx);
+        //     std.log.info("deshredded!", .{});
 
-        std.debug.assert(fec_set_ctx.data_shreds_received.count() == FecSetCtx.data_shreds_max);
+        //     const deshredded_bytes = deshredded_buf[0..bytes_written];
 
-        var complete: bool = false;
-        for (&fec_set_ctx.data_shreds_buf) |*data_packet| {
-            const data_shred: *const Shred = .fromBufferUnchecked(data_packet);
+        //     var bincode_buf: [64 * 1024]u8 = undefined;
+        //     var bincode_fba = std.heap.FixedBufferAllocator.init(&bincode_buf);
+        //     const bincode_fba_allocator = bincode_fba.allocator();
 
-            complete = complete or (data_shred.code_or_data.data.flags & 0x40) != 0;
-            if (complete) break;
-        }
+        //     const entries, const consumed = bincode.Entry.slice_config.decodeSlice(
+        //         deshredded_bytes,
+        //         bincode_fba_allocator,
+        //         .{ .endian = .little, .int = .fixint },
+        //         null,
+        //     ) catch |err| {
+        //         std.log.info("decode failed with err {}", .{err});
+        //         continue;
+        //     };
+        //     _ = consumed;
 
-        std.log.info("complete? {}", .{complete});
-
-        state.done.insertRemovingFirst(&fec_set_id, &hashSignature(&shred.signature));
-
-        if (complete) {
-            var deshredded_buf: [64 * 1024]u8 = undefined;
-            var bytes_written: u16 = 0;
-
-            for (&fec_set_ctx.data_shreds_buf) |*data_shred| {
-                const data_payload = Shred.fromBufferUnchecked(data_shred).dataPayload();
-                @memcpy(deshredded_buf[bytes_written..][0..data_payload.len], data_payload);
-                bytes_written += @intCast(data_payload.len);
-            }
-
-            std.log.info("deshredded!", .{});
-
-            const deshredded_bytes = deshredded_buf[0..bytes_written];
-
-            var bincode_buf: [64 * 1024]u8 = undefined;
-            var bincode_fba = std.heap.FixedBufferAllocator.init(&bincode_buf);
-            const bincode_fba_allocator = bincode_fba.allocator();
-
-            const entries, const consumed = bincode.Entry.slice_config.decodeSlice(
-                deshredded_bytes,
-                bincode_fba_allocator,
-                .{ .endian = .little, .int = .fixint },
-                null,
-            ) catch |err| {
-                std.log.info("decode failed with err {}", .{err});
-                continue;
-            };
-            _ = consumed;
-
-            for (entries) |entry| {
-                for (entry.transactions) |tx| {
-                    switch (tx.message) {
-                        .legacy => |msg| {
-                            for (msg.account_keys) |key| {
-                                std.log.info("(legacy) key: {f}", .{key});
-                            }
-                        },
-                        .v0 => |msg| {
-                            for (msg.account_keys) |key| {
-                                std.log.info("(v0) key: {f}", .{key});
-                            }
-                        },
-                    }
-                }
-            }
-        }
+        //     for (entries) |entry| {
+        //         for (entry.transactions) |tx| {
+        //             switch (tx.message) {
+        //                 .legacy => |msg| {
+        //                     for (msg.account_keys) |key| {
+        //                         std.log.info("(legacy) key: {f}", .{key});
+        //                     }
+        //                 },
+        //                 .v0 => |msg| {
+        //                     for (msg.account_keys) |key| {
+        //                         std.log.info("(v0) key: {f}", .{key});
+        //                     }
+        //                 },
+        //             }
+        //         }
+        //     }
+        // }
     }
 }
 
