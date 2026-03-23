@@ -125,6 +125,25 @@ pub const Hash = extern struct {
         };
     }
 
+    // When decoding JSON-RPC `params`, the server parses each element as a
+    // `std.json.Value` and then calls `std.json.innerParseFromValue(...)`.
+    //
+    // `Pubkey` provides `jsonParseFromValue`, but `Hash` previously only
+    // implemented `jsonParse`, which meant parameter decoding for
+    // `isBlockhashValid` always failed with `Invalid method parameters`.
+    pub fn jsonParseFromValue(
+        _: std.mem.Allocator,
+        source: std.json.Value,
+        _: std.json.ParseOptions,
+    ) std.json.ParseFromValueError!Hash {
+        return switch (source) {
+            .string => |str| parseRuntime(str) catch |err| switch (err) {
+                error.InvalidHash => error.InvalidCharacter,
+            },
+            else => error.UnexpectedToken,
+        };
+    }
+
     pub fn jsonStringify(self: Hash, write_stream: anytype) !void {
         try write_stream.write(self.base58String().constSlice());
     }
