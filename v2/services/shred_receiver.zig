@@ -495,40 +495,41 @@ test "Shred layout" {
     if (@alignOf(Shred) != 1) @compileError("Shred should be align(1)");
 }
 
-/// GF(2^8) arithmetic and Reed-Solomon encoding matrix for erasure coding.
-/// All operations use pre-computed lookup tables from reed_solomon_table.zig.
-const field = struct {
-    inline fn add(a: u8, b: u8) u8 {
-        return a ^ b;
-    }
-
-    inline fn mul(a: u8, b: u8) u8 {
-        return rs_table.mul[a][b];
-    }
-
-    inline fn div(a: u8, b: u8) u8 {
-        if (a == 0) return 0;
-        const log_a = rs_table.log[a];
-        const log_b = rs_table.log[b];
-        const log_result: i16 = @as(i16, log_a) - @as(i16, log_b);
-        return rs_table.exp[@intCast(if (log_result < 0) log_result + 255 else log_result)];
-    }
-
-    fn exp(a: u8, n: usize) u8 {
-        if (n == 0) return 1;
-        if (a == 0) return 0;
-        var log_result: usize = @as(usize, rs_table.log[a]) * n;
-        while (log_result >= 255) {
-            log_result -= 255;
-        }
-        return rs_table.exp[log_result];
-    }
-};
-
 /// Comptime-generated 64x32 encoding matrix for Reed-Solomon with data_count=32, code_count=32.
 /// Top 32 rows = identity matrix (for data shreds), bottom 32 rows = parity coefficients.
 /// Derived from: Vandermonde(64x32) * inverse(Vandermonde_top(32x32))
 const encoding_matrix: [64][32]u8 = blk: {
+
+    // GF(2^8) arithmetic and Reed-Solomon encoding matrix for erasure coding.
+    // All operations use pre-computed lookup tables from reed_solomon_table.zig.
+    const field = struct {
+        inline fn add(a: u8, b: u8) u8 {
+            return a ^ b;
+        }
+
+        inline fn mul(a: u8, b: u8) u8 {
+            return rs_table.mul[a][b];
+        }
+
+        inline fn div(a: u8, b: u8) u8 {
+            if (a == 0) return 0;
+            const log_a = rs_table.log[a];
+            const log_b = rs_table.log[b];
+            const log_result: i16 = @as(i16, log_a) - @as(i16, log_b);
+            return rs_table.exp[@intCast(if (log_result < 0) log_result + 255 else log_result)];
+        }
+
+        fn exp(a: u8, n: usize) u8 {
+            if (n == 0) return 1;
+            if (a == 0) return 0;
+            var log_result: usize = @as(usize, rs_table.log[a]) * n;
+            while (log_result >= 255) {
+                log_result -= 255;
+            }
+            return rs_table.exp[log_result];
+        }
+    };
+
     @setEvalBranchQuota(1_000_000);
 
     const total = 64;
@@ -640,7 +641,6 @@ const FecSetCtx = extern struct {
     // https://github.com/solana-foundation/specs/blob/main/p2p/shred.md
 
     // TODO: should these all be 32?
-
     const data_shreds_max = 67;
     const code_shreds_max = 67;
     const fec_shred_cnt = 32;
@@ -1536,9 +1536,7 @@ const compact_u16: bk.Codec(u16) = .implement(void, void, struct {
     pub const free = null;
 });
 
-/// Returns a binkode codec for a slice type `[]T` where the length is encoded as a compact-u16
-/// (ShortVec) rather than the standard bincode u64 prefix.
-/// This mirrors Solana's ShortVec encoding used for transaction sub-arrays.
+// For slices that have a u16 length rather than a u64
 fn shortVec(comptime Element: type, comptime element: bk.Codec(Element)) bk.Codec([]Element) {
     return comptime .implement(element.EncodeCtx, element.DecodeCtx, struct {
         pub fn encode(
@@ -1706,15 +1704,10 @@ const V0Message = struct {
         .address_table_lookups = .from(shortVec(AddressLookup, AddressLookup.bk_config)),
     }));
 };
-
-/// VersionedMessage uses a custom codec because the version detection is non-standard:
-/// - Peek the first byte (do NOT consume it yet).
-/// - If byte & 0x80 == 0 → legacy message. The byte is the first field of MessageHeader
-///   (num_required_signatures). Leave it in the stream and decode a LegacyMessage.
-/// - If byte & 0x80 != 0 → consume the byte. version = byte & 0x7F.
-///   Only version 0 is supported. Then decode a V0Message.
 const VersionedMessage = union(enum) {
+    // first byte & 0x80 == 0
     legacy: LegacyMessage,
+    // first byte & 0x80 != 0
     v0: V0Message,
 
     const bk_config: bk.Codec(VersionedMessage) = .implement(void, void, struct {
@@ -1830,8 +1823,6 @@ const VersionedMessage = union(enum) {
             decoded_count: *usize,
             _: void,
         ) bk.DecodeSkipError!void {
-            // To skip, we must parse the structure to know how many bytes to advance.
-            // We decode into throwaway values without allocation concern (skip mode).
             for (0..value_count) |i| {
                 errdefer decoded_count.* = i;
                 const first_byte = try reader.takeByte();
@@ -1885,16 +1876,12 @@ const Entry = struct {
     hash: Hash,
     transactions: []VersionedTransaction,
 
-    /// Codec for a single Entry. Fields are serialized as a bincode tuple:
-    ///   [u64 LE: num_hashes] [32 bytes: hash] [u64 LE: tx_count] [tx_0] [tx_1] ...
-    /// Note: transactions uses standard u64 length prefix (not ShortVec).
     const bk_config: bk.Codec(Entry) = .standard(.tuple(.{
         .num_hashes = .fixint,
         .hash = .from(hash_codec),
         .transactions = .sliceNonStd(VersionedTransaction.bk_config),
     }));
 
-    /// Codec for a Vec<Entry> (the top-level deshredded payload format).
-    /// [u64 LE: entry_count] [entry_0] [entry_1] ...
+    // slice of entries
     const slice_config: bk.Codec([]Entry) = .standard(.sliceNonStd(Entry.bk_config));
 };
