@@ -84,10 +84,10 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             \\index: {}
             \\shred_type: {}
         , .{
-            packet_shred.libHeader().slot,
-            packet_shred.libHeader().erasure_set_index,
-            packet_shred.libHeader().index,
-            packet_shred.libHeader().variant.shred_type,
+            packet_shred.commonHeader().slot,
+            packet_shred.commonHeader().erasure_set_index,
+            packet_shred.commonHeader().index,
+            packet_shred.commonHeader().variant.shred_type,
         });
     }
 }
