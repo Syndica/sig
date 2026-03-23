@@ -35,8 +35,11 @@ pub const Config = extern struct {
 
 pub const ClusterInfo = extern struct {
     public_ip: Address,
-    entry_addr: Address,
     shred_version: u16,
+    entry_addrs_len: u8,
+    entry_addrs: [MAX_ENTRY_ADDRS]Address,
+
+    pub const MAX_ENTRY_ADDRS = 16;
 
     // For std.meta.eql compatibility insice `serviceMap`
     pub const Address = extern struct {
@@ -48,9 +51,20 @@ pub const ClusterInfo = extern struct {
             if (self.is_v6) return .initIp6(self.ip, self.port, 0, 0);
             return .initIp4(self.ip[0..4].*, self.port);
         }
+
+        pub fn format(self: Address, w: *std.Io.Writer) !void {
+            return self.toNetAddress().format(w);
+        }
     };
 
+    pub fn getEntryAddresses(self: *const ClusterInfo) []const Address {
+        return self.entry_addrs[0..self.entry_addrs_len];
+    }
+
     pub fn getFromEcho(gossip_port: u16, cluster: common.solana.Cluster) !ClusterInfo {
+        var result: ClusterInfo = undefined;
+        result.entry_addrs_len = 0;
+
         for (cluster.getEntrypoints()) |entrypoint| {
             const split = std.mem.indexOfScalar(u8, entrypoint, ':') orelse continue;
             const port = std.fmt.parseInt(u16, entrypoint[split + 1 ..], 10) catch continue;
@@ -58,20 +72,22 @@ pub const ClusterInfo = extern struct {
             var addr_buf: [4096]u8 = undefined;
             var fba = std.heap.FixedBufferAllocator.init(&addr_buf);
             const addr_list =
-                try std.net.getAddressList(fba.allocator(), entrypoint[0..split], port);
+                std.net.getAddressList(fba.allocator(), entrypoint[0..split], port) catch continue;
             defer addr_list.deinit();
 
             for (addr_list.addrs) |entry_addr| {
-                const socket = try std.posix.socket(
+                if (result.entry_addrs_len >= MAX_ENTRY_ADDRS) break;
+
+                const socket = std.posix.socket(
                     entry_addr.any.family,
                     std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC,
                     std.posix.IPPROTO.TCP,
-                );
+                ) catch continue;
                 defer std.posix.close(socket);
 
                 // set timeout of 1s for connect, read, write.
                 const tv = comptime std.mem.asBytes(&std.posix.timeval{ .sec = 1, .usec = 0 });
-                try std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, tv);
+                std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, tv) catch continue;
                 std.posix.connect(socket, &entry_addr.any, entry_addr.getOsSockLen()) catch {
                     continue;
                 };
@@ -104,25 +120,44 @@ pub const ClusterInfo = extern struct {
                     else => continue,
                 };
 
-                return .{
-                    .public_ip = .{
+                // First successful echo sets public_ip and shred_version.
+                // Subsequent echoes must return the same shred_version.
+                if (result.entry_addrs_len == 0) {
+                    result.public_ip = .{
                         .is_v6 = is_v6,
                         .ip = ip,
                         .port = gossip_port,
+                    };
+                    result.shred_version = shred_version;
+                } else if (shred_version != result.shred_version) {
+                    continue;
+                }
+
+                const new_addr: Address = .{
+                    .is_v6 = entry_addr.any.family == std.posix.AF.INET6,
+                    .ip = switch (entry_addr.any.family) {
+                        std.posix.AF.INET6 => entry_addr.in6.sa.addr,
+                        std.posix.AF.INET => @bitCast([_]u32{ entry_addr.in.sa.addr, 0, 0, 0 }),
+                        else => unreachable,
                     },
-                    .entry_addr = .{
-                        .is_v6 = entry_addr.any.family == std.posix.AF.INET6,
-                        .ip = switch (entry_addr.any.family) {
-                            std.posix.AF.INET6 => entry_addr.in6.sa.addr,
-                            std.posix.AF.INET => @bitCast([_]u32{ entry_addr.in.sa.addr, 0, 0, 0 }),
-                            else => unreachable,
-                        },
-                        .port = entry_addr.getPort(),
-                    },
-                    .shred_version = shred_version,
+                    .port = entry_addr.getPort(),
                 };
+
+                const exists = for (result.getEntryAddresses()) |e| {
+                    if (std.meta.eql(e, new_addr)) break true;
+                } else false;
+
+                // Only accumulate if address isnt a duplicate.
+                if (!exists) {
+                    result.entry_addrs[result.entry_addrs_len] = new_addr;
+                    result.entry_addrs_len += 1;
+                }
+
+                break; // only one resolved address per entrypoint hostname
             }
         }
-        return error.NoValidEntrypoint;
+
+        if (result.entry_addrs_len == 0) return error.NoValidEntrypoint;
+        return result;
     }
 };

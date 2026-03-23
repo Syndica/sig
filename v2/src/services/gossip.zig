@@ -35,14 +35,13 @@ pub const ReadOnly = struct {
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
-    const cluster_info = &ro.config.cluster_info;
     std.log.debug(
-        "Gossip started on :{} as {f}:\n\tshred_version:{}\n\tentrypoint:{f}",
+        "Gossip started on :{} as {f}:\n\tshred_version:{}\n\tentrypoints:{f}",
         .{
             rw.pair.port,
             ro.config.keypair.pubkey,
-            cluster_info.shred_version,
-            cluster_info.entry_addr.toNetAddress(),
+            ro.config.cluster_info.shred_version,
+            common.fmtSlice(ro.config.cluster_info.getEntryAddresses()),
         },
     );
 
@@ -71,7 +70,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         .from = ro.config.keypair.pubkey,
         .wallclock = .{ .value = now },
         .created = now,
-        .shred_version = cluster_info.shred_version,
+        .shred_version = ro.config.cluster_info.shred_version,
         .major = .{ .value = 0 },
         .minor = .{ .value = 0 },
         .patch = .{ .value = 0 },
@@ -79,10 +78,10 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         .feature_set = 0,
         .client_id = .{ .value = 0 },
         .ips = .{ .items = &.{
-            if (cluster_info.public_ip.is_v6)
-                .{ .v6 = cluster_info.public_ip.ip }
+            if (ro.config.cluster_info.public_ip.is_v6)
+                .{ .v6 = ro.config.cluster_info.public_ip.ip }
             else
-                .{ .v4 = cluster_info.public_ip.ip[0..4].* },
+                .{ .v4 = ro.config.cluster_info.public_ip.ip[0..4].* },
         } },
         .sockets = .{ .items = &socket_entries },
         .extensions = .{ .items = &.{} },
@@ -92,7 +91,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var gossip = try Gossip.init(&fba, .{
         .netpair = rw.pair,
         .keypair = &ro.config.keypair,
-        .entry_addr = cluster_info.entry_addr.toNetAddress(),
+        .cluster_info = &ro.config.cluster_info,
         .contact_info = contact_info,
     });
 
@@ -241,7 +240,7 @@ const Gossip = struct {
     pub const Config = struct {
         netpair: *Pair,
         keypair: *const common.gossip.KeyPair,
-        entry_addr: std.net.Address,
+        cluster_info: *const common.gossip.ClusterInfo,
         contact_info: GossipData,
     };
 
@@ -288,12 +287,12 @@ const Gossip = struct {
 
         if (self.push_timeout <= now) {
             self.push_timeout = now + PUSH_INTERVAL_MS;
-            try self.processPushMessages(now);
+            try self.updatePushSet(now);
         }
 
         if (self.ping_timeout <= now) {
             self.ping_timeout = now + PING_INTERVAL_MS;
-            try self.processPings(now);
+            try self.updatePeers(now);
         }
 
         var slice = self.config.netpair.recv.getReadable() catch return;
@@ -526,7 +525,7 @@ const Gossip = struct {
         }
     }
 
-    fn processPings(self: *Gossip, now: u64) !void {
+    fn updatePeers(self: *Gossip, now: u64) !void {
         // Update the ping tokens
         self.ping_token_window[0] = self.ping_token_window[1];
         self.prng.fill(&self.ping_token_window[1]);
@@ -551,7 +550,18 @@ const Gossip = struct {
         }
     }
 
-    fn processPushMessages(self: *Gossip, now: u64) !void {
+    fn updatePushSet(self: *Gossip, now: u64) !void {
+        // refresh contact info
+        self.refreshPushActiveSet(now);
+
+        // Add a new instance of our contact info.
+        try self.insertOurOwnData(now, self.config.contact_info);
+
+        // Send out push messages
+        try self.sendPushMessages();
+    }
+
+    fn refreshPushActiveSet(self: *Gossip, now: u64) void {
         // Refresh push active set
         self.push_active_set.clearRetainingCapacity();
 
@@ -572,7 +582,7 @@ const Gossip = struct {
                     continue;
 
                 // matching shred_version
-                if (peer.shred_version != self.config.contact_info.contact_info.shred_version)
+                if (peer.shred_version != self.config.cluster_info.shred_version)
                     continue;
 
                 // active-enough ContactInfo
@@ -585,12 +595,6 @@ const Gossip = struct {
                 if (self.push_active_set.items.len == self.push_active_set.capacity) break;
             }
         }
-
-        // Add a new instance of our contact info.
-        try self.insertOurOwnData(now, self.config.contact_info);
-
-        // Send out push messages
-        try self.sendPushMessages();
     }
 
     fn sendPushMessages(self: *Gossip) !void {
@@ -599,9 +603,11 @@ const Gossip = struct {
         if (pushed_keys.len == 0) return;
         defer self.push_buf.clearRetainingCapacity();
 
-        // No active_set peers. Try to send PushMessages to entrypoint to get us into the cluster.
+        // No active_set peers. Try to send PushMessages to entrypoints to get us into the cluster.
         if (self.push_active_set.items.len == 0) {
-            try self.sendPushMessagesTo(self.config.entry_addr, pushed_keys, null);
+            for (self.config.cluster_info.getEntryAddresses()) |entry_addr| {
+                try self.sendPushMessagesTo(entry_addr.toNetAddress(), pushed_keys, null);
+            }
             return;
         }
 
@@ -740,7 +746,7 @@ const Gossip = struct {
             }
         }
 
-        // Check if there were no peers & send to entrypoint (rate limited).
+        // Check if there were no peers & send to entrypoints (rate limited).
         // If reconnect to network, entrypoint will get our ContactInfo & ping us to start tracking.
         // We get pong, start tracking entrypoint, and start getting PullResponses from it in later
         // calls to `sendPullRequests`.
@@ -758,14 +764,16 @@ const Gossip = struct {
                 std.log.debug("No peers...", .{});
 
                 const mask =
-                    (@as(u65, i) << (@as(u7, 64) - mask_bits)) | (~@as(u64, 0) >> mask_bits);
+                    (@as(u65, 0) << (@as(u7, 64) - mask_bits)) | (~@as(u64, 0) >> mask_bits);
 
-                try self.sendMessage(self.config.entry_addr, .{ .pull_request = .{
-                    .ignoring = bloom_filters.items[i],
-                    .mask = @intCast(mask),
-                    .mask_bits = mask_bits,
-                    .contact_info = signed_ci,
-                } });
+                for (self.config.cluster_info.getEntryAddresses()) |entry_addr| {
+                    try self.sendMessage(entry_addr.toNetAddress(), .{ .pull_request = .{
+                        .ignoring = bloom_filters.items[0],
+                        .mask = @intCast(mask),
+                        .mask_bits = mask_bits,
+                        .contact_info = signed_ci,
+                    } });
+                }
             }
         }
     }
