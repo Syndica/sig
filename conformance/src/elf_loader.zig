@@ -14,25 +14,35 @@ export fn sol_compat_elf_loader_v2(
     in_ptr: [*]const u8,
     in_size: u64,
 ) i32 {
-    errdefer |err| std.debug.panic("err: {s}", .{@errorName(err)});
+    testAndHandleIO(out_ptr, out_size, in_ptr, in_size) catch |e| {
+        std.debug.print("error: {s}\n", .{@errorName(e)});
+        return -1;
+    };
+    return 0;
+}
+
+fn testAndHandleIO(
+    out_ptr: [*]u8,
+    out_size: *u64,
+    in_ptr: [*]const u8,
+    in_size: u64,
+) !void {
     const allocator = std.heap.c_allocator;
 
     // zig_protobuf leaks sometimes on invalid input, so we just work around with by using an arena
     var decode_arena = std.heap.ArenaAllocator.init(allocator);
     defer decode_arena.deinit();
 
-    var ctx = ELFLoaderCtx.decode(decode_arena.allocator(), in_ptr[0..in_size]) catch return -1;
+    var ctx = try ELFLoaderCtx.decode(decode_arena.allocator(), in_ptr[0..in_size]);
     defer ctx.deinit(decode_arena.allocator());
 
-    var elf_effects = executeElfTest(ctx, allocator) catch return -1;
+    var elf_effects = try executeElfTest(ctx, allocator);
     defer elf_effects.deinit(allocator);
 
     const effect_bytes = elf_effects.encode();
-    const out_slice = out_ptr[0..out_size.*];
-
-    @memcpy(out_slice[0..effect_bytes.len], &effect_bytes);
+    if (out_size.* < effect_bytes.len) return error.OutputTooSmall;
+    @memcpy(out_ptr[0..effect_bytes.len], &effect_bytes);
     out_size.* = effect_bytes.len;
-    return 0;
 }
 
 fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEffects {
