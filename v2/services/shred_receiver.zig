@@ -713,7 +713,7 @@ fn FixedArrayMap(
 
         fn getIdxUnused(self: *const Self) ?u32 {
             for (&self.used, 0..) |used, i| {
-                if (!used) continue;
+                if (used) continue;
                 return @intCast(i);
             }
             return null;
@@ -727,6 +727,7 @@ fn FixedArrayMap(
                 @memmove(self.keys[0 .. n - 2], self.keys[1 .. n - 1]);
                 @memmove(self.vals[0 .. n - 2], self.vals[1 .. n - 1]);
                 @memmove(self.hash[0 .. n - 2], self.hash[1 .. n - 1]);
+                @memmove(self.used[0 .. n - 2], self.used[1 .. n - 1]);
                 break :idx n - 1;
             };
 
@@ -770,10 +771,6 @@ const State = struct {
 // of serviceMain.
 var state: State = .empty;
 
-const diagnostics = union(enum) {
-    bad_packet: anyerror,
-};
-
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
 
@@ -799,13 +796,15 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
         std.log.info("Got packet", .{});
 
+        // check that the shred variant is supported and the header is valid
         const shred = Shred.fromPacketChecked(packet) catch |err| {
             std.log.info("bad packet, err {}\n", .{err});
             continue; // TODO: report reasons for rejecting/ignoring shreds in all cases
         };
 
-        // ignore shred from a slot that's too old
+        // ignore shred from a slot that's too old or too new
         if (shred.slot < stub_root_slot) continue;
+        if (shred.slot > stub_max_slot) continue;
 
         // ignore shred with wrong version
         if (shred.version != stub_shred_version.load(.monotonic)) continue;
@@ -828,7 +827,9 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         if (shred.variant.isData()) {
             // data shreds marked as complete must be the last shred in the fec set.
             const slot_complete = 0x80; // hm
-            if (((shred.code_or_data.data.flags & slot_complete) != 0) and (((shred.slot_idx + 1) % FecSetCtx.fec_shred_cnt) != 0)) {
+            if (((shred.code_or_data.data.flags & slot_complete) != 0) and
+                (((shred.slot_idx + 1) % FecSetCtx.fec_shred_cnt) != 0))
+            {
                 std.log.info("data shred marked as complete isn't the last shred in the set", .{});
                 continue;
             }
@@ -890,12 +891,15 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             if ((shred.variant.isData() and !shred.variant.eql(fec_set_ctx.data_variant)) or
                 (shred.variant.isCode() and !shred.variant.eql(fec_set_ctx.code_variant)))
             {
-                std.log.info("dropping shred with variant mismatch, found {}, found_but_swapped: {}, expected_data: {}, expected_code: {}", .{
-                    shred.variant,
-                    shred.variant.swapType(),
-                    fec_set_ctx.data_variant,
-                    fec_set_ctx.code_variant,
-                });
+                std.log.info(
+                    "dropping shred with variant mismatch, found {}, found_but_swapped: {}, expected_data: {}, expected_code: {}",
+                    .{
+                        shred.variant,
+                        shred.variant.swapType(),
+                        fec_set_ctx.data_variant,
+                        fec_set_ctx.code_variant,
+                    },
+                );
                 continue;
             }
 
@@ -930,8 +934,15 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
             state.in_progress.contexts[new_fec_set_idx] = .{
                 // we will check against these for equality in later received shreds
-                .data_variant = if (shred.variant.isData()) shred.variant else shred.variant.swapType(),
-                .code_variant = if (shred.variant.isCode()) shred.variant else shred.variant.swapType(),
+                .data_variant = if (shred.variant.isData())
+                    shred.variant
+                else
+                    shred.variant.swapType(),
+
+                .code_variant = if (shred.variant.isCode())
+                    shred.variant
+                else
+                    shred.variant.swapType(),
 
                 .merkle_root = shred_merkle_root,
 
@@ -1014,9 +1025,6 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
             const deshredded_bytes = deshredded_buf[0..bytes_written];
 
-            const n_entries: u64 = @bitCast(deshredded_bytes[0..8].*);
-            std.log.info("n_entries: {}", .{n_entries});
-
             var bincode_buf: [64 * 1024]u8 = undefined;
             var bincode_fba = std.heap.FixedBufferAllocator.init(&bincode_buf);
             const bincode_fba_allocator = bincode_fba.allocator();
@@ -1031,8 +1039,6 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
                 continue;
             };
             _ = consumed;
-
-            std.debug.assert(n_entries == entries.len);
 
             for (entries) |entry| {
                 for (entry.transactions) |tx| {
@@ -1246,8 +1252,6 @@ const reedsol = struct {
 
             // Mark this data shred as received
             fec_set_ctx.data_shreds_received.set(i);
-
-            std.log.info("FEC: recovered data shred index {}", .{i});
         }
     }
 
