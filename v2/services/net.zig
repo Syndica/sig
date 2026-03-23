@@ -101,7 +101,7 @@ fn mainInner(
             // TODO: use std.os.linux.recvmmsg
             while (it.peek()) |ptr| {
                 var addr_len: std.posix.socklen_t = @sizeOf(std.net.Address);
-                ptr.size = @intCast(std.posix.recvfrom(
+                ptr.len = @intCast(std.posix.recvfrom(
                     sock,
                     &ptr.data,
                     0,

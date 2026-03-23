@@ -1152,9 +1152,9 @@ pub const layout = struct {
 
     pub fn getShredSize(packet: *const Packet, is_repair: bool) usize {
         return if (is_repair)
-            packet.size -| @sizeOf(Nonce)
+            packet.len -| @sizeOf(Nonce)
         else
-            packet.size;
+            packet.len;
     }
 
     pub fn getSlot(shred: []const u8) ?Slot {
