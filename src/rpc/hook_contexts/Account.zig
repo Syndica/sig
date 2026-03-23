@@ -564,7 +564,7 @@ pub fn getTokenAccountsByDelegate(
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
-    const slot_reader = self.account_reader.forSlot(ancestors);
+    const slot_reader = self.account_reader.forSlot(ancestors).toOwnedReader();
 
     // Resolve filter -> token program ID + optional mint.
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2150
