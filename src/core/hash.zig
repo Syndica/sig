@@ -623,3 +623,33 @@ test "Hash format" {
         buf[0..w.end],
     );
 }
+
+test "jsonParseFromValue for rpc params" {
+    const valid_hash_str = "DULfJyE3WQqNxy3ymuhAChyNR3yufT88pmqvAazKFMG4";
+    const expected = try Hash.parseRuntime(valid_hash_str);
+
+    const parsed = try Hash.jsonParseFromValue(
+        std.testing.allocator,
+        .{ .string = valid_hash_str },
+        .{},
+    );
+    try std.testing.expectEqual(expected, parsed);
+
+    try std.testing.expectError(
+        error.InvalidCharacter,
+        Hash.jsonParseFromValue(
+            std.testing.allocator,
+            .{ .string = "not-a-valid-base58-hash" },
+            .{},
+        ),
+    );
+
+    try std.testing.expectError(
+        error.UnexpectedToken,
+        Hash.jsonParseFromValue(
+            std.testing.allocator,
+            .null,
+            .{},
+        ),
+    );
+}
