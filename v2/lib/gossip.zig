@@ -38,7 +38,7 @@ pub const ClusterInfo = extern struct {
     entry_addr: Address,
     shred_version: u16,
 
-    // For std.meta.eql compatibility insice `serviceMap`
+    // For std.meta.eql compatibility inside `serviceMap`
     pub const Address = extern struct {
         is_v6: bool,
         ip: [16]u8,
