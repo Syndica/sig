@@ -34,6 +34,7 @@ const GetTokenAccountsByOwner = sig.rpc.methods.GetTokenAccountsByOwner;
 const AccountEncoding = account_codec.AccountEncoding;
 const CommitmentSlotConfig = sig.rpc.methods.common.CommitmentSlotConfig;
 const RpcFilterType = sig.rpc.filters.RpcFilterType;
+const slot_resolution = @import("./slot_resolution.zig");
 
 const AccountHookContext = @This();
 
@@ -53,26 +54,11 @@ pub fn getAccountInfo(
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L545
     const encoding = config.encoding orelse AccountEncoding.binary;
 
-    var slot = self.slot_tracker.commitments.get(commitment);
-    if (config.minContextSlot) |min_slot| {
-        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
-
-    // [agave] Commitment resolution is bank-based and resilient: when the
-    // commitment-selected bank is missing, Agave falls back to root-bank
-    // instead of immediately returning an RPC error.
-    // - bank selection: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L345-L376
-    // - fallback to root-bank: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L377-L394
-    //
-    // Sig currently resolves by slot, not `Arc<Bank>`. To match Agave's
-    // availability intent in this path, we degrade to the processed slot when
-    // a finalized/confirmed slot is not yet materialized in `SlotTracker`.
-    if (commitment != .processed and !self.slot_tracker.contains(slot)) {
-        slot = self.slot_tracker.commitments.get(.processed);
-        if (config.minContextSlot) |min_slot| {
-            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-        }
-    }
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        commitment,
+        config.minContextSlot,
+    );
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
@@ -113,22 +99,11 @@ pub fn getBalance(
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
     const commitment = config.commitment orelse .finalized;
 
-    var slot = self.slot_tracker.commitments.get(commitment);
-    if (config.minContextSlot) |min_slot| {
-        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
-
-    // [agave] See commitment fallback behavior in rpc/src/rpc.rs:
-    // missing commitment-selected bank falls back to root-bank
-    // (https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L377-L394).
-    // Sig mirrors the same "prefer availability" behavior by retrying via the
-    // processed slot if the requested commitment slot is absent.
-    if (commitment != .processed and !self.slot_tracker.contains(slot)) {
-        slot = self.slot_tracker.commitments.get(.processed);
-        if (config.minContextSlot) |min_slot| {
-            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-        }
-    }
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        commitment,
+        config.minContextSlot,
+    );
 
     // Get slot reference to access ancestors
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
@@ -158,7 +133,11 @@ pub fn getTokenAccountBalance(
     const config: GetTokenAccountBalance.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        commitment,
+        null,
+    );
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
@@ -216,7 +195,11 @@ pub fn getTokenSupply(
     const config: GetTokenSupply.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        commitment,
+        null,
+    );
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
@@ -282,21 +265,11 @@ pub fn getMultipleAccounts(
     const config = params.config orelse GetAccountInfo.Config{};
     const commitment = config.commitment orelse .finalized;
     const encoding = config.encoding orelse AccountEncoding.base64;
-    var slot = self.slot_tracker.commitments.get(commitment);
-    if (config.minContextSlot) |min_slot| {
-        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
-
-    // [agave] Same rationale as get_account_info/get_balance: RPC uses a
-    // resilient commitment-to-bank mapping and falls back to root-bank when the
-    // selected bank slot is missing (rpc/src/rpc.rs#L377-L394). Here we mirror
-    // this intent in slot-space by retrying with processed.
-    if (commitment != .processed and !self.slot_tracker.contains(slot)) {
-        slot = self.slot_tracker.commitments.get(.processed);
-        if (config.minContextSlot) |min_slot| {
-            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-        }
-    }
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        commitment,
+        config.minContextSlot,
+    );
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
@@ -350,29 +323,11 @@ pub fn getFeeForMessage(
     const config: GetFeeForMessage.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
-    var slot = self.slot_tracker.commitments.get(commitment);
-
-    if (config.minContextSlot) |min_slot| {
-        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
-
-    // [agave] `get_fee_for_message` first resolves a bank by commitment, then
-    // computes fee in that bank context:
-    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L4254-L4278
-    //
-    // Bank resolution itself is resilient and falls back to root-bank when the
-    // commitment-selected bank is missing:
-    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L345-L394
-    //
-    // Sig currently resolves by slot. To preserve Agave's "don't fail on
-    // transient missing commitment slot" behavior, we retry through processed
-    // and then root-slot before returning SlotNotAvailable.
-    if (commitment != .processed and !self.slot_tracker.contains(slot)) {
-        slot = self.slot_tracker.commitments.get(.processed);
-        if (config.minContextSlot) |min_slot| {
-            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-        }
-    }
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        commitment,
+        config.minContextSlot,
+    );
 
     const slot_ref = blk: {
         if (self.slot_tracker.get(slot)) |ref| break :blk ref;
@@ -538,10 +493,11 @@ pub fn getProgramAccounts(
     const f = config.filters orelse &.{};
     try sig.rpc.filters.verifyFilters(f);
 
-    const slot = self.slot_tracker.commitments.get(commitment);
-    if (config.minContextSlot) |min_slot| {
-        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        commitment,
+        config.minContextSlot,
+    );
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
@@ -607,10 +563,11 @@ pub fn getTokenAccountsByOwner(
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2098
     const encoding = config.encoding orelse AccountEncoding.binary;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
-    if (config.minContextSlot) |min_slot| {
-        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        commitment,
+        config.minContextSlot,
+    );
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();

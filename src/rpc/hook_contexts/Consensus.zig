@@ -4,6 +4,7 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const common = sig.rpc.methods.common;
+const slot_resolution = @import("./slot_resolution.zig");
 
 const Slot = sig.core.Slot;
 const SlotRef = sig.replay.trackers.SlotTracker.Reference;
@@ -43,34 +44,11 @@ fn resolveCommitmentSlot(
     commitment: ?Commitment,
     min_context_slot: ?Slot,
 ) !Slot {
-    const resolved_commitment = commitment orelse .finalized;
-    var slot = self.slot_tracker.commitments.get(resolved_commitment);
-
-    if (min_context_slot) |min_slot| {
-        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
-
-    // [agave] RPC does not fail immediately when the commitment-selected slot
-    // is missing. It selects a bank for the requested commitment and falls
-    // back to root-bank if that bank is absent:
-    // - bank selection: rpc/src/rpc.rs#L345-L376
-    // - missing-slot fallback to root: rpc/src/rpc.rs#L377-L394
-    //
-    // In sig we don't yet hold `Arc<Bank>` objects in this path, so we apply
-    // the equivalent intent in slot-space: if the requested commitment slot is
-    // not materialized in `SlotTracker`, first try the processed commitment
-    // slot (closest live view), and downstream callers still retain a root-slot
-    // fallback where needed.
-    if (resolved_commitment != .processed and
-        !self.slot_tracker.contains(slot))
-    {
-        slot = self.slot_tracker.commitments.get(.processed);
-        if (min_context_slot) |min_slot| {
-            if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-        }
-    }
-
-    return slot;
+    return slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        commitment,
+        min_context_slot,
+    );
 }
 
 /// Resolves commitment config to a slot and returns the slot number along

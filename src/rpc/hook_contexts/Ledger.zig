@@ -5,6 +5,7 @@ const sig = @import("../../sig.zig");
 const base58 = @import("base58");
 const methods = @import("../methods.zig");
 const parse_instruction = @import("../parse_instruction/lib.zig");
+const slot_resolution = @import("./slot_resolution.zig");
 
 const AccountKeys = parse_instruction.AccountKeys;
 const Allocator = std.mem.Allocator;
@@ -400,9 +401,7 @@ pub fn getInflationReward(
     // Determine the epoch to query. Default: current_epoch - 1.
     const current_slot = self.commitments.get(commitment);
 
-    if (config.minContextSlot) |min_slot| {
-        if (current_slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
+    try slot_resolution.validateMinContextSlot(current_slot, config.minContextSlot);
 
     const epoch = config.epoch orelse self.epoch_tracker.epoch_schedule.getEpoch(current_slot) -| 1;
 
@@ -591,16 +590,24 @@ pub fn getSignaturesForAddress(
     // processed is not supported
     if (commitment == .processed) return error.ProcessedNotSupported;
 
-    const highest_finalized_slot = self.commitments.get(.finalized);
+    const highest_finalized_slot = try slot_resolution.slotFromCommitment(
+        self.commitments,
+        .finalized,
+        null,
+    );
     const highest_slot: Slot = switch (commitment) {
-        .confirmed => self.commitments.get(.confirmed),
-        .finalized => highest_finalized_slot,
+        .confirmed => try slot_resolution.slotFromCommitment(
+            self.commitments,
+            .confirmed,
+            config.minContextSlot,
+        ),
+        .finalized => try slot_resolution.slotFromCommitment(
+            self.commitments,
+            .finalized,
+            config.minContextSlot,
+        ),
         .processed => unreachable,
     };
-
-    if (config.minContextSlot) |min_slot| {
-        if (highest_slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
 
     const limit = config.getLimit();
     if (limit == 0 or limit > 1000) return error.InvalidParams; // TODO: invalid params should return a more specific error
