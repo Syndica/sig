@@ -361,14 +361,14 @@ test "Request duplicate & ignored fields (non-standard)" {
 
 test "Request parse errors" {
     try std.testing.expectError(
-        error.MissingField,
+        error.LengthMismatch,
         std.json.parseFromSliceLeaky(Request, std.testing.allocator,
             \\{"jsonrpc":"2.0","id":42,"id":"33","method":"getBalance","method":"getAccountInfo"}
         , .{ .duplicate_field_behavior = .use_first }),
     );
 
     try std.testing.expectError(
-        error.MissingField,
+        error.LengthMismatch,
         std.json.parseFromSliceLeaky(Request, std.testing.allocator,
             \\{"jsonrpc":"2.0","id":null,"method":"getBalance"}
         , .{}),
