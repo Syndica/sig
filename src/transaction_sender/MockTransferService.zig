@@ -303,7 +303,7 @@ fn buildTransfer(
     from_account: *Account,
     to_account: *Account,
 ) !TransactionInfo {
-    const blockhash = try self.getLatestBlockhash(.confirmed);
+    const blockhash = try self.getLatestBlockhash(.finalized);
 
     const transaction = try buildTransferTransaction(
         gpa,

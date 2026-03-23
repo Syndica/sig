@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("sig");
 
-const RpcClient = sig.rpc.Client;
 const ExitCondition = sig.sync.ExitCondition;
 
 const Logger = sig.trace.log.Logger("test_mock_transfers");
@@ -16,12 +15,14 @@ fn printUsage() void {
             "  <num_transactions>    Number of transactions to send (required)\n\n" ++
             "Options:\n" ++
             "  --rpc-url <url>           RPC URL for state queries (default: {s})\n" ++
-            "  --submit-rpc-url <url>    RPC URL for submitting transactions (defaults to --rpc-url)\n" ++
+            "  --submit-rpc-url <url>    RPC URL for submitting transactions " ++
+            "(defaults to --rpc-url)\n" ++
             "  --skip-preflight          Skip preflight simulation\n\n" ++
             "Example:\n" ++
             "  test-mock-transfers 10\n" ++
             "  test-mock-transfers 10 --skip-preflight\n" ++
-            "  test-mock-transfers 10 --rpc-url https://api.testnet.solana.com --submit-rpc-url http://localhost:8899\n",
+            "  test-mock-transfers 10 --rpc-url https://api.testnet.solana.com " ++
+            "--submit-rpc-url http://localhost:8899\n",
         .{DEFAULT_RPC_URL},
     );
 }

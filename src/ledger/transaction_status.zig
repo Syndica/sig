@@ -655,12 +655,22 @@ test "TransactionStatusMetaBuilder.extractLogMessages" {
 
         const processed = PT{
             .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
-            .rent = 0, .writes = .{}, .err = null, .loaded_accounts_data_size = 0,
+            .rent = 0,
+            .writes = .{},
+            .err = null,
+            .loaded_accounts_data_size = 0,
             .outputs = ExecutedTransaction{
-                .err = null, .log_collector = log_collector, .instruction_trace = null,
-                .return_data = null, .compute_limit = 0, .compute_meter = 0, .accounts_data_len_delta = 0,
+                .err = null,
+                .log_collector = log_collector,
+                .instruction_trace = null,
+                .return_data = null,
+                .compute_limit = 0,
+                .compute_meter = 0,
+                .accounts_data_len_delta = 0,
             },
-            .pre_balances = .{}, .pre_token_balances = .{}, .cost_units = 0,
+            .pre_balances = .{},
+            .pre_token_balances = .{},
+            .cost_units = 0,
         };
 
         const messages = (try TransactionStatusMetaBuilder.extractLogMessages(
@@ -681,12 +691,22 @@ test "TransactionStatusMetaBuilder.extractLogMessages" {
 
         const processed = PT{
             .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
-            .rent = 0, .writes = .{}, .err = null, .loaded_accounts_data_size = 0,
+            .rent = 0,
+            .writes = .{},
+            .err = null,
+            .loaded_accounts_data_size = 0,
             .outputs = ExecutedTransaction{
-                .err = null, .log_collector = log_collector, .instruction_trace = null,
-                .return_data = null, .compute_limit = 0, .compute_meter = 0, .accounts_data_len_delta = 0,
+                .err = null,
+                .log_collector = log_collector,
+                .instruction_trace = null,
+                .return_data = null,
+                .compute_limit = 0,
+                .compute_meter = 0,
+                .accounts_data_len_delta = 0,
             },
-            .pre_balances = .{}, .pre_token_balances = .{}, .cost_units = 0,
+            .pre_balances = .{},
+            .pre_token_balances = .{},
+            .cost_units = 0,
         };
 
         const messages = (try TransactionStatusMetaBuilder.extractLogMessages(
@@ -701,9 +721,14 @@ test "TransactionStatusMetaBuilder.extractLogMessages" {
     {
         const processed = PT{
             .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
-            .rent = 0, .writes = .{}, .err = null, .loaded_accounts_data_size = 0,
+            .rent = 0,
+            .writes = .{},
+            .err = null,
+            .loaded_accounts_data_size = 0,
             .outputs = null,
-            .pre_balances = .{}, .pre_token_balances = .{}, .cost_units = 0,
+            .pre_balances = .{},
+            .pre_token_balances = .{},
+            .cost_units = 0,
         };
 
         const messages = try TransactionStatusMetaBuilder.extractLogMessages(
@@ -729,12 +754,22 @@ test "TransactionStatusMetaBuilder.convertReturnData" {
 
     const processed = PT{
         .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
-        .rent = 0, .writes = .{}, .err = null, .loaded_accounts_data_size = 0,
+        .rent = 0,
+        .writes = .{},
+        .err = null,
+        .loaded_accounts_data_size = 0,
         .outputs = ExecutedTransaction{
-            .err = null, .log_collector = null, .instruction_trace = null,
-            .return_data = rt_return_data, .compute_limit = 0, .compute_meter = 0, .accounts_data_len_delta = 0,
+            .err = null,
+            .log_collector = null,
+            .instruction_trace = null,
+            .return_data = rt_return_data,
+            .compute_limit = 0,
+            .compute_meter = 0,
+            .accounts_data_len_delta = 0,
         },
-        .pre_balances = .{}, .pre_token_balances = .{}, .cost_units = 0,
+        .pre_balances = .{},
+        .pre_token_balances = .{},
+        .cost_units = 0,
     };
 
     const result = (try TransactionStatusMetaBuilder.convertReturnData(allocator, processed)).?;
@@ -850,15 +885,28 @@ test "TransactionStatusMetaBuilder.convertInstructionTrace" {
 
     const processed = PT{
         .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
-        .rent = 0, .writes = .{}, .err = null, .loaded_accounts_data_size = 0,
+        .rent = 0,
+        .writes = .{},
+        .err = null,
+        .loaded_accounts_data_size = 0,
         .outputs = ExecutedTransaction{
-            .err = null, .log_collector = null, .instruction_trace = trace,
-            .return_data = null, .compute_limit = 0, .compute_meter = 0, .accounts_data_len_delta = 0,
+            .err = null,
+            .log_collector = null,
+            .instruction_trace = trace,
+            .return_data = null,
+            .compute_limit = 0,
+            .compute_meter = 0,
+            .accounts_data_len_delta = 0,
         },
-        .pre_balances = .{}, .pre_token_balances = .{}, .cost_units = 0,
+        .pre_balances = .{},
+        .pre_token_balances = .{},
+        .cost_units = 0,
     };
 
-    const result = (try TransactionStatusMetaBuilder.convertInstructionTrace(allocator, processed)).?;
+    const result = (try TransactionStatusMetaBuilder.convertInstructionTrace(
+        allocator,
+        processed,
+    )).?;
     defer {
         for (result) |item| item.deinit(allocator);
         allocator.free(result);
@@ -884,15 +932,28 @@ test "TransactionStatusMetaBuilder.convertInstructionTrace - empty trace" {
     const trace = InstructionTrace{};
     const processed = PT{
         .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
-        .rent = 0, .writes = .{}, .err = null, .loaded_accounts_data_size = 0,
+        .rent = 0,
+        .writes = .{},
+        .err = null,
+        .loaded_accounts_data_size = 0,
         .outputs = ExecutedTransaction{
-            .err = null, .log_collector = null, .instruction_trace = trace,
-            .return_data = null, .compute_limit = 0, .compute_meter = 0, .accounts_data_len_delta = 0,
+            .err = null,
+            .log_collector = null,
+            .instruction_trace = trace,
+            .return_data = null,
+            .compute_limit = 0,
+            .compute_meter = 0,
+            .accounts_data_len_delta = 0,
         },
-        .pre_balances = .{}, .pre_token_balances = .{}, .cost_units = 0,
+        .pre_balances = .{},
+        .pre_token_balances = .{},
+        .cost_units = 0,
     };
 
-    const result = (try TransactionStatusMetaBuilder.convertInstructionTrace(allocator, processed)).?;
+    const result = (try TransactionStatusMetaBuilder.convertInstructionTrace(
+        allocator,
+        processed,
+    )).?;
     // Empty trace returns static empty slice
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }

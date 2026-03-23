@@ -1627,7 +1627,9 @@ pub const SendTransaction = struct {
                 .signature => |s| try jw.write(s),
                 // preflight_failure is handled by the server layer as a JSON-RPC error,
                 // not serialized through the normal result path.
-                .preflight_failure => @panic("preflight_failure must be handled by the server layer before serialization"),
+                .preflight_failure => @panic(
+                    "preflight_failure must be handled by the server layer before serialization",
+                ),
             }
         }
     };

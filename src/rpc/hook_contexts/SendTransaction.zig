@@ -14,7 +14,6 @@ const GetBlock = methods.GetBlock;
 const GetLatestBlockhashValue = methods.GetLatestBlockhash.Response.Value;
 const Hash = sig.core.Hash;
 const InnerInstructions = sig.ledger.transaction_status.InnerInstructions;
-const InstructionTrace = sig.runtime.TransactionContext.InstructionTrace;
 const Message = sig.core.transaction.Message;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 const Pubkey = sig.core.Pubkey;
@@ -76,7 +75,8 @@ pub fn sendTransaction(
     if (config.minContextSlot) |min_slot| {
         if (preflight_slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
-    const preflight_slot_ref = self.slot_tracker.get(preflight_slot) orelse unreachable;
+    const preflight_slot_ref = self.slot_tracker.get(preflight_slot) orelse
+        return error.PreflightSlotNotAvailable;
     defer preflight_slot_ref.release();
 
     const transaction = try sanitizeTransaction(
@@ -147,7 +147,7 @@ pub fn simulateTransaction(
 ) !SimulateTransaction.Response {
     const config: SimulateTransaction.Config = params.config orelse .{};
     const encoding = config.resolveEncoding() orelse return error.UnsupportedEncoding;
-    _, var unsanitized_tx = try decodeAndDeserialize(
+    _, _, var unsanitized_tx = try decodeAndDeserialize(
         arena,
         params.transaction,
         encoding,
@@ -176,9 +176,8 @@ pub fn simulateTransaction(
             recent_blockhash,
         ) orelse return error.SlotNotAvailable;
 
-        const blockhash_str = recent_blockhash.base58String();
         break :blk .{
-            .blockhash = try arena.dupe(u8, blockhash_str.constSlice()),
+            .blockhash = recent_blockhash,
             .lastValidBlockHeight = last_valid_block_height,
         };
     } else null;
@@ -205,51 +204,60 @@ pub fn simulateTransaction(
 
     // Build accounts response if requested.
     // [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4030-L4074
-    const accounts: ?[]const ?GetAccountInfo.Response.Value = if (config.accounts) |accounts_config| blk: {
-        const accounts_encoding = accounts_config.encoding orelse .base64;
-        if (accounts_encoding == .binary or accounts_encoding == .base58) {
-            return error.InvalidParams;
-        }
+    const accounts: ?[]const ?GetAccountInfo.Response.Value =
+        if (config.accounts) |accounts_config| blk: {
+            const accounts_encoding = accounts_config.encoding orelse .base64;
+            if (accounts_encoding == .binary or accounts_encoding == .base58) {
+                return error.InvalidParams;
+            }
 
-        if (accounts_config.addresses.len > transaction.accounts.len) {
-            return error.InvalidParams;
-        }
+            if (accounts_config.addresses.len > transaction.accounts.len) {
+                return error.InvalidParams;
+            }
 
-        // If simulation had an error, return null for each requested account.
-        if (simulation_result.err != null) {
-            const nulls = try arena.alloc(?GetAccountInfo.Response.Value, accounts_config.addresses.len);
-            @memset(nulls, null);
-            break :blk nulls;
-        }
+            // If simulation had an error, return null for each requested account.
+            if (simulation_result.err != null) {
+                const nulls = try arena.alloc(
+                    ?GetAccountInfo.Response.Value,
+                    accounts_config.addresses.len,
+                );
+                @memset(nulls, null);
+                break :blk nulls;
+            }
 
-        const result = try arena.alloc(?GetAccountInfo.Response.Value, accounts_config.addresses.len);
-        for (accounts_config.addresses, 0..) |address, i| {
-            result[i] = try getSimulatedAccount(
-                arena,
-                address,
-                accounts_encoding,
-                simulation_result.post_simulation_accounts,
-                slot_account_reader,
+            const result = try arena.alloc(
+                ?GetAccountInfo.Response.Value,
+                accounts_config.addresses.len,
             );
-        }
-        break :blk result;
-    } else null;
+            for (accounts_config.addresses, 0..) |address, i| {
+                result[i] = try getSimulatedAccount(
+                    arena,
+                    address,
+                    accounts_encoding,
+                    simulation_result.post_simulation_accounts,
+                    slot_account_reader,
+                );
+            }
+            break :blk result;
+        } else null;
 
     // Convert inner instructions if requested.
     // [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4076-L4080
-    const inner_instructions: ?[]const parse_instruction.UiInnerInstructions = if (config.innerInstructions)
-        if (simulation_result.inner_instructions) |iis|
-            try convertInnerInstructions(arena, iis)
+    const inner_instructions: ?[]const parse_instruction.UiInnerInstructions =
+        if (config.innerInstructions)
+            if (simulation_result.inner_instructions) |iis|
+                try convertInnerInstructions(arena, iis)
+            else
+                null
         else
-            null
-    else
-        null;
+            null;
 
     // Convert return data to UI format (base64 encode).
-    const return_data: ?GetBlock.Response.UiTransactionReturnData = if (simulation_result.return_data) |rd|
-        try convertReturnDataToUi(arena, rd)
-    else
-        null;
+    const return_data: ?GetBlock.Response.UiTransactionReturnData =
+        if (simulation_result.return_data) |rd|
+            try convertReturnDataToUi(arena, rd)
+        else
+            null;
 
     // Resolve and convert token balances.
     // Uses a FallbackAccountReader that checks post-simulation writes first, then the bank.
@@ -461,18 +469,19 @@ fn simulateRuntimeTransaction(
     // to the account store — the preflight slot may be finalized/rooted,
     // and writing to a rooted slot would fail with CannotWriteRootedSlot.
     const environment = try svm_gateway.environment();
-    const processed_transaction = switch (try sig.runtime.transaction_execution.loadAndExecuteTransaction(
-        arena,
-        arena,
-        &transaction,
-        svm_gateway.params.account_store.reader(),
-        &environment,
-        &.{ .log = true, .log_messages_byte_limit = null },
-        &svm_gateway.state.programs,
-    )) {
-        .ok => |processed_transaction| processed_transaction,
-        .err => |err| return .{ .err = err },
-    };
+    const processed_transaction =
+        switch (try sig.runtime.transaction_execution.loadAndExecuteTransaction(
+            arena,
+            arena,
+            &transaction,
+            svm_gateway.params.account_store.reader(),
+            &environment,
+            &.{ .log = true, .log_messages_byte_limit = null },
+            &svm_gateway.state.programs,
+        )) {
+            .ok => |processed_transaction| processed_transaction,
+            .err => |err| return .{ .err = err },
+        };
 
     const outputs = processed_transaction.outputs;
 
@@ -703,7 +712,11 @@ const SimulationFallbackAccountReader = struct {
         }
     };
 
-    pub fn get(self: SimulationFallbackAccountReader, allocator: Allocator, pubkey: Pubkey) !?StubAccount {
+    pub fn get(
+        self: SimulationFallbackAccountReader,
+        allocator: Allocator,
+        pubkey: Pubkey,
+    ) !?StubAccount {
         // Check post-simulation writes first.
         for (self.writes) |*account| {
             if (account.pubkey.equals(&pubkey)) {
