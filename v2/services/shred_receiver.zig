@@ -1138,7 +1138,6 @@ fn reconstructFecSet(fec_set_ctx: *FecSetCtx) void {
 }
 
 var state: State = .empty;
-var bincode_buf: [1024 * 1024 * 1024]u8 = undefined;
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     std.log.info("Waiting for shreds on port {}", .{rw.pair.port});
@@ -1399,6 +1398,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             const n_entries: u64 = @bitCast(deshredded_bytes[0..8].*);
             std.log.info("n_entries: {}", .{n_entries});
 
+            var bincode_buf: [64 * 1024]u8 = undefined;
             var bincode_fba = std.heap.FixedBufferAllocator.init(&bincode_buf);
             const bincode_fba_allocator = bincode_fba.allocator();
 
@@ -1496,19 +1496,17 @@ const compact_u16: bk.Codec(u16) = .implement(void, void, struct {
         _: void,
     ) bk.DecodeFromReaderError!void {
         for (values, 0..) |*value, i| {
+            errdefer decoded_count.* = i;
+
             var result: u16 = 0;
             var shift: u4 = 0;
             for (0..3) |_| {
-                const byte = reader.takeByte() catch |err| {
-                    decoded_count.* = i;
-                    return err;
-                };
+                const byte = try reader.takeByte();
                 result |= @as(u16, byte & 0x7f) << shift;
                 if (byte & 0x80 == 0) break;
                 shift += 7;
             } else {
                 // Fourth byte would be needed → overflow for u16
-                decoded_count.* = i;
                 return error.DecodeFailed;
             }
             value.* = result;
@@ -1524,14 +1522,11 @@ const compact_u16: bk.Codec(u16) = .implement(void, void, struct {
         _: void,
     ) bk.DecodeSkipError!void {
         for (0..value_count) |i| {
+            errdefer decoded_count.* = i;
             for (0..3) |_| {
-                const byte = reader.takeByte() catch |err| {
-                    decoded_count.* = i;
-                    return err;
-                };
+                const byte = try reader.takeByte();
                 if (byte & 0x80 == 0) break;
             } else {
-                decoded_count.* = i;
                 return error.DecodeFailed;
             }
         }
@@ -1544,7 +1539,7 @@ const compact_u16: bk.Codec(u16) = .implement(void, void, struct {
 /// Returns a binkode codec for a slice type `[]T` where the length is encoded as a compact-u16
 /// (ShortVec) rather than the standard bincode u64 prefix.
 /// This mirrors Solana's ShortVec encoding used for transaction sub-arrays.
-fn ShortVec(comptime Element: type, comptime element: bk.Codec(Element)) bk.Codec([]Element) {
+fn shortVec(comptime Element: type, comptime element: bk.Codec(Element)) bk.Codec([]Element) {
     return comptime .implement(element.EncodeCtx, element.DecodeCtx, struct {
         pub fn encode(
             writer: *std.Io.Writer,
@@ -1559,15 +1554,11 @@ fn ShortVec(comptime Element: type, comptime element: bk.Codec(Element)) bk.Code
             for (values[0..max_count]) |slice_val| {
                 // Write compact-u16 length
                 const len: u16 = std.math.cast(u16, slice_val.len) orelse return error.EncodeFailed;
-                const len_counts = compact_u16.encodeOnePartialRaw(writer, config, &len, null, .unlimited, {}) catch
-                    return error.EncodeFailed;
+                const len_counts = try compact_u16.encodeOnePartialRaw(writer, config, &len, null, .unlimited, {});
                 byte_count += len_counts.byte_count;
 
                 // Write elements
-                const elem_counts = element.encodeManyPartialRaw(writer, config, slice_val, null, .unlimited, ctx) catch |err| switch (err) {
-                    error.WriteFailed => |e| return e,
-                    error.EncodeFailed => |e| return e,
-                };
+                const elem_counts = try element.encodeManyPartialRaw(writer, config, slice_val, null, .unlimited, ctx);
                 byte_count += elem_counts.byte_count;
             }
             return .{ .value_count = max_count, .byte_count = byte_count };
@@ -1597,26 +1588,16 @@ fn ShortVec(comptime Element: type, comptime element: bk.Codec(Element)) bk.Code
             for (values, 0..) |*value, i| {
                 errdefer decoded_count.* = i;
 
-                // Read compact-u16 length
-                const len = compact_u16.decode(reader, null, .default, {}) catch |err| switch (err) {
-                    error.OutOfMemory => unreachable,
-                    else => |e| return e,
-                };
+                const len = try compact_u16.decode(reader, null, .default, {});
 
-                // Allocate slice for elements
                 const elems = try gpa.alloc(Element, len);
                 errdefer gpa.free(elems);
 
-                // Decode elements into the allocated slice
-                element.decodeInitMany(gpa, elems, ctx) catch |err| {
-                    gpa.free(elems);
-                    return err;
-                };
-                element.decodeIntoMany(reader, gpa, config, elems, ctx) catch |err| {
-                    element.freeMany(gpa, elems, ctx);
-                    gpa.free(elems);
-                    return err;
-                };
+                // decode into elems
+                try element.decodeInitMany(gpa, elems, ctx);
+                errdefer element.freeMany(gpa, elems, ctx);
+
+                try element.decodeIntoMany(reader, gpa, config, elems, ctx);
 
                 value.* = elems;
             }
@@ -1632,13 +1613,8 @@ fn ShortVec(comptime Element: type, comptime element: bk.Codec(Element)) bk.Code
         ) bk.DecodeSkipError!void {
             for (0..value_count) |i| {
                 errdefer decoded_count.* = i;
-                const len = compact_u16.decode(reader, null, .default, null) catch |err| switch (err) {
-                    error.OutOfMemory => unreachable,
-                    else => |e| return e,
-                };
-                element.decodeSkip(reader, config, len, ctx) catch |err| {
-                    return err;
-                };
+                const len = try compact_u16.decode(reader, null, .default, null);
+                try element.decodeSkip(reader, config, len, ctx);
             }
             decoded_count.* = value_count;
         }
@@ -1684,8 +1660,8 @@ const CompiledInstruction = struct {
 
     const bk_config: bk.Codec(CompiledInstruction) = .standard(.tuple(.{
         .program_id_index = .fixint,
-        .accounts = .from(ShortVec(u8, bk.StdCodec(u8).fixint.codec)),
-        .data = .from(ShortVec(u8, bk.StdCodec(u8).fixint.codec)),
+        .accounts = .from(shortVec(u8, bk.StdCodec(u8).fixint.codec)),
+        .data = .from(shortVec(u8, bk.StdCodec(u8).fixint.codec)),
     }));
 };
 
@@ -1696,8 +1672,8 @@ const AddressLookup = struct {
 
     const bk_config: bk.Codec(AddressLookup) = .standard(.tuple(.{
         .account_key = .from(pubkey_codec),
-        .writable_indexes = .from(ShortVec(u8, bk.StdCodec(u8).fixint.codec)),
-        .readonly_indexes = .from(ShortVec(u8, bk.StdCodec(u8).fixint.codec)),
+        .writable_indexes = .from(shortVec(u8, bk.StdCodec(u8).fixint.codec)),
+        .readonly_indexes = .from(shortVec(u8, bk.StdCodec(u8).fixint.codec)),
     }));
 };
 
@@ -1709,9 +1685,9 @@ const LegacyMessage = struct {
 
     const bk_config: bk.Codec(LegacyMessage) = .standard(.tuple(.{
         .header = .from(MessageHeader.bk_config),
-        .account_keys = .from(ShortVec(Pubkey, pubkey_codec)),
+        .account_keys = .from(shortVec(Pubkey, pubkey_codec)),
         .recent_blockhash = .from(hash_codec),
-        .instructions = .from(ShortVec(CompiledInstruction, CompiledInstruction.bk_config)),
+        .instructions = .from(shortVec(CompiledInstruction, CompiledInstruction.bk_config)),
     }));
 };
 
@@ -1724,10 +1700,10 @@ const V0Message = struct {
 
     const bk_config: bk.Codec(V0Message) = .standard(.tuple(.{
         .header = .from(MessageHeader.bk_config),
-        .account_keys = .from(ShortVec(Pubkey, pubkey_codec)),
+        .account_keys = .from(shortVec(Pubkey, pubkey_codec)),
         .recent_blockhash = .from(hash_codec),
-        .instructions = .from(ShortVec(CompiledInstruction, CompiledInstruction.bk_config)),
-        .address_table_lookups = .from(ShortVec(AddressLookup, AddressLookup.bk_config)),
+        .instructions = .from(shortVec(CompiledInstruction, CompiledInstruction.bk_config)),
+        .address_table_lookups = .from(shortVec(AddressLookup, AddressLookup.bk_config)),
     }));
 };
 
@@ -1802,48 +1778,29 @@ const VersionedMessage = union(enum) {
                 errdefer decoded_count.* = i;
 
                 // Peek the first byte to determine version.
-                const first_byte = reader.takeByte() catch |err| {
-                    decoded_count.* = i;
-                    return err;
-                };
+                const first_byte = try reader.takeByte();
 
                 if (first_byte & 0x80 == 0) {
                     // Legacy message. The byte we just read is num_required_signatures.
                     // We need to "put it back" — reconstruct by reading the remaining
                     // MessageHeader fields (2 more bytes), then the rest of the message.
-                    const num_readonly_signed = reader.takeByte() catch |err| {
-                        decoded_count.* = i;
-                        return err;
-                    };
-                    const num_readonly_unsigned = reader.takeByte() catch |err| {
-                        decoded_count.* = i;
-                        return err;
-                    };
-
-                    const header = MessageHeader{
+                    const num_readonly_signed = try reader.takeByte();
+                    const num_readonly_unsigned = try reader.takeByte();
+                    const header: MessageHeader = .{
                         .num_required_signatures = first_byte,
                         .num_readonly_signed_accounts = num_readonly_signed,
                         .num_readonly_unsigned_accounts = num_readonly_unsigned,
                     };
 
                     // Decode the remaining fields of LegacyMessage (account_keys, recent_blockhash, instructions)
-                    const account_keys_codec = ShortVec(Pubkey, pubkey_codec);
-                    const account_keys = account_keys_codec.decode(reader, gpa_opt, config, null) catch |err| {
-                        decoded_count.* = i;
-                        return err;
-                    };
+                    const account_keys_codec = shortVec(Pubkey, pubkey_codec);
+                    const account_keys = try account_keys_codec.decode(reader, gpa_opt, config, null);
 
                     var recent_blockhash: Hash = undefined;
-                    hash_codec.decodeIntoOne(reader, null, config, &recent_blockhash, null) catch |err| {
-                        decoded_count.* = i;
-                        return err;
-                    };
+                    try hash_codec.decodeIntoOne(reader, null, config, &recent_blockhash, null);
 
-                    const instructions_codec = ShortVec(CompiledInstruction, CompiledInstruction.bk_config);
-                    const instructions = instructions_codec.decode(reader, gpa_opt, config, null) catch |err| {
-                        decoded_count.* = i;
-                        return err;
-                    };
+                    const instructions_codec = shortVec(CompiledInstruction, CompiledInstruction.bk_config);
+                    const instructions = try instructions_codec.decode(reader, gpa_opt, config, null);
 
                     value.* = .{ .legacy = .{
                         .header = header,
@@ -1855,16 +1812,11 @@ const VersionedMessage = union(enum) {
                     // Versioned message. The byte was consumed. Check version.
                     const version = first_byte & 0x7F;
                     if (version != 0) {
-                        decoded_count.* = i;
                         return error.DecodeFailed; // unsupported version
                     }
 
                     // Decode V0Message
-                    const msg = V0Message.bk_config.decode(reader, gpa_opt, config, null) catch |err| {
-                        decoded_count.* = i;
-                        return err;
-                    };
-
+                    const msg = try V0Message.bk_config.decode(reader, gpa_opt, config, null);
                     value.* = .{ .v0 = msg };
                 }
             }
@@ -1882,52 +1834,22 @@ const VersionedMessage = union(enum) {
             // We decode into throwaway values without allocation concern (skip mode).
             for (0..value_count) |i| {
                 errdefer decoded_count.* = i;
-                const first_byte = reader.takeByte() catch |err| {
-                    decoded_count.* = i;
-                    return err;
-                };
+                const first_byte = try reader.takeByte();
 
                 if (first_byte & 0x80 == 0) {
                     // Legacy: skip remaining 2 header bytes + fields
-                    reader.discardAll(2) catch |err| {
-                        decoded_count.* = i;
-                        return err;
-                    };
+                    try reader.discardAll(2);
                     // Skip account_keys (shortVec of 32-byte pubkeys)
-                    const ak_len = compact_u16.decode(reader, null, .default, null) catch |err| switch (err) {
-                        error.OutOfMemory => unreachable,
-                        else => |e| {
-                            decoded_count.* = i;
-                            return e;
-                        },
-                    };
-                    reader.discardAll(ak_len * Pubkey.SIZE) catch |err| {
-                        decoded_count.* = i;
-                        return err;
-                    };
+                    const ak_len = try compact_u16.decode(reader, null, .default, null);
+                    try reader.discardAll(ak_len * Pubkey.SIZE);
                     // Skip recent_blockhash
-                    reader.discardAll(Hash.SIZE) catch |err| {
-                        decoded_count.* = i;
-                        return err;
-                    };
+                    try reader.discardAll(Hash.SIZE);
                     // Skip instructions
-                    const ix_len = compact_u16.decode(reader, null, .default, null) catch |err| switch (err) {
-                        error.OutOfMemory => unreachable,
-                        else => |e| {
-                            decoded_count.* = i;
-                            return e;
-                        },
-                    };
-                    CompiledInstruction.bk_config.decodeSkip(reader, config, ix_len, {}) catch |err| {
-                        decoded_count.* = i;
-                        return err;
-                    };
+                    const ix_len = try compact_u16.decode(reader, null, .default, null);
+                    try CompiledInstruction.bk_config.decodeSkip(reader, config, ix_len, {});
                 } else {
                     // V0: version byte already consumed. Skip V0Message.
-                    V0Message.bk_config.decodeSkip(reader, config, 1, {}) catch |err| {
-                        decoded_count.* = i;
-                        return err;
-                    };
+                    try V0Message.bk_config.decodeSkip(reader, config, 1, {});
                 }
             }
             decoded_count.* = value_count;
@@ -1953,7 +1875,7 @@ const VersionedTransaction = struct {
     message: VersionedMessage,
 
     const bk_config: bk.Codec(VersionedTransaction) = .standard(.tuple(.{
-        .signatures = .from(ShortVec(Signature, Signature.bk_config)),
+        .signatures = .from(shortVec(Signature, Signature.bk_config)),
         .message = .from(VersionedMessage.bk_config),
     }));
 };
