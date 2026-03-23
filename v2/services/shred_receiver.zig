@@ -821,30 +821,20 @@ fn processPacket(
         }
     }
 
-    std.log.info("shred {} ({s}) passing baseline checks", .{
-        @as(FecSetId, .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot }),
-        if (shred.variant.isCode()) "code" else "data",
-    });
-
     const fec_set_id: FecSetId = .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot };
 
     // is fec set already being built?
     const maybe_fec_set = state.in_progress.getFecSetCtx(&shred.signature);
     if (maybe_fec_set == null) {
-        std.log.info("got shred in unknown fec set", .{});
-
         // fec set is not currently being built (likely finished already)
 
         // ignore shreds from already finished fec sets
         if (state.done.get(&fec_set_id)) |finished_set| {
             const signature_hash = hashSignature(&shred.signature);
             if (signature_hash == finished_set.*) {
-                std.log.info("got shred from finished fec set", .{});
-
                 return .fec_set_already_finished;
             } else {
                 // we got a different hash, for the same FecSetId, this is equivocation
-                std.log.info("found equivocated shred?", .{});
                 return error.EquivocationDifferentHashForSameFecSetId;
             }
         }
@@ -861,21 +851,10 @@ fn processPacket(
     const fec_set_ctx: *FecSetCtx = if (maybe_fec_set) |fec_set_ctx| blk: {
         @branchHint(.likely); // fec set is being constructed, and this is not the first shred
 
-        std.log.info("got shred in in-progress fec set", .{});
-
         // variant should match that of the first recorded shred in the fec set
         if ((shred.variant.isData() and !shred.variant.eql(fec_set_ctx.data_variant)) or
             (shred.variant.isCode() and !shred.variant.eql(fec_set_ctx.code_variant)))
         {
-            std.log.info(
-                "dropping shred with variant mismatch, found {}, found_but_swapped: {}, expected_data: {}, expected_code: {}",
-                .{
-                    shred.variant,
-                    shred.variant.swapType(),
-                    fec_set_ctx.data_variant,
-                    fec_set_ctx.code_variant,
-                },
-            );
             return error.VariantMismatchFromFecSet;
         }
 
@@ -889,7 +868,6 @@ fn processPacket(
         break :blk fec_set_ctx;
     } else blk: {
         @branchHint(.unlikely); // this is the first shred of a new in-progress fec set
-        std.log.info("got shred in new fec set", .{});
 
         {
             const verify_zone = tracy.Zone.init(@src(), .{ .name = "sig verify" });
@@ -901,7 +879,6 @@ fn processPacket(
             );
         }
 
-        std.log.info("got verified shred in new fec set", .{});
         // shred looks good, let's add a new ctx to in_progress
 
         const new_fec_set_idx = state.in_progress.allocFecSetCtx(fec_set_id);
@@ -943,7 +920,6 @@ fn processPacket(
 
     if (shred.variant.isCode()) {
         if (fec_set_ctx.code_shreds_received.isSet(in_type_idx)) {
-            std.log.info("shred already in fec set, skipping", .{});
             return .shred_already_seen;
         }
 
@@ -952,7 +928,6 @@ fn processPacket(
     }
     if (shred.variant.isData()) {
         if (fec_set_ctx.data_shreds_received.isSet(in_type_idx)) {
-            std.log.info("shred already in fec set, skipping", .{});
             return .shred_already_seen;
         }
 
@@ -961,8 +936,6 @@ fn processPacket(
     }
 
     std.debug.assert(fec_set_ctx.totalShredsReceived() >= 1); // we just received one
-
-    std.log.info("got {}/32 shreds", .{fec_set_ctx.totalShredsReceived()});
 
     if (fec_set_ctx.totalShredsReceived() < FecSetCtx.fec_shred_cnt) {
         // we're all good, but we haven't received enough to reconstruct the fec set yet
@@ -975,7 +948,6 @@ fn processPacket(
 
     // starting fec set reconstruction now
     reedsol.reconstructFecSet(fec_set_ctx);
-
     std.debug.assert(fec_set_ctx.data_shreds_received.count() == FecSetCtx.data_shreds_max);
 
     return .{ .fec_set_finished = .{ .data_shreds = &fec_set_ctx.data_shreds_buf } };
