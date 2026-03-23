@@ -98,7 +98,7 @@ pub const MethodAndParams = union(enum) {
     minimumLedgerSlot: noreturn,
     requestAirdrop: RequestAirdrop,
     sendTransaction: SendTransaction,
-    simulateTransaction: noreturn,
+    simulateTransaction: SimulateTransaction,
 
     pub const Tag = @typeInfo(MethodAndParams).@"union".tag_type.?;
 
@@ -1644,7 +1644,50 @@ pub const SendTransaction = struct {
     };
 };
 
-// TODO: simulateTransaction
+pub const SimulateTransaction = struct {
+    transaction: []const u8,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        encoding: ?common.TransactionEncoding = null,
+        replaceRecentBlockhash: bool = false,
+        sigVerify: bool = false,
+        minContextSlot: ?Slot = null,
+        innerInstructions: bool = false,
+        accounts: ?AccountsConfig = null,
+
+        pub fn resolveEncoding(self: Config) ?common.TransactionBinaryEncoding {
+            const encoding = self.encoding orelse .base58;
+            return encoding.toBinaryEncoding();
+        }
+    };
+
+    pub const AccountsConfig = struct {
+        encoding: ?common.AccountEncoding = null,
+        addresses: []const Pubkey,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        value: struct {
+            err: ?sig.ledger.transaction_status.TransactionError = null,
+            logs: ?[]const []const u8 = null,
+            accounts: ?[]const ?GetAccountInfo.Response.Value = null,
+            unitsConsumed: ?u64 = null,
+            loadedAccountsDataSize: ?u32 = null,
+            returnData: ?GetBlock.Response.UiTransactionReturnData = null,
+            innerInstructions: ?[]const parse_instruction.UiInnerInstructions = null,
+            replacementBlockhash: ?GetLatestBlockhash.Response.Value = null,
+            fee: ?u64 = null,
+            preBalances: ?[]const u64 = null,
+            postBalances: ?[]const u64 = null,
+            preTokenBalances: ?[]const GetBlock.Response.UiTransactionTokenBalance = null,
+            postTokenBalances: ?[]const GetBlock.Response.UiTransactionTokenBalance = null,
+            loadedAddresses: ?GetBlock.Response.UiLoadedAddresses = null,
+        },
+    };
+};
 
 /// Types that are used in multiple RPC methods.
 pub const common = struct {
@@ -1707,6 +1750,14 @@ pub const common = struct {
         base64,
         json,
         jsonParsed,
+
+        pub fn toBinaryEncoding(self: TransactionEncoding) ?TransactionBinaryEncoding {
+            return switch (self) {
+                .binary, .base58 => .base58,
+                .base64 => .base64,
+                else => null,
+            };
+        }
     };
 
     pub const TransactionBinaryEncoding = enum {

@@ -4,17 +4,23 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 const base58 = @import("base58");
 const methods = @import("../methods.zig");
+const parse_instruction = @import("../parse_instruction/lib.zig");
 
 const Allocator = std.mem.Allocator;
 const Channel = sig.sync.Channel;
 const Base64Decoder = std.base64.standard.Decoder;
+const GetAccountInfo = methods.GetAccountInfo;
+const GetBlock = methods.GetBlock;
+const GetLatestBlockhashValue = methods.GetLatestBlockhash.Response.Value;
 const Hash = sig.core.Hash;
+const InnerInstructions = sig.ledger.transaction_status.InnerInstructions;
 const InstructionTrace = sig.runtime.TransactionContext.InstructionTrace;
 const Message = sig.core.transaction.Message;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 const Pubkey = sig.core.Pubkey;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const SendTransaction = methods.SendTransaction;
+const SimulateTransaction = methods.SimulateTransaction;
 const Slot = sig.core.Slot;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
@@ -23,8 +29,9 @@ const SvmGateway = sig.replay.svm_gateway.SvmGateway;
 const Transaction = sig.core.Transaction;
 const TransactionInfo = sig.TransactionSenderService.TransactionInfo;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
-const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
+const TransactionReturnData = sig.ledger.transaction_status.TransactionReturnData;
 
+const encodeAccount = sig.rpc.account_codec.encodeAccount;
 const computeBudgetExecute = sig.runtime.program.compute_budget.execute;
 const getDurableNonce = sig.runtime.check_transactions.getDurableNonce;
 const getSysvarFromAccount = sig.replay.update_sysvar.getSysvarFromAccount;
@@ -103,7 +110,7 @@ pub fn sendTransaction(
             // Agave json rpc config specifies a health check which checks node health before servicing requests.
             // We should consider the same.
             // [agave] https://github.com/anza-xyz/agave/blob/2a61a3ecd417b0515c0b2f322d0128394f20626b/rpc/src/rpc.rs#L3867-L3886
-            break :blk try self.simulateTransaction(
+            break :blk try self.simulateRuntimeTransaction(
                 arena,
                 transaction,
                 preflight_slot,
@@ -131,6 +138,156 @@ pub fn sendTransaction(
         durable_nonce_info,
         config.maxRetries,
     ) };
+}
+
+pub fn simulateTransaction(
+    self: SendTransactionHookContext,
+    arena: Allocator,
+    params: SimulateTransaction,
+) !SimulateTransaction.Response {
+    const config: SimulateTransaction.Config = params.config orelse .{};
+    const encoding = config.resolveEncoding() orelse return error.UnsupportedEncoding;
+    _, var unsanitized_tx = try decodeAndDeserialize(
+        arena,
+        params.transaction,
+        encoding,
+    );
+
+    const commitment = config.commitment orelse .finalized;
+    const slot = self.slot_tracker.commitments.get(commitment);
+    if (config.minContextSlot) |min_slot| {
+        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+    }
+    var slot_ref = self.slot_tracker.get(slot) orelse unreachable;
+    defer slot_ref.release();
+
+    const blockhash: ?GetLatestBlockhashValue = if (config.replaceRecentBlockhash) blk: {
+        if (config.sigVerify) {
+            // TODO: return a more helpful error here somehow
+            return error.InvalidParams;
+        }
+        const recent_blockhash = last_bh: {
+            const bq, var bq_lg = slot_ref.state().blockhash_queue.readWithLock();
+            defer bq_lg.unlock();
+            break :last_bh bq.last_hash orelse return error.SlotNotAvailable;
+        };
+        unsanitized_tx.msg.recent_blockhash = recent_blockhash;
+        const last_valid_block_height = slot_ref.getBlockhashLastValidBlockHeight(
+            recent_blockhash,
+        ) orelse return error.SlotNotAvailable;
+
+        const blockhash_str = recent_blockhash.base58String();
+        break :blk .{
+            .blockhash = try arena.dupe(u8, blockhash_str.constSlice()),
+            .lastValidBlockHeight = last_valid_block_height,
+        };
+    } else null;
+
+    const slot_account_reader = self.account_store.reader().forSlot(&slot_ref.constants().ancestors);
+
+    const transaction = try sanitizeTransaction(
+        arena,
+        unsanitized_tx,
+        slot,
+        &slot_ref,
+        slot_account_reader,
+    );
+
+    const verification_error: ?TransactionError = if (config.sigVerify) blk: {
+        unsanitized_tx.verify() catch break :blk .SignatureFailure;
+        break :blk null;
+    } else null;
+
+    const simulation_result: SimulateTransactionResult = if (verification_error) |err|
+        .{ .err = err }
+    else
+        try self.simulateRuntimeTransaction(arena, transaction, slot, &slot_ref);
+
+    // Build accounts response if requested.
+    // [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4030-L4074
+    const accounts: ?[]const ?GetAccountInfo.Response.Value = if (config.accounts) |accounts_config| blk: {
+        const accounts_encoding = accounts_config.encoding orelse .base64;
+        if (accounts_encoding == .binary or accounts_encoding == .base58) {
+            return error.InvalidParams;
+        }
+
+        if (accounts_config.addresses.len > transaction.accounts.len) {
+            return error.InvalidParams;
+        }
+
+        // If simulation had an error, return null for each requested account.
+        if (simulation_result.err != null) {
+            const nulls = try arena.alloc(?GetAccountInfo.Response.Value, accounts_config.addresses.len);
+            @memset(nulls, null);
+            break :blk nulls;
+        }
+
+        const result = try arena.alloc(?GetAccountInfo.Response.Value, accounts_config.addresses.len);
+        for (accounts_config.addresses, 0..) |address, i| {
+            result[i] = try getSimulatedAccount(
+                arena,
+                address,
+                accounts_encoding,
+                simulation_result.post_simulation_accounts,
+                slot_account_reader,
+            );
+        }
+        break :blk result;
+    } else null;
+
+    // Convert inner instructions if requested.
+    // [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4076-L4080
+    const inner_instructions: ?[]const parse_instruction.UiInnerInstructions = if (config.innerInstructions)
+        if (simulation_result.inner_instructions) |iis|
+            try convertInnerInstructions(arena, iis)
+        else
+            null
+    else
+        null;
+
+    // Convert return data to UI format (base64 encode).
+    const return_data: ?GetBlock.Response.UiTransactionReturnData = if (simulation_result.return_data) |rd|
+        try convertReturnDataToUi(arena, rd)
+    else
+        null;
+
+    // Resolve and convert token balances.
+    // Uses a FallbackAccountReader that checks post-simulation writes first, then the bank.
+    const pre_token_balances = try resolveAndConvertTokenBalances(
+        arena,
+        simulation_result.pre_token_balances,
+        simulation_result.post_simulation_accounts,
+        slot_account_reader,
+    );
+    const post_token_balances = try resolveAndConvertTokenBalances(
+        arena,
+        simulation_result.post_token_balances,
+        simulation_result.post_simulation_accounts,
+        slot_account_reader,
+    );
+
+    // Extract loaded addresses from the transaction (ALT-resolved accounts).
+    const loaded_addresses = getLoadedAddresses(unsanitized_tx, transaction);
+
+    return .{
+        .context = .{ .slot = slot },
+        .value = .{
+            .err = simulation_result.err,
+            .logs = simulation_result.logs,
+            .accounts = accounts,
+            .unitsConsumed = simulation_result.units_consumed,
+            .loadedAccountsDataSize = simulation_result.loaded_accounts_data_size,
+            .returnData = return_data,
+            .innerInstructions = inner_instructions,
+            .replacementBlockhash = blockhash,
+            .fee = simulation_result.fee,
+            .preBalances = simulation_result.pre_balances.constSlice(),
+            .postBalances = simulation_result.post_balances.constSlice(),
+            .preTokenBalances = pre_token_balances,
+            .postTokenBalances = post_token_balances,
+            .loadedAddresses = loaded_addresses,
+        },
+    };
 }
 
 /// Analogous to [decode_and_deserialize](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4343)
@@ -264,7 +421,7 @@ const SimulateTransactionResult = struct {
     units_consumed: u64 = 0,
     loaded_accounts_data_size: u32 = 0,
     return_data: ?TransactionReturnData = null,
-    inner_instructions: ?InstructionTrace = null,
+    inner_instructions: ?[]const InnerInstructions = null,
     fee: ?u64 = null,
     pre_balances: ProcessedTransaction.PreBalances = .{},
     post_balances: ProcessedTransaction.PreBalances = .{},
@@ -272,7 +429,7 @@ const SimulateTransactionResult = struct {
     post_token_balances: ProcessedTransaction.PreTokenBalances = .{},
 };
 
-fn simulateTransaction(
+fn simulateRuntimeTransaction(
     self: *const SendTransactionHookContext,
     arena: Allocator,
     transaction: RuntimeTransaction,
@@ -319,22 +476,15 @@ fn simulateTransaction(
 
     const outputs = processed_transaction.outputs;
 
+    const meta = sig.ledger.transaction_status.TransactionStatusMetaBuilder;
     return .{
         .err = processed_transaction.err,
-        .logs = if (outputs) |out| if (out.log_collector) |lc| blk: {
-            const log_messages = try arena.alloc([]const u8, lc.message_indices.items.len);
-            var it = lc.iterator();
-            var i: usize = 0;
-            while (it.next()) |msg| : (i += 1) {
-                log_messages[i] = msg;
-            }
-            break :blk log_messages;
-        } else &[_][]const u8{} else &[_][]const u8{},
+        .logs = (try meta.extractLogMessages(arena, processed_transaction)) orelse &[_][]const u8{},
         .post_simulation_accounts = processed_transaction.writes,
         .units_consumed = if (outputs) |out| out.compute_limit - out.compute_meter else 0,
         .loaded_accounts_data_size = processed_transaction.loaded_accounts_data_size,
-        .return_data = if (outputs) |out| out.return_data else null,
-        .inner_instructions = if (outputs) |out| out.instruction_trace else null,
+        .return_data = try meta.convertReturnData(arena, processed_transaction),
+        .inner_instructions = try meta.convertInstructionTrace(arena, processed_transaction),
         .fee = processed_transaction.fees.total(),
         .pre_balances = processed_transaction.pre_balances,
         .post_balances = blk: {
@@ -355,6 +505,220 @@ fn simulateTransaction(
         ),
     };
 }
+
+/// Look up a post-simulation account by address, falling back to the bank state,
+/// and encode it for the RPC response.
+/// [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4042-L4072
+fn getSimulatedAccount(
+    arena: Allocator,
+    address: Pubkey,
+    encoding: methods.common.AccountEncoding,
+    post_simulation_accounts: ProcessedTransaction.Writes,
+    slot_reader: SlotAccountReader,
+) !?GetAccountInfo.Response.Value {
+    // Check post-simulation accounts first (these reflect state after simulation).
+    for (post_simulation_accounts.constSlice()) |written| {
+        if (!written.pubkey.equals(&address)) continue;
+        const account: sig.core.Account = .{
+            .lamports = written.account.lamports,
+            .data = .{ .unowned_allocation = written.account.data },
+            .owner = written.account.owner,
+            .executable = written.account.executable,
+            .rent_epoch = written.account.rent_epoch,
+        };
+        const data = try encodeAccount(
+            arena,
+            address,
+            account,
+            encoding,
+            slot_reader,
+            null,
+        );
+        return .from(account, data);
+    }
+    // Fall back to bank state.
+    const account = try slot_reader.get(arena, address) orelse return null;
+    const data = try encodeAccount(
+        arena,
+        address,
+        account,
+        encoding,
+        slot_reader,
+        null,
+    );
+    return .from(account, data);
+}
+
+/// Convert ledger InnerInstructions to RPC UiInnerInstructions.
+/// [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4076-L4080
+fn convertInnerInstructions(
+    arena: Allocator,
+    inner_instructions: []const InnerInstructions,
+) ![]const parse_instruction.UiInnerInstructions {
+    const result = try arena.alloc(parse_instruction.UiInnerInstructions, inner_instructions.len);
+    for (inner_instructions, 0..) |ii, i| {
+        const instructions = try arena.alloc(parse_instruction.UiInstruction, ii.instructions.len);
+        for (ii.instructions, 0..) |inner_ix, j| {
+            const data_str = data: {
+                var buf = try arena.alloc(u8, base58.encodedMaxSize(inner_ix.instruction.data.len));
+                break :data buf[0..base58.Table.BITCOIN.encode(buf, inner_ix.instruction.data)];
+            };
+            instructions[j] = .{ .compiled = .{
+                .programIdIndex = inner_ix.instruction.program_id_index,
+                .accounts = try arena.dupe(u8, inner_ix.instruction.accounts),
+                .data = data_str,
+                .stackHeight = inner_ix.stack_height,
+            } };
+        }
+        result[i] = .{ .index = ii.index, .instructions = instructions };
+    }
+    return result;
+}
+
+/// Convert ledger TransactionReturnData to RPC UiTransactionReturnData (base64 encoded).
+fn convertReturnDataToUi(
+    arena: Allocator,
+    rd: TransactionReturnData,
+) !GetBlock.Response.UiTransactionReturnData {
+    const encoded_len = std.base64.standard.Encoder.calcSize(rd.data.len);
+    const base64_data = try arena.alloc(u8, encoded_len);
+    _ = std.base64.standard.Encoder.encode(base64_data, rd.data);
+    return .{
+        .programId = rd.program_id,
+        .data = .{ base64_data, .base64 },
+    };
+}
+
+/// Extract loaded addresses (ALT-resolved writable/readonly) from the resolved transaction.
+/// The RuntimeTransaction accounts are ordered: [static keys] ++ [writable lookups] ++ [readonly lookups].
+/// [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4102
+fn getLoadedAddresses(
+    unsanitized_tx: Transaction,
+    transaction: RuntimeTransaction,
+) GetBlock.Response.UiLoadedAddresses {
+    const static_keys_len = unsanitized_tx.msg.account_keys.len;
+    var writable_lookup_count: usize = 0;
+    var readonly_lookup_count: usize = 0;
+    for (unsanitized_tx.msg.address_lookups) |lookup| {
+        writable_lookup_count += lookup.writable_indexes.len;
+        readonly_lookup_count += lookup.readonly_indexes.len;
+    }
+
+    const pubkeys = transaction.accounts.items(.pubkey);
+    const writable_start = static_keys_len;
+    const readonly_start = writable_start + writable_lookup_count;
+
+    return .{
+        .writable = if (writable_lookup_count > 0)
+            pubkeys[writable_start..readonly_start]
+        else
+            &.{},
+        .readonly = if (readonly_lookup_count > 0)
+            pubkeys[readonly_start .. readonly_start + readonly_lookup_count]
+        else
+            &.{},
+    };
+}
+
+/// Resolve raw token balances (mint decimals lookup) and convert to UI format.
+/// Uses a FallbackAccountReader that checks post-simulation writes first, then falls back
+/// to the account store for mint accounts not modified by the transaction.
+/// [reference] Committer.writeTransactionStatus uses the same FallbackAccountReader pattern.
+fn resolveAndConvertTokenBalances(
+    arena: Allocator,
+    raw_balances: ProcessedTransaction.PreTokenBalances,
+    post_simulation_accounts: ProcessedTransaction.Writes,
+    slot_reader: SlotAccountReader,
+) !?[]const GetBlock.Response.UiTransactionTokenBalance {
+    if (raw_balances.len == 0) return null;
+
+    const spl_token = sig.runtime.spl_token;
+
+    var mint_cache = spl_token.MintDecimalsCache.init(arena);
+    defer mint_cache.deinit();
+
+    // Pre-populate cache with mints found in post-simulation writes.
+    for (post_simulation_accounts.constSlice()) |*written_account| {
+        const acc = written_account.account;
+        if (acc.data.len >= spl_token.MINT_ACCOUNT_SIZE) {
+            if (spl_token.ParsedMint.parse(acc.data[0..spl_token.MINT_ACCOUNT_SIZE])) |mint| {
+                mint_cache.put(written_account.pubkey, mint.decimals) catch {};
+            }
+        }
+    }
+
+    const mint_reader = SimulationFallbackAccountReader{
+        .writes = post_simulation_accounts.constSlice(),
+        .slot_reader = slot_reader,
+    };
+
+    const resolved = spl_token.resolveTokenBalances(
+        arena,
+        raw_balances,
+        &mint_cache,
+        SimulationFallbackAccountReader,
+        mint_reader,
+    ) catch return null;
+    const balances = resolved orelse return null;
+
+    const result = try arena.alloc(GetBlock.Response.UiTransactionTokenBalance, balances.len);
+    for (balances, 0..) |b, i| {
+        result[i] = .{
+            .accountIndex = b.account_index,
+            .mint = b.mint,
+            .owner = b.owner,
+            .programId = b.program_id,
+            .uiTokenAmount = .{
+                .amount = b.ui_token_amount.amount,
+                .decimals = b.ui_token_amount.decimals,
+                .uiAmount = b.ui_token_amount.ui_amount,
+                .uiAmountString = b.ui_token_amount.ui_amount_string,
+            },
+        };
+    }
+    return result;
+}
+
+/// Account reader that checks post-simulation writes first, then falls back to the
+/// SlotAccountReader for mint accounts not modified by the simulation.
+/// Returns a StubAccount with a `.data.constSlice()` interface that
+/// spl_token.getMintDecimals expects.
+const SimulationFallbackAccountReader = struct {
+    writes: []const sig.runtime.account_loader.LoadedAccount,
+    slot_reader: SlotAccountReader,
+
+    const StubAccount = struct {
+        data: DataHandle,
+
+        const DataHandle = struct {
+            slice: []const u8,
+
+            pub fn constSlice(self: DataHandle) []const u8 {
+                return self.slice;
+            }
+        };
+
+        pub fn deinit(self: StubAccount, allocator: Allocator) void {
+            allocator.free(self.data.slice);
+        }
+    };
+
+    pub fn get(self: SimulationFallbackAccountReader, allocator: Allocator, pubkey: Pubkey) !?StubAccount {
+        // Check post-simulation writes first.
+        for (self.writes) |*account| {
+            if (account.pubkey.equals(&pubkey)) {
+                const data_copy = try allocator.dupe(u8, account.account.data);
+                return StubAccount{ .data = .{ .slice = data_copy } };
+            }
+        }
+
+        // Fall back to bank state.
+        const account = try self.slot_reader.get(allocator, pubkey) orelse return null;
+        defer account.deinit(allocator);
+        const data_copy = try account.data.readAllAllocate(allocator);
+        return StubAccount{ .data = .{ .slice = data_copy } };
+    }
+};
 
 test "decodeAndDeserialize: base64 encoding succeeds" {
     const tx_bytes = sig.core.transaction.transaction_legacy_example.as_bytes;
