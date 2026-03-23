@@ -495,41 +495,40 @@ test "Shred layout" {
     if (@alignOf(Shred) != 1) @compileError("Shred should be align(1)");
 }
 
+// GF(2^8) arithmetic and Reed-Solomon encoding matrix for erasure coding.
+// All operations use pre-computed lookup tables from reed_solomon_table.zig.
+const field = struct {
+    inline fn add(a: u8, b: u8) u8 {
+        return a ^ b;
+    }
+
+    inline fn mul(a: u8, b: u8) u8 {
+        return rs_table.mul[a][b];
+    }
+
+    inline fn div(a: u8, b: u8) u8 {
+        if (a == 0) return 0;
+        const log_a = rs_table.log[a];
+        const log_b = rs_table.log[b];
+        const log_result: i16 = @as(i16, log_a) - @as(i16, log_b);
+        return rs_table.exp[@intCast(if (log_result < 0) log_result + 255 else log_result)];
+    }
+
+    fn exp(a: u8, n: usize) u8 {
+        if (n == 0) return 1;
+        if (a == 0) return 0;
+        var log_result: usize = @as(usize, rs_table.log[a]) * n;
+        while (log_result >= 255) {
+            log_result -= 255;
+        }
+        return rs_table.exp[log_result];
+    }
+};
+
 /// Comptime-generated 64x32 encoding matrix for Reed-Solomon with data_count=32, code_count=32.
 /// Top 32 rows = identity matrix (for data shreds), bottom 32 rows = parity coefficients.
 /// Derived from: Vandermonde(64x32) * inverse(Vandermonde_top(32x32))
 const encoding_matrix: [64][32]u8 = blk: {
-
-    // GF(2^8) arithmetic and Reed-Solomon encoding matrix for erasure coding.
-    // All operations use pre-computed lookup tables from reed_solomon_table.zig.
-    const field = struct {
-        inline fn add(a: u8, b: u8) u8 {
-            return a ^ b;
-        }
-
-        inline fn mul(a: u8, b: u8) u8 {
-            return rs_table.mul[a][b];
-        }
-
-        inline fn div(a: u8, b: u8) u8 {
-            if (a == 0) return 0;
-            const log_a = rs_table.log[a];
-            const log_b = rs_table.log[b];
-            const log_result: i16 = @as(i16, log_a) - @as(i16, log_b);
-            return rs_table.exp[@intCast(if (log_result < 0) log_result + 255 else log_result)];
-        }
-
-        fn exp(a: u8, n: usize) u8 {
-            if (n == 0) return 1;
-            if (a == 0) return 0;
-            var log_result: usize = @as(usize, rs_table.log[a]) * n;
-            while (log_result >= 255) {
-                log_result -= 255;
-            }
-            return rs_table.exp[log_result];
-        }
-    };
-
     @setEvalBranchQuota(1_000_000);
 
     const total = 64;
@@ -640,9 +639,10 @@ const FecSetCtx = extern struct {
     // https://github.com/firedancer-io/firedancer/blob/ecd2d6d8f5b9f926d0b9aa9360efe36ea1550ad6/src/ballet/reedsol/fd_reedsol.h#L23
     // https://github.com/solana-foundation/specs/blob/main/p2p/shred.md
 
-    // TODO: should these all be 32?
-    const data_shreds_max = 67;
-    const code_shreds_max = 67;
+    // There's now a max of 32+32 shreds
+    // https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0317-enforce-32-data-shreds.md
+    const data_shreds_max = 32;
+    const code_shreds_max = 32;
     const fec_shred_cnt = 32;
 
     fn totalShredsReceived(self: *const FecSetCtx) u8 {
@@ -816,7 +816,8 @@ const ProgressMap = extern struct {
         fn compare(self: QueueContext, a: Idx, b: Idx) std.math.Order {
             std.debug.assert(self.used[a] and self.used[b]);
 
-            return FecSetId.compare(&self.ids[a], &self.ids[b]);
+            // remove greatest (slot, fec id) first
+            return std.math.Order.invert(FecSetId.compare(&self.ids[a], &self.ids[b]));
         }
     };
 
@@ -877,16 +878,6 @@ fn FixedArrayMap(
             return null;
         }
 
-        // fn getOrInsert(self: *Self, key: *const Key, or_insert: *const Value) !void {
-        //     if (self.getIdx(key)) |get_idx| return &self.vals[get_idx];
-
-        //     const insert_idx = self.getIdxUnused() orelse return error.MapFull;
-        //     const hashed = if (maybeHashFn) |hashFn| hashFn(key) else key;
-
-        //     self.hash[insert_idx] = hashed;
-        //     self.vals[insert_idx] = or_insert.*;
-        // }
-
         fn insertRemovingFirst(self: *Self, key: *const Key, insert: *const Value) void {
             const hashed = if (maybeHashFn) |hashFn| hashFn(key) else {};
 
@@ -901,6 +892,7 @@ fn FixedArrayMap(
             self.keys[target_idx] = key.*;
             self.vals[target_idx] = insert.*;
             self.hash[target_idx] = hashed;
+            self.used[target_idx] = true;
         }
 
         fn containsValue(self: *const Self, value: *const Value) bool {
@@ -1162,7 +1154,10 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             continue; // TODO: report reasons for rejecting/ignoring shreds in all cases
         };
 
-        // std.log.info("Got valid shred", .{});
+        // Legacy (non-merkle), and non-chained shreds are deprecated
+        // https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0313-drop-unchained-merkle-shreds.md
+        if (!shred.variant.isMerkle()) continue;
+        if (!shred.variant.isChained()) continue;
 
         // ignore shred from a slot that's too old
         if (shred.slot < stub_root_slot) continue;
@@ -1178,10 +1173,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         }
         if (shred.variant.isLegacy()) continue; // ignore legacy
 
-        // std.log.info("Got valid shred passing checks", .{});
-
         // is fec set already being built?
-
         const maybe_fec_set = state.in_progress.getFecSetCtx(&shred.signature);
         if (maybe_fec_set == null) {
             std.log.info("got shred in unknown fec set", .{});
@@ -1194,13 +1186,12 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             if (state.done.get(&fec_set_id)) |finished_set| {
                 const signature_hash = State.hashSignature(&shred.signature);
                 if (signature_hash == finished_set.*) {
-                    std.log.info("found equivocated shred?", .{});
-
-                    // likely equivocation
-                    continue;
-                } else {
                     std.log.info("got shred from finished fec set", .{});
 
+                    continue;
+                } else {
+                    // we got a different hash, for the same slot + idx, this is likely equivocation
+                    std.log.info("found equivocated shred?", .{});
                     continue;
                 }
             }
@@ -1213,21 +1204,12 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             }
         }
 
-        // at
-
-        // std.log.info("packet_shred: {}\n", .{shred});
-
         const in_type_idx = if (shred.variant.isData())
             shred.slot_idx - shred.fec_set_idx
         else
             shred.code_or_data.code.code_shred_idx;
 
         std.log.info("in_type_idx: {}", .{in_type_idx});
-
-        // const shred_idx = if (shred.variant.isData())
-        //     in_type_idx
-        // else
-        //     in_type_idx + shred.code_or_data.code.data_count;
 
         if (shred.fec_set_idx % FecSetCtx.fec_shred_cnt != 0) continue;
         if (in_type_idx >= FecSetCtx.fec_shred_cnt) continue;
@@ -1240,7 +1222,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         if (shred.variant.isData()) {
             // data shreds marked as complete must be the last shred in the fec set.
             const slot_complete = 0x80; // hm
-            if ((shred.code_or_data.data.flags & slot_complete != 0) and (((shred.slot_idx + 1) % FecSetCtx.fec_shred_cnt) != 0)) {
+            if (((shred.code_or_data.data.flags & slot_complete) != 0) and (((shred.slot_idx + 1) % FecSetCtx.fec_shred_cnt) != 0)) {
                 std.log.info("data shred marked as complete isn't the last shred in the set", .{});
                 continue;
             }
@@ -1277,7 +1259,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
             if (!fec_set_ctx.merkle_root.eql(&shred_merkle_root)) {
                 std.log.info("merkle root mismatch\n", .{});
-                continue; // merkle root mismatch
+                continue;
             }
             // TODO: check against prev and next shred if present
             // TODO: update in_progress state
@@ -1291,18 +1273,15 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             shred.signature.verify(
                 ro.leader_schedule.get(shred.slot) orelse {
                     std.log.info("unknown leader: {}", .{shred.slot});
-
-                    continue; // unknown leader
+                    continue;
                 },
                 &shred_merkle_root.data,
             ) catch |err| {
                 std.log.info("verification failed: {}", .{err});
-
-                continue; // invalid signature, or failed verification
+                continue;
             };
 
             std.log.info("got verified shred in new fec set", .{});
-
             // shred looks good, let's add a new ctx to in_progress
 
             const new_fec_set_idx = state.in_progress.allocFecSetCtx(fec_set_id);
@@ -1319,8 +1298,6 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
                 .data_shreds_buf = undefined,
                 .code_shreds_buf = undefined,
-
-                // .code_shred_count = shred.code_or_data.code,
             };
 
             state.in_progress.used[new_fec_set_idx] = true;
@@ -1367,13 +1344,13 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         // starting fec set reconstruction now
         reconstructFecSet(fec_set_ctx);
 
-        std.debug.assert(fec_set_ctx.data_shreds_received.count() == 32);
+        std.debug.assert(fec_set_ctx.data_shreds_received.count() == FecSetCtx.data_shreds_max);
 
         var complete: bool = false;
-        for (fec_set_ctx.data_shreds_buf[0..32]) |*data_packet| {
+        for (&fec_set_ctx.data_shreds_buf) |*data_packet| {
             const data_shred: *const Shred = .fromPacketUnchecked(data_packet);
 
-            complete = complete or data_shred.code_or_data.data.flags & 0x40 != 0;
+            complete = complete or (data_shred.code_or_data.data.flags & 0x40) != 0;
             if (complete) break;
         }
 
@@ -1385,7 +1362,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             var deshredded_buf: [64 * 1024]u8 = undefined;
             var bytes_written: u16 = 0;
 
-            for (fec_set_ctx.data_shreds_buf[0..32]) |*data_shred| {
+            for (&fec_set_ctx.data_shreds_buf) |*data_shred| {
                 const data_payload = Shred.fromPacketUnchecked(data_shred).dataPayload();
                 @memcpy(deshredded_buf[bytes_written..][0..data_payload.len], data_payload);
                 bytes_written += @intCast(data_payload.len);
@@ -1405,13 +1382,15 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             const entries, const consumed = Entry.slice_config.decodeSlice(
                 deshredded_bytes,
                 bincode_fba_allocator,
-                bincode_config,
+                .{ .endian = .little, .int = .fixint },
                 null,
             ) catch |err| {
                 std.log.info("decode failed with err {}", .{err});
                 continue;
             };
             _ = consumed;
+
+            std.debug.assert(n_entries == entries.len);
 
             for (entries) |entry| {
                 for (entry.transactions) |tx| {
@@ -1433,26 +1412,8 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     }
 }
 
-// ---- Entry / Transaction types and binkode codecs ----
-//
-// These types represent the deserialized contents of deshredded data shred payloads.
-// The deshredded buffer is a bincode-serialized Vec<Entry>.
-//
-// Serialization format:
-//   - Outer Vec<Entry> length and Entry.transactions length: standard bincode u64 LE prefix
-//   - Transaction.signatures, Message.account_keys, Message.instructions,
-//     CompiledInstruction.accounts, CompiledInstruction.data,
-//     AddressLookup.writable_indexes, AddressLookup.readonly_indexes: compact-u16 (ShortVec) prefix
-//   - VersionedMessage version detection: peek first byte after signatures;
-//     if byte & 0x80 == 0 → legacy (byte is num_required_signatures, NOT consumed);
-//     if byte & 0x80 != 0 → consume byte, version = byte & 0x7F (0 = v0)
-
-const bincode_config: bk.Config = .{ .endian = .little, .int = .fixint };
-
-/// Solana compact-u16 (ShortVec) codec.
-/// Encodes a u16 in 1-3 bytes using a continuation-bit scheme:
-///   byte & 0x80 set → more bytes follow; payload is the low 7 bits.
-///   Third byte may only use the 2 least-significant bits (max value 0x3FFFF masks to u16).
+// This isn't quite a bincode fixed int, nor a varint. It's some custom Solana thing used in
+// Agave's `short_vec`. I think it's supposed to be smaller than a fixed or varint for a u16.
 const compact_u16: bk.Codec(u16) = .implement(void, void, struct {
     pub fn encode(
         writer: *std.Io.Writer,
@@ -1704,6 +1665,7 @@ const V0Message = struct {
         .address_table_lookups = .from(shortVec(AddressLookup, AddressLookup.bk_config)),
     }));
 };
+
 const VersionedMessage = union(enum) {
     // first byte & 0x80 == 0
     legacy: LegacyMessage,
