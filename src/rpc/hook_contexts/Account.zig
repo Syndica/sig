@@ -329,21 +329,9 @@ pub fn getFeeForMessage(
         config.minContextSlot,
     );
 
-    const slot_ref = blk: {
-        if (self.slot_tracker.get(slot)) |ref| break :blk ref;
-
-        // Agave-style availability fallback in slot-space:
-        // commitment slot -> processed slot -> root slot.
-        if (commitment != .processed) {
-            const processed_slot = self.slot_tracker.commitments.get(.processed);
-            if (self.slot_tracker.get(processed_slot)) |ref| break :blk ref;
-        }
-
-        const root_slot = self.slot_tracker.root.load(.monotonic);
-        if (self.slot_tracker.get(root_slot)) |ref| break :blk ref;
-
-        return error.SlotNotAvailable;
-    };
+    // [agave] get_bank_with_config() validates min context after bank fallback.
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L270-L285
+    const slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer slot_ref.release();
 
     // Decode base64-encoded message.

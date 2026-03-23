@@ -101,10 +101,10 @@ pub const Request = struct {
                 return diag.initErr(error.MissingJsonRpcVersion, .{ .id = id });
             const method_str = self.method orelse
                 return diag.initErr(error.MissingMethod, .{ .id = id });
-            // Agave / solana_client compatibility:
-            // the solana rpc client send `"params": null` (or omit `params` entirely) for
-            // no-param RPC methods like `getVersion` and `getIdentity`.
-            // Agave accepts this by treating it like `params: []`.
+            // Agave / solana-client compatibility:
+            // Solana clients can send `"params": null` (or omit `params`) for
+            // zero-argument methods like `getVersion` and `getIdentity`.
+            // Agave accepts this and treats it like `params: []`.
             //
             // [agave] Agave unit tests call `create_test_request(..., None)`, which
             // serializes as `"params": null` and still expects success.
