@@ -40,7 +40,7 @@ const stub_root_slot = 0;
 const stub_max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
 
 // we can read the bincode directly - no deserialisation/copying required
-// Methods taking `self: *const Shred` assume that self is pointing to a Packet
+// Methods taking `self: *const Shred` assume that self is pointing to the Packet's buffer
 // https://github.com/solana-foundation/specs/blob/main/p2p/shred.md
 const Shred = extern struct {
     signature: Signature align(1),
@@ -207,13 +207,13 @@ const Shred = extern struct {
     // [firedancer] https://github.com/firedancer-io/firedancer/commit/7cbb71919ec9b8045c247957280e5b15d1e0cb85
     /// Makes sure that the *layout* of the Shred is valid.
     fn fromPacketChecked(packet: *const Packet) !*const Shred {
-        if (packet.size < min_header_size) return error.PacketUnderMinHeaderSize;
+        if (packet.len < min_header_size) return error.PacketUnderMinHeaderSize;
 
         const shred: *const Shred = @ptrCast(packet);
         if (!shred.variant.isSupported()) return error.UnsupportedVariant;
 
         const header_size = shred.variant.headerSize();
-        if (packet.size < header_size) return error.PacketUnderHeaderSize;
+        if (packet.len < header_size) return error.PacketUnderHeaderSize;
 
         const trailer_size: u16 = shred.variant.merkleSize() +
             (if (shred.variant.isResigned()) @as(u16, Signature.SIZE) else 0) +
@@ -222,7 +222,7 @@ const Shred = extern struct {
         const zero_padding_size, const payload_size = if (shred.variant.isData()) sizes: {
             if (shred.code_or_data.data.size < header_size) return error.DataSmallerThanHeader;
 
-            if (packet.size < min_size) return error.DataPacketUnderMinSize;
+            if (packet.len < min_size) return error.DataPacketUnderMinSize;
 
             const payload_size = shred.code_or_data.data.size - header_size;
 
@@ -245,7 +245,7 @@ const Shred = extern struct {
             };
         };
 
-        if (packet.size < header_size + payload_size + zero_padding_size + trailer_size)
+        if (packet.len < header_size + payload_size + zero_padding_size + trailer_size)
             return error.PacketSizeUnderExpected3;
 
         if (shred.variant.isData()) {
@@ -275,14 +275,14 @@ const Shred = extern struct {
         return shred;
     }
 
-    fn fromPacketUnchecked(packet: *const Packet) *const Shred {
-        return @ptrCast(packet);
+    fn fromBufferUnchecked(buffer: *const Packet.Buffer) *const Shred {
+        return @ptrCast(buffer);
     }
 
     // This is combined with fragments from other shreds in the erasure set to
     // reconstruct a collection of entries.
     fn erasureFragment(shred: *const Shred) ?[]const u8 {
-        const packet: *const Packet = @ptrCast(@alignCast(shred));
+        const buffer: *const Packet.Buffer = @ptrCast(@alignCast(shred));
         const header_size = shred.variant.headerSize();
         if (header_size == 0) unreachable; // we should have gotten rid of this shred earlier?
 
@@ -298,12 +298,12 @@ const Shred = extern struct {
         const cap = payload_size - header_size - trailer;
 
         const end = header_size + cap;
-        if (end > packet.data.len) return null;
+        if (end > Packet.capacity) return null;
 
         // Data shreds: erasure shard starts after signature (offset 64)
         // Code shreds: erasure shard starts after header
         const start_off: usize = if (shred.variant.isData()) Signature.SIZE else header_size;
-        return packet.data[start_off..end];
+        return buffer[start_off..end];
     }
 
     fn size(shred: *const Shred) u16 {
@@ -316,7 +316,7 @@ const Shred = extern struct {
     const MerkleProofNode = extern struct { data: [merkle_node_size]u8 };
 
     fn merkleProofNodes(shred: *const Shred) []const MerkleProofNode {
-        const packet: *const Packet = @ptrCast(@alignCast(shred));
+        const buffer: *const Packet.Buffer = @ptrCast(@alignCast(shred));
 
         // The offset of the merkle inclusion proof
         const merkle_offset = shred.size() -
@@ -324,7 +324,7 @@ const Shred = extern struct {
             if (shred.variant.isResigned()) Signature.SIZE else 0;
 
         const merkle_proof_ptr: [*]const MerkleProofNode =
-            @ptrCast(packet.data[0..].ptr + merkle_offset);
+            @ptrCast(buffer[0..].ptr + merkle_offset);
 
         return merkle_proof_ptr[0..shred.variant.merkleCount()];
     }
@@ -332,11 +332,11 @@ const Shred = extern struct {
     // The payload of a data shred. Asserts shred is a data shred.
     fn dataPayload(shred: *const Shred) []const u8 {
         std.debug.assert(shred.variant.isData());
-        const packet: *const Packet = @ptrCast(@alignCast(shred));
+        const buffer: *const Packet.Buffer = @ptrCast(@alignCast(shred));
 
         std.log.info("shred slot{} idx{} variant{}", .{ shred.slot, shred.slot_idx, shred.variant });
 
-        return packet.data[@offsetOf(Shred, "code_or_data") + @sizeOf(DataHeader) .. shred.code_or_data.data.size];
+        return buffer[@offsetOf(Shred, "code_or_data") + @sizeOf(DataHeader) .. shred.code_or_data.data.size];
     }
 
     // The bytes which are checked against the merkle root.
@@ -349,8 +349,6 @@ const Shred = extern struct {
             merkle_node_size * shred.variant.merkleCount() -
             @intFromBool(shred.variant.isChained()) * @as(usize, merkle_root_size) -
             @intFromBool(shred.variant.isResigned()) * Signature.SIZE;
-
-        std.log.info("erasure_protected_size: {}", .{erasure_protected_size});
 
         const data_merkle_protected_size = erasure_protected_size +
             @as(usize, merkle_root_size) * @intFromBool(shred.variant.isChained());
@@ -365,14 +363,14 @@ const Shred = extern struct {
         else
             code_merkle_protected_size;
 
-        return @as(*const Packet, @ptrCast(@alignCast(shred))).data[Signature.SIZE..][0..merkle_protected_size];
+        return @as(*const Packet.Buffer, @ptrCast(@alignCast(shred)))[Signature.SIZE..][0..merkle_protected_size];
     }
 
     // Added by the node who retransmitted the shred to us over Turbine.
     // This is only used for the shreds in the final erasure set of the slot.
     // Only safe on pre-checked packets.
-    fn retransmitterSignature(packet: *const Packet) ?[]const u8 {
-        const shred = fromPacketUnchecked(packet);
+    fn retransmitterSignature(packet: *const Shred) ?[]const u8 {
+        const shred = fromBufferUnchecked(packet);
         _ = shred;
     }
 
@@ -477,8 +475,8 @@ const FecSetCtx = extern struct {
     // all packets are pre-validated shreds, i.e. Shred.fromPacketUnchecked is safe
     // items are valid iff its index is set to 1 in its corresponding bitset
     // TODO: these fields will likely cause a lot of memory use, consider using a pool of them in future
-    data_shreds_buf: [data_shreds_max]Packet,
-    code_shreds_buf: [code_shreds_max]Packet,
+    data_shreds_buf: [data_shreds_max]Packet.Buffer,
+    code_shreds_buf: [code_shreds_max]Packet.Buffer,
 
     // used to make sure that all code and data shreds have the same variant as eachother
     data_variant: Shred.Variant,
@@ -617,8 +615,6 @@ const ProgressMap = extern struct {
         self.eviction_queue_len += 1;
 
         tracy.plot(u16, "eviction queue count", @intCast(eviction_queue.count()));
-
-        std.log.info(">--- eviction queue count: {}", .{eviction_queue.count()});
 
         return @intCast(unused_idx);
     }
@@ -773,6 +769,10 @@ const State = struct {
 // of serviceMain.
 var state: State = .empty;
 
+const diagnostics = union(enum) {
+    bad_packet: anyerror,
+};
+
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     std.log.info("Waiting for shreds on port {}", .{rw.pair.port});
 
@@ -824,6 +824,17 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             }
         }
 
+        const merkle_layer_count = 7;
+        if (shred.variant.merkleCount() > merkle_layer_count - 1) {
+            std.log.info("merkleCount too large", .{});
+            continue;
+        }
+
+        std.log.info("shred {} ({s}) passing baseline checks", .{
+            @as(FecSetId, .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot }),
+            if (shred.variant.isCode()) "code" else "data",
+        });
+
         // is fec set already being built?
         const maybe_fec_set = state.in_progress.getFecSetCtx(&shred.signature);
         if (maybe_fec_set == null) {
@@ -853,17 +864,6 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
                 continue;
             }
-        }
-
-        std.log.info("shred {} ({s}) validated + passing checks + index not too high", .{
-            @as(FecSetId, .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot }),
-            if (shred.variant.isCode()) "code" else "data",
-        });
-
-        const merkle_layer_count = 7;
-        if (shred.variant.merkleCount() > merkle_layer_count - 1) {
-            std.log.info("merkleCount too large", .{});
-            continue;
         }
 
         var shred_merkle_root: Hash = undefined;
@@ -953,7 +953,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             }
 
             fec_set_ctx.code_shreds_received.set(in_type_idx); // track shred as received
-            fec_set_ctx.code_shreds_buf[in_type_idx] = packet.*; // persist packet to our state
+            fec_set_ctx.code_shreds_buf[in_type_idx] = packet.data; // persist packet to our state
         }
         if (shred.variant.isData()) {
             if (fec_set_ctx.data_shreds_received.isSet(in_type_idx)) {
@@ -962,7 +962,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             }
 
             fec_set_ctx.data_shreds_received.set(in_type_idx); // track shred as received
-            fec_set_ctx.data_shreds_buf[in_type_idx] = packet.*; // persist packet to our state
+            fec_set_ctx.data_shreds_buf[in_type_idx] = packet.data; // persist packet to our state
         }
 
         std.debug.assert(fec_set_ctx.totalShredsReceived() >= 1); // we just received one
@@ -980,7 +980,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
         var complete: bool = false;
         for (&fec_set_ctx.data_shreds_buf) |*data_packet| {
-            const data_shred: *const Shred = .fromPacketUnchecked(data_packet);
+            const data_shred: *const Shred = .fromBufferUnchecked(data_packet);
 
             complete = complete or (data_shred.code_or_data.data.flags & 0x40) != 0;
             if (complete) break;
@@ -995,7 +995,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             var bytes_written: u16 = 0;
 
             for (&fec_set_ctx.data_shreds_buf) |*data_shred| {
-                const data_payload = Shred.fromPacketUnchecked(data_shred).dataPayload();
+                const data_payload = Shred.fromBufferUnchecked(data_shred).dataPayload();
                 @memcpy(deshredded_buf[bytes_written..][0..data_payload.len], data_payload);
                 bytes_written += @intCast(data_payload.len);
             }
@@ -1062,7 +1062,7 @@ const reedsol = struct {
             if (fec_set_ctx.data_shreds_received.isSet(i)) {
                 present[i] = true;
                 if (shard_len == 0) {
-                    const shred = Shred.fromPacketUnchecked(&fec_set_ctx.data_shreds_buf[i]);
+                    const shred = Shred.fromBufferUnchecked(&fec_set_ctx.data_shreds_buf[i]);
                     if (shred.erasureFragment()) |frag| {
                         shard_len = frag.len;
                     }
@@ -1073,7 +1073,7 @@ const reedsol = struct {
             if (fec_set_ctx.code_shreds_received.isSet(i)) {
                 present[data_count + i] = true;
                 if (shard_len == 0) {
-                    const shred = Shred.fromPacketUnchecked(&fec_set_ctx.code_shreds_buf[i]);
+                    const shred = Shred.fromBufferUnchecked(&fec_set_ctx.code_shreds_buf[i]);
                     if (shred.erasureFragment()) |frag| {
                         shard_len = frag.len;
                     }
@@ -1167,7 +1167,7 @@ const reedsol = struct {
         var have_sig = false;
         for (0..data_count) |i| {
             if (fec_set_ctx.data_shreds_received.isSet(i)) {
-                @memcpy(&leader_sig, fec_set_ctx.data_shreds_buf[i].data[0..Signature.SIZE]);
+                @memcpy(&leader_sig, fec_set_ctx.data_shreds_buf[i][0..Signature.SIZE]);
                 have_sig = true;
                 break;
             }
@@ -1175,7 +1175,7 @@ const reedsol = struct {
         if (!have_sig) {
             for (0..code_count) |i| {
                 if (fec_set_ctx.code_shreds_received.isSet(i)) {
-                    @memcpy(&leader_sig, fec_set_ctx.code_shreds_buf[i].data[0..Signature.SIZE]);
+                    @memcpy(&leader_sig, fec_set_ctx.code_shreds_buf[i][0..Signature.SIZE]);
                     have_sig = true;
                     break;
                 }
@@ -1187,10 +1187,10 @@ const reedsol = struct {
         for (0..data_count) |k| {
             const idx = valid_indices[k];
             if (idx < data_count) {
-                const shred = Shred.fromPacketUnchecked(&fec_set_ctx.data_shreds_buf[idx]);
+                const shred = Shred.fromBufferUnchecked(&fec_set_ctx.data_shreds_buf[idx]);
                 shard_ptrs[k] = (shred.erasureFragment() orelse return).ptr;
             } else {
-                const shred = Shred.fromPacketUnchecked(&fec_set_ctx.code_shreds_buf[idx - data_count]);
+                const shred = Shred.fromBufferUnchecked(&fec_set_ctx.code_shreds_buf[idx - data_count]);
                 shard_ptrs[k] = (shred.erasureFragment() orelse return).ptr;
             }
         }
@@ -1207,7 +1207,7 @@ const reedsol = struct {
 
             // First, copy leader signature into bytes 0..64
             if (have_sig) {
-                @memcpy(dest_packet.data[0..Signature.SIZE], &leader_sig);
+                @memcpy(dest_packet[0..Signature.SIZE], &leader_sig);
             }
 
             // For data shreds, erasure shard starts at offset 64 (after signature)
@@ -1215,9 +1215,9 @@ const reedsol = struct {
             // The erasure shard for data shreds covers bytes [64 .. 64 + shard_len]
             const dest_start = Signature.SIZE; // 64
             const dest_end = dest_start + shard_len;
-            if (dest_end > dest_packet.data.len) return;
+            if (dest_end > Packet.capacity) return;
 
-            var dest = dest_packet.data[dest_start..dest_end];
+            var dest = dest_packet[dest_start..dest_end];
 
             // Multiply: dest[byte] = sum over k of (inv_row[k] * shard_ptrs[k][byte])
             // First pass: dest = inv_row[0] * shard_ptrs[0]
@@ -1233,9 +1233,6 @@ const reedsol = struct {
                     dest[b] = field.add(dest[b], field.mul(coeff, shard_ptrs[k][b]));
                 }
             }
-
-            // Set the packet size appropriately for a data shred
-            dest_packet.size = @intCast(Shred.min_size);
 
             // Mark this data shred as received
             fec_set_ctx.data_shreds_received.set(i);
@@ -1455,7 +1452,7 @@ const bincode = struct {
         pub const free = null;
     });
 
-    // For slices that have a u16 length rather than a u64
+    // For slices that have a compact_u16 length rather than a u64
     fn shortVec(comptime Element: type, comptime element: bk.Codec(Element)) bk.Codec([]Element) {
         return comptime .implement(element.EncodeCtx, element.DecodeCtx, struct {
             pub fn encode(
