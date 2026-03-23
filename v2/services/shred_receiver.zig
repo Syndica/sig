@@ -70,24 +70,20 @@ const Shred = extern struct {
         inner: u8,
 
         // [firedancer] https://github.com/firedancer-io/firedancer/blob/9f7770af997a1443e7903113fc03ca1ce3b0ad73/src/ballet/shred/fd_shred.c#L16
-        fn isValid(self: Variant) bool {
+        // Legacy (non-merkle), and non-chained shreds are deprecated
+        // https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0313-drop-unchained-merkle-shreds.md
+        fn isSupported(self: Variant) bool {
             const variant = self.inner;
 
             return switch (variant & 0xF0) {
                 // test upper 4 bits
-                merkle_data,
-                merkle_code,
                 merkle_data_chained,
                 merkle_code_chained,
                 merkle_data_chained_resigned,
                 merkle_code_chained_resigned,
                 => true,
 
-                else => switch (variant) {
-                    // legacy_data, legacy_code, with the correct (static) lower 4 bits
-                    0xA5, 0x5A => true,
-                    else => false,
-                },
+                else => false,
             };
         }
 
@@ -95,14 +91,14 @@ const Shred = extern struct {
             const shared_base = @offsetOf(Shred, "code_or_data");
 
             return switch (self.inner & 0xF0) {
-                legacy_data,
-                merkle_data,
+                legacy_data, // deprecated
+                merkle_data, // deprecated
                 merkle_data_chained,
                 merkle_data_chained_resigned,
                 => shared_base + @sizeOf(DataHeader),
 
-                legacy_code,
-                merkle_code,
+                legacy_code, // deprecated
+                merkle_code, // deprecated
                 merkle_code_chained,
                 merkle_code_chained_resigned,
                 => shared_base + @sizeOf(CodeHeader),
@@ -113,7 +109,7 @@ const Shred = extern struct {
 
         fn merkleCount(self: Variant) u8 {
             return switch (self.inner & 0xF0) {
-                legacy_data, legacy_code => 0,
+                legacy_data, legacy_code => 0, // deprecated
                 else => self.inner & 0x0F,
             };
         }
@@ -142,8 +138,8 @@ const Shred = extern struct {
 
         fn isData(self: Variant) bool {
             return switch (self.inner & 0xF0) {
-                legacy_data,
-                merkle_data,
+                legacy_data, // deprecated
+                merkle_data, // deprecated
                 merkle_data_chained,
                 merkle_data_chained_resigned,
                 => true,
@@ -153,8 +149,8 @@ const Shred = extern struct {
 
         fn isCode(self: Variant) bool {
             return switch (self.inner & 0xF0) {
-                legacy_code,
-                merkle_code,
+                legacy_code, // deprecated
+                merkle_code, // deprecated
                 merkle_code_chained,
                 merkle_code_chained_resigned,
                 => true,
@@ -162,17 +158,10 @@ const Shred = extern struct {
             };
         }
 
-        fn isLegacy(self: Variant) bool {
-            return switch (self.inner & 0xF0) {
-                legacy_code, legacy_data => true,
-                else => false,
-            };
-        }
-
         fn isMerkle(self: Variant) bool {
             return switch (self.inner & 0xF0) {
-                merkle_data,
-                merkle_code,
+                merkle_data, // deprecated
+                merkle_code, // deprecated
                 merkle_data_chained,
                 merkle_code_chained,
                 merkle_data_chained_resigned,
@@ -193,10 +182,10 @@ const Shred = extern struct {
         }
 
         // upper 4 bits
-        const legacy_data = 0xA0;
-        const legacy_code = 0x50;
-        const merkle_data = 0x80;
-        const merkle_code = 0x40;
+        const legacy_data = 0xA0; // deprecated
+        const legacy_code = 0x50; // deprecated
+        const merkle_data = 0x80; // deprecated by SIMD-0313
+        const merkle_code = 0x40; // deprecated by SIMD-0313
         const merkle_data_chained = 0x90;
         const merkle_code_chained = 0x60;
         const merkle_data_chained_resigned = 0xB0;
@@ -217,77 +206,66 @@ const Shred = extern struct {
         if (packet.size < min_header_size) return error.PacketUnderMinHeaderSize;
 
         const shred: *const Shred = @ptrCast(packet);
-        if (!shred.variant.isValid()) return error.InvalidVariant;
+        if (!shred.variant.isSupported()) return error.UnsupportedVariant;
 
         const header_size = shred.variant.headerSize();
         if (packet.size < header_size) return error.PacketUnderHeaderSize;
 
         const trailer_size: u16 = shred.variant.merkleSize() +
             (if (shred.variant.isResigned()) @as(u16, Signature.SIZE) else 0) +
-            (if (shred.variant.isChained()) @as(u16, Hash.SIZE) else 0);
+            @as(u16, Hash.SIZE); // all shreds are chained
 
-        const kind: enum { code, data } = if (shred.variant.isData())
-            .data
-        else if (shred.variant.isCode())
-            .code
-        else
-            unreachable; // safe: checked variant above
+        const zero_padding_size, const payload_size = if (shred.variant.isData()) sizes: {
+            if (shred.code_or_data.data.size < header_size) return error.DataSmallerThanHeader;
 
-        const zero_padding_size, const payload_size = sizes: switch (kind) {
-            .data => {
-                if (shred.code_or_data.data.size < header_size) return error.DataSmallerThanHeader;
+            if (packet.size < min_size) return error.DataPacketUnderMinSize;
 
-                const is_legacy = shred.variant.isLegacy();
-                if (!is_legacy and packet.size < min_size) return error.DataPacketUnderMinSize;
+            const payload_size = shred.code_or_data.data.size - header_size;
 
-                const payload_size = shred.code_or_data.data.size - header_size;
+            const effective_size = min_size;
+            if (effective_size < header_size + payload_size + trailer_size)
+                return error.DataEffectiveSizeTooSmall;
 
-                const effective_size = if (is_legacy) packet.size else min_size;
-                if (effective_size < header_size + payload_size + trailer_size) return error.DataEffectiveSizeTooSmall;
+            break :sizes .{
+                effective_size - header_size - payload_size - trailer_size,
+                payload_size,
+            };
+        } else sizes: {
+            const zero_padding_size = 0;
+            if (header_size + zero_padding_size + trailer_size > max_size)
+                return error.CodeShredOverMaxSize;
 
-                break :sizes .{
-                    effective_size - header_size - payload_size - trailer_size,
-                    payload_size,
-                };
-            },
-            .code => {
-                const zero_padding_size = 0;
-                if (header_size + zero_padding_size + trailer_size > max_size) return error.CodeShredOverMaxSize;
-                break :sizes .{
-                    zero_padding_size,
-                    max_size - header_size - zero_padding_size - trailer_size,
-                };
-            },
+            break :sizes .{
+                zero_padding_size,
+                max_size - header_size - zero_padding_size - trailer_size,
+            };
         };
 
         if (packet.size < header_size + payload_size + zero_padding_size + trailer_size)
             return error.PacketSizeUnderExpected3;
 
-        switch (kind) {
+        if (shred.variant.isData()) {
             // [firedancer] https://github.com/firedancer-io/firedancer/commit/4936f39676997d95e5d15772d3904e5942fa9864
-            .data => {
-                const parent_offset = shred.code_or_data.data.parent_offset;
-                const slot = shred.slot;
+            const parent_offset = shred.code_or_data.data.parent_offset;
+            const slot = shred.slot;
 
-                if ((shred.code_or_data.data.flags & 0xC0) == 0x80) return error.BadFlags;
-                if (parent_offset > slot) return error.BadOffset;
+            if ((shred.code_or_data.data.flags & 0xC0) == 0x80) return error.BadFlags;
+            if (parent_offset > slot) return error.BadOffset;
 
-                if ((slot != 0 and parent_offset == 0) or (slot > 1 and parent_offset == slot))
-                    return error.BadSlotOrParentOffset;
-                if (shred.slot_idx < shred.fec_set_idx) return error.BadSlotIdx;
-            },
-            .code => {
-                const code_header = shred.code_or_data.code;
+            if ((slot != 0 and parent_offset == 0) or (slot > 1 and parent_offset == slot))
+                return error.BadSlotOrParentOffset;
+            if (shred.slot_idx < shred.fec_set_idx) return error.BadSlotIdx;
+        } else {
+            const code_header = shred.code_or_data.code;
 
-                if (code_header.code_shred_idx >= code_header.code_count)
-                    return error.BadCodeShredIdx;
-                if (code_header.code_shred_idx > shred.slot_idx)
-                    return error.BadSlotIdx;
-                if (code_header.data_count == 0 or code_header.code_count == 0)
-                    return error.NoCodeOrDataCount;
-                if (code_header.code_count + code_header.data_count > 256)
-                    return error.CodeOrDataCountTooLarge;
-            },
+            if (code_header.code_shred_idx >= code_header.code_count)
+                return error.BadCodeShredIdx;
+            if (code_header.code_shred_idx > shred.slot_idx)
+                return error.BadSlotIdx;
+            if (code_header.data_count == 0 or code_header.code_count == 0)
+                return error.NoCodeOrDataCount;
+            if (code_header.code_count + code_header.data_count > 256)
+                return error.CodeOrDataCountTooLarge;
         }
 
         return shred;
@@ -306,7 +284,8 @@ const Shred = extern struct {
 
         // capacity = payload_size - headers_size - chained_merkle_root - merkle_proof - retransmitter_sig
         const payload_size: usize = if (shred.variant.isData()) min_size else max_size;
-        const chained_size: usize = if (shred.variant.isChained()) merkle_root_size else 0;
+        // NOTE: all shreds are now chained
+        const chained_size: usize = merkle_root_size;
         const proof_size: usize = @as(usize, shred.variant.merkleCount()) * merkle_node_size;
         const resign_size: usize = if (shred.variant.isResigned()) Signature.SIZE else 0;
         const trailer = chained_size + proof_size + resign_size;
@@ -323,18 +302,9 @@ const Shred = extern struct {
         return packet.data[start_off..end];
     }
 
-    // This is the Merkle root for the previous erasure set.
-    fn chainedMerkleRoot(shred: *const Shred) *const [32]u8 {
-        _ = shred;
-    }
-
     fn size(shred: *const Shred) u16 {
-        const packet: *const Packet = @ptrCast(@alignCast(shred));
-
         return if (shred.variant.isCode())
             max_size
-        else if (shred.variant.isLegacy() and shred.variant.isData())
-            packet.size
         else
             min_size;
     }
@@ -1171,7 +1141,6 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             if (shred.code_or_data.code.code_count != FecSetCtx.fec_shred_cnt) continue;
             if (shred.code_or_data.code.code_shred_idx >= FecSetCtx.fec_shred_cnt) continue;
         }
-        if (shred.variant.isLegacy()) continue; // ignore legacy
 
         // is fec set already being built?
         const maybe_fec_set = state.in_progress.getFecSetCtx(&shred.signature);
