@@ -135,6 +135,10 @@ pub fn build(b: *Build) !void {
                 .{ .name = "tracy", .module = tracy_mod },
             },
         });
+        service_mod.addImport("lib", lib);
+        service_mod.addImport("start", start_service);
+        service_mod.addImport("tracy", tracy);
+        service_mod.addImport("binkode", b.dependency("binkode", .{}).module("binkode"));
 
         const service_lib = b.addLibrary(.{
             .name = service_name,
