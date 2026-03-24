@@ -150,8 +150,12 @@ fn receiveShreds(
     var turbine_tree_cache = TurbineTreeCache.init(allocator);
     defer turbine_tree_cache.deinit();
 
-    const forward_addr: ?std.net.Address = if (forward_shreds_to) |a| a.toAddress() else null;
-    var forward_socket: ?UdpSocket = try createForwardSocket(forward_shreds_to);
+    const forward_addr, var forward_socket = if (forward_shreds_to) |a| blk: {
+        const sock: UdpSocket = try .create(a.getFamily());
+        errdefer sock.close();
+        try sock.bindToPort(0);
+        break :blk .{ a.toAddress(), sock };
+    } else .{ null, null };
     defer if (forward_socket) |s| s.close();
 
     var deduper = try ShredDeduper(2).init(
@@ -198,12 +202,6 @@ fn receiveShreds(
         }
 
         if (grouped_shreds.count() > 0) {
-            // Forward deduped shreds for v2 testing.
-            if (forward_addr) |addr| if (forward_socket) |*sock| {
-                for (grouped_shreds.values()) |slot_shreds| {
-                    forwardSlotShredsToUdp(sock, addr, slot_shreds.items);
-                }
-            };
             try createAndSendRetransmitInfo(
                 allocator,
                 grouped_shreds,
@@ -222,6 +220,14 @@ fn receiveShreds(
         metrics.receive_shreds_nanos.observe(receive_shreds_timer.read().asNanos());
 
         metrics.maybeLog(logger);
+
+        // Forward raw shreds for v2 testing.
+        if (forward_socket) |*sock| {
+            for (shreds.items) |p| _ = sock.sendTo(
+                forward_addr.?,
+                p.buffer[0..p.size],
+            ) catch |err| logger.err().logf("failed to forward shred: {}", .{err});
+        }
     }
 }
 
@@ -472,118 +478,6 @@ pub const RetransmitServiceMetrics = struct {
         }
     }
 };
-
-fn forwardSlotShredsToUdp(
-    sock: *const UdpSocket,
-    addr: std.net.Address,
-    slot_shreds: []const ShredIdAndPacket,
-) void {
-    for (slot_shreds) |shred_id_and_packet| {
-        const p = shred_id_and_packet[1];
-        // NOTE:- should we care these errors?
-        _ = sock.sendTo(addr, p.buffer[0..p.size]) catch {};
-    }
-}
-
-fn createForwardSocket(forward_shreds_to: ?sig.net.SocketAddr) !?UdpSocket {
-    return if (forward_shreds_to) |addr| blk: {
-        const family: sig.net.net.AddressFamily = switch (addr) {
-            .V4 => .ipv4,
-            .V6 => .ipv6,
-        };
-        const sock: UdpSocket = try .create(family);
-        errdefer sock.close();
-        try sock.bindToPort(0);
-        break :blk sock;
-    } else null;
-}
-
-test "forward: udp family mapping" {
-    try std.testing.expectEqual(
-        @as(?sig.net.net.AddressFamily, .ipv4),
-        sig.net.net.udpFamilyForAddress(std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 1234)),
-    );
-    try std.testing.expectEqual(
-        @as(?sig.net.net.AddressFamily, .ipv6),
-        sig.net.net.udpFamilyForAddress(std.net.Address.initIp6(.{0} ** 16, 1234, 0, 0)),
-    );
-
-    const unsupported = try std.net.Address.initUnix("/tmp/sig-udpFamilyForAddress.sock");
-    try std.testing.expectEqual(
-        @as(?sig.net.net.AddressFamily, null),
-        sig.net.net.udpFamilyForAddress(unsupported),
-    );
-}
-
-test "forward: createForwardSocket handles null and both families" {
-    const no_socket = try createForwardSocket(null);
-    try std.testing.expect(no_socket == null);
-
-    const v4_addr = sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
-    var v4_socket = (try createForwardSocket(v4_addr)).?;
-    defer v4_socket.close();
-
-    const v6_addr = sig.net.SocketAddr.initIpv6(.{0} ** 16, 0);
-    var v6_socket = (try createForwardSocket(v6_addr)).?;
-    defer v6_socket.close();
-}
-
-test "forward: sends each packet payload" {
-    var p1: Packet = .ANY_EMPTY;
-    p1.size = 3;
-    p1.buffer[0] = 1;
-    p1.buffer[1] = 2;
-    p1.buffer[2] = 3;
-
-    var p2: Packet = .ANY_EMPTY;
-    p2.size = 1;
-    p2.buffer[0] = 9;
-
-    const shred_id_1: ShredId = .{ .slot = 1, .index = 0, .shred_type = .data };
-    const shred_id_2: ShredId = .{ .slot = 1, .index = 1, .shred_type = .code };
-
-    const slot_shreds: [2]ShredIdAndPacket = .{
-        .{ shred_id_1, p1 },
-        .{ shred_id_2, p2 },
-    };
-
-    var receiver = try sig.net.UdpSocket.create(.ipv4);
-    defer receiver.close();
-    // Bind to loopback so `getLocalEndPoint()` returns a routable address.
-    try receiver.bind(std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0));
-    try receiver.setReadTimeout(250_000); // 250ms
-    const receiver_addr = try receiver.getLocalEndPoint();
-
-    var sender = try sig.net.UdpSocket.create(.ipv4);
-    defer sender.close();
-    try sender.bindToPort(0);
-
-    forwardSlotShredsToUdp(&sender, receiver_addr, slot_shreds[0..]);
-
-    var buf: [Packet.DATA_SIZE]u8 = undefined;
-    const len1, _ = try receiver.receiveFrom(buf[0..]);
-    const len2, _ = try receiver.receiveFrom(buf[0..]);
-    try std.testing.expect(len1 + len2 == 4);
-}
-
-test "forward: no packets does not send data" {
-    const empty: [0]ShredIdAndPacket = .{};
-
-    var receiver = try sig.net.UdpSocket.create(.ipv4);
-    defer receiver.close();
-    try receiver.bind(std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0));
-    try receiver.setReadTimeout(50_000); // 50ms
-    const receiver_addr = try receiver.getLocalEndPoint();
-
-    var sender = try sig.net.UdpSocket.create(.ipv4);
-    defer sender.close();
-    try sender.bindToPort(0);
-
-    forwardSlotShredsToUdp(&sender, receiver_addr, empty[0..]);
-
-    var buf: [Packet.DATA_SIZE]u8 = undefined;
-    try std.testing.expectError(error.WouldBlock, receiver.receiveFrom(buf[0..]));
-}
 
 test "createAndSendRetransmitInfo" {
     const allocator = std.testing.allocator;

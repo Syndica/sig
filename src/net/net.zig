@@ -7,6 +7,14 @@ pub const AddressFamily = enum(u32) {
     ipv4 = posix.AF.INET,
     ipv6 = posix.AF.INET6,
 
+    pub fn fromAddress(addr: std.net.Address) !AddressFamily {
+        return switch (addr.any.family) {
+            posix.AF.INET => .ipv4,
+            posix.AF.INET6 => .ipv6,
+            else => error.UnsupportedAddressFamily,
+        };
+    }
+
     fn fromNativeAddressFamily(domain: u32) ?AddressFamily {
         return std.meta.intToEnum(AddressFamily, domain) catch null;
     }
@@ -15,14 +23,6 @@ pub const AddressFamily = enum(u32) {
         return @intFromEnum(family);
     }
 };
-
-pub fn udpFamilyForAddress(addr: std.net.Address) ?AddressFamily {
-    return switch (addr.any.family) {
-        posix.AF.INET => .ipv4,
-        posix.AF.INET6 => .ipv6,
-        else => null,
-    };
-}
 
 pub const UdpSocket = struct {
     family: AddressFamily,
@@ -203,6 +203,13 @@ pub const SocketAddr = union(enum(u8)) {
             .flowinfo = 0,
             .scope_id = 0,
         } };
+    }
+
+    pub fn getFamily(self: SocketAddr) AddressFamily {
+        return switch (self) {
+            .V4 => .ipv4,
+            .V6 => .ipv6,
+        };
     }
 
     pub fn getPort(self: *const SocketAddr) u16 {
