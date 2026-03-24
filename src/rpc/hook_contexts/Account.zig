@@ -800,9 +800,13 @@ pub fn getTokenLargestAccounts(
         GetTokenLargestAccounts.TokenAccountBalancePair,
         heap.count(),
     );
-    for (results) |*result| {
+    // Min-heap extraction yields ascending order; fill backwards for
+    // descending (largest first) to match Agave behavior.
+    var i: usize = results.len;
+    while (i > 0) {
+        i -= 1;
         const entry = heap.remove();
-        result.* = .{
+        results[i] = .{
             .address = entry.address,
             .ui_token_amount = .init(entry.amount, spl_token_data),
         };
