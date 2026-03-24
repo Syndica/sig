@@ -159,8 +159,21 @@ test "init/denit" {
     const no_prune_fanout_len = fanout.items.len;
     try std.testing.expect(no_prune_fanout_len > 0);
 
-    var iter = active_set.peers.keyIterator();
-    const peer_pubkey = iter.next().?.*;
+    // Prune a peer that is actually in the fanout (same iteration order and
+    // filters as getFanoutPeers). The first peer in map order might be skipped
+    // by getFanoutPeers (no contact info, no gossip_addr, sanitize fails).
+    var peer_iter = active_set.peers.iterator();
+    const peer_pubkey = blk: {
+        while (peer_iter.next()) |entry| {
+            const peer_info = table.getThreadSafeContactInfo(entry.key_ptr.*) orelse continue;
+            const peer_gossip_addr = peer_info.gossip_addr orelse continue;
+            peer_gossip_addr.sanitize() catch continue;
+            const origin_bytes = origin.data;
+            if (entry.value_ptr.contains(&origin_bytes)) continue;
+            break :blk entry.key_ptr.*;
+        }
+        return error.TestUnexpected;
+    };
     active_set.prune(peer_pubkey, origin);
 
     var fanout_with_prune = try active_set.getFanoutPeers(alloc, origin, &table);
