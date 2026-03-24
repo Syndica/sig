@@ -811,17 +811,22 @@ const Gossip = struct {
         value: GossipValue,
     ) !?struct { Key, u8 } {
         // Extract key information from the data.
+        var deprecated = false;
         const from: Pubkey, const wallclock: u64, const index: u16 = switch (value.data) {
             inline .vote, .lowest_slot, .epoch_slots, .duplicate_shred => |v| blk: {
                 break :blk .{ v.from, v.wallclock, v.index };
             },
-            .snapshot_hashes => |v| blk: {
-                break :blk .{ v.from, v.wallclock, 0 };
-            },
             .contact_info => |ci| blk: {
                 break :blk .{ ci.from, ci.wallclock.value, 0 };
             },
-            else => unreachable,
+            inline .snapshot_hashes, .restart_heaviest_fork, .restart_last_voted_fork => |v| blk: {
+                deprecated = value.data != .snapshot_hashes;
+                break :blk .{ v.from, v.wallclock, 0 };
+            },
+            inline else => |v| {
+                comptime std.debug.assert(@TypeOf(v) == bincode.Deprecated);
+                unreachable;
+            },
         };
 
         // Serialize the value & validate its signature.
@@ -836,13 +841,17 @@ const Gossip = struct {
 
         // Check wallclock in general
         const key: Key = .{ .from = from, .tag = std.meta.activeTag(value.data), .index = index };
-        const update_contact = switch (caller) {
-            .us => true,
+        const update_contact = (switch (caller) {
+            .us => blk: {
+                assert(!deprecated); // we should not be inserting our own deprecated data
+                break :blk true; // update our own ContactInfo's last_updated
+            },
             .push => blk: {
-                if (wallclock <= (now -| STALE_PUSH_THRESHOLD_MS)) return null;
-                if (wallclock >= (now +| STALE_PUSH_THRESHOLD_MS)) return null;
-                if (from.equals(&self.identity())) return null;
-                break :blk false;
+                if (wallclock <= (now -| STALE_PUSH_THRESHOLD_MS)) return null; // out of range
+                if (wallclock >= (now +| STALE_PUSH_THRESHOLD_MS)) return null; // out of range
+                if (from.equals(&self.identity())) return null; // push sent our own thing to us
+                if (deprecated) break :blk null; // discover, but dont insert
+                break :blk false; // push msgs dont update ContactInfo's last_updated
             },
             .pull => blk: {
                 // TODO: currently assumes all nodes are staked.
@@ -855,15 +864,19 @@ const Gossip = struct {
                     threshold = 432_000 * 400; // slots_in_epoch * slot_ms
                 }
 
-                if (now <= wallclock +| threshold) break :blk true;
-                if (value.data == .contact_info) break :blk false;
+                if (!deprecated) {
+                    if (now <= wallclock +| threshold) break :blk true; // within threshold
+                    if (value.data == .contact_info) break :blk false; // Contact outside threshold
+                }
 
-                // Value is too old while not being a ContactInfo.
-                // Record that we've seen it, but dont insert it.
-                try self.onDiscoveredValue(now, key, value);
-                self.addExpired(now, hash);
-                return null;
+                // deprecated, or old non-Contact outside threshold
+                break :blk null;
             },
+        }) orelse {
+            // Record that we've seen it, but don't insert it.
+            try self.onDiscoveredValue(now, key, value);
+            self.addExpired(now, hash);
+            return null;
         };
 
         const exists, const v = blk: {
@@ -974,7 +987,11 @@ const Gossip = struct {
                     // TODO: if map.get(.tpu_vote): send to consensus service
                     // TODO: if map.get(.rpc): send to snapshot service
                 },
-                else => unreachable,
+                .restart_heaviest_fork, .restart_last_voted_fork => {}, // deprecated
+                inline else => |v| {
+                    comptime std.debug.assert(@TypeOf(v) == bincode.Deprecated);
+                    unreachable;
+                },
             }
         }
     }
@@ -1415,8 +1432,25 @@ const GossipData = union(enum(u32)) {
             bytes: ShortVec(u8),
         }),
     },
-    restart_last_voted_fork: bincode.Deprecated,
-    restart_heaviest_fork: bincode.Deprecated,
+    /// Deprecated and unused. But nodes may still send them for us to addExpired.
+    restart_last_voted_fork: struct {
+        from: Pubkey,
+        wallclock: u64,
+        offsets: Vec(union(enum(u32)) {
+            rle: Vec(VarInt(u16)),
+            raw: BitVec(u8),
+        }),
+        last_voted: SlotAndHash,
+        shred_version: u16,
+    },
+    /// Deprecated and unused. But nodes may still send them for us to addExpired.
+    restart_heaviest_fork: struct {
+        from: Pubkey,
+        wallclock: u64,
+        last_slot: SlotAndHash,
+        observed_stake: u64,
+        shred_version: u16,
+    },
 
     const SocketKey = enum(u8) {
         gossip,

@@ -87,7 +87,8 @@ pub const ClusterInfo = extern struct {
 
                 // set timeout of 1s for connect, read, write.
                 const tv = comptime std.mem.asBytes(&std.posix.timeval{ .sec = 1, .usec = 0 });
-                std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, tv) catch continue;
+                std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, tv) catch
+                    continue;
                 std.posix.connect(socket, &entry_addr.any, entry_addr.getOsSockLen()) catch {
                     continue;
                 };
