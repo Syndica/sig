@@ -6,6 +6,7 @@ const tracy = @import("tracy");
 const sig = @import("../../sig.zig");
 
 const account_codec = sig.rpc.account_codec;
+const parse_stake = account_codec.parse_stake;
 const parse_token = account_codec.parse_token;
 
 const check_transactions = sig.runtime.check_transactions;
@@ -25,6 +26,7 @@ const Slot = sig.core.Slot;
 const GetAccountInfo = sig.rpc.methods.GetAccountInfo;
 const GetBalance = sig.rpc.methods.GetBalance;
 const GetFeeForMessage = sig.rpc.methods.GetFeeForMessage;
+const GetSupply = sig.rpc.methods.GetSupply;
 const GetTokenAccountBalance = sig.rpc.methods.GetTokenAccountBalance;
 const GetTokenSupply = sig.rpc.methods.GetTokenSupply;
 const GetMultipleAccounts = sig.rpc.methods.GetMultipleAccounts;
@@ -34,6 +36,19 @@ const GetTokenAccountsByOwner = sig.rpc.methods.GetTokenAccountsByOwner;
 const AccountEncoding = account_codec.AccountEncoding;
 const CommitmentSlotConfig = sig.rpc.methods.common.CommitmentSlotConfig;
 const RpcFilterType = sig.rpc.filters.RpcFilterType;
+const non_circulating_supply = @import("non-circulating-supply");
+
+/// Compile-time perfect hash set for O(1) membership checks against the static
+/// non-circulating accounts list. Built from the build-time-decoded pubkey arrays.
+const NonCirculatingSet = blk: {
+    var entries: []const struct { sig.core.Pubkey, void } = &.{};
+    for (&non_circulating_supply.non_circulating_accounts) |*raw| {
+        entries = entries ++ &[_]struct { sig.core.Pubkey, void }{
+            .{ .{ .data = raw.* }, {} },
+        };
+    }
+    break :blk sig.utils.pht(void, entries);
+};
 
 const AccountHookContext = @This();
 
@@ -615,5 +630,72 @@ pub fn getTokenAccountsByOwner(
     return .{
         .context = .{ .slot = slot },
         .value = try results.toOwnedSlice(arena),
+    };
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1105-L1137
+pub fn getSupply(
+    self: AccountHookContext,
+    arena: std.mem.Allocator,
+    params: GetSupply,
+) !GetSupply.Response {
+    const config = params.config orelse GetSupply.Config{};
+    const commitment = config.commitment orelse .finalized;
+    const exclude_accounts = config.excludeNonCirculatingAccountsList;
+
+    const slot = self.slot_tracker.commitments.get(commitment);
+    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    defer ref.release();
+    const ancestors = &ref.constants().ancestors;
+    const slot_reader = self.account_reader.forSlot(ancestors).toOwnedReader();
+
+    // Read the Clock sysvar to check lockup conditions.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L18-L22
+    const clock = try account_codec.getSysvar(sig.runtime.sysvar.Clock, arena, slot_reader) orelse
+        return error.SlotNotAvailable;
+
+    var non_circulating_lamports: u64 = 0;
+    var non_circulating_accounts = std.ArrayListUnmanaged(sig.core.Pubkey){};
+    if (!exclude_accounts) try non_circulating_accounts
+        .ensureUnusedCapacity(arena, non_circulating_supply.non_circulating_accounts.len);
+
+    // Sum lamports for the static non-circulating accounts.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L24-L29
+    for (&non_circulating_supply.non_circulating_accounts) |*raw| {
+        if (slot_reader.get(arena, .{ .data = raw.* }) catch null) |account| {
+            non_circulating_lamports += account.lamports;
+        }
+        if (!exclude_accounts) non_circulating_accounts.appendAssumeCapacity(.{ .data = raw.* });
+    }
+
+    // Iterate all stake accounts and collect non-circulating ones not already in the static set.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L30-L46
+    var owner_iter = try slot_reader.getByOwner(arena, &sig.runtime.program.stake.ID);
+    defer owner_iter.deinit();
+
+    while (try owner_iter.next()) |entry| {
+        const pubkey, const account = entry;
+
+        if (parse_stake.isNonCirculatingStake(arena, &account.data, &clock)) {
+            // Dedup against the static set via perfect hash lookup.
+            if (NonCirculatingSet.get(&pubkey) == null) {
+                non_circulating_lamports += account.lamports;
+                if (!exclude_accounts) try non_circulating_accounts.append(arena, pubkey);
+            }
+        }
+    }
+
+    // [agave] Total supply is the capitalization at this slot.
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1121
+    const total = ref.state().capitalization.load(.monotonic);
+
+    return .{
+        .context = .{ .slot = slot },
+        .value = .{
+            .total = total,
+            .circulating = total -| non_circulating_lamports,
+            .nonCirculating = non_circulating_lamports,
+            .nonCirculatingAccounts = try non_circulating_accounts.toOwnedSlice(arena),
+        },
     };
 }
