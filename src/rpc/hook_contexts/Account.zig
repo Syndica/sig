@@ -796,17 +796,15 @@ pub fn getTokenLargestAccounts(
     }
 
     // Extract results from heap and sort by amount descending.
-    const count = heap.count();
-    const results = try arena.alloc(GetTokenLargestAccounts.TokenAccountBalancePair, count);
-    var i: usize = count;
-    while (heap.removeOrNull()) |entry| {
-        i -= 1;
-        results[i] = .{
+    const results = try arena.alloc(
+        GetTokenLargestAccounts.TokenAccountBalancePair,
+        heap.count(),
+    );
+    for (results) |*result| {
+        const entry = heap.remove();
+        result.* = .{
             .address = entry.address,
-            .ui_token_amount = parse_token.UiTokenAmount.init(
-                entry.amount,
-                spl_token_data,
-            ),
+            .ui_token_amount = .init(entry.amount, spl_token_data),
         };
     }
 
