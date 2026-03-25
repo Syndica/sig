@@ -208,12 +208,11 @@ pub fn resolveTransaction(
 
     // construct instructions
     const instructions = try allocator.alloc(InstructionInfo, message.instructions.len);
-    errdefer {
-        for (instructions) |instr| instr.deinit(allocator);
-        allocator.free(instructions);
-    }
+    errdefer allocator.free(instructions);
 
-    for (message.instructions, instructions) |input_ix, *output_ix| {
+    for (message.instructions, instructions, 0..) |input_ix, *output_ix, output_i| {
+        errdefer for (instructions[0..output_i]) |prev_output_ix| prev_output_ix.deinit(allocator);
+
         var account_metas = InstructionInfo.AccountMetas{};
         errdefer account_metas.deinit(allocator);
 

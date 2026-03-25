@@ -104,6 +104,7 @@ const TransactionInstruction = sig.core.transaction.Instruction;
 const TransactionAddressLookup = sig.core.transaction.AddressLookup;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
+const Clock = sig.runtime.sysvar.Clock;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const EpochRewards = sig.runtime.sysvar.EpochRewards;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
@@ -139,6 +140,9 @@ fn executeTxnContext(
 
     var accounts_map = try loadAccountsMap(allocator, &pb_txn_ctx);
     defer deinitMapAndValues(allocator, accounts_map);
+
+    const clock = getSysvarFromAccounts(allocator, Clock, &accounts_map);
+    const fixture_slot: Slot = if (clock) |c| c.slot else 10;
 
     // TODO: use??
     // const fee_collector = Pubkey.parseRuntime("1111111111111111111111111111111111") catch unreachable;
@@ -440,11 +444,11 @@ fn executeTxnContext(
         account_store.reader(),
     );
 
-    parent_slot = slot;
+    slot = fixture_slot;
+    parent_slot = slot -| 1;
     parent_hash = slot_hash;
     const parent_slots_epoch = epoch;
 
-    slot = 10;
     // Bank::new_from_parent(...)
     {
         // Clone epoch schedule
@@ -506,6 +510,7 @@ fn executeTxnContext(
         // var new = Bank{...}
 
         // Create ancestors with new slot and all parent slots
+        try ancestors.addSlot(allocator, parent_slot);
         try ancestors.addSlot(allocator, slot);
 
         // Update epoch
@@ -661,13 +666,13 @@ fn executeTxnContext(
     // });
 
     // Remove address lookup table, stake, and config program accounts by inserting empty accounts (zero-lamports)
-    try account_store.put(slot, program.address_lookup_table.ID, .EMPTY);
-    try account_store.put(slot, program.config.ID, .EMPTY);
-    try account_store.put(slot, program.stake.ID, .EMPTY);
+    try account_store.put(parent_slot, program.address_lookup_table.ID, .EMPTY);
+    try account_store.put(parent_slot, program.config.ID, .EMPTY);
+    try account_store.put(parent_slot, program.stake.ID, .EMPTY);
 
     // Load accounts into accounts db
     for (accounts_map.keys(), accounts_map.values()) |pubkey, account| {
-        try account_store.put(slot, pubkey, .{
+        try account_store.put(parent_slot, pubkey, .{
             .lamports = account.lamports,
             .data = account.data,
             .owner = account.owner,
@@ -784,6 +789,7 @@ fn executeTxnContext(
         error.InvalidAddressLookupTableOwner => .InvalidAddressLookupTableOwner,
         error.InvalidAddressLookupTableData => .InvalidAddressLookupTableData,
         error.InvalidAddressLookupTableIndex => .InvalidAddressLookupTableIndex,
+        error.InvalidAccountIndex => .InvalidAccountIndex,
         else => std.debug.panic("Unexpected error: {s}\n", .{@errorName(err)}),
     });
     defer resolved_transaction.deinit(allocator);
