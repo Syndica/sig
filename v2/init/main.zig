@@ -4,7 +4,6 @@ comptime {
     _ = std.testing.refAllDecls(@This());
 }
 
-const services_zon = @import("services.zon");
 const services = @import("services.zig");
 const lib = @import("lib");
 
