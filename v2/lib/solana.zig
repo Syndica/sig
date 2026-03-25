@@ -6,9 +6,11 @@ comptime {
 
 pub const Hash = @import("solana/hash.zig").Hash;
 pub const Pubkey = @import("solana/pubkey.zig").Pubkey;
+pub const KeyPair = @import("solana/keypair.zig").KeyPair;
 pub const Signature = @import("solana/signature.zig").Signature;
 pub const ClusterType = @import("solana/cluster.zig").ClusterType;
 pub const LeaderSchedule = @import("solana/leader_schedule.zig").LeaderSchedule;
+pub const gossip = @import("solana/gossip.zig");
 
 pub const Lamports = u64;
 pub const Nonce = u32;

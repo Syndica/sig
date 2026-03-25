@@ -170,9 +170,9 @@ pub const SharedRegion = struct {
 pub const Region = union(enum) {
     net_pair: struct { port: u16 },
     gossip_config: struct {
-        cluster_info: lib.gossip.ClusterInfo,
+        cluster_info: lib.solana.gossip.ClusterInfo,
         // TODO: this should live in signing service
-        keypair: lib.gossip.KeyPair,
+        keypair: lib.solana.KeyPair,
         turbine_recv_port: u16,
     },
     shred_recv_config: struct {
@@ -184,7 +184,7 @@ pub const Region = union(enum) {
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(lib.net.Pair),
-            .gossip_config => @sizeOf(lib.gossip.Config),
+            .gossip_config => @sizeOf(lib.solana.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
         };
     }
@@ -202,8 +202,8 @@ pub const Region = union(enum) {
                 data.port = cfg.port;
             },
             .gossip_config => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(lib.gossip.Config));
-                const data: *lib.gossip.Config = @ptrCast(buf);
+                std.debug.assert(buf.len == @sizeOf(lib.solana.gossip.Config));
+                const data: *lib.solana.gossip.Config = @ptrCast(buf);
 
                 data.keypair = cfg.keypair;
                 data.cluster_info = cfg.cluster_info;

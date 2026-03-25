@@ -58,7 +58,7 @@ pub fn main() !void {
 
     std.log.info("config: {}", .{config});
 
-    const gossip_cluster_info: lib.gossip.ClusterInfo =
+    const gossip_cluster_info: lib.solana.gossip.ClusterInfo =
         try .getFromEcho(config.gossip.port, config.cluster);
 
     const schedule_file = try std.fs.cwd().openFile(config.leader_schedule_file, .{});
