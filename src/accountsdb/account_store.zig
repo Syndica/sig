@@ -916,7 +916,7 @@ test "insertion out of order" {
 
     for (0..100) |i| {
         const slot: Slot = while (true) {
-            const slot = random.uintLessThan(Slot, 1000);
+            const slot = random.intRangeAtMost(Slot, 1, 999);
             if (ancestor_set.containsSlot(slot)) continue;
             break slot;
         };

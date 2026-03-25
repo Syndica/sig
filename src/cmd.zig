@@ -2254,7 +2254,10 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         snapshot_files,
         .{
             .genesis_file_path = genesis_file_path,
-            .extract = .{ .entire_snapshot_and_validate = &rooted_db },
+            .extract = if (cfg.accounts_db.skip_snapshot_validation)
+                .{ .entire_snapshot = &rooted_db }
+            else
+                .{ .entire_snapshot_and_validate = &rooted_db },
         },
     );
     defer loaded_snapshot.deinit();

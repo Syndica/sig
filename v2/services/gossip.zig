@@ -35,14 +35,13 @@ pub const ReadOnly = struct {
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
-    const cluster_info = &ro.config.cluster_info;
     std.log.debug(
-        "Gossip started on :{} as {f}:\n\tshred_version:{}\n\tentrypoint:{f}",
+        "Gossip started on :{} as {f}:\n\tshred_version:{}\n\tentrypoints:{f}",
         .{
             rw.pair.port,
             ro.config.keypair.pubkey,
-            cluster_info.shred_version,
-            cluster_info.entry_addr.toNetAddress(),
+            ro.config.cluster_info.shred_version,
+            lib.fmtSlice(ro.config.cluster_info.getEntryAddresses()),
         },
     );
 
@@ -71,7 +70,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         .from = ro.config.keypair.pubkey,
         .wallclock = .{ .value = now },
         .created = now,
-        .shred_version = cluster_info.shred_version,
+        .shred_version = ro.config.cluster_info.shred_version,
         .major = .{ .value = 0 },
         .minor = .{ .value = 0 },
         .patch = .{ .value = 0 },
@@ -79,10 +78,10 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         .feature_set = 0,
         .client_id = .{ .value = 0 },
         .ips = .{ .items = &.{
-            if (cluster_info.public_ip.is_v6)
-                .{ .v6 = cluster_info.public_ip.ip }
+            if (ro.config.cluster_info.public_ip.is_v6)
+                .{ .v6 = ro.config.cluster_info.public_ip.ip }
             else
-                .{ .v4 = cluster_info.public_ip.ip[0..4].* },
+                .{ .v4 = ro.config.cluster_info.public_ip.ip[0..4].* },
         } },
         .sockets = .{ .items = &socket_entries },
         .extensions = .{ .items = &.{} },
@@ -92,7 +91,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var gossip = try Gossip.init(&fba, .{
         .netpair = rw.pair,
         .keypair = &ro.config.keypair,
-        .entry_addr = cluster_info.entry_addr.toNetAddress(),
+        .cluster_info = &ro.config.cluster_info,
         .contact_info = contact_info,
     });
 
@@ -241,7 +240,7 @@ const Gossip = struct {
     pub const Config = struct {
         netpair: *Pair,
         keypair: *const lib.gossip.KeyPair,
-        entry_addr: std.net.Address,
+        cluster_info: *const lib.gossip.ClusterInfo,
         contact_info: GossipData,
     };
 
@@ -288,12 +287,12 @@ const Gossip = struct {
 
         if (self.push_timeout <= now) {
             self.push_timeout = now + PUSH_INTERVAL_MS;
-            try self.processPushMessages(now);
+            try self.updatePushSet(now);
         }
 
         if (self.ping_timeout <= now) {
             self.ping_timeout = now + PING_INTERVAL_MS;
-            try self.processPings(now);
+            try self.updatePeers(now);
         }
 
         var slice = self.config.netpair.recv.getReadable() catch return;
@@ -318,7 +317,7 @@ const Gossip = struct {
         switch (msg) {
             .pull_request => |pr| {
                 const from, const shred_version = switch (pr.contact_info.data) {
-                    inline .legacy_contact_info, .contact_info => |v| .{ v.from, v.shred_version },
+                    .contact_info => |v| .{ v.from, v.shred_version },
                     else => return error.InvalidPullRequestContactInfo,
                 };
 
@@ -526,7 +525,7 @@ const Gossip = struct {
         }
     }
 
-    fn processPings(self: *Gossip, now: u64) !void {
+    fn updatePeers(self: *Gossip, now: u64) !void {
         // Update the ping tokens
         self.ping_token_window[0] = self.ping_token_window[1];
         self.prng.fill(&self.ping_token_window[1]);
@@ -551,7 +550,18 @@ const Gossip = struct {
         }
     }
 
-    fn processPushMessages(self: *Gossip, now: u64) !void {
+    fn updatePushSet(self: *Gossip, now: u64) !void {
+        // refresh contact info
+        self.refreshPushActiveSet(now);
+
+        // Add a new instance of our contact info.
+        try self.insertOurOwnData(now, self.config.contact_info);
+
+        // Send out push messages
+        try self.sendPushMessages();
+    }
+
+    fn refreshPushActiveSet(self: *Gossip, now: u64) void {
         // Refresh push active set
         self.push_active_set.clearRetainingCapacity();
 
@@ -567,30 +577,24 @@ const Gossip = struct {
 
                 // TODO: if staked & rng.change(1/16), then skip checks below
 
-                // Past the ping check
+                // Passes the ping check
                 if (peer.last_pong == null)
                     continue;
 
-                // TODO: enable this? matching shred_version
-                // if (peer.shred_version != self.config.contact_info.contact_info.shred_version)
-                //     continue;
+                // matching shred_version
+                if (peer.shred_version != self.config.cluster_info.shred_version)
+                    continue;
 
-                // TODO: enable this? active-enough ContactInfo
-                // const ci_key: Key = .{ .from = from, .tag = .contact_info, .index = 0 };
-                // const ci = self.table.getPtr(ci_key) orelse continue;
-                // if (ci.last_updated <= now -| ACTIVE_VALUE_THRESHOLD_MS)
-                //     continue;
+                // active-enough ContactInfo
+                const ci_key: Key = .{ .from = from, .tag = .contact_info, .index = 0 };
+                const ci = self.table.getPtr(ci_key) orelse continue;
+                if (ci.last_updated <= now -| ACTIVE_VALUE_THRESHOLD_MS)
+                    continue;
 
                 self.push_active_set.appendAssumeCapacity(from);
                 if (self.push_active_set.items.len == self.push_active_set.capacity) break;
             }
         }
-
-        // Add a new instance of our contact info.
-        try self.insertOurOwnData(now, self.config.contact_info);
-
-        // Send out push messages
-        try self.sendPushMessages();
     }
 
     fn sendPushMessages(self: *Gossip) !void {
@@ -599,47 +603,68 @@ const Gossip = struct {
         if (pushed_keys.len == 0) return;
         defer self.push_buf.clearRetainingCapacity();
 
+        // No active_set peers. Try to send PushMessages to entrypoints to get us into the cluster.
+        if (self.push_active_set.items.len == 0) {
+            for (self.config.cluster_info.getEntryAddresses()) |entry_addr| {
+                try self.sendPushMessagesTo(entry_addr.toNetAddress(), pushed_keys, null);
+            }
+            return;
+        }
+
         self.push_alloc_buf.clearRetainingCapacity();
         for (self.push_active_set.items) |pubkey| {
             const peer = self.peers.getPtr(pubkey) orelse continue;
             const ignored = peer.ignoring.asBloomFilter(null, null);
+            try self.sendPushMessagesTo(peer.addr, pushed_keys, &ignored);
+        }
+    }
 
-            var value_buf: [PUSH_BUFFER_MAX]GossipValue = undefined;
-            var values: std.ArrayListUnmanaged(GossipValue) = .initBuffer(&value_buf);
-            assert(pushed_keys.len <= value_buf.len);
+    fn sendPushMessagesTo(
+        self: *Gossip,
+        addr: std.net.Address,
+        pushed_keys: []const Key,
+        maybe_ignore_filter: ?*const BloomFilter,
+    ) !void {
+        var value_buf: [PUSH_BUFFER_MAX]GossipValue = undefined;
+        var values: std.ArrayListUnmanaged(GossipValue) = .initBuffer(&value_buf);
+        assert(pushed_keys.len <= value_buf.len);
 
-            var packet_size: usize = 4 + 32 + 8;
-            for (pushed_keys) |key| {
+        var packet_size: usize = 4 + 32 + 8;
+        self.push_alloc_buf.clearRetainingCapacity();
+        for (pushed_keys) |key| {
+            if (maybe_ignore_filter) |ignored| {
                 if (ignored.contains(&key.from.data)) continue;
-                const v = self.table.getPtr(key) orelse continue;
-
-                // Would overflow push message. Send one out with whats collected so far.
-                if (packet_size + v.size > Packet.len) {
-                    try self.sendMessage(peer.addr, .{ .push_message = .{
-                        .from = self.identity(),
-                        .values = .{ .items = values.items },
-                    } });
-                    self.push_alloc_buf.clearRetainingCapacity();
-                    values.clearRetainingCapacity();
-                    packet_size = 4 + 32 + 8;
-                }
-
-                // TODO: no need to actually deserialize here. Ideally, just write the v.values
-                // directly into the PushMessage packet being sent out.
-                const alloc_buf = self.push_alloc_buf.addManyAsSliceAssumeCapacity(16 * 1024);
-                var fba = std.heap.FixedBufferAllocator.init(alloc_buf);
-                var reader: std.Io.Reader = .fixed(v.value[0..v.size]);
-                const value = try bincode.read(&fba, &reader, GossipValue);
-                values.appendAssumeCapacity(value);
             }
 
-            // Send out remaining push message.
-            if (values.items.len > 0) {
-                try self.sendMessage(peer.addr, .{ .push_message = .{
+            // Key may have been removed from the table in the mean time: that's fine.
+            const v = self.table.getPtr(key) orelse continue;
+
+            // Would overflow push message. Send one out with whats collected so far.
+            if (packet_size + v.size > Packet.len) {
+                try self.sendMessage(addr, .{ .push_message = .{
                     .from = self.identity(),
                     .values = .{ .items = values.items },
                 } });
+                self.push_alloc_buf.clearRetainingCapacity();
+                values.clearRetainingCapacity();
+                packet_size = 4 + 32 + 8;
             }
+
+            // TODO: no need to actually deserialize here. Ideally, just write the v.values
+            // directly into the PushMessage packet being sent out.
+            const alloc_buf = self.push_alloc_buf.addManyAsSliceAssumeCapacity(16 * 1024);
+            var fba = std.heap.FixedBufferAllocator.init(alloc_buf);
+            var reader: std.Io.Reader = .fixed(v.value[0..v.size]);
+            const value = try bincode.read(&fba, &reader, GossipValue);
+            values.appendAssumeCapacity(value);
+        }
+
+        // Send out remaining push message.
+        if (values.items.len > 0) {
+            try self.sendMessage(addr, .{ .push_message = .{
+                .from = self.identity(),
+                .values = .{ .items = values.items },
+            } });
         }
     }
 
@@ -721,7 +746,7 @@ const Gossip = struct {
             }
         }
 
-        // Check if there were no peers & send to entrypoint (rate limited).
+        // Check if there were no peers & send to entrypoints (rate limited).
         // If reconnect to network, entrypoint will get our ContactInfo & ping us to start tracking.
         // We get pong, start tracking entrypoint, and start getting PullResponses from it in later
         // calls to `sendPullRequests`.
@@ -739,14 +764,16 @@ const Gossip = struct {
                 std.log.debug("No peers...", .{});
 
                 const mask =
-                    (@as(u65, i) << (@as(u7, 64) - mask_bits)) | (~@as(u64, 0) >> mask_bits);
+                    (@as(u65, 0) << (@as(u7, 64) - mask_bits)) | (~@as(u64, 0) >> mask_bits);
 
-                try self.sendMessage(self.config.entry_addr, .{ .pull_request = .{
-                    .ignoring = bloom_filters.items[i],
-                    .mask = @intCast(mask),
-                    .mask_bits = mask_bits,
-                    .contact_info = signed_ci,
-                } });
+                for (self.config.cluster_info.getEntryAddresses()) |entry_addr| {
+                    try self.sendMessage(entry_addr.toNetAddress(), .{ .pull_request = .{
+                        .ignoring = bloom_filters.items[0],
+                        .mask = @intCast(mask),
+                        .mask_bits = mask_bits,
+                        .contact_info = signed_ci,
+                    } });
+                }
             }
         }
     }
@@ -755,9 +782,10 @@ const Gossip = struct {
         var data = data_;
         switch (std.meta.activeTag(data)) {
             .contact_info => data.contact_info.wallclock = .{ .value = now },
-            inline else => |tag| {
+            inline .vote, .lowest_slot, .epoch_slots, .duplicate_shred, .snapshot_hashes => |tag| {
                 @field(data, @tagName(tag)).wallclock = now;
             },
+            else => return error.SigningDeprecatedValue,
         }
 
         // TODO: serialize directly table.
@@ -782,22 +810,22 @@ const Gossip = struct {
         caller: enum { us, pull, push },
         value: GossipValue,
     ) !?struct { Key, u8 } {
-        var deprecated = false;
-
         // Extract key information from the data.
+        var deprecated = false;
         const from: Pubkey, const wallclock: u64, const index: u16 = switch (value.data) {
             inline .vote, .lowest_slot, .epoch_slots, .duplicate_shred => |v| blk: {
                 break :blk .{ v.from, v.wallclock, v.index };
             },
-            inline .snapshot_hashes, .restart_last_voted_fork, .restart_heaviest_fork => |v| blk: {
-                break :blk .{ v.from, v.wallclock, 0 };
-            },
             .contact_info => |ci| blk: {
                 break :blk .{ ci.from, ci.wallclock.value, 0 };
             },
-            inline else => |v| blk: {
-                deprecated = true;
+            inline .snapshot_hashes, .restart_heaviest_fork, .restart_last_voted_fork => |v| blk: {
+                deprecated = value.data != .snapshot_hashes;
                 break :blk .{ v.from, v.wallclock, 0 };
+            },
+            inline else => |v| {
+                comptime std.debug.assert(@TypeOf(v) == bincode.Deprecated);
+                unreachable;
             },
         };
 
@@ -813,13 +841,17 @@ const Gossip = struct {
 
         // Check wallclock in general
         const key: Key = .{ .from = from, .tag = std.meta.activeTag(value.data), .index = index };
-        const update_contact = switch (caller) {
-            .us => true,
+        const update_contact = (switch (caller) {
+            .us => blk: {
+                assert(!deprecated); // we should not be inserting our own deprecated data
+                break :blk true; // update our own ContactInfo's last_updated
+            },
             .push => blk: {
-                if (wallclock <= (now -| STALE_PUSH_THRESHOLD_MS)) return null;
-                if (wallclock >= (now +| STALE_PUSH_THRESHOLD_MS)) return null;
-                if (from.equals(&self.identity())) return null;
-                break :blk false;
+                if (wallclock <= (now -| STALE_PUSH_THRESHOLD_MS)) return null; // out of range
+                if (wallclock >= (now +| STALE_PUSH_THRESHOLD_MS)) return null; // out of range
+                if (from.equals(&self.identity())) return null; // push sent our own thing to us
+                if (deprecated) break :blk null; // discover, but dont insert
+                break :blk false; // push msgs dont update ContactInfo's last_updated
             },
             .pull => blk: {
                 // TODO: currently assumes all nodes are staked.
@@ -833,16 +865,18 @@ const Gossip = struct {
                 }
 
                 if (!deprecated) {
-                    if (now <= wallclock +| threshold) break :blk true;
-                    if (value.data == .contact_info) break :blk false;
-                    try self.onDiscoveredValue(now, key, value);
+                    if (now <= wallclock +| threshold) break :blk true; // within threshold
+                    if (value.data == .contact_info) break :blk false; // Contact outside threshold
                 }
 
-                // Value is deprecated, or too old while not being a ContactInfo.
-                // Record that we've seen it, but dont insert it.
-                self.addExpired(now, hash);
-                return null;
+                // deprecated, or old non-Contact outside threshold
+                break :blk null;
             },
+        }) orelse {
+            // Record that we've seen it, but don't insert it.
+            try self.onDiscoveredValue(now, key, value);
+            self.addExpired(now, hash);
+            return null;
         };
 
         const exists, const v = blk: {
@@ -911,9 +945,9 @@ const Gossip = struct {
     }
 
     fn onDiscoveredValue(self: *Gossip, now: u64, key: Key, value: GossipValue) !void {
-        std.log.debug("Discovered {f}", .{key});
-
         if (!key.from.equals(&self.identity())) {
+            std.log.debug("Discovered {f}", .{key});
+
             switch (value.data) {
                 .vote => {}, // TODO: send to consensus service
                 .lowest_slot => {}, // TODO: send to repair service
@@ -953,9 +987,11 @@ const Gossip = struct {
                     // TODO: if map.get(.tpu_vote): send to consensus service
                     // TODO: if map.get(.rpc): send to snapshot service
                 },
-                .restart_last_voted_fork => {}, // TODO: implement wen-restart protocol (SIMD-0046).
-                .restart_heaviest_fork => {}, // TODO: implement wen-restart protocol (SIMD-0046).
-                else => {},
+                .restart_heaviest_fork, .restart_last_voted_fork => {}, // deprecated
+                inline else => |v| {
+                    comptime std.debug.assert(@TypeOf(v) == bincode.Deprecated);
+                    unreachable;
+                },
             }
         }
     }
@@ -1049,6 +1085,7 @@ const Gossip = struct {
 };
 
 const bincode = struct {
+    const Deprecated = void; // noreturn here crashes the compiler
     const read_func_overload = "bincodeRead";
     const write_func_overload = "bincodeWrite";
 
@@ -1081,6 +1118,7 @@ const bincode = struct {
                 inline for (info.fields) |f| @field(value, f.name) = try read(fba, reader, f.type);
                 return value;
             },
+            .void => return error.Deprecated,
             else => @compileError("unsupported type: " ++ @typeName(T)),
         }
     }
@@ -1110,6 +1148,7 @@ const bincode = struct {
                     return @field(T, write_func_overload)(&value, writer);
                 inline for (info.fields) |f| try write(writer, @field(value, f.name));
             },
+            .void => return error.Deprecated,
             else => @compileError("unsupported type: " ++ @typeName(T)),
         }
     }
@@ -1295,21 +1334,7 @@ const GossipValue = struct {
 };
 
 const GossipData = union(enum(u32)) {
-    legacy_contact_info: struct {
-        from: Pubkey,
-        gossip: SocketAddr,
-        tvu: SocketAddr,
-        tvu_quic: SocketAddr,
-        serve_repair_quic: SocketAddr,
-        tpu: SocketAddr,
-        tpu_forwards: SocketAddr,
-        tpu_vote: SocketAddr,
-        rpc: SocketAddr,
-        rpc_pubsub: SocketAddr,
-        serve_repair: SocketAddr,
-        wallclock: u64,
-        shred_version: u16,
-    },
+    legacy_contact_info: bincode.Deprecated,
     vote: struct {
         index: u8,
         from: Pubkey,
@@ -1347,8 +1372,8 @@ const GossipData = union(enum(u32)) {
         }),
         wallclock: u64,
     },
-    legacy_snapshot_hashes: AccountHashes,
-    account_hashes: AccountHashes,
+    legacy_snapshot_hashes: bincode.Deprecated,
+    account_hashes: bincode.Deprecated,
     epoch_slots: struct {
         index: u8,
         from: Pubkey,
@@ -1366,33 +1391,16 @@ const GossipData = union(enum(u32)) {
         }),
         wallclock: u64,
     },
-    legacy_version: struct {
-        from: Pubkey,
-        wallclock: u64,
-        version: Version,
-    },
-    version: struct {
-        from: Pubkey,
-        wallclock: u64,
-        version: Version,
-        feature_set: u32,
-    },
-    node_instance: struct {
-        from: Pubkey,
-        wallclock: u64,
-        created: u64,
-        token: u64,
-    },
+    legacy_version: bincode.Deprecated,
+    version: bincode.Deprecated,
+    node_instance: bincode.Deprecated,
     duplicate_shred: struct {
         index: u16,
         from: Pubkey,
         wallclock: u64,
         slot: Slot,
         _unused: u32,
-        _shred_type: enum(u8) {
-            data = 0b10100101,
-            code = 0b01011010,
-        },
+        _unused_shred_type: u8, // explicitly not an enum to avoid specific tag checks
         num_chunks: u8,
         chunk_idx: u8,
         chunk: Vec(u8),
@@ -1424,6 +1432,7 @@ const GossipData = union(enum(u32)) {
             bytes: ShortVec(u8),
         }),
     },
+    /// Deprecated and unused. But nodes may still send them for us to addExpired.
     restart_last_voted_fork: struct {
         from: Pubkey,
         wallclock: u64,
@@ -1434,6 +1443,7 @@ const GossipData = union(enum(u32)) {
         last_voted: SlotAndHash,
         shred_version: u16,
     },
+    /// Deprecated and unused. But nodes may still send them for us to addExpired.
     restart_heaviest_fork: struct {
         from: Pubkey,
         wallclock: u64,

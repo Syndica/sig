@@ -41,9 +41,11 @@ const GetSlot = methods.GetSlot;
 const GetSlotLeader = methods.GetSlotLeader;
 const GetSlotLeaders = methods.GetSlotLeaders;
 const GetStakeMinimumDelegation = methods.GetStakeMinimumDelegation;
+const GetSupply = methods.GetSupply;
 const GetTransaction = methods.GetTransaction;
 const GetTransactionCount = methods.GetTransactionCount;
 const GetTokenAccountBalance = methods.GetTokenAccountBalance;
+const GetTokenLargestAccounts = methods.GetTokenLargestAccounts;
 const GetTokenSupply = methods.GetTokenSupply;
 const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
@@ -913,7 +915,74 @@ test GetStakeMinimumDelegation {
     );
 }
 
-// TODO: test getSupply()
+test GetSupply {
+    // Request without config
+    try testRequest(
+        .getSupply,
+        .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getSupply","params":[]}
+        ,
+    );
+
+    // Request with commitment config
+    try testRequest(
+        .getSupply,
+        .{ .config = .{ .commitment = .finalized } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getSupply","params":[{"commitment":"finalized","excludeNonCirculatingAccountsList":false}]}
+        ,
+    );
+
+    // Request with excludeNonCirculatingAccountsList
+    try testRequest(
+        .getSupply,
+        .{ .config = .{ .excludeNonCirculatingAccountsList = true } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getSupply","params":[{"commitment":null,"excludeNonCirculatingAccountsList":true}]}
+        ,
+    );
+
+    // Request with both config options
+    try testRequest(
+        .getSupply,
+        .{ .config = .{ .commitment = .finalized, .excludeNonCirculatingAccountsList = true } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getSupply","params":[{"commitment":"finalized","excludeNonCirculatingAccountsList":true}]}
+        ,
+    );
+
+    // Response with non-circulating accounts list
+    try testResponse(
+        GetSupply,
+        .{ .result = .{
+            .context = .{ .slot = 1114, .apiVersion = "2.0.15" },
+            .value = .{
+                .total = 1016000000000000000,
+                .circulating = 15000000000000000,
+                .nonCirculating = 1001000000000000000,
+                .nonCirculatingAccounts = &.{
+                    .parse("FEy8pTbP5fEoqMV1GdTz83byuA86iyvT5GkzZKbXvGkB"),
+                    .parse("9huDUZfxoJ7wGMTffUE7vh1xePqef7gyrLJu9NApncqA"),
+                },
+            },
+        } },
+        \\{"jsonrpc":"2.0","result":{"context":{"slot":1114,"apiVersion":"2.0.15"},"value":{"total":1016000000000000000,"circulating":15000000000000000,"nonCirculating":1001000000000000000,"nonCirculatingAccounts":["FEy8pTbP5fEoqMV1GdTz83byuA86iyvT5GkzZKbXvGkB","9huDUZfxoJ7wGMTffUE7vh1xePqef7gyrLJu9NApncqA"]}},"id":1}
+        ,
+    );
+
+    // Response with empty non-circulating accounts list (excludeNonCirculatingAccountsList=true)
+    try testResponse(
+        GetSupply,
+        .{ .result = .{
+            .context = .{ .slot = 1114, .apiVersion = "2.0.15" },
+            .value = .{
+                .total = 1016000000000000000,
+                .circulating = 15000000000000000,
+                .nonCirculating = 1001000000000000000,
+                .nonCirculatingAccounts = &.{},
+            },
+        } },
+        \\{"jsonrpc":"2.0","result":{"context":{"slot":1114,"apiVersion":"2.0.15"},"value":{"total":1016000000000000000,"circulating":15000000000000000,"nonCirculating":1001000000000000000,"nonCirculatingAccounts":[]}},"id":1}
+        ,
+    );
+}
 
 test GetTokenAccountBalance {
     const pubkey: Pubkey = .parse("7fUAJdStEuGbc3sM84cKRL6yYaaSstyLSU4ve5oovLS7");
@@ -948,7 +1017,65 @@ test GetTokenAccountBalance {
 
 // TODO: test getTokenAccountsByDelegate()
 // TODO: test getTockenAccountsByOwner()
-// TODO: test getTokenLargestAccounts()
+
+test GetTokenLargestAccounts {
+    const mint: Pubkey = .parse("3wyAj7Rt1TWVPZVteFJPLa26JmLvdb1CAKEFZm3NY75E");
+
+    // Request without config
+    try testRequest(
+        .getTokenLargestAccounts,
+        .{ .mint = mint },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTokenLargestAccounts","params":["3wyAj7Rt1TWVPZVteFJPLa26JmLvdb1CAKEFZm3NY75E"]}
+        ,
+    );
+
+    // Request with commitment config
+    try testRequest(
+        .getTokenLargestAccounts,
+        .{ .mint = mint, .config = .{ .commitment = .finalized } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTokenLargestAccounts","params":["3wyAj7Rt1TWVPZVteFJPLa26JmLvdb1CAKEFZm3NY75E",{"commitment":"finalized"}]}
+        ,
+    );
+
+    // Response deserialization
+    try testResponse(GetTokenLargestAccounts, .{ .result = .{
+        .context = .{ .slot = 1114, .apiVersion = "2.1.6" },
+        .value = &.{
+            .{
+                .address = .parse("FYjHNoFtSQ5uijKrZFyYAxvEr87hsKXkXcxkcmkBAf4r"),
+                .ui_token_amount = .init(771, .{ .decimals = 2 }),
+            },
+            .{
+                .address = .parse("BnsywxTcaYeNUtzrPxQUvzAWxfzZe3ZLUJ4wMMuLESnu"),
+                .ui_token_amount = .init(229, .{ .decimals = 2 }),
+            },
+        },
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"slot":1114,"apiVersion":"2.1.6"},"value":[{"address":"FYjHNoFtSQ5uijKrZFyYAxvEr87hsKXkXcxkcmkBAf4r","decimals":2,"amount":"771","uiAmount":7.71,"uiAmountString":"7.71"},{"address":"BnsywxTcaYeNUtzrPxQUvzAWxfzZe3ZLUJ4wMMuLESnu","decimals":2,"amount":"229","uiAmount":2.29,"uiAmountString":"2.29"}]},"id":1}
+    );
+
+    // TokenAccountBalancePair serialization (jsonStringify flattens UiTokenAmount)
+    try expectJsonStringify(
+        \\{"address":"FYjHNoFtSQ5uijKrZFyYAxvEr87hsKXkXcxkcmkBAf4r","decimals":2,"amount":"771","uiAmount":7.71,"uiAmountString":"7.71"}
+    , GetTokenLargestAccounts.TokenAccountBalancePair{
+        .address = .parse("FYjHNoFtSQ5uijKrZFyYAxvEr87hsKXkXcxkcmkBAf4r"),
+        .ui_token_amount = .init(771, .{ .decimals = 2 }),
+    });
+
+    // TokenAccountBalancePair serialization with null uiAmount
+    try expectJsonStringify(
+        \\{"address":"FYjHNoFtSQ5uijKrZFyYAxvEr87hsKXkXcxkcmkBAf4r","decimals":0,"amount":"0","uiAmount":null,"uiAmountString":"0"}
+    , GetTokenLargestAccounts.TokenAccountBalancePair{
+        .address = .parse("FYjHNoFtSQ5uijKrZFyYAxvEr87hsKXkXcxkcmkBAf4r"),
+        .ui_token_amount = .{
+            .ui_amount = null,
+            .decimals = 0,
+            .amount = 0,
+            .ui_amount_string = .fromSlice("0"),
+        },
+    });
+}
+
 test GetTransaction {
     const tx_sig: Signature = .parse(
         "56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",
