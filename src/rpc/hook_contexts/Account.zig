@@ -881,9 +881,9 @@ pub fn getLargestAccounts(
         break :blk try filtered.toOwnedSlice(arena);
     } else blk: {
         const vals = try arena.alloc(GetLargestAccounts.AccountBalance, results.len);
-        for (results, 0..) |entry, i| {
+        for (vals, results) |*val, entry| {
             const pubkey, const lamports = entry;
-            vals[i] = .{ .address = pubkey, .lamports = lamports };
+            val.* = .{ .address = pubkey, .lamports = lamports };
         }
         break :blk vals;
     };
