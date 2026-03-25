@@ -534,9 +534,9 @@ pub const BlockCommitmentCache = struct {
             var stake_sum: u64 = 0;
             for (items) |entry| {
                 stake_sum += entry.stake;
-                if (@as(f64, @floatFromInt(stake_sum)) / @as(f64, @floatFromInt(self.total_stake)) > VOTE_THRESHOLD_SIZE) {
-                    return entry.slot;
-                }
+                const stake_sum_f64 = @as(f64, @floatFromInt(stake_sum));
+                const total_stake_f64 = @as(f64, @floatFromInt(self.total_stake));
+                if (stake_sum_f64 / total_stake_f64 > VOTE_THRESHOLD_SIZE) return entry.slot;
             }
             return 0;
         }
