@@ -9,7 +9,7 @@ const parse_address_lookup_table = @import("parse_account_lookup_table.zig");
 const parse_bpf_upgradeable_loader = @import("parse_bpf_upgradeable_loader.zig");
 const parse_config = @import("parse_config.zig");
 const parse_nonce = @import("parse_nonce.zig");
-const parse_stake = @import("parse_stake.zig");
+pub const parse_stake = @import("parse_stake.zig");
 const parse_sysvar = @import("parse_sysvar.zig");
 pub const parse_token = @import("parse_token.zig");
 const parse_token_extension = @import("parse_token_extension.zig");
@@ -67,6 +67,16 @@ pub const AccountData = union(enum) {
     /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/lib.rs#L39
     legacy_binary: []const u8,
 
+    pub fn deinit(self: AccountData, allocator: std.mem.Allocator) void {
+        const slice = switch (self) {
+            .encoded => |pair| pair[0],
+            .jsonParsed => |s| s,
+            .json_parsed_base64_fallback => |s| s,
+            .legacy_binary => |s| s,
+        };
+        allocator.free(slice);
+    }
+
     pub fn jsonStringify(
         self: AccountData,
         /// `*std.json.WriteStream(...)`
@@ -121,6 +131,23 @@ pub const AccountData = union(enum) {
         };
     }
 };
+
+/// Encodes account data using the specified encoding.
+/// Dispatches to `encodeJsonParsed` or `encodeStandard` based on the encoding parameter.
+/// This is the common entry point used by `getAccountInfo` and `getProgramAccounts`.
+pub fn encodeAccount(
+    allocator: std.mem.Allocator,
+    pubkey: Pubkey,
+    account: sig.core.Account,
+    encoding: AccountEncoding,
+    slot_reader: sig.accounts_db.SlotAccountReader,
+    data_slice: ?DataSlice,
+) !AccountData {
+    return if (encoding == .jsonParsed)
+        encodeJsonParsed(allocator, pubkey, account, slot_reader, data_slice)
+    else
+        encodeStandard(allocator, account, encoding, data_slice);
+}
 
 /// Handles jsonParsed encoding with fallback to base64.
 /// Attempts program-specific parsing; falls back to base64 if no parser is found.
@@ -695,6 +722,18 @@ pub fn buildTokenAdditionalData(
     return .{ .spl_token = spl_token };
 }
 
+/// Fetches a sysvar account by its well-known ID and bincode-decodes it.
+/// Returns null if the account does not exist.
+pub fn getSysvar(
+    comptime Sysvar: type,
+    arena: std.mem.Allocator,
+    slot_reader: sig.accounts_db.SlotAccountReader,
+) !?Sysvar {
+    const account = try slot_reader.get(arena, Sysvar.ID) orelse return null;
+    var iter = account.data.iterator();
+    return try sig.bincode.read(arena, Sysvar, iter.reader(), .{});
+}
+
 /// Fetches a mint account by pubkey and extracts decimals, Token-2022 extension configs,
 /// and the clock timestamp needed for interest-bearing/scaled calculations.
 /// Returns null if the mint account cannot be found or parsed.
@@ -731,18 +770,11 @@ pub fn parseMintAdditionalData(
     const mint = parse_token.Mint.unpack(mint_data) catch return null;
 
     // Fetch Clock sysvar for timestamp
-    const clock_id = sig.runtime.sysvar.Clock.ID;
-    const maybe_clock_account = slot_reader.get(arena, clock_id) catch return null;
-    const clock_account = maybe_clock_account orelse return null;
-    defer clock_account.deinit(arena);
-
-    var clock_iter = clock_account.data.iterator();
-    const clock = sig.bincode.read(
-        arena,
+    const clock = getSysvar(
         sig.runtime.sysvar.Clock,
-        clock_iter.reader(),
-        .{},
-    ) catch return null;
+        arena,
+        slot_reader,
+    ) catch null orelse return null;
 
     // Extract extension configs from mint data
     const InterestCfg = parse_token_extension.InterestBearingConfigData;

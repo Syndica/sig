@@ -1047,7 +1047,8 @@ pub const DuplicateShred = struct {
     wallclock: u64,
     slot: Slot,
     shred_index: u32,
-    shred_type: ShredType,
+    // Should be ShredType, but is deprecated and allowed to be any u8
+    shred_type: u8,
     // Serialized DuplicateSlotProof split into chunks.
     num_chunks: u8,
     chunk_index: u8,
@@ -1081,7 +1082,7 @@ pub const DuplicateShred = struct {
             .wallclock = getWallclockMs(),
             .slot = random.int(u64),
             .shred_index = random.int(u32),
-            .shred_type = .data,
+            .shred_type = @intFromEnum(ShredType.data),
             .num_chunks = num_chunks,
             .chunk_index = chunk_index,
             .chunk = &slice,

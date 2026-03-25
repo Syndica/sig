@@ -7,6 +7,7 @@ const Logger = sig.trace.Logger("duplicate_shred_listener");
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
+const ShredType = sig.gossip.data.ShredType;
 const DuplicateShred = sig.gossip.data.DuplicateShred;
 
 const ResultWriter = sig.ledger.ResultWriter;
@@ -444,7 +445,7 @@ test "GossipDuplicateShredHandler: invalid chunk index rejected" {
         .wallclock = 1000,
         .slot = 10,
         .shred_index = 0,
-        .shred_type = .data,
+        .shred_type = @intFromEnum(ShredType.data),
         .num_chunks = 2,
         .chunk_index = 2, // invalid (>= num_chunks)
         .chunk = &.{ 1, 2, 3 },
@@ -487,7 +488,7 @@ test "GossipDuplicateShredHandler: overwrite existing chunk at same index" {
         .wallclock = 1000,
         .slot = slot,
         .shred_index = 0,
-        .shred_type = .data,
+        .shred_type = @intFromEnum(ShredType.data),
         .num_chunks = 2,
         .chunk_index = 0,
         .chunk = &.{ 9, 9 },
@@ -540,7 +541,7 @@ test "GossipDuplicateShredHandler: complete invalid proof cleans up entry" {
         .wallclock = 1000,
         .slot = slot,
         .shred_index = 0,
-        .shred_type = .data,
+        .shred_type = @intFromEnum(ShredType.data),
         .num_chunks = 1,
         .chunk_index = 0,
         .chunk = &.{ 0xAA, 0xBB, 0xCC }, // bogus
@@ -591,7 +592,7 @@ test "GossipDuplicateShredHandler: early duplicate slot skips buffering" {
         .wallclock = 1000,
         .slot = slot,
         .shred_index = 0,
-        .shred_type = .data,
+        .shred_type = @intFromEnum(ShredType.data),
         .num_chunks = 2,
         .chunk_index = 0,
         .chunk = &.{ 1, 2, 3 },
