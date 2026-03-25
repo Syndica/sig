@@ -1584,7 +1584,6 @@ fn validator(
         false;
 
     var rooted_db: sig.accounts_db.Db.Rooted = try .init(
-        allocator,
         rooted_file,
         cfg.accounts_db.rpc_enable_owner_index,
         cfg.accounts_db.rpc_enable_spl_token_owner_index,
@@ -1890,7 +1889,6 @@ fn replayOffline(
         false;
 
     var rooted_db: sig.accounts_db.Db.Rooted = try .init(
-        allocator,
         rooted_file,
         cfg.accounts_db.rpc_enable_owner_index,
         cfg.accounts_db.rpc_enable_spl_token_owner_index,
@@ -2243,7 +2241,6 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     defer allocator.free(rooted_file);
 
     var rooted_db: sig.accounts_db.Db.Rooted = try .init(
-        allocator,
         rooted_file,
         cfg.accounts_db.rpc_enable_owner_index,
         cfg.accounts_db.rpc_enable_spl_token_owner_index,

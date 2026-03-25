@@ -49,7 +49,7 @@ pub fn initTest(allocator: std.mem.Allocator) !TestContext {
     var buffer: [std.fs.max_path_bytes + 1]u8 = undefined;
     const path = try std.fmt.bufPrintZ(&buffer, "{s}/accounts.db", .{tmp_path});
 
-    var rooted: Rooted = try .init(allocator, path, false, false);
+    var rooted: Rooted = try .init(path, false, false);
     errdefer rooted.deinit();
 
     const db: @This() = try .init(allocator, rooted);
@@ -527,7 +527,7 @@ test "accounts_db: spl token owner query" {
     var path_buffer: [std.fs.max_path_bytes + 1]u8 = undefined;
     const path = try std.fmt.bufPrintZ(&path_buffer, "{s}/accounts.db", .{tmp_path});
 
-    const rooted: Rooted = try .init(allocator, path, false, true);
+    const rooted: Rooted = try .init(path, false, true);
     var db: Db = try .init(allocator, rooted);
     defer {
         Rooted.deinitThreadLocals();
