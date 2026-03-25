@@ -11,7 +11,7 @@ const lib = @import("lib");
 const Config = struct {
     sandboxing_mode: SandboxingMode,
 
-    cluster: lib.solana.ClusterType,
+    cluster: lib.solana.Cluster,
 
     /// path to a file containing the output of `solana leader-schedule`
     leader_schedule_file: []const u8,
