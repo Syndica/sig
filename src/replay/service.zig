@@ -652,6 +652,8 @@ fn bypassConsensus(state: *ReplayState) !void {
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root.store(new_root, .monotonic);
+        // In bypass-consensus mode there is no BlockCommitmentCache to compute
+        // highest_super_majority_root, so we approximate finalized = root.
         slot_tracker.commitments.update(.finalized, new_root);
         slot_tracker.pruneNonRooted(&state.thread_pool);
 

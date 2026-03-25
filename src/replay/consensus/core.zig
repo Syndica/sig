@@ -528,6 +528,9 @@ pub const TowerConsensus = struct {
         // Commit accumulated commitment data to the cache in one atomic swap.
         if (params.block_commitment_cache) |cache| {
             cache.commitAccumulated(&commitment_ctx.acc);
+            // Update finalized commitment from the highest supermajority root,
+            // matching Agave's commitment_service semantics.
+            params.slot_tracker.commitments.update(.finalized, cache.highestSuperMajorityRoot());
         }
     }
 
@@ -1688,7 +1691,8 @@ fn checkAndHandleNewRoot(
     // Update the slot tracker.
     // Set new root.
     slot_tracker.root.store(new_root, .monotonic);
-    slot_tracker.commitments.update(.finalized, new_root); // TODO should be supermajority root
+    // Note: finalized commitment is updated separately from
+    // highest_super_majority_root computed in BlockCommitmentCache.
     // Prune non rooted slots
     slot_tracker.pruneNonRooted(maybe_thread_pool);
 
@@ -7885,10 +7889,11 @@ test "process populates block commitment cache when provided" {
 test "CommitmentVisitorCtx visit delegates to accumulator" {
     const gpa = std.testing.allocator;
 
+    const ancestors = [_]Slot{42};
     var ctx: CommitmentVisitorCtx = .{
         .acc = .{},
         .allocator = gpa,
-        .ancestors = null,
+        .ancestors = &ancestors,
     };
     defer ctx.acc.deinit(gpa);
 

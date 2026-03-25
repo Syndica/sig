@@ -38,6 +38,9 @@ const TransactionEncoding = methods.common.TransactionEncoding;
 // Maximum allowed slot distance before node is considered unhealthy.
 // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L158
 const DELINQUENT_VALIDATOR_SLOT_DISTANCE: u64 = 128;
+/// Maximum allowed number of signatures in a single getSignatureStatuses query.
+/// See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L144
+const MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS: usize = 256;
 
 const LedgerHookContext = @This();
 
@@ -624,28 +627,16 @@ pub fn getSignatureStatuses(
     const config: GetSignatureStatuses.Config = params.config orelse .{};
     const search_history = config.searchTransactionHistory orelse false;
 
+    if (params.signatures.len > MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS) {
+        // TODO: invalid params should return a more specific error
+        return error.InvalidParams;
+    }
+
     const processed_slot = self.slot_tracker.commitments.get(.processed);
-    const finalized_slot = self.slot_tracker.commitments.get(.finalized);
-
-    const ancestors: sig.core.Ancestors = if (self.slot_tracker.get(processed_slot)) |info| anc: {
-        defer info.release();
-        break :anc try info.constants().ancestors.clone(arena);
-    } else .{};
-
-    // Obtain confirmed slot ancestors for optimistic confirmation re-query.
-    // Agave looks up each signature again against the confirmed bank's status
-    // cache to decide Confirmed vs Processed, rather than using a simple slot
-    // comparison.
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.9/rpc/src/rpc.rs#L1707
-    const confirmed_slot = self.slot_tracker.commitments.get(.confirmed);
-    const confirmed_ancestors: sig.core.Ancestors = if (confirmed_slot == processed_slot)
-        ancestors
-    else if (self.slot_tracker.get(confirmed_slot)) |info| blk: {
-        defer info.release();
-        break :blk try info.constants().ancestors.clone(arena);
-    } else .{};
-
-    const reader = self.ledger.reader();
+    const processed_slot_ref = self.slot_tracker.get(
+        processed_slot,
+    ) orelse return error.InternalError;
+    defer processed_slot_ref.release();
 
     const results = try arena.alloc(
         ?GetSignatureStatuses.Response.TransactionStatus,
@@ -655,48 +646,12 @@ pub fn getSignatureStatuses(
 
     for (params.signatures, results) |signature, *result| {
         // Tier 1: StatusCache (recent in-memory transactions)
-        if (self.status_cache.getStatusAnyBlockhash(
-            &signature.toBytes(),
-            &ancestors,
-        )) |fork| {
-            // Determine confirmation status following Agave's get_transaction_status logic.
-            //
-            // Finalized: slot is at or below the super-majority root AND the slot is
-            // verifiably on the canonical chain (rooted in the blockstore or present in
-            // the bank's ancestor set). This two-part check prevents misclassifying
-            // orphaned-fork slots whose number happens to be below the finalized tip.
-            // [agave] is_finalized: https://github.com/anza-xyz/agave/blob/v3.1.9/rpc/src/rpc.rs#L151
-            const is_finalized = fork.slot <= finalized_slot and
-                (try reader.isRoot(arena, fork.slot) or ancestors.containsSlot(fork.slot));
-
-            // Confirmed: re-query the status cache with the confirmed slot's ancestors.
-            // If the signature is found, the transaction is on the optimistically-confirmed
-            // fork. A simple `slot <= confirmed_slot` comparison can misclassify during
-            // severe forking when confirmed and processed diverge.
-            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.9/rpc/src/rpc.rs#L1707-1709
-            const is_confirmed = if (!is_finalized)
-                self.status_cache.getStatusAnyBlockhash(
-                    &signature.toBytes(),
-                    &confirmed_ancestors,
-                ) != null
-            else
-                false;
-
-            result.* = .{
-                .slot = fork.slot,
-                .status = if (fork.maybe_err) |err| .{ .Err = err } else .{ .Ok = .{} },
-                .confirmations = if (is_finalized)
-                    null
-                else
-                    self.block_commitment_cache.getConfirmationCount(fork.slot) orelse 0,
-                .err = fork.maybe_err,
-                .confirmationStatus = if (is_finalized)
-                    .finalized
-                else if (is_confirmed)
-                    .confirmed
-                else
-                    .processed,
-            };
+        if (self.getTransactionStatus(
+            arena,
+            signature,
+            &processed_slot_ref,
+        )) |status| {
+            result.* = status;
             continue;
         }
 
@@ -708,9 +663,9 @@ pub fn getSignatureStatuses(
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.9/rpc/src/rpc.rs#L1660-1670
         if (!search_history) continue;
 
-        if (try reader.getRootedTransactionStatus(arena, signature)) |status| {
+        if (try self.ledger.reader().getRootedTransactionStatus(arena, signature)) |status| {
             const slot, const status_meta = status;
-            if (slot <= finalized_slot) {
+            if (slot <= self.slot_tracker.commitments.get(.finalized)) {
                 result.* = .{
                     .slot = slot,
                     .status = if (status_meta.status) |err| .{ .Err = err } else .{ .Ok = .{} },
@@ -827,6 +782,52 @@ pub fn minimumLedgerSlot(
     var meta_iter = try self.ledger.reader().slotMetaIterator(0);
     defer meta_iter.deinit();
     return try meta_iter.nextKey() orelse 0;
+}
+
+fn getTransactionStatus(
+    self: LedgerHookContext,
+    arena: Allocator,
+    signature: Signature,
+    slot_ref: *const sig.replay.trackers.SlotTracker.Reference,
+) ?GetSignatureStatuses.Response.TransactionStatus {
+    const fork = self.status_cache.getStatusAnyBlockhash(
+        &signature.toBytes(),
+        &slot_ref.constants().ancestors,
+    ) orelse return null;
+    const slot = fork.slot;
+    const status = fork.maybe_err;
+
+    const confirmed_slot_ref = self.slot_tracker.get(self.slot_tracker.commitments.get(.confirmed));
+    defer if (confirmed_slot_ref) |ref| ref.release();
+    const confirmed_fork = if (confirmed_slot_ref) |ref| self.status_cache.getStatusAnyBlockhash(
+        &signature.toBytes(),
+        &ref.constants().ancestors,
+    ) else null;
+
+    const is_finalized = blk: {
+        if (slot > self.slot_tracker.commitments.get(.finalized)) break :blk false;
+        if (self.ledger.reader().isRoot(arena, slot) catch false) break :blk true;
+        if (slot_ref.constants().ancestors.containsSlot(slot)) break :blk true;
+        break :blk false;
+    };
+
+    const confirmations = if (self.slot_tracker.root.load(.monotonic) >= slot and is_finalized)
+        null
+    else
+        self.block_commitment_cache.getConfirmationCount(slot) orelse 0;
+
+    return .{
+        .slot = slot,
+        .status = if (status) |err| .{ .Err = err } else .{ .Ok = .{} },
+        .confirmations = confirmations,
+        .err = status,
+        .confirmationStatus = if (confirmations == null)
+            .finalized
+        else if (confirmed_fork != null)
+            .confirmed
+        else
+            .processed,
+    };
 }
 
 /// Walk from latest_confirmed back to the root, collecting confirmed-but-unrooted slots.
