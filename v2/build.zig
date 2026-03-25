@@ -5,8 +5,11 @@ pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const fmt_check_step = b.addFmt(.{
+        .check = true,
+        .paths = &.{ "init/", "lib/", "services/", "build.zig" },
+    });
     const test_step = b.step("test", "Run unit tests");
-    const fmt_check_step = b.addFmt(.{ .check = true, .paths = &.{ "src/", "build.zig" } });
     const ci_step = b.step("ci", "Run all checks used for CI");
     const check_step = b.step("check", "Check step.");
     ci_step.dependOn(test_step);
