@@ -73,13 +73,13 @@ pub fn deinit(self: *Service) void {
 }
 
 pub fn init(
-    gpa: Allocator,
+    allocator: Allocator,
     exit: ExitCondition,
     logger: Logger,
     cfg: Config,
     ctx: Context,
 ) !Service {
-    const receiver = try Channel(TransactionInfo).create(gpa);
+    const receiver = try Channel(TransactionInfo).create(allocator);
     receiver.name = "TransactionSenderService: TransactionInfo Receiver";
     errdefer receiver.destroy();
 
@@ -93,47 +93,42 @@ pub fn init(
     };
 }
 
-pub fn run(self: *Service, gpa: Allocator) !void {
+pub fn run(self: *Service, allocator: Allocator) !void {
     errdefer |err| {
         self.logger.err().logf("TransactionSenderService Error: {s}", .{@errorName(err)});
         if (@errorReturnTrace()) |tr| std.debug.dumpStackTrace(tr.*);
         self.exit.setExit();
     }
 
-    const quic_client = try QuicClient.create(
-        gpa,
-        .from(self.logger),
-        self.exit,
-        .{},
-    );
+    const quic_client = try QuicClient.create(allocator, .from(self.logger), self.exit, .{});
     defer quic_client.destroy();
 
     const quic_handle = try std.Thread.spawn(.{}, QuicClient.run, .{quic_client});
     defer quic_handle.join();
 
-    try self.handleTransactions(gpa, quic_client.receiver);
+    try self.handleTransactions(allocator, quic_client.receiver);
 }
 
-fn handleTransactions(self: *Service, gpa: Allocator, quic_sender: *Channel(Packet)) !void {
+fn handleTransactions(self: *Service, allocator: Allocator, quic_sender: *Channel(Packet)) !void {
     var txn_pool = std.AutoArrayHashMapUnmanaged(Signature, TransactionInfo).empty;
-    defer txn_pool.deinit(gpa);
-    try txn_pool.ensureTotalCapacity(gpa, self.cfg.max_pooled);
+    defer txn_pool.deinit(allocator);
+    try txn_pool.ensureTotalCapacity(allocator, self.cfg.max_pooled);
 
     var drop_list = std.ArrayList(Signature).empty;
-    defer drop_list.deinit(gpa);
-    try drop_list.ensureTotalCapacity(gpa, self.cfg.max_pooled);
+    defer drop_list.deinit(allocator);
+    try drop_list.ensureTotalCapacity(allocator, self.cfg.max_pooled);
 
     var leader_info = try LeaderInfo.init(
-        gpa,
+        allocator,
         self.logger,
         self.ctx.epoch_tracker,
         self.ctx.gossip_table_rw,
         self.cfg.tpu_cache_size,
     );
-    defer leader_info.deinit(gpa);
+    defer leader_info.deinit(allocator);
 
-    const leader_addresses = try gpa.alloc(?SocketAddr, self.cfg.max_leaders);
-    defer gpa.free(leader_addresses);
+    const leader_addresses = try allocator.alloc(?SocketAddr, self.cfg.max_leaders);
+    defer allocator.free(leader_addresses);
 
     var metrics_last_logged = Instant.EPOCH_ZERO;
     while (!self.exit.shouldExit()) {
@@ -149,7 +144,7 @@ fn handleTransactions(self: *Service, gpa: Allocator, quic_sender: *Channel(Pack
         if (self.exit.shouldExit()) break;
 
         self.processTransactions(
-            gpa,
+            allocator,
             quic_sender,
             &txn_pool,
             &drop_list,
@@ -213,7 +208,7 @@ fn receiveTransactions(
 /// Drop transactions which are failed, expired, or rooted.
 fn processTransactions(
     self: *Service,
-    gpa: Allocator,
+    allocator: Allocator,
     sender: *Channel(Packet),
     txn_pool: *std.AutoArrayHashMapUnmanaged(Signature, TransactionInfo),
     drop_list: *std.ArrayList(Signature),
@@ -276,40 +271,35 @@ fn processTransactions(
             .succeeded => continue,
         }
 
-        if (txn_info.retries >= @min(txn_info.max_retries, self.cfg.max_retries)) {
+        // Drop the transaction if:
+        // - It has reached max retry attempts
+        // - It is expired based on block height
+        // - It is a durable nonce transaction which is not inflight and has an invalid nonce
+        const drop_txn =
+            txn_info.retries >= @min(txn_info.max_retries, self.cfg.max_retries) or
+            txn_info.last_valid_block_height < root_ref.constants().block_height or
+            if (txn_info.durable_nonce_info) |nonce| drop_nonce: {
+                const inflight = if (txn_info.last_sent_time) |last_sent_time|
+                    last_sent_time.elapsed().lte(self.cfg.retry_interval)
+                else
+                    false;
+
+                break :drop_nonce !inflight and invalid_nonce: {
+                    const account = try account_reader.get(allocator, nonce[0]) orelse
+                        break :invalid_nonce true;
+                    defer account.deinit(allocator);
+
+                    break :invalid_nonce sig.runtime.check_transactions.verifyNonceAccount(
+                        account,
+                        &nonce[1],
+                    ) == null;
+                };
+            } else false;
+
+        if (drop_txn) {
             self.metrics.expired_count.inc();
             drop_list.appendAssumeCapacity(signature);
             continue;
-        }
-
-        if (txn_info.last_valid_block_height < root_ref.constants().block_height) {
-            self.metrics.expired_count.inc();
-            drop_list.appendAssumeCapacity(signature);
-            continue;
-        }
-
-        if (txn_info.durable_nonce_info) |nonce| {
-            const inflight = if (txn_info.last_sent_time) |last_sent_time|
-                last_sent_time.elapsed().lte(self.cfg.retry_interval)
-            else
-                false;
-
-            const valid = blk: {
-                const account = try account_reader.get(gpa, nonce[0]) orelse
-                    break :blk false;
-                defer account.deinit(gpa);
-
-                break :blk sig.runtime.check_transactions.verifyNonceAccount(
-                    account,
-                    &nonce[1],
-                ) != null;
-            };
-
-            if (!inflight and !valid) {
-                self.metrics.expired_count.inc();
-                drop_list.appendAssumeCapacity(signature);
-                continue;
-            }
         }
 
         if (txn_info.last_sent_time) |last_sent_time| {
@@ -391,13 +381,13 @@ const LeaderInfo = struct {
         addr: ?SocketAddr,
     };
 
-    pub fn deinit(self: *LeaderInfo, gpa: Allocator) void {
-        self.tpu_cache.deinit(gpa);
+    pub fn deinit(self: *LeaderInfo, allocator: Allocator) void {
+        self.tpu_cache.deinit(allocator);
         self.leader_schedules.release();
     }
 
     pub fn init(
-        gpa: Allocator,
+        allocator: Allocator,
         logger: Logger,
         epoch_tracker: *EpochTracker,
         gossip_table_rw: *RwMux(GossipTable),
@@ -407,8 +397,8 @@ const LeaderInfo = struct {
         errdefer leader_schedules.release();
 
         var tpu_cache = PubkeyMap(CachedAddress).empty;
-        errdefer tpu_cache.deinit(gpa);
-        try tpu_cache.ensureTotalCapacity(gpa, tpu_cache_size);
+        errdefer tpu_cache.deinit(allocator);
+        try tpu_cache.ensureTotalCapacity(allocator, tpu_cache_size);
 
         return .{
             .tpu_cache = tpu_cache,
@@ -420,7 +410,6 @@ const LeaderInfo = struct {
     }
 
     pub fn fillLeaderAddresses(self: *LeaderInfo, slot: Slot, buf: []?SocketAddr) !void {
-        @memset(buf, null);
         for (buf, 0..) |*leader_address, i| {
             const leader_slot = slot + i * NUM_CONSECUTIVE_LEADER_SLOTS;
             leader_address.* = try self.getLeaderAddress(leader_slot);
@@ -435,6 +424,7 @@ const LeaderInfo = struct {
             break :blk self.leader_schedules.leader_schedules.getLeader(slot) catch
                 return error.NoLeaderForSlot;
         };
+        errdefer comptime unreachable;
 
         if (self.tpu_cache.count() >= self.tpu_cache.capacity() -| 1) {
             self.logger.info().log("tpu cache is full, pruning old entries.");
@@ -524,40 +514,40 @@ const TestContext = struct {
     gossip_table_rw: RwMux(GossipTable),
     quic_sender: *Channel(Packet),
 
-    fn deinit(self: *TestContext, gpa: Allocator) void {
+    fn deinit(self: *TestContext, allocator: Allocator) void {
         self.db_ctx.deinit();
         self.epoch_tracker.deinit();
-        self.slot_tracker.deinit(gpa);
-        self.status_cache.deinit(gpa);
+        self.slot_tracker.deinit(allocator);
+        self.status_cache.deinit(allocator);
         const table, var table_lg = self.gossip_table_rw.writeWithLock();
         table.deinit();
         table_lg.unlock();
         self.quic_sender.destroy();
     }
 
-    fn init(gpa: Allocator, random: std.Random, root_slot: Slot) !TestContext {
+    fn init(allocator: Allocator, random: std.Random, root_slot: Slot) !TestContext {
         const exit_flag = std.atomic.Value(bool).init(false);
 
-        var db_ctx = try sig.accounts_db.Db.initTest(gpa);
+        var db_ctx = try sig.accounts_db.Db.initTest(allocator);
         errdefer db_ctx.deinit();
 
-        var epoch_tracker = try EpochTracker.initForTest(gpa, random, root_slot, .INIT);
+        var epoch_tracker = try EpochTracker.initForTest(allocator, random, root_slot, .INIT);
         errdefer epoch_tracker.deinit();
 
-        var slot_tracker = try SlotTracker.initEmpty(gpa, root_slot);
-        errdefer slot_tracker.deinit(gpa);
+        var slot_tracker = try SlotTracker.initEmpty(allocator, root_slot);
+        errdefer slot_tracker.deinit(allocator);
 
         var status_cache = StatusCache.DEFAULT;
-        errdefer status_cache.deinit(gpa);
+        errdefer status_cache.deinit(allocator);
 
-        var gossip_table_rw = RwMux(GossipTable).init(try GossipTable.init(gpa, gpa));
+        var gossip_table_rw = RwMux(GossipTable).init(try GossipTable.init(allocator, allocator));
         errdefer {
             const table, var table_lg = gossip_table_rw.writeWithLock();
             table.deinit();
             table_lg.unlock();
         }
 
-        const quic_sender = try Channel(Packet).create(gpa);
+        const quic_sender = try Channel(Packet).create(allocator);
         errdefer quic_sender.destroy();
 
         return .{
@@ -573,28 +563,28 @@ const TestContext = struct {
 };
 
 test "handleTransactions" {
-    const gpa = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root_slot: u64 = 5e6;
     const working_slot: u64 = root_slot + 10;
 
-    var test_ctx = try TestContext.init(gpa, random, root_slot);
-    defer test_ctx.deinit(gpa);
+    var test_ctx = try TestContext.init(allocator, random, root_slot);
+    defer test_ctx.deinit(allocator);
 
     {
         var root_ancestors = sig.core.Ancestors.EMPTY;
-        errdefer root_ancestors.deinit(gpa);
-        for (root_slot - 10..root_slot + 1) |slot| try root_ancestors.addSlot(gpa, slot);
+        errdefer root_ancestors.deinit(allocator);
+        for (root_slot - 10..root_slot + 1) |slot| try root_ancestors.addSlot(allocator, slot);
 
-        var root_constants = try sig.core.bank.SlotConstants.genesis(gpa, .DEFAULT);
-        errdefer root_constants.deinit(gpa);
-        root_constants.ancestors.deinit(gpa);
+        var root_constants = try sig.core.bank.SlotConstants.genesis(allocator, .DEFAULT);
+        errdefer root_constants.deinit(allocator);
+        root_constants.ancestors.deinit(allocator);
         root_constants.ancestors = root_ancestors;
 
-        try test_ctx.slot_tracker.put(gpa, root_slot, .{
-            .allocator = gpa,
+        try test_ctx.slot_tracker.put(allocator, root_slot, .{
+            .allocator = allocator,
             .constants = root_constants,
             .state = .GENESIS,
         });
@@ -603,16 +593,16 @@ test "handleTransactions" {
 
     {
         var working_ancestors = sig.core.Ancestors.EMPTY;
-        errdefer working_ancestors.deinit(gpa);
-        for (root_slot..working_slot + 1) |slot| try working_ancestors.addSlot(gpa, slot);
+        errdefer working_ancestors.deinit(allocator);
+        for (root_slot..working_slot + 1) |slot| try working_ancestors.addSlot(allocator, slot);
 
-        var working_constants = try sig.core.bank.SlotConstants.genesis(gpa, .DEFAULT);
-        errdefer working_constants.deinit(gpa);
-        working_constants.ancestors.deinit(gpa);
+        var working_constants = try sig.core.bank.SlotConstants.genesis(allocator, .DEFAULT);
+        errdefer working_constants.deinit(allocator);
+        working_constants.ancestors.deinit(allocator);
         working_constants.ancestors = working_ancestors;
 
-        try test_ctx.slot_tracker.put(gpa, working_slot, .{
-            .allocator = gpa,
+        try test_ctx.slot_tracker.put(allocator, working_slot, .{
+            .allocator = allocator,
             .constants = working_constants,
             .state = .GENESIS,
         });
@@ -620,7 +610,7 @@ test "handleTransactions" {
     test_ctx.slot_tracker.commitments.processed.store(working_slot, .monotonic);
 
     var service = try Service.init(
-        gpa,
+        allocator,
         .{ .unordered = &test_ctx.exit_flag },
         .noop,
         .{
@@ -643,7 +633,7 @@ test "handleTransactions" {
     const handle_transactions_handle = try std.Thread.spawn(
         .{},
         Service.handleTransactions,
-        .{ &service, gpa, test_ctx.quic_sender },
+        .{ &service, allocator, test_ctx.quic_sender },
     );
     defer handle_transactions_handle.join();
     defer test_ctx.exit_flag.store(true, .monotonic);
@@ -651,8 +641,8 @@ test "handleTransactions" {
     var count: usize = 0;
     for (0..10) |i| {
         count += 1;
-        const txn = try Transaction.initRandom(gpa, random, null);
-        defer txn.deinit(gpa);
+        const txn = try Transaction.initRandom(allocator, random, null);
+        defer txn.deinit(allocator);
         const txn_info = try TransactionInfo.init(
             txn,
             Hash.initRandom(random),
@@ -664,7 +654,7 @@ test "handleTransactions" {
         // Add a transaction which hits the root status cache check
         if (i == 7) {
             try test_ctx.status_cache.insert(
-                gpa,
+                allocator,
                 random,
                 &txn_info.recent_blockhash,
                 &txn_info.message_hash.data,
@@ -677,7 +667,7 @@ test "handleTransactions" {
         // This will remain in the pool until its is rooted, or dropped after a a fork switch
         if (i == 8) {
             try test_ctx.status_cache.insert(
-                gpa,
+                allocator,
                 random,
                 &txn_info.recent_blockhash,
                 &txn_info.message_hash.data,
@@ -690,7 +680,7 @@ test "handleTransactions" {
         // This will remain in the pool until its is rooted, or dropped after a a fork switch
         if (i == 9) {
             try test_ctx.status_cache.insert(
-                gpa,
+                allocator,
                 random,
                 &txn_info.recent_blockhash,
                 &txn_info.message_hash.data,
@@ -720,24 +710,24 @@ test "handleTransactions" {
 }
 
 test "fillLeaderAddresses" {
-    const gpa = std.testing.allocator;
+    const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const root_slot: u64 = 5e6;
-    var test_ctx = try TestContext.init(gpa, random, root_slot);
-    defer test_ctx.deinit(gpa);
+    var test_ctx = try TestContext.init(allocator, random, root_slot);
+    defer test_ctx.deinit(allocator);
 
     const leader_addresses_null = [_]?SocketAddr{null} ** 5;
     var leader_addresses = [_]?SocketAddr{null} ** 5;
     var leader_info = try LeaderInfo.init(
-        gpa,
+        allocator,
         .noop,
         &test_ctx.epoch_tracker,
         &test_ctx.gossip_table_rw,
         5,
     );
-    defer leader_info.deinit(gpa);
+    defer leader_info.deinit(allocator);
 
     try std.testing.expectError(
         error.NoLeaderForSlot,
@@ -772,7 +762,7 @@ test "fillLeaderAddresses" {
         const leader_schedules = &leader_info.leader_schedules.leader_schedules;
         const leader_pubkey = try leader_schedules.getLeader(leader_slot);
 
-        var contact_info = sig.gossip.ContactInfo.init(gpa, leader_pubkey, 0, 0);
+        var contact_info = sig.gossip.ContactInfo.init(allocator, leader_pubkey, 0, 0);
         try contact_info.setSocket(.tpu_quic, SocketAddr.initRandom(random));
         tpu_addresses[i] = contact_info.getSocket(.tpu_quic);
 
