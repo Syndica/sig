@@ -29,9 +29,9 @@ const Gauge = sig.prometheus.Gauge;
 const Duration = sig.time.Duration;
 const Instant = sig.time.Instant;
 
-pub const Logger = sig.trace.Logger("quic_client");
-
 const QuicClient = @This();
+const Logger = sig.trace.Logger(@typeName(QuicClient));
+var lsquic_global_initialized = std.atomic.Value(bool).init(false);
 
 gpa: Allocator,
 exit: ExitCondition,
@@ -97,14 +97,12 @@ pub const Metrics = struct {
 /// Creates a heap-allocated QuicClient. Must be heap-allocated because
 /// `lsquic_engine_api` contains pointers into `self` (settings, stream
 /// interface, socket) that must remain stable for the engine's lifetime.
-pub fn create(
-    gpa: Allocator,
-    logger: Logger,
-    exit: ExitCondition,
-    config: Config,
-) !*QuicClient {
-    if (lsquic.lsquic_global_init(lsquic.LSQUIC_GLOBAL_CLIENT) != 0)
-        @panic("lsquic_global_init failed");
+pub fn create(gpa: Allocator, logger: Logger, exit: ExitCondition, config: Config) !*QuicClient {
+    if (lsquic_global_initialized.cmpxchgStrong(false, true, .monotonic, .monotonic) == null) {
+        errdefer lsquic_global_initialized.store(false, .monotonic);
+        if (lsquic.lsquic_global_init(lsquic.LSQUIC_GLOBAL_CLIENT) != 0)
+            return error.LsquicGlobalInitFailed;
+    }
 
     const receiver = try Channel(Packet).create(gpa);
     errdefer receiver.destroy();
@@ -178,12 +176,15 @@ pub fn create(
         0,
         &err_buf,
         err_buf.len,
-    ) != 0) @panic("lsquic_check_engine_settings failed: err=" ++ err_buf);
+    ) != 0) {
+        self.logger.err().logf("lsquic_engine_check_settings failed: err={s}", .{err_buf});
+        return error.LsquicEngineInitSettingsFailed;
+    }
 
     self.lsquic_engine = lsquic.lsquic_engine_new(
         0,
         &self.lsquic_engine_api,
-    ) orelse @panic("lsquic_engine_new failed");
+    ) orelse return error.LsquicEngineNewFailed;
 
     return self;
 }
@@ -509,16 +510,22 @@ const Stream = struct {
     ) callconv(.c) void {
         const stream: *Stream = @ptrCast(@alignCast(maybe_stream.?));
 
-        const remaining = stream.packet.buffer[stream.bytes_written..stream.packet.size];
-        const n = lsquic.lsquic_stream_write(maybe_lsquic_stream, remaining.ptr, remaining.len);
+        const bytes_remaining = stream.packet.buffer[stream.bytes_written..stream.packet.size];
+        const bytes_written = lsquic.lsquic_stream_write(
+            maybe_lsquic_stream,
+            bytes_remaining.ptr,
+            bytes_remaining.len,
+        );
 
-        if (n < 0) {
+        // A zero-byte write means the stream is temporarily not writeable.
+        // Keep `wantwrite` set so lsquic calls `onWrite` again when the stream becomes available.
+        if (bytes_written < 0) {
             stream.connection.client.logger.warn().log("stream write failed; closing stream");
             _ = lsquic.lsquic_stream_wantwrite(maybe_lsquic_stream, 0);
             _ = lsquic.lsquic_stream_close(maybe_lsquic_stream);
             stream.connection.client.metrics.stream_write_errors_count.inc();
-        } else if (n > 0) {
-            stream.bytes_written += @intCast(n);
+        } else if (bytes_written > 0) {
+            stream.bytes_written += @intCast(bytes_written);
 
             if (stream.bytes_written > stream.packet.size)
                 @panic("lsquic_stream_write wrote more bytes than requested");
@@ -739,6 +746,22 @@ fn initX509Certificate() struct { *ssl.EVP_PKEY, *ssl.X509 } {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+test "QuicClient: create and destroy" {
+    const allocator = std.testing.allocator;
+    var exit_flag = std.atomic.Value(bool).init(false);
+    const exit: ExitCondition = .{ .unordered = &exit_flag };
+
+    try std.testing.expectEqual(false, lsquic_global_initialized.load(.monotonic));
+
+    var client_0 = try QuicClient.create(allocator, .noop, exit, .{});
+    client_0.destroy();
+
+    var client_1 = try QuicClient.create(allocator, .noop, exit, .{});
+    client_1.destroy();
+
+    try std.testing.expectEqual(true, lsquic_global_initialized.load(.monotonic));
+}
 
 test "PacketBuffer: push, reserve, pop cycle" {
     const allocator = std.testing.allocator;
