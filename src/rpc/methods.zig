@@ -14,6 +14,9 @@ const rpc = @import("lib.zig");
 const base58 = @import("base58");
 const parse_instruction = @import("parse_instruction/lib.zig");
 
+const account_codec = sig.rpc.account_codec;
+const filters = sig.rpc.filters;
+
 const Allocator = std.mem.Allocator;
 const ParseOptions = std.json.ParseOptions;
 
@@ -23,8 +26,7 @@ const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 const ClientVersion = sig.version.ClientVersion;
 
-const account_codec = sig.rpc.account_codec;
-const filters = sig.rpc.filters;
+const JsonString = account_codec.JsonString;
 
 pub fn Result(comptime method: MethodAndParams.Tag) type {
     return union(enum) {
@@ -88,7 +90,7 @@ pub const MethodAndParams = union(enum) {
     getTokenAccountBalance: GetTokenAccountBalance,
     getTokenAccountsByDelegate: noreturn,
     getTokenAccountsByOwner: GetTokenAccountsByOwner,
-    getTokenLargestAccounts: noreturn,
+    getTokenLargestAccounts: GetTokenLargestAccounts,
     getTokenSupply: GetTokenSupply,
     getTransaction: GetTransaction,
     getTransactionCount: GetTransactionCount,
@@ -1543,7 +1545,83 @@ pub const GetTokenAccountsByOwner = struct {
     };
 };
 
-// TODO: getTokenLargestAccounts
+pub const GetTokenLargestAccounts = struct {
+    /// Pubkey of the token Mint to query, as base-58 encoded string
+    mint: Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+    };
+
+    /// Maximum number of largest accounts to return.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2025
+    pub const NUM_LARGEST_ACCOUNTS: usize = 20;
+
+    pub const TokenAccountBalancePair = struct {
+        address: Pubkey,
+        ui_token_amount: account_codec.parse_token.UiTokenAmount,
+
+        // NOTE: re-implemented here due to UiTokenAmount needing to be flattened for this RPC method.
+        pub fn jsonStringify(self: TokenAccountBalancePair, jw: anytype) @TypeOf(jw.*).Error!void {
+            try jw.beginObject();
+            try jw.objectField("address");
+            try jw.write(self.address);
+            try jw.objectField("decimals");
+            try jw.write(self.ui_token_amount.decimals);
+            try jw.objectField("amount");
+            try jw.print("\"{d}\"", .{self.ui_token_amount.amount});
+            try jw.objectField("uiAmount");
+            if (self.ui_token_amount.ui_amount) |a|
+                try account_codec.RyuF64.init(a).jsonStringify(jw)
+            else
+                try jw.write(null);
+            try jw.objectField("uiAmountString");
+            try jw.write(self.ui_token_amount.ui_amount_string);
+            try jw.endObject();
+        }
+
+        // Note: only used for unit tests.
+        pub fn jsonParse(
+            alloc: std.mem.Allocator,
+            source: anytype,
+            options: std.json.ParseOptions,
+        ) std.json.ParseError(@TypeOf(source.*))!TokenAccountBalancePair {
+            const value = try std.json.Value.jsonParse(alloc, source, options);
+            const intermediate = try std.json.parseFromValue(
+                struct {
+                    address: []const u8,
+                    uiAmount: ?f64 = null,
+                    decimals: u8,
+                    amount: []const u8,
+                    uiAmountString: []const u8,
+                },
+                alloc,
+                value,
+                options,
+            );
+            return .{
+                .address = Pubkey.parseRuntime(intermediate.value.address) catch
+                    return error.UnexpectedToken,
+                .ui_token_amount = .{
+                    .ui_amount = intermediate.value.uiAmount,
+                    .decimals = intermediate.value.decimals,
+                    .amount = std.fmt.parseInt(
+                        u64,
+                        intermediate.value.amount,
+                        10,
+                    ) catch return error.UnexpectedToken,
+                    .ui_amount_string = JsonString(40).fromSlice(intermediate.value.uiAmountString),
+                },
+            };
+        }
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        value: []const TokenAccountBalancePair,
+    };
+};
 
 pub const GetTokenSupply = struct {
     /// Pubkey of the token Mint to query, as base-58 encoded string
