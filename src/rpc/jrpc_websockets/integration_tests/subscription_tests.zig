@@ -9,20 +9,73 @@ const TestServer = helpers.TestServer;
 const addTrackedSlot = helpers.addTrackedSlot;
 const initTestClient = helpers.initTestClient;
 const filledPubkey = helpers.filledPubkey;
+const parseResultBool = helpers.parseResultBool;
+const parseResultU64 = helpers.parseResultU64;
 const putAccountAtSlot = helpers.putAccountAtSlot;
+const RootNotification = helpers.RootNotification;
 const runBothLoops = helpers.runBothLoops;
-const subNotifUnsubTest = helpers.subNotifUnsubTest;
+const SlotNotification = helpers.SlotNotification;
 const waitForMessages = helpers.waitForMessages;
 
 test "client subscribes to slot, receives notification, unsubscribes" {
-    try subNotifUnsubTest(
+    const allocator = std.testing.allocator;
+
+    var server = try TestServer.start(allocator);
+    defer {
+        server.stop();
+        server.deinit();
+    }
+
+    var handler = TestClientHandler.init(allocator);
+    defer handler.deinit();
+
+    handler.queueSend(
         \\{"jsonrpc":"2.0","id":1,"method":"slotSubscribe","params":[]}
-    ,
-        \\{"jsonrpc":"2.0","id":2,"method":"slotUnsubscribe","params":[1]}
-    ,
-        .{ .slot_frozen = .{ .slot = 100, .parent = 99, .root = 68 } },
-        &.{ "\"slot\":100", "\"parent\":99", "\"root\":68" },
     );
+    handler.close_after = 3;
+
+    var client_env: TestClientEnv = undefined;
+    try client_env.start();
+    defer client_env.deinit();
+
+    var conn: TestClient.Conn = undefined;
+    var client = initTestClient(allocator, &client_env, &handler, &conn, server.port);
+    try client.connect();
+
+    waitForMessages(server, &client_env, &handler, 1, 5000);
+    try std.testing.expect(handler.received.items.len >= 1);
+    try std.testing.expect(parseResultU64(handler.received.items[0]) != null);
+
+    server.injectEvent(.{ .slot_frozen = .{ .slot = 100, .parent = 99, .root = 68 } });
+
+    waitForMessages(server, &client_env, &handler, 2, 5000);
+    try std.testing.expect(handler.received.items.len >= 2);
+    const parsed_notif = try std.json.parseFromSlice(
+        SlotNotification,
+        allocator,
+        handler.received.items[1],
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
+
+    try std.testing.expectEqualStrings("slotNotification", notification.method);
+    try std.testing.expectEqual(100, notification.params.result.slot);
+    try std.testing.expectEqual(99, notification.params.result.parent);
+    try std.testing.expectEqual(68, notification.params.result.root);
+
+    handler.queueSendNow(
+        \\{"jsonrpc":"2.0","id":2,"method":"slotUnsubscribe","params":[1]}
+    );
+
+    waitForMessages(server, &client_env, &handler, 3, 5000);
+    try std.testing.expect(handler.received.items.len >= 3);
+    try std.testing.expectEqual(
+        true,
+        parseResultBool(handler.received.items[2]) orelse return error.TestUnexpectedResult,
+    );
+
+    runBothLoops(server, &client_env, &handler, 100);
 }
 
 test "client subscribes to account, receives notification, unsubscribes" {
@@ -69,20 +122,44 @@ test "client subscribes to account, receives notification, unsubscribes" {
 
     waitForMessages(server, &client_env, &handler, 1, 5000);
     try std.testing.expect(handler.received.items.len >= 1);
-    try std.testing.expect(std.mem.indexOf(u8, handler.received.items[0], "\"result\":") != null);
+    try std.testing.expect(parseResultU64(handler.received.items[0]) != null);
 
     server.injectEvent(.{ .slot_rooted = 2 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
     const notif = handler.received.items[1];
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"accountNotification\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"lamports\":42000") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"slot\":2") != null);
+    const AccountNotification = struct {
+        method: []const u8,
+        params: struct {
+            result: struct {
+                context: struct {
+                    slot: u64,
+                },
+                value: struct {
+                    lamports: u64,
+                    data: []const u8,
+                },
+            },
+        },
+    };
+    const parsed_notif = try std.json.parseFromSlice(
+        AccountNotification,
+        allocator,
+        notif,
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
+
+    try std.testing.expectEqualStrings("accountNotification", notification.method);
+    try std.testing.expectEqual(2, notification.params.result.context.slot);
+    try std.testing.expectEqual(42_000, notification.params.result.value.lamports);
+    try std.testing.expectEqualStrings("Hwr", notification.params.result.value.data);
 
     server.injectEvent(.{ .slot_rooted = 3 });
     runBothLoops(server, &client_env, &handler, 200);
-    try std.testing.expectEqual(@as(usize, 2), handler.received.items.len);
+    try std.testing.expectEqual(2, handler.received.items.len);
 
     handler.queueSendNow(
         \\{"jsonrpc":"2.0","id":2,"method":"accountUnsubscribe","params":[1]}
@@ -90,8 +167,9 @@ test "client subscribes to account, receives notification, unsubscribes" {
 
     waitForMessages(server, &client_env, &handler, 3, 5000);
     try std.testing.expect(handler.received.items.len >= 3);
-    try std.testing.expect(
-        std.mem.indexOf(u8, handler.received.items[2], "\"result\":true") != null,
+    try std.testing.expectEqual(
+        true,
+        parseResultBool(handler.received.items[2]) orelse return error.TestUnexpectedResult,
     );
 
     runBothLoops(server, &client_env, &handler, 100);
@@ -128,12 +206,15 @@ test "no notifications after unsubscribe" {
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
     const unsub_resp = handler.received.items[1];
-    try std.testing.expect(std.mem.indexOf(u8, unsub_resp, "\"result\":true") != null);
+    try std.testing.expectEqual(
+        true,
+        parseResultBool(unsub_resp) orelse return error.TestUnexpectedResult,
+    );
 
     server.injectEvent(.{ .slot_frozen = .{ .slot = 300, .parent = 299, .root = 268 } });
 
     runBothLoops(server, &client_env, &handler, 200);
-    try std.testing.expectEqual(@as(usize, 2), handler.received.items.len);
+    try std.testing.expectEqual(2, handler.received.items.len);
 
     if (handler.conn_ref) |c| {
         c.close(.normal, "");
@@ -155,7 +236,7 @@ test "client subscribes to program, receives notification, unsubscribes" {
 
     try addTrackedSlot(server, 88, 0, &.{88});
 
-    const account_shared = try putAccountAtSlot(server, 88, pk, owner_pk, 12345, &.{ 0xCA, 0xFE });
+    const account_shared = try putAccountAtSlot(server, 88, pk, owner_pk, 12345, &.{ 0xDE, 0xAD });
     defer account_shared.deinit(allocator);
 
     var handler = TestClientHandler.init(allocator);
@@ -176,7 +257,7 @@ test "client subscribes to program, receives notification, unsubscribes" {
 
     waitForMessages(server, &client_env, &handler, 1, 5000);
     try std.testing.expect(handler.received.items.len >= 1);
-    try std.testing.expect(std.mem.indexOf(u8, handler.received.items[0], "\"result\":") != null);
+    try std.testing.expect(parseResultU64(handler.received.items[0]) != null);
 
     server.injectEvent(.{ .slot_frozen = .{ .slot = 88, .parent = 0, .root = 0 } });
     server.injectEvent(.{ .slot_rooted = 88 });
@@ -184,9 +265,35 @@ test "client subscribes to program, receives notification, unsubscribes" {
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
     const notif = handler.received.items[1];
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"programNotification\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"lamports\":12345") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"slot\":88") != null);
+    const ProgramNotification = struct {
+        method: []const u8,
+        params: struct {
+            result: struct {
+                context: struct {
+                    slot: u64,
+                },
+                value: struct {
+                    account: struct {
+                        lamports: u64,
+                        data: []const u8,
+                    },
+                },
+            },
+        },
+    };
+    const parsed_notif = try std.json.parseFromSlice(
+        ProgramNotification,
+        allocator,
+        notif,
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
+
+    try std.testing.expectEqualStrings("programNotification", notification.method);
+    try std.testing.expectEqual(88, notification.params.result.context.slot);
+    try std.testing.expectEqual(12_345, notification.params.result.value.account.lamports);
+    try std.testing.expectEqualStrings("Hwr", notification.params.result.value.account.data);
 
     handler.queueSendNow(
         \\{"jsonrpc":"2.0","id":2,"method":"programUnsubscribe","params":[1]}
@@ -194,20 +301,69 @@ test "client subscribes to program, receives notification, unsubscribes" {
 
     waitForMessages(server, &client_env, &handler, 3, 5000);
     try std.testing.expect(handler.received.items.len >= 3);
-    try std.testing.expect(
-        std.mem.indexOf(u8, handler.received.items[2], "\"result\":true") != null,
+    try std.testing.expectEqual(
+        true,
+        parseResultBool(handler.received.items[2]) orelse return error.TestUnexpectedResult,
     );
 
     runBothLoops(server, &client_env, &handler, 100);
 }
 
 test "client subscribes to root, receives notification, unsubscribes" {
-    try subNotifUnsubTest(
+    const allocator = std.testing.allocator;
+
+    var server = try TestServer.start(allocator);
+    defer {
+        server.stop();
+        server.deinit();
+    }
+
+    var handler = TestClientHandler.init(allocator);
+    defer handler.deinit();
+
+    handler.queueSend(
         \\{"jsonrpc":"2.0","id":1,"method":"rootSubscribe","params":[]}
-    ,
-        \\{"jsonrpc":"2.0","id":2,"method":"rootUnsubscribe","params":[1]}
-    ,
-        .{ .slot_rooted = 256 },
-        &.{"\"result\":256"},
     );
+    handler.close_after = 3;
+
+    var client_env: TestClientEnv = undefined;
+    try client_env.start();
+    defer client_env.deinit();
+
+    var conn: TestClient.Conn = undefined;
+    var client = initTestClient(allocator, &client_env, &handler, &conn, server.port);
+    try client.connect();
+
+    waitForMessages(server, &client_env, &handler, 1, 5000);
+    try std.testing.expect(handler.received.items.len >= 1);
+    try std.testing.expect(parseResultU64(handler.received.items[0]) != null);
+
+    server.injectEvent(.{ .slot_rooted = 256 });
+
+    waitForMessages(server, &client_env, &handler, 2, 5000);
+    try std.testing.expect(handler.received.items.len >= 2);
+    const parsed_notif = try std.json.parseFromSlice(
+        RootNotification,
+        allocator,
+        handler.received.items[1],
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
+
+    try std.testing.expectEqualStrings("rootNotification", notification.method);
+    try std.testing.expectEqual(256, notification.params.result);
+
+    handler.queueSendNow(
+        \\{"jsonrpc":"2.0","id":2,"method":"rootUnsubscribe","params":[1]}
+    );
+
+    waitForMessages(server, &client_env, &handler, 3, 5000);
+    try std.testing.expect(handler.received.items.len >= 3);
+    try std.testing.expectEqual(
+        true,
+        parseResultBool(handler.received.items[2]) orelse return error.TestUnexpectedResult,
+    );
+
+    runBothLoops(server, &client_env, &handler, 100);
 }
