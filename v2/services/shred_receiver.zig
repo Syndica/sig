@@ -6,7 +6,6 @@ const bk = @import("binkode");
 const start = @import("start");
 const lib = @import("lib");
 const tracy = @import("tracy");
-const rs_table = lib.reed_solomon_table;
 
 const Packet = lib.net.Packet;
 
@@ -20,6 +19,7 @@ const Atomic = std.atomic.Value;
 const DeshreddedFecSet = lib.shred.DeshreddedFecSet;
 const FecSetId = lib.shred.FecSetId;
 const DeshredRing = lib.shred.DeshredRing;
+const rs_table = lib.shred.reed_solomon_table;
 
 comptime {
     _ = start;
@@ -827,7 +827,7 @@ fn processPacket(
     state: *State,
     leader_schedule: *const lib.solana.LeaderSchedule,
     packet: *const Packet,
-    deshred_ring: *ReadWrite.DeshredRing.Slice(.writer),
+    deshred_ring: *DeshredRing.Slice(.writer),
 ) !NonErrorStatus {
     const zone = tracy.Zone.init(@src(), .{ .name = "processPacket" });
     defer zone.deinit();
@@ -1082,7 +1082,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
         const result = processPacket(
             &global.state,
-            ro.leader_schedule,
+            &ro.config.leader_schedule,
             packet,
             &writer_slice,
         ) catch |err| {

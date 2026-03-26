@@ -1,7 +1,8 @@
-const lib = @import("lib");
 const std = @import("std");
+const solana = @import("solana.zig");
+const ipc = @import("ipc.zig");
 
-const solana = lib.solana;
+pub const reed_solomon_table = @import("shred/reed_solomon_table.zig");
 
 const Hash = solana.Hash;
 const Slot = solana.Slot;
@@ -12,17 +13,17 @@ pub const RecvConfig = extern struct {
     shred_version: u16,
 };
 
-pub const DeshredRing = lib.ipc.Ring(256, DeshreddedFecSet);
+pub const DeshredRing = ipc.Ring(256, DeshreddedFecSet);
 
 pub const FecSetId = extern struct {
     slot: Slot,
     fec_set_idx: u32,
 
-    fn eql(a: *const FecSetId, b: *const FecSetId) bool {
+    pub fn eql(a: *const FecSetId, b: *const FecSetId) bool {
         return (a.slot == b.slot and a.fec_set_idx == b.fec_set_idx);
     }
 
-    fn compare(a: *const FecSetId, b: *const FecSetId) std.math.Order {
+    pub fn compare(a: *const FecSetId, b: *const FecSetId) std.math.Order {
         if (a.slot > b.slot) return .gt;
         if (a.slot < b.slot) return .lt;
         if (a.fec_set_idx > b.fec_set_idx) return .gt;
@@ -52,5 +53,5 @@ pub const DeshreddedFecSet = extern struct {
 };
 
 pub const Shred = struct {
-    const data_payload_max = 1198;
+    const data_payload_max = 11918;
 };
