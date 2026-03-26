@@ -493,10 +493,13 @@ fn testAddTrackedSlot(
     gop.reference.release();
 }
 
+var test_status_cache: sig.core.StatusCache = .DEFAULT;
+
 fn testSlotReadCtx(slot_tracker: *sig.replay.trackers.SlotTracker) SlotReadContext {
     return .{
         .slot_tracker = slot_tracker,
         .account_reader = .noop,
+        .status_cache = &test_status_cache,
     };
 }
 

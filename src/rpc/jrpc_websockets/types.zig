@@ -18,6 +18,7 @@ pub const AccountWithPubkey = struct {
 pub const SlotReadContext = struct {
     slot_tracker: *sig.replay.trackers.SlotTracker,
     account_reader: sig.accounts_db.AccountReader,
+    status_cache: *sig.core.StatusCache,
 };
 
 /// Subscription families used for subscription identity and fanout.
@@ -334,20 +335,32 @@ pub const SlotFrozenEvent = struct {
 };
 
 /// Internal runtime input event from producer threads to the websocket loop thread.
+pub const ReceivedSignaturesEvent = struct {
+    slot: u64,
+    signatures: []const Signature,
+
+    pub fn deinit(self: ReceivedSignaturesEvent, allocator: std.mem.Allocator) void {
+        if (self.signatures.len > 0) {
+            allocator.free(self.signatures);
+        }
+    }
+};
+
 pub const InboundEvent = union(enum) {
     logs: SlotTransactionLogs,
+    received_signatures: ReceivedSignaturesEvent,
     slot_frozen: SlotFrozenEvent,
     slot_confirmed: u64,
     slot_rooted: u64,
     tip_changed: u64,
 
     pub fn deinit(self: InboundEvent, allocator: std.mem.Allocator) void {
-        _ = allocator;
         switch (self) {
             .logs => |slot_logs| {
                 var logs = slot_logs;
                 logs.deinit();
             },
+            .received_signatures => |data| data.deinit(allocator),
             .slot_frozen => |slot_data| {
                 var accounts = slot_data.accounts;
                 accounts.deinit();
@@ -491,7 +504,7 @@ pub const TransactionLogsEntry = struct {
         const cloned_mentions = try allocator.dupe(Pubkey, self.mentioned_pubkeys);
         errdefer allocator.free(cloned_mentions);
 
-        const cloned_err = try cloneTransactionError(self.err, allocator);
+        const cloned_err = if (self.err) |err| try err.clone(allocator) else null;
         errdefer if (cloned_err) |tx_err| tx_err.deinit(allocator);
 
         return .{
@@ -553,28 +566,35 @@ fn freeLogLines(allocator: std.mem.Allocator, log_lines: []const []const u8) voi
     }
 }
 
-fn cloneTransactionError(
-    tx_err: ?TransactionError,
-    allocator: std.mem.Allocator,
-) !?TransactionError {
-    const tx_err_value = tx_err orelse return null;
-    if (tx_err_value != .InstructionError) {
-        return tx_err_value;
-    }
-
-    const instruction_error = tx_err_value.InstructionError;
-    if (instruction_error.@"1" != .BorshIoError) {
-        return tx_err_value;
-    }
-
-    return .{ .InstructionError = .{
-        instruction_error.@"0",
-        .{ .BorshIoError = try allocator.dupe(u8, instruction_error.@"1".BorshIoError) },
-    } };
-}
-
 pub const RootEventData = struct {
     root: u64,
+};
+
+pub const SignatureNotificationData = struct {
+    slot: u64,
+    value: Value,
+
+    pub const Value = union(enum) {
+        received,
+        final: struct {
+            err: ?TransactionError,
+        },
+
+        pub fn deinit(self: Value, allocator: std.mem.Allocator) void {
+            switch (self) {
+                .received => {},
+                .final => |result| {
+                    if (result.err) |tx_err| {
+                        tx_err.deinit(allocator);
+                    }
+                },
+            }
+        }
+    };
+
+    pub fn deinit(self: SignatureNotificationData, allocator: std.mem.Allocator) void {
+        self.value.deinit(allocator);
+    }
 };
 
 /// Serialization job: loop thread -> worker thread.
@@ -583,6 +603,7 @@ pub const SerializeJob = struct {
     sub_id: SubId,
     index: ?u64,
     job_type: JobType,
+    is_final: bool = false,
     submitted_at: std.time.Instant,
 
     pub const JobType = union(enum) {
@@ -600,6 +621,7 @@ pub const SerializeJob = struct {
             read_ctx: SlotReadContext,
         },
         root: RootEventData,
+        signature: SignatureNotificationData,
         slot: SlotEventData,
 
         pub fn deinit(self: JobType, allocator: std.mem.Allocator) void {
@@ -607,6 +629,7 @@ pub const SerializeJob = struct {
                 .account => |job| job.data.deinit(allocator),
                 .logs => |job| job.deinit(allocator),
                 .program => |job| job.data.deinit(allocator),
+                .signature => |job| job.deinit(allocator),
                 else => {},
             }
         }
@@ -635,6 +658,7 @@ pub const CommitMsg = struct {
     sub_id: SubId,
     index: ?u64,
     result: CommitResult,
+    is_final: bool = false,
     serialize_ns: u64 = 0,
     pipeline_latency_ns: u64 = 0,
     payload_bytes: u64 = 0,

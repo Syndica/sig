@@ -304,6 +304,35 @@ pub fn serializeLogsNotification(
     });
 }
 
+const SignatureNotificationValue = struct {
+    value: types.SignatureNotificationData.Value,
+
+    pub fn jsonStringify(self: SignatureNotificationValue, jw: anytype) !void {
+        switch (self.value) {
+            .received => try jw.write("receivedSignature"),
+            .final => |result| try jw.write(.{ .err = result.err }),
+        }
+    }
+};
+
+pub fn serializeSignatureNotification(
+    allocator: std.mem.Allocator,
+    sub_id: types.SubId,
+    data: types.SignatureNotificationData,
+) !NotifPayload {
+    return serializeToPayload(allocator, .{
+        .jsonrpc = "2.0",
+        .method = "signatureNotification",
+        .params = .{
+            .result = .{
+                .context = .{ .slot = data.slot },
+                .value = SignatureNotificationValue{ .value = data.value },
+            },
+            .subscription = sub_id,
+        },
+    });
+}
+
 pub fn serializeNotification(
     allocator: std.mem.Allocator,
     sub_id: types.SubId,
@@ -329,6 +358,7 @@ pub fn serializeNotification(
             job.data_slice,
             job.read_ctx,
         ),
+        .signature => |data| serializeSignatureNotification(allocator, sub_id, data),
     };
 }
 
@@ -942,6 +972,45 @@ test "serializeLogsNotification zero logs" {
 
     try std.testing.expectEqualStrings(
         \\{"jsonrpc":"2.0","method":"logsNotification","params":{"result":{"context":{"slot":1},"value":{"signature":"1111111111111111111111111111111111111111111111111111111111111111","err":null,"logs":[]}},"subscription":1}}
+    , extractJson(p.payload()));
+}
+
+test "serializeSignatureNotification received payload" {
+    const allocator = std.testing.allocator;
+    const p = try serializeSignatureNotification(allocator, 3, .{
+        .slot = 123,
+        .value = .received,
+    });
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"signatureNotification","params":{"result":{"context":{"slot":123},"value":"receivedSignature"},"subscription":3}}
+    , extractJson(p.payload()));
+}
+
+test "serializeSignatureNotification final payload with null err" {
+    const allocator = std.testing.allocator;
+    const p = try serializeSignatureNotification(allocator, 4, .{
+        .slot = 124,
+        .value = .{ .final = .{ .err = null } },
+    });
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"signatureNotification","params":{"result":{"context":{"slot":124},"value":{"err":null}},"subscription":4}}
+    , extractJson(p.payload()));
+}
+
+test "serializeSignatureNotification final payload with concrete err" {
+    const allocator = std.testing.allocator;
+    const p = try serializeSignatureNotification(allocator, 5, .{
+        .slot = 125,
+        .value = .{ .final = .{ .err = .AccountInUse } },
+    });
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"signatureNotification","params":{"result":{"context":{"slot":125},"value":{"err":"AccountInUse"}},"subscription":5}}
     , extractJson(p.payload()));
 }
 

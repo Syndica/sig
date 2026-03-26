@@ -528,6 +528,24 @@ pub const TransactionError = union(enum(u32)) {
         }
     }
 
+    pub fn clone(self: @This(), allocator: Allocator) error{OutOfMemory}!@This() {
+        var cloned = self;
+        switch (cloned) {
+            .InstructionError => |*instruction_err| {
+                switch (instruction_err[1]) {
+                    .BorshIoError => |msg| {
+                        instruction_err[1] = .{
+                            .BorshIoError = try allocator.dupe(u8, msg),
+                        };
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+        return cloned;
+    }
+
     /// Serialize to JSON matching Agave's serde format for UiTransactionError.
     /// - Unit variants: "VariantName"
     /// - Tuple variants: {"VariantName": value}

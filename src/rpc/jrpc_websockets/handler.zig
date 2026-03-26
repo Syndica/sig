@@ -321,7 +321,7 @@ pub const JRPCHandler = struct {
             return error.Internal;
         };
         const q = result.queue;
-        const next_index = q.head + 1;
+        var next_index = q.head + 1;
         errdefer self.ctx.maybeRemoveIdleQueue(result.sub_id, q);
 
         // Duplicate check: same sub_id means same RPC method + params are already
@@ -348,6 +348,10 @@ pub const JRPCHandler = struct {
             log.warn("subscribe addSubscriber failed: {}", .{err});
             return error.Internal;
         };
+
+        if (q.finalNotificationIndex()) |final_index| {
+            next_index = final_index;
+        }
         errdefer q.removeSubscriber(self, next_index);
 
         self.active_subs.append(self.allocator, .{
@@ -456,7 +460,18 @@ pub const JRPCHandler = struct {
                 Runtime.releasePayload(self.ctx, pick.payload);
                 break;
             };
-            self.active_subs.items[pick.sub_idx].next_index += 1;
+
+            const sub = &self.active_subs.items[pick.sub_idx];
+            if (pick.is_final) {
+                sub.next_index += 1;
+                const removed = self.active_subs.swapRemove(pick.sub_idx);
+                const q = removed.queue;
+                q.removeSubscriber(self, removed.next_index);
+                self.ctx.maybeRemoveIdleQueue(removed.sub_id, q);
+            } else {
+                sub.next_index += 1;
+            }
+
             batch_count += 1;
             batch_bytes += @intCast(payload_slice.len);
             Runtime.releasePayload(self.ctx, pick.payload);
@@ -486,6 +501,7 @@ pub const JRPCHandler = struct {
     const NotifPick = struct {
         payload: NotifPayload,
         sub_idx: usize,
+        is_final: bool,
     };
 
     fn pickNextNotification(self: *JRPCHandler, start_idx: usize) ?NotifPick {
@@ -514,8 +530,8 @@ pub const JRPCHandler = struct {
                 };
             },
         };
-        const payload = maybe_payload orelse return null;
-        return .{ .payload = payload, .sub_idx = idx };
+        const notif = maybe_payload orelse return null;
+        return .{ .payload = notif.payload, .sub_idx = idx, .is_final = notif.is_final };
     }
 
     fn findActiveSubIndex(

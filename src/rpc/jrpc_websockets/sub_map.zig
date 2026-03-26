@@ -71,8 +71,8 @@ pub const RPCSubMap = struct {
     /// retained. On new entry, heap fields are deep-copied into the map's allocator.
     ///
     /// Queue commit path policy:
-    /// - `.slot`, `.root`, `.program`, `.account`, and `.logs` use `.reserved`
-    ///   to preserve event order
+    /// - `.slot`, `.root`, `.signature`, `.program`, `.account`, and `.logs`
+    ///   use `.reserved` to preserve event order
     /// - all other methods use `.direct`
     pub fn getOrCreate(
         self: *RPCSubMap,
@@ -91,8 +91,7 @@ pub const RPCSubMap = struct {
 
         const queue = try self.allocator.create(NotifQueue);
         const commit_path: NotifQueue.CommitPath = switch (key.method) {
-            .slot, .root, .program, .account, .logs => .reserved,
-            else => .direct,
+            .slot, .root, .signature, .program, .account, .logs => .reserved,
         };
         queue.* = try NotifQueue.init(self.allocator, self.queue_capacity, commit_path);
         errdefer {
@@ -234,6 +233,26 @@ test "RPCSubMap logs all and mentions filters get different entries" {
     const mentions_again = try sm.getOrCreate(&mentions_key);
     try std.testing.expectEqual(mentions.sub_id, mentions_again.sub_id);
     try std.testing.expect(!mentions_again.created);
+}
+
+test "RPCSubMap signature subscriptions use reserved queues" {
+    const allocator = std.testing.allocator;
+
+    var sm = RPCSubMap.init(allocator, 8);
+    defer sm.deinit();
+
+    const key: SubReqKey = .{
+        .method = .signature,
+        .params = .{ .signature = .{
+            .sig_value = sig.core.Signature.ZEROES,
+            .commitment = .processed,
+            .enableReceivedNotification = true,
+        } },
+    };
+
+    const entry = try sm.getOrCreate(&key);
+    try std.testing.expectEqual(NotifQueue.CommitPath.reserved, entry.queue.commit_path);
+    try std.testing.expectEqual(@as(?u64, null), entry.queue.finalNotificationIndex());
 }
 
 test "RPCSubMap removeById and recreate gets new sub_id" {
