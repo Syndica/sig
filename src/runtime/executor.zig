@@ -284,7 +284,7 @@ pub fn prepareCpiInstructionInfo(
 
             std.debug.assert(prev.index_in_transaction < InstructionInfo.MAX_ACCOUNT_METAS);
             const new = prev.*; // this avoids a bug caused by Parameter Reference Optimisation (PRO)
-            try deduped_account_metas.append(tc.allocator, new);
+            (try deduped_account_metas.addOne(tc.allocator)).* = new; // this is also needed to avoid the PRO bug
         } else {
             index_in_callee_ptr.* = @intCast(deduped_account_metas.items.len);
             try deduped_account_metas.append(tc.allocator, .{
@@ -297,9 +297,8 @@ pub fn prepareCpiInstructionInfo(
     }
 
     for (deduped_account_metas.items, 0..) |*account_meta, index_in_instruction| {
-        std.debug.assert(account_meta.index_in_transaction < InstructionInfo.MAX_ACCOUNT_METAS);
-
         const index_in_callee = dedupe_map[account_meta.index_in_transaction];
+        std.debug.assert(account_meta.index_in_transaction < InstructionInfo.MAX_ACCOUNT_METAS);
 
         if (index_in_callee != index_in_instruction) {
             if (index_in_callee >= deduped_account_metas.items.len) return error.MissingAccount;
