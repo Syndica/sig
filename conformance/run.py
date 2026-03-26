@@ -9,7 +9,7 @@ import textwrap
 
 from collections import defaultdict
 
-conformance_dir = os.path.dirname(os.path.abspath(__file__))
+conformance_dir = os.path.dirname(os.path.realpath(__file__))
 
 try:
     from typer.testing import CliRunner

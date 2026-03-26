@@ -21,11 +21,11 @@ zig build solfuzz_sig
 **Run the test vectors**
 
 ```bash
-# run all
-./run.py
+# run all conformance test vectors
+run
 
 # run only the transaction harness tests
-./run.py txn
+run txn
 ```
 
 For customization, try `--help`.
@@ -63,13 +63,13 @@ Then you can use some commands like these:
 
 ```bash
 # run the tests against agave
-./run.py --exec-lib env/solfuzz-agave/target/release/libsolfuzz_agave.so
+run --exec-lib env/solfuzz-agave/target/release/libsolfuzz_agave.so
 
 # create the fixtures based on agave, and run the conformance tests against sig
-./run.py --create
+run --create
 
 # re-run conformance tests against sig using your created fixtures
-./run.py --use-created
+run --use-created
 ```
 
 # Interpreting results

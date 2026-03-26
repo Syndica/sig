@@ -666,13 +666,14 @@ fn executeTxnContext(
     // });
 
     // Remove address lookup table, stake, and config program accounts by inserting empty accounts (zero-lamports)
-    try account_store.put(parent_slot, program.address_lookup_table.ID, .EMPTY);
-    try account_store.put(parent_slot, program.config.ID, .EMPTY);
-    try account_store.put(parent_slot, program.stake.ID, .EMPTY);
+    // TODO: investigate: agave uses parent_slot here, but that causes more test failures in our code.
+    try account_store.put(slot, program.address_lookup_table.ID, .EMPTY);
+    try account_store.put(slot, program.config.ID, .EMPTY);
+    try account_store.put(slot, program.stake.ID, .EMPTY);
 
     // Load accounts into accounts db
     for (accounts_map.keys(), accounts_map.values()) |pubkey, account| {
-        try account_store.put(parent_slot, pubkey, .{
+        try account_store.put(slot, pubkey, .{
             .lamports = account.lamports,
             .data = account.data,
             .owner = account.owner,

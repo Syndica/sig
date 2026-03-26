@@ -74,6 +74,7 @@
 
       python3.13 -m venv env/venv
       source env/venv/bin/activate
+      ln -sfn "$PWD/run.py" env/venv/bin/run
       cp -r ${solana-conformance} env/solana-conformance && chmod +w -R env/solana-conformance
       export SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
       pip install -e env/solana-conformance[dev,octane]
