@@ -188,11 +188,13 @@ pub const StatusCache = struct {
 
         const lookup_key: [CACHED_KEY_SIZE]u8 = key[key_index..][0..CACHED_KEY_SIZE].*;
 
-        const owned_err = if (maybe_err) |err| try err.clone(allocator) else null;
-        errdefer if (owned_err) |err| err.deinit(allocator);
+        {
+            const owned_err = if (maybe_err) |err| try err.clone(allocator) else null;
+            errdefer if (owned_err) |err| err.deinit(allocator);
 
-        const forks = try hash_map.getOrPutValue(allocator, lookup_key, .empty);
-        try forks.value_ptr.append(allocator, .{ .slot = slot, .maybe_err = owned_err });
+            const forks = try hash_map.getOrPutValue(allocator, lookup_key, .empty);
+            try forks.value_ptr.append(allocator, .{ .slot = slot, .maybe_err = owned_err });
+        }
 
         // Add this key slice to the list of key slices for this slot and blockhash combo.
         const fork_entry = try state.mut().slot_deltas.getOrPutValue(allocator, slot, .empty);
