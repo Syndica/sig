@@ -16,7 +16,6 @@ const WsRequest = ws_request.WsRequest;
 
 const ErrorCode = protocol.ErrorCode;
 const SubscribeError = error{
-    DuplicateSubscription,
     Internal,
 };
 
@@ -226,7 +225,7 @@ pub const JRPCHandler = struct {
         };
         const id = request.id;
 
-        request.method.verify() catch |err| switch (err) {
+        request.method.validate() catch |err| switch (err) {
             error.MethodNotImplemented => {
                 self.sendErrorResponse(
                     id,
@@ -243,13 +242,6 @@ pub const JRPCHandler = struct {
 
         if (SubReqKey.fromMethod(&request.method)) |key| {
             self.handleSubscribe(id, &key) catch |err| switch (err) {
-                error.DuplicateSubscription => {
-                    self.sendErrorResponse(
-                        id,
-                        ErrorCode.invalid_params,
-                        "duplicate subscription",
-                    );
-                },
                 error.Internal => {
                     self.sendInternalError(id);
                 },
@@ -324,7 +316,7 @@ pub const JRPCHandler = struct {
     ) SubscribeError!void {
         self.ctx.metrics.subscribe_requests += 1;
 
-        const result = self.ctx.sub_map.getOrCreate(key) catch |err| {
+        const result = self.ctx.getOrCreateSubscription(key) catch |err| {
             log.warn("subscribe getOrCreate failed: {}", .{err});
             return error.Internal;
         };
@@ -332,12 +324,23 @@ pub const JRPCHandler = struct {
         const next_index = q.head + 1;
         errdefer self.ctx.maybeRemoveIdleQueue(result.sub_id, q);
 
-        // Duplicate check: same sub_id means same SubReqKey
-        // already active.
+        // Duplicate check: same sub_id means same RPC method + params are already
+        // active on this connection. Match Agave's idempotent behavior by returning
+        // the existing subscription id without changing local subscription state.
         for (self.active_subs.items) |s| {
             if (s.sub_id == result.sub_id) {
                 log.debug("duplicate subscription request for sub_id={d}", .{result.sub_id});
-                return error.DuplicateSubscription;
+                protocol.serializeSubscribeResponse(
+                    &self.send_state.response_buf,
+                    self.allocator,
+                    request_id,
+                    result.sub_id,
+                ) catch |err| {
+                    log.warn("failed to serialize duplicate subscribe response: {}", .{err});
+                    return error.Internal;
+                };
+                self.responseReadyAndSend();
+                return;
             }
         }
 
