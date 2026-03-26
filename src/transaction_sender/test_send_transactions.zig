@@ -55,14 +55,14 @@ pub fn main() !void {
         exit.setExit();
     }
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
-    defer if (gpa_state.deinit() == .leak) {
+    var allocator_state = std.heap.GeneralPurposeAllocator(.{}){};
+    defer if (allocator_state.deinit() == .leak) {
         logger.err().log("Memory leak detected");
     };
-    const gpa = gpa_state.allocator();
+    const allocator = allocator_state.allocator();
 
-    const args = try std.process.argsAlloc(gpa);
-    defer std.process.argsFree(gpa, args);
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
 
     if (args.len < 2 or args.len == 3 or args.len > 4) {
         printUsage();
@@ -93,7 +93,7 @@ pub fn main() !void {
     logger.info().logf("Starting test with {d} transactions, RPC URL: {s}", .{ transfers, rpc_url });
 
     var mock_sender_service = try MockSenderService.init(
-        gpa,
+        allocator,
         exit,
         .from(logger),
         rpc_url,
@@ -104,14 +104,14 @@ pub fn main() !void {
     const mock_sender_handle = try std.Thread.spawn(
         .{},
         MockSenderService.run,
-        .{ &mock_sender_service, gpa },
+        .{ &mock_sender_service, allocator },
     );
     defer mock_sender_handle.join();
 
     var mock_transfer_service = sig.MockTransferService{
         .exit = exit,
         .logger = .from(logger),
-        .client = try .init(gpa, rpc_url, .{
+        .client = try .init(allocator, rpc_url, .{
             .max_retries = 5,
             .logger = .noop,
         }),
@@ -120,7 +120,7 @@ pub fn main() !void {
     };
     defer mock_transfer_service.deinit();
 
-    try mock_transfer_service.run(gpa);
+    try mock_transfer_service.run(allocator);
 
     exit.setExit();
 }
@@ -138,18 +138,18 @@ const MockSenderService = struct {
     }
 
     pub fn init(
-        gpa: Allocator,
+        allocator: Allocator,
         exit: ExitCondition,
         logger: Logger,
         rpc_url: []const u8,
         send_interval: Duration,
     ) !MockSenderService {
-        const receiver = try Channel(TransactionInfo).create(gpa);
+        const receiver = try Channel(TransactionInfo).create(allocator);
         receiver.name = "TransactionSenderService: TransactionInfo Receiver";
         errdefer receiver.destroy();
 
         var client = try RpcClient.init(
-            gpa,
+            allocator,
             rpc_url,
             .{ .max_retries = 3, .logger = .noop },
         );
@@ -164,9 +164,9 @@ const MockSenderService = struct {
         };
     }
 
-    pub fn run(self: *MockSenderService, gpa: Allocator) !void {
+    pub fn run(self: *MockSenderService, allocator: Allocator) !void {
         const quic_client = try QuicClient.create(
-            gpa,
+            allocator,
             .from(self.logger),
             self.exit,
             .{ .log_metrics_interval = .fromSecs(1) },
@@ -176,19 +176,19 @@ const MockSenderService = struct {
         const quic_handle = try std.Thread.spawn(.{}, QuicClient.run, .{quic_client});
         defer quic_handle.join();
 
-        try self.handleTransactions(gpa, quic_client.receiver);
+        try self.handleTransactions(allocator, quic_client.receiver);
     }
 
     fn handleTransactions(
         self: *MockSenderService,
-        gpa: Allocator,
+        allocator: Allocator,
         quic_sender: *Channel(Packet),
     ) !void {
         const epoch_start_slot, const epoch_leaders = try resolveLeadersFromRpc(
-            gpa,
+            allocator,
             &self.client,
         );
-        defer gpa.free(epoch_leaders);
+        defer allocator.free(epoch_leaders);
 
         var last_sent_time = Instant.EPOCH_ZERO;
         var txn_info = try self.receiver.receive(self.exit);
@@ -240,7 +240,7 @@ const MockSenderService = struct {
     }
 };
 
-fn resolveLeadersFromRpc(gpa: Allocator, client: *RpcClient) !struct { u64, []?SocketAddr } {
+fn resolveLeadersFromRpc(allocator: Allocator, client: *RpcClient) !struct { u64, []?SocketAddr } {
     var slot_response = try client.getSlot(.{
         .config = .{ .commitment = .processed },
     });
@@ -264,7 +264,7 @@ fn resolveLeadersFromRpc(gpa: Allocator, client: *RpcClient) !struct { u64, []?S
     const cluster_nodes = try cluster_nodes_response.result();
 
     var pubkey_to_tpu_quic = std.AutoArrayHashMapUnmanaged(Pubkey, SocketAddr).empty;
-    defer pubkey_to_tpu_quic.deinit(gpa);
+    defer pubkey_to_tpu_quic.deinit(allocator);
 
     for (cluster_nodes) |node| {
         const tpu_quic = node.tpuQuic orelse continue;
@@ -278,24 +278,24 @@ fn resolveLeadersFromRpc(gpa: Allocator, client: *RpcClient) !struct { u64, []?S
             break :blk gossip_addr;
         };
 
-        try pubkey_to_tpu_quic.put(gpa, try Pubkey.parseRuntime(node.pubkey), addr);
+        try pubkey_to_tpu_quic.put(allocator, try Pubkey.parseRuntime(node.pubkey), addr);
     }
 
     var leader_by_slot = std.AutoArrayHashMapUnmanaged(u64, Pubkey).empty;
-    defer leader_by_slot.deinit(gpa);
+    defer leader_by_slot.deinit(allocator);
 
     var it = rpc_leader_schedule.value.iterator();
     while (it.next()) |entry| {
         const leader = entry.key_ptr.*;
         for (entry.value_ptr.*) |slot_in_epoch| {
-            try leader_by_slot.put(gpa, epoch_start_slot + slot_in_epoch, leader);
+            try leader_by_slot.put(allocator, epoch_start_slot + slot_in_epoch, leader);
         }
     }
 
     const start = std.mem.min(u64, leader_by_slot.keys());
     const end = std.mem.max(u64, leader_by_slot.keys());
-    const addresses = try gpa.alloc(?SocketAddr, end - start + 1);
-    errdefer gpa.free(addresses);
+    const addresses = try allocator.alloc(?SocketAddr, end - start + 1);
+    errdefer allocator.free(addresses);
     var has_address_count: usize = 0;
     for (start..end + 1, 0..) |slot, i| {
         const leader = leader_by_slot.get(slot) orelse return error.MissingLeaderForSlot;

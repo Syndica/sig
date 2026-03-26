@@ -121,7 +121,7 @@ pub const Account = struct {
     }
 };
 
-pub fn run(self: *Service, gpa: Allocator) !void {
+pub fn run(self: *Service, allocator: Allocator) !void {
     errdefer |err| {
         self.logger.err().logf("MockTransferService Error: {s}", .{@errorName(err)});
         if (@errorReturnTrace()) |tr| std.debug.dumpStackTrace(tr.*);
@@ -129,7 +129,7 @@ pub fn run(self: *Service, gpa: Allocator) !void {
     }
 
     self.logger.info().log("Initializing accounts for mock transfer");
-    var from_account, var to_account = try self.initAccounts(gpa);
+    var from_account, var to_account = try self.initAccounts(allocator);
 
     self.logger.info().logf("Starting mock transfers: {f} -> {f}", .{ from_account, to_account });
     while (!self.exit.shouldExit() and self.successful < self.transfers) {
@@ -153,7 +153,7 @@ pub fn run(self: *Service, gpa: Allocator) !void {
             self.successful + 1,
             self.transfers,
         });
-        const txn_info = try self.buildTransfer(gpa, from_account, to_account);
+        const txn_info = try self.buildTransfer(allocator, from_account, to_account);
 
         self.logger.info().logf("Sending transfer {}/{}: signature={f}", .{
             self.successful + 1,
@@ -164,7 +164,7 @@ pub fn run(self: *Service, gpa: Allocator) !void {
 
         switch (self.waitForTransfer(&txn_info, .fromSecs(60))) {
             .succeeded => {
-                try self.resetAccountBalances(gpa, .confirmed);
+                try self.resetAccountBalances(allocator, .confirmed);
                 self.logger.info().logf("Transfer success {}/{}: signature={f}", .{
                     self.successful + 1,
                     self.transfers,
@@ -200,9 +200,9 @@ fn submitTransaction(self: *Service, txn_info: TransactionInfo) !void {
     }
 }
 
-fn initAccounts(self: *Service, gpa: Allocator) !struct { *Account, *Account } {
+fn initAccounts(self: *Service, allocator: Allocator) !struct { *Account, *Account } {
     while (self.exit.shouldRun()) {
-        self.resetAccountBalances(gpa, .finalized) catch |err| {
+        self.resetAccountBalances(allocator, .finalized) catch |err| {
             self.logger.info().logf("Failed to get account balances: {any}", .{err});
             std.Thread.sleep(10 * std.time.ns_per_s);
             continue;
@@ -215,14 +215,14 @@ fn initAccounts(self: *Service, gpa: Allocator) !struct { *Account, *Account } {
         .{ &self.account_1, &self.account_0 };
 }
 
-fn resetAccountBalances(self: *Service, gpa: Allocator, commitment: Commitment) !void {
+fn resetAccountBalances(self: *Service, allocator: Allocator, commitment: Commitment) !void {
     self.account_0.lamports = try self.getAccountBalance(
-        gpa,
+        allocator,
         self.account_0.pubkey,
         commitment,
     );
     self.account_1.lamports = try self.getAccountBalance(
-        gpa,
+        allocator,
         self.account_1.pubkey,
         commitment,
     );
@@ -262,20 +262,20 @@ fn getSignatureStatus(self: *Service, signature: Signature) !Status {
 
 fn buildTransfer(
     self: *Service,
-    gpa: Allocator,
+    allocator: Allocator,
     from_account: *Account,
     to_account: *Account,
 ) !TransactionInfo {
     const blockhash = try self.getLatestBlockhash(.confirmed);
 
     const transaction = try buildTransferTransaction(
-        gpa,
+        allocator,
         from_account.keypair,
         to_account.pubkey,
         TRANSFER_AMOUNT,
         blockhash,
     );
-    defer transaction.deinit(gpa);
+    defer transaction.deinit(allocator);
 
     const msg_bytes = try transaction.msg.serializeBounded(transaction.version);
     const message_hash = sig.core.transaction.Message.hash(msg_bytes.constSlice());
@@ -315,7 +315,7 @@ fn waitForTransfer(
 }
 
 fn buildTransferTransaction(
-    gpa: Allocator,
+    allocator: Allocator,
     from_keypair: KeyPair,
     to_pubkey: Pubkey,
     lamports: u64,
@@ -323,15 +323,15 @@ fn buildTransferTransaction(
 ) !sig.core.Transaction {
     const from_pubkey = Pubkey.fromPublicKey(&from_keypair.public_key);
 
-    const account_keys = try gpa.dupe(Pubkey, &.{
+    const account_keys = try allocator.dupe(Pubkey, &.{
         from_pubkey,
         to_pubkey,
         sig.runtime.program.system.ID,
     });
-    errdefer gpa.free(account_keys);
+    errdefer allocator.free(account_keys);
 
-    const account_indexes = try gpa.dupe(u8, &.{ 0, 1 });
-    errdefer gpa.free(account_indexes);
+    const account_indexes = try allocator.dupe(u8, &.{ 0, 1 });
+    errdefer allocator.free(account_indexes);
 
     var transfer_data = [_]u8{0} ** 12;
     var fbs = std.io.fixedBufferStream(&transfer_data);
@@ -339,11 +339,11 @@ fn buildTransferTransaction(
     try writer.writeInt(u32, 2, .little);
     try writer.writeInt(u64, lamports, .little);
 
-    const instruction_data = try gpa.dupe(u8, &transfer_data);
-    errdefer gpa.free(instruction_data);
+    const instruction_data = try allocator.dupe(u8, &transfer_data);
+    errdefer allocator.free(instruction_data);
 
-    const instructions = try gpa.alloc(sig.core.transaction.Instruction, 1);
-    errdefer gpa.free(instructions);
+    const instructions = try allocator.alloc(sig.core.transaction.Instruction, 1);
+    errdefer allocator.free(instructions);
     instructions[0] = .{
         .program_index = 2,
         .account_indexes = account_indexes,
@@ -360,7 +360,7 @@ fn buildTransferTransaction(
     };
 
     return try sig.core.Transaction.initOwnedMessageWithSigningKeypairs(
-        gpa,
+        allocator,
         .legacy,
         msg,
         &.{from_keypair},
