@@ -4,6 +4,7 @@
 const std = @import("std");
 const start = @import("start");
 const lib = @import("lib");
+const tracy = @import("tracy");
 const Pair = lib.net.Pair;
 const tel = lib.telemetry;
 
