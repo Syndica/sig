@@ -12,7 +12,7 @@ const root = @import("root");
 
 const std = @import("std");
 const builtin = @import("builtin");
-const common = @import("common");
+const lib = @import("lib");
 
 comptime {
     _ = std.testing.refAllDecls(@This());
@@ -52,7 +52,7 @@ pub const options: std.Options = .{
 
 pub const panic_state = struct {
     pub var stderr: std.os.linux.fd_t = undefined;
-    pub var exit: *common.Exit = undefined;
+    pub var exit: *lib.ipc.Exit = undefined;
     var faulted: bool = false;
 };
 
@@ -77,8 +77,8 @@ fn serviceLog(
     nosuspend writer.interface.print(fmt_string, args) catch return;
 }
 
-fn serviceMain(params: common.ResolvedArgs) callconv(.c) void {
-    const exit: *common.Exit = @ptrCast(params.exit);
+fn serviceMain(params: lib.ipc.ResolvedArgs) callconv(.c) void {
+    const exit: *lib.ipc.Exit = @ptrCast(params.exit);
     exit.* = .{};
 
     // this is set to undefined in std, and never set for code built as a library

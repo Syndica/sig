@@ -4,14 +4,14 @@ comptime {
     _ = std.testing.refAllDecls(@This());
 }
 
-const common = @import("../../common.zig");
+const lib = @import("../lib.zig");
 const binkode = @import("binkode");
 
 const base58 = @import("base58");
 const BASE58_ENDEC = base58.Table.BITCOIN;
 
-const ed25519 = common.crypto.ed25519;
-const Pubkey = common.solana.Pubkey;
+const ed25519 = lib.crypto.ed25519;
+const Pubkey = lib.solana.Pubkey;
 
 pub const Signature = extern struct {
     r: [32]u8,

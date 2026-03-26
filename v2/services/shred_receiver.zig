@@ -3,16 +3,16 @@
 
 const std = @import("std");
 const start = @import("start");
-const common = @import("common");
+const lib = @import("lib");
 const tracy = @import("tracy");
 
-const shred = common.shred;
+const shred = lib.shred;
 const layout = shred.layout;
 
-const Pair = common.net.Pair;
-const Packet = common.net.Packet;
-const Slot = common.solana.Slot;
-const Hash = common.solana.Hash;
+const Pair = lib.net.Pair;
+const Packet = lib.net.Packet;
+const Slot = lib.solana.Slot;
+const Hash = lib.solana.Hash;
 
 comptime {
     _ = start;
@@ -27,7 +27,7 @@ pub const ReadWrite = struct {
 };
 
 pub const ReadOnly = struct {
-    config: *const common.shred.RecvConfig,
+    config: *const lib.shred.RecvConfig,
 };
 
 // stubs
@@ -182,7 +182,7 @@ fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
 /// Analogous to [verify_shred_cpu](https://github.com/anza-xyz/agave/blob/83e7d84bcc4cf438905d07279bc07e012a49afd9/ledger/src/sigverify_shreds.rs#L35)
 pub fn verifyShred(
     packet: *const Packet,
-    leader_schedule: *const common.solana.LeaderSchedule,
+    leader_schedule: *const lib.solana.LeaderSchedule,
     verified_merkle_roots: *VerifiedMerkleRoots,
 ) ShredVerificationFailure!void {
     const zone = tracy.Zone.init(@src(), .{ .name = "verifyShred" });

@@ -297,7 +297,9 @@ jobs:
           command: |
             python3 scripts/style.py --check src
             python3 scripts/style.py --check conformance/src
-            python3 scripts/style.py --check v2/src
+            python3 scripts/style.py --check v2/lib
+            python3 scripts/style.py --check v2/services
+            python3 scripts/style.py --check v2/init
       - run:
           name: Check docs
           command: python3 docs/check.py ./
