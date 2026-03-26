@@ -100,7 +100,8 @@ pub const Metrics = struct {
 pub fn create(gpa: Allocator, logger: Logger, exit: ExitCondition, config: Config) !*QuicClient {
     if (lsquic_global_initialized.cmpxchgStrong(false, true, .monotonic, .monotonic) == null) {
         errdefer lsquic_global_initialized.store(false, .monotonic);
-        if (lsquic.lsquic_global_init(lsquic.LSQUIC_GLOBAL_CLIENT) != 0) return error.LsquicGlobalInitFailed;
+        if (lsquic.lsquic_global_init(lsquic.LSQUIC_GLOBAL_CLIENT) != 0)
+            return error.LsquicGlobalInitFailed;
     }
 
     const receiver = try Channel(Packet).create(gpa);
