@@ -162,6 +162,7 @@ pub fn main() !void {
             .address = address,
             .handler_context = {},
             .max_message_size = max_message_size,
+            .tcp_nodelay = true,
         },
     );
     defer server.deinit();

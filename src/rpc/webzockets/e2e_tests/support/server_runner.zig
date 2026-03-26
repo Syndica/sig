@@ -48,7 +48,10 @@ pub fn ServerRunner(comptime ServerType: type) type {
             self.loop = try xev.Loop.init(.{ .thread_pool = &self.thread_pool });
             errdefer self.loop.deinit();
 
-            self.server = try ServerType.init(allocator, &self.loop, config);
+            var server_config = config;
+            server_config.tcp_nodelay = true;
+
+            self.server = try ServerType.init(allocator, &self.loop, server_config);
             errdefer self.server.deinit();
 
             self.port = getAssignedPortFromFd(self.server.listen_socket.fd);
