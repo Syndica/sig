@@ -74,7 +74,7 @@ pub const StatusCache = struct {
         state.mut().slot_deltas.deinit(allocator);
     }
 
-    pub fn getFork(
+    fn getFork(
         self: *StatusCache,
         key: []const u8,
         blockhash: *const Hash,
