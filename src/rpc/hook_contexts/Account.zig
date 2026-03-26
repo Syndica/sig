@@ -6,6 +6,7 @@ const tracy = @import("tracy");
 const sig = @import("../../sig.zig");
 
 const account_codec = sig.rpc.account_codec;
+const parse_stake = account_codec.parse_stake;
 const parse_token = account_codec.parse_token;
 
 const check_transactions = sig.runtime.check_transactions;
@@ -25,13 +26,30 @@ const Slot = sig.core.Slot;
 const GetAccountInfo = sig.rpc.methods.GetAccountInfo;
 const GetBalance = sig.rpc.methods.GetBalance;
 const GetFeeForMessage = sig.rpc.methods.GetFeeForMessage;
+const GetSupply = sig.rpc.methods.GetSupply;
 const GetTokenAccountBalance = sig.rpc.methods.GetTokenAccountBalance;
+const GetTokenLargestAccounts = sig.rpc.methods.GetTokenLargestAccounts;
 const GetTokenSupply = sig.rpc.methods.GetTokenSupply;
 const GetMultipleAccounts = sig.rpc.methods.GetMultipleAccounts;
 const GetProgramAccounts = sig.rpc.methods.GetProgramAccounts;
+const GetTokenAccountsByOwner = sig.rpc.methods.GetTokenAccountsByOwner;
 
 const AccountEncoding = account_codec.AccountEncoding;
 const CommitmentSlotConfig = sig.rpc.methods.common.CommitmentSlotConfig;
+const RpcFilterType = sig.rpc.filters.RpcFilterType;
+const non_circulating_supply = @import("non-circulating-supply");
+
+/// Compile-time perfect hash set for O(1) membership checks against the static
+/// non-circulating accounts list. Built from the build-time-decoded pubkey arrays.
+const NonCirculatingSet = blk: {
+    var entries: []const struct { sig.core.Pubkey, void } = &.{};
+    for (&non_circulating_supply.non_circulating_accounts) |*raw| {
+        entries = entries ++ &[_]struct { sig.core.Pubkey, void }{
+            .{ .{ .data = raw.* }, {} },
+        };
+    }
+    break :blk sig.utils.pht(void, entries);
+};
 
 const AccountHookContext = @This();
 
@@ -60,7 +78,7 @@ pub fn getAccountInfo(
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
-    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
     const account = try slot_reader.get(arena, params.pubkey) orelse return .{
         .context = .{ .slot = slot },
         .value = null,
@@ -105,7 +123,7 @@ pub fn getBalance(
     // Get slot reference to access ancestors
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
-    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
 
     // Look up account
     const maybe_account = try slot_reader.get(arena, params.pubkey);
@@ -134,7 +152,7 @@ pub fn getTokenAccountBalance(
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
-    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
     const maybe_account = try slot_reader.get(arena, params.pubkey);
 
     const account = maybe_account orelse return error.RpcAccountNotFound;
@@ -192,7 +210,7 @@ pub fn getTokenSupply(
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
-    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
 
     // Fetch mint account
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1989-L1991
@@ -260,7 +278,7 @@ pub fn getMultipleAccounts(
     }
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
-    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
     const values = try arena.alloc(?GetAccountInfo.Response.Value, params.pubkeys.len);
 
     for (params.pubkeys, values) |pubkey, *value| {
@@ -337,7 +355,7 @@ pub fn getFeeForMessage(
     const message = Message.deserialize(&limit_allocator, peekable.reader(), version) catch
         return error.InvalidMessageFormat;
 
-    const slot_account_reader = self.account_reader.forSlot(&slot_ref.constants().ancestors);
+    const slot_reader = self.account_reader.forSlot(&slot_ref.constants().ancestors).toOwnedReader();
 
     const empty_result: GetFeeForMessage.Response = .{
         .context = .{ .slot = slot },
@@ -348,7 +366,7 @@ pub fn getFeeForMessage(
         arena,
         message,
         version,
-        slot_account_reader,
+        slot_reader,
         &slot_ref.constants().reserved_accounts,
         slot,
     ) catch return empty_result) orelse return empty_result;
@@ -365,7 +383,7 @@ pub fn getFeeForMessage(
         const nonce_result = check_transactions.loadMessageNonceAccount(
             arena,
             &runtime_txn,
-            slot_account_reader,
+            slot_reader,
         ) catch return empty_result;
         if (nonce_result) |r| return .{
             .context = .{ .slot = slot },
@@ -458,7 +476,7 @@ pub fn getProgramAccounts(
     arena: std.mem.Allocator,
     params: GetProgramAccounts,
 ) !GetProgramAccounts.Response {
-    const zone = tracy.Zone.init(@src(), .{ .name = "rpc.gPA" });
+    const zone = tracy.Zone.init(@src(), .{ .name = "rpc.getProgramAccounts" });
     defer zone.deinit();
 
     const config = params.config orelse GetProgramAccounts.Config{};
@@ -475,10 +493,10 @@ pub fn getProgramAccounts(
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
-    const slot_reader = self.account_reader.forSlot(ancestors);
+    const slot_reader = self.account_reader.forSlot(ancestors).toOwnedReader();
 
     var iter = blk: {
-        const z = tracy.Zone.init(@src(), .{ .name = "rpc.gPA.ownerQuery" });
+        const z = tracy.Zone.init(@src(), .{ .name = "rpc.getProgramAccounts.ownerQuery" });
         defer z.deinit();
         break :blk try slot_reader.getByOwner(arena, &params.program_id);
     };
@@ -506,7 +524,7 @@ pub fn getProgramAccounts(
 
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3361
     if (config.sortResults orelse true) {
-        const z = tracy.Zone.init(@src(), .{ .name = "rpc.gPA.sort" });
+        const z = tracy.Zone.init(@src(), .{ .name = "rpc.getProgramAccounts.sort" });
         defer z.deinit();
         std.mem.sortUnstable(GetProgramAccounts.Value, results.items, {}, struct {
             fn lessThan(_: void, a: GetProgramAccounts.Value, b: GetProgramAccounts.Value) bool {
@@ -519,4 +537,283 @@ pub fn getProgramAccounts(
         return .{ .context = .{ .context = .{ .slot = slot }, .value = values } };
     }
     return .{ .list = values };
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2091-L2130
+pub fn getTokenAccountsByOwner(
+    self: AccountHookContext,
+    arena: std.mem.Allocator,
+    params: GetTokenAccountsByOwner,
+) !GetTokenAccountsByOwner.Response {
+    const zone = tracy.Zone.init(@src(), .{ .name = "rpc.getTokenAccountsByOwner" });
+    defer zone.deinit();
+
+    const config = params.config orelse GetTokenAccountsByOwner.Config{};
+    const commitment = config.commitment orelse .finalized;
+    // [agave] Default encoding for gTABO is `Binary` (legacy base58), not base64.
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2098
+    const encoding = config.encoding orelse AccountEncoding.binary;
+
+    const slot = self.slot_tracker.commitments.get(commitment);
+    if (config.minContextSlot) |min_slot| {
+        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+    }
+
+    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    defer ref.release();
+    const ancestors = &ref.constants().ancestors;
+    const slot_reader = self.account_reader.forSlot(ancestors).toOwnedReader();
+
+    // Resolve filter -> token program ID + optional mint.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2649-L2673
+    const resolved = try params.filter.resolve(arena, slot_reader);
+
+    // Build auto-filters: tokenAccountState + optional memcmp@0(mint).
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2627-L2648
+    var filters: [2]RpcFilterType = undefined;
+    var filter_count: usize = 0;
+    filters[filter_count] = .tokenAccountState;
+    filter_count += 1;
+    if (resolved.mint != null) {
+        filters[filter_count] = .{ .memcmp = .{ .offset = 0, .bytes = &resolved.mint.?.data } };
+        filter_count += 1;
+    }
+    const f = filters[0..filter_count];
+
+    var iter = blk: {
+        const z = tracy.Zone.init(@src(), .{ .name = "rpc.gTABO.splTokenOwnerQuery" });
+        defer z.deinit();
+        break :blk try slot_reader.getBySplTokenOwner(&params.owner);
+    };
+    defer iter.deinit();
+
+    var results = std.ArrayListUnmanaged(GetTokenAccountsByOwner.Value){};
+
+    while (try iter.next()) |entry| {
+        const pubkey, const account = entry;
+
+        // Only include accounts owned by the resolved token program.
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2115
+        if (!account.owner.equals(&resolved.token_program_id)) continue;
+
+        if (!sig.rpc.filters.filtersAllow(f, &account.data)) continue;
+
+        const data = try account_codec.encodeAccount(
+            arena,
+            pubkey,
+            account,
+            encoding,
+            slot_reader,
+            config.dataSlice,
+        );
+        try results.append(arena, .{
+            .pubkey = pubkey,
+            .account = .from(account, data),
+        });
+    }
+
+    // [agave] gTABO always sorts results by pubkey.
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2127
+    {
+        const z = tracy.Zone.init(@src(), .{ .name = "rpc.gTABO.sort" });
+        defer z.deinit();
+        std.mem.sortUnstable(GetTokenAccountsByOwner.Value, results.items, {}, struct {
+            fn lessThan(
+                _: void,
+                a: GetTokenAccountsByOwner.Value,
+                b: GetTokenAccountsByOwner.Value,
+            ) bool {
+                return a.pubkey.order(b.pubkey) == .lt;
+            }
+        }.lessThan);
+    }
+
+    return .{
+        .context = .{ .slot = slot },
+        .value = try results.toOwnedSlice(arena),
+    };
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1105-L1137
+pub fn getSupply(
+    self: AccountHookContext,
+    arena: std.mem.Allocator,
+    params: GetSupply,
+) !GetSupply.Response {
+    const config = params.config orelse GetSupply.Config{};
+    const commitment = config.commitment orelse .finalized;
+    const exclude_accounts = config.excludeNonCirculatingAccountsList;
+
+    const slot = self.slot_tracker.commitments.get(commitment);
+    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    defer ref.release();
+    const ancestors = &ref.constants().ancestors;
+    const slot_reader = self.account_reader.forSlot(ancestors).toOwnedReader();
+
+    // Read the Clock sysvar to check lockup conditions.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L18-L22
+    const clock = try account_codec.getSysvar(sig.runtime.sysvar.Clock, arena, slot_reader) orelse
+        return error.SlotNotAvailable;
+
+    var non_circulating_lamports: u64 = 0;
+    var non_circulating_accounts = std.ArrayListUnmanaged(sig.core.Pubkey){};
+    if (!exclude_accounts) try non_circulating_accounts
+        .ensureUnusedCapacity(arena, non_circulating_supply.non_circulating_accounts.len);
+
+    // Sum lamports for the static non-circulating accounts.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L24-L29
+    for (&non_circulating_supply.non_circulating_accounts) |*raw| {
+        if (slot_reader.get(arena, .{ .data = raw.* }) catch null) |account| {
+            non_circulating_lamports += account.lamports;
+        }
+        if (!exclude_accounts) non_circulating_accounts.appendAssumeCapacity(.{ .data = raw.* });
+    }
+
+    // Iterate all stake accounts and collect non-circulating ones not already in the static set.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L30-L46
+    var owner_iter = try slot_reader.getByOwner(arena, &sig.runtime.program.stake.ID);
+    defer owner_iter.deinit();
+
+    while (try owner_iter.next()) |entry| {
+        const pubkey, const account = entry;
+
+        if (parse_stake.isNonCirculatingStake(arena, &account.data, &clock)) {
+            // Dedup against the static set via perfect hash lookup.
+            if (NonCirculatingSet.get(&pubkey) == null) {
+                non_circulating_lamports += account.lamports;
+                if (!exclude_accounts) try non_circulating_accounts.append(arena, pubkey);
+            }
+        }
+    }
+
+    // [agave] Total supply is the capitalization at this slot.
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L1121
+    const total = ref.state().capitalization.load(.monotonic);
+
+    return .{
+        .context = .{ .slot = slot },
+        .value = .{
+            .total = total,
+            .circulating = total -| non_circulating_lamports,
+            .nonCirculating = non_circulating_lamports,
+            .nonCirculatingAccounts = try non_circulating_accounts.toOwnedSlice(arena),
+        },
+    };
+}
+
+/// Returns the 20 largest accounts of a particular SPL Token mint.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2021-L2069
+pub fn getTokenLargestAccounts(
+    self: AccountHookContext,
+    arena: std.mem.Allocator,
+    params: GetTokenLargestAccounts,
+) !GetTokenLargestAccounts.Response {
+    const config: GetTokenLargestAccounts.Config = params.config orelse .{};
+    const commitment = config.commitment orelse .finalized;
+
+    const slot = self.slot_tracker.commitments.get(commitment);
+
+    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    defer ref.release();
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors).toOwnedReader();
+
+    // Validate that the mint exists and is owned by a token program.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2030-L2039
+    const maybe_mint_account = try slot_reader.get(arena, params.mint);
+    const mint_account = maybe_mint_account orelse return error.RpcAccountNotFound;
+
+    const mint_owner = mint_account.owner;
+    const is_token_program = mint_owner.equals(&sig.runtime.ids.TOKEN_PROGRAM_ID) or
+        mint_owner.equals(&sig.runtime.ids.TOKEN_2022_PROGRAM_ID);
+    if (!is_token_program) return error.RpcNotATokenAccount;
+
+    // Read mint data into contiguous buffer for parsing and extension extraction.
+    const mint_data_len = mint_account.data.len();
+    const mint_data = try arena.alloc(u8, mint_data_len);
+    var mint_data_iter = mint_account.data.iterator();
+    _ = mint_data_iter.readBytes(mint_data) catch return error.RpcMintUnpackFailed;
+
+    // Validate this is actually a mint account, not a token account or multisig.
+    const detected = parse_token.DetectedType.parse(mint_data) orelse
+        return error.RpcMintUnpackFailed;
+    if (detected != .mint) return error.RpcMintUnpackFailed;
+
+    // Parse mint to validate it's initialized (matching getTokenSupply).
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2028
+    const mint = parse_token.Mint.unpack(mint_data) catch return error.RpcMintUnpackFailed;
+    if (!mint.is_initialized) return error.RpcMintUnpackFailed;
+
+    // Extract decimals, extension configs for UiTokenAmount conversion.
+    const spl_token_data = account_codec.parseMintAdditionalData(
+        arena,
+        mint_data,
+        slot_reader,
+    ) orelse return error.RpcMintUnpackFailed;
+
+    // Scan all token accounts owned by the mint's token program, filtered to this mint.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2035-L2062
+    const N = GetTokenLargestAccounts.NUM_LARGEST_ACCOUNTS;
+    const Entry = struct { address: sig.core.Pubkey, amount: u64 };
+
+    // Min-heap: smallest amount at top for efficient eviction of the smallest entry.
+    // Tiebreak by pubkey for determinism, matching Agave's (u64, Pubkey) tuple ordering.
+    const MinHeap = std.PriorityQueue(Entry, void, struct {
+        fn order(_: void, a: Entry, b: Entry) std.math.Order {
+            const amt_order = std.math.order(a.amount, b.amount);
+            if (amt_order != .eq) return amt_order;
+            return std.mem.order(u8, &a.address.data, &b.address.data);
+        }
+    }.order);
+
+    var heap = MinHeap.init(arena, {});
+    try heap.ensureTotalCapacity(N + 1);
+
+    // Only scan the token program that owns this mint — a mint's token accounts
+    // are always under the same program as the mint itself.
+    var iter = try slot_reader.getByOwner(arena, &mint_owner);
+    defer iter.deinit();
+
+    while (try iter.next()) |entry| {
+        const pubkey, const account = entry;
+
+        // Parse token account data to get mint and amount.
+        var data_buf: [parse_token.TokenAccount.LEN]u8 = undefined;
+        var data_iter = account.data.iterator();
+        const bytes_read = data_iter.readBytes(&data_buf) catch continue;
+        if (bytes_read < parse_token.TokenAccount.LEN) continue;
+
+        const token_account = parse_token.TokenAccount.unpack(&data_buf) catch continue;
+        if (token_account.state == .uninitialized) continue;
+
+        // Filter by the requested mint.
+        if (!token_account.mint.equals(&params.mint)) continue;
+
+        // Insert into min-heap, evict smallest if over capacity.
+        heap.add(.{ .address = pubkey, .amount = token_account.amount }) catch unreachable;
+        if (heap.count() > N) {
+            _ = heap.remove();
+        }
+    }
+
+    // Extract results from heap and sort by amount descending.
+    const results = try arena.alloc(
+        GetTokenLargestAccounts.TokenAccountBalancePair,
+        heap.count(),
+    );
+    // Min-heap extraction yields ascending order; fill backwards for
+    // descending (largest first) to match Agave behavior.
+    var i: usize = results.len;
+    while (i > 0) {
+        i -= 1;
+        const entry = heap.remove();
+        results[i] = .{
+            .address = entry.address,
+            .ui_token_amount = .init(entry.amount, spl_token_data),
+        };
+    }
+
+    return .{
+        .context = .{ .slot = slot },
+        .value = results,
+    };
 }

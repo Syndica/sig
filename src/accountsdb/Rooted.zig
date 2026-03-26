@@ -6,6 +6,8 @@ const sql = @import("sqlite");
 const tracy = @import("tracy");
 const Rooted = @This();
 
+const ids = sig.runtime.ids;
+
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const Account = sig.core.Account;
@@ -23,14 +25,22 @@ handle: *sql.sqlite3,
 largest_rooted_slot: ?Slot,
 /// Updates a prometheus counter for mem usage.
 sqlite_mem_used: ?*Gauge = null,
+/// Whether the SPL token owner index column is enabled (runtime CLI flag).
+enable_spl_token_owner_index: bool,
 
 /// These aren't thread safe, but we can have as many as we want. Clean up with deinitThreadLocals
 /// on any threads that use put or get.
 threadlocal var put_stmt: ?*sql.sqlite3_stmt = null;
+threadlocal var put_with_token_owner_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_by_owner_stmt: ?*sql.sqlite3_stmt = null;
+threadlocal var get_by_spl_token_owner_stmt: ?*sql.sqlite3_stmt = null;
 
-pub fn init(file_path: [:0]const u8, enable_owner_index: bool) !Rooted {
+pub fn init(
+    file_path: [:0]const u8,
+    enable_owner_index: bool,
+    enable_spl_token_owner_index: bool,
+) !Rooted {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.init" });
     defer zone.deinit();
 
@@ -44,6 +54,7 @@ pub fn init(file_path: [:0]const u8, enable_owner_index: bool) !Rooted {
     var self: Rooted = .{
         .handle = db,
         .largest_rooted_slot = null,
+        .enable_spl_token_owner_index = enable_spl_token_owner_index,
     };
 
     {
@@ -102,6 +113,37 @@ pub fn init(file_path: [:0]const u8, enable_owner_index: bool) !Rooted {
             return error.FailedToDropIndex;
     }
 
+    if (enable_spl_token_owner_index) {
+        // Add nullable token_owner column. Silently ignored if it already exists.
+        // NULL means "not a token account", so non-token rows never match
+        // `WHERE token_owner = ?` queries (SQL NULL != anything).
+        _ = sql.sqlite3_exec(
+            db,
+            "ALTER TABLE entries ADD COLUMN token_owner BLOB(32) DEFAULT NULL",
+            null,
+            null,
+            null,
+        );
+        if (sql.sqlite3_exec(
+            db,
+            "CREATE INDEX IF NOT EXISTS rpc_spl_token_owner_idx ON entries(token_owner)" ++
+                " WHERE token_owner IS NOT NULL",
+            null,
+            null,
+            null,
+        ) != OK)
+            return error.FailedToCreateIndex;
+    } else {
+        if (sql.sqlite3_exec(
+            db,
+            "DROP INDEX IF EXISTS rpc_spl_token_owner_idx",
+            null,
+            null,
+            null,
+        ) != OK)
+            return error.FailedToDropIndex;
+    }
+
     return self;
 }
 
@@ -115,6 +157,10 @@ pub fn deinitThreadLocals() void {
         _ = sql.sqlite3_finalize(stmt);
         put_stmt = null;
     }
+    if (put_with_token_owner_stmt) |stmt| {
+        _ = sql.sqlite3_finalize(stmt);
+        put_with_token_owner_stmt = null;
+    }
     if (get_stmt) |stmt| {
         _ = sql.sqlite3_finalize(stmt);
         get_stmt = null;
@@ -122,6 +168,10 @@ pub fn deinitThreadLocals() void {
     if (get_by_owner_stmt) |stmt| {
         _ = sql.sqlite3_finalize(stmt);
         get_by_owner_stmt = null;
+    }
+    if (get_by_spl_token_owner_stmt) |stmt| {
+        _ = sql.sqlite3_finalize(stmt);
+        get_by_spl_token_owner_stmt = null;
     }
 }
 
@@ -256,6 +306,42 @@ pub const OwnerIterator = struct {
         defer std.debug.assert(sql.sqlite3_reset(self.stmt) == OK);
     }
 };
+
+/// Returns an iterator over all token accounts where the token owner (bytes 32..64
+/// of account data) matches the given `token_owner`.
+///
+/// When `enable_spl_token_owner_index` is true, queries the indexed `token_owner`
+/// column. When false, falls back to a full-scan query using `substr(data, 33, 32)`
+/// filtered to the SPL Token and Token-2022 program owners.
+///
+/// The caller must ensure `token_owner` outlives the returned iterator.
+pub fn getBySplTokenOwner(self: *Rooted, token_owner: *const Pubkey) OwnerIterator {
+    const stmt: *sql.sqlite3_stmt = if (get_by_spl_token_owner_stmt) |stmt| stmt else blk: {
+        const query = if (self.enable_spl_token_owner_index)
+            // Indexed path: query the token_owner column directly.
+            \\ SELECT lamports, data, owner, executable, rent_epoch, address
+            \\ FROM entries WHERE token_owner = ? AND lamports > 0;
+        else
+            // Fallback: full scan extracting the token owner from data bytes 32..64
+            // (sqlite substr is 1-based, so byte 33 with length 32).
+            // Restricted to SPL Token and Token-2022 program owners.
+            " SELECT lamports, data, owner, executable, rent_epoch, address" ++
+                " FROM entries WHERE substr(data, 33, 32) = ? AND lamports > 0" ++
+                " AND (owner = X'" ++ ids.TOKEN_PROGRAM_ID.hexBytesLower() ++ "'" ++
+                " OR owner = X'" ++ ids.TOKEN_2022_PROGRAM_ID.hexBytesLower() ++ "');";
+        self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_by_spl_token_owner_stmt, null));
+        break :blk get_by_spl_token_owner_stmt.?;
+    };
+
+    self.err(sql.sqlite3_bind_blob(
+        stmt,
+        1,
+        token_owner,
+        Pubkey.SIZE,
+        sql.SQLITE_STATIC,
+    ));
+    return .{ .stmt = stmt, .rooted = self };
+}
 
 /// Reads the common account fields (lamports, data, owner, executable, rent_epoch)
 /// from a sqlite row starting at column `base`. The returned `data` slice borrows
@@ -456,10 +542,40 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
         if (self.sqlite_mem_used) |guage| guage.set(@intCast(mem_used));
     }
 
+    if (self.enable_spl_token_owner_index and account.data.len >= 64 and
+        (account.owner.equals(&ids.TOKEN_PROGRAM_ID) or
+            account.owner.equals(&ids.TOKEN_2022_PROGRAM_ID)))
+    {
+        self.putWithTokenOwner(address, slot, account);
+    } else {
+        self.putWithoutTokenOwner(address, slot, account);
+    }
+}
+
+fn putWithoutTokenOwner(
+    self: *Rooted,
+    address: Pubkey,
+    slot: Slot,
+    account: AccountSharedData,
+) void {
     const stmt: *sql.sqlite3_stmt = if (put_stmt) |stmt| stmt else blk: {
         // Insert or update only if last_modified_slot is greater (excluded = VALUES)
         // https://sqlite.org/lang_upsert.html#examples
-        const query =
+        const query = if (self.enable_spl_token_owner_index)
+            \\INSERT INTO entries
+            \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?)
+            \\ON CONFLICT(address) DO UPDATE SET
+            \\  lamports=excluded.lamports,
+            \\  data=excluded.data,
+            \\  owner=excluded.owner,
+            \\  executable=excluded.executable,
+            \\  rent_epoch=excluded.rent_epoch,
+            \\  last_modified_slot=excluded.last_modified_slot,
+            \\  token_owner=NULL
+            \\WHERE excluded.last_modified_slot > entries.last_modified_slot
+            \\;
+        else
             \\INSERT INTO entries
             \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot)
             \\VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -473,7 +589,13 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
             \\WHERE excluded.last_modified_slot > entries.last_modified_slot
             \\;
         ;
-        self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &put_stmt, null));
+        self.err(sql.sqlite3_prepare_v2(
+            self.handle,
+            query,
+            -1,
+            &put_stmt,
+            null,
+        ));
         break :blk put_stmt.?;
     };
     defer std.debug.assert(sql.sqlite3_reset(stmt) == OK);
@@ -498,6 +620,62 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
     self.err(sql.sqlite3_bind_int64(stmt, 6, @bitCast(account.rent_epoch)));
 
     self.err(sql.sqlite3_bind_int64(stmt, 7, @bitCast(slot)));
+
+    const result = sql.sqlite3_step(stmt);
+    if (result != DONE) self.err(result);
+}
+
+fn putWithTokenOwner(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedData) void {
+    const stmt: *sql.sqlite3_stmt = if (put_with_token_owner_stmt) |stmt| stmt else blk: {
+        const query =
+            \\INSERT INTO entries
+            \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot, token_owner)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            \\ON CONFLICT(address) DO UPDATE SET
+            \\  lamports=excluded.lamports,
+            \\  data=excluded.data,
+            \\  owner=excluded.owner,
+            \\  executable=excluded.executable,
+            \\  rent_epoch=excluded.rent_epoch,
+            \\  last_modified_slot=excluded.last_modified_slot,
+            \\  token_owner=excluded.token_owner
+            \\WHERE excluded.last_modified_slot > entries.last_modified_slot
+            \\;
+        ;
+        self.err(sql.sqlite3_prepare_v2(
+            self.handle,
+            query,
+            -1,
+            &put_with_token_owner_stmt,
+            null,
+        ));
+        break :blk put_with_token_owner_stmt.?;
+    };
+    defer std.debug.assert(sql.sqlite3_reset(stmt) == OK);
+
+    self.err(sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC));
+    self.err(sql.sqlite3_bind_int64(stmt, 2, @bitCast(account.lamports)));
+    self.err(sql.sqlite3_bind_blob(
+        stmt,
+        3,
+        account.data.ptr,
+        @intCast(account.data.len),
+        sql.SQLITE_STATIC,
+    ));
+    self.err(sql.sqlite3_bind_blob(
+        stmt,
+        4,
+        &account.owner.data,
+        Pubkey.SIZE,
+        sql.SQLITE_STATIC,
+    ));
+    self.err(sql.sqlite3_bind_int(stmt, 5, @intFromBool(account.executable)));
+    self.err(sql.sqlite3_bind_int64(stmt, 6, @bitCast(account.rent_epoch)));
+    self.err(sql.sqlite3_bind_int64(stmt, 7, @bitCast(slot)));
+
+    // Extract the token-level owner from data[32..64]. The caller already
+    // verified this is a token program account with data.len >= 64.
+    self.err(sql.sqlite3_bind_blob(stmt, 8, account.data.ptr + 32, Pubkey.SIZE, sql.SQLITE_STATIC));
 
     const result = sql.sqlite3_step(stmt);
     if (result != DONE) self.err(result);

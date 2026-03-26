@@ -115,6 +115,12 @@ pub const Pubkey = extern struct {
             if (self.equals(&candidate)) break index;
         } else null;
     }
+
+    /// Returns the 32 bytes as a 64-character lowercase hex string.
+    /// Intended for embedding in SQL literals like `X'<hex>'`.
+    pub fn hexBytesLower(comptime self: Pubkey) [64]u8 {
+        return std.fmt.bytesToHex(&self.data, .lower);
+    }
 };
 
 const Error = error{ InvalidBytesLength, InvalidEncodedLength, InvalidEncodedValue };

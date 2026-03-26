@@ -314,6 +314,53 @@ test "pairing" {
     }
 }
 
+test "pairing with trailing infinity" {
+    // Regression test: if the last pair(s) in the input are points at infinity,
+    // the main loop `continue`s past them without flushing the accumulated batch.
+    // The post-loop flush must handle this leftover batch.
+
+    // G1 generator (1, 2) and G2 generator, as used in the existing pairing tests.
+    const g1_gen = "0000000000000000000000000000000000000000000000000000000000000001" ++
+        "0000000000000000000000000000000000000000000000000000000000000002";
+    const g2_gen = "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2" ++
+        "1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed" ++
+        "090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b" ++
+        "12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa";
+    const zero_pair = "00" ** 192;
+
+    const cases: []const Case = &.{
+        // Single valid pair + trailing all-zero infinity pair.
+        // e(G1, G2) != 1, so result is 0. The trailing zero pair must not prevent
+        // the valid pair from being processed via the post-loop flush.
+        .{
+            .input = g1_gen ++ g2_gen ++ zero_pair,
+            .expected = "0000000000000000000000000000000000000000000000000000000000000000",
+        },
+        // Trailing infinity pair where only G1 is zero (G2 is the generator).
+        // Same expected result as above.
+        .{
+            .input = g1_gen ++ g2_gen ++ ("00" ** 64) ++ g2_gen,
+            .expected = "0000000000000000000000000000000000000000000000000000000000000000",
+        },
+    };
+
+    for (cases) |case| {
+        const N = 192 * 10;
+        var buffer: [N]u8 = .{0} ** N;
+        const input = try std.fmt.hexToBytes(&buffer, case.input);
+
+        var out: [32]u8 = undefined;
+        try bn254.pairingSyscall(&out, input);
+
+        var expected_buffer: [32]u8 = undefined;
+        try std.testing.expectEqualSlices(
+            u8,
+            try std.fmt.hexToBytes(&expected_buffer, case.expected),
+            &out,
+        );
+    }
+}
+
 test "edge cases" {
     // All zeroes should return all zeroes.
     {

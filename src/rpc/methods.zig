@@ -14,6 +14,9 @@ const rpc = @import("lib.zig");
 const base58 = @import("base58");
 const parse_instruction = @import("parse_instruction/lib.zig");
 
+const account_codec = sig.rpc.account_codec;
+const filters = sig.rpc.filters;
+
 const Allocator = std.mem.Allocator;
 const ParseOptions = std.json.ParseOptions;
 
@@ -23,8 +26,7 @@ const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 const ClientVersion = sig.version.ClientVersion;
 
-const account_codec = sig.rpc.account_codec;
-const filters = sig.rpc.filters;
+const JsonString = account_codec.JsonString;
 
 pub fn Result(comptime method: MethodAndParams.Tag) type {
     return union(enum) {
@@ -84,11 +86,11 @@ pub const MethodAndParams = union(enum) {
     getSlotLeader: GetSlotLeader,
     getSlotLeaders: GetSlotLeaders,
     getStakeMinimumDelegation: GetStakeMinimumDelegation,
-    getSupply: noreturn,
+    getSupply: GetSupply,
     getTokenAccountBalance: GetTokenAccountBalance,
     getTokenAccountsByDelegate: noreturn,
-    getTokenAccountsByOwner: noreturn,
-    getTokenLargestAccounts: noreturn,
+    getTokenAccountsByOwner: GetTokenAccountsByOwner,
+    getTokenLargestAccounts: GetTokenLargestAccounts,
     getTokenSupply: GetTokenSupply,
     getTransaction: GetTransaction,
     getTransactionCount: GetTransactionCount,
@@ -1402,7 +1404,27 @@ pub const GetStakeMinimumDelegation = struct {
     };
 };
 
-// TODO: getSupply
+pub const GetSupply = struct {
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+        excludeNonCirculatingAccountsList: bool = false,
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        value: Value,
+
+        pub const Value = struct {
+            total: u64,
+            circulating: u64,
+            nonCirculating: u64,
+            nonCirculatingAccounts: []const Pubkey,
+        };
+    };
+};
+
 pub const GetTokenAccountBalance = struct {
     pubkey: Pubkey,
     config: ?Config = null,
@@ -1418,8 +1440,189 @@ pub const GetTokenAccountBalance = struct {
 };
 
 // TODO: getTokenAccountsByDelegate
-// TODO: getTokenAccountsByOwner
-// TODO: getTokenLargestAccounts
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2091-L2130
+pub const GetTokenAccountsByOwner = struct {
+    /// The account owner to query for (the SPL token account's owner field at data[32..64]).
+    owner: Pubkey,
+    /// Either `{ "mint": "<base58>" }` or `{ "programId": "<base58>" }`.
+    filter: TokenAccountsFilter,
+    config: ?Config = null,
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/config.rs#L189-L192
+    pub const TokenAccountsFilter = union(enum) {
+        mint: Pubkey,
+        programId: Pubkey,
+
+        pub const Resolved = struct { token_program_id: Pubkey, mint: ?Pubkey };
+
+        /// Resolves a `TokenAccountsFilter` into a token program ID and optional mint pubkey.
+        ///
+        /// For `mint` filters, fetches the mint account to determine which token program owns it.
+        /// For `programId` filters, validates it's a known SPL token program.
+        /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2649-L2673
+        pub fn resolve(
+            self: TokenAccountsFilter,
+            allocator: Allocator,
+            slot_reader: sig.accounts_db.SlotAccountReader,
+        ) !Resolved {
+            const spl_token = sig.runtime.ids.TOKEN_PROGRAM_ID;
+            const token_2022 = sig.runtime.ids.TOKEN_2022_PROGRAM_ID;
+
+            switch (self) {
+                .mint => |mint_pubkey| {
+                    const mint_account = try slot_reader.get(allocator, mint_pubkey) orelse
+                        return error.InvalidParams; // "could not find mint"
+                    defer mint_account.deinit(allocator);
+
+                    if (!mint_account.owner.equals(&spl_token) and
+                        !mint_account.owner.equals(&token_2022))
+                        return error.InvalidParams; // "not a Token mint"
+
+                    return .{ .token_program_id = mint_account.owner, .mint = mint_pubkey };
+                },
+                .programId => |program_id| {
+                    if (!program_id.equals(&spl_token) and
+                        !program_id.equals(&token_2022))
+                        return error.InvalidParams; // "unrecognized Token program id"
+
+                    return .{ .token_program_id = program_id, .mint = null };
+                },
+            }
+        }
+
+        /// Custom parser: the wire format is a JSON object with exactly one key,
+        /// either `"mint"` or `"programId"`, whose value is a base58 pubkey string.
+        /// [agave] Rejects maps with more than one key:
+        /// https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/config.rs#L189-L192
+        pub fn jsonParseFromValue(
+            allocator: Allocator,
+            source: std.json.Value,
+            options: ParseOptions,
+        ) std.json.ParseFromValueError!TokenAccountsFilter {
+            if (source != .object) return error.UnexpectedToken;
+            const obj = source.object;
+            if (obj.count() != 1) return error.UnexpectedToken;
+            if (obj.get("mint")) |val|
+                return .{
+                    .mint = try std.json.innerParseFromValue(
+                        Pubkey,
+                        allocator,
+                        val,
+                        options,
+                    ),
+                };
+            if (obj.get("programId")) |val|
+                return .{
+                    .programId = try std.json.innerParseFromValue(
+                        Pubkey,
+                        allocator,
+                        val,
+                        options,
+                    ),
+                };
+            return error.UnexpectedToken;
+        }
+    };
+
+    /// Uses `RpcAccountInfoConfig` shape — no user-supplied filters,
+    /// no `withContext`, no `sortResults`.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/config.rs#L30-L39
+    pub const Config = struct {
+        encoding: ?common.AccountEncoding = null,
+        dataSlice: ?common.DataSlice = null,
+        commitment: ?common.Commitment = null,
+        minContextSlot: ?u64 = null,
+    };
+
+    /// Same shape as `getProgramAccounts`: `{ pubkey, account }`.
+    pub const Value = GetProgramAccounts.Value;
+
+    /// Always context-wrapped (unlike `getProgramAccounts` which has `OptionalContext`).
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2127-L2130
+    pub const Response = struct {
+        context: common.Context,
+        value: []const Value,
+    };
+};
+
+pub const GetTokenLargestAccounts = struct {
+    /// Pubkey of the token Mint to query, as base-58 encoded string
+    mint: Pubkey,
+    config: ?Config = null,
+
+    pub const Config = struct {
+        commitment: ?common.Commitment = null,
+    };
+
+    /// Maximum number of largest accounts to return.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2025
+    pub const NUM_LARGEST_ACCOUNTS: usize = 20;
+
+    pub const TokenAccountBalancePair = struct {
+        address: Pubkey,
+        ui_token_amount: account_codec.parse_token.UiTokenAmount,
+
+        // NOTE: re-implemented here due to UiTokenAmount needing to be flattened for this RPC method.
+        pub fn jsonStringify(self: TokenAccountBalancePair, jw: anytype) @TypeOf(jw.*).Error!void {
+            try jw.beginObject();
+            try jw.objectField("address");
+            try jw.write(self.address);
+            try jw.objectField("decimals");
+            try jw.write(self.ui_token_amount.decimals);
+            try jw.objectField("amount");
+            try jw.print("\"{d}\"", .{self.ui_token_amount.amount});
+            try jw.objectField("uiAmount");
+            if (self.ui_token_amount.ui_amount) |a|
+                try account_codec.RyuF64.init(a).jsonStringify(jw)
+            else
+                try jw.write(null);
+            try jw.objectField("uiAmountString");
+            try jw.write(self.ui_token_amount.ui_amount_string);
+            try jw.endObject();
+        }
+
+        // Note: only used for unit tests.
+        pub fn jsonParse(
+            alloc: std.mem.Allocator,
+            source: anytype,
+            options: std.json.ParseOptions,
+        ) std.json.ParseError(@TypeOf(source.*))!TokenAccountBalancePair {
+            const value = try std.json.Value.jsonParse(alloc, source, options);
+            const intermediate = try std.json.parseFromValue(
+                struct {
+                    address: []const u8,
+                    uiAmount: ?f64 = null,
+                    decimals: u8,
+                    amount: []const u8,
+                    uiAmountString: []const u8,
+                },
+                alloc,
+                value,
+                options,
+            );
+            return .{
+                .address = Pubkey.parseRuntime(intermediate.value.address) catch
+                    return error.UnexpectedToken,
+                .ui_token_amount = .{
+                    .ui_amount = intermediate.value.uiAmount,
+                    .decimals = intermediate.value.decimals,
+                    .amount = std.fmt.parseInt(
+                        u64,
+                        intermediate.value.amount,
+                        10,
+                    ) catch return error.UnexpectedToken,
+                    .ui_amount_string = JsonString(40).fromSlice(intermediate.value.uiAmountString),
+                },
+            };
+        }
+    };
+
+    pub const Response = struct {
+        context: common.Context,
+        value: []const TokenAccountBalancePair,
+    };
+};
 
 pub const GetTokenSupply = struct {
     /// Pubkey of the token Mint to query, as base-58 encoded string

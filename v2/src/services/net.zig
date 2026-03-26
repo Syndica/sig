@@ -15,11 +15,12 @@ pub const panic = start.panic;
 pub const std_options = start.options;
 
 pub const ReadWrite = struct {
-    pair: *Pair,
+    gossip_pair: *Pair,
+    shred_pair: *Pair,
 };
 
 pub fn serviceMain(rw: ReadWrite) !noreturn {
-    try mainInner(&.{rw.pair});
+    try mainInner(&.{ rw.gossip_pair, rw.shred_pair });
 }
 
 const MAX_SOCKETS = 10;
@@ -75,12 +76,13 @@ fn mainInner(pairs: []const *Pair) !noreturn {
         for (pairs, sockets[0..sockets_len]) |pair, sock| {
             var slice = pair.recv.getWritable() catch continue;
             const ptr = slice.get(0);
+            var addr_len: std.posix.socklen_t = @sizeOf(std.net.Address);
             ptr.size = @intCast(std.posix.recvfrom(
                 sock,
                 &ptr.data,
                 0,
-                null,
-                null,
+                &ptr.addr.any,
+                &addr_len,
             ) catch |err| switch (err) {
                 error.WouldBlock => continue,
                 else => |e| return e,
