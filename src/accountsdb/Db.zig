@@ -120,15 +120,42 @@ pub fn get(
     address: Pubkey,
     ancestors: *const Ancestors,
 ) !?Account {
+    const result = try self.getWithModifiedSlot(allocator, address, ancestors) orelse return null;
+    return result.account;
+}
+
+pub fn getWithModifiedSlot(
+    self: *Db,
+    allocator: std.mem.Allocator,
+    address: Pubkey,
+    ancestors: *const Ancestors,
+) !?struct { account: Account, modified_slot: Slot } {
     // first try finding it in the unrooted storage
-    if (self.unrooted.get(address, ancestors)) |data| {
-        return data;
+    if (self.unrooted.getWithModifiedSlot(address, ancestors)) |data| {
+        return .{ .account = data.account, .modified_slot = data.modified_slot };
     }
     // then try finding it in the rooted storage
-    if (try self.rooted.get(allocator, address)) |data| {
-        return data.toOwnedAccount();
+    if (try self.rooted.getWithModifiedSlot(allocator, address)) |data| {
+        return .{ .account = data.account.toOwnedAccount(), .modified_slot = data.modified_slot };
     }
     // doesn't exist
+    return null;
+}
+
+/// Like `getWithModifiedSlot`, but returns an account with caller-owned data
+/// (allocates and copies out the account from both Unrooted and Rooted lookups).
+pub fn getWithModifiedSlotOwned(
+    self: *Db,
+    allocator: std.mem.Allocator,
+    address: Pubkey,
+    ancestors: *const Ancestors,
+) !?struct { account: Account, modified_slot: Slot } {
+    if (try self.unrooted.getWithModifiedSlotOwned(allocator, address, ancestors)) |data| {
+        return .{ .account = data.account, .modified_slot = data.modified_slot };
+    }
+    if (try self.rooted.getWithModifiedSlot(allocator, address)) |data| {
+        return .{ .account = data.account.toOwnedAccount(), .modified_slot = data.modified_slot };
+    }
     return null;
 }
 
@@ -139,13 +166,12 @@ pub fn getOwned(
     address: Pubkey,
     ancestors: *const Ancestors,
 ) !?Account {
-    if (try self.unrooted.getOwned(allocator, address, ancestors)) |data| {
-        return data;
-    }
-    if (try self.rooted.get(allocator, address)) |data| {
-        return data.toOwnedAccount();
-    }
-    return null;
+    const result = try self.getWithModifiedSlotOwned(
+        allocator,
+        address,
+        ancestors,
+    ) orelse return null;
+    return result.account;
 }
 
 pub const SlotModifiedIterator = struct {

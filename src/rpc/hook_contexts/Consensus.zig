@@ -689,7 +689,7 @@ test "ConsensusHookContext.getBlockHeight - respects commitment level" {
         .state = testDummySlotState(0),
         .allocator = testing.allocator,
     });
-    slot_tracker.latest_processed_slot.set(15);
+    slot_tracker.commitments.update(.processed, 15);
 
     const ctx = testConsensusHookContext(&slot_tracker);
 
@@ -824,7 +824,7 @@ test "ConsensusHookContext.getTransactionCount - respects commitment level" {
         .state = testDummySlotState(2000),
         .allocator = testing.allocator,
     });
-    slot_tracker.latest_processed_slot.set(15);
+    slot_tracker.commitments.update(.processed, 15);
 
     const ctx = testConsensusHookContext(&slot_tracker);
 
@@ -918,7 +918,7 @@ test "ConsensusHookContext.getEpochInfo - respects commitment level" {
         .state = testDummySlotState(2000),
         .allocator = testing.allocator,
     });
-    slot_tracker.latest_processed_slot.set(35);
+    slot_tracker.commitments.update(.processed, 35);
 
     const ctx = testConsensusHookContextWithEpochTracker(&slot_tracker, &epoch_tracker);
 

@@ -34,7 +34,11 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
         else => return error.AcceptError,
     };
     var close_conn = true;
-    defer if (close_conn) conn.stream.close();
+    defer {
+        if (close_conn) {
+            conn.stream.close();
+        }
+    }
 
     server_ctx.wait_group.start();
     defer server_ctx.wait_group.finish();

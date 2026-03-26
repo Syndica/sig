@@ -401,7 +401,11 @@ fn runFeedConnectionCase(comptime mode: FeedReadMode) !void {
     var conn = try listener.accept();
     try socket_opts.setTcpNoDelay(conn.stream.handle);
     var close_conn = true;
-    defer if (close_conn) conn.stream.close();
+    defer {
+        if (close_conn) {
+            conn.stream.close();
+        }
+    }
 
     // Simulate an upstream pre-read: either full headers or only the first half.
     var initial_data_buf: [512]u8 = undefined;

@@ -95,8 +95,13 @@ pub fn put(
     entry.is_empty.store(false, .release);
 }
 
-/// Like `get`, but returns an account with caller-owned data (allocates and
-/// copies out the account).
+pub const AccountWithModifiedSlot = struct {
+    account: Account,
+    modified_slot: Slot,
+};
+
+/// Like `getWithModifiedSlot`, but returns an account with caller-owned data
+/// (allocates and copies out the account).
 ///
 /// Uses a two-phase approach to avoid cloning on every candidate slot:
 /// 1. Scan all indices to find the best (highest) slot containing the address.
@@ -104,15 +109,15 @@ pub fn put(
 ///
 /// If the winning index was modified between phases (e.g. pruned by
 /// `onSlotRooted`), the scan is retried. Retries are bounded to avoid
-/// unbounded looping. If exhausted, returns `error.RetryLimitExceeded`
+/// unbounded looping. If exhausted, returns `error.UnrootedGetOwnedMaxRetries`
 /// because the account exists but could not be read.
-pub fn getOwned(
+pub fn getWithModifiedSlotOwned(
     self: *Unrooted,
     allocator: std.mem.Allocator,
     address: Pubkey,
     ancestors: *const Ancestors,
-) error{ OutOfMemory, UnrootedGetOwnedMaxRetries }!?Account {
-    const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.getOwned" });
+) error{ OutOfMemory, UnrootedGetOwnedMaxRetries }!?AccountWithModifiedSlot {
+    const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.getWithModifiedSlotOwned" });
     defer zone.deinit();
 
     var retries: u32 = 0;
@@ -151,12 +156,30 @@ pub fn getOwned(
             retries += 1;
             continue;
         };
-        return (try data.clone(allocator)).toOwnedAccount();
+        return .{
+            .account = (try data.clone(allocator)).toOwnedAccount(),
+            .modified_slot = best_slot,
+        };
     }
 
     // Exhausted retries, slot keeps getting pruned/reused underneath us.
     // Returning null would incorrectly indicate the account doesn't exist.
     return error.UnrootedGetOwnedMaxRetries;
+}
+
+/// Like `get`, but returns an account with caller-owned data.
+pub fn getOwned(
+    self: *Unrooted,
+    allocator: std.mem.Allocator,
+    address: Pubkey,
+    ancestors: *const Ancestors,
+) error{ OutOfMemory, UnrootedGetOwnedMaxRetries }!?Account {
+    const result = try self.getWithModifiedSlotOwned(
+        allocator,
+        address,
+        ancestors,
+    ) orelse return null;
+    return result.account;
 }
 
 /// Gets the latest state of the account keyed by `address` visible to the given ancestor set.
@@ -165,6 +188,16 @@ pub fn get(
     address: Pubkey,
     ancestors: *const Ancestors,
 ) ?Account {
+    const result = self.getWithModifiedSlot(address, ancestors) orelse return null;
+    return result.account;
+}
+
+/// Gets the latest state of the account together with the slot that last modified it.
+pub fn getWithModifiedSlot(
+    self: *Unrooted,
+    address: Pubkey,
+    ancestors: *const Ancestors,
+) ?AccountWithModifiedSlot {
     const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.get" });
     defer zone.deinit();
 
@@ -172,7 +205,7 @@ pub fn get(
     defer zone.value(n_gets);
 
     var best_slot: Slot = 0;
-    var result: ?Account = null;
+    var result: ?AccountWithModifiedSlot = null;
 
     for (self.slots) |*index| {
         if (index.is_empty.load(.acquire)) continue;
@@ -183,7 +216,7 @@ pub fn get(
         if (index.slot >= best_slot and ancestors.containsSlot(index.slot)) {
             n_gets += 1;
             const data = index.entries.get(address) orelse continue;
-            result = data.asAccount();
+            result = .{ .account = data.asAccount(), .modified_slot = index.slot };
             best_slot = index.slot;
         }
     }

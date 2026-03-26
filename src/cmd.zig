@@ -13,7 +13,7 @@ const socket_opts = @import("webzockets").socket_opts;
 const replay = sig.replay;
 
 const WSRPCHandler = jrpc_ws.handler.JRPCHandler;
-const WSRPCRuntimeContext = jrpc_ws.runtime.RuntimeContext;
+const WSRPCRuntime = jrpc_ws.Runtime;
 const WSRPCServer = WSRPCHandler.WebSocketServer;
 
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
@@ -1722,7 +1722,7 @@ fn validator(
         try jrpc_ws.types.EventSink.create(allocator)
     else
         null;
-    defer if (event_sink) |sink| sink.destroy(allocator);
+    defer if (event_sink) |sink| sink.destroy();
 
     var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
     defer prioritization_fee_cache.deinit(allocator);
@@ -1815,6 +1815,8 @@ fn validator(
             app_base.exit,
             std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
             &app_base.rpc_hooks,
+            &replay_service_state.replay_state.slot_tracker,
+            replay_service_state.replay_state.account_store.reader(),
             event_sink.?,
         })
     else
@@ -1833,6 +1835,8 @@ fn runRPCServer(
     exit: *std.atomic.Value(bool),
     server_addr: std.net.Address,
     rpc_hooks: *sig.rpc.Hooks,
+    slot_tracker: *sig.replay.trackers.SlotTracker,
+    account_reader: sig.accounts_db.AccountReader,
     event_sink: *jrpc_ws.types.EventSink,
 ) !void {
     var commit_queue = try sig.sync.Channel(jrpc_ws.types.CommitMsg).init(allocator);
@@ -1847,10 +1851,10 @@ fn runRPCServer(
     var loop = try xev.Loop.init(.{ .thread_pool = &xev_pool });
     defer loop.deinit();
 
-    var serialization_pool = sig.sync.ThreadPool.init(.{ .max_threads = 4 });
+    var threadpool = sig.sync.ThreadPool.init(.{ .max_threads = 4 });
     defer {
-        serialization_pool.shutdown();
-        serialization_pool.deinit();
+        threadpool.shutdown();
+        threadpool.deinit();
     }
 
     var metrics = jrpc_ws.metrics.Metrics{};
@@ -1858,18 +1862,23 @@ fn runRPCServer(
     var sub_map = jrpc_ws.sub_map.RPCSubMap.init(allocator, 1024);
     defer sub_map.deinit();
 
-    var ws_runtime_ctx = WSRPCRuntimeContext{
+    const slot_read_ctx: jrpc_ws.Runtime.SlotReadContext = .{
+        .slot_tracker = slot_tracker,
+        .account_reader = account_reader,
+    };
+
+    var ws_runtime_ctx = WSRPCRuntime.init(.{
         .allocator = allocator,
+        .logger = .from(logger),
         .sub_map = &sub_map,
-        .inbound_event_queue = &event_sink.channel,
+        .slot_read_ctx = slot_read_ctx,
+        .event_sink = event_sink,
         .commit_queue = &commit_queue,
-        .loop_async = &event_sink.loop_async,
-        .serialization_pool = &serialization_pool,
+        .threadpool = &threadpool,
         .metrics = &metrics,
         .max_batch_bytes = 64 * 1024,
         .loop = &loop,
-        .notify_pending = &event_sink.notify_pending,
-    };
+    });
     defer ws_runtime_ctx.deinit();
 
     var ws_server = try WSRPCServer.initNoListen(allocator, &loop, .{
@@ -1892,7 +1901,7 @@ fn runRPCServer(
 
     var ws_bridge = WebSocketBridge{
         .allocator = allocator,
-        .logger = logger.withScope("WebSocketBridge"),
+        .logger = logger.withScope("rpc.jrpc_websockets.bridge"),
         .runtime_ctx = &ws_runtime_ctx,
         .pending_connections = &pending_connections,
         .ws_server = &ws_server,
@@ -1923,7 +1932,7 @@ fn runRPCServer(
     const loop_thread = try std.Thread.spawn(
         .{},
         runXevLoopThread,
-        .{ &loop, logger.withScope("runXevLoopThread") },
+        .{ &loop, logger },
     );
     defer loop_thread.join();
 
@@ -1938,10 +1947,16 @@ fn runRPCServer(
 
     ws_bridge.shutdown_requested.store(true, .release);
     ws_runtime_ctx.running = false;
+    event_sink.channel.close();
+    pending_connections.close();
     ws_runtime_ctx.requestWakeup();
     logger.info().log("Shutdown requested, waiting for WebSocketBridge to complete shutdown...");
     ws_bridge.shutdown_complete.timedWait(15 * std.time.ns_per_s) catch {
         logger.err().log("Timed out waiting for WebSocketBridge shutdown to complete");
+    };
+
+    ws_runtime_ctx.shutdown(5 * std.time.ms_per_s) catch |err| {
+        logger.err().logf("websocket runtime shutdown failed: {}", .{err});
     };
 
     try serve_result;
@@ -1954,8 +1969,8 @@ const PendingConnection = struct {
 
 const WebSocketBridge = struct {
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger("WebSocketBridge"),
-    runtime_ctx: *WSRPCRuntimeContext,
+    logger: sig.trace.Logger("rpc.jrpc_websockets.bridge"),
+    runtime_ctx: *WSRPCRuntime,
     pending_connections: *sig.sync.Channel(PendingConnection),
     ws_server: *WSRPCServer,
     shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -2018,10 +2033,14 @@ const WebSocketBridge = struct {
     }
 };
 
-fn runXevLoopThread(loop: *xev.Loop, logger: sig.trace.Logger("runXevLoopThread")) void {
+fn runXevLoopThread(
+    loop: *xev.Loop,
+    logger: Logger,
+) void {
+    const log = logger.withScope("rpc.jrpc_websockets.xev_loop_thread");
     loop.run(.until_done) catch |err| {
         // This should never happen, but if it does log it.
-        logger.err().logf("jrpc websocket loop thread exited with error: {}", .{err});
+        log.err().logf("jrpc websocket loop thread exited with error: {}", .{err});
     };
 }
 

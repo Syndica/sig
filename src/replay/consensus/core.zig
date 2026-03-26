@@ -3,6 +3,7 @@ const std14 = @import("std14");
 const sig = @import("../../sig.zig");
 const replay = @import("../lib.zig");
 const tracy = @import("tracy");
+const jrpc_types = sig.rpc.jrpc_websockets.types;
 
 const cluster_sync = replay.consensus.cluster_sync;
 const Allocator = std.mem.Allocator;
@@ -366,6 +367,7 @@ pub const TowerConsensus = struct {
             /// Same comments on `duplicate_confirmed_slots` apply.
             gossip_verified_vote_hashes: *std.ArrayListUnmanaged(GossipVerifiedVoteHash),
             results: []const ReplayResult,
+            event_sink: ?*jrpc_types.EventSink = null,
         },
     ) !void {
         var zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.process" });
@@ -378,22 +380,35 @@ pub const TowerConsensus = struct {
         }
         const arena = arena_state.allocator();
 
-        try self.vote_collector.collectAndProcessVotes(allocator, .from(self.logger), .{
-            .slot_data_provider = .{
-                .slot_tracker = params.slot_tracker,
-                .epoch_tracker = params.epoch_tracker,
+        const confirmed_slots = try self.vote_collector.collectAndProcessVotes(
+            allocator,
+            .from(self.logger),
+            .{
+                .slot_data_provider = .{
+                    .slot_tracker = params.slot_tracker,
+                    .epoch_tracker = params.epoch_tracker,
+                },
+                .senders = .{
+                    .verified_vote = params.senders.verified_vote,
+                    .gossip_verified_vote_hashes = params.gossip_verified_vote_hashes,
+                    .duplicate_confirmed_slots = params.duplicate_confirmed_slots,
+                },
+                .receivers = .{ .replay_votes = params.receivers.replay_votes },
+                .ledger = params.ledger,
+                .gossip_votes = params.gossip_votes,
             },
-            .senders = .{
-                .verified_vote = params.senders.verified_vote,
-                .gossip_verified_vote_hashes = params.gossip_verified_vote_hashes,
-                .duplicate_confirmed_slots = params.duplicate_confirmed_slots,
-                .bank_notification = null,
-                .subscriptions = .{},
-            },
-            .receivers = .{ .replay_votes = params.receivers.replay_votes },
-            .ledger = params.ledger,
-            .gossip_votes = params.gossip_votes,
-        });
+        );
+        defer allocator.free(confirmed_slots);
+        for (confirmed_slots) |confirmed_slot| {
+            if (params.event_sink) |sink| {
+                sink.send(.{ .slot_confirmed = confirmed_slot.slot }) catch |err| {
+                    self.logger.err().logf(
+                        "failed to send confirmed slot event {}: {}",
+                        .{ confirmed_slot.slot, err },
+                    );
+                };
+            }
+        }
 
         // Process replay results
         for (params.results) |r| {
@@ -477,6 +492,7 @@ pub const TowerConsensus = struct {
             self.identity.vote_account,
             params.senders,
             params.maybe_thread_pool,
+            params.event_sink,
         );
     }
 
@@ -530,6 +546,7 @@ pub const TowerConsensus = struct {
         vote_account: ?Pubkey,
         senders: Senders,
         maybe_thread_pool: ?*ThreadPool,
+        event_sink: ?*jrpc_types.EventSink,
     ) !void {
         const newly_computed_consensus_slots = try computeConsensusInputs(
             allocator,
@@ -672,6 +689,7 @@ pub const TowerConsensus = struct {
                 slot_leaders,
                 vote_sockets,
                 maybe_thread_pool,
+                event_sink,
             );
 
             // Update the latest processed slot to the bank being voted on.
@@ -679,6 +697,15 @@ pub const TowerConsensus = struct {
             // handle_votable_bank(), which is only called when vote_bank.is_some().
             // See: https://github.com/anza-xyz/agave/blob/5e900421520a10933642d5e9a21e191a70f9b125/core/src/replay_stage.rs#L2683
             slot_tracker.commitments.update(.processed, voted.slot);
+            // emit event for the new processed tip slot
+            if (event_sink) |sink| {
+                sink.send(.{ .tip_changed = voted.slot }) catch |err| {
+                    self.logger.err().logf(
+                        "failed to send tip_changed event {}: {}",
+                        .{ voted.slot, err },
+                    );
+                };
+            }
         }
 
         // Reset onto a fork
@@ -963,6 +990,7 @@ fn handleVotableBank(
     slot_leaders: ?sig.core.leader_schedule.SlotLeaders,
     maybe_sockets: ?*const VoteSockets,
     maybe_thread_pool: ?*ThreadPool,
+    event_sink: ?*jrpc_types.EventSink,
 ) !void {
     const maybe_new_root = try replay_tower.recordBankVote(
         allocator,
@@ -975,6 +1003,7 @@ fn handleVotableBank(
         // handling the rooting in the caller
         try checkAndHandleNewRoot(
             allocator,
+            logger,
             ledger_result_writer,
             slot_tracker,
             progress,
@@ -984,6 +1013,7 @@ fn handleVotableBank(
             status_cache,
             new_root,
             maybe_thread_pool,
+            event_sink,
         );
     }
 
@@ -1596,6 +1626,7 @@ fn createVoteInstruction(
 /// Analogous to [check_and_handle_new_root](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L4002)
 fn checkAndHandleNewRoot(
     allocator: std.mem.Allocator,
+    logger: Logger,
     ledger: Ledger.ResultWriter,
     slot_tracker: *SlotTracker,
     progress: *ProgressMap,
@@ -1605,6 +1636,7 @@ fn checkAndHandleNewRoot(
     status_cache: ?*sig.core.StatusCache,
     new_root: Slot,
     maybe_thread_pool: ?*ThreadPool,
+    event_sink: ?*jrpc_types.EventSink,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "checkAndHandleNewRoot" });
     defer zone.deinit();
@@ -1622,6 +1654,7 @@ fn checkAndHandleNewRoot(
 
     const rooted_slots = try slot_tracker.parents(allocator, new_root);
     defer allocator.free(rooted_slots);
+    const old_root = slot_tracker.root.load(.monotonic);
 
     try ledger.setRoots(rooted_slots);
 
@@ -1636,8 +1669,6 @@ fn checkAndHandleNewRoot(
     // Set new root.
     slot_tracker.root.store(new_root, .monotonic);
     slot_tracker.commitments.update(.finalized, new_root); // TODO should be supermajority root
-    // Prune non rooted slots
-    slot_tracker.pruneNonRooted(maybe_thread_pool);
 
     // Tell the status_cache about it for its tracking.
     if (status_cache) |sc| try sc.addRoot(allocator, new_root);
@@ -1645,6 +1676,25 @@ fn checkAndHandleNewRoot(
     const slot_constants = slot_tracker.get(new_root).?;
     defer slot_constants.release();
     try account_store.onSlotRooted(new_root, &slot_constants.constants().ancestors);
+
+    // Send events for newly rooted slots
+    if (event_sink) |sink| {
+        // TODO: this should be sending the consensus super majority root, not the local rooted.
+        const newly_rooted_slots = try slot_tracker.rootedPathForward(allocator, old_root, new_root);
+        defer allocator.free(newly_rooted_slots);
+
+        for (newly_rooted_slots) |rooted_slot| {
+            sink.send(.{ .slot_rooted = rooted_slot }) catch |err| {
+                logger.err().logf(
+                    "failed to send rooted slot event {}: {}",
+                    .{ rooted_slot, err },
+                );
+            };
+        }
+    }
+
+    // Prune non rooted slots
+    slot_tracker.pruneNonRooted(maybe_thread_pool);
 
     // TODO
     // - Prune program cache bank_forks.read().unwrap().prune_program_cache(new_root);
@@ -2599,6 +2649,7 @@ test "checkAndHandleNewRoot - missing slot" {
     // Try to check a slot that doesn't exist in the tracker
     const result = checkAndHandleNewRoot(
         allocator,
+        Logger.noop,
         test_state.resultWriter(),
         &slot_tracker,
         &fixture.progress,
@@ -2608,6 +2659,7 @@ test "checkAndHandleNewRoot - missing slot" {
         null, // no need to update a StatusCache,
         123, // Non-existent slot
         null, // no thread pool
+        null,
     );
 
     try testing.expectError(error.MissingSlot, result);
@@ -2664,6 +2716,7 @@ test "checkAndHandleNewRoot - missing hash" {
     // Try to check a slot that doesn't exist in the tracker
     const result = checkAndHandleNewRoot(
         allocator,
+        Logger.noop,
         test_state.resultWriter(),
         &slot_tracker2,
         &fixture.progress,
@@ -2673,6 +2726,7 @@ test "checkAndHandleNewRoot - missing hash" {
         null, // no need to update a StatusCache,
         root.slot, // Non-existent hash
         null, // no thread pool
+        null,
     );
 
     try testing.expectError(error.MissingHash, result);
@@ -2716,6 +2770,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     // Try to check a slot that doesn't exist in the tracker
     const result = checkAndHandleNewRoot(
         testing.allocator,
+        Logger.noop,
         test_state.resultWriter(),
         &slot_tracker3,
         &fixture.progress,
@@ -2725,6 +2780,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
         null, // no need to update a StatusCache,
         root.slot,
         null, // no thread pool
+        null,
     );
 
     try testing.expectError(error.EmptySlotTracker, result);
@@ -2767,11 +2823,17 @@ test "checkAndHandleNewRoot - success" {
     }
 
     {
+        var constants1 = try SlotConstants.genesis(allocator, .initRandom(random));
+        errdefer constants1.deinit(allocator);
+
         var constants2 = try SlotConstants.genesis(allocator, .initRandom(random));
         errdefer constants2.deinit(allocator);
 
         var constants3 = try SlotConstants.genesis(allocator, .initRandom(random));
         errdefer constants3.deinit(allocator);
+
+        var state1: SlotState = .GENESIS;
+        errdefer state1.deinit(allocator);
 
         var state2: SlotState = .GENESIS;
         errdefer state2.deinit(allocator);
@@ -2779,13 +2841,20 @@ test "checkAndHandleNewRoot - success" {
         var state3: SlotState = .GENESIS;
         errdefer state3.deinit(allocator);
 
+        constants1.parent_slot = root.slot;
         constants2.parent_slot = hash1.slot;
         constants3.parent_slot = hash2.slot;
+        state1.hash = .init(hash1.hash);
         state2.hash = .init(hash2.hash);
         state3.hash = .init(hash3.hash);
 
         const ptr, var lg = slot_tracker4.writeWithLock();
         defer lg.unlock();
+        try ptr.put(allocator, hash1.slot, .{
+            .allocator = allocator,
+            .constants = constants1,
+            .state = state1,
+        });
         try ptr.put(allocator, hash2.slot, .{
             .allocator = allocator,
             .constants = constants2,
@@ -2826,6 +2895,9 @@ test "checkAndHandleNewRoot - success" {
     );
     defer epoch_tracker.deinit();
 
+    const event_sink = try jrpc_types.EventSink.create(allocator);
+    defer event_sink.destroy();
+
     try testing.expectEqual(4, fixture.progress.map.count());
     try testing.expect(fixture.progress.map.contains(hash1.slot));
     {
@@ -2833,6 +2905,7 @@ test "checkAndHandleNewRoot - success" {
         defer slot_tracker4_lg.unlock();
         try checkAndHandleNewRoot(
             allocator,
+            Logger.noop,
             test_state.resultWriter(),
             slot_tracker4_ptr,
             &fixture.progress,
@@ -2842,8 +2915,25 @@ test "checkAndHandleNewRoot - success" {
             null, // no need to update a StatusCache,
             hash3.slot,
             null, // no thread pool
+            event_sink,
         );
     }
+
+    const rooted_event_1 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
+    defer rooted_event_1.deinit(event_sink.channel.allocator);
+    try testing.expect(rooted_event_1 == .slot_rooted);
+    try testing.expectEqual(@as(Slot, 1), rooted_event_1.slot_rooted);
+
+    const rooted_event_2 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
+    defer rooted_event_2.deinit(event_sink.channel.allocator);
+    try testing.expect(rooted_event_2 == .slot_rooted);
+    try testing.expectEqual(@as(Slot, 2), rooted_event_2.slot_rooted);
+
+    const rooted_event_3 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
+    defer rooted_event_3.deinit(event_sink.channel.allocator);
+    try testing.expect(rooted_event_3 == .slot_rooted);
+    try testing.expectEqual(@as(Slot, 3), rooted_event_3.slot_rooted);
+    try testing.expect(event_sink.channel.tryReceive() == null);
 
     try testing.expectEqual(1, fixture.progress.map.count());
     // Now the write lock is released, we can acquire a read lock
