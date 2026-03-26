@@ -230,6 +230,8 @@ pub const ShredReceiver = struct {
         const allocator = event_sink.channel.allocator;
 
         for (result.completed_data_set_infos.items) |info| {
+            // NOTE: this looks weird but it's because info is inclusive and getEntriesInDataBlock
+            // expects an exclusive end index
             const end_index = info.end_index + 1;
             const entries = self.params.duplicate_handler.ledger_reader.getEntriesInDataBlock(
                 allocator,

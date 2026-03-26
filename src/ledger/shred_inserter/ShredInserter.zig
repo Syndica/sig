@@ -1100,7 +1100,7 @@ fn updateCompletedDataIndexes(
     var shred_indices = ArrayList(u32).init(allocator);
     defer shred_indices.deinit();
     const subslice = completed_data_indexes.range(null, new_shred_index);
-    const start_shred_index = if (subslice.len == 0) 0 else subslice[subslice.len - 1];
+    const start_shred_index = if (subslice.len == 0) 0 else subslice[subslice.len - 1] + 1;
     // Consecutive entries i, k, j in this vector represent potential ranges [i, k),
     // [k, j) that could be completed data ranges
     try shred_indices.append(start_shred_index);
@@ -1112,7 +1112,7 @@ fn updateCompletedDataIndexes(
     }
     const new_subslice = completed_data_indexes.range(new_shred_index + 1, null);
     if (new_subslice.len != 0) {
-        try shred_indices.append(new_subslice[0]);
+        try shred_indices.append(new_subslice[0] + 1);
     }
 
     var ret = ArrayList([2]u32).init(allocator);

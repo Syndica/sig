@@ -1174,7 +1174,7 @@ fn getCompletedRanges(
     return .{ completed_ranges, slot_meta };
 }
 
-/// Get the range of indexes [start_index, end_index] of every completed data block
+/// Get the range of indexes [start_index, end_index) (exclusive end) of every completed data block.
 /// agave: get_completed_data_ranges
 fn getCompletedDataRanges(
     allocator: Allocator,
@@ -1211,12 +1211,13 @@ pub fn getEntriesInDataBlock(
 }
 
 /// Fetch the entries corresponding to all of the shred indices in `completed_ranges`
-/// This function takes advantage of the fact that `completed_ranges` are both
-/// contiguous and in sorted order. To clarify, suppose completed_ranges is as follows:
+/// (each range has an exclusive end). This function takes advantage of the fact that
+/// `completed_ranges` are both contiguous and in sorted order. To clarify, suppose
+/// completed_ranges is as follows:
 ///   completed_ranges = [..., (s_i, e_i), (s_i+1, e_i+1), ...]
 /// Then, the following statements are true:
-///   s_i < e_i < s_i+1 < e_i+1
-///   e_i == s_i+1 + 1
+///   s_i < e_i <= s_i+1 < e_i+1
+///   e_i == s_i+1
 ///
 /// Analogous to [get_slot_entries_in_block](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3614)
 fn getSlotEntriesInBlock(
@@ -1237,7 +1238,7 @@ fn getSlotEntriesInBlock(
 
     var data_shreds = try ArrayList(DataShred).initCapacity(
         allocator,
-        all_ranges_end_index - all_ranges_start_index + 1,
+        all_ranges_end_index - all_ranges_start_index,
     );
     defer {
         for (data_shreds.items) |ds| ds.deinit();
@@ -1525,6 +1526,8 @@ pub fn highestSlot(self: *const Reader) !?Slot {
     return try iterator.nextKey();
 }
 
+/// Ranges of shred indices for completed data blocks. Each tuple is
+/// `{ start_index, end_index }` where `end_index` is exclusive.
 const CompletedRanges = ArrayList(struct { u32, u32 });
 
 /// Confirmed block with type guarantees that transaction metadata
