@@ -41,6 +41,8 @@ mod_mask: u64,
 head: u64,
 tail: u64,
 next_reserve: u64,
+/// Reserved or committed terminal notification index, if this queue has one.
+final_index: ?u64,
 /// Selected commit behavior mode for this queue (set at init).
 commit_path: CommitPath,
 allocator: std.mem.Allocator,
@@ -79,10 +81,25 @@ pub const Entry = struct {
     };
 };
 
+pub const CommittedNotif = struct {
+    payload: NotifPayload,
+    /// If true then this is the last entry for this NotifQueue (subscriber can expect no more
+    /// notifications after this one unless reset)
+    is_final: bool,
+};
+
 /// `IndexOverwritten`: index is older than retained `tail`.
 /// `IndexSkipped`: index is inside `[tail, head]` but explicitly skipped.
 /// Only used when using reserved commit path when reservation rollback occurs.
 pub const GetError = error{ IndexOverwritten, IndexSkipped };
+pub const ReserveError = error{FinalNotificationExists};
+pub const CommitError = error{
+    ExpectedIndexForReservedPath,
+    UnexpectedIndexForDirectPath,
+    FinalNotificationExists,
+    InvalidState,
+    InvalidFinalIndex,
+};
 
 /// Allocate queue storage and start with an empty committed set.
 ///
@@ -101,6 +118,7 @@ pub fn init(allocator: std.mem.Allocator, capacity: u64, commit_path: CommitPath
         .head = 0,
         .tail = 1,
         .next_reserve = 1,
+        .final_index = null,
         .commit_path = commit_path,
         .allocator = allocator,
         .wake_pending = false,
@@ -116,17 +134,38 @@ pub fn deinit(self: *NotifQueue) void {
     self.subscribers.deinit(self.allocator);
 }
 
+pub fn finalNotificationIndex(self: *const NotifQueue) ?u64 {
+    return self.final_index;
+}
+
 /// Reserve the next ordered slot. Returns the reserved index.
 ///
 /// Reserved-path only. Panics if called on a direct-path queue.
-pub fn reserveUncommitted(self: *NotifQueue) u64 {
+pub fn reserveUncommitted(self: *NotifQueue) ReserveError!u64 {
     defer self.assertInvariants();
 
     self.requireMode(.reserved);
+    if (self.final_index != null) {
+        return error.FinalNotificationExists;
+    }
 
-    const reservation = self.reserveNextSlot();
-    self.entries[reservation.slot] = .{ .state = .reserved };
-    return reservation.index;
+    return self.reserveIndex();
+}
+
+/// Reserve the terminal notification index for this queue.
+///
+/// Reserved-path only. Panics if called on a direct-path queue.
+pub fn reserveFinalUncommitted(self: *NotifQueue) ReserveError!u64 {
+    defer self.assertInvariants();
+
+    self.requireMode(.reserved);
+    if (self.final_index != null) {
+        return error.FinalNotificationExists;
+    }
+
+    const index = self.reserveIndex();
+    self.final_index = index;
+    return index;
 }
 
 /// Commit payload through the queue's configured commit path.
@@ -137,12 +176,12 @@ pub fn reserveUncommitted(self: *NotifQueue) u64 {
 ///
 /// Returns the number of notifications newly committed by this call.
 /// Returns `0` when there are no subscribers (payload is dropped).
-///
-/// Errors:
-/// - `error.ExpectedIndexForReservedPath`
-/// - `error.UnexpectedIndexForDirectPath`
-/// - any error from `markReady` on the reserved path
-pub fn commitSerialized(self: *NotifQueue, index: ?u64, payload: NotifPayload) !usize {
+pub fn commitSerialized(
+    self: *NotifQueue,
+    index: ?u64,
+    payload: NotifPayload,
+    is_final: bool,
+) CommitError!usize {
     if (self.subscriberCount() == 0) {
         payload.deinit(self.allocator);
         return 0;
@@ -151,6 +190,10 @@ pub fn commitSerialized(self: *NotifQueue, index: ?u64, payload: NotifPayload) !
     return switch (self.commit_path) {
         .reserved => {
             const ready_index = index orelse return error.ExpectedIndexForReservedPath;
+            const matches_final_index = self.final_index == ready_index;
+            if (matches_final_index != is_final) {
+                return error.InvalidFinalIndex;
+            }
             try self.markReady(ready_index, payload);
             return self.commitReadyPrefix();
         },
@@ -158,7 +201,7 @@ pub fn commitSerialized(self: *NotifQueue, index: ?u64, payload: NotifPayload) !
             if (index != null) {
                 return error.UnexpectedIndexForDirectPath;
             }
-            self.appendCommitted(payload);
+            try self.appendCommitted(payload, is_final);
             return 1;
         },
     };
@@ -185,17 +228,19 @@ pub fn cancelReservation(self: *NotifQueue, index: u64) void {
         return;
     }
 
-    self.clearEntry(entry);
+    self.clearEntryAtIndex(index, entry);
 }
 
 /// Read a committed entry for a subscriber cursor.
 ///
-/// On success returns a cloned payload (caller must `deinit`) and consumes one
-/// subscriber reference for that entry.
+/// On success returns a cloned payload (caller must `deinit`). Non-final
+/// entries consume one subscriber reference for that entry. Final entries are
+/// sticky and remain retained until the queue is reset or they roll off the ring.
+/// NOTE: not expected final entries would roll off the ring since it should be final.
 /// Returns `null` when `index > head`, `error.IndexOverwritten` when
 /// `index < tail`, and `error.IndexSkipped` when the index is within
 /// `[tail, head]` but is skipped/canceled and will not be populated.
-pub fn get(self: *NotifQueue, index: u64) GetError!?NotifPayload {
+pub fn get(self: *NotifQueue, index: u64) GetError!?CommittedNotif {
     if (index < self.tail) {
         return error.IndexOverwritten;
     }
@@ -211,8 +256,11 @@ pub fn get(self: *NotifQueue, index: u64) GetError!?NotifPayload {
     }
 
     const clone = entry.payload.acquire();
-    self.consumeSubscriberRef(slot, index);
-    return clone;
+    const is_final = self.final_index == index;
+    if (!is_final) {
+        self.consumeSubscriberRef(slot, index);
+    }
+    return .{ .payload = clone, .is_final = is_final };
 }
 
 /// Number of currently registered subscribers.
@@ -273,7 +321,7 @@ pub fn removeSubscriber(self: *NotifQueue, subscriber: *JRPCHandler, next_index:
 ///
 /// Returns `error.InvalidState` when `index` is outside the retained
 /// reservation window or the slot is not currently `.reserved`.
-fn markReady(self: *NotifQueue, index: u64, p: NotifPayload) !void {
+fn markReady(self: *NotifQueue, index: u64, p: NotifPayload) CommitError!void {
     defer self.assertInvariants();
 
     self.requireMode(.reserved);
@@ -318,7 +366,8 @@ fn commitReadyPrefix(self: *NotifQueue) usize {
                 // transition ready to committed
                 const subscriber_count = self.beginCommit(index);
                 entry.state = .committed;
-                entry.remaining = subscriber_count;
+                // final entries are sticky and do not track subscriber refs
+                entry.remaining = if (self.final_index == index) 0 else subscriber_count;
                 count += 1;
             },
             .reserved => {
@@ -344,17 +393,24 @@ fn commitReadyPrefix(self: *NotifQueue) usize {
 ///
 /// Internal helper used by direct-path commit flow.
 /// Requires at least one subscriber.
-fn appendCommitted(self: *NotifQueue, p: NotifPayload) void {
+fn appendCommitted(self: *NotifQueue, p: NotifPayload, is_final: bool) CommitError!void {
     defer self.assertInvariants();
 
     self.requireMode(.direct);
+    if (self.final_index != null) {
+        return error.FinalNotificationExists;
+    }
 
     const reservation = self.reserveNextSlot();
+    if (is_final) {
+        self.final_index = reservation.index;
+    }
     const subscriber_count = self.beginCommit(reservation.index);
     self.entries[reservation.slot] = .{
         .state = .committed,
         .payload = p,
-        .remaining = subscriber_count,
+        // final entries are sticky and do not track subscriber refs
+        .remaining = if (self.final_index == reservation.index) 0 else subscriber_count,
     };
 }
 
@@ -403,6 +459,12 @@ fn clampCommitFrontierToRetainedWindow(self: *NotifQueue) void {
     }
 }
 
+fn reserveIndex(self: *NotifQueue) u64 {
+    const reservation = self.reserveNextSlot();
+    self.entries[reservation.slot] = .{ .state = .reserved };
+    return reservation.index;
+}
+
 fn reserveNextSlot(self: *NotifQueue) struct { slot: usize, index: u64 } {
     const index = self.next_reserve;
     const slot = self.slotFor(index);
@@ -435,9 +497,12 @@ fn beginCommit(self: *NotifQueue, index: u64) u32 {
 /// Consume one subscriber reference; clear slot when the last ref is consumed.
 fn consumeSubscriberRef(self: *NotifQueue, slot: usize, index: u64) void {
     const entry = &self.entries[slot];
+    if (self.final_index == index) {
+        return;
+    }
     entry.remaining -= 1;
     if (entry.remaining == 0) {
-        self.clearEntry(entry);
+        self.clearEntryAtIndex(index, entry);
         self.onCommittedRemoved(index);
     }
 }
@@ -450,10 +515,18 @@ fn clearEntry(self: *NotifQueue, entry: *Entry) void {
     entry.* = .{};
 }
 
+fn clearEntryAtIndex(self: *NotifQueue, index: u64, entry: *Entry) void {
+    self.clearEntry(entry);
+    if (self.final_index == index) {
+        self.final_index = null;
+    }
+}
+
 fn clearAllSlots(self: *NotifQueue) void {
     for (self.entries) |*entry| {
         self.clearEntry(entry);
     }
+    self.final_index = null;
 }
 
 /// Reclaim a slot before reusing it for `new_index`.
@@ -467,19 +540,17 @@ fn releaseOccupiedSlot(self: *NotifQueue, slot: usize, new_index: u64) void {
     const entry = &self.entries[slot];
     const prior_state = entry.state;
 
-    if (prior_state == .empty or prior_state == .reserved) {
+    if (prior_state == .empty) {
         return;
     }
 
-    if (prior_state == .ready or prior_state == .committed) {
-        // should not be releasing an occupied slot before reaching `capacity` reservations
-        std.debug.assert(new_index > self.capacity);
-    }
-
-    self.clearEntry(entry);
+    // should not be releasing an occupied slot before reaching `capacity` reservations
+    std.debug.assert(new_index > self.capacity);
+    const released_index = new_index - self.capacity;
+    self.clearEntryAtIndex(released_index, entry);
 
     if (prior_state == .committed) {
-        self.onCommittedRemoved(new_index - self.capacity);
+        self.onCommittedRemoved(released_index);
     }
 }
 
@@ -530,6 +601,12 @@ fn assertInvariants(self: *const NotifQueue) void {
         }
     }
 
+    if (self.final_index) |final_index| {
+        std.debug.assert(final_index >= self.oldestRetainedIndex());
+        std.debug.assert(final_index < self.next_reserve);
+        std.debug.assert(self.entries[self.slotFor(final_index)].state != .empty);
+    }
+
     if (self.tail <= self.head) {
         std.debug.assert(self.tail >= self.oldestRetainedIndex());
 
@@ -545,13 +622,18 @@ fn allocPayload(allocator: std.mem.Allocator, s: []const u8) !NotifPayload {
 }
 
 fn reserveReady(q: *NotifQueue, allocator: std.mem.Allocator, msg: []const u8) !u64 {
-    const idx = q.reserveUncommitted();
+    const idx = try q.reserveUncommitted();
     try q.markReady(idx, try allocPayload(allocator, msg));
     return idx;
 }
 
-fn mustGet(q: *NotifQueue, index: u64) !NotifPayload {
+fn mustGetNotif(q: *NotifQueue, index: u64) !CommittedNotif {
     return (try q.get(index)) orelse error.TestUnexpectedResult;
+}
+
+fn mustGet(q: *NotifQueue, index: u64) !NotifPayload {
+    const notif = try mustGetNotif(q, index);
+    return notif.payload;
 }
 
 fn committedCount(q: *const NotifQueue) u64 {
@@ -615,7 +697,10 @@ test "commitSerialized reserved path requires index" {
     try q.addSubscriber(&sub);
 
     const p = try allocPayload(allocator, "x");
-    try std.testing.expectError(error.ExpectedIndexForReservedPath, q.commitSerialized(null, p));
+    try std.testing.expectError(
+        error.ExpectedIndexForReservedPath,
+        q.commitSerialized(null, p, false),
+    );
     p.deinit(allocator);
 }
 
@@ -629,7 +714,7 @@ test "commitSerialized direct path rejects index" {
     try q.addSubscriber(&sub);
 
     const p = try allocPayload(allocator, "x");
-    try std.testing.expectError(error.UnexpectedIndexForDirectPath, q.commitSerialized(1, p));
+    try std.testing.expectError(error.UnexpectedIndexForDirectPath, q.commitSerialized(1, p, false));
     p.deinit(allocator);
 }
 
@@ -692,7 +777,7 @@ test "capacity 1 direct path: commit, get, wraparound" {
     var sub: JRPCHandler = undefined;
     try q.addSubscriber(&sub);
 
-    q.appendCommitted(try allocPayload(allocator, "a"));
+    try q.appendCommitted(try allocPayload(allocator, "a"), false);
     try std.testing.expectEqual(1, q.head);
 
     const got_a = try mustGet(&q, 1);
@@ -701,7 +786,7 @@ test "capacity 1 direct path: commit, get, wraparound" {
     try std.testing.expectEqual(q.head + 1, q.tail);
 
     // Wrap into same slot.
-    q.appendCommitted(try allocPayload(allocator, "b"));
+    try q.appendCommitted(try allocPayload(allocator, "b"), false);
     try std.testing.expectEqual(2, q.head);
     try std.testing.expectError(NotifQueue.GetError.IndexOverwritten, q.get(1));
 
@@ -710,8 +795,8 @@ test "capacity 1 direct path: commit, get, wraparound" {
     try std.testing.expectEqualStrings("b", got_b.payload());
 
     // Wrap while unconsumed (lag eviction).
-    q.appendCommitted(try allocPayload(allocator, "c"));
-    q.appendCommitted(try allocPayload(allocator, "d"));
+    try q.appendCommitted(try allocPayload(allocator, "c"), false);
+    try q.appendCommitted(try allocPayload(allocator, "d"), false);
     try std.testing.expectEqual(4, q.head);
     try std.testing.expectError(NotifQueue.GetError.IndexOverwritten, q.get(3));
 
@@ -726,8 +811,8 @@ test "markReady rejects stale index after slot reuse" {
     var q = try NotifQueue.init(allocator, 1, .reserved);
     defer q.deinit();
 
-    const idx1 = q.reserveUncommitted();
-    const idx2 = q.reserveUncommitted();
+    const idx1 = try q.reserveUncommitted();
+    const idx2 = try q.reserveUncommitted();
 
     const stale = try allocPayload(allocator, "stale");
     try std.testing.expectError(error.InvalidState, q.markReady(idx1, stale));
@@ -745,9 +830,9 @@ test "out-of-order ready with in-order commit" {
     var sub: JRPCHandler = undefined;
     try q.addSubscriber(&sub);
 
-    const idx1 = q.reserveUncommitted();
-    const idx2 = q.reserveUncommitted();
-    const idx3 = q.reserveUncommitted();
+    const idx1 = try q.reserveUncommitted();
+    const idx2 = try q.reserveUncommitted();
+    const idx3 = try q.reserveUncommitted();
 
     try q.markReady(idx3, try allocPayload(allocator, "msg3"));
     try std.testing.expectEqual(0, q.commitReadyPrefix());
@@ -781,8 +866,8 @@ test "rollback gap is skipped and later ready commits" {
     var sub: JRPCHandler = undefined;
     try q.addSubscriber(&sub);
 
-    const idx1 = q.reserveUncommitted();
-    const idx2 = q.reserveUncommitted();
+    const idx1 = try q.reserveUncommitted();
+    const idx2 = try q.reserveUncommitted();
 
     q.cancelReservation(idx1);
 
@@ -814,8 +899,8 @@ test "rollback keeps committed backlog before rollback point" {
     defer old.deinit(allocator);
     try std.testing.expectEqualStrings("old", old.payload());
 
-    const idx2 = q.reserveUncommitted();
-    const idx3 = q.reserveUncommitted();
+    const idx2 = try q.reserveUncommitted();
+    const idx3 = try q.reserveUncommitted();
     q.cancelReservation(idx3);
 
     try q.markReady(idx2, try allocPayload(allocator, "new"));
@@ -838,8 +923,8 @@ test "get returns IndexSkipped for dropped index in tail-head window" {
     const idx1 = try reserveReady(&q, allocator, "1");
     try std.testing.expectEqual(1, q.commitReadyPrefix());
 
-    const idx2 = q.reserveUncommitted();
-    const idx3 = q.reserveUncommitted();
+    const idx2 = try q.reserveUncommitted();
+    const idx3 = try q.reserveUncommitted();
     q.cancelReservation(idx2);
     try q.markReady(idx3, try allocPayload(allocator, "3"));
 
@@ -862,11 +947,11 @@ test "wraparound tail transitions with gaps and slot reuse" {
     try std.testing.expectEqual(1, q.commitReadyPrefix());
     try std.testing.expectEqual(idx1, q.tail);
 
-    const idx2 = q.reserveUncommitted();
-    const idx3 = q.reserveUncommitted();
-    const idx4 = q.reserveUncommitted();
-    const idx5 = q.reserveUncommitted(); // wraps and evicts idx1
-    const idx6 = q.reserveUncommitted(); // middle slot
+    const idx2 = try q.reserveUncommitted();
+    const idx3 = try q.reserveUncommitted();
+    const idx4 = try q.reserveUncommitted();
+    const idx5 = try q.reserveUncommitted(); // wraps and evicts idx1
+    const idx6 = try q.reserveUncommitted(); // middle slot
 
     // idx1 was evicted by wrap; no committed entries are retained.
     try std.testing.expectEqual(q.head + 1, q.tail);
@@ -886,8 +971,8 @@ test "wraparound tail transitions with gaps and slot reuse" {
     defer got6.deinit(allocator);
     try std.testing.expectEqual(q.head + 1, q.tail);
 
-    const idx7 = q.reserveUncommitted();
-    const idx8 = q.reserveUncommitted(); // slot 0
+    const idx7 = try q.reserveUncommitted();
+    const idx8 = try q.reserveUncommitted(); // slot 0
     try q.markReady(idx8, try allocPayload(allocator, "8"));
     q.cancelReservation(idx7);
 
@@ -898,7 +983,7 @@ test "wraparound tail transitions with gaps and slot reuse" {
     defer got8.deinit(allocator);
     try std.testing.expectEqual(q.head + 1, q.tail);
 
-    const idx9 = q.reserveUncommitted(); // slot 1
+    const idx9 = try q.reserveUncommitted(); // slot 1
     try q.markReady(idx9, try allocPayload(allocator, "9"));
     try std.testing.expectEqual(1, q.commitReadyPrefix());
     try std.testing.expectEqual(idx9, q.tail);
@@ -922,10 +1007,10 @@ test "reserved gap blocks commit and keeps empty tail" {
     _ = try reserveReady(&q, allocator, "1");
     try std.testing.expectEqual(1, q.commitReadyPrefix());
 
-    _ = q.reserveUncommitted();
-    _ = q.reserveUncommitted();
-    _ = q.reserveUncommitted();
-    const idx5 = q.reserveUncommitted();
+    _ = try q.reserveUncommitted();
+    _ = try q.reserveUncommitted();
+    _ = try q.reserveUncommitted();
+    const idx5 = try q.reserveUncommitted();
 
     // idx1 was evicted by wrap; no committed entries are retained.
     try std.testing.expectEqual(q.head + 1, q.tail);
@@ -950,12 +1035,12 @@ test "commitReadyPrefix clamps frontier when lagging retained window" {
     const idx1 = try reserveReady(&q, allocator, "1");
     try std.testing.expectEqual(1, q.commitReadyPrefix());
 
-    const idx2 = q.reserveUncommitted();
-    _ = q.reserveUncommitted();
-    const idx4 = q.reserveUncommitted();
-    const idx5 = q.reserveUncommitted();
-    const idx6 = q.reserveUncommitted();
-    const idx7 = q.reserveUncommitted();
+    const idx2 = try q.reserveUncommitted();
+    _ = try q.reserveUncommitted();
+    const idx4 = try q.reserveUncommitted();
+    const idx5 = try q.reserveUncommitted();
+    const idx6 = try q.reserveUncommitted();
+    const idx7 = try q.reserveUncommitted();
 
     q.cancelReservation(idx4);
     q.cancelReservation(idx5);
@@ -990,7 +1075,7 @@ test "overwrite beyond retention returns IndexOverwritten" {
     try std.testing.expectEqual(4, q.commitReadyPrefix());
     try std.testing.expectEqual(4, q.head);
 
-    _ = q.reserveUncommitted();
+    _ = try q.reserveUncommitted();
     try std.testing.expectError(NotifQueue.GetError.IndexOverwritten, q.get(1));
 }
 
@@ -1003,7 +1088,7 @@ test "get returns null when not committed" {
     var sub: JRPCHandler = undefined;
     try q.addSubscriber(&sub);
 
-    _ = q.reserveUncommitted();
+    _ = try q.reserveUncommitted();
     try std.testing.expectEqual(null, try q.get(1));
 }
 
@@ -1017,13 +1102,13 @@ test "ring wrap evicts .ready entry and frees payload" {
     try q.addSubscriber(&sub);
 
     // idx1 reserved, idx2 reserved+ready (blocks commit of idx2 because idx1 is still reserved).
-    const idx1 = q.reserveUncommitted();
+    const idx1 = try q.reserveUncommitted();
     _ = try reserveReady(&q, allocator, "will_be_evicted");
 
     // idx3 wraps to slot for idx1 (empty/reserved — no payload to free).
     // idx4 wraps to slot for idx2 (.ready — payload must be freed).
-    _ = q.reserveUncommitted();
-    const idx4 = q.reserveUncommitted();
+    _ = try q.reserveUncommitted();
+    const idx4 = try q.reserveUncommitted();
 
     // idx1's slot is now idx3 (reserved), idx2's slot is now idx4 (reserved).
     // The .ready payload from idx2 was freed by releaseOccupiedSlot.
@@ -1044,9 +1129,9 @@ test "clampCommitFrontierToRetainedWindow advances empty committed set" {
     try q.addSubscriber(&sub);
 
     // Reserve 3 slots without ever committing. next_reserve=4, head=0, tail=1.
-    _ = q.reserveUncommitted(); // idx1, slot 1
-    const idx2 = q.reserveUncommitted(); // idx2, slot 0 (wraps, idx1 was reserved)
-    const idx3 = q.reserveUncommitted(); // idx3, slot 1 (wraps, idx2 was reserved)
+    _ = try q.reserveUncommitted(); // idx1, slot 1
+    const idx2 = try q.reserveUncommitted(); // idx2, slot 0 (wraps, idx1 was reserved)
+    const idx3 = try q.reserveUncommitted(); // idx3, slot 1 (wraps, idx2 was reserved)
 
     // oldest = next_reserve - capacity = 4 - 2 = 2.
     // head + 1 = 1 < oldest = 2 → clamp triggers.
@@ -1178,9 +1263,9 @@ test "remove last subscriber resets queued state" {
     const idx1 = try reserveReady(&q, allocator, "committed");
     try std.testing.expectEqual(1, q.commitReadyPrefix());
 
-    const idx2 = q.reserveUncommitted();
+    const idx2 = try q.reserveUncommitted();
     try q.markReady(idx2, try allocPayload(allocator, "ready"));
-    const idx3 = q.reserveUncommitted();
+    const idx3 = try q.reserveUncommitted();
 
     q.removeSubscriber(&sub, idx1);
 
@@ -1319,16 +1404,16 @@ test "commitSerialized reserved path commits ready prefix" {
     var sub: JRPCHandler = undefined;
     try q.addSubscriber(&sub);
 
-    const idx1 = q.reserveUncommitted();
-    const idx2 = q.reserveUncommitted();
+    const idx1 = try q.reserveUncommitted();
+    const idx2 = try q.reserveUncommitted();
 
     try std.testing.expectEqual(
         0,
-        try q.commitSerialized(idx2, try allocPayload(allocator, "msg2")),
+        try q.commitSerialized(idx2, try allocPayload(allocator, "msg2"), false),
     );
     try std.testing.expectEqual(
         2,
-        try q.commitSerialized(idx1, try allocPayload(allocator, "msg1")),
+        try q.commitSerialized(idx1, try allocPayload(allocator, "msg1"), false),
     );
 
     const m1 = try mustGet(&q, idx1);
@@ -1351,12 +1436,99 @@ test "commitSerialized direct path commits immediately" {
 
     try std.testing.expectEqual(
         1,
-        try q.commitSerialized(null, try allocPayload(allocator, "direct")),
+        try q.commitSerialized(null, try allocPayload(allocator, "direct"), false),
     );
 
     const got = try mustGet(&q, 1);
     defer got.deinit(allocator);
     try std.testing.expectEqualStrings("direct", got.payload());
+}
+
+test "commitSerialized preserves final metadata" {
+    const allocator = std.testing.allocator;
+
+    var q = try NotifQueue.init(allocator, 8, .reserved);
+    defer q.deinit();
+
+    var sub: JRPCHandler = undefined;
+    try q.addSubscriber(&sub);
+
+    const idx = try q.reserveFinalUncommitted();
+    try std.testing.expectEqual(idx, q.finalNotificationIndex().?);
+    try std.testing.expect(q.finalNotificationIndex() != null);
+    try std.testing.expectEqual(
+        1,
+        try q.commitSerialized(idx, try allocPayload(allocator, "final"), true),
+    );
+
+    const notif = try mustGetNotif(&q, idx);
+    defer notif.payload.deinit(allocator);
+    try std.testing.expect(notif.is_final);
+    try std.testing.expectEqualStrings("final", notif.payload.payload());
+}
+
+test "final committed entries stay retained for late readers" {
+    const allocator = std.testing.allocator;
+
+    var q = try NotifQueue.init(allocator, 8, .reserved);
+    defer q.deinit();
+
+    var sub_a: JRPCHandler = undefined;
+    try q.addSubscriber(&sub_a);
+
+    const idx = try q.reserveFinalUncommitted();
+    try std.testing.expectEqual(
+        1,
+        try q.commitSerialized(idx, try allocPayload(allocator, "final"), true),
+    );
+
+    const notif_a = try mustGetNotif(&q, idx);
+    defer notif_a.payload.deinit(allocator);
+    try std.testing.expect(notif_a.is_final);
+    try std.testing.expectEqual(idx, q.tail);
+    try std.testing.expectEqual(idx, q.head);
+
+    const notif_b = try mustGetNotif(&q, idx);
+    defer notif_b.payload.deinit(allocator);
+    try std.testing.expect(notif_b.is_final);
+    try std.testing.expectEqualStrings("final", notif_b.payload.payload());
+    try std.testing.expectEqual(idx, q.tail);
+}
+
+test "final reservations reject later enqueue attempts" {
+    const allocator = std.testing.allocator;
+
+    var q = try NotifQueue.init(allocator, 8, .reserved);
+    defer q.deinit();
+
+    var sub: JRPCHandler = undefined;
+    try q.addSubscriber(&sub);
+
+    const idx = try q.reserveFinalUncommitted();
+    try std.testing.expectEqual(idx, q.finalNotificationIndex().?);
+    try std.testing.expectError(error.FinalNotificationExists, q.reserveUncommitted());
+    q.cancelReservation(idx);
+    try std.testing.expectEqual(@as(?u64, null), q.finalNotificationIndex());
+
+    _ = try q.reserveUncommitted();
+}
+
+test "remove last subscriber clears final state" {
+    const allocator = std.testing.allocator;
+
+    var q = try NotifQueue.init(allocator, 8, .reserved);
+    defer q.deinit();
+
+    var sub: JRPCHandler = undefined;
+    try q.addSubscriber(&sub);
+
+    const idx = try q.reserveFinalUncommitted();
+    try std.testing.expect(q.finalNotificationIndex() != null);
+
+    q.removeSubscriber(&sub, idx);
+
+    try std.testing.expectEqual(0, q.subscriberCount());
+    try std.testing.expectEqual(@as(?u64, null), q.finalNotificationIndex());
 }
 
 test "commitSerialized direct path drops payload when no subscribers" {
@@ -1367,7 +1539,7 @@ test "commitSerialized direct path drops payload when no subscribers" {
 
     try std.testing.expectEqual(
         0,
-        try q.commitSerialized(null, try allocPayload(allocator, "drop")),
+        try q.commitSerialized(null, try allocPayload(allocator, "drop"), false),
     );
     try std.testing.expectEqual(0, committedCount(&q));
 }
@@ -1378,10 +1550,10 @@ test "commitSerialized reserved path drops payload when no subscribers" {
     var q = try NotifQueue.init(allocator, 8, .reserved);
     defer q.deinit();
 
-    const idx = q.reserveUncommitted();
+    const idx = try q.reserveUncommitted();
     try std.testing.expectEqual(
         0,
-        try q.commitSerialized(idx, try allocPayload(allocator, "drop")),
+        try q.commitSerialized(idx, try allocPayload(allocator, "drop"), false),
     );
     try std.testing.expectEqual(0, committedCount(&q));
 }
@@ -1395,9 +1567,9 @@ test "appendCommitted multiple appends" {
     var sub: JRPCHandler = undefined;
     try q.addSubscriber(&sub);
 
-    q.appendCommitted(try allocPayload(allocator, "a"));
-    q.appendCommitted(try allocPayload(allocator, "b"));
-    q.appendCommitted(try allocPayload(allocator, "c"));
+    try q.appendCommitted(try allocPayload(allocator, "a"), false);
+    try q.appendCommitted(try allocPayload(allocator, "b"), false);
+    try q.appendCommitted(try allocPayload(allocator, "c"), false);
 
     try std.testing.expectEqual(3, q.head);
     try std.testing.expectEqual(3, committedCount(&q));
@@ -1424,8 +1596,8 @@ test "appendCommitted ring wrap with overwrite" {
     var sub: JRPCHandler = undefined;
     try q.addSubscriber(&sub);
 
-    q.appendCommitted(try allocPayload(allocator, "first"));
-    q.appendCommitted(try allocPayload(allocator, "second"));
+    try q.appendCommitted(try allocPayload(allocator, "first"), false);
+    try q.appendCommitted(try allocPayload(allocator, "second"), false);
 
     // Both consumed so refs drop.
     const m1 = try mustGet(&q, 1);
@@ -1434,7 +1606,7 @@ test "appendCommitted ring wrap with overwrite" {
     defer m2.deinit(allocator);
 
     // Third wraps around, overwriting slot for index 1.
-    q.appendCommitted(try allocPayload(allocator, "third"));
+    try q.appendCommitted(try allocPayload(allocator, "third"), false);
 
     try std.testing.expectEqual(3, q.head);
     try std.testing.expectError(NotifQueue.GetError.IndexOverwritten, q.get(1));
@@ -1454,12 +1626,12 @@ test "appendCommitted subscriber lag recovery" {
     try q.addSubscriber(&sub);
 
     // Fill and don't consume — subscriber is lagging.
-    q.appendCommitted(try allocPayload(allocator, "old1"));
-    q.appendCommitted(try allocPayload(allocator, "old2"));
+    try q.appendCommitted(try allocPayload(allocator, "old1"), false);
+    try q.appendCommitted(try allocPayload(allocator, "old2"), false);
 
     // Wrap around: overwrites old committed entries.
-    q.appendCommitted(try allocPayload(allocator, "new1"));
-    q.appendCommitted(try allocPayload(allocator, "new2"));
+    try q.appendCommitted(try allocPayload(allocator, "new1"), false);
+    try q.appendCommitted(try allocPayload(allocator, "new2"), false);
 
     try std.testing.expectEqual(4, q.head);
 
