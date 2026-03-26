@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 const xev = @import("xev");
 const ws = @import("webzockets");
+const socket_opts = ws.socket_opts;
 
 const lib = @import("lib.zig");
 const types = lib.types;
@@ -25,10 +26,9 @@ const RuntimeContext = runtime_mod.RuntimeContext;
 const TestServer = struct {
     allocator: std.mem.Allocator,
     metrics: metrics_mod.Metrics,
-    inbound_event_queue: Channel(types.EventMsg),
+    event_sink: *types.EventSink,
     commit_queue: Channel(types.CommitMsg),
     loop: xev.Loop,
-    loop_async: xev.Async,
     xev_pool: xev.ThreadPool,
     ser_pool: ThreadPool,
     sub_map: sub_map_mod.RPCSubMap,
@@ -43,8 +43,8 @@ const TestServer = struct {
         self.allocator = allocator;
         self.metrics = .{};
 
-        self.inbound_event_queue = try Channel(types.EventMsg).init(allocator);
-        errdefer self.inbound_event_queue.deinit();
+        self.event_sink = try types.EventSink.create(allocator);
+        errdefer self.event_sink.destroy(allocator);
 
         self.commit_queue = try Channel(types.CommitMsg).init(allocator);
         errdefer self.commit_queue.deinit();
@@ -54,9 +54,6 @@ const TestServer = struct {
         self.loop = try xev.Loop.init(.{ .thread_pool = &self.xev_pool });
         errdefer self.loop.deinit();
 
-        self.loop_async = try xev.Async.init();
-        errdefer self.loop_async.deinit();
-
         self.ser_pool = ThreadPool.init(.{ .max_threads = 2 });
 
         self.sub_map = sub_map_mod.RPCSubMap.init(allocator, 1024);
@@ -65,13 +62,14 @@ const TestServer = struct {
         self.ctx = .{
             .allocator = allocator,
             .sub_map = &self.sub_map,
-            .inbound_event_queue = &self.inbound_event_queue,
+            .inbound_event_queue = &self.event_sink.channel,
             .commit_queue = &self.commit_queue,
-            .loop_async = &self.loop_async,
+            .loop_async = &self.event_sink.loop_async,
             .serialization_pool = &self.ser_pool,
             .metrics = &self.metrics,
             .max_batch_bytes = 64 * 1024,
             .loop = &self.loop,
+            .notify_pending = &self.event_sink.notify_pending,
         };
         self.ctx.armAsyncWait();
 
@@ -96,8 +94,7 @@ const TestServer = struct {
 
     /// Inject an event into the inbound queue and wake the loop.
     fn injectEvent(self: *TestServer, event: types.EventMsg) void {
-        self.inbound_event_queue.send(event) catch return;
-        self.ctx.requestWakeup();
+        self.event_sink.send(event) catch return;
     }
 
     /// Run the loop for a bounded number of ticks. Returns when no more
@@ -133,13 +130,266 @@ const TestServer = struct {
         self.ser_pool.deinit();
         self.xev_pool.shutdown();
         self.xev_pool.deinit();
-        self.loop_async.deinit();
         self.loop.deinit();
         self.commit_queue.deinit();
-        self.inbound_event_queue.deinit();
+        self.event_sink.destroy(allocator);
         allocator.destroy(self);
     }
 };
+
+const PendingConnection = struct {
+    fd: std.posix.fd_t,
+    initial_data: []u8,
+};
+
+const WsBridge = struct {
+    allocator: std.mem.Allocator,
+    pending_connections: *Channel(PendingConnection),
+    runtime_ctx: *RuntimeContext,
+    ws_server: *WebSocketServer,
+
+    fn feedConnection(ptr: *anyopaque, fd: std.posix.fd_t, initial_data: []const u8) !void {
+        const self: *WsBridge = @ptrCast(@alignCast(ptr));
+        const data_copy = try self.allocator.dupe(u8, initial_data);
+        self.pending_connections.send(.{ .fd = fd, .initial_data = data_copy }) catch |err| {
+            self.allocator.free(data_copy);
+            return err;
+        };
+        self.runtime_ctx.requestWakeup();
+    }
+
+    fn onWake(ptr: *anyopaque) void {
+        const self: *WsBridge = @ptrCast(@alignCast(ptr));
+        while (self.pending_connections.tryReceive()) |pending| {
+            defer self.allocator.free(pending.initial_data);
+
+            socket_opts.setNonBlocking(pending.fd) catch {
+                std.posix.close(pending.fd);
+                continue;
+            };
+
+            self.ws_server.feedConnection(pending.fd, pending.initial_data) catch {
+                std.posix.close(pending.fd);
+                continue;
+            };
+        }
+    }
+};
+
+const IntegratedTestServer = struct {
+    allocator: std.mem.Allocator,
+    metrics: metrics_mod.Metrics,
+    event_sink: *types.EventSink,
+    commit_queue: Channel(types.CommitMsg),
+    loop: xev.Loop,
+    xev_pool: xev.ThreadPool,
+    ser_pool: ThreadPool,
+    sub_map: sub_map_mod.RPCSubMap,
+    ctx: RuntimeContext,
+    ws_server: WebSocketServer,
+    pending_connections: Channel(PendingConnection),
+    bridge: WsBridge,
+    rpc_hooks: sig.rpc.Hooks,
+    rpc_server_ctx: sig.rpc.server.Context,
+    rpc_exit: std.atomic.Value(bool),
+    rpc_thread: std.Thread,
+    port: u16,
+
+    fn start(allocator: std.mem.Allocator) !*IntegratedTestServer {
+        const self = try allocator.create(IntegratedTestServer);
+        errdefer allocator.destroy(self);
+
+        self.allocator = allocator;
+        self.metrics = .{};
+
+        self.event_sink = try types.EventSink.create(allocator);
+        errdefer self.event_sink.destroy(allocator);
+
+        self.commit_queue = try Channel(types.CommitMsg).init(allocator);
+        errdefer self.commit_queue.deinit();
+
+        self.xev_pool = xev.ThreadPool.init(.{});
+
+        self.loop = try xev.Loop.init(.{ .thread_pool = &self.xev_pool });
+        errdefer self.loop.deinit();
+
+        self.ser_pool = ThreadPool.init(.{ .max_threads = 2 });
+
+        self.sub_map = sub_map_mod.RPCSubMap.init(allocator, 1024);
+        errdefer self.sub_map.deinit();
+
+        self.ctx = .{
+            .allocator = allocator,
+            .sub_map = &self.sub_map,
+            .inbound_event_queue = &self.event_sink.channel,
+            .commit_queue = &self.commit_queue,
+            .loop_async = &self.event_sink.loop_async,
+            .serialization_pool = &self.ser_pool,
+            .metrics = &self.metrics,
+            .max_batch_bytes = 64 * 1024,
+            .loop = &self.loop,
+            .notify_pending = &self.event_sink.notify_pending,
+        };
+
+        self.ws_server = try WebSocketServer.initNoListen(allocator, &self.loop, .{
+            .address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0),
+            .handler_context = &self.ctx,
+        });
+        errdefer self.ws_server.deinit();
+
+        self.pending_connections = try Channel(PendingConnection).init(allocator);
+        errdefer self.pending_connections.deinit();
+
+        self.bridge = .{
+            .allocator = allocator,
+            .pending_connections = &self.pending_connections,
+            .runtime_ctx = &self.ctx,
+            .ws_server = &self.ws_server,
+        };
+
+        self.ctx.wakeup_hook = .{
+            .ptr = &self.bridge,
+            .onWake = WsBridge.onWake,
+        };
+        self.ctx.armAsyncWait();
+
+        self.rpc_hooks = .{};
+        errdefer self.rpc_hooks.deinit(allocator);
+
+        try self.rpc_hooks.set(allocator, struct {
+            pub fn getHealth(
+                _: @This(),
+                _: std.mem.Allocator,
+                _: anytype,
+            ) !sig.rpc.methods.GetHealth.Response {
+                return .ok;
+            }
+        }{});
+
+        const logger: sig.trace.Logger("jrpc_ws_integration_tests") = .noop;
+
+        self.rpc_server_ctx = try sig.rpc.server.Context.init(.{
+            .allocator = allocator,
+            .logger = .from(logger),
+            .rpc_hooks = &self.rpc_hooks,
+            .read_buffer_size = sig.rpc.server.MIN_READ_BUFFER_SIZE,
+            .socket_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0),
+            .reuse_address = true,
+            .ws_server = .{
+                .ptr = &self.bridge,
+                .feedFn = WsBridge.feedConnection,
+            },
+        });
+        errdefer self.rpc_server_ctx.joinDeinit();
+
+        self.port = self.rpc_server_ctx.tcp.listen_address.getPort();
+
+        self.rpc_exit = std.atomic.Value(bool).init(false);
+        self.rpc_thread = try std.Thread.spawn(
+            .{},
+            runRPCServeThread,
+            .{ &self.rpc_exit, &self.rpc_server_ctx },
+        );
+
+        return self;
+    }
+
+    fn injectEvent(self: *IntegratedTestServer, event: types.EventMsg) void {
+        self.event_sink.send(event) catch return;
+    }
+
+    fn tick(self: *IntegratedTestServer, max_ticks: usize) void {
+        for (0..max_ticks) |_| {
+            self.loop.run(.no_wait) catch break;
+        }
+    }
+
+    fn postJsonRpc(self: *IntegratedTestServer, body: []const u8) ![]u8 {
+        return postJsonRpcRequest(self.allocator, self.port, body);
+    }
+
+    fn stop(self: *IntegratedTestServer) void {
+        self.rpc_exit.store(true, .release);
+        self.rpc_thread.join();
+
+        self.ctx.running = false;
+
+        var shutdown_done = false;
+        self.ws_server.shutdown(1000, bool, &shutdown_done, struct {
+            fn onShutdown(done_opt: ?*bool, _: WebSocketServer.ShutdownResult) void {
+                if (done_opt) |done| {
+                    done.* = true;
+                }
+            }
+        }.onShutdown);
+
+        const deadline = @as(u64, @intCast(std.time.milliTimestamp())) + 2000;
+        while (!shutdown_done and @as(u64, @intCast(std.time.milliTimestamp())) < deadline) {
+            self.tick(50);
+            std.Thread.sleep(1 * std.time.ns_per_ms);
+        }
+
+        while (self.pending_connections.tryReceive()) |pending| {
+            self.allocator.free(pending.initial_data);
+            std.posix.close(pending.fd);
+        }
+    }
+
+    fn deinit(self: *IntegratedTestServer) void {
+        const allocator = self.allocator;
+
+        self.ws_server.deinit();
+        self.ctx.deinit();
+        self.sub_map.deinit();
+        self.ser_pool.shutdown();
+        self.ser_pool.deinit();
+        self.xev_pool.shutdown();
+        self.xev_pool.deinit();
+        self.loop.deinit();
+
+        self.rpc_server_ctx.joinDeinit();
+        self.rpc_hooks.deinit(allocator);
+
+        self.pending_connections.deinit();
+        self.commit_queue.deinit();
+        self.event_sink.destroy(allocator);
+
+        allocator.destroy(self);
+    }
+};
+
+fn runRPCServeThread(exit: *std.atomic.Value(bool), server_ctx: *sig.rpc.server.Context) void {
+    sig.rpc.server.serve(exit, server_ctx, .basic) catch {};
+}
+
+fn postJsonRpcRequest(allocator: std.mem.Allocator, port: u16, body: []const u8) ![]u8 {
+    var client: std.http.Client = .{ .allocator = allocator };
+    defer client.deinit();
+
+    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/", .{port});
+    defer allocator.free(url);
+
+    const uri = try std.Uri.parse(url);
+    var request = try client.request(.POST, uri, .{
+        .headers = .{
+            .content_type = .{ .override = "application/json" },
+        },
+    });
+    defer request.deinit();
+
+    request.transfer_encoding = .{ .content_length = body.len };
+    var send_buf: [4096]u8 = undefined;
+    var body_writer = try request.sendBody(&send_buf);
+    try body_writer.writer.writeAll(body);
+    try body_writer.end();
+
+    var recv_head_buf: [4096]u8 = undefined;
+    var response = try request.receiveHead(&recv_head_buf);
+
+    var recv_body_buf: [4096]u8 = undefined;
+    const reader = response.reader(&recv_body_buf);
+    return try reader.allocRemaining(allocator, .limited64(1 << 20));
+}
 
 /// Client-side WebSocket handler for e2e tests.
 /// Collects all received messages (text frames) and supports a scripted
@@ -283,7 +533,7 @@ const TestClientEnv = struct {
 /// Interleaves ticks to allow the async wakeup / event delivery cycle.
 /// Stops early if the handler's close callback has fired.
 fn runBothLoops(
-    server: *TestServer,
+    server: anytype,
     client_env: *TestClientEnv,
     handler: *TestClientHandler,
     max_iters: usize,
@@ -300,7 +550,7 @@ fn runBothLoops(
 
 /// Run loops until a condition is met or a timeout is reached.
 fn runBothLoopsUntil(
-    server: *TestServer,
+    server: anytype,
     client_env: *TestClientEnv,
     comptime predicate: fn (*TestClientHandler) bool,
     handler: *TestClientHandler,
@@ -319,7 +569,7 @@ fn runBothLoopsUntil(
 
 /// Wait until the handler has received at least `count` messages.
 fn waitForMessages(
-    server: *TestServer,
+    server: anytype,
     client_env: *TestClientEnv,
     handler: *TestClientHandler,
     count: usize,
@@ -941,4 +1191,218 @@ test "e2e: client subscribes to root, receives notification, unsubscribes" {
         },
         &.{"\"result\":256"},
     );
+}
+
+test "integration: websocket upgrade via HTTP server supports root subscription" {
+    const allocator = std.testing.allocator;
+
+    var server = try IntegratedTestServer.start(allocator);
+    defer {
+        server.stop();
+        server.deinit();
+    }
+
+    var handler = TestClientHandler.init(allocator);
+    defer handler.deinit();
+    handler.queueSend(
+        \\{"jsonrpc":"2.0","id":1,"method":"rootSubscribe","params":[]}
+    );
+    handler.close_after = 2;
+
+    var client_env: TestClientEnv = undefined;
+    try client_env.start();
+    defer client_env.deinit();
+
+    var conn: TestClient.Conn = undefined;
+    var client = TestClient.init(
+        allocator,
+        &client_env.loop,
+        &handler,
+        &conn,
+        &client_env.csprng,
+        .{ .address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, server.port) },
+    );
+    try client.connect();
+
+    waitForMessages(server, &client_env, &handler, 1, 5000);
+    try std.testing.expect(handler.received.items.len >= 1);
+
+    server.injectEvent(.{
+        .method = .root,
+        .event_data = .{ .root = .{ .root = 500 } },
+    });
+
+    waitForMessages(server, &client_env, &handler, 2, 5000);
+    try std.testing.expect(handler.received.items.len >= 2);
+    try std.testing.expect(std.mem.indexOf(u8, handler.received.items[1], "\"result\":500") != null);
+
+    runBothLoops(server, &client_env, &handler, 100);
+}
+
+test "integration: HTTP JSON-RPC and WebSocket run on same port" {
+    const allocator = std.testing.allocator;
+
+    var server = try IntegratedTestServer.start(allocator);
+    defer {
+        server.stop();
+        server.deinit();
+    }
+
+    var handler = TestClientHandler.init(allocator);
+    defer handler.deinit();
+    handler.queueSend(
+        \\{"jsonrpc":"2.0","id":1,"method":"rootSubscribe","params":[]}
+    );
+    handler.close_after = 3;
+
+    var client_env: TestClientEnv = undefined;
+    try client_env.start();
+    defer client_env.deinit();
+
+    var conn: TestClient.Conn = undefined;
+    var client = TestClient.init(
+        allocator,
+        &client_env.loop,
+        &handler,
+        &conn,
+        &client_env.csprng,
+        .{ .address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, server.port) },
+    );
+    try client.connect();
+
+    waitForMessages(server, &client_env, &handler, 1, 5000);
+    try std.testing.expect(handler.received.items.len >= 1);
+
+    const http_resp = try server.postJsonRpc(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getHealth\",\"params\":[]}",
+    );
+    defer allocator.free(http_resp);
+    try std.testing.expect(std.mem.indexOf(u8, http_resp, "\"result\":\"ok\"") != null);
+
+    server.injectEvent(.{
+        .method = .root,
+        .event_data = .{ .root = .{ .root = 501 } },
+    });
+
+    waitForMessages(server, &client_env, &handler, 2, 5000);
+    try std.testing.expect(handler.received.items.len >= 2);
+
+    handler.queueSendNow(
+        \\{"jsonrpc":"2.0","id":2,"method":"rootUnsubscribe","params":[1]}
+    );
+
+    waitForMessages(server, &client_env, &handler, 3, 5000);
+    try std.testing.expect(handler.received.items.len >= 3);
+    try std.testing.expect(
+        std.mem.indexOf(u8, handler.received.items[2], "\"result\":true") != null,
+    );
+
+    runBothLoops(server, &client_env, &handler, 100);
+}
+
+test "integration: multiple websocket clients receive root notifications via HTTP upgrade" {
+    const allocator = std.testing.allocator;
+
+    var server = try IntegratedTestServer.start(allocator);
+    defer {
+        server.stop();
+        server.deinit();
+    }
+
+    var handler1 = TestClientHandler.init(allocator);
+    defer handler1.deinit();
+    handler1.queueSend(
+        \\{"jsonrpc":"2.0","id":1,"method":"rootSubscribe","params":[]}
+    );
+    handler1.close_after = 2;
+
+    var handler2 = TestClientHandler.init(allocator);
+    defer handler2.deinit();
+    handler2.queueSend(
+        \\{"jsonrpc":"2.0","id":1,"method":"rootSubscribe","params":[]}
+    );
+    handler2.close_after = 2;
+
+    var env1: TestClientEnv = undefined;
+    try env1.start();
+    defer env1.deinit();
+
+    var env2: TestClientEnv = undefined;
+    try env2.start();
+    defer env2.deinit();
+
+    var conn1: TestClient.Conn = undefined;
+    var client1 = TestClient.init(
+        allocator,
+        &env1.loop,
+        &handler1,
+        &conn1,
+        &env1.csprng,
+        .{ .address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, server.port) },
+    );
+    try client1.connect();
+
+    var conn2: TestClient.Conn = undefined;
+    var client2 = TestClient.init(
+        allocator,
+        &env2.loop,
+        &handler2,
+        &conn2,
+        &env2.csprng,
+        .{ .address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, server.port) },
+    );
+    try client2.connect();
+
+    const sub_deadline = @as(u64, @intCast(std.time.milliTimestamp())) + 5000;
+    while (@as(u64, @intCast(std.time.milliTimestamp())) < sub_deadline) {
+        server.tick(50);
+        env1.loop.run(.no_wait) catch {};
+        env2.loop.run(.no_wait) catch {};
+        if (handler1.received.items.len >= 1 and handler2.received.items.len >= 1) {
+            break;
+        }
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
+
+    try std.testing.expect(handler1.received.items.len >= 1);
+    try std.testing.expect(handler2.received.items.len >= 1);
+
+    server.injectEvent(.{
+        .method = .root,
+        .event_data = .{ .root = .{ .root = 502 } },
+    });
+
+    const notif_deadline = @as(u64, @intCast(std.time.milliTimestamp())) + 5000;
+    while (@as(u64, @intCast(std.time.milliTimestamp())) < notif_deadline) {
+        server.tick(50);
+        env1.loop.run(.no_wait) catch {};
+        env2.loop.run(.no_wait) catch {};
+        if (handler1.received.items.len >= 2 and handler2.received.items.len >= 2) {
+            break;
+        }
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
+
+    try std.testing.expect(handler1.received.items.len >= 2);
+    try std.testing.expect(handler2.received.items.len >= 2);
+    try std.testing.expect(
+        std.mem.indexOf(u8, handler1.received.items[1], "\"result\":502") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, handler2.received.items[1], "\"result\":502") != null,
+    );
+
+    for (0..200) |_| {
+        if (handler1.close_called and handler2.close_called) {
+            break;
+        }
+        server.tick(50);
+        if (!handler1.close_called) {
+            env1.loop.run(.no_wait) catch {};
+        }
+        if (!handler2.close_called) {
+            env2.loop.run(.no_wait) catch {};
+        }
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
 }

@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
+const xev = @import("xev");
 const NotifPayload = sig.sync.RcSlice(u8);
 const methods = @import("methods.zig");
 const ws_request = @import("ws_request.zig");
@@ -345,6 +346,49 @@ pub const SubId = u64;
 pub const EventMsg = struct {
     method: SubMethod,
     event_data: EventData,
+};
+
+/// Sink to push events for jrpc ws runtime broadcasting.
+pub const EventSink = struct {
+    channel: Channel(EventMsg),
+    /// Used to wake the IO loop.
+    loop_async: xev.Async,
+    /// Used to avoid spamming IO loop wakes.
+    notify_pending: std.atomic.Value(bool) = .init(false),
+
+    const Channel = sig.sync.Channel;
+
+    pub fn create(allocator: std.mem.Allocator) !*EventSink {
+        const self = try allocator.create(EventSink);
+        errdefer allocator.destroy(self);
+        var channel = try Channel(EventMsg).init(allocator);
+        errdefer channel.deinit();
+        self.* = .{
+            .channel = channel,
+            .loop_async = try xev.Async.init(),
+        };
+        return self;
+    }
+
+    pub fn destroy(self: *EventSink, allocator: std.mem.Allocator) void {
+        while (self.channel.tryReceive()) |msg| {
+            msg.event_data.deinit(allocator);
+        }
+        self.channel.deinit();
+        self.loop_async.deinit();
+        allocator.destroy(self);
+    }
+
+    pub fn send(self: *EventSink, msg: EventMsg) !void {
+        try self.channel.send(msg);
+        const already = self.notify_pending.swap(true, .release);
+        if (!already) {
+            self.loop_async.notify() catch |err| {
+                _ = self.notify_pending.swap(false, .release);
+                return err;
+            };
+        }
+    }
 };
 
 /// Tagged union of event payloads.
