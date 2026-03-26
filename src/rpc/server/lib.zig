@@ -19,6 +19,7 @@ pub const serve = server.serve;
 
 pub const Context = server.Context;
 pub const WorkPool = server.WorkPool;
+pub const WsServerRef = server.WsServerRef;
 
 // backends
 pub const basic = server.basic;

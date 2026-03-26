@@ -423,8 +423,8 @@ pub const JRPCHandler = struct {
             .idle => {},
         }
 
-        // TODO(perf): we need to set TCP_NODELAY on the TCP socket and add a short flush interval
-        // using an xev timer to ensure low latency without crippling throughput.
+        // TODO(perf): we may need add a short flush interval using an xev timer to keep TCP_NODELAY
+        // low latency without crippling throughput.
 
         // Batch available notifications into one send. Cap batch size to avoid blocking the event
         // loop when a single handler has a large backlog of pending notifications.

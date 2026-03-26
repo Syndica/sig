@@ -4,20 +4,20 @@ comptime {
     _ = std.testing.refAllDecls(@This());
 }
 
-const common = @import("../common.zig");
+const lib = @import("lib.zig");
 const bk = @import("binkode");
 
 const Allocator = std.mem.Allocator;
 
-const Packet = common.net.Packet;
-const Hash = common.solana.Hash;
-const Nonce = common.solana.Nonce;
-const Signature = common.solana.Signature;
-const Slot = common.solana.Slot;
-const Pubkey = common.solana.Pubkey;
+const Packet = lib.net.Packet;
+const Hash = lib.solana.Hash;
+const Nonce = lib.solana.Nonce;
+const Signature = lib.solana.Signature;
+const Slot = lib.solana.Slot;
+const Pubkey = lib.solana.Pubkey;
 
 pub const RecvConfig = struct {
-    leader_schedule: common.solana.LeaderSchedule,
+    leader_schedule: lib.solana.LeaderSchedule,
     shred_version: u16,
 };
 
@@ -1424,7 +1424,7 @@ fn readChunk(allocator: Allocator, reader: *std.Io.Reader) !?[]const u8 {
 test "merkleProof" {
     const shreds = try loadShredsFromFile(
         std.testing.allocator,
-        common.test_data_dir ++ "shreds/merkle_proof_test_shreds_34_data_34_code.bin",
+        lib.test_data_dir ++ "shreds/merkle_proof_test_shreds_34_data_34_code.bin",
     );
     defer {
         for (shreds) |shred| std.testing.allocator.free(shred.payload());

@@ -1,0 +1,32 @@
+.{
+    .regions = .{
+        .net_to_shred = .net_pair,
+        .shred_recv_config = .shred_recv_config,
+
+        .net_to_gossip = .net_pair,
+        .gossip_config = .gossip_config,
+    },
+    .services = .{
+        .{
+            .name = .net,
+            .regions = .{
+                .{ .name = .net_to_shred, .access = .rw },
+                .{ .name = .net_to_gossip, .access = .rw },
+            },
+        },
+        .{
+            .name = .gossip,
+            .regions = .{
+                .{ .name = .net_to_gossip, .access = .rw },
+                .{ .name = .gossip_config, .access = .readonly },
+            },
+        },
+        .{
+            .name = .shred_receiver,
+            .regions = .{
+                .{ .name = .net_to_shred, .access = .rw },
+                .{ .name = .shred_recv_config, .access = .readonly },
+            },
+        },
+    },
+}
