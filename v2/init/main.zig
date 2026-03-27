@@ -69,6 +69,7 @@ pub fn main() !void {
         .{ .service = .shred_receiver },
         .{ .service = .net },
         .{ .service = .gossip },
+        .{ .service = .replay },
     };
 
     const shared_regions = services.toSharedRegions(.{

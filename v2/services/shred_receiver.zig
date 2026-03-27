@@ -43,6 +43,9 @@
 //!       Once we complete a FEC set, we are free to build another FEC set of that very same
 //!       FecSetId; the downstream service must be fully aware of equivocation.
 //!
+//!       Once repair is implemented, shreds from it should bypass these checks and enter the map,
+//!       even if there is already an instance of that FecSetId.
+//!
 
 const std = @import("std");
 const bk = @import("binkode");
@@ -93,10 +96,14 @@ pub const ReadOnly = struct {
 
 // We will ignore shreds outside of this range, as they're not useful to us
 // TODO: get this information from our fork-aware data structures
+// TODO: aggressively evict any in-progress entries <= the root slot
 const stub_root_slot = 0;
 const stub_max_slot = std.math.maxInt(Slot);
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
+    const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
+    defer zone.deinit();
+
     std.log.info("Waiting for shreds on port {}", .{rw.tvu_socket.port});
 
     const global = struct {
@@ -108,8 +115,8 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     while (true) {
         var recv_slice = rw.tvu_socket.recv.getReadable() catch continue;
 
-        const zone = tracy.Zone.init(@src(), .{ .name = "shred recv" });
-        defer zone.deinit();
+        const recv_zone = tracy.Zone.init(@src(), .{ .name = "shred recv" });
+        defer recv_zone.deinit();
 
         const packet = recv_slice.get(0);
         defer recv_slice.markUsed(1);
@@ -131,11 +138,11 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             &writer_slice,
         ) catch |err| {
             std.log.warn("packet failed with {}", .{err});
-            zone.color(0x0000FF); // a nice red
+            recv_zone.color(0xFF000000); // a nice red
             continue;
         };
 
-        std.log.info("Got packet, result: {}", .{result});
+        _ = result;
     }
 }
 
@@ -214,8 +221,8 @@ fn processPacket(
     zone.text(str);
 
     // is fec set already being built?
-    const maybe_fec_set = state.in_progress.getFecSetCtx(&shred.signature);
-    if (maybe_fec_set == null) {
+    var maybe_in_progress_idx = state.in_progress.getFecSetCtxIdx(&shred.signature);
+    if (maybe_in_progress_idx == null) {
         // fec set is not currently being built (likely finished already)
 
         // ignore shreds from already finished fec sets
@@ -248,12 +255,14 @@ fn processPacket(
         }
     }
 
-    // TODO: only recompute this
+    // TODO: only compute this for new fec sets
     var shred_merkle_root: Hash = undefined;
     try shred.merkleRoot(&shred_merkle_root);
 
-    const fec_set_ctx: *FecSetCtx = if (maybe_fec_set) |fec_set_ctx| blk: {
+    const fec_set_ctx: *FecSetCtx = if (maybe_in_progress_idx) |fec_set_ctx_idx| blk: {
         @branchHint(.likely); // fec set is being constructed, and this is not the first shred
+
+        const fec_set_ctx = &state.in_progress.contexts[fec_set_ctx_idx];
 
         // variant should match that of the first recorded shred in the fec set
         if ((shred.variant.isData() and !shred.variant.eql(fec_set_ctx.data_variant)) or
@@ -317,13 +326,16 @@ fn processPacket(
 
         std.debug.assert(state.in_progress.contexts[new_fec_set_idx].totalShredsReceived() == 0);
 
+        maybe_in_progress_idx = new_fec_set_idx;
+
         break :blk &state.in_progress.contexts[new_fec_set_idx];
 
         // TODO: handle resigned shreds?
     };
 
     zone.value(fec_set_ctx.totalShredsReceived());
-    if (fec_set_ctx.totalShredsReceived() > FecSetCtx.fec_shred_cnt) return .shred_already_seen; // TODO: <-- REMOVE THIS ( should be handled be early if in finished check )
+
+    // if (fec_set_ctx.totalShredsReceived() > FecSetCtx.fec_shred_cnt) return .shred_already_seen; // TODO: <-- REMOVE THIS ( should be handled be early if in finished check )
 
     tracy.plot(u8, "totalShredsReceived", fec_set_ctx.totalShredsReceived());
 
@@ -342,10 +354,12 @@ fn processPacket(
         fec_set_ctx.data_shreds_buf[in_type_idx] = packet.data; // persist packet to our state
     }
 
+    tracy.plot(u8, "totalShredsReceived", fec_set_ctx.totalShredsReceived());
+
     // we just received one
     std.debug.assert(fec_set_ctx.totalShredsReceived() >= 1);
-    // // this fec set should have completed last iteration
-    // std.debug.assert(fec_set_ctx.totalShredsReceived() <= FecSetCtx.fec_shred_cnt);
+    // this fec set should have completed last iteration
+    std.debug.assert(fec_set_ctx.totalShredsReceived() <= FecSetCtx.fec_shred_cnt);
 
     if (fec_set_ctx.totalShredsReceived() < FecSetCtx.fec_shred_cnt) {
         // we're all good, but we haven't received enough to reconstruct the fec set yet
@@ -364,6 +378,9 @@ fn processPacket(
 
     // writing out deshredded fec set
     {
+        const sending_zone = tracy.Zone.init(@src(), .{ .name = "writing deshredded" });
+        defer sending_zone.deinit();
+
         const total_payload_len, const data_complete, const slot_complete = blk: {
             var len: u16 = 0;
             var data_complete: bool = false;
@@ -408,6 +425,40 @@ fn processPacket(
 
     state.done.insertRemovingFirst(&fec_set_id, &hashSignature(&shred.signature));
 
+    // free our in_progress entry for the fec set
+    {
+        const free_zone = tracy.Zone.init(@src(), .{ .name = "free in_progress entry" });
+        defer free_zone.deinit();
+
+        const in_progress_idx = maybe_in_progress_idx.?;
+
+        {
+            var queue = state.in_progress.evictionQueue();
+
+            tracy.plot(u16, "eviction queue count", @intCast(queue.count()));
+
+            const update_index = blk: {
+                var idx: usize = 0;
+                while (idx < queue.items.len) : (idx += 1) {
+                    const item = queue.items[idx];
+                    if (queue.context.compare(item, in_progress_idx) == .eq) break :blk idx;
+                }
+                unreachable; // alive in_progress entry must be in the eviction queue
+            };
+
+            const removed = queue.removeIndex(update_index);
+            std.debug.assert(removed == in_progress_idx);
+        }
+
+        state.in_progress.used[in_progress_idx] = false;
+        state.in_progress.eviction_queue_len -= 1;
+
+        {
+            var queue = state.in_progress.evictionQueue();
+            tracy.plot(u16, "eviction queue count", @intCast(queue.count()));
+        }
+    }
+
     tracy.frameMarkNamed("finished FEC sets");
 
     return .fec_set_finished;
@@ -446,8 +497,6 @@ const FecSetCtx = extern struct {
         const code_recv: u8 = @intCast(self.code_shreds_received.count());
         std.debug.assert(code_recv <= code_shreds_max);
 
-        comptime std.debug.assert(data_shreds_max + code_shreds_max < 256);
-
         return data_recv + code_recv;
     }
 };
@@ -465,7 +514,7 @@ fn hashSignature(a: *const Signature) u32 {
 /// Tracks in-progress FEC sets
 /// Keyed by signature (cheaper than getting the merkle root)
 const ProgressMap = extern struct {
-    const n = 256; // max number of in-progress fec sets. Number chosen arbitrarily.
+    const n = 2048; // max number of in-progress fec sets. Number chosen arbitrarily.
     const Idx = u16;
 
     signatures: [n]Signature,

@@ -31,5 +31,11 @@
                 .{ .name = .deshredded_out, .access = .rw },
             },
         },
+        .{
+            .name = .replay,
+            .regions = .{
+                .{ .name = .deshredded_out, .access = .rw },
+            },
+        },
     },
 }
