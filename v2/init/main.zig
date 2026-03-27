@@ -118,6 +118,9 @@ pub fn main() !void {
 
             .histogram_data_len = 4096 * 3,
         },
+
+        // shred receiver -> replay
+        .deshredded_out = {},
     });
 
     switch (config.sandboxing_mode) {

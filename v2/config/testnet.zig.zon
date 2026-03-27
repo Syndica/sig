@@ -1,7 +1,7 @@
 .{
-    .sandboxing_mode = .sandboxed,
+    .sandboxing_mode = .threaded,
 
-    .cluster = .testnet,
+    .cluster = .devnet,
     .leader_schedule_file = "schedule.txt",
     .gossip = .{
         .port = 8001,
