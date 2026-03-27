@@ -1,3 +1,15 @@
+//! This is the root process, in charge of initialising and spawning all services.
+//!
+//! Responsibilities:
+//!  - Parsing config
+//!  - Creation of shared memory regions
+//!  - Initialising shared data structures / passing through config
+//!  - Creating sandboxed processes (unsandboxed single-process also supported for e.g. profiling)
+//!  - Waiting for first service failure, and shutdown
+//!
+//! See `services` for how this works.
+//!
+
 const std = @import("std");
 
 comptime {

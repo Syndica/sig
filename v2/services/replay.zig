@@ -1,6 +1,7 @@
 const std = @import("std");
-const start = @import("start");
+const start = @import("start_service");
 const lib = @import("lib");
+const tracy = @import("tracy");
 
 const Packet = lib.net.Packet;
 const Hash = lib.solana.Hash;
@@ -23,6 +24,9 @@ pub const ReadWrite = struct {
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
 pub fn serviceMain(rw: ReadWrite) !noreturn {
+    const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
+    defer zone.deinit();
+
     var fba = std.heap.FixedBufferAllocator.init(&scratch_memory);
     const allocator = fba.allocator();
 
@@ -34,9 +38,14 @@ pub fn serviceMain(rw: ReadWrite) !noreturn {
         const deshredded_fec_set: *const lib.shred.DeshreddedFecSet = read.get(0);
         defer read.markUsed(1);
 
+        const received_zone = tracy.Zone.init(@src(), .{ .name = "received fec set" });
+        defer received_zone.deinit();
+
+        const entry = state.insertGetChained(deshredded_fec_set);
+
         std.log.info(
-            "finished fec set {} {f}",
-            .{ deshredded_fec_set.id, deshredded_fec_set.merkle_root },
+            "finished fec set {} {f}, insert: {s}",
+            .{ deshredded_fec_set.id, deshredded_fec_set.merkle_root, @tagName(entry) },
         );
     }
 }
@@ -47,19 +56,30 @@ const State = struct {
     fn init(allocator: std.mem.Allocator) !State {
         var root_map: MerkleRootMap = .empty;
         errdefer root_map.deinit(allocator);
-        root_map.ensureTotalCapacity(allocator, 1024);
+        try root_map.ensureTotalCapacity(allocator, 1024);
 
         return .{
             .map = root_map,
         };
     }
 
-    fn insert(self: *State, deshredded: *const lib.shred.DeshreddedFecSet) !void {
+    const InsertResult = union(enum) {
+        already_known,
+        inserted,
+        inserted_known_chain: MerkleRootMap.Entry,
+    };
+
+    fn insertGetChained(self: *State, deshredded: *const lib.shred.DeshreddedFecSet) InsertResult {
         // TODO: eviction
 
         const get_or_put = self.map.getOrPutAssumeCapacity(deshredded.merkle_root);
-        if (get_or_put.found_existing) return;
+        if (get_or_put.found_existing) return .already_known;
         get_or_put.value_ptr.* = .init(deshredded);
+
+        return if (self.map.getEntry(deshredded.chained_merkle_root)) |entry|
+            .{ .inserted_known_chain = entry }
+        else
+            .inserted;
     }
 
     const MerkleRootMap = std.ArrayHashMapUnmanaged(Hash, Value, Context, true);
@@ -67,12 +87,12 @@ const State = struct {
     const Context = struct {
         pub fn hash(ctx: Context, key: Hash) u32 {
             _ = ctx;
-            return key.bytes()[0..4].*;
+            return @bitCast(key.data[0..4].*);
         }
         pub fn eql(ctx: Context, a: Hash, b: Hash, key_idx: usize) bool {
             _ = ctx;
             _ = key_idx;
-            return a.eql(b);
+            return a.eql(&b);
         }
     };
 
@@ -82,6 +102,8 @@ const State = struct {
         data_complete: bool,
         slot_complete: bool,
         payload_len: u16,
+
+        // TODO: we will probably want a doubly linked list for chaining
 
         // TODO: this shouldn't be copied, and should instead come in via a pool
         payload_buf: [32 * Shred.data_payload_max]u8,
