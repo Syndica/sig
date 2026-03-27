@@ -278,13 +278,13 @@ pub fn prepareCpiInstructionInfo(
 
         const index_in_callee_ptr = &dedupe_map[index_in_transaction];
         if (index_in_callee_ptr.* < deduped_account_metas.items.len) {
+            try deduped_account_metas.ensureUnusedCapacity(tc.allocator, 1);
             const prev = &deduped_account_metas.items[index_in_callee_ptr.*];
             prev.is_signer = prev.is_signer or account.is_signer;
             prev.is_writable = prev.is_writable or account.is_writable;
 
             std.debug.assert(prev.index_in_transaction < InstructionInfo.MAX_ACCOUNT_METAS);
-            const new = prev.*; // this avoids a bug caused by Parameter Reference Optimisation (PRO)
-            (try deduped_account_metas.addOne(tc.allocator)).* = new; // this is also needed to avoid the PRO bug
+            deduped_account_metas.addOneAssumeCapacity().* = prev.*; // this avoids a bug caused by Parameter Reference Optimisation (PRO)
         } else {
             index_in_callee_ptr.* = @intCast(deduped_account_metas.items.len);
             try deduped_account_metas.append(tc.allocator, .{
