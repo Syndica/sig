@@ -4,17 +4,17 @@
 
 const std = @import("std");
 const start = @import("start");
-const common = @import("common");
+const lib = @import("lib");
 
 const assert = std.debug.assert;
 
-const Pair = common.net.Pair;
-const Packet = common.net.Packet;
+const Pair = lib.net.Pair;
+const Packet = lib.net.Packet;
 
-const Signature = common.solana.Signature;
-const Pubkey = common.solana.Pubkey;
-const Slot = common.solana.Slot;
-const Hash = common.solana.Hash;
+const Signature = lib.solana.Signature;
+const Pubkey = lib.solana.Pubkey;
+const Slot = lib.solana.Slot;
+const Hash = lib.solana.Hash;
 
 comptime {
     _ = start;
@@ -29,7 +29,7 @@ pub const ReadWrite = struct {
 };
 
 pub const ReadOnly = struct {
-    config: *const common.gossip.Config,
+    config: *const lib.gossip.Config,
 };
 
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
@@ -41,7 +41,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             rw.pair.port,
             ro.config.keypair.pubkey,
             ro.config.cluster_info.shred_version,
-            common.fmtSlice(ro.config.cluster_info.getEntryAddresses()),
+            lib.fmtSlice(ro.config.cluster_info.getEntryAddresses()),
         },
     );
 
@@ -239,8 +239,8 @@ const Gossip = struct {
 
     pub const Config = struct {
         netpair: *Pair,
-        keypair: *const common.gossip.KeyPair,
-        cluster_info: *const common.gossip.ClusterInfo,
+        keypair: *const lib.gossip.KeyPair,
+        cluster_info: *const lib.gossip.ClusterInfo,
         contact_info: GossipData,
     };
 

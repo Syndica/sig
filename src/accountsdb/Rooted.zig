@@ -27,6 +27,8 @@ largest_rooted_slot: ?Slot,
 sqlite_mem_used: ?*Gauge = null,
 /// Whether the SPL token owner index column is enabled (runtime CLI flag).
 enable_spl_token_owner_index: bool,
+/// In-memory top-N accounts by lamport balance, updated on every put().
+largest_tracker: LargestTracker = .{},
 
 /// These aren't thread safe, but we can have as many as we want. Clean up with deinitThreadLocals
 /// on any threads that use put or get.
@@ -623,6 +625,8 @@ fn putWithoutTokenOwner(
 
     const result = sql.sqlite3_step(stmt);
     if (result != DONE) self.err(result);
+
+    self.largest_tracker.update(address, account.lamports);
 }
 
 fn putWithTokenOwner(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedData) void {
@@ -679,4 +683,236 @@ fn putWithTokenOwner(self: *Rooted, address: Pubkey, slot: Slot, account: Accoun
 
     const result = sql.sqlite3_step(stmt);
     if (result != DONE) self.err(result);
+
+    self.largest_tracker.update(address, account.lamports);
+}
+
+/// Tracks the top 20 accounts by lamport balance in rooted storage.
+/// Populated incrementally during snapshot loading and slot rooting
+/// via Rooted.put(). RPC threads read via snapshot().
+pub const LargestTracker = struct {
+    pub const CAPACITY = 20;
+    pub const Entry = struct { Pubkey, u64 };
+
+    len: usize = 0,
+    keys: [CAPACITY]Pubkey = .{Pubkey.ZEROES} ** CAPACITY,
+    lamports: [CAPACITY]u64 = .{0} ** CAPACITY,
+
+    /// Cached minimum lamports in the tracker. Enables fast rejection of puts
+    /// that can't enter the top-N. Only meaningful when tracker is full.
+    /// Only accessed by the single writer thread (snapshot load or replay).
+    min_lamports: u64 = 0,
+    /// Protects mutations for concurrent RPC snapshot() readers.
+    lock: sig.sync.RwLock = .{},
+
+    fn indexOf(self: *const LargestTracker, pk: Pubkey) ?usize {
+        for (self.keys[0..self.len], 0..) |*key, i| {
+            if (key.equals(&pk)) return i;
+        }
+        return null;
+    }
+
+    fn swapRemoveAt(self: *LargestTracker, index: usize) void {
+        self.len -= 1;
+        self.keys[index] = self.keys[self.len];
+        self.lamports[index] = self.lamports[self.len];
+    }
+
+    fn recomputeMin(self: *LargestTracker) void {
+        if (self.len == 0) {
+            self.min_lamports = 0;
+            return;
+        }
+        self.min_lamports = std.mem.min(u64, self.lamports[0..self.len]);
+    }
+
+    fn removeMin(self: *LargestTracker) void {
+        if (self.len == 0) return;
+        const min_idx = std.mem.indexOfMin(u64, self.lamports[0..self.len]);
+        self.swapRemoveAt(min_idx);
+    }
+
+    /// Append an entry. Caller must ensure self.len < CAPACITY.
+    fn put(self: *LargestTracker, pubkey: Pubkey, lam: u64) void {
+        std.debug.assert(self.len < CAPACITY);
+        self.keys[self.len] = pubkey;
+        self.lamports[self.len] = lam;
+        self.len += 1;
+    }
+
+    /// Update the tracker with a new account balance.
+    /// Called from Rooted.put() on the single writer thread (snapshot load or replay).
+    pub fn update(self: *LargestTracker, pubkey: Pubkey, lamports: u64) void {
+        // Fast path: tracker is full, balance is below the minimum, and the
+        // pubkey isn't already tracked. Reading the arrays here without a lock
+        // is safe because we are the single writer thread.
+        if (lamports > 0 and self.len == CAPACITY and
+            lamports <= self.min_lamports and
+            self.indexOf(pubkey) == null)
+        {
+            return;
+        }
+
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        // NOTE: we re-scan the (20) pubkeys here. This path is infrequent anyways
+        // (only gets hit for very large accounts, when they aren't already in the map).
+        if (self.indexOf(pubkey)) |idx| {
+            // Already tracked, update or remove.
+            if (lamports == 0) {
+                const was_min = self.lamports[idx] == self.min_lamports;
+                self.swapRemoveAt(idx);
+                if (was_min) self.recomputeMin();
+            } else {
+                self.lamports[idx] = lamports;
+                if (lamports < self.min_lamports) {
+                    self.min_lamports = lamports;
+                }
+            }
+        } else {
+            // Not tracked.
+            if (lamports == 0) return;
+
+            if (self.len < CAPACITY) {
+                self.put(pubkey, lamports);
+                // Track min incrementally as the map fills up.
+                const min = self.min_lamports;
+                if (min == 0 or lamports < min) {
+                    self.min_lamports = lamports;
+                }
+            } else if (lamports > self.min_lamports) {
+                // Displace the minimum entry.
+                // NOTE: removeMin only runs on two unavoidable cases:
+                // * When removing the current min (lamports -> 0)
+                // * displacement (a new entry knocked the min entry out)
+                // Both cases require finding the second-smallest, which we don't track (just 20 entries).
+                self.removeMin();
+                self.put(pubkey, lamports);
+                self.recomputeMin();
+            }
+        }
+    }
+
+    /// Copy current entries into caller's buffer. Returns count of entries copied.
+    /// Safe to call from any RPC thread (takes shared lock).
+    pub fn snapshot(self: *LargestTracker, buf: *[CAPACITY]Entry) usize {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        for (self.keys[0..self.len], self.lamports[0..self.len], 0..) |key, lam, i| {
+            buf[i] = .{ key, lam };
+        }
+        return self.len;
+    }
+};
+
+test "LargestTracker: empty snapshot" {
+    var tracker: LargestTracker = .{};
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    const n = tracker.snapshot(&buf);
+    try std.testing.expectEqual(0, n);
+}
+
+test "LargestTracker: basic insert and snapshot" {
+    var tracker: LargestTracker = .{};
+
+    const pk_a: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    const pk_b: Pubkey = .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk");
+    const pk_c: Pubkey = .parse("7EqfdGiB5UZgLWc1U9xYbKdy9Ky9NoYcMbEwUq9aAWR6");
+
+    tracker.update(pk_a, 1000);
+    tracker.update(pk_b, 2000);
+    tracker.update(pk_c, 500);
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    const n = tracker.snapshot(&buf);
+    try std.testing.expectEqual(3, n);
+    try std.testing.expectEqual(1000, tracker.lamports[tracker.indexOf(pk_a).?]);
+    try std.testing.expectEqual(2000, tracker.lamports[tracker.indexOf(pk_b).?]);
+    try std.testing.expectEqual(500, tracker.lamports[tracker.indexOf(pk_c).?]);
+}
+
+test "LargestTracker: update existing entry" {
+    var tracker: LargestTracker = .{};
+
+    const pk: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    tracker.update(pk, 1000);
+    tracker.update(pk, 5000);
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    try std.testing.expectEqual(1, tracker.snapshot(&buf));
+    try std.testing.expectEqual(5000, tracker.lamports[tracker.indexOf(pk).?]);
+}
+
+test "LargestTracker: remove by zero lamports" {
+    var tracker: LargestTracker = .{};
+
+    const pk_a: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    const pk_b: Pubkey = .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk");
+
+    tracker.update(pk_a, 1000);
+    tracker.update(pk_b, 2000);
+    tracker.update(pk_a, 0); // remove
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    try std.testing.expectEqual(1, tracker.snapshot(&buf));
+    try std.testing.expectEqual(null, tracker.indexOf(pk_a));
+    try std.testing.expectEqual(2000, tracker.lamports[tracker.indexOf(pk_b).?]);
+}
+
+test "LargestTracker: zero lamports insert is no-op" {
+    var tracker: LargestTracker = .{};
+
+    const pk: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    tracker.update(pk, 0);
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    try std.testing.expectEqual(0, tracker.snapshot(&buf));
+}
+
+test "LargestTracker: displacement when full" {
+    var tracker: LargestTracker = .{};
+
+    // Fill to capacity with deterministic random pubkeys
+    var random = std.Random.DefaultPrng.init(0);
+    var pks: [LargestTracker.CAPACITY]Pubkey = undefined;
+    for (0..LargestTracker.CAPACITY) |i| {
+        pks[i] = Pubkey.initRandom(random.random());
+        tracker.update(pks[i], (i + 1) * 100);
+    }
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    try std.testing.expectEqual(LargestTracker.CAPACITY, tracker.snapshot(&buf));
+    try std.testing.expectEqual(100, tracker.min_lamports);
+
+    // Insert a new entry above the min — should displace the min (lamports=100)
+    const newcomer: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    tracker.update(newcomer, 9999);
+
+    try std.testing.expectEqual(LargestTracker.CAPACITY, tracker.snapshot(&buf));
+    // The old minimum (100) should be gone; new minimum is 200
+    try std.testing.expectEqual(200, tracker.min_lamports);
+    try std.testing.expectEqual(null, tracker.indexOf(pks[0]));
+    try std.testing.expectEqual(9999, tracker.lamports[tracker.indexOf(newcomer).?]);
+}
+
+test "LargestTracker: no displacement below min" {
+    var tracker: LargestTracker = .{};
+
+    var random = std.Random.DefaultPrng.init(0);
+    for (0..LargestTracker.CAPACITY) |i| {
+        tracker.update(Pubkey.initRandom(random.random()), (i + 1) * 100);
+    }
+    try std.testing.expectEqual(100, tracker.min_lamports);
+
+    // Insert below min — should be rejected
+    const newcomer: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    tracker.update(newcomer, 50);
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    try std.testing.expectEqual(LargestTracker.CAPACITY, tracker.snapshot(&buf));
+    // Min unchanged, newcomer not present
+    try std.testing.expectEqual(100, tracker.min_lamports);
+    try std.testing.expectEqual(null, tracker.indexOf(newcomer));
 }

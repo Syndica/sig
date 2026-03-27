@@ -5,10 +5,10 @@ comptime {
 }
 
 const builtin = @import("builtin");
-const common = @import("../../common.zig");
+const lib = @import("../lib.zig");
 
-const Signature = common.solana.Signature;
-const Pubkey = common.solana.Pubkey;
+const Signature = lib.solana.Signature;
+const Pubkey = lib.solana.Pubkey;
 
 pub const pippenger = @import("ed25519/pippenger.zig");
 pub const straus = @import("ed25519/straus.zig");

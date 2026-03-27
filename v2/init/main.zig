@@ -5,12 +5,12 @@ comptime {
 }
 
 const services = @import("services.zig");
-const common = @import("common");
+const lib = @import("lib");
 
 const Config = struct {
     sandboxing_mode: SandboxingMode,
 
-    cluster: common.solana.Cluster,
+    cluster: lib.solana.Cluster,
 
     /// path to a file containing the output of `solana leader-schedule`
     leader_schedule_file: []const u8,
@@ -57,7 +57,7 @@ pub fn main() !void {
 
     std.log.info("config: {}", .{config});
 
-    const gossip_cluster_info: common.gossip.ClusterInfo =
+    const gossip_cluster_info: lib.gossip.ClusterInfo =
         try .getFromEcho(config.gossip.port, config.cluster);
 
     const schedule_file = try std.fs.cwd().openFile(config.leader_schedule_file, .{});
@@ -71,59 +71,36 @@ pub fn main() !void {
         .{ .service = .gossip },
     };
 
-    const shared_regions: []const services.SharedRegion = &.{
+    const shared_regions = services.toSharedRegions(.{
         // net -> shred
-        .{
-            .region = .{ .net_pair = .{ .port = config.shred_network.recv_port } },
-            .shares = &.{
-                .{ .instance = .{ .service = .shred_receiver }, .rw = true },
-                .{ .instance = .{ .service = .net }, .rw = true },
-            },
-        },
+        .net_to_shred = .{ .port = config.shred_network.recv_port },
         // shred constants
-        .{
-            .region = .{ .shred_recv_config = .{
-                .schedule_string = &reader.interface,
-                .shred_version = gossip_cluster_info.shred_version,
-            } },
-            .shares = &.{
-                .{ .instance = .{ .service = .shred_receiver } },
-            },
+        .shred_recv_config = .{
+            .schedule_string = &reader.interface,
+            .shred_version = gossip_cluster_info.shred_version,
         },
+
         // net -> gossip
-        .{
-            .region = .{ .net_pair = .{ .port = config.gossip.port } },
-            .shares = &.{
-                .{ .instance = .{ .service = .gossip }, .rw = true },
-                .{ .instance = .{ .service = .net }, .rw = true },
-            },
-        },
+        .net_to_gossip = .{ .port = config.gossip.port },
         // gossip constants
-        .{
-            .region = .{
-                .gossip_config = .{
-                    .cluster_info = gossip_cluster_info,
-                    // TODO: read this from identity file in signer service
-                    .keypair = .fromKeyPair(.generate()),
-                    .turbine_recv_port = config.shred_network.recv_port,
-                },
-            },
-            .shares = &.{
-                .{ .instance = .{ .service = .gossip } },
-            },
+        .gossip_config = .{
+            .cluster_info = gossip_cluster_info,
+            // TODO: read this from identity file in signer service
+            .keypair = .fromKeyPair(.generate()),
+            .turbine_recv_port = config.shred_network.recv_port,
         },
-    };
+    });
 
     switch (config.sandboxing_mode) {
         .sandboxed => try services.spawnAndWait(
             allocator,
             service_instances,
-            shared_regions,
+            &shared_regions,
         ),
         .threaded => try services.spawnAndWaitNoSandbox(
             allocator,
             service_instances,
-            shared_regions,
+            &shared_regions,
         ),
     }
 }

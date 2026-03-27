@@ -26,6 +26,7 @@ const Slot = sig.core.Slot;
 const GetAccountInfo = sig.rpc.methods.GetAccountInfo;
 const GetBalance = sig.rpc.methods.GetBalance;
 const GetFeeForMessage = sig.rpc.methods.GetFeeForMessage;
+const GetLargestAccounts = sig.rpc.methods.GetLargestAccounts;
 const GetSupply = sig.rpc.methods.GetSupply;
 const GetTokenAccountBalance = sig.rpc.methods.GetTokenAccountBalance;
 const GetTokenLargestAccounts = sig.rpc.methods.GetTokenLargestAccounts;
@@ -815,5 +816,80 @@ pub fn getTokenLargestAccounts(
     return .{
         .context = .{ .slot = slot },
         .value = results,
+    };
+}
+
+/// [agave] Agave's cache is keyed only by filter (None/Circulating/NonCirculating),
+/// not by commitment level. The cache is checked before bank selection, so a
+/// cached processed-era result is served to finalized callers and vice versa.
+/// TTL is 2 hours with no explicit invalidation. (rpc.rs:1053-1058, rpc_cache.rs:1-77)
+pub fn getLargestAccounts(
+    self: AccountHookContext,
+    arena: std.mem.Allocator,
+    params: GetLargestAccounts,
+) !GetLargestAccounts.Response {
+    const config = params.config orelse GetLargestAccounts.Config{};
+    const commitment = config.commitment orelse .finalized;
+
+    const slot = self.slot_tracker.commitments.get(commitment);
+    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    defer ref.release();
+    const ancestors = &ref.constants().ancestors;
+    const slot_reader = self.account_reader.forSlot(ancestors).toOwnedReader();
+
+    const results = try slot_reader.getLargest(arena, GetLargestAccounts.MAX_LARGEST_ACCOUNTS);
+
+    // Apply circulating/nonCirculating filter if requested.
+    const values = if (config.filter) |filter| blk: {
+        // Build the non-circulating account set (same logic as getSupply).
+        const clock = try account_codec.getSysvar(
+            sig.runtime.sysvar.Clock,
+            arena,
+            slot_reader,
+        ) orelse
+            return error.SlotNotAvailable;
+
+        var nc_set = std.AutoArrayHashMap(sig.core.Pubkey, void).init(arena);
+
+        for (&non_circulating_supply.non_circulating_accounts) |*raw| {
+            try nc_set.put(.{ .data = raw.* }, {});
+        }
+
+        var owner_iter = try slot_reader.getByOwner(arena, &sig.runtime.program.stake.ID);
+        defer owner_iter.deinit();
+
+        while (try owner_iter.next()) |entry| {
+            const pubkey, const account = entry;
+            if (parse_stake.isNonCirculatingStake(arena, &account.data, &clock)) {
+                try nc_set.put(pubkey, {});
+            }
+        }
+
+        // Filter results based on whether they are in the non-circulating set.
+        var filtered = std.ArrayListUnmanaged(GetLargestAccounts.AccountBalance){};
+        for (results) |entry| {
+            const pubkey, const lamports = entry;
+            const is_non_circulating = nc_set.contains(pubkey);
+            const include = switch (filter) {
+                .circulating => !is_non_circulating,
+                .nonCirculating => is_non_circulating,
+            };
+            if (include) {
+                try filtered.append(arena, .{ .address = pubkey, .lamports = lamports });
+            }
+        }
+        break :blk try filtered.toOwnedSlice(arena);
+    } else blk: {
+        const vals = try arena.alloc(GetLargestAccounts.AccountBalance, results.len);
+        for (vals, results) |*val, entry| {
+            const pubkey, const lamports = entry;
+            val.* = .{ .address = pubkey, .lamports = lamports };
+        }
+        break :blk vals;
+    };
+
+    return .{
+        .context = .{ .slot = slot },
+        .value = values,
     };
 }
