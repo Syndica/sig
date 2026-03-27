@@ -49,7 +49,7 @@
 
 const std = @import("std");
 const bk = @import("binkode");
-const start = @import("start");
+const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
 
@@ -407,7 +407,7 @@ fn processPacket(
 
         finished.* = .{
             .merkle_root = fec_set_ctx.merkle_root,
-            .chained_merkle_root = undefined, // TODO!
+            .chained_merkle_root = shred.chainedMerkleRoot().*, // TODO!
             .id = fec_set_id,
             .data_complete = data_complete,
             .slot_complete = slot_complete,
