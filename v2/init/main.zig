@@ -87,6 +87,7 @@ pub fn main() !void {
         .{ .service = .net },
         .{ .service = .gossip },
         .{ .service = .telemetry },
+        .{ .service = .replay },
     };
 
     const shared_regions = services.toSharedRegions(.{
