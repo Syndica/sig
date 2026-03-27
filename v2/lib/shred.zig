@@ -387,8 +387,6 @@ pub const Shred = extern struct {
         std.debug.assert(shred.variant.isData());
         const buffer: *const Packet.Buffer = @ptrCast(@alignCast(shred));
 
-        std.log.info("shred slot{} idx{} variant{}", .{ shred.slot, shred.slot_idx, shred.variant });
-
         return buffer[@offsetOf(Shred, "code_or_data") + @sizeOf(DataHeader) .. shred.code_or_data.data.size];
     }
 
@@ -488,3 +486,59 @@ pub const Shred = extern struct {
         if (idx != 0) return error.InvalidMerkleProof;
     }
 };
+
+test "Shred layout" {
+    const struct_types = &.{
+        Shred,
+        Shred.DataHeader,
+        Shred.CodeHeader,
+    };
+
+    const expected_byte_offsets = &.{
+        &.{ 0x00, 0x40, 0x41, 0x49, 0x4d, 0x4f, 0x53 },
+        &.{ 0x00, 0x02, 0x03 },
+        &.{ 0x00, 0x02, 0x04 },
+    };
+
+    inline for (struct_types, expected_byte_offsets) |Type, offsets| {
+        inline for (
+            comptime std.meta.fieldNames(Type),
+            offsets,
+        ) |field_name, expected_offset| {
+            const actual_offset = @offsetOf(Type, field_name);
+            if (actual_offset == expected_offset) continue;
+
+            @compileLog(std.fmt.comptimePrint(
+                "{s} field {s} found with offset 0x{X}, expected 0x{X}",
+                .{ @typeName(Type), field_name, actual_offset, expected_offset },
+            ));
+        }
+    }
+
+    const packed_struct_types = &.{
+        Shred.DataHeader.Flags,
+    };
+
+    const expected_first_bit_masks = &.{
+        &.{ 0x01, 0x40, 0x80 },
+    };
+
+    inline for (packed_struct_types, expected_first_bit_masks) |Type, first_bit_masks| {
+        inline for (
+            comptime std.meta.fieldNames(Type),
+            first_bit_masks,
+        ) |field_name, expected_first_bit_mask| {
+            const actual_offset = @bitOffsetOf(Type, field_name);
+            const actual_first_bit_mask = 1 << actual_offset;
+
+            if (actual_first_bit_mask == expected_first_bit_mask) continue;
+
+            @compileLog(std.fmt.comptimePrint(
+                "{s} bitfield {s} found with start 0x{X}, expected 0x{X}",
+                .{ @typeName(Type), field_name, actual_first_bit_mask, expected_first_bit_mask },
+            ));
+        }
+    }
+
+    if (@alignOf(Shred) != 1) @compileError("Shred should be align(1)");
+}
