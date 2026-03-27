@@ -789,13 +789,20 @@ fn trackNewVotesAndNotifyConfirmations(
                 // By now:
                 // 1) The vote must have come from ReplayStage,
                 // 2) We've seen this vote from replay for this hash before
-                // (`track_optimistic_confirmation_vote()` will not set `is_new == true`
-                // for same slot different hash), so short circuit because this vote
-                // has no new information
-
-                // Note gossip votes will always be processed because those should be unique
-                // and we need to update the gossip-only stake in the `VoteTracker`.
-                return;
+                // (`track_optimistic_confirmation_vote()` will not set
+                // `is_new == true` for same slot different hash), so short
+                // circuit because this vote has no new information.
+                //
+                // Note gossip votes will always be processed because those
+                // should be unique and we need to update the gossip-only
+                // stake in the `VoteTracker`.
+                //
+                // Must `break` (not `return`) to preserve `is_new_vote`
+                // from a prior iteration (e.g. the tip slot) so that
+                // post-loop notification logic still fires.
+                // https://github.com/anza-xyz/agave/blob/v2.2.6/
+                // core/src/cluster_info_vote_listener.rs#L560-L571
+                break;
             }
 
             is_new_vote = is_new;
