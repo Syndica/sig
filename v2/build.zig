@@ -31,7 +31,7 @@ pub fn build(b: *Build) !void {
             bool,
             "tracy-on-demand",
             "Start capturing profiler data when tracy starts",
-        ) orelse true,
+        ) orelse false,
         .tracy_callstack = 6,
     }).module("tracy");
 

@@ -89,6 +89,9 @@ pub fn main() !void {
             .keypair = .fromKeyPair(.generate()),
             .turbine_recv_port = config.shred_network.recv_port,
         },
+
+        // shred receiver -> replay
+        .deshredded_out = {},
     });
 
     switch (config.sandboxing_mode) {

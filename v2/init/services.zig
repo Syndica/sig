@@ -180,12 +180,14 @@ pub const Region = union(enum) {
         schedule_string: *std.Io.Reader,
         shred_version: u16,
     },
+    deshredded_out,
 
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(lib.net.Pair),
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
+            .deshredded_out => @sizeOf(lib.shred.DeshredRing),
         };
     }
 
@@ -218,6 +220,11 @@ pub const Region = union(enum) {
                     cfg.schedule_string,
                 );
                 data.shred_version = cfg.shred_version;
+            },
+            .deshredded_out => {
+                std.debug.assert(buf.len == @sizeOf(lib.shred.DeshredRing));
+                const data: *lib.shred.DeshredRing = @ptrCast(buf);
+                data.init();
             },
         };
     }
