@@ -789,19 +789,19 @@ fn trackNewVotesAndNotifyConfirmations(
                 // By now:
                 // 1) The vote must have come from ReplayStage,
                 // 2) We've seen this vote from replay for this hash before
-                // (`track_optimistic_confirmation_vote()` will not set
-                // `is_new == true` for same slot different hash), so short
+                // (track_optimistic_confirmation_vote() will not set
+                // is_new == true for same slot different hash), so short
                 // circuit because this vote has no new information.
                 //
                 // Note gossip votes will always be processed because those
                 // should be unique and we need to update the gossip-only
-                // stake in the `VoteTracker`.
+                // stake in the VoteTracker.
                 //
-                // Must `break` (not `return`) to preserve `is_new_vote`
+                // Must break (not return) to preserve is_new_vote
                 // from a prior iteration (e.g. the tip slot) so that
                 // post-loop notification logic still fires.
-                // https://github.com/anza-xyz/agave/blob/v2.2.6/
-                // core/src/cluster_info_vote_listener.rs#L560-L571
+                // This matches agave's control flow:
+                // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L560-L571
                 break;
             }
 
@@ -831,18 +831,29 @@ fn trackNewVotesAndNotifyConfirmations(
     latest_vote_slot.* = @max(latest_vote_slot.*, last_vote_slot);
 
     if (is_new_vote) {
-        // Notify RPC websocket voteSubscribe subscribers about the new vote.
-        // Slots are duped here because the event sink takes ownership; the runtime
-        // loop frees them via InboundEvent.deinit after dispatching to subscribers
-        // (see Runtime.handleInboundEvent). Each subscriber gets its own clone of
-        // the slots via handleVoteEvent.
+        // Notify RPC websocket voteSubscribe subscribers.
+        // [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L595
+        //
+        // Sig emits ~5x more vote notifications than Agave. This is
+        // expected and not a bug: Agave's gossip consumer polls CRDS
+        // with a cursor every 100ms, coalescing intermediate vote
+        // replacements for the same label (vote_index, pubkey).
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/gossip/src/crds.rs#L349-L360
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L252-L268
+        // Sig delivers votes via LocalMessageBroker.publish() on
+        // every successful CRDS insert (both new and replaced), so
+        // each intermediate tip-slot advance produces a notification.
+        // Every notification is accurate and unique, deduped by
+        // (slot, hash, pubkey) in trackOptimisticConfirmationVote.
+        // This leads to subscribers simply seeing finer-grained data.
+        //
+        // Slots are duped because the event sink takes ownership;
+        // the runtime frees them via InboundEvent.deinit after
+        // dispatch (see Runtime.handleInboundEvent).
         if (senders.event_sink) |event_sink| {
-            // Allocation failure is treated as best-effort: vote notifications are
-            // non-critical and should not disrupt consensus. The send catch frees
-            // the duped slots on channel failure (e.g. channel closed).
-            // TODO: add error logging here (for both dupe and send failures) once
-            // a logger is threaded through to this function -- consistent with how
-            // other event emission sites handle errors (see replay/service.zig:629).
+            // Best-effort: vote notifications are non-critical.
+            // TODO: add error logging once a logger is threaded
+            // through (see replay/service.zig:629).
             const event_slots = allocator.dupe(Slot, vote_slots) catch null;
             if (event_slots) |duped_slots| {
                 event_sink.send(.{
