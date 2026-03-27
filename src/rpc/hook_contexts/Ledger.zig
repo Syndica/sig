@@ -804,12 +804,10 @@ fn getTransactionStatus(
         &ref.constants().ancestors,
     ) else null;
 
-    const is_finalized = blk: {
-        if (slot > self.slot_tracker.commitments.get(.finalized)) break :blk false;
-        if (self.ledger.reader().isRoot(arena, slot) catch false) break :blk true;
-        if (slot_ref.constants().ancestors.containsSlot(slot)) break :blk true;
-        break :blk false;
-    };
+    const is_finalized: bool =
+        slot <= self.slot_tracker.commitments.get(.finalized) and
+        (slot_ref.constants().ancestors.containsSlot(slot) or
+            self.ledger.reader().isRoot(arena, slot) catch false);
 
     const confirmations = if (self.slot_tracker.root.load(.monotonic) >= slot and is_finalized)
         null
