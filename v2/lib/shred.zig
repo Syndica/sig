@@ -244,7 +244,7 @@ pub const Shred = extern struct {
     const max_size = 1228;
 
     // This might not be possible? But this definitely always works as an upper bound
-    const data_payload_max = min_size - @sizeOf(DataHeader);
+    pub const data_payload_max = min_size - @sizeOf(DataHeader);
 
     const merkle_node_size = 20;
     const merkle_root_size = 32;
@@ -388,6 +388,21 @@ pub const Shred = extern struct {
         const buffer: *const Packet.Buffer = @ptrCast(@alignCast(shred));
 
         return buffer[@offsetOf(Shred, "code_or_data") + @sizeOf(DataHeader) .. shred.code_or_data.data.size];
+    }
+
+    pub fn chainedMerkleRoot(shred: *const Shred) *const Hash {
+        std.debug.assert(shred.variant.isMerkle());
+        std.debug.assert(shred.variant.isChained());
+        const buffer: *const Packet.Buffer = @ptrCast(@alignCast(shred));
+
+        const resigned_size: u16 = if (shred.variant.isResigned()) Signature.SIZE else 0;
+
+        const offset = shred.size() -
+            merkle_root_size -
+            shred.variant.merkleSize() -
+            resigned_size;
+
+        return @ptrCast(buffer[offset..][0..32]);
     }
 
     // The bytes which are checked against the merkle root.

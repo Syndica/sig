@@ -12,6 +12,7 @@ pub fn build(b: *Build) !void {
     const test_step = b.step("test", "Run unit tests");
     const ci_step = b.step("ci", "Run all checks used for CI");
     const check_step = b.step("check", "Check step.");
+    const docs_step = b.step("docs", "Emit docs");
     ci_step.dependOn(test_step);
     ci_step.dependOn(b.getInstallStep());
     ci_step.dependOn(&fmt_check_step.step);
@@ -35,6 +36,13 @@ pub fn build(b: *Build) !void {
         .tracy_callstack = 6,
     }).module("tracy");
 
+    // For doc generation
+    const DocGenModule = struct { name: []const u8, module: *Build.Module };
+    var doc_modules: std.ArrayListUnmanaged(DocGenModule) = .empty;
+    defer doc_modules.deinit(b.allocator);
+    var doc_service_modules: std.ArrayListUnmanaged(DocGenModule) = .empty;
+    defer doc_service_modules.deinit(b.allocator);
+
     const lib = mod: {
         const lib = b.createModule(.{
             .root_source_file = b.path("lib/lib.zig"),
@@ -48,6 +56,8 @@ pub fn build(b: *Build) !void {
         const lib_tests = b.addTest(.{ .root_module = lib, .name = "lib" });
         const lib_tests_run = b.addRunArtifact(lib_tests);
         test_step.dependOn(&lib_tests_run.step);
+
+        try doc_modules.append(b.allocator, .{ .name = "lib", .module = lib });
 
         break :mod lib;
     };
@@ -80,6 +90,8 @@ pub fn build(b: *Build) !void {
         const run_step = b.step("run", "Run supervisor");
         run_step.dependOn(&run_cmd.step);
 
+        try doc_modules.append(b.allocator, .{ .name = "sig_init", .module = sig_init });
+
         break :mod sig_init;
     };
 
@@ -100,6 +112,8 @@ pub fn build(b: *Build) !void {
         const start_service_tests_run = b.addRunArtifact(start_service_tests);
         test_step.dependOn(&start_service_tests_run.step);
 
+        try doc_modules.append(b.allocator, .{ .name = "start_service", .module = start_service });
+
         break :mod start_service;
     };
 
@@ -114,7 +128,7 @@ pub fn build(b: *Build) !void {
             .omit_frame_pointer = false,
         });
         service_mod.addImport("lib", lib);
-        service_mod.addImport("start", start_service);
+        service_mod.addImport("start_service", start_service);
         service_mod.addImport("tracy", tracy);
         service_mod.addImport("binkode", b.dependency("binkode", .{}).module("binkode"));
 
@@ -128,5 +142,55 @@ pub fn build(b: *Build) !void {
         const service_tests = b.addTest(.{ .root_module = service_mod, .name = service_name });
         const service_tests_run = b.addRunArtifact(service_tests);
         test_step.dependOn(&service_tests_run.step);
+
+        try doc_service_modules.append(b.allocator, .{
+            .name = service_name,
+            .module = service_mod,
+        });
+    }
+
+    // generates unified docs for all modules
+    // TODO: `zig build docs` should probably disable installing/building sig binaries
+    {
+        const gen_docs_run = b.addRunArtifact(
+            b.addExecutable(.{
+                .name = "sig-init",
+                .root_module = b.createModule(.{
+                    .target = target,
+                    .optimize = .Debug,
+                    .root_source_file = b.path("scripts/gen_docs_entry.zig"),
+                }),
+                .use_llvm = false,
+            }),
+        );
+
+        inline for (&.{ doc_service_modules, doc_service_modules }) |module_list| {
+            var services_str = std.io.Writer.Allocating.init(b.allocator);
+            defer services_str.deinit();
+
+            for (module_list.items, 0..) |svc_mod, i| {
+                const end: []const u8 = if (i == module_list.items.len - 1) "" else ", ";
+                try services_str.writer.print("{s}{s}", .{ svc_mod.name, end });
+            }
+
+            gen_docs_run.addArg(services_str.written());
+        }
+
+        const docs_mod = b.createModule(.{
+            .target = target,
+            .optimize = .Debug,
+            .root_source_file = gen_docs_run.addOutputFileArg("docs.zig"),
+        });
+        for (doc_modules.items) |mod| docs_mod.addImport(mod.name, mod.module);
+        for (doc_service_modules.items) |mod| docs_mod.addImport(mod.name, mod.module);
+
+        const docs_obj = b.addTest(.{ .name = "docs", .root_module = docs_mod });
+
+        const install_docs = b.addInstallDirectory(.{
+            .source_dir = docs_obj.getEmittedDocs(),
+            .install_dir = .prefix,
+            .install_subdir = "docs",
+        });
+        docs_step.dependOn(&install_docs.step);
     }
 }
