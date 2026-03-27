@@ -41,6 +41,7 @@ pub const AccountPayload = struct {
 pub const VersionedAccountPayload = union(enum(u8)) {
     AccountPayloadV1: AccountPayloadV1,
     EndOfSnapshotLoading: void,
+    TradeEventV1: TradeEventV1,
 
     const Self = @This();
 
@@ -48,8 +49,19 @@ pub const VersionedAccountPayload = union(enum(u8)) {
         switch (self.*) {
             .AccountPayloadV1 => self.AccountPayloadV1.deinit(allocator),
             .EndOfSnapshotLoading => {},
+            .TradeEventV1 => {},
         }
     }
+};
+
+pub const TradeEventV1 = struct {
+    slot: u64,
+    curve: [32]u8,
+    wallet: [32]u8,
+    /// Token amount from instruction data: buy(amount=tokens_out) / sell(amount=tokens_in).
+    /// Caller derives SOL cost/received via constant-product AMM math.
+    token_amount: u64,
+    direction: u8, // 0=buy, 1=sell
 };
 
 pub const AccountPayloadV1 = struct {
@@ -171,12 +183,19 @@ pub const GeyserWriter = struct {
         }
     }
 
+    /// Max depth before events are dropped to bound memory usage.
+    /// At ~100 bytes/event this caps backlog at ~5 MB.
+    const MAX_IO_CHANNEL_DEPTH: usize = 50_000;
+
     /// serializes the payload and sends it through the IO channel
     /// to eventually be written to the pipe.
     pub fn writePayloadToPipe(
         self: *Self,
         versioned_payload: VersionedAccountPayload,
     ) !void {
+        // Drop when backlogged — prevents unbounded RAM growth when chimera_brain is slow.
+        // Stale signals are worthless; dropping is correct behaviour.
+        if (self.io_channel.len() > MAX_IO_CHANNEL_DEPTH) return;
         const buf = try self.writePayloadToSlice(versioned_payload);
         try self.io_channel.send(buf);
     }
