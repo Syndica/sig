@@ -42,6 +42,8 @@ replay_votes_sender: ?*Channel(ParsedVote),
 ledger: ?*Ledger,
 /// Account store for looking up accounts (e.g. mint accounts for token balance resolution)
 account_store: ?SlotAccountStore,
+/// Geyser writer for streaming account updates to external consumers
+geyser_writer: ?*sig.geyser.GeyserWriter = null,
 
 pub fn commitTransactions(
     self: Committer,
@@ -163,6 +165,11 @@ pub fn commitTransactions(
             self.new_rate_activation_epoch,
         );
     }
+
+    // NOTE: AccountPayloadV1 writes removed — chimera_brain only consumes TradeEventV1
+    // events from pumpfun_parser (injected in execution.zig). Writing all modified
+    // accounts per slot added ~GB of io_channel pressure with no downstream benefit.
+    _ = self.geyser_writer;
 }
 
 /// Build and write TransactionStatusMeta to the ledger for a single transaction.
