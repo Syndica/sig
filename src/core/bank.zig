@@ -117,8 +117,10 @@ pub const SlotConstants = struct {
         bank_fields: *const BankFields,
         feature_set: FeatureSet,
     ) Allocator.Error!SlotConstants {
-        const ancestors = try bank_fields.ancestors.clone(allocator);
+        var ancestors = try bank_fields.ancestors.clone(allocator);
         errdefer ancestors.deinit(allocator);
+
+        try ancestors.addSlot(allocator, bank_fields.slot);
 
         const reserved_accounts = try ReservedAccounts.initForSlot(
             allocator,
