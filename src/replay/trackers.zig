@@ -469,19 +469,16 @@ pub const BlockCommitmentCache = struct {
             allocator: Allocator,
             tower: *const Tower,
             stake: u64,
-            ancestors: ?[]const Slot,
+            ancestors: []const Slot,
         ) error{OutOfMemory}!void {
-            self.total_stake += stake;
-
-            const sorted_ancestors = ancestors orelse return;
-            if (sorted_ancestors.len == 0) return;
+            if (ancestors.len == 0) return;
 
             // Agave-compatible walk over sorted ancestor slots.
             var ancestors_index: usize = 0;
 
             // 1. Root handling: credit rooted stake to every ancestor <= root.
             if (tower.root) |root| {
-                for (sorted_ancestors, 0..) |ancestor, i| {
+                for (ancestors, 0..) |ancestor, i| {
                     if (ancestor > root) {
                         ancestors_index = i;
                         break;
@@ -499,11 +496,11 @@ pub const BlockCommitmentCache = struct {
             // 2. Vote handling: credit confirmation stake to all ancestors
             //    between consecutive votes.
             for (tower.votes.constSlice()) |vote| {
-                while (sorted_ancestors[ancestors_index] <= vote.slot) {
-                    if (sorted_ancestors[ancestors_index] > vote.slot) break;
+                while (ancestors[ancestors_index] <= vote.slot) {
+                    if (ancestors[ancestors_index] > vote.slot) break;
                     const entry = try self.new_commitment.getOrPutValue(
                         allocator,
-                        sorted_ancestors[ancestors_index],
+                        ancestors[ancestors_index],
                         std.mem.zeroes(BlockCommitmentArray),
                     );
                     std.debug.assert(vote.confirmation_count > 0);
@@ -511,7 +508,7 @@ pub const BlockCommitmentCache = struct {
                     entry.value_ptr[vote.confirmation_count - 1] += stake;
                     ancestors_index += 1;
 
-                    if (ancestors_index == sorted_ancestors.len) return;
+                    if (ancestors_index == ancestors.len) return;
                 }
             }
         }
@@ -1139,6 +1136,7 @@ test "BlockCommitmentCache commitAccumulated swaps data atomically" {
     const ancestors = [_]Slot{ 10, 42 };
     var acc: BlockCommitmentCache.Accumulator = .{};
     defer acc.deinit(allocator);
+    acc.total_stake += 700;
     try acc.observeVoteAccount(allocator, &tower, 700, &ancestors);
 
     // Commit: should swap cache contents
@@ -1178,11 +1176,13 @@ test "BlockCommitmentCache Accumulator multiple vote accounts accumulate" {
     // First vote account votes on slot 100 at depth 2
     var tower1: Tower = .{ .root = null };
     try tower1.votes.append(.{ .slot = 100, .confirmation_count = 2 });
+    acc.total_stake += 300;
     try acc.observeVoteAccount(allocator, &tower1, 300, &ancestors);
 
     // Second vote account also votes on slot 100 at depth 2
     var tower2: Tower = .{ .root = null };
     try tower2.votes.append(.{ .slot = 100, .confirmation_count = 2 });
+    acc.total_stake += 500;
     try acc.observeVoteAccount(allocator, &tower2, 500, &ancestors);
 
     // Stake should accumulate: 300 + 500 = 800
@@ -1205,6 +1205,7 @@ test "BlockCommitmentCache Accumulator ancestor-filtered walk credits intermedia
     var acc: BlockCommitmentCache.Accumulator = .{};
     defer acc.deinit(allocator);
 
+    acc.total_stake += 600;
     try acc.observeVoteAccount(allocator, &tower, 600, &ancestors);
 
     try std.testing.expectEqual(@as(u64, 600), acc.total_stake);

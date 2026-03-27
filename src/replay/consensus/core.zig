@@ -101,7 +101,14 @@ const CommitmentVisitorCtx = struct {
 
     fn visit(ctx_ptr: *anyopaque, tower: *const Tower, stake: u64) error{OutOfMemory}!void {
         const self: *CommitmentVisitorCtx = @ptrCast(@alignCast(ctx_ptr));
-        try self.acc.observeVoteAccount(self.allocator, tower, stake, self.ancestors);
+
+        self.acc.total_stake += stake;
+        if (self.ancestors) |ancestors| try self.acc.observeVoteAccount(
+            self.allocator,
+            tower,
+            stake,
+            ancestors,
+        );
     }
 };
 
