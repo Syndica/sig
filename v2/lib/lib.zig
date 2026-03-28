@@ -25,4 +25,8 @@ comptime {
     _ = telemetry;
 }
 
+comptime {
+    _ = std.testing.refAllDecls(@This());
+}
+
 pub const test_data_dir = "../data/test-data/";
