@@ -1867,7 +1867,7 @@ fn runRPCServer(
         .account_reader = account_reader,
     };
 
-    var ws_runtime_ctx = WSRPCRuntime.init(.{
+    var ws_runtime_ctx = try WSRPCRuntime.init(.{
         .allocator = allocator,
         .logger = .from(logger),
         .sub_map = &sub_map,

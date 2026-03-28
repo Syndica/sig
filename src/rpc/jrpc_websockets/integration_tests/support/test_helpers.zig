@@ -112,7 +112,7 @@ pub const TestServer = struct {
             .account_reader = .{ .accounts_db = &self.account_db.db },
         };
         const logger: sig.trace.Logger("jrpc_ws_integration_tests") = .noop;
-        self.ctx = Runtime.init(.{
+        self.ctx = try Runtime.init(.{
             .allocator = allocator,
             .logger = .from(logger),
             .sub_map = &self.sub_map,
@@ -304,7 +304,7 @@ pub const IntegratedTestServer = struct {
             .account_reader = .{ .accounts_db = &self.account_db.db },
         };
         const logger: sig.trace.Logger("jrpc_ws_integration_tests") = .noop;
-        self.ctx = Runtime.init(.{
+        self.ctx = try Runtime.init(.{
             .allocator = allocator,
             .logger = .from(logger),
             .sub_map = &self.sub_map,

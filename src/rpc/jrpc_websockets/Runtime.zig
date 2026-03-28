@@ -21,7 +21,126 @@ const NotifPayload = sig.sync.RcSlice(u8);
 pub const ReleasedPayloadBytes = @TypeOf((@as(NotifPayload, undefined)).release().?);
 pub const SlotReadContext = types.SlotReadContext;
 
+const Pubkey = sig.core.Pubkey;
+
 const RuntimeContext = @This();
+
+/// Interval at which buffered vote notifications are flushed to
+/// subscribers, matching Agave's GOSSIP_SLEEP_MILLIS polling cadence.
+/// See: agave/gossip/src/cluster_info.rs:105 (v3.1.8)
+const vote_coalesce_interval_ms = 100;
+
+/// Buffers vote events per validator pubkey using last-writer-wins
+/// semantics. Flushed periodically by an xev timer to match Agave's
+/// implicit coalescing from its 100ms CRDS polling loop.
+///
+/// Entries are retained after flushing so that stale votes (with a
+/// lower tip slot than the last-flushed version) are rejected. This
+/// prevents subscribers from seeing vote tip regressions due to
+/// reordered gossip delivery.
+///
+/// Memory is bounded by the number of unique validators (~600 on
+/// mainnet, ~120 KB worst case).
+const VoteCoalescer = struct {
+    const Entry = struct {
+        data: types.VoteEventData,
+        /// True once this version has been dispatched to
+        /// subscribers. Only entries with `flushed == false`
+        /// are sent on the next flush cycle.
+        flushed: bool,
+    };
+
+    const Map = std.AutoArrayHashMapUnmanaged(
+        Pubkey,
+        Entry,
+    );
+
+    map: Map = .empty,
+    /// Number of entries with `flushed == false`.
+    dirty_count: u32 = 0,
+
+    const empty: VoteCoalescer = .{};
+
+    /// Insert or replace a vote for the given pubkey. Only votes
+    /// with a strictly higher tip slot (last element of `slots`)
+    /// than the existing entry are accepted — same-or-lower tips
+    /// are dropped to prevent duplicate or regressed notifications.
+    ///
+    /// Takes ownership of `vote_data.slots` — the caller must
+    /// NOT free them.
+    fn ingest(
+        self: *VoteCoalescer,
+        allocator: std.mem.Allocator,
+        vote_data: types.VoteEventData,
+    ) void {
+        const gop = self.map.getOrPut(
+            allocator,
+            vote_data.vote_pubkey,
+        ) catch {
+            // OOM: drop this vote — nonfatal.
+            allocator.free(vote_data.slots);
+            return;
+        };
+
+        if (gop.found_existing) {
+            const old = gop.value_ptr;
+            const old_tip = tipSlot(old.data.slots);
+            const new_tip = tipSlot(vote_data.slots);
+
+            if (new_tip > old_tip) {
+                // Strictly newer tower tip — replace.
+                allocator.free(old.data.slots);
+                if (old.flushed) self.dirty_count += 1;
+                gop.value_ptr.* = .{
+                    .data = vote_data,
+                    .flushed = false,
+                };
+            } else {
+                // Same or lower tip — stale/duplicate, drop.
+                allocator.free(vote_data.slots);
+            }
+        } else {
+            gop.value_ptr.* = .{
+                .data = vote_data,
+                .flushed = false,
+            };
+            self.dirty_count += 1;
+        }
+    }
+
+    /// Return true if there are unflushed entries waiting to be
+    /// dispatched.
+    fn hasDirty(self: *const VoteCoalescer) bool {
+        return self.dirty_count > 0;
+    }
+
+    /// Mark all dirty entries as flushed.  Called after the
+    /// runtime has dispatched them to subscribers.
+    fn markAllFlushed(self: *VoteCoalescer) void {
+        for (self.map.values()) |*entry| {
+            entry.flushed = true;
+        }
+        self.dirty_count = 0;
+    }
+
+    /// Release all resources.
+    fn deinit(
+        self: *VoteCoalescer,
+        allocator: std.mem.Allocator,
+    ) void {
+        for (self.map.values()) |entry| {
+            allocator.free(entry.data.slots);
+        }
+        self.map.deinit(allocator);
+    }
+
+    fn tipSlot(slots: []const u64) u64 {
+        return if (slots.len > 0)
+            slots[slots.len - 1]
+        else
+            0;
+    }
+};
 
 allocator: std.mem.Allocator,
 logger: Logger,
@@ -58,6 +177,15 @@ threadpool_wg: std.Thread.WaitGroup,
 /// Optional callback run on the loop thread whenever the async wake fires.
 /// Used by integrations to drain additional loop-thread-only queues.
 wakeup_hook: ?WakeupHook = null,
+/// Buffers vote events per-pubkey and flushes them on a timer to match
+/// Agave's ~100ms polling cadence. See spec: vote-notification-coalescing.
+vote_coalescer: VoteCoalescer = .empty,
+/// xev timer handle for periodic vote coalescing flushes.
+coalesce_timer: xev.Timer,
+/// Completion token for the coalesce timer.
+coalesce_timer_completion: xev.Completion = .{},
+/// Whether the coalesce timer is currently armed.
+coalesce_timer_armed: bool = false,
 
 pub const WakeupHook = struct {
     ptr: *anyopaque,
@@ -82,13 +210,16 @@ pub const Dependencies = struct {
     wakeup_hook: ?WakeupHook = null,
 };
 
-pub fn init(deps: Dependencies) RuntimeContext {
+pub fn init(deps: Dependencies) !RuntimeContext {
     const runtime: RuntimeContext = .{
         .allocator = deps.allocator,
         .logger = .from(deps.logger),
         .sub_map = deps.sub_map,
         .slot_read_ctx = deps.slot_read_ctx,
-        .slot_state_cache = .init(deps.slot_read_ctx, .from(deps.logger)),
+        .slot_state_cache = .init(
+            deps.slot_read_ctx,
+            .from(deps.logger),
+        ),
         .inbound_event_queue = &deps.event_sink.channel,
         .commit_queue = deps.commit_queue,
         .loop_async = &deps.event_sink.loop_async,
@@ -99,6 +230,8 @@ pub fn init(deps: Dependencies) RuntimeContext {
         .notify_pending = &deps.event_sink.notify_pending,
         .threadpool_wg = .{},
         .wakeup_hook = deps.wakeup_hook,
+        .coalesce_timer = xev.Timer.init() catch
+            return error.TimerInitFailed,
     };
     return runtime;
 }
@@ -201,6 +334,7 @@ const FreePayloadTask = struct {
 /// IMPORTANT: callers must shutdown the websocket server and stop sending messages to the
 /// inbound event channel before calling `shutdown()`.
 pub fn shutdown(self: *RuntimeContext, timeout_ms: u64) error{Timeout}!void {
+    self.flushCoalescedVotes();
     self.drainCommitQueue();
     try self.waitForThreadpoolTasks(timeout_ms);
 
@@ -214,6 +348,8 @@ pub fn shutdown(self: *RuntimeContext, timeout_ms: u64) error{Timeout}!void {
 }
 
 pub fn deinit(self: *RuntimeContext) void {
+    self.vote_coalescer.deinit(self.allocator);
+    self.coalesce_timer.deinit();
     self.slot_state_cache.deinit(self.allocator);
     self.pending_wake_queues.deinit(self.allocator);
 }
@@ -401,7 +537,7 @@ fn handleInboundEvent(
             self.handleSlotTransition(.tip_changed, new_tip, transition, task_batch);
         },
         .vote => |vote_data| {
-            self.handleVoteEvent(vote_data, task_batch);
+            self.coalesceVoteEvent(vote_data, &e);
         },
     }
 }
@@ -608,6 +744,108 @@ fn handleVoteEvent(
             },
         }, task_batch);
     }
+}
+
+/// Buffer a vote event in the coalescer instead of dispatching
+/// immediately. Arms the flush timer if not already armed.
+///
+/// Agave's `recv_loop` polls CRDS every 100ms, so intermediate
+/// tower advances that overwrite the same `(vote_index, pubkey)`
+/// label between polls are silently coalesced. We replicate that
+/// by buffering here and flushing on a timer.
+///
+/// See: agave/core/src/cluster_info_vote_listener.rs:252-268
+///      agave/gossip/src/cluster_info.rs:105 (v3.1.8)
+fn coalesceVoteEvent(
+    self: *RuntimeContext,
+    vote_data: types.VoteEventData,
+    event: *types.InboundEvent,
+) void {
+    // Transfer ownership of vote_data.slots to the coalescer.
+    // Null-out the event's slots so the caller's `defer
+    // e.deinit()` doesn't double-free.
+    self.vote_coalescer.ingest(
+        self.allocator,
+        vote_data,
+    );
+    event.* = .{ .vote = .{
+        .vote_pubkey = vote_data.vote_pubkey,
+        .slots = &.{},
+        .hash = vote_data.hash,
+        .timestamp = vote_data.timestamp,
+        .signature = vote_data.signature,
+    } };
+
+    if (!self.coalesce_timer_armed) {
+        self.armCoalesceTimer();
+    }
+}
+
+/// Flush all unflushed vote events through the normal dispatch
+/// path and submit the resulting serialization tasks.
+fn flushCoalescedVotes(self: *RuntimeContext) void {
+    if (!self.vote_coalescer.hasDirty()) return;
+
+    var task_batch = ThreadPool.Batch{};
+    defer {
+        if (task_batch.len > 0) {
+            self.threadpool_wg.startMany(task_batch.len);
+            self.threadpool.schedule(task_batch);
+        }
+    }
+
+    for (self.vote_coalescer.map.values()) |*entry| {
+        if (!entry.flushed) {
+            self.handleVoteEvent(entry.data, &task_batch);
+        }
+    }
+
+    self.vote_coalescer.markAllFlushed();
+}
+
+/// Arm the xev timer for the next coalescing flush.
+fn armCoalesceTimer(self: *RuntimeContext) void {
+    self.coalesce_timer_armed = true;
+    self.coalesce_timer.run(
+        self.loop,
+        &self.coalesce_timer_completion,
+        vote_coalesce_interval_ms,
+        RuntimeContext,
+        self,
+        onCoalesceTimerFire,
+    );
+}
+
+/// xev timer callback: flush buffered votes and re-arm if there
+/// are still entries (lazy re-arm avoids unnecessary syscalls
+/// when no votes are flowing).
+fn onCoalesceTimerFire(
+    self_opt: ?*RuntimeContext,
+    _: *xev.Loop,
+    _: *xev.Completion,
+    result: xev.Timer.RunError!void,
+) xev.CallbackAction {
+    const self = self_opt orelse return .disarm;
+    result catch |err| {
+        self.logger.err().logf(
+            "vote coalesce timer error: {}",
+            .{err},
+        );
+        self.coalesce_timer_armed = false;
+        return .disarm;
+    };
+
+    self.flushCoalescedVotes();
+
+    // Re-arm only if new dirty entries arrived during flush.
+    // Otherwise go idle — the next ingest() call will re-arm.
+    if (self.vote_coalescer.hasDirty()) {
+        self.armCoalesceTimer();
+    } else {
+        self.coalesce_timer_armed = false;
+    }
+
+    return .disarm;
 }
 
 fn transitionMatchesCommitment(
@@ -1157,7 +1395,7 @@ test "releasePayload frees payloads on the threadpool" {
         .slot_tracker = &slot_tracker,
         .account_reader = .noop,
     };
-    var runtime = RuntimeContext.init(.{
+    var runtime = try RuntimeContext.init(.{
         .allocator = allocator,
         .logger = .FOR_TESTS,
         .sub_map = &sub_map,
@@ -1216,7 +1454,7 @@ test "shutdown times out while runtime tasks remain unfinished" {
         .slot_tracker = &slot_tracker,
         .account_reader = .noop,
     };
-    var runtime = RuntimeContext.init(.{
+    var runtime = try RuntimeContext.init(.{
         .allocator = allocator,
         .logger = .FOR_TESTS,
         .sub_map = &sub_map,
@@ -1275,7 +1513,7 @@ test "handleCommitMsg drops payload for removed queue" {
         .slot_tracker = &slot_tracker,
         .account_reader = .noop,
     };
-    var runtime = RuntimeContext.init(.{
+    var runtime = try RuntimeContext.init(.{
         .allocator = allocator,
         .logger = .FOR_TESTS,
         .sub_map = &sub_map,
@@ -1352,7 +1590,7 @@ test "handleCommitMsg ignores serialize error for removed queue" {
         .slot_tracker = &slot_tracker,
         .account_reader = .noop,
     };
-    var runtime = RuntimeContext.init(.{
+    var runtime = try RuntimeContext.init(.{
         .allocator = allocator,
         .logger = .FOR_TESTS,
         .sub_map = &sub_map,
@@ -1386,4 +1624,133 @@ test "handleCommitMsg ignores serialize error for removed queue" {
     try std.testing.expectEqual(1, metrics.serialize_jobs);
     try std.testing.expectEqual(1, metrics.serialize_errors);
     try std.testing.expect(sub_map.getById(result.sub_id) == null);
+}
+
+test "VoteCoalescer coalesces within window and rejects stale across windows" {
+    const allocator = std.testing.allocator;
+    const Hash = sig.core.Hash;
+    const Signature = sig.core.Signature;
+
+    var coalescer: VoteCoalescer = .empty;
+    defer coalescer.deinit(allocator);
+
+    var pk_a_data: [32]u8 = undefined;
+    @memset(&pk_a_data, 0xAA);
+    const pk_a: Pubkey = .{ .data = pk_a_data };
+
+    var pk_b_data: [32]u8 = undefined;
+    @memset(&pk_b_data, 0xBB);
+    const pk_b: Pubkey = .{ .data = pk_b_data };
+
+    // --- Window 1: three ascending votes for pk_a ---
+
+    coalescer.ingest(allocator, .{
+        .vote_pubkey = pk_a,
+        .slots = try allocator.dupe(u64, &.{100}),
+        .hash = Hash.ZEROES,
+        .timestamp = 1,
+        .signature = Signature.ZEROES,
+    });
+    try std.testing.expectEqual(1, coalescer.dirty_count);
+
+    coalescer.ingest(allocator, .{
+        .vote_pubkey = pk_a,
+        .slots = try allocator.dupe(u64, &.{ 100, 101 }),
+        .hash = Hash.ZEROES,
+        .timestamp = 2,
+        .signature = Signature.ZEROES,
+    });
+    // Still 1 dirty — replaced the unflushed entry.
+    try std.testing.expectEqual(1, coalescer.dirty_count);
+
+    coalescer.ingest(allocator, .{
+        .vote_pubkey = pk_a,
+        .slots = try allocator.dupe(
+            u64,
+            &.{ 100, 101, 102 },
+        ),
+        .hash = Hash.ZEROES,
+        .timestamp = 3,
+        .signature = Signature.ZEROES,
+    });
+    try std.testing.expectEqual(1, coalescer.dirty_count);
+
+    // Also insert pk_b.
+    coalescer.ingest(allocator, .{
+        .vote_pubkey = pk_b,
+        .slots = try allocator.dupe(u64, &.{200}),
+        .hash = Hash.ZEROES,
+        .timestamp = 4,
+        .signature = Signature.ZEROES,
+    });
+    try std.testing.expectEqual(2, coalescer.dirty_count);
+
+    // Verify coalesced state: pk_a should have tip 102.
+    const a_entry = coalescer.map.get(pk_a).?;
+    try std.testing.expectEqual(
+        102,
+        a_entry.data.slots[a_entry.data.slots.len - 1],
+    );
+    try std.testing.expect(!a_entry.flushed);
+
+    // Simulate flush (mark all flushed).
+    coalescer.markAllFlushed();
+    try std.testing.expectEqual(0, coalescer.dirty_count);
+    try std.testing.expect(!coalescer.hasDirty());
+
+    // --- Window 2: stale vote for pk_a (tip 101 < 102) ---
+
+    coalescer.ingest(allocator, .{
+        .vote_pubkey = pk_a,
+        .slots = try allocator.dupe(u64, &.{ 100, 101 }),
+        .hash = Hash.ZEROES,
+        .timestamp = 5,
+        .signature = Signature.ZEROES,
+    });
+    // Stale — should be rejected, dirty_count stays 0.
+    try std.testing.expectEqual(0, coalescer.dirty_count);
+
+    // pk_a still has the old tip 102 entry, marked flushed.
+    const a_after = coalescer.map.get(pk_a).?;
+    try std.testing.expectEqual(
+        102,
+        a_after.data.slots[a_after.data.slots.len - 1],
+    );
+    try std.testing.expect(a_after.flushed);
+
+    // Same-tip vote (102) is also rejected (not strictly >).
+    coalescer.ingest(allocator, .{
+        .vote_pubkey = pk_a,
+        .slots = try allocator.dupe(u64, &.{ 100, 101, 102 }),
+        .hash = Hash.ZEROES,
+        .timestamp = 6,
+        .signature = Signature.ZEROES,
+    });
+    try std.testing.expectEqual(0, coalescer.dirty_count);
+
+    // --- Window 2: newer vote for pk_a (tip 103 > 102) ---
+
+    coalescer.ingest(allocator, .{
+        .vote_pubkey = pk_a,
+        .slots = try allocator.dupe(
+            u64,
+            &.{ 101, 102, 103 },
+        ),
+        .hash = Hash.ZEROES,
+        .timestamp = 7,
+        .signature = Signature.ZEROES,
+    });
+    // Accepted — dirty_count goes to 1.
+    try std.testing.expectEqual(1, coalescer.dirty_count);
+
+    const a_new = coalescer.map.get(pk_a).?;
+    try std.testing.expectEqual(
+        103,
+        a_new.data.slots[a_new.data.slots.len - 1],
+    );
+    try std.testing.expect(!a_new.flushed);
+
+    // pk_b is still flushed/clean from window 1.
+    const b_entry = coalescer.map.get(pk_b).?;
+    try std.testing.expect(b_entry.flushed);
 }
