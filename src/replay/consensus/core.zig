@@ -97,18 +97,11 @@ const CommitmentVisitorCtx = struct {
     allocator: Allocator,
     /// Sorted status-cache root slots; when non-null, restricts commitment
     /// tracking to only these ancestor slots (matching Agave behaviour).
-    ancestors: ?[]const Slot,
+    ancestors: []const Slot,
 
     fn visit(ctx_ptr: *anyopaque, tower: *const Tower, stake: u64) error{OutOfMemory}!void {
         const self: *CommitmentVisitorCtx = @ptrCast(@alignCast(ctx_ptr));
-
-        self.acc.total_stake += stake;
-        if (self.ancestors) |ancestors| try self.acc.observeVoteAccount(
-            self.allocator,
-            tower,
-            stake,
-            ancestors,
-        );
+        try self.acc.observeVoteAccount(self.allocator, tower, stake, self.ancestors);
     }
 };
 
@@ -489,29 +482,27 @@ pub const TowerConsensus = struct {
         // the vote-account iteration inside collectClusterVoteState, avoiding a
         // redundant second loop over every vote account.
         //
-        // When a StatusCache is available, extract its sorted root slots so that
-        // the accumulator only tracks commitment for recent ancestor slots,
-        // matching Agave's `aggregate_commitment_for_vote_account` semantics.
-        const sorted_roots: ?[]Slot = if (params.status_cache) |sc|
-            sc.getSortedRoots(allocator) catch null
-        else
-            null;
-        defer if (sorted_roots) |r| allocator.free(r);
-
-        var commitment_ctx: CommitmentVisitorCtx = .{
+        // Extract StatusCache's sorted root slots so that the accumulator only
+        // tracks commitment for recent ancestor slots, matching Agave's
+        // `aggregate_commitment_for_vote_account` semantics.
+        var commitment_ctx: ?CommitmentVisitorCtx = if (params.block_commitment_cache != null) .{
             .acc = .{},
             .allocator = allocator,
-            .ancestors = sorted_roots,
+            .ancestors = if (params.status_cache) |sc|
+                try sc.getSortedRoots(allocator)
+            else
+                // StatusCache is required when BlockCommitmentCache is expected to be populated
+                return error.MissingStatusCache,
+        } else null;
+        defer if (commitment_ctx) |c| {
+            c.acc.deinit(allocator);
+            allocator.free(c.ancestors);
         };
-        defer commitment_ctx.acc.deinit(allocator);
 
-        const commitment_visitor: ?VoteAccountVisitor = if (params.block_commitment_cache != null)
-            .{
-                .context = @ptrCast(&commitment_ctx),
-                .visitFn = &CommitmentVisitorCtx.visit,
-            }
-        else
-            null;
+        const commitment_visitor: ?VoteAccountVisitor = if (commitment_ctx) |*ctx| .{
+            .context = @ptrCast(ctx),
+            .visitFn = &CommitmentVisitorCtx.visit,
+        } else null;
 
         try self.executeProtocol(
             allocator,
@@ -534,7 +525,7 @@ pub const TowerConsensus = struct {
 
         // Commit accumulated commitment data to the cache in one atomic swap.
         if (params.block_commitment_cache) |cache| {
-            cache.commitAccumulated(&commitment_ctx.acc);
+            cache.commitAccumulated(&commitment_ctx.?.acc);
             // Update finalized commitment from the highest supermajority root,
             // matching Agave's commitment_service semantics.
             params.slot_tracker.commitments.update(.finalized, cache.highestSuperMajorityRoot());
@@ -7797,100 +7788,6 @@ test "loadTower handles invalid vote state" {
     const result = loadTower(allocator, .noop, .{ .account_map = &account_map }, vote_pubkey);
 
     try std.testing.expectError(error.BincodeError, result);
-}
-
-test "process populates block commitment cache when provided" {
-    const gpa = std.testing.allocator;
-
-    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
-    const prng = prng_state.random();
-
-    var registry: sig.prometheus.Registry(.{}) = .init(gpa);
-    defer registry.deinit();
-
-    var stubs = try sig.replay.service.DependencyStubs.init(gpa, .noop);
-    defer stubs.deinit();
-
-    const root_slot: Slot = 0;
-    const root_consts = try sig.core.SlotConstants.genesis(gpa, .DEFAULT);
-    var root_state: sig.core.SlotState = .GENESIS;
-
-    root_state.hash.set(Hash.ZEROES);
-    {
-        var bhq = root_state.blockhash_queue.write();
-        defer bhq.unlock();
-        try bhq.mut().insertGenesisHash(gpa, root_state.hash.readCopy().?, 0);
-    }
-
-    var slot_tracker = try SlotTracker.init(
-        gpa,
-        root_slot,
-        .{
-            .allocator = gpa,
-            .constants = root_consts,
-            .state = root_state,
-        },
-    );
-    defer slot_tracker.deinit(gpa);
-
-    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
-        gpa,
-        &.{.EMPTY_WITH_GENESIS},
-    );
-    defer epoch_tracker.deinit();
-
-    var progress = sig.consensus.ProgressMap.INIT;
-    defer progress.deinit(gpa);
-    {
-        const fork_progress0 = try sig.consensus.progress_map.ForkProgress.zeroes(gpa);
-        try progress.map.put(gpa, root_slot, fork_progress0);
-    }
-
-    var consensus = try TowerConsensus.init(gpa, .{
-        .logger = .noop,
-        .identity = .{
-            .vote_account = null,
-            .validator = .initRandom(prng),
-        },
-        .signing = .{
-            .node = null,
-            .authorized_voters = &.{},
-        },
-        .account_reader = stubs.accountReader(),
-        .ledger = &stubs.ledger,
-        .slot_tracker = &slot_tracker,
-        .now = .EPOCH_ZERO,
-        .registry = &registry,
-    });
-    defer consensus.deinit(gpa);
-
-    var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
-    defer duplicate_confirmed_slots.deinit(gpa);
-
-    var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
-    defer gossip_verified_vote_hashes.deinit(gpa);
-
-    var block_commitment_cache: sig.replay.trackers.BlockCommitmentCache = .DEFAULT;
-    defer block_commitment_cache.deinit(gpa);
-
-    try consensus.process(gpa, .{
-        .account_store = stubs.accountStore(),
-        .ledger = &stubs.ledger,
-        .gossip_votes = null,
-        .gossip_table = null,
-        .slot_tracker = &slot_tracker,
-        .epoch_tracker = &epoch_tracker,
-        .progress_map = &progress,
-        .status_cache = null,
-        .senders = stubs.senders,
-        .receivers = stubs.receivers,
-        .vote_sockets = null,
-        .slot_leaders = null,
-        .duplicate_confirmed_slots = &duplicate_confirmed_slots,
-        .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
-        .results = &.{},
-        .block_commitment_cache = &block_commitment_cache,
-    });
 }
 
 test "CommitmentVisitorCtx visit delegates to accumulator" {

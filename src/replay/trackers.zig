@@ -471,6 +471,7 @@ pub const BlockCommitmentCache = struct {
             stake: u64,
             ancestors: []const Slot,
         ) error{OutOfMemory}!void {
+            self.total_stake += stake;
             if (ancestors.len == 0) return;
 
             // Agave-compatible walk over sorted ancestor slots.
@@ -538,9 +539,11 @@ pub const BlockCommitmentCache = struct {
             return 0;
         }
 
-        pub fn deinit(self: *Accumulator, allocator: Allocator) void {
-            self.new_commitment.deinit(allocator);
-            self.rooted_stake.deinit(allocator);
+        pub fn deinit(self: *const Accumulator, allocator: Allocator) void {
+            var new_commitment = self.new_commitment;
+            var rooted_stake = self.rooted_stake;
+            new_commitment.deinit(allocator);
+            rooted_stake.deinit(allocator);
         }
     };
 
@@ -1136,7 +1139,6 @@ test "BlockCommitmentCache commitAccumulated swaps data atomically" {
     const ancestors = [_]Slot{ 10, 42 };
     var acc: BlockCommitmentCache.Accumulator = .{};
     defer acc.deinit(allocator);
-    acc.total_stake += 700;
     try acc.observeVoteAccount(allocator, &tower, 700, &ancestors);
 
     // Commit: should swap cache contents
@@ -1176,13 +1178,11 @@ test "BlockCommitmentCache Accumulator multiple vote accounts accumulate" {
     // First vote account votes on slot 100 at depth 2
     var tower1: Tower = .{ .root = null };
     try tower1.votes.append(.{ .slot = 100, .confirmation_count = 2 });
-    acc.total_stake += 300;
     try acc.observeVoteAccount(allocator, &tower1, 300, &ancestors);
 
     // Second vote account also votes on slot 100 at depth 2
     var tower2: Tower = .{ .root = null };
     try tower2.votes.append(.{ .slot = 100, .confirmation_count = 2 });
-    acc.total_stake += 500;
     try acc.observeVoteAccount(allocator, &tower2, 500, &ancestors);
 
     // Stake should accumulate: 300 + 500 = 800
@@ -1205,7 +1205,6 @@ test "BlockCommitmentCache Accumulator ancestor-filtered walk credits intermedia
     var acc: BlockCommitmentCache.Accumulator = .{};
     defer acc.deinit(allocator);
 
-    acc.total_stake += 600;
     try acc.observeVoteAccount(allocator, &tower, 600, &ancestors);
 
     try std.testing.expectEqual(@as(u64, 600), acc.total_stake);
