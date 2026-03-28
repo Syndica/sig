@@ -58,7 +58,6 @@ threadpool_wg: std.Thread.WaitGroup,
 /// Optional callback run on the loop thread whenever the async wake fires.
 /// Used by integrations to drain additional loop-thread-only queues.
 wakeup_hook: ?WakeupHook = null,
-
 pub const WakeupHook = struct {
     ptr: *anyopaque,
     onWake: *const fn (*anyopaque) void,
@@ -88,7 +87,10 @@ pub fn init(deps: Dependencies) RuntimeContext {
         .logger = .from(deps.logger),
         .sub_map = deps.sub_map,
         .slot_read_ctx = deps.slot_read_ctx,
-        .slot_state_cache = .init(deps.slot_read_ctx, .from(deps.logger)),
+        .slot_state_cache = .init(
+            deps.slot_read_ctx,
+            .from(deps.logger),
+        ),
         .inbound_event_queue = &deps.event_sink.channel,
         .commit_queue = deps.commit_queue,
         .loop_async = &deps.event_sink.loop_async,

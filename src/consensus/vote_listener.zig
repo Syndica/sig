@@ -23,6 +23,9 @@ const EpochTracker = sig.core.EpochTracker;
 
 const Logger = sig.trace.Logger("vote_listener");
 
+/// Matches Agave's gossip vote polling cadence.
+const gossip_vote_coalesce_interval_ms = 100;
+
 pub const SlotDataProvider = struct {
     slot_tracker: *SlotTracker,
     epoch_tracker: *EpochTracker,
@@ -126,9 +129,11 @@ pub const Senders = struct {
 
 const GossipVoteReceptor = struct {
     vote_tx_buffer: std.ArrayListUnmanaged(vote_parser.ParsedVote),
+    latest_vote_idx_by_pubkey: sig.utils.collections.PubkeyMap(usize),
 
     const INIT: GossipVoteReceptor = .{
         .vote_tx_buffer = .empty,
+        .latest_vote_idx_by_pubkey = .empty,
     };
 
     fn deinit(
@@ -139,6 +144,7 @@ const GossipVoteReceptor = struct {
 
         copy.clearVoteTxBuffer(allocator);
         copy.vote_tx_buffer.deinit(allocator);
+        copy.latest_vote_idx_by_pubkey.deinit(allocator);
     }
 
     fn clearVoteTxBuffer(
@@ -189,11 +195,47 @@ const GossipVoteReceptor = struct {
             if (votes_processed >= max_votes_to_process) break;
         }
 
-        // Update metrics for gossip votes received
+        // Update metrics for parsed gossip votes before coalescing.
         metrics.gossip_votes_received.add(vote_tx_buffer.items.len);
+        try self.coalesceVerifiedVotesByPubkey(allocator);
         if (vote_tx_buffer.items.len == 0) return &.{};
 
         return vote_tx_buffer.items;
+    }
+
+    fn coalesceVerifiedVotesByPubkey(
+        self: *GossipVoteReceptor,
+        allocator: std.mem.Allocator,
+    ) !void {
+        const vote_tx_buffer = &self.vote_tx_buffer;
+        var latest_vote_idx_by_pubkey = &self.latest_vote_idx_by_pubkey;
+        latest_vote_idx_by_pubkey.clearRetainingCapacity();
+        try latest_vote_idx_by_pubkey.ensureTotalCapacity(allocator, vote_tx_buffer.items.len);
+
+        var kept_len: usize = 0;
+        for (0..vote_tx_buffer.items.len) |idx| {
+            const parsed_vote = vote_tx_buffer.items[idx];
+            const new_tip = parsed_vote.vote.lastVotedSlot() orelse unreachable;
+            const gop = try latest_vote_idx_by_pubkey.getOrPut(allocator, parsed_vote.key);
+
+            if (!gop.found_existing) {
+                vote_tx_buffer.items[kept_len] = parsed_vote;
+                gop.value_ptr.* = kept_len;
+                kept_len += 1;
+                continue;
+            }
+
+            const kept_idx = gop.value_ptr.*;
+            const kept_tip = vote_tx_buffer.items[kept_idx].vote.lastVotedSlot() orelse unreachable;
+            if (new_tip >= kept_tip) {
+                vote_tx_buffer.items[kept_idx].deinit(allocator);
+                vote_tx_buffer.items[kept_idx] = parsed_vote;
+            } else {
+                parsed_vote.deinit(allocator);
+            }
+        }
+
+        vote_tx_buffer.items.len = kept_len;
     }
 };
 
@@ -277,6 +319,7 @@ pub const VoteCollector = struct {
     vote_tracker: sig.consensus.VoteTracker,
     confirmation_verifier: OptimisticConfirmationVerifier,
     latest_vote_slot_per_validator: sig.utils.collections.PubkeyMap(Slot),
+    last_gossip_vote_collect: sig.time.Instant,
     last_process_root: sig.time.Instant,
     vote_processing_time: VoteProcessingTiming,
     metrics: VoteListenerMetrics,
@@ -299,6 +342,9 @@ pub const VoteCollector = struct {
             .vote_tracker = .EMPTY,
             .confirmation_verifier = .init(now, root_slot),
             .latest_vote_slot_per_validator = .empty,
+            .last_gossip_vote_collect = now.sub(
+                sig.time.Duration.fromMillis(gossip_vote_coalesce_interval_ms),
+            ),
             .last_process_root = now,
             .vote_processing_time = .ZEROES,
             .metrics = try .init(registry),
@@ -322,15 +368,22 @@ pub const VoteCollector = struct {
         const receivers = params.receivers;
         const ledger = params.ledger;
 
-        const gossip_vote_txs = if (params.gossip_votes) |gossip_votes|
-            try self.gossip_vote_receptor.receiveVerifiedVotes(
+        const gossip_vote_txs = gossip_vote_txs: {
+            const gossip_votes = params.gossip_votes orelse break :gossip_vote_txs &.{};
+            if (self.last_gossip_vote_collect.elapsed().asMillis() <
+                gossip_vote_coalesce_interval_ms)
+            {
+                break :gossip_vote_txs &.{};
+            }
+
+            self.last_gossip_vote_collect = .now();
+            break :gossip_vote_txs try self.gossip_vote_receptor.receiveVerifiedVotes(
                 allocator,
                 &slot_data_provider,
                 gossip_votes,
                 self.metrics,
-            )
-        else
-            &.{};
+            );
+        };
 
         const root_slot = slot_data_provider.rootSlot();
         const root_hash = slot_data_provider.getSlotHash(root_slot);
@@ -834,18 +887,15 @@ fn trackNewVotesAndNotifyConfirmations(
         // Notify RPC websocket voteSubscribe subscribers.
         // [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L595
         //
-        // Sig emits ~5x more vote notifications than Agave. This is
-        // expected and not a bug: Agave's gossip consumer polls CRDS
-        // with a cursor every 100ms, coalescing intermediate vote
-        // replacements for the same label (vote_index, pubkey).
+        // Sig batches gossip votes before they reach this point so
+        // voteSubscribe notifications track Agave's 100ms CRDS poll
+        // cadence rather than every intermediate gossip replacement.
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/gossip/src/crds.rs#L349-L360
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L252-L268
-        // Sig delivers votes via LocalMessageBroker.publish() on
-        // every successful CRDS insert (both new and replaced), so
-        // each intermediate tip-slot advance produces a notification.
-        // Every notification is accurate and unique, deduped by
-        // (slot, hash, pubkey) in trackOptimisticConfirmationVote.
-        // This leads to subscribers simply seeing finer-grained data.
+        // Replay votes still flow through immediately; dedup by
+        // (slot, hash, pubkey) in trackOptimisticConfirmationVote
+        // prevents duplicate notifications when gossip and replay see
+        // the same vote in different orders.
         //
         // Slots are duped because the event sink takes ownership;
         // the runtime frees them via InboundEvent.deinit after
@@ -1857,6 +1907,109 @@ test "simple usage" {
     // NOTE: processed slot is not used here, but required to construct SlotTracker.
     try std.testing.expectEqual(0, slot_tracker.commitments.get(.processed));
     try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
+}
+
+test "gossip vote receptor coalesces latest vote per pubkey" {
+    const allocator = std.testing.allocator;
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const node_keypair: sig.identity.KeyPair = try randomKeyPair(random);
+    const vote_keypair: sig.identity.KeyPair = try randomKeyPair(random);
+    const vote_pubkey = Pubkey.fromPublicKey(&vote_keypair.public_key);
+
+    var epoch_stakes = sig.core.EpochStakes.EMPTY_WITH_GENESIS;
+    errdefer epoch_stakes.deinit(allocator);
+
+    const vote_account = try sig.core.stakes.VoteAccount.initRandom(
+        allocator,
+        random,
+        Pubkey.fromPublicKey(&node_keypair.public_key),
+    );
+    errdefer {
+        var vote_account_to_deinit = vote_account;
+        vote_account_to_deinit.deinit(allocator);
+    }
+
+    try epoch_stakes.stakes.vote_accounts.vote_accounts.put(allocator, vote_pubkey, .{
+        .account = vote_account,
+        .stake = 1,
+    });
+    epoch_stakes.total_stake = 1;
+    try epoch_stakes.epoch_authorized_voters.put(allocator, vote_pubkey, vote_pubkey);
+
+    var epoch_stakes_slice = [_]sig.core.EpochStakes{epoch_stakes};
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        allocator,
+        &epoch_stakes_slice,
+    );
+    defer epoch_tracker.deinit();
+
+    var slot_tracker: SlotTracker = try .init(
+        allocator,
+        0,
+        try slotTrackerElementGenesis(allocator, .DEFAULT),
+    );
+    defer slot_tracker.deinit(allocator);
+
+    const slot_data_provider: SlotDataProvider = .{
+        .slot_tracker = &slot_tracker,
+        .epoch_tracker = &epoch_tracker,
+    };
+
+    var receptor = GossipVoteReceptor.INIT;
+    defer receptor.deinit(allocator);
+
+    const metrics = try VoteListenerMetrics.init(&registry);
+    const gossip_votes_channel: *sig.sync.Channel(sig.gossip.data.Vote) = try .create(allocator);
+    defer gossip_votes_channel.destroy();
+
+    inline for (.{ 10, 11, 12 }) |slot| {
+        var tower_sync: vote_program.state.TowerSync = .{
+            .lockouts = .{},
+            .root = slot - 1,
+            .hash = Hash.ZEROES,
+            .timestamp = slot,
+            .block_id = Hash.ZEROES,
+        };
+        defer tower_sync.deinit(allocator);
+
+        try tower_sync.lockouts.append(allocator, .{
+            .slot = slot,
+            .confirmation_count = 1,
+        });
+
+        const tower_sync_tx = try newTowerSyncTransaction(allocator, .{
+            .tower_sync = tower_sync,
+            .recent_blockhash = Hash.ZEROES,
+            .node_keypair = node_keypair,
+            .vote_keypair = vote_keypair,
+            .authorized_voter_keypair = vote_keypair,
+            .maybe_switch_proof_hash = null,
+        });
+
+        try gossip_votes_channel.send(.{
+            .from = vote_pubkey,
+            .transaction = tower_sync_tx,
+            .wallclock = slot,
+            .slot = slot,
+        });
+    }
+
+    const parsed_votes = try receptor.receiveVerifiedVotes(
+        allocator,
+        &slot_data_provider,
+        gossip_votes_channel,
+        metrics,
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), parsed_votes.len);
+    try std.testing.expectEqual(vote_pubkey, parsed_votes[0].key);
+    try std.testing.expectEqual(@as(Slot, 12), parsed_votes[0].vote.lastVotedSlot().?);
 }
 
 test "check trackers" {
