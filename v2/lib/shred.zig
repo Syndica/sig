@@ -77,6 +77,7 @@ pub const Shred = extern struct {
     } align(1),
 
     pub const DataHeader = extern struct {
+        /// Slots since the block that this block is based off. Must be <= shred.slot, typically 1.
         parent_offset: u16 align(1),
         flags: Flags align(1),
         size: u16 align(1),
