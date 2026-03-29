@@ -91,21 +91,6 @@ const check_slot_agrees_with_cluster =
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 
-/// Context for the VoteAccountVisitor callback that accumulates
-/// BlockCommitmentCache data during collectClusterVoteState.
-const CommitmentVisitorCtx = struct {
-    acc: sig.replay.trackers.BlockCommitmentCache.Accumulator,
-    allocator: Allocator,
-    /// Sorted status-cache root slots; when non-null, restricts commitment
-    /// tracking to only these ancestor slots (matching Agave behaviour).
-    ancestors: []const Slot,
-
-    fn visit(ctx_ptr: *anyopaque, tower: *const Tower, stake: u64) error{OutOfMemory}!void {
-        const self: *CommitmentVisitorCtx = @ptrCast(@alignCast(ctx_ptr));
-        try self.acc.observeVoteAccount(self.allocator, tower, stake, self.ancestors);
-    }
-};
-
 pub const VoteOp = union(enum) {
     push_vote: struct {
         tx: Transaction,
@@ -127,7 +112,6 @@ pub const TowerConsensus = struct {
     // Core consensus state
     fork_choice: HeaviestSubtreeForkChoice,
     replay_tower: ReplayTower,
-    status_cache: StatusCache,
     slot_data: SlotData,
 
     vote_collector: sig.consensus.VoteCollector,
@@ -204,7 +188,6 @@ pub const TowerConsensus = struct {
 
             .fork_choice = fork_choice,
             .replay_tower = replay_tower,
-            .status_cache = .DEFAULT,
             .slot_data = .empty,
 
             .vote_collector = vote_collector,
@@ -373,7 +356,6 @@ pub const TowerConsensus = struct {
             slot_tracker: *SlotTracker,
             epoch_tracker: *sig.core.EpochTracker,
             progress_map: *ProgressMap,
-            status_cache: *StatusCache,
             senders: Senders,
             receivers: Receivers,
             vote_sockets: ?*const VoteSockets,
@@ -384,7 +366,7 @@ pub const TowerConsensus = struct {
             /// Same comments on `duplicate_confirmed_slots` apply.
             gossip_verified_vote_hashes: *std.ArrayListUnmanaged(GossipVerifiedVoteHash),
             results: []const ReplayResult,
-            block_commitment_cache: ?*sig.replay.trackers.BlockCommitmentCache = null,
+            vote_account_visitor: ?VoteAccountVisitor = null,
         },
     ) !?Slot {
         var zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.process" });
@@ -480,28 +462,6 @@ pub const TowerConsensus = struct {
             break :cluster_sync_and_ancestors_descendants .{ ancestors, descendants };
         };
 
-        // Build an accumulator for BlockCommitmentCache so we can piggyback on
-        // the vote-account iteration inside collectClusterVoteState, avoiding a
-        // redundant second loop over every vote account.
-        //
-        // Extract StatusCache's sorted root slots so that the accumulator only
-        // tracks commitment for recent ancestor slots, matching Agave's
-        // `aggregate_commitment_for_vote_account` semantics.
-        var commitment_ctx: ?CommitmentVisitorCtx = if (params.block_commitment_cache != null) .{
-            .acc = .{},
-            .allocator = allocator,
-            .ancestors = try params.status_cache.getSortedRoots(allocator),
-        } else null;
-        defer if (commitment_ctx) |c| {
-            c.acc.deinit(allocator);
-            allocator.free(c.ancestors);
-        };
-
-        const commitment_visitor: ?VoteAccountVisitor = if (commitment_ctx) |*ctx| .{
-            .context = @ptrCast(ctx),
-            .visitFn = &CommitmentVisitorCtx.visit,
-        } else null;
-
         const maybe_new_root = try self.executeProtocol(
             allocator,
             params.ledger,
@@ -516,16 +476,8 @@ pub const TowerConsensus = struct {
             params.vote_sockets,
             self.identity.vote_account,
             params.senders,
-            commitment_visitor,
+            params.vote_account_visitor,
         );
-
-        // Commit accumulated commitment data to the cache in one atomic swap.
-        if (params.block_commitment_cache) |cache| {
-            cache.commitAccumulated(&commitment_ctx.?.acc);
-            // Update finalized commitment from the highest supermajority root,
-            // matching Agave's commitment_service semantics.
-            params.slot_tracker.commitments.update(.finalized, cache.highestSuperMajorityRoot());
-        }
 
         return maybe_new_root;
     }
@@ -4692,7 +4644,6 @@ test "edge cases - duplicate slot" {
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
-        .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
         .receivers = tc_input_channels,
         .vote_sockets = null,
@@ -4873,7 +4824,6 @@ test "edge cases - duplicate confirmed slot" {
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
-        .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
         .receivers = tc_input_channels,
         .vote_sockets = null,
@@ -5066,7 +5016,6 @@ test "edge cases - gossip verified vote hashes" {
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &replay_state.progress_map,
-        .status_cache = &replay_state.status_cache,
         .senders = tc_output_channels,
         .receivers = tc_input_channels,
         .vote_sockets = null,
@@ -5243,9 +5192,6 @@ test "vote on heaviest frozen descendant with no switch" {
     var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
     defer gossip_verified_vote_hashes.deinit(gpa);
 
-    var status_cache: StatusCache = .DEFAULT;
-    defer status_cache.deinit(gpa);
-
     // Component entry point being tested
     _ = try consensus.process(gpa, .{
         .account_store = stubs.accountStore(),
@@ -5255,7 +5201,6 @@ test "vote on heaviest frozen descendant with no switch" {
         .slot_tracker = &slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &progress,
-        .status_cache = &status_cache,
         .senders = stubs.senders,
         .receivers = stubs.receivers,
         .vote_sockets = null,
@@ -5478,9 +5423,6 @@ test "vote accounts with landed votes populate bank stats" {
     var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
     defer gossip_verified_vote_hashes.deinit(gpa);
 
-    var status_cache: StatusCache = .DEFAULT;
-    defer status_cache.deinit(gpa);
-
     // Component entry point being tested
     _ = try consensus.process(gpa, .{
         .account_store = stubs.accountStore(),
@@ -5490,7 +5432,6 @@ test "vote accounts with landed votes populate bank stats" {
         .slot_tracker = &slot_tracker,
         .epoch_tracker = &epoch_tracker,
         .progress_map = &progress,
-        .status_cache = &status_cache,
         .senders = stubs.senders,
         .receivers = stubs.receivers,
         .vote_sockets = null,
@@ -5795,9 +5736,6 @@ test "root advances after vote satisfies lockouts" {
             .{ .slot = 31, .output = .{ .last_entry_hash = hashes[31] } },
         };
 
-        var status_cache: StatusCache = .DEFAULT;
-        defer status_cache.deinit(gpa);
-
         _ = try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -5806,7 +5744,6 @@ test "root advances after vote satisfies lockouts" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
-            .status_cache = &status_cache,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -5869,9 +5806,6 @@ test "root advances after vote satisfies lockouts" {
             .{ .slot = 32, .output = .{ .last_entry_hash = hashes[32] } },
         };
 
-        var status_cache: StatusCache = .DEFAULT;
-        defer status_cache.deinit(gpa);
-
         _ = try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -5880,7 +5814,6 @@ test "root advances after vote satisfies lockouts" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
-            .status_cache = &status_cache,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -5953,9 +5886,6 @@ test "root advances after vote satisfies lockouts" {
             .{ .slot = 33, .output = .{ .last_entry_hash = hashes[33] } },
         };
 
-        var status_cache: StatusCache = .DEFAULT;
-        defer status_cache.deinit(gpa);
-
         _ = try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -5964,7 +5894,6 @@ test "root advances after vote satisfies lockouts" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
-            .status_cache = &status_cache,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -6138,9 +6067,6 @@ test "vote refresh when no new vote available" {
             .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
         };
 
-        var status_cache: StatusCache = .DEFAULT;
-        defer status_cache.deinit(gpa);
-
         _ = try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -6149,7 +6075,6 @@ test "vote refresh when no new vote available" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
-            .status_cache = &status_cache,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -6169,9 +6094,6 @@ test "vote refresh when no new vote available" {
     {
         const empty_results: []const ReplayResult = &.{};
 
-        var status_cache: StatusCache = .DEFAULT;
-        defer status_cache.deinit(gpa);
-
         _ = try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -6180,7 +6102,6 @@ test "vote refresh when no new vote available" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
-            .status_cache = &status_cache,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -6469,9 +6390,6 @@ test "detect and mark duplicate confirmed fork" {
             .{ .slot = 2, .output = .{ .last_entry_hash = slot2_hash } },
         };
 
-        var status_cache: StatusCache = .DEFAULT;
-        defer status_cache.deinit(gpa);
-
         _ = try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -6480,7 +6398,6 @@ test "detect and mark duplicate confirmed fork" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
-            .status_cache = &status_cache,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -6660,9 +6577,6 @@ test "detect and mark duplicate slot" {
             .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
         };
 
-        var status_cache: StatusCache = .DEFAULT;
-        defer status_cache.deinit(gpa);
-
         _ = try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -6671,7 +6585,6 @@ test "detect and mark duplicate slot" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
-            .status_cache = &status_cache,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -7072,9 +6985,6 @@ test "successful fork switch (switch_proof)" {
             .{ .slot = 2, .output = .{ .last_entry_hash = slot2_hash } },
         };
 
-        var status_cache: StatusCache = .DEFAULT;
-        defer status_cache.deinit(gpa);
-
         _ = try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -7083,7 +6993,6 @@ test "successful fork switch (switch_proof)" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
-            .status_cache = &status_cache,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -7118,9 +7027,6 @@ test "successful fork switch (switch_proof)" {
             .{ .slot = 4, .output = .{ .last_entry_hash = slot4_hash } },
         };
 
-        var status_cache: StatusCache = .DEFAULT;
-        defer status_cache.deinit(gpa);
-
         _ = try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -7129,7 +7035,6 @@ test "successful fork switch (switch_proof)" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
-            .status_cache = &status_cache,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -7192,9 +7097,6 @@ test "successful fork switch (switch_proof)" {
     {
         const empty_results: []const ReplayResult = &.{};
 
-        var status_cache: StatusCache = .DEFAULT;
-        defer status_cache.deinit(gpa);
-
         _ = try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -7203,7 +7105,6 @@ test "successful fork switch (switch_proof)" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
-            .status_cache = &status_cache,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -7275,9 +7176,6 @@ test "successful fork switch (switch_proof)" {
             },
         };
 
-        var status_cache: StatusCache = .DEFAULT;
-        defer status_cache.deinit(gpa);
-
         _ = try consensus.process(gpa, .{
             .account_store = stubs.accountStore(),
             .ledger = &stubs.ledger,
@@ -7286,7 +7184,6 @@ test "successful fork switch (switch_proof)" {
             .slot_tracker = &slot_tracker,
             .epoch_tracker = &epoch_tracker,
             .progress_map = &progress,
-            .status_cache = &status_cache,
             .senders = stubs.senders,
             .receivers = stubs.receivers,
             .vote_sockets = null,
@@ -7376,26 +7273,4 @@ test "loadTower handles invalid vote state" {
     const result = loadTower(allocator, .noop, .{ .account_map = &account_map }, vote_pubkey);
 
     try std.testing.expectError(error.BincodeError, result);
-}
-
-test "CommitmentVisitorCtx visit delegates to accumulator" {
-    const gpa = std.testing.allocator;
-
-    const ancestors = [_]Slot{42};
-    var ctx: CommitmentVisitorCtx = .{
-        .acc = .{},
-        .allocator = gpa,
-        .ancestors = &ancestors,
-    };
-    defer ctx.acc.deinit(gpa);
-
-    var tower: Tower = .{ .root = null };
-    try tower.votes.append(.{ .slot = 42, .confirmation_count = 3 });
-
-    try CommitmentVisitorCtx.visit(@ptrCast(&ctx), &tower, 500);
-
-    // The accumulator should have recorded the vote.
-    try std.testing.expectEqual(@as(u64, 500), ctx.acc.total_stake);
-    const entry = ctx.acc.new_commitment.get(42).?;
-    try std.testing.expectEqual(@as(u64, 500), entry[2]); // depth index = min(3-1, 30) = 2
 }

@@ -117,7 +117,20 @@ pub fn advanceReplay(
         var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
         defer duplicate_confirmed_slots.deinit(allocator);
 
-        break :new_root try consensus.tower.process(allocator, .{
+        var commitment_ctx: ?CommitmentVisitorCtx = if (replay_state.block_commitment_cache != null)
+            try commitmentVistorContext(
+                allocator,
+                &replay_state.slot_tracker,
+                &replay_state.status_cache,
+            )
+        else
+            null;
+        defer if (commitment_ctx) |c| {
+            c.acc.deinit(allocator);
+            allocator.free(c.ancestors);
+        };
+
+        const maybe_new_root = try consensus.tower.process(allocator, .{
             .account_store = replay_state.account_store,
             .gossip_votes = consensus.gossip_votes,
             .gossip_table = consensus.gossip_table,
@@ -125,7 +138,6 @@ pub fn advanceReplay(
             .slot_tracker = &replay_state.slot_tracker,
             .epoch_tracker = replay_state.epoch_tracker,
             .progress_map = &replay_state.progress_map,
-            .status_cache = &replay_state.status_cache,
             .senders = consensus.senders,
             .receivers = consensus.receivers,
             .vote_sockets = consensus.vote_sockets,
@@ -133,11 +145,24 @@ pub fn advanceReplay(
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
             .results = slot_results,
-            .block_commitment_cache = if (replay_state.block_commitment_cache) |*cache|
-                cache
-            else
-                null,
+            .vote_account_visitor = if (commitment_ctx) |*ctx| .{
+                .context = @ptrCast(ctx),
+                .visitFn = &CommitmentVisitorCtx.visit,
+            } else null,
         });
+
+        if (replay_state.block_commitment_cache) |*cache| {
+            // Commit accumulated commitment data to the cache in one atomic swap.
+            cache.commitAccumulated(&commitment_ctx.?.acc);
+            // Update finalized commitment from the highest supermajority root,
+            // matching Agave's commitment_service semantics.
+            replay_state.slot_tracker.commitments
+                .update(.finalized, cache.highestSuperMajorityRoot());
+        } else if (maybe_new_root) |new_root| {
+            // fall back to using root for finalized if we aren't tracking commitments
+            replay_state.slot_tracker.commitments.update(.finalized, new_root);
+        }
+        break :new_root maybe_new_root;
     } else try bypassConsensus(replay_state);
 
     if (maybe_new_root) |new_root| try handleNewRoot(
@@ -182,6 +207,73 @@ pub fn advanceReplay(
     }
 
     if (!processed_a_slot) try std.Thread.yield();
+}
+
+/// Context for the VoteAccountVisitor callback that accumulates
+/// BlockCommitmentCache data during collectClusterVoteState.
+const CommitmentVisitorCtx = struct {
+    acc: sig.replay.trackers.BlockCommitmentCache.Accumulator,
+    allocator: Allocator,
+    /// Sorted status-cache root slots; when non-null, restricts commitment
+    /// tracking to only these ancestor slots (matching Agave behaviour).
+    ancestors: []const Slot,
+
+    fn visit(
+        ctx_ptr: *anyopaque,
+        tower: *const sig.consensus.tower.Tower,
+        stake: u64,
+    ) error{OutOfMemory}!void {
+        const self: *CommitmentVisitorCtx = @ptrCast(@alignCast(ctx_ptr));
+        try self.acc.observeVoteAccount(self.allocator, tower, stake, self.ancestors);
+    }
+};
+
+// Build an accumulator for BlockCommitmentCache so we can piggyback on
+// the vote-account iteration inside collectClusterVoteState, avoiding a
+// redundant second loop over every vote account.
+//
+// Extract StatusCache's sorted root slots so that the accumulator only
+// tracks commitment for recent ancestor slots, matching Agave's
+// `aggregate_commitment_for_vote_account` semantics.
+pub fn commitmentVistorContext(
+    allocator: std.mem.Allocator,
+    slot_tracker: *SlotTracker,
+    status_cache: *StatusCache,
+) !CommitmentVisitorCtx {
+    const processed_reader = slot_tracker
+        .get(slot_tracker.commitments.get(.processed)) orelse
+        return error.MissingProcessedSlot;
+    defer processed_reader.release();
+
+    const processed_ancestors = &processed_reader.constants().ancestors;
+
+    var state = status_cache.state.read();
+    defer state.unlock();
+
+    const roots = state.get().roots;
+    const keys = roots.keys();
+
+    // analogous to agave's Bank::status_cache_ancestors
+    var sorted_recent_processed_ancestors: std.ArrayList(Slot) = .{};
+    try sorted_recent_processed_ancestors.ensureTotalCapacity(allocator, keys.len);
+    sorted_recent_processed_ancestors.expandToCapacity();
+    @memcpy(sorted_recent_processed_ancestors.items, keys);
+
+    var max_root: Slot = 0;
+    for (sorted_recent_processed_ancestors.items) |slot| max_root = @max(slot, max_root);
+
+    for (processed_ancestors.ancestors.keys()) |slot| {
+        if (slot < keys[0]) continue;
+        try sorted_recent_processed_ancestors.append(allocator, slot);
+    }
+
+    std.mem.sort(Slot, sorted_recent_processed_ancestors.items, {}, std.sort.asc(Slot));
+
+    return .{
+        .acc = .{},
+        .allocator = allocator,
+        .ancestors = try sorted_recent_processed_ancestors.toOwnedSlice(allocator),
+    };
 }
 
 pub const Dependencies = struct {
@@ -1409,7 +1501,6 @@ test "process runs without error with no replay results" {
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = replay_state.epoch_tracker,
         .progress_map = &replay_state.progress_map,
-        .status_cache = &replay_state.status_cache,
         .senders = consensus_senders,
         .receivers = consensus_receivers,
         .vote_sockets = null,
@@ -1909,3 +2000,25 @@ const TestAccount = struct {
         };
     }
 };
+
+test "CommitmentVisitorCtx visit delegates to accumulator" {
+    const gpa = std.testing.allocator;
+
+    const ancestors = [_]Slot{42};
+    var ctx: CommitmentVisitorCtx = .{
+        .acc = .{},
+        .allocator = gpa,
+        .ancestors = &ancestors,
+    };
+    defer ctx.acc.deinit(gpa);
+
+    var tower: sig.consensus.tower.Tower = .{ .root = null };
+    try tower.votes.append(.{ .slot = 42, .confirmation_count = 3 });
+
+    try CommitmentVisitorCtx.visit(@ptrCast(&ctx), &tower, 500);
+
+    // The accumulator should have recorded the vote.
+    try std.testing.expectEqual(@as(u64, 500), ctx.acc.total_stake);
+    const entry = ctx.acc.new_commitment.get(42).?;
+    try std.testing.expectEqual(@as(u64, 500), entry[2]); // depth index = min(3-1, 30) = 2
+}
