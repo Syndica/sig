@@ -15,7 +15,6 @@ pub const Logger = sig.trace.Logger("consensus");
 
 const Channel = sig.sync.Channel;
 const RwMux = sig.sync.RwMux;
-const ThreadPool = sig.sync.ThreadPool;
 
 const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
 
@@ -28,7 +27,6 @@ const Slot = sig.core.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotConstants = sig.core.SlotConstants;
 const SlotState = sig.core.SlotState;
-const StatusCache = sig.core.StatusCache;
 const Transaction = sig.core.transaction.Transaction;
 const SocketAddr = sig.net.SocketAddr;
 
@@ -368,7 +366,7 @@ pub const TowerConsensus = struct {
             results: []const ReplayResult,
             vote_account_visitor: ?VoteAccountVisitor = null,
         },
-    ) !?Slot {
+    ) !replay.service.SlotUpdate {
         var zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.process" });
         defer zone.deinit();
 
@@ -379,22 +377,23 @@ pub const TowerConsensus = struct {
         }
         const arena = arena_state.allocator();
 
-        try self.vote_collector.collectAndProcessVotes(allocator, .from(self.logger), .{
-            .slot_data_provider = .{
-                .slot_tracker = params.slot_tracker,
-                .epoch_tracker = params.epoch_tracker,
-            },
-            .senders = .{
-                .verified_vote = params.senders.verified_vote,
-                .gossip_verified_vote_hashes = params.gossip_verified_vote_hashes,
-                .duplicate_confirmed_slots = params.duplicate_confirmed_slots,
-                .bank_notification = null,
-                .subscriptions = .{},
-            },
-            .receivers = .{ .replay_votes = params.receivers.replay_votes },
-            .ledger = params.ledger,
-            .gossip_votes = params.gossip_votes,
-        });
+        const optimistically_confirmed_slot =
+            try self.vote_collector.collectAndProcessVotes(allocator, .from(self.logger), .{
+                .slot_data_provider = .{
+                    .slot_tracker = params.slot_tracker,
+                    .epoch_tracker = params.epoch_tracker,
+                },
+                .senders = .{
+                    .verified_vote = params.senders.verified_vote,
+                    .gossip_verified_vote_hashes = params.gossip_verified_vote_hashes,
+                    .duplicate_confirmed_slots = params.duplicate_confirmed_slots,
+                    .bank_notification = null,
+                    .subscriptions = .{},
+                },
+                .receivers = .{ .replay_votes = params.receivers.replay_votes },
+                .ledger = params.ledger,
+                .gossip_votes = params.gossip_votes,
+            });
 
         // Process replay results
         for (params.results) |r| {
@@ -462,7 +461,7 @@ pub const TowerConsensus = struct {
             break :cluster_sync_and_ancestors_descendants .{ ancestors, descendants };
         };
 
-        const maybe_new_root = try self.executeProtocol(
+        const result = try self.executeProtocol(
             allocator,
             params.ledger,
             params.gossip_table,
@@ -479,7 +478,11 @@ pub const TowerConsensus = struct {
             params.vote_account_visitor,
         );
 
-        return maybe_new_root;
+        return .{
+            .root = result.root,
+            .voted = result.voted,
+            .optimistically_confirmed = optimistically_confirmed_slot,
+        };
     }
 
     fn processResult(
@@ -531,7 +534,10 @@ pub const TowerConsensus = struct {
         vote_account: ?Pubkey,
         senders: Senders,
         vote_account_visitor: ?VoteAccountVisitor,
-    ) !?Slot {
+    ) !struct {
+        root: ?Slot,
+        voted: ?Slot,
+    } {
         const newly_computed_consensus_slots = try computeConsensusInputs(
             allocator,
             self.logger,
@@ -671,12 +677,6 @@ pub const TowerConsensus = struct {
                 slot_leaders,
                 vote_sockets,
             );
-
-            // Update the latest processed slot to the bank being voted on.
-            // This matches Agave's behavior: the processed slot is updated inside
-            // handle_votable_bank(), which is only called when vote_bank.is_some().
-            // See: https://github.com/anza-xyz/agave/blob/5e900421520a10933642d5e9a21e191a70f9b125/core/src/replay_stage.rs#L2683
-            slot_tracker.commitments.update(.processed, voted.slot);
         }
 
         // Reset onto a fork
@@ -684,7 +684,10 @@ pub const TowerConsensus = struct {
             // TODO implement
             _ = reset_slot;
         }
-        return maybe_new_root;
+        return .{
+            .root = maybe_new_root,
+            .voted = if (maybe_voted_slot) |voted| voted.slot else null,
+        };
     }
 
     fn handleDuplicateConfirmedFork(
@@ -5008,7 +5011,7 @@ test "edge cases - gossip verified vote hashes" {
     );
     defer epoch_tracker.deinit();
 
-    _ = try tower_consensus.process(gpa, .{
+    const result = try tower_consensus.process(gpa, .{
         .account_store = replay_state.account_store,
         .ledger = replay_state.ledger,
         .gossip_votes = null,
@@ -5036,7 +5039,7 @@ test "edge cases - gossip verified vote hashes" {
     );
 
     // Optimisic confirmation threshold not reached during this test.
-    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
+    try std.testing.expectEqual(0, result.optimistically_confirmed);
 }
 
 // TODO: Re-implement tests for the new consolidated API
@@ -5193,7 +5196,7 @@ test "vote on heaviest frozen descendant with no switch" {
     defer gossip_verified_vote_hashes.deinit(gpa);
 
     // Component entry point being tested
-    _ = try consensus.process(gpa, .{
+    const result = try consensus.process(gpa, .{
         .account_store = stubs.accountStore(),
         .ledger = &stubs.ledger,
         .gossip_votes = null,
@@ -5243,9 +5246,9 @@ test "vote on heaviest frozen descendant with no switch" {
 
     // 6. Assert trackers
     // processed slot is updated to slot_1 when the tower votes on it
-    try std.testing.expectEqual(slot_1, slot_tracker.commitments.get(.processed));
+    try std.testing.expectEqual(slot_1, result.voted);
     // confirmed slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
+    try std.testing.expectEqual(0, result.optimistically_confirmed);
 }
 
 // State setup
@@ -5424,7 +5427,7 @@ test "vote accounts with landed votes populate bank stats" {
     defer gossip_verified_vote_hashes.deinit(gpa);
 
     // Component entry point being tested
-    _ = try consensus.process(gpa, .{
+    const result = try consensus.process(gpa, .{
         .account_store = stubs.accountStore(),
         .ledger = &stubs.ledger,
         .gossip_votes = null,
@@ -5473,9 +5476,9 @@ test "vote accounts with landed votes populate bank stats" {
 
     // Assert trackers
     // processed slot is updated to slot_1 when the tower votes on it
-    try std.testing.expectEqual(slot_1, slot_tracker.commitments.get(.processed));
+    try std.testing.expectEqual(slot_1, result.voted);
     // confirmed slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
+    try std.testing.expectEqual(0, result.optimistically_confirmed);
 }
 
 // Test case:
@@ -5879,51 +5882,49 @@ test "root advances after vote satisfies lockouts" {
     }
 
     // Test
-    {
-        const old_root = try consensus.replay_tower.tower.getRoot();
+    const old_root = try consensus.replay_tower.tower.getRoot();
 
-        const results = [_]ReplayResult{
-            .{ .slot = 33, .output = .{ .last_entry_hash = hashes[33] } },
-        };
+    const results = [_]ReplayResult{
+        .{ .slot = 33, .output = .{ .last_entry_hash = hashes[33] } },
+    };
 
-        _ = try consensus.process(gpa, .{
-            .account_store = stubs.accountStore(),
-            .ledger = &stubs.ledger,
-            .gossip_votes = null,
-            .gossip_table = null,
-            .slot_tracker = &slot_tracker,
-            .epoch_tracker = &epoch_tracker,
-            .progress_map = &progress,
-            .senders = stubs.senders,
-            .receivers = stubs.receivers,
-            .vote_sockets = null,
-            .slot_leaders = null,
-            .duplicate_confirmed_slots = &duplicate_confirmed_slots,
-            .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
-            .results = &results,
-        });
+    const result = try consensus.process(gpa, .{
+        .account_store = stubs.accountStore(),
+        .ledger = &stubs.ledger,
+        .gossip_votes = null,
+        .gossip_table = null,
+        .slot_tracker = &slot_tracker,
+        .epoch_tracker = &epoch_tracker,
+        .progress_map = &progress,
+        .senders = stubs.senders,
+        .receivers = stubs.receivers,
+        .vote_sockets = null,
+        .slot_leaders = null,
+        .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+        .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+        .results = &results,
+    });
 
-        const new_root = try consensus.replay_tower.tower.getRoot();
-        try std.testing.expect(new_root > old_root);
-        try std.testing.expectEqual(1, old_root);
-        try std.testing.expectEqual(2, new_root);
-        try std.testing.expectEqual(
-            MAX_LOCKOUT_HISTORY,
-            consensus.replay_tower.tower.votes.len,
-        );
+    const new_root = try consensus.replay_tower.tower.getRoot();
+    try std.testing.expect(new_root > old_root);
+    try std.testing.expectEqual(1, old_root);
+    try std.testing.expectEqual(2, new_root);
+    try std.testing.expectEqual(
+        MAX_LOCKOUT_HISTORY,
+        consensus.replay_tower.tower.votes.len,
+    );
 
-        try std.testing.expect(new_root > initial_root);
-        const last_voted = consensus.replay_tower.tower.lastVotedSlot();
-        try std.testing.expectEqual(33, last_voted);
+    try std.testing.expect(new_root > initial_root);
+    const last_voted = consensus.replay_tower.tower.lastVotedSlot();
+    try std.testing.expectEqual(33, last_voted);
 
-        try std.testing.expectEqual(33, consensus.fork_choice.heaviestOverallSlot().slot);
-    }
+    try std.testing.expectEqual(33, consensus.fork_choice.heaviestOverallSlot().slot);
 
     // Assert trackers
     // processed slot is updated to slot 33 when the tower votes on it
-    try std.testing.expectEqual(33, slot_tracker.commitments.get(.processed));
+    try std.testing.expectEqual(33, result.voted);
     // confirmed slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
+    try std.testing.expectEqual(0, result.optimistically_confirmed);
 }
 
 // Test case:
@@ -6062,28 +6063,29 @@ test "vote refresh when no new vote available" {
     var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
     defer gossip_verified_vote_hashes.deinit(gpa);
 
-    {
-        const results = [_]ReplayResult{
-            .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
-        };
+    const results = [_]ReplayResult{
+        .{ .slot = 1, .output = .{ .last_entry_hash = slot1_hash } },
+    };
 
-        _ = try consensus.process(gpa, .{
-            .account_store = stubs.accountStore(),
-            .ledger = &stubs.ledger,
-            .gossip_votes = null,
-            .gossip_table = null,
-            .slot_tracker = &slot_tracker,
-            .epoch_tracker = &epoch_tracker,
-            .progress_map = &progress,
-            .senders = stubs.senders,
-            .receivers = stubs.receivers,
-            .vote_sockets = null,
-            .slot_leaders = null,
-            .duplicate_confirmed_slots = &duplicate_confirmed_slots,
-            .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
-            .results = &results,
-        });
-    }
+    const result = try consensus.process(gpa, .{
+        .account_store = stubs.accountStore(),
+        .ledger = &stubs.ledger,
+        .gossip_votes = null,
+        .gossip_table = null,
+        .slot_tracker = &slot_tracker,
+        .epoch_tracker = &epoch_tracker,
+        .progress_map = &progress,
+        .senders = stubs.senders,
+        .receivers = stubs.receivers,
+        .vote_sockets = null,
+        .slot_leaders = null,
+        .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+        .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+        .results = &results,
+    });
+
+    try std.testing.expectEqual(1, result.voted);
+    try std.testing.expectEqual(0, result.optimistically_confirmed);
 
     const initial_last_voted = consensus.replay_tower.lastVotedSlot();
     try std.testing.expectEqual(1, initial_last_voted);
@@ -6091,26 +6093,24 @@ test "vote refresh when no new vote available" {
     try std.testing.expect(initial_tx_blockhash == .non_voting);
 
     // The Test
-    {
-        const empty_results: []const ReplayResult = &.{};
+    const empty_results: []const ReplayResult = &.{};
 
-        _ = try consensus.process(gpa, .{
-            .account_store = stubs.accountStore(),
-            .ledger = &stubs.ledger,
-            .gossip_votes = null,
-            .gossip_table = null,
-            .slot_tracker = &slot_tracker,
-            .epoch_tracker = &epoch_tracker,
-            .progress_map = &progress,
-            .senders = stubs.senders,
-            .receivers = stubs.receivers,
-            .vote_sockets = null,
-            .slot_leaders = null,
-            .duplicate_confirmed_slots = &duplicate_confirmed_slots,
-            .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
-            .results = empty_results,
-        });
-    }
+    const result2 = try consensus.process(gpa, .{
+        .account_store = stubs.accountStore(),
+        .ledger = &stubs.ledger,
+        .gossip_votes = null,
+        .gossip_table = null,
+        .slot_tracker = &slot_tracker,
+        .epoch_tracker = &epoch_tracker,
+        .progress_map = &progress,
+        .senders = stubs.senders,
+        .receivers = stubs.receivers,
+        .vote_sockets = null,
+        .slot_leaders = null,
+        .duplicate_confirmed_slots = &duplicate_confirmed_slots,
+        .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
+        .results = empty_results,
+    });
 
     // Assert: No new vote recorded
     const final_last_voted = consensus.replay_tower.lastVotedSlot();
@@ -6127,10 +6127,10 @@ test "vote refresh when no new vote available" {
     try std.testing.expectEqual(1, consensus.fork_choice.heaviestOverallSlot().slot);
 
     // Assert trackers
-    // processed slot is updated to slot 1 when the tower votes on it
-    try std.testing.expectEqual(1, slot_tracker.commitments.get(.processed));
+    // already voted previously, not voting again.
+    try std.testing.expectEqual(null, result2.voted);
     // confirmed slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
+    try std.testing.expectEqual(0, result2.optimistically_confirmed);
 }
 
 // Test case:

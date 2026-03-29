@@ -55,6 +55,7 @@ const NonCirculatingSet = blk: {
 const AccountHookContext = @This();
 
 slot_tracker: *sig.replay.trackers.SlotTracker,
+commitments: *sig.replay.trackers.CommitmentTracker,
 account_reader: sig.accounts_db.AccountReader,
 
 pub fn getAccountInfo(
@@ -72,7 +73,7 @@ pub fn getAccountInfo(
     // We default to base64 as it's more efficient and the recommended encoding.
     const encoding = config.encoding orelse AccountEncoding.binary;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
@@ -116,7 +117,7 @@ pub fn getBalance(
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L348
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
@@ -149,7 +150,7 @@ pub fn getTokenAccountBalance(
     const config: GetTokenAccountBalance.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
@@ -207,7 +208,7 @@ pub fn getTokenSupply(
     const config: GetTokenSupply.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
@@ -273,7 +274,7 @@ pub fn getMultipleAccounts(
     const config = params.config orelse GetAccountInfo.Config{};
     const commitment = config.commitment orelse .finalized;
     const encoding = config.encoding orelse AccountEncoding.base64;
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
@@ -330,7 +331,7 @@ pub fn getFeeForMessage(
     const config: GetFeeForMessage.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
 
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
@@ -486,7 +487,7 @@ pub fn getProgramAccounts(
     const f = config.filters orelse &.{};
     try sig.rpc.filters.verifyFilters(f);
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
@@ -555,7 +556,7 @@ pub fn getTokenAccountsByOwner(
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2098
     const encoding = config.encoding orelse AccountEncoding.binary;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
@@ -645,7 +646,7 @@ pub fn getSupply(
     const commitment = config.commitment orelse .finalized;
     const exclude_accounts = config.excludeNonCirculatingAccountsList;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
@@ -712,7 +713,7 @@ pub fn getTokenLargestAccounts(
     const config: GetTokenLargestAccounts.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
@@ -831,7 +832,7 @@ pub fn getLargestAccounts(
     const config = params.config orelse GetLargestAccounts.Config{};
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;

@@ -32,6 +32,7 @@ const IsBlockhashValid = sig.rpc.methods.IsBlockhashValid;
 const ConsensusHookContext = @This();
 
 slot_tracker: *sig.replay.trackers.SlotTracker,
+commitments: *sig.replay.trackers.CommitmentTracker,
 gossip_table_rw: ?*sig.sync.RwMux(sig.gossip.GossipTable) = null,
 my_shred_version: ?*const std.atomic.Value(u16) = null,
 epoch_tracker: *sig.core.EpochTracker,
@@ -44,7 +45,7 @@ fn resolveCommitmentSlot(
     min_context_slot: ?Slot,
 ) !Slot {
     const resolved_commitment = commitment orelse .finalized;
-    const slot = self.slot_tracker.commitments.get(resolved_commitment);
+    const slot = self.commitments.get(resolved_commitment);
 
     if (min_context_slot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
