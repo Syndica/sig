@@ -12,8 +12,10 @@ const ThreadPool = sig.sync.ThreadPool;
 
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
+const SlotConstants = sig.core.SlotConstants;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
+const StatusCache = sig.core.StatusCache;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
@@ -108,15 +110,14 @@ pub fn advanceReplay(
     const root_before = replay_state.slot_tracker.root.load(.monotonic);
 
     // run consensus
-    if (consensus_params) |consensus| {
+    const maybe_new_root = if (consensus_params) |consensus| new_root: {
         var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
         defer gossip_verified_vote_hashes.deinit(allocator);
 
         var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
         defer duplicate_confirmed_slots.deinit(allocator);
 
-        try consensus.tower.process(allocator, .{
-            .maybe_thread_pool = &replay_state.thread_pool,
+        break :new_root try consensus.tower.process(allocator, .{
             .account_store = replay_state.account_store,
             .gossip_votes = consensus.gossip_votes,
             .gossip_table = consensus.gossip_table,
@@ -137,9 +138,19 @@ pub fn advanceReplay(
             else
                 null,
         });
-    } else {
-        try bypassConsensus(replay_state);
-    }
+    } else try bypassConsensus(replay_state);
+
+    if (maybe_new_root) |new_root| try handleNewRoot(
+        allocator,
+        replay_state.ledger.resultWriter(),
+        &replay_state.slot_tracker,
+        &replay_state.progress_map,
+        replay_state.epoch_tracker,
+        replay_state.account_store,
+        &replay_state.status_cache,
+        new_root,
+        &replay_state.thread_pool,
+    );
 
     const root_after = replay_state.slot_tracker.root.load(.monotonic);
     if (root_after != root_before) {
@@ -657,7 +668,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
 }
 
 /// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
-fn bypassConsensus(state: *ReplayState) !void {
+fn bypassConsensus(state: *ReplayState) !?Slot {
     // NOTE: Processed slot semantics differ from Agave when Sig is in bypass-consensus mode.
     // In bypass mode, `latest_processed_slot` is set to the highest slot among all fork
     // leaves (SlotTree.tip()).
@@ -673,24 +684,403 @@ fn bypassConsensus(state: *ReplayState) !void {
     state.slot_tracker.commitments.update(.processed, state.slot_tree.tip());
 
     if (state.slot_tree.reRoot(state.allocator)) |new_root| {
-        const slot_tracker = &state.slot_tracker;
-
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
-        slot_tracker.root.store(new_root, .monotonic);
         // In bypass-consensus mode there is no BlockCommitmentCache to compute
         // highest_super_majority_root, so we approximate finalized = root.
-        slot_tracker.commitments.update(.finalized, new_root);
-        slot_tracker.pruneNonRooted(&state.thread_pool);
+        state.slot_tracker.commitments.update(.finalized, new_root);
+        return new_root;
+    }
+    return null;
+}
 
-        try state.status_cache.addRoot(state.allocator, new_root);
+/// Processes a new root slot by updating various system components to reflect the new root.
+///
+/// - Validates the new root exists and has a hash.
+/// - Gets all slots rooted at the new root.
+/// - Updates ledger state with the new roots.
+/// - Cleans up progress map for non-existent slots.
+///
+/// Analogous to [check_and_handle_new_root](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57bcc41a6f863/core/src/replay_stage.rs#L4002)
+pub fn handleNewRoot(
+    allocator: std.mem.Allocator,
+    ledger: Ledger.ResultWriter,
+    slot_tracker: *SlotTracker,
+    progress: *ProgressMap,
+    epoch_tracker: *sig.core.EpochTracker,
+    account_store: AccountStore,
+    status_cache: ?*StatusCache,
+    new_root: Slot,
+    maybe_thread_pool: ?*ThreadPool,
+) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "handleNewRoot" });
+    defer zone.deinit();
 
-        const slot_constants = slot_tracker.get(new_root).?;
-        defer slot_constants.release();
-        try state.account_store.onSlotRooted(
-            new_root,
-            &slot_constants.constants().ancestors,
+    // get the root bank before squash.
+    {
+        var slots_lg = slot_tracker.slots.read();
+        defer slots_lg.unlock();
+        if (slots_lg.get().count() == 0) return error.EmptySlotTracker;
+    }
+    const root_tracker = slot_tracker.get(new_root) orelse return error.MissingSlot;
+    defer root_tracker.release();
+
+    const rooted_slots = try slot_tracker.parents(allocator, new_root);
+    defer allocator.free(rooted_slots);
+
+    try ledger.setRoots(rooted_slots);
+
+    try epoch_tracker.onSlotRooted(
+        allocator,
+        new_root,
+        &root_tracker.constants().ancestors,
+    );
+
+    // Audit: The rest of the code maps to Self::handle_new_root in Agave.
+    // Update the slot tracker.
+    // Set new root.
+    slot_tracker.root.store(new_root, .monotonic);
+    // Note: finalized commitment is updated separately from
+    // highest_super_majority_root computed in BlockCommitmentCache.
+    // Prune non rooted slots
+    slot_tracker.pruneNonRooted(maybe_thread_pool);
+
+    // Tell the status_cache about it for its tracking.
+    if (status_cache) |s| try s.addRoot(allocator, new_root);
+    // Tell the account_store about it for its unrooted accounts
+    const slot_constants = slot_tracker.get(new_root).?;
+    defer slot_constants.release();
+    try account_store.onSlotRooted(new_root, &slot_constants.constants().ancestors);
+
+    // TODO
+    // - Prune program cache bank_forks.read().unwrap().prune_program_cache(new_root);
+    // - Extra operations as part of setting new root:
+    //   - cleare reward cache root_bank.clear_epoch_rewards_cache
+    //   - extend banks banks.extend(parents.iter());
+    //   - operations around snapshot_controller
+    //   - After setting a new root, prune the banks that are no longer on rooted paths self.prune_non_rooted(root, highest_super_majority_root);
+
+    // Update the progress map.
+    // Remove entries from the progress map no longer in the slot tracker.
+    var progress_keys = progress.map.keys();
+    var index: usize = 0;
+    while (index < progress_keys.len) {
+        const progress_slot = progress_keys[index];
+        const maybe_ref = slot_tracker.get(progress_slot);
+        if (maybe_ref) |ref| ref.release();
+        if (maybe_ref == null) {
+            const removed_value = progress.map.fetchSwapRemove(progress_slot) orelse continue;
+            defer removed_value.value.deinit(allocator);
+            progress_keys = progress.map.keys();
+        } else {
+            index += 1;
+        }
+    }
+}
+
+test "handleNewRoot - missing slot" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const root_slot_and_hash = sig.core.hash.SlotAndHash{
+        .slot = 0,
+        .hash = .initRandom(random),
+    };
+
+    // NOTE: TestFixture has its own SlotTracker as well. Unclear if that matters.
+    var fixture = try sig.consensus.replay_tower.TestFixture.init(
+        allocator,
+        root_slot_and_hash,
+    );
+    defer fixture.deinit(allocator);
+
+    // Build a tracked slot set wrapped in RwMux
+    var slot_tracker: SlotTracker = try .initEmpty(allocator, root_slot_and_hash.slot);
+    defer slot_tracker.deinit(allocator);
+
+    {
+        const constants: SlotConstants = try .genesis(allocator, .initRandom(random));
+        errdefer constants.deinit(allocator);
+        try slot_tracker.put(allocator, root_slot_and_hash.slot, .{
+            .allocator = allocator,
+            .constants = constants,
+            .state = .GENESIS,
+        });
+    }
+
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer test_state.deinit();
+
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        random,
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit();
+
+    // Try to check a slot that doesn't exist in the tracker
+    const result = handleNewRoot(
+        allocator,
+        test_state.resultWriter(),
+        &slot_tracker,
+        &fixture.progress,
+        &epoch_tracker,
+        .noop,
+        null, // no need to update a StatusCache,
+        123, // Non-existent slot
+        null, // no thread pool
+    );
+
+    try std.testing.expectError(error.MissingSlot, result);
+
+    // Verify slot trackers remain at initial state after failure
+    try std.testing.expectEqual(0, slot_tracker.commitments.get(.processed));
+    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
+}
+
+test "handleNewRoot - missing hash" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const root = sig.core.hash.SlotAndHash{
+        .slot = 0,
+        .hash = .initRandom(random),
+    };
+
+    var fixture = try sig.consensus.replay_tower.TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    var slot_tracker2: SlotTracker = try .initEmpty(allocator, root.slot);
+    defer slot_tracker2.deinit(allocator);
+
+    {
+        const constants = try SlotConstants.genesis(allocator, .initRandom(random));
+        errdefer constants.deinit(allocator);
+
+        var state: SlotState = .GENESIS;
+        errdefer state.deinit(allocator);
+
+        try slot_tracker2.put(allocator, root.slot, .{
+            .allocator = allocator,
+            .constants = constants,
+            .state = state,
+        });
+    }
+
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer test_state.deinit();
+
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        random,
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit();
+
+    // Try to check a slot that doesn't exist in the tracker
+    try handleNewRoot(
+        allocator,
+        test_state.resultWriter(),
+        &slot_tracker2,
+        &fixture.progress,
+        &epoch_tracker,
+        .noop,
+        null, // no need to update a StatusCache,
+        root.slot, // Non-existent hash
+        null, // no thread pool
+    );
+
+    // Verify slot trackers remain at initial state after failure
+    try std.testing.expectEqual(0, slot_tracker2.commitments.get(.processed));
+    try std.testing.expectEqual(0, slot_tracker2.commitments.get(.confirmed));
+}
+
+test "handleNewRoot - empty slot tracker" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const root = sig.core.hash.SlotAndHash{
+        .slot = 0,
+        .hash = .initRandom(random),
+    };
+
+    var fixture = try sig.consensus.replay_tower.TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    var slot_tracker3: SlotTracker = try .initEmpty(allocator, root.slot);
+    defer slot_tracker3.deinit(allocator);
+
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer test_state.deinit();
+
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        random,
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit();
+
+    // Try to check a slot that doesn't exist in the tracker
+    const result = handleNewRoot(
+        allocator,
+        test_state.resultWriter(),
+        &slot_tracker3,
+        &fixture.progress,
+        &epoch_tracker,
+        .noop,
+        null, // no need to update a StatusCache,
+        root.slot,
+        null, // no thread pool
+    );
+
+    try std.testing.expectError(error.EmptySlotTracker, result);
+
+    // Verify slot trackers remain at initial state after failure
+    try std.testing.expectEqual(0, slot_tracker3.commitments.get(.processed));
+    try std.testing.expectEqual(0, slot_tracker3.commitments.get(.confirmed));
+}
+
+test "handleNewRoot - success" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const hash3 = sig.core.hash.SlotAndHash{
+        .slot = 3,
+        .hash = .initRandom(random),
+    };
+    const hash2 = sig.core.hash.SlotAndHash{
+        .slot = 2,
+        .hash = .initRandom(random),
+    };
+    const hash1 = sig.core.hash.SlotAndHash{
+        .slot = 1,
+        .hash = .initRandom(random),
+    };
+    const root = sig.core.hash.SlotAndHash{
+        .slot = 0,
+        .hash = .initRandom(random),
+    };
+
+    var fixture = try sig.consensus.replay_tower.TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    var slot_tracker4 = sig.sync.RwMux(SlotTracker).init(try .initEmpty(allocator, root.slot));
+    defer {
+        const ptr, var lg = slot_tracker4.writeWithLock();
+        defer lg.unlock();
+        ptr.deinit(allocator);
+    }
+
+    {
+        var constants2 = try SlotConstants.genesis(allocator, .initRandom(random));
+        errdefer constants2.deinit(allocator);
+
+        var constants3 = try SlotConstants.genesis(allocator, .initRandom(random));
+        errdefer constants3.deinit(allocator);
+
+        var state2: SlotState = .GENESIS;
+        errdefer state2.deinit(allocator);
+
+        var state3: SlotState = .GENESIS;
+        errdefer state3.deinit(allocator);
+
+        constants2.parent_slot = hash1.slot;
+        constants3.parent_slot = hash2.slot;
+        state2.hash = .init(hash2.hash);
+        state3.hash = .init(hash3.hash);
+
+        const ptr, var lg = slot_tracker4.writeWithLock();
+        defer lg.unlock();
+        try ptr.put(allocator, hash2.slot, .{
+            .allocator = allocator,
+            .constants = constants2,
+            .state = state2,
+        });
+        try ptr.put(allocator, hash3.slot, .{
+            .allocator = allocator,
+            .constants = constants3,
+            .state = state3,
+        });
+    }
+
+    // Add some entries to progress map that should be removed
+    var trees1 = try std14.BoundedArray(
+        sig.consensus.fork_choice.TreeNode,
+        sig.consensus.replay_tower.MAX_TEST_TREE_LEN,
+    ).init(0);
+    trees1.appendSliceAssumeCapacity(&.{
+        .{ hash1, root },
+        .{ hash2, hash1 },
+        .{ hash3, hash2 },
+    });
+
+    try fixture.fillFork(
+        allocator,
+        .{ .root = root, .data = trees1 },
+        .active,
+    );
+
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
+    defer test_state.deinit();
+
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(
+        allocator,
+        random,
+        0,
+        .INIT,
+    );
+    defer epoch_tracker.deinit();
+
+    try std.testing.expectEqual(4, fixture.progress.map.count());
+    try std.testing.expect(fixture.progress.map.contains(hash1.slot));
+    {
+        const slot_tracker4_ptr, var slot_tracker4_lg = slot_tracker4.writeWithLock();
+        defer slot_tracker4_lg.unlock();
+
+        try handleNewRoot(
+            allocator,
+            test_state.resultWriter(),
+            slot_tracker4_ptr,
+            &fixture.progress,
+            &epoch_tracker,
+            .noop,
+            null, // no need to update a StatusCache,
+            hash3.slot,
+            null, // no thread pool
         );
     }
+
+    try std.testing.expectEqual(1, fixture.progress.map.count());
+    // Now the write lock is released, we can acquire a read lock
+    {
+        const ptr, var lg = slot_tracker4.writeWithLock();
+        defer lg.unlock();
+        var slots_lg = ptr.slots.read();
+        defer slots_lg.unlock();
+        for (slots_lg.get().keys()) |remaining_slots| {
+            try std.testing.expect(remaining_slots >= hash3.slot);
+        }
+    }
+    try std.testing.expect(!fixture.progress.map.contains(hash1.slot));
 }
 
 test "getActiveFeatures rejects wrong ownership" {
@@ -1011,7 +1401,7 @@ test "process runs without error with no replay results" {
 
     // TODO: run consensus in the tests that actually execute blocks for better
     // coverage. currently consensus panics or hangs if you run it with actual data
-    try consensus.process(allocator, .{
+    _ = try consensus.process(allocator, .{
         .account_store = dep_stubs.accountStore(),
         .ledger = &dep_stubs.ledger,
         .gossip_votes = null,
