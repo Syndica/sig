@@ -5,7 +5,7 @@ import math
 import os
 import re
 
-MAX_LINE_LENGTH = 100
+MAX_LINE_LENGTH = 120
 
 
 def main():
@@ -174,18 +174,18 @@ files_excluded_from_line_length_check = [
     "src/transaction_sender/mock_transfer_generator.zig",
     "src/transaction_sender/service.zig",
     "src/transaction_sender/transaction_pool.zig",
-    "v2/src/common/shred/test_shreds.zig",
-    "v2/src/common/shred.zig",
+    "v2/lib/shred/test_shreds.zig",
+    "v2/lib/shred.zig",
 
     # Generated files, will not conform to style guide.
     "src/crypto/bn254/bn254_64.zig",
     "src/crypto/ed25519/wycheproof.zig",
-    "v2/src/common/crypto/ed25519/wycheproof.zig",
+    "v2/lib/crypto/ed25519/wycheproof.zig",
 ]
 
 
 def line_length(args, files_to_check):
-    """Enforces lines of code to be at most 100 characters long."""
+    """Enforces lines of code to be at most MAX_LINE_LENGTH characters long."""
 
     # map relating file paths to the number of lines that are too long
     unique_files = {}

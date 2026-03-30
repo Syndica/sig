@@ -1,7 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
 
-const http = @import("webzockets_lib").http;
+const ws = @import("webzockets_lib");
+const http = ws.http;
+const socket_opts = ws.socket_opts;
 const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
 const FdLeakDetector = @import("../support/FdLeakDetector.zig");
@@ -320,6 +322,7 @@ fn acceptAndStall(listener: std.posix.socket_t, mode: StallMode) void {
         0,
     ) catch return;
     defer std.posix.close(conn_fd);
+    socket_opts.setTcpNoDelay(conn_fd) catch return;
     const stream = std.net.Stream{ .handle = conn_fd };
 
     var req_buf: [4096]u8 = undefined;
@@ -368,6 +371,7 @@ fn acceptAndRespond(
         0,
     ) catch return;
     defer std.posix.close(conn_fd);
+    socket_opts.setTcpNoDelay(conn_fd) catch return;
     const stream = std.net.Stream{ .handle = conn_fd };
 
     // Read the client's upgrade request.
