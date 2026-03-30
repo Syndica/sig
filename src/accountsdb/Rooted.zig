@@ -6,6 +6,8 @@ const sql = @import("sqlite");
 const tracy = @import("tracy");
 const Rooted = @This();
 
+const ids = sig.runtime.ids;
+
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const Account = sig.core.Account;
@@ -23,14 +25,24 @@ handle: *sql.sqlite3,
 largest_rooted_slot: ?Slot,
 /// Updates a prometheus counter for mem usage.
 sqlite_mem_used: ?*Gauge = null,
+/// Whether the SPL token owner index column is enabled (runtime CLI flag).
+enable_spl_token_owner_index: bool,
+/// In-memory top-N accounts by lamport balance, updated on every put().
+largest_tracker: LargestTracker = .{},
 
 /// These aren't thread safe, but we can have as many as we want. Clean up with deinitThreadLocals
 /// on any threads that use put or get.
 threadlocal var put_stmt: ?*sql.sqlite3_stmt = null;
+threadlocal var put_with_token_owner_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_by_owner_stmt: ?*sql.sqlite3_stmt = null;
+threadlocal var get_by_spl_token_owner_stmt: ?*sql.sqlite3_stmt = null;
 
-pub fn init(file_path: [:0]const u8, enable_owner_index: bool) !Rooted {
+pub fn init(
+    file_path: [:0]const u8,
+    enable_owner_index: bool,
+    enable_spl_token_owner_index: bool,
+) !Rooted {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.init" });
     defer zone.deinit();
 
@@ -44,6 +56,7 @@ pub fn init(file_path: [:0]const u8, enable_owner_index: bool) !Rooted {
     var self: Rooted = .{
         .handle = db,
         .largest_rooted_slot = null,
+        .enable_spl_token_owner_index = enable_spl_token_owner_index,
     };
 
     {
@@ -102,6 +115,37 @@ pub fn init(file_path: [:0]const u8, enable_owner_index: bool) !Rooted {
             return error.FailedToDropIndex;
     }
 
+    if (enable_spl_token_owner_index) {
+        // Add nullable token_owner column. Silently ignored if it already exists.
+        // NULL means "not a token account", so non-token rows never match
+        // `WHERE token_owner = ?` queries (SQL NULL != anything).
+        _ = sql.sqlite3_exec(
+            db,
+            "ALTER TABLE entries ADD COLUMN token_owner BLOB(32) DEFAULT NULL",
+            null,
+            null,
+            null,
+        );
+        if (sql.sqlite3_exec(
+            db,
+            "CREATE INDEX IF NOT EXISTS rpc_spl_token_owner_idx ON entries(token_owner)" ++
+                " WHERE token_owner IS NOT NULL",
+            null,
+            null,
+            null,
+        ) != OK)
+            return error.FailedToCreateIndex;
+    } else {
+        if (sql.sqlite3_exec(
+            db,
+            "DROP INDEX IF EXISTS rpc_spl_token_owner_idx",
+            null,
+            null,
+            null,
+        ) != OK)
+            return error.FailedToDropIndex;
+    }
+
     return self;
 }
 
@@ -115,6 +159,10 @@ pub fn deinitThreadLocals() void {
         _ = sql.sqlite3_finalize(stmt);
         put_stmt = null;
     }
+    if (put_with_token_owner_stmt) |stmt| {
+        _ = sql.sqlite3_finalize(stmt);
+        put_with_token_owner_stmt = null;
+    }
     if (get_stmt) |stmt| {
         _ = sql.sqlite3_finalize(stmt);
         get_stmt = null;
@@ -122,6 +170,10 @@ pub fn deinitThreadLocals() void {
     if (get_by_owner_stmt) |stmt| {
         _ = sql.sqlite3_finalize(stmt);
         get_by_owner_stmt = null;
+    }
+    if (get_by_spl_token_owner_stmt) |stmt| {
+        _ = sql.sqlite3_finalize(stmt);
+        get_by_spl_token_owner_stmt = null;
     }
 }
 
@@ -256,6 +308,42 @@ pub const OwnerIterator = struct {
         defer std.debug.assert(sql.sqlite3_reset(self.stmt) == OK);
     }
 };
+
+/// Returns an iterator over all token accounts where the token owner (bytes 32..64
+/// of account data) matches the given `token_owner`.
+///
+/// When `enable_spl_token_owner_index` is true, queries the indexed `token_owner`
+/// column. When false, falls back to a full-scan query using `substr(data, 33, 32)`
+/// filtered to the SPL Token and Token-2022 program owners.
+///
+/// The caller must ensure `token_owner` outlives the returned iterator.
+pub fn getBySplTokenOwner(self: *Rooted, token_owner: *const Pubkey) OwnerIterator {
+    const stmt: *sql.sqlite3_stmt = if (get_by_spl_token_owner_stmt) |stmt| stmt else blk: {
+        const query = if (self.enable_spl_token_owner_index)
+            // Indexed path: query the token_owner column directly.
+            \\ SELECT lamports, data, owner, executable, rent_epoch, address
+            \\ FROM entries WHERE token_owner = ? AND lamports > 0;
+        else
+            // Fallback: full scan extracting the token owner from data bytes 32..64
+            // (sqlite substr is 1-based, so byte 33 with length 32).
+            // Restricted to SPL Token and Token-2022 program owners.
+            " SELECT lamports, data, owner, executable, rent_epoch, address" ++
+                " FROM entries WHERE substr(data, 33, 32) = ? AND lamports > 0" ++
+                " AND (owner = X'" ++ ids.TOKEN_PROGRAM_ID.hexBytesLower() ++ "'" ++
+                " OR owner = X'" ++ ids.TOKEN_2022_PROGRAM_ID.hexBytesLower() ++ "');";
+        self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_by_spl_token_owner_stmt, null));
+        break :blk get_by_spl_token_owner_stmt.?;
+    };
+
+    self.err(sql.sqlite3_bind_blob(
+        stmt,
+        1,
+        token_owner,
+        Pubkey.SIZE,
+        sql.SQLITE_STATIC,
+    ));
+    return .{ .stmt = stmt, .rooted = self };
+}
 
 /// Reads the common account fields (lamports, data, owner, executable, rent_epoch)
 /// from a sqlite row starting at column `base`. The returned `data` slice borrows
@@ -456,10 +544,40 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
         if (self.sqlite_mem_used) |guage| guage.set(@intCast(mem_used));
     }
 
+    if (self.enable_spl_token_owner_index and account.data.len >= 64 and
+        (account.owner.equals(&ids.TOKEN_PROGRAM_ID) or
+            account.owner.equals(&ids.TOKEN_2022_PROGRAM_ID)))
+    {
+        self.putWithTokenOwner(address, slot, account);
+    } else {
+        self.putWithoutTokenOwner(address, slot, account);
+    }
+}
+
+fn putWithoutTokenOwner(
+    self: *Rooted,
+    address: Pubkey,
+    slot: Slot,
+    account: AccountSharedData,
+) void {
     const stmt: *sql.sqlite3_stmt = if (put_stmt) |stmt| stmt else blk: {
         // Insert or update only if last_modified_slot is greater (excluded = VALUES)
         // https://sqlite.org/lang_upsert.html#examples
-        const query =
+        const query = if (self.enable_spl_token_owner_index)
+            \\INSERT INTO entries
+            \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?)
+            \\ON CONFLICT(address) DO UPDATE SET
+            \\  lamports=excluded.lamports,
+            \\  data=excluded.data,
+            \\  owner=excluded.owner,
+            \\  executable=excluded.executable,
+            \\  rent_epoch=excluded.rent_epoch,
+            \\  last_modified_slot=excluded.last_modified_slot,
+            \\  token_owner=NULL
+            \\WHERE excluded.last_modified_slot > entries.last_modified_slot
+            \\;
+        else
             \\INSERT INTO entries
             \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot)
             \\VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -473,7 +591,13 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
             \\WHERE excluded.last_modified_slot > entries.last_modified_slot
             \\;
         ;
-        self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &put_stmt, null));
+        self.err(sql.sqlite3_prepare_v2(
+            self.handle,
+            query,
+            -1,
+            &put_stmt,
+            null,
+        ));
         break :blk put_stmt.?;
     };
     defer std.debug.assert(sql.sqlite3_reset(stmt) == OK);
@@ -501,4 +625,294 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
 
     const result = sql.sqlite3_step(stmt);
     if (result != DONE) self.err(result);
+
+    self.largest_tracker.update(address, account.lamports);
+}
+
+fn putWithTokenOwner(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedData) void {
+    const stmt: *sql.sqlite3_stmt = if (put_with_token_owner_stmt) |stmt| stmt else blk: {
+        const query =
+            \\INSERT INTO entries
+            \\(address, lamports, data, owner, executable, rent_epoch, last_modified_slot, token_owner)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            \\ON CONFLICT(address) DO UPDATE SET
+            \\  lamports=excluded.lamports,
+            \\  data=excluded.data,
+            \\  owner=excluded.owner,
+            \\  executable=excluded.executable,
+            \\  rent_epoch=excluded.rent_epoch,
+            \\  last_modified_slot=excluded.last_modified_slot,
+            \\  token_owner=excluded.token_owner
+            \\WHERE excluded.last_modified_slot > entries.last_modified_slot
+            \\;
+        ;
+        self.err(sql.sqlite3_prepare_v2(
+            self.handle,
+            query,
+            -1,
+            &put_with_token_owner_stmt,
+            null,
+        ));
+        break :blk put_with_token_owner_stmt.?;
+    };
+    defer std.debug.assert(sql.sqlite3_reset(stmt) == OK);
+
+    self.err(sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC));
+    self.err(sql.sqlite3_bind_int64(stmt, 2, @bitCast(account.lamports)));
+    self.err(sql.sqlite3_bind_blob(
+        stmt,
+        3,
+        account.data.ptr,
+        @intCast(account.data.len),
+        sql.SQLITE_STATIC,
+    ));
+    self.err(sql.sqlite3_bind_blob(
+        stmt,
+        4,
+        &account.owner.data,
+        Pubkey.SIZE,
+        sql.SQLITE_STATIC,
+    ));
+    self.err(sql.sqlite3_bind_int(stmt, 5, @intFromBool(account.executable)));
+    self.err(sql.sqlite3_bind_int64(stmt, 6, @bitCast(account.rent_epoch)));
+    self.err(sql.sqlite3_bind_int64(stmt, 7, @bitCast(slot)));
+
+    // Extract the token-level owner from data[32..64]. The caller already
+    // verified this is a token program account with data.len >= 64.
+    self.err(sql.sqlite3_bind_blob(stmt, 8, account.data.ptr + 32, Pubkey.SIZE, sql.SQLITE_STATIC));
+
+    const result = sql.sqlite3_step(stmt);
+    if (result != DONE) self.err(result);
+
+    self.largest_tracker.update(address, account.lamports);
+}
+
+/// Tracks the top 20 accounts by lamport balance in rooted storage.
+/// Populated incrementally during snapshot loading and slot rooting
+/// via Rooted.put(). RPC threads read via snapshot().
+pub const LargestTracker = struct {
+    pub const CAPACITY = 20;
+    pub const Entry = struct { Pubkey, u64 };
+
+    len: usize = 0,
+    keys: [CAPACITY]Pubkey = .{Pubkey.ZEROES} ** CAPACITY,
+    lamports: [CAPACITY]u64 = .{0} ** CAPACITY,
+
+    /// Cached minimum lamports in the tracker. Enables fast rejection of puts
+    /// that can't enter the top-N. Only meaningful when tracker is full.
+    /// Only accessed by the single writer thread (snapshot load or replay).
+    min_lamports: u64 = 0,
+    /// Protects mutations for concurrent RPC snapshot() readers.
+    lock: sig.sync.RwLock = .{},
+
+    fn indexOf(self: *const LargestTracker, pk: Pubkey) ?usize {
+        for (self.keys[0..self.len], 0..) |*key, i| {
+            if (key.equals(&pk)) return i;
+        }
+        return null;
+    }
+
+    fn swapRemoveAt(self: *LargestTracker, index: usize) void {
+        self.len -= 1;
+        self.keys[index] = self.keys[self.len];
+        self.lamports[index] = self.lamports[self.len];
+    }
+
+    fn recomputeMin(self: *LargestTracker) void {
+        if (self.len == 0) {
+            self.min_lamports = 0;
+            return;
+        }
+        self.min_lamports = std.mem.min(u64, self.lamports[0..self.len]);
+    }
+
+    fn removeMin(self: *LargestTracker) void {
+        if (self.len == 0) return;
+        const min_idx = std.mem.indexOfMin(u64, self.lamports[0..self.len]);
+        self.swapRemoveAt(min_idx);
+    }
+
+    /// Append an entry. Caller must ensure self.len < CAPACITY.
+    fn put(self: *LargestTracker, pubkey: Pubkey, lam: u64) void {
+        std.debug.assert(self.len < CAPACITY);
+        self.keys[self.len] = pubkey;
+        self.lamports[self.len] = lam;
+        self.len += 1;
+    }
+
+    /// Update the tracker with a new account balance.
+    /// Called from Rooted.put() on the single writer thread (snapshot load or replay).
+    pub fn update(self: *LargestTracker, pubkey: Pubkey, lamports: u64) void {
+        // Fast path: tracker is full, balance is below the minimum, and the
+        // pubkey isn't already tracked. Reading the arrays here without a lock
+        // is safe because we are the single writer thread.
+        if (lamports > 0 and self.len == CAPACITY and
+            lamports <= self.min_lamports and
+            self.indexOf(pubkey) == null)
+        {
+            return;
+        }
+
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        // NOTE: we re-scan the (20) pubkeys here. This path is infrequent anyways
+        // (only gets hit for very large accounts, when they aren't already in the map).
+        if (self.indexOf(pubkey)) |idx| {
+            // Already tracked, update or remove.
+            if (lamports == 0) {
+                const was_min = self.lamports[idx] == self.min_lamports;
+                self.swapRemoveAt(idx);
+                if (was_min) self.recomputeMin();
+            } else {
+                self.lamports[idx] = lamports;
+                if (lamports < self.min_lamports) {
+                    self.min_lamports = lamports;
+                }
+            }
+        } else {
+            // Not tracked.
+            if (lamports == 0) return;
+
+            if (self.len < CAPACITY) {
+                self.put(pubkey, lamports);
+                // Track min incrementally as the map fills up.
+                const min = self.min_lamports;
+                if (min == 0 or lamports < min) {
+                    self.min_lamports = lamports;
+                }
+            } else if (lamports > self.min_lamports) {
+                // Displace the minimum entry.
+                // NOTE: removeMin only runs on two unavoidable cases:
+                // * When removing the current min (lamports -> 0)
+                // * displacement (a new entry knocked the min entry out)
+                // Both cases require finding the second-smallest, which we don't track (just 20 entries).
+                self.removeMin();
+                self.put(pubkey, lamports);
+                self.recomputeMin();
+            }
+        }
+    }
+
+    /// Copy current entries into caller's buffer. Returns count of entries copied.
+    /// Safe to call from any RPC thread (takes shared lock).
+    pub fn snapshot(self: *LargestTracker, buf: *[CAPACITY]Entry) usize {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        for (self.keys[0..self.len], self.lamports[0..self.len], 0..) |key, lam, i| {
+            buf[i] = .{ key, lam };
+        }
+        return self.len;
+    }
+};
+
+test "LargestTracker: empty snapshot" {
+    var tracker: LargestTracker = .{};
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    const n = tracker.snapshot(&buf);
+    try std.testing.expectEqual(0, n);
+}
+
+test "LargestTracker: basic insert and snapshot" {
+    var tracker: LargestTracker = .{};
+
+    const pk_a: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    const pk_b: Pubkey = .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk");
+    const pk_c: Pubkey = .parse("7EqfdGiB5UZgLWc1U9xYbKdy9Ky9NoYcMbEwUq9aAWR6");
+
+    tracker.update(pk_a, 1000);
+    tracker.update(pk_b, 2000);
+    tracker.update(pk_c, 500);
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    const n = tracker.snapshot(&buf);
+    try std.testing.expectEqual(3, n);
+    try std.testing.expectEqual(1000, tracker.lamports[tracker.indexOf(pk_a).?]);
+    try std.testing.expectEqual(2000, tracker.lamports[tracker.indexOf(pk_b).?]);
+    try std.testing.expectEqual(500, tracker.lamports[tracker.indexOf(pk_c).?]);
+}
+
+test "LargestTracker: update existing entry" {
+    var tracker: LargestTracker = .{};
+
+    const pk: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    tracker.update(pk, 1000);
+    tracker.update(pk, 5000);
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    try std.testing.expectEqual(1, tracker.snapshot(&buf));
+    try std.testing.expectEqual(5000, tracker.lamports[tracker.indexOf(pk).?]);
+}
+
+test "LargestTracker: remove by zero lamports" {
+    var tracker: LargestTracker = .{};
+
+    const pk_a: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    const pk_b: Pubkey = .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk");
+
+    tracker.update(pk_a, 1000);
+    tracker.update(pk_b, 2000);
+    tracker.update(pk_a, 0); // remove
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    try std.testing.expectEqual(1, tracker.snapshot(&buf));
+    try std.testing.expectEqual(null, tracker.indexOf(pk_a));
+    try std.testing.expectEqual(2000, tracker.lamports[tracker.indexOf(pk_b).?]);
+}
+
+test "LargestTracker: zero lamports insert is no-op" {
+    var tracker: LargestTracker = .{};
+
+    const pk: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    tracker.update(pk, 0);
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    try std.testing.expectEqual(0, tracker.snapshot(&buf));
+}
+
+test "LargestTracker: displacement when full" {
+    var tracker: LargestTracker = .{};
+
+    // Fill to capacity with deterministic random pubkeys
+    var random = std.Random.DefaultPrng.init(0);
+    var pks: [LargestTracker.CAPACITY]Pubkey = undefined;
+    for (0..LargestTracker.CAPACITY) |i| {
+        pks[i] = Pubkey.initRandom(random.random());
+        tracker.update(pks[i], (i + 1) * 100);
+    }
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    try std.testing.expectEqual(LargestTracker.CAPACITY, tracker.snapshot(&buf));
+    try std.testing.expectEqual(100, tracker.min_lamports);
+
+    // Insert a new entry above the min — should displace the min (lamports=100)
+    const newcomer: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    tracker.update(newcomer, 9999);
+
+    try std.testing.expectEqual(LargestTracker.CAPACITY, tracker.snapshot(&buf));
+    // The old minimum (100) should be gone; new minimum is 200
+    try std.testing.expectEqual(200, tracker.min_lamports);
+    try std.testing.expectEqual(null, tracker.indexOf(pks[0]));
+    try std.testing.expectEqual(9999, tracker.lamports[tracker.indexOf(newcomer).?]);
+}
+
+test "LargestTracker: no displacement below min" {
+    var tracker: LargestTracker = .{};
+
+    var random = std.Random.DefaultPrng.init(0);
+    for (0..LargestTracker.CAPACITY) |i| {
+        tracker.update(Pubkey.initRandom(random.random()), (i + 1) * 100);
+    }
+    try std.testing.expectEqual(100, tracker.min_lamports);
+
+    // Insert below min — should be rejected
+    const newcomer: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    tracker.update(newcomer, 50);
+
+    var buf: [LargestTracker.CAPACITY]LargestTracker.Entry = undefined;
+    try std.testing.expectEqual(LargestTracker.CAPACITY, tracker.snapshot(&buf));
+    // Min unchanged, newcomer not present
+    try std.testing.expectEqual(100, tracker.min_lamports);
+    try std.testing.expectEqual(null, tracker.indexOf(newcomer));
 }

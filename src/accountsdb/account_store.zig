@@ -257,6 +257,10 @@ pub const SlotAccountStore = union(enum) {
 
 pub const SlotAccountReader = union(enum) {
     accounts_db: struct { *accounts_db.Db, *const Ancestors },
+    /// Like `accounts_db`, but `.get()` returns caller-owned (cloned) data.
+    /// Use this variant in RPC contexts where the caller outlives the lock
+    /// that protects unrooted account data from pruning.
+    accounts_db_owned: struct { *accounts_db.Db, *const Ancestors },
     /// Contains many versions of accounts and becomes fork-aware using
     /// ancestors, like accountsdb.
     thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
@@ -271,6 +275,18 @@ pub const SlotAccountReader = union(enum) {
         return switch (self) {
             .accounts_db => |pair| {
                 const account = try pair[0].get(
+                    alloc,
+                    address,
+                    pair[1],
+                ) orelse return null;
+                if (account.lamports == 0) {
+                    account.deinit(alloc);
+                    return null;
+                }
+                return account;
+            },
+            .accounts_db_owned => |pair| {
+                const account = try pair[0].getOwned(
                     alloc,
                     address,
                     pair[1],
@@ -299,11 +315,26 @@ pub const SlotAccountReader = union(enum) {
 
     pub fn getByOwner(self: SlotAccountReader, _: Allocator, owner: *const Pubkey) !OwnerIterator {
         return switch (self) {
-            .accounts_db => |pair| {
+            .accounts_db_owned => |pair| {
                 const db, const ancestors = pair;
-                return .{ .accounts_db = try db.ownerQuery(owner, ancestors) };
+                return .{ .accounts_db = try db.ownerQueryOwned(owner, ancestors) };
             },
             else => .{ .noop = {} },
+        };
+    }
+
+    /// Returns the top `limit` accounts by lamport balance (descending).
+    pub fn getLargest(
+        self: SlotAccountReader,
+        allocator: Allocator,
+        limit: u32,
+    ) ![]const struct { sig.core.Pubkey, u64 } {
+        return switch (self) {
+            .accounts_db, .accounts_db_owned => |pair| {
+                const db, const ancestors = pair;
+                return db.getLargest(allocator, ancestors, limit);
+            },
+            else => &.{},
         };
     }
 
@@ -325,6 +356,31 @@ pub const SlotAccountReader = union(enum) {
             }
         }
     };
+
+    pub fn getBySplTokenOwner(
+        self: SlotAccountReader,
+        token_owner: *const Pubkey,
+    ) !OwnerIterator {
+        return switch (self) {
+            // NOTE: either variant is fine here since both will allocate and copy out the accounts from Unrooted.
+            .accounts_db, .accounts_db_owned => |pair| {
+                const db, const ancestors = pair;
+                return .{ .accounts_db = try db.splTokenOwnerQuery(token_owner, ancestors) };
+            },
+            else => .{ .noop = {} },
+        };
+    }
+
+    /// Returns a version of this reader where `.get()` returns caller-owned
+    /// (cloned) data. Use in contexts where the caller outlives the lock that
+    /// protects unrooted account data from pruning (e.g. RPC).
+    pub fn toOwnedReader(self: SlotAccountReader) SlotAccountReader {
+        return switch (self) {
+            .accounts_db => |pair| .{ .accounts_db_owned = pair },
+            .accounts_db_owned => self,
+            else => @panic("TODO: toOwned not yet implemented for this variant"),
+        };
+    }
 };
 
 /// Simple implementation of AccountReader and AccountStore, used for tests
@@ -663,6 +719,16 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
         allocator,
         one_lamport_address,
     )).?.lamports);
+
+    // Same checks via the owned reader variant
+    const owned_reader = slot_reader.toOwnedReader();
+
+    try std.testing.expectEqual(null, try owned_reader.get(allocator, zero_lamport_address));
+    {
+        const account = (try owned_reader.get(allocator, one_lamport_address)).?;
+        defer account.deinit(allocator);
+        try std.testing.expectEqual(1, account.lamports);
+    }
 }
 
 test ThreadSafeAccountMap {
@@ -865,7 +931,7 @@ test "insertion out of order" {
 
     for (0..100) |i| {
         const slot: Slot = while (true) {
-            const slot = random.uintLessThan(Slot, 1000);
+            const slot = random.intRangeAtMost(Slot, 1, 999);
             if (ancestor_set.containsSlot(slot)) continue;
             break slot;
         };
@@ -1206,7 +1272,8 @@ fn expectAccountFromStores(
     for (stores) |store| {
         errdefer std.log.err("Occurred with store impl '{s}'", .{@tagName(store)});
         const reader = store.reader();
-        const actual_account = try reader.forSlot(ancestors).get(allocator, address) orelse {
+        const slot_reader = reader.forSlot(ancestors);
+        const actual_account = try slot_reader.get(allocator, address) orelse {
             try std.testing.expectEqual(maybe_expected_account, null);
             continue;
         };
@@ -1217,6 +1284,16 @@ fn expectAccountFromStores(
             continue;
         };
         try actual_account.expectEquals(expected_account);
+
+        // Also test the owned reader variant for accounts_db stores
+        if (store == .accounts_db) {
+            const owned_reader = slot_reader.toOwnedReader();
+            const owned_account = try owned_reader.get(allocator, address) orelse {
+                return error.TestOwnedReaderReturnedNullUnexpectedly;
+            };
+            defer owned_account.deinit(allocator);
+            try owned_account.expectEquals(expected_account);
+        }
     }
 }
 

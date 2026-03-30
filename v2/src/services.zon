@@ -1,5 +1,0 @@
-// all services inside the `services/` dir must be listed here
-.{
-    "net",
-    "shred_receiver",
-}

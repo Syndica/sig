@@ -64,16 +64,28 @@ pub fn Handshake(
 
         /// Begin reading the HTTP upgrade request from the socket.
         pub fn start(self: *HandshakeSelf) void {
-            if (self.upgrade_timer_completion.state() != .active) {
-                self.timer.run(
-                    self.server.loop,
-                    &self.upgrade_timer_completion,
-                    self.server.config.upgrade_timeout_ms,
-                    HandshakeSelf,
-                    self,
-                    onUpgradeTimerCallback,
-                );
+            self.startUpgradeTimer();
+            self.startRead();
+        }
+
+        /// Begin handshake with bytes already read from the socket by another layer.
+        pub fn startWithInitialData(self: *HandshakeSelf, initial_data: []const u8) void {
+            if (initial_data.len > self.read_buf.len) {
+                self.fail();
+                return;
             }
+
+            self.startUpgradeTimer();
+            std.mem.copyForwards(u8, self.read_buf[0..initial_data.len], initial_data);
+            self.read_pos = initial_data.len;
+
+            const consumed = self.head_parser.feed(initial_data);
+            if (self.head_parser.state == .finished) {
+                self.header_len = consumed;
+                self.processHandshake();
+                return;
+            }
+
             self.startRead();
         }
 
@@ -91,6 +103,19 @@ pub fn Handshake(
             self.header_len = 0;
             self.user_handler = null;
             self.terminal_action = .none;
+        }
+
+        fn startUpgradeTimer(self: *HandshakeSelf) void {
+            if (self.upgrade_timer_completion.state() != .active) {
+                self.timer.run(
+                    self.server.loop,
+                    &self.upgrade_timer_completion,
+                    self.server.config.upgrade_timeout_ms,
+                    HandshakeSelf,
+                    self,
+                    onUpgradeTimerCallback,
+                );
+            }
         }
 
         fn startRead(self: *HandshakeSelf) void {

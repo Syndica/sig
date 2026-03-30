@@ -3,6 +3,7 @@ pub const mask = @import("mask.zig");
 pub const http = @import("http.zig");
 pub const frame = @import("frame.zig");
 pub const reader = @import("reader.zig");
+pub const socket_opts = @import("socket_opts.zig");
 pub const server = @import("server/server.zig");
 // Client modules
 pub const client = @import("client/client.zig");
@@ -31,6 +32,7 @@ test {
     _ = @import("http.zig");
     _ = @import("frame.zig");
     _ = @import("reader.zig");
+    _ = @import("socket_opts.zig");
     _ = @import("control_queue.zig");
     _ = @import("server/server.zig");
     _ = @import("server/connection.zig");
