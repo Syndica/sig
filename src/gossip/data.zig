@@ -644,6 +644,22 @@ pub const Vote = struct {
     }
 };
 
+/// A gossip `Vote` together with its CRDS label index (0..11).
+///
+/// The label index is the first element of the `GossipData.Vote` tuple.
+/// It is NOT part of the bincode-serialized `Vote` struct — we carry it
+/// separately so that downstream consumers (vote_listener, VoteCoalescer)
+/// can replicate Agave's per-label coalescing without touching the wire
+/// format.
+pub const IndexedVote = struct {
+    vote_index: u8,
+    vote: Vote,
+
+    pub fn deinit(self: IndexedVote, allocator: std.mem.Allocator) void {
+        self.vote.deinit(allocator);
+    }
+};
+
 pub const LowestSlot = struct {
     from: Pubkey,
     root: u64, //deprecated

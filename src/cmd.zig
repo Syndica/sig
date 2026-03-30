@@ -1521,7 +1521,7 @@ fn validator(
     });
     defer snapshot_dir.close();
 
-    var gossip_votes: sig.sync.Channel(sig.gossip.data.Vote) = try .init(allocator);
+    var gossip_votes: sig.sync.Channel(sig.gossip.data.IndexedVote) = try .init(allocator);
     defer gossip_votes.deinit();
 
     var duplicate_shreds: sig.sync.Channel(sig.gossip.data.DuplicateShred) = try .init(allocator);
@@ -3112,7 +3112,7 @@ const ReplayAndConsensusServiceState = struct {
         self: *ReplayAndConsensusServiceState,
         app_base: *const AppBase,
         vote_sockets: ?*const replay.consensus.core.VoteSockets,
-        gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
+        gossip_votes: ?*sig.sync.Channel(sig.gossip.data.IndexedVote),
         gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
     ) !std.Thread {
         return try app_base.spawnService(

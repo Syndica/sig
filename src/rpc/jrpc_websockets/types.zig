@@ -597,6 +597,10 @@ pub const VoteEventData = struct {
     hash: Hash,
     timestamp: ?i64,
     signature: Signature,
+    /// CRDS label index (0..11) from gossip. Internal only, not
+    /// serialized into the JSON RPC notification. `null` for
+    /// replayed votes (non-gossip).
+    vote_index: ?u8 = null,
 
     pub fn deinit(self: VoteEventData, allocator: std.mem.Allocator) void {
         allocator.free(self.slots);

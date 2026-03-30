@@ -2037,7 +2037,7 @@ pub const GossipService = struct {
 /// messaging that happens between multiple validators over the network.
 pub const LocalMessageBroker = struct {
     /// Pushes votes to VoteCollector in consensus.
-    vote_collector: ?*Channel(sig.gossip.data.Vote) = null,
+    vote_collector: ?*Channel(sig.gossip.data.IndexedVote) = null,
     duplicate_shred_listener: ?*Channel(sig.gossip.data.DuplicateShred) = null,
 
     /// Publishes new gossip data that was just received over the network to the
@@ -2047,10 +2047,10 @@ pub const LocalMessageBroker = struct {
     fn publish(self: *const LocalMessageBroker, data: *const GossipData) !void {
         switch (data.*) {
             .Vote => |idx_vote| if (self.vote_collector) |channel| {
-                _, const vote = idx_vote;
+                const vote_index, const vote = idx_vote;
                 const cloned_vote = try vote.clone(channel.allocator);
                 errdefer cloned_vote.deinit(channel.allocator);
-                try channel.send(cloned_vote);
+                try channel.send(.{ .vote_index = vote_index, .vote = cloned_vote });
             },
             .DuplicateShred => |idx_dupe_shred| if (self.duplicate_shred_listener) |channel| {
                 _, const dupe_shred = idx_dupe_shred;
@@ -2064,7 +2064,7 @@ pub const LocalMessageBroker = struct {
 
     fn deinit(self: *const LocalMessageBroker) void {
         if (self.vote_collector) |vcs| {
-            while (vcs.tryReceive()) |vote| vote.deinit(vcs.allocator);
+            while (vcs.tryReceive()) |indexed_vote| indexed_vote.deinit(vcs.allocator);
         }
     }
 };
@@ -3638,7 +3638,7 @@ test "benchmarkGossipService" {
 test LocalMessageBroker {
     const allocator = std.testing.allocator;
     var rng = std.Random.DefaultPrng.init(0);
-    var vote_collector: Channel(sig.gossip.data.Vote) = try .init(allocator);
+    var vote_collector: Channel(sig.gossip.data.IndexedVote) = try .init(allocator);
     defer vote_collector.deinit();
     const broker: LocalMessageBroker = .{ .vote_collector = &vote_collector };
     var signer: Pubkey = undefined;
@@ -3653,7 +3653,8 @@ test LocalMessageBroker {
             .slot = 0,
         } } });
     }
-    const vote = vote_collector.tryReceive().?;
-    defer vote.deinit(allocator);
-    try std.testing.expectEqualSlices(u8, &signer.data, &vote.transaction.msg.account_keys[0].data);
+    const indexed_vote = vote_collector.tryReceive().?;
+    defer indexed_vote.deinit(allocator);
+    try std.testing.expectEqual(@as(u8, 0), indexed_vote.vote_index);
+    try std.testing.expectEqualSlices(u8, &signer.data, &indexed_vote.vote.transaction.msg.account_keys[0].data);
 }

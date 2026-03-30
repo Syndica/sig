@@ -40,7 +40,7 @@ const vote_coalesce_interval_ms = 100;
 /// reordered gossip delivery.
 ///
 /// Memory is bounded by the number of unique validators (~600 on
-/// mainnet, ~120 KB worst case).
+/// mainnet) times 12 vote label indices, ~120 KB worst case.
 const VoteCoalescer = struct {
     const Entry = struct {
         data: types.VoteEventData,
@@ -50,8 +50,14 @@ const VoteCoalescer = struct {
         flushed: bool,
     };
 
+    /// Composite key matching Agave's CRDS label: (pubkey, vote_index).
+    /// Gossip votes always have a vote_index (0..11); replayed votes
+    /// (vote_index == null) use sentinel 0xFF so they never collide
+    /// with gossip labels and are effectively keyed by pubkey alone.
+    const CoalesceKey = struct { Pubkey, u8 };
+
     const Map = std.AutoArrayHashMapUnmanaged(
-        Pubkey,
+        CoalesceKey,
         Entry,
     );
 
@@ -61,10 +67,9 @@ const VoteCoalescer = struct {
 
     const empty: VoteCoalescer = .{};
 
-    /// Insert or replace a vote for the given pubkey. Only votes
-    /// with a strictly higher tip slot (last element of `slots`)
-    /// than the existing entry are accepted — same-or-lower tips
-    /// are dropped to prevent duplicate or regressed notifications.
+    /// Insert or replace a vote for the given (pubkey, vote_index).
+    /// Within the same label, only votes with a strictly higher tip
+    /// slot are accepted, same-or-lower tips are dropped.
     ///
     /// Takes ownership of `vote_data.slots` — the caller must
     /// NOT free them.
@@ -73,11 +78,16 @@ const VoteCoalescer = struct {
         allocator: std.mem.Allocator,
         vote_data: types.VoteEventData,
     ) void {
+        const key: CoalesceKey = .{
+            vote_data.vote_pubkey,
+            vote_data.vote_index orelse 0xFF,
+        };
+
         const gop = self.map.getOrPut(
             allocator,
-            vote_data.vote_pubkey,
+            key,
         ) catch {
-            // OOM: drop this vote — nonfatal.
+            // OOM: drop this vote (nonfatal).
             allocator.free(vote_data.slots);
             return;
         };
@@ -96,7 +106,7 @@ const VoteCoalescer = struct {
                     .flushed = false,
                 };
             } else {
-                // Same or lower tip — stale/duplicate, drop.
+                // Same or lower tip, stale/duplicate, drop.
                 allocator.free(vote_data.slots);
             }
         } else {
@@ -178,7 +188,7 @@ threadpool_wg: std.Thread.WaitGroup,
 /// Used by integrations to drain additional loop-thread-only queues.
 wakeup_hook: ?WakeupHook = null,
 /// Buffers vote events per-pubkey and flushes them on a timer to match
-/// Agave's ~100ms polling cadence. See spec: vote-notification-coalescing.
+/// Agave's ~100ms polling cadence.
 vote_coalescer: VoteCoalescer = .empty,
 /// xev timer handle for periodic vote coalescing flushes.
 coalesce_timer: xev.Timer,
@@ -741,6 +751,7 @@ fn handleVoteEvent(
                 .hash = vote_data.hash,
                 .timestamp = vote_data.timestamp,
                 .signature = vote_data.signature,
+                .vote_index = vote_data.vote_index,
             },
         }, task_batch);
     }
@@ -774,6 +785,7 @@ fn coalesceVoteEvent(
         .hash = vote_data.hash,
         .timestamp = vote_data.timestamp,
         .signature = vote_data.signature,
+        .vote_index = vote_data.vote_index,
     } };
 
     if (!self.coalesce_timer_armed) {
@@ -1642,7 +1654,7 @@ test "VoteCoalescer coalesces within window and rejects stale across windows" {
     @memset(&pk_b_data, 0xBB);
     const pk_b: Pubkey = .{ .data = pk_b_data };
 
-    // --- Window 1: three ascending votes for pk_a ---
+    // --- Window 1: three ascending votes for pk_a, same vote_index ---
 
     coalescer.ingest(allocator, .{
         .vote_pubkey = pk_a,
@@ -1650,6 +1662,7 @@ test "VoteCoalescer coalesces within window and rejects stale across windows" {
         .hash = Hash.ZEROES,
         .timestamp = 1,
         .signature = Signature.ZEROES,
+        .vote_index = 3,
     });
     try std.testing.expectEqual(1, coalescer.dirty_count);
 
@@ -1659,6 +1672,7 @@ test "VoteCoalescer coalesces within window and rejects stale across windows" {
         .hash = Hash.ZEROES,
         .timestamp = 2,
         .signature = Signature.ZEROES,
+        .vote_index = 3,
     });
     // Still 1 dirty — replaced the unflushed entry.
     try std.testing.expectEqual(1, coalescer.dirty_count);
@@ -1672,6 +1686,7 @@ test "VoteCoalescer coalesces within window and rejects stale across windows" {
         .hash = Hash.ZEROES,
         .timestamp = 3,
         .signature = Signature.ZEROES,
+        .vote_index = 3,
     });
     try std.testing.expectEqual(1, coalescer.dirty_count);
 
@@ -1682,11 +1697,13 @@ test "VoteCoalescer coalesces within window and rejects stale across windows" {
         .hash = Hash.ZEROES,
         .timestamp = 4,
         .signature = Signature.ZEROES,
+        .vote_index = 0,
     });
     try std.testing.expectEqual(2, coalescer.dirty_count);
 
-    // Verify coalesced state: pk_a should have tip 102.
-    const a_entry = coalescer.map.get(pk_a).?;
+    // Verify coalesced state: pk_a (index 3) should have tip 102.
+    const key_a: VoteCoalescer.CoalesceKey = .{ pk_a, 3 };
+    const a_entry = coalescer.map.get(key_a).?;
     try std.testing.expectEqual(
         102,
         a_entry.data.slots[a_entry.data.slots.len - 1],
@@ -1706,12 +1723,13 @@ test "VoteCoalescer coalesces within window and rejects stale across windows" {
         .hash = Hash.ZEROES,
         .timestamp = 5,
         .signature = Signature.ZEROES,
+        .vote_index = 3,
     });
     // Stale — should be rejected, dirty_count stays 0.
     try std.testing.expectEqual(0, coalescer.dirty_count);
 
     // pk_a still has the old tip 102 entry, marked flushed.
-    const a_after = coalescer.map.get(pk_a).?;
+    const a_after = coalescer.map.get(key_a).?;
     try std.testing.expectEqual(
         102,
         a_after.data.slots[a_after.data.slots.len - 1],
@@ -1725,6 +1743,7 @@ test "VoteCoalescer coalesces within window and rejects stale across windows" {
         .hash = Hash.ZEROES,
         .timestamp = 6,
         .signature = Signature.ZEROES,
+        .vote_index = 3,
     });
     try std.testing.expectEqual(0, coalescer.dirty_count);
 
@@ -1739,11 +1758,12 @@ test "VoteCoalescer coalesces within window and rejects stale across windows" {
         .hash = Hash.ZEROES,
         .timestamp = 7,
         .signature = Signature.ZEROES,
+        .vote_index = 3,
     });
     // Accepted — dirty_count goes to 1.
     try std.testing.expectEqual(1, coalescer.dirty_count);
 
-    const a_new = coalescer.map.get(pk_a).?;
+    const a_new = coalescer.map.get(key_a).?;
     try std.testing.expectEqual(
         103,
         a_new.data.slots[a_new.data.slots.len - 1],
@@ -1751,6 +1771,32 @@ test "VoteCoalescer coalesces within window and rejects stale across windows" {
     try std.testing.expect(!a_new.flushed);
 
     // pk_b is still flushed/clean from window 1.
-    const b_entry = coalescer.map.get(pk_b).?;
+    const key_b: VoteCoalescer.CoalesceKey = .{ pk_b, 0 };
+    const b_entry = coalescer.map.get(key_b).?;
     try std.testing.expect(b_entry.flushed);
+
+    // --- Different vote_index for same pubkey produces a separate entry ---
+
+    coalescer.ingest(allocator, .{
+        .vote_pubkey = pk_a,
+        .slots = try allocator.dupe(u64, &.{50}),
+        .hash = Hash.ZEROES,
+        .timestamp = 8,
+        .signature = Signature.ZEROES,
+        .vote_index = 7,
+    });
+    // pk_a index 3 is dirty (tip 103), plus pk_a index 7 is new dirty.
+    try std.testing.expectEqual(2, coalescer.dirty_count);
+
+    const key_a7: VoteCoalescer.CoalesceKey = .{ pk_a, 7 };
+    const a7_entry = coalescer.map.get(key_a7).?;
+    try std.testing.expectEqual(50, a7_entry.data.slots[0]);
+    try std.testing.expect(!a7_entry.flushed);
+
+    // Original pk_a index 3 is still there with tip 103.
+    const a3_entry = coalescer.map.get(key_a).?;
+    try std.testing.expectEqual(
+        103,
+        a3_entry.data.slots[a3_entry.data.slots.len - 1],
+    );
 }

@@ -1,0 +1,10 @@
+{
+  "sig_commit": "ea6ba86ef7a67f04eb9d3e10fcadad0651aec862",
+  "sig_commit_message": "fix: InvalidRootSlot",
+  "snapshot_slot": 398384161,
+  "ledger_bounds": {
+    "lowest": 398393037,
+    "highest": 398396299
+  },
+  "captured_at": "2026-03-30T15:53Z"
+}

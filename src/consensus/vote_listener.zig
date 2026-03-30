@@ -158,7 +158,7 @@ const GossipVoteReceptor = struct {
         self: *GossipVoteReceptor,
         allocator: std.mem.Allocator,
         slot_data_provider: *const SlotDataProvider,
-        gossip_votes: *sig.sync.Channel(sig.gossip.data.Vote),
+        gossip_votes: *sig.sync.Channel(sig.gossip.data.IndexedVote),
         metrics: VoteListenerMetrics,
     ) ![]const vote_parser.ParsedVote {
         const zone = tracy.Zone.init(@src(), .{ .name = "receiveVerifiedVotes" });
@@ -173,14 +173,16 @@ const GossipVoteReceptor = struct {
         const max_votes_to_process: usize = sig.MAX_VALIDATORS;
         try vote_tx_buffer.ensureTotalCapacityPrecise(allocator, max_votes_to_process);
         var votes_processed: usize = 0;
-        while (gossip_votes.tryReceive()) |gossip_vote| {
-            defer gossip_vote.transaction.deinit(gossip_votes.allocator);
+        while (gossip_votes.tryReceive()) |indexed_vote| {
+            defer indexed_vote.vote.transaction.deinit(gossip_votes.allocator);
             if (parseAndVerifyVoteTransaction(
                 allocator,
-                gossip_vote.transaction,
+                indexed_vote.vote.transaction,
                 slot_data_provider.epoch_tracker,
             )) |parsed_vote| {
-                vote_tx_buffer.appendAssumeCapacity(parsed_vote);
+                var pv = parsed_vote;
+                pv.vote_index = indexed_vote.vote_index;
+                vote_tx_buffer.appendAssumeCapacity(pv);
             } else |e| switch (e) {
                 error.Unverified => {},
                 error.OutOfMemory => return e,
@@ -314,7 +316,7 @@ pub const VoteCollector = struct {
             senders: Senders,
             receivers: Receivers,
             ledger: *Ledger,
-            gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
+            gossip_votes: ?*sig.sync.Channel(sig.gossip.data.IndexedVote),
         },
     ) ![]const ThresholdConfirmedSlot {
         const slot_data_provider = params.slot_data_provider;
@@ -461,6 +463,7 @@ fn filterAndConfirmWithNewVotes(
                 vote,
                 vote_pubkey,
                 signature,
+                parsed_vote.vote_index,
                 &diff,
                 &new_optimistic_confirmed_slots,
                 is_gossip,
@@ -678,6 +681,7 @@ fn trackNewVotesAndNotifyConfirmations(
     vote: VoteTransaction,
     vote_pubkey: Pubkey,
     vote_transaction_signature: sig.core.Signature,
+    vote_index: ?u8,
     diff: *SlotsDiff,
     new_optimistic_confirmed_slots: *std.ArrayListUnmanaged(ThresholdConfirmedSlot),
     is_gossip_vote: bool,
@@ -863,6 +867,7 @@ fn trackNewVotesAndNotifyConfirmations(
                         .hash = last_vote_hash,
                         .timestamp = vote.timestamp(),
                         .signature = vote_transaction_signature,
+                        .vote_index = vote_index,
                     },
                 }) catch {
                     allocator.free(duped_slots);
@@ -983,6 +988,7 @@ test "trackNewVotesAndNotifyConfirmations filter" {
             tower_sync_tx_parsed.vote,
             tower_sync_tx_parsed.key,
             tower_sync_tx_parsed.signature,
+            null,
             &diff,
             &new_optimistic_confirmed_slots,
             is_gossip_vote,
@@ -1031,6 +1037,7 @@ test "trackNewVotesAndNotifyConfirmations filter" {
             tower_sync_tx_parsed.vote,
             tower_sync_tx_parsed.key,
             tower_sync_tx_parsed.signature,
+            null,
             &diff,
             &new_optimistic_confirmed_slots,
             is_gossip_vote,
@@ -1138,6 +1145,7 @@ test "trackNewVotesAndNotifyConfirmations records confirmed slots" {
         tower_sync_tx_parsed.vote,
         tower_sync_tx_parsed.key,
         tower_sync_tx_parsed.signature,
+        null,
         &diff,
         &new_optimistic_confirmed_slots,
         true,
@@ -1207,6 +1215,8 @@ pub const vote_parser = struct {
         vote: VoteTransaction,
         switch_proof_hash: ?Hash,
         signature: sig.core.Signature,
+        /// CRDS label index (0..11) from gossip. `null` for replayed votes.
+        vote_index: ?u8 = null,
 
         pub fn deinit(self: ParsedVote, allocator: std.mem.Allocator) void {
             self.vote.deinit(allocator);
@@ -1937,7 +1947,7 @@ test "check trackers" {
     var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer state.deinit();
 
-    const gossip_votes_channel: *sig.sync.Channel(sig.gossip.data.Vote) = try .create(allocator);
+    const gossip_votes_channel: *sig.sync.Channel(sig.gossip.data.IndexedVote) = try .create(allocator);
     defer gossip_votes_channel.destroy();
 
     const senders: Senders = try .createForTest(allocator);
@@ -2006,10 +2016,13 @@ test "check trackers" {
         errdefer tower_sync_tx.deinit(allocator);
 
         try gossip_votes_channel.send(.{
-            .from = from,
-            .transaction = tower_sync_tx,
-            .wallclock = wallclock,
-            .slot = slot,
+            .vote_index = 0,
+            .vote = .{
+                .from = from,
+                .transaction = tower_sync_tx,
+                .wallclock = wallclock,
+                .slot = slot,
+            },
         });
     }
 

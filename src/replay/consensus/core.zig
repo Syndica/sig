@@ -351,7 +351,7 @@ pub const TowerConsensus = struct {
             ledger: *Ledger,
             maybe_thread_pool: ?*ThreadPool = null,
             /// Scanned by the vote collector if provided.
-            gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
+            gossip_votes: ?*sig.sync.Channel(sig.gossip.data.IndexedVote),
             gossip_table: ?*sig.sync.RwMux(sig.gossip.GossipTable),
             slot_tracker: *SlotTracker,
             epoch_tracker: *sig.core.EpochTracker,

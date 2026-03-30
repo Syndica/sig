@@ -53,7 +53,7 @@ pub const Metrics = struct {
 
 pub const AvanceReplayConsensusParams = struct {
     tower: *TowerConsensus,
-    gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
+    gossip_votes: ?*sig.sync.Channel(sig.gossip.data.IndexedVote),
     senders: TowerConsensus.Senders,
     receivers: TowerConsensus.Receivers,
     vote_sockets: ?*const sig.replay.consensus.core.VoteSockets,
