@@ -30,7 +30,7 @@ pub fn serviceMain(rw: ReadWrite) !noreturn {
     var fba = std.heap.FixedBufferAllocator.init(&scratch_memory);
     const allocator = fba.allocator();
 
-    var state: State = try .init(allocator);
+    var map_tree: MerkleForest = try .init(allocator);
 
     while (true) {
         var read = rw.deshredded_in.getReadable() catch continue;
@@ -41,107 +41,18 @@ pub fn serviceMain(rw: ReadWrite) !noreturn {
         const received_zone = tracy.Zone.init(@src(), .{ .name = "received fec set" });
         defer received_zone.deinit();
 
-        const entry = state.insertGetChained(deshredded_fec_set);
-
-        std.log.info(
-            "finished fec set {} {f}, insert: {s}",
-            .{ deshredded_fec_set.id, deshredded_fec_set.merkle_root, @tagName(entry) },
-        );
+        const result = try map_tree.put(deshredded_fec_set);
+        std.log.info("{}: {f}, last? {}", .{ deshredded_fec_set.id, result, deshredded_fec_set.slot_complete });
     }
 }
 
-const State = struct {
-    map: MerkleRootMap,
-
-    fn init(allocator: std.mem.Allocator) !State {
-        var root_map: MerkleRootMap = .empty;
-        errdefer root_map.deinit(allocator);
-        try root_map.ensureTotalCapacity(allocator, 1024);
-
-        return .{
-            .map = root_map,
-        };
-    }
-
-    const InsertResult = union(enum) {
-        already_known,
-        inserted,
-        inserted_known_chain: MerkleRootMap.Entry,
-    };
-
-    fn insertGetChained(self: *State, deshredded: *const lib.shred.DeshreddedFecSet) InsertResult {
-        // TODO: eviction
-
-        _ = self;
-        _ = deshredded;
-        return .inserted;
-
-        // const get_or_put = self.map.getOrPutAssumeCapacity(deshredded.merkle_root);
-        // if (get_or_put.found_existing) return .already_known;
-        // get_or_put.value_ptr.* = .init(deshredded);
-
-        // const chained = self.map.getEntry(deshredded.chained_merkle_root) orelse
-        //     return .inserted;
-
-        // get_or_put.value_ptr.prev = chained.value_ptr;
-
-        // if (deshredded.slot_complete) {
-        //     var maybe_node = get_or_put.value_ptr.prev;
-        //     while (maybe_node) |node| : (maybe_node = node.prev) {
-        //         if (node.id.fec_set_idx == 0)
-        //             std.log.info("Finished chain! {}->{}", .{ node.id, deshredded.id });
-        //     }
-        // }
-
-        // return .{ .inserted_known_chain = chained };
-    }
-
-    const MerkleRootMap = std.ArrayHashMapUnmanaged(void, *Value, Context, true);
-
-    const Context = struct {
-        pub fn hash(ctx: Context, key: Hash) u32 {
-            _ = ctx;
-            return @bitCast(key.data[0..4].*);
-        }
-        pub fn eql(ctx: Context, a: Hash, b: Hash, key_idx: usize) bool {
-            _ = ctx;
-            _ = key_idx;
-            return a.eql(&b);
-        }
-    };
-
-    const Value = extern struct {
-        chained_merkle_root: Hash,
-        id: FecSetId,
-        data_complete: bool,
-        slot_complete: bool,
-        payload_len: u16,
-
-        // the node found by the chained merkle root
-        // NOTE: we can't use a normal next pointer
-        prev: ?*Value = null,
-
-        // TODO: this shouldn't be copied, and should instead come in via a pool
-        payload_buf: [32 * Shred.data_payload_max]u8,
-
-        fn payload(self: *const Value) []const u8 {
-            return self.payload_buf[0..self.payload_len];
-        }
-
-        fn init(deshredded: *const lib.shred.DeshreddedFecSet) Value {
-            return .{
-                .chained_merkle_root = deshredded.chained_merkle_root,
-                .id = deshredded.id,
-                .data_complete = deshredded.data_complete,
-                .slot_complete = deshredded.slot_complete,
-                .payload_len = deshredded.payload_len,
-                .payload_buf = deshredded.payload_buf,
-            };
-        }
-    };
-};
-
-const MapTreeNode = extern struct {
+/// A hashmap value, and a tree node.
+/// This node is also used for the keys of hashmaps. When doing so, be careful of which adapted
+/// context you use.
+///
+/// NOTE: When used inside the Pool, these may be items in a free list. However such nodes should
+/// not be in either map or the tree.
+const MerkleNode = extern struct {
     parent: PoolIdx = .null,
     child: PoolIdx = .null,
     sibling: PoolIdx = .null,
@@ -154,12 +65,14 @@ const MapTreeNode = extern struct {
     payload_len: u16,
 
     // TODO: this shouldn't be copied, and should instead come in via a pool
+    // NOTE: it is an advantage for MerkleNode to be small! (cache locality for map lookup and tree
+    // traversal).
     payload_buf: [32 * Shred.data_payload_max]u8,
 
-    pub fn format(node: *const MapTreeNode, writer: *std.io.Writer) !void {
+    pub fn format(node: *const MerkleNode, writer: *std.io.Writer) !void {
         try writer.print(
             \\ {{
-            \\     id: {}, 
+            \\     id: {}, slot_complete: {}
             \\     parent: {}, child: {}, sibling: {}
             \\     root: {f}, chained_root: {f}
             \\     data_complete: {}, slot_complete: {}
@@ -178,57 +91,118 @@ const MapTreeNode = extern struct {
     }
 };
 
-const MapTree = struct {
+// TODO: handle eviction
+/// A tree of FEC sets, which are also keyed by their merkle (and chained) merkle roots.
+const MerkleForest = struct {
+    // owns all of the memory of nodes used in the tree
     pool: NodePool,
     tree: NodeTree,
-    map: Map, // merkle-hash -> node
-    const capacity = 128;
 
-    const Map = std.ArrayHashMapUnmanaged(void, *MapTreeNode, Context, true);
-    const NodePool = Pool(MapTreeNode, capacity);
-    const NodeTree = Tree(MapTreeNode, capacity);
+    // Nodes are inserted, keyed by their merkle root.
+    // New nodes can look for their parent using this map.
+    //
+    // merkle-hash -> node
+    map: MerkleMap,
 
-    const Context = struct {
-        map: *const Map,
+    // Nodes are inserted, keyed by their *chained* merkle root.
+    // New nodes can look for their child using this map.
+    //
+    // chained-merkle-hash -> node
+    orphan_map: OrphanMap,
 
-        pub fn hash(ctx: Context, key: *const Hash) u32 {
+    const capacity = 2048;
+
+    // keyed by merkle root
+    const OrphanMap = std.ArrayHashMapUnmanaged(void, *MerkleNode, OrphanContext, true);
+
+    // keyed by chained merkle root
+    const MerkleMap = std.ArrayHashMapUnmanaged(void, *MerkleNode, MerkleContext, true);
+
+    const NodePool = Pool(MerkleNode, capacity);
+    const NodeTree = Tree(MerkleNode, capacity);
+
+    const MerkleContext = struct {
+        map: *const MerkleMap,
+
+        pub fn hash(ctx: MerkleContext, key: *const Hash) u32 {
             _ = ctx;
             return @bitCast(key.data[0..4].*);
         }
-        pub fn eql(ctx: Context, a: *const Hash, _: void, key_idx: usize) bool {
+        pub fn eql(ctx: MerkleContext, a: *const Hash, _: void, key_idx: usize) bool {
             const b: *const Hash = &ctx.map.values()[key_idx].merkle_root;
             return a.eql(b);
         }
     };
 
-    fn init(self: *MapTree, allocator: std.mem.Allocator) !void {
-        self.pool = .init();
-        self.tree = .{ .buf = @ptrCast(&self.pool.buf) };
-        self.map = .empty;
-        try self.map.ensureTotalCapacity(allocator, capacity);
+    const OrphanContext = struct {
+        map: *const OrphanMap,
+
+        pub fn hash(ctx: OrphanContext, key: *const Hash) u32 {
+            _ = ctx;
+            return @bitCast(key.data[0..4].*);
+        }
+        pub fn eql(ctx: OrphanContext, a: *const Hash, _: void, key_idx: usize) bool {
+            const b: *const Hash = &ctx.map.values()[key_idx].chained_merkle_root;
+            return a.eql(b);
+        }
+    };
+
+    fn init(allocator: std.mem.Allocator) !MerkleForest {
+        const pool_buf = try allocator.alloc(NodePool.Node, capacity);
+        errdefer allocator.free(pool_buf);
+
+        var map: MerkleMap = .empty;
+        errdefer map.deinit(allocator);
+        try map.ensureTotalCapacity(allocator, capacity);
+
+        var orphan_map: OrphanMap = .empty;
+        errdefer orphan_map.deinit(allocator);
+        try orphan_map.ensureTotalCapacity(allocator, capacity);
+
+        return .{
+            // NOTE: the pool and the tree share the exact same buffer - this is intentional
+            .pool = .init(pool_buf[0..capacity]),
+            .tree = .{ .buf = @ptrCast(pool_buf[0..capacity]) },
+
+            .map = map,
+            .orphan_map = orphan_map,
+        };
+    }
+
+    fn deinit(self: *MerkleForest, allocator: std.mem.Allocator) void {
+        allocator.free(self.pool.buf);
+        self.map.deinit(allocator);
+        self.orphan_map.deinit(allocator);
     }
 
     const InsertResult = union(enum) {
-        already_known,
-        inserted,
-        inserted_known_chain: *MapTreeNode,
+        node_already_known, // merkle root in map early return
+
+        waiting_for_child,
+        waiting_for_parent,
+        waiting_for_parent_and_child,
+
+        // The new node's parent and child nodes are both found (or not needed), but we still don't
+        // have a complete slot.
+        chain_incomplete,
+        chain_complete,
 
         pub fn format(self: InsertResult, writer: *std.io.Writer) !void {
             switch (self) {
-                .already_known, .inserted => try writer.print("{s}", .{@tagName(self)}),
-                .inserted_known_chain => |node| try writer.print("{s}: {f}", .{ @tagName(self), node }),
+                inline else => try writer.print("{s}", .{@tagName(self)}),
             }
         }
     };
 
-    fn put(self: *MapTree, new_fec_set: *const lib.shred.DeshreddedFecSet) !InsertResult {
-        const ctx: Context = .{ .map = &self.map };
+    fn put(self: *MerkleForest, new_fec_set: *const lib.shred.DeshreddedFecSet) !InsertResult {
+        const map_ctx: MerkleContext = .{ .map = &self.map };
+        const orphan_map_ctx: OrphanContext = .{ .map = &self.orphan_map };
 
-        const result = self.map.getOrPutAssumeCapacityAdapted(&new_fec_set.merkle_root, ctx);
-        if (result.found_existing) return .already_known;
+        const map_result = self.map.getOrPutAssumeCapacityAdapted(&new_fec_set.merkle_root, map_ctx);
+        if (map_result.found_existing) return .node_already_known;
 
         const node = try self.pool.create();
-        result.value_ptr.* = node;
+        map_result.value_ptr.* = node;
 
         node.* = .{
             .merkle_root = new_fec_set.merkle_root,
@@ -240,22 +214,85 @@ const MapTree = struct {
             .payload_buf = new_fec_set.payload_buf,
         };
 
-        if (self.map.getAdapted(&new_fec_set.chained_merkle_root, ctx)) |parent| {
-            self.tree.insert(parent, node);
-            return .{ .inserted_known_chain = parent };
+        var must_wait_for_parent: bool = false;
+
+        // TODO: stop checking cross-slot?
+        if (self.map.getAdapted(&new_fec_set.chained_merkle_root, map_ctx)) |parent| {
+            self.tree.linkOrphaned(parent, node);
+            // return .{ .inserted_known_chain = parent };
+        } else if (new_fec_set.id.fec_set_idx != 0) {
+            // We don't have this fec set's parent yet, and it should have one.
+            //
+            // The chained merkle root of a node is the node's parent; nodes encode enough
+            // information to find their parent, but not their child.
+            //
+            // We insert this parent-less node into this map, such that if the parent comes later,
+            // it can find its child, only knowing the merkle root of itself.
+            //
+
+            const orphan_map_result = self.orphan_map.getOrPutAssumeCapacityAdapted(
+                &new_fec_set.chained_merkle_root,
+                orphan_map_ctx,
+            );
+            std.debug.assert(!orphan_map_result.found_existing);
+            orphan_map_result.value_ptr.* = node;
+
+            must_wait_for_parent = true;
         }
-        return .inserted;
 
-        // self.tree.insert();
+        var must_wait_for_child: bool = false;
 
-        // return (self.map.getEntryAdapted(merkle_root, Context{ .map = &self.map }) orelse return null).value_ptr.*;
+        if (self.orphan_map.getAdapted(&new_fec_set.merkle_root, orphan_map_ctx)) |child| {
+            self.tree.linkOrphaned(node, child);
+        } else if (!new_fec_set.slot_complete) {
+            // We don't have this fec set's child yet, and it should have one
+            //
+            // There is nothing to do here, the child can find its parent through the child's
+            // chained merkle root in self.map.
+
+            must_wait_for_child = true;
+        }
+
+        if (!must_wait_for_child and !must_wait_for_parent) {
+            // This slot might be finished? Let's traverse our node's parents and children to find
+            // out.
+            const start_finished: bool = node.id.fec_set_idx == 0 or found_idx_0: {
+                var maybe_backwards_idx: ?usize = node.parent.index();
+
+                break :found_idx_0 while (maybe_backwards_idx) |backwards_idx| {
+                    const parent_node: *const MerkleNode = @ptrCast(&self.pool.buf[backwards_idx]);
+
+                    if (parent_node.id.fec_set_idx == 0) break true;
+
+                    maybe_backwards_idx = parent_node.parent.index();
+                } else false;
+            };
+
+            const end_finished: bool = node.slot_complete or found_slot_complete: {
+                var maybe_forwards_idx: ?usize = node.child.index();
+
+                break :found_slot_complete while (maybe_forwards_idx) |forwards_idx| {
+                    const child_node: *const MerkleNode = @ptrCast(&self.pool.buf[forwards_idx]);
+
+                    if (child_node.slot_complete) break true;
+
+                    maybe_forwards_idx = child_node.child.index();
+                } else false;
+            };
+
+            return if (start_finished and end_finished) return .chain_complete else .chain_incomplete;
+        }
+
+        if (must_wait_for_child and must_wait_for_parent) return .waiting_for_parent_and_child;
+        if (must_wait_for_child) return .waiting_for_child;
+        if (must_wait_for_parent) return .waiting_for_parent;
+        unreachable;
     }
 };
 
-test MapTree {
-    var tree: MapTree = undefined;
-    try tree.init(std.testing.allocator);
-    defer tree.map.deinit(std.testing.allocator);
+test "MerkleForest tree put" {
+    var tree: MerkleForest = try .init(std.testing.allocator);
+    defer tree.deinit(std.testing.allocator);
 
     const a_hash: Hash = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
     const b_hash: Hash = .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd");
@@ -278,7 +315,7 @@ test MapTree {
         .chained_merkle_root = a_hash,
         .merkle_root = b_hash,
 
-        .id = .{ .slot = 409284941, .fec_set_idx = 0 },
+        .id = .{ .slot = 409284941, .fec_set_idx = 32 },
 
         .data_complete = true,
         .slot_complete = false,
@@ -291,7 +328,7 @@ test MapTree {
         .chained_merkle_root = b_hash,
         .merkle_root = c_hash,
 
-        .id = .{ .slot = 409284941, .fec_set_idx = 0 },
+        .id = .{ .slot = 409284941, .fec_set_idx = 64 },
 
         .data_complete = true,
         .slot_complete = true,
@@ -300,18 +337,74 @@ test MapTree {
         .payload_buf = undefined,
     };
 
-    std.debug.print("{f}\n", .{try tree.put(&a)});
-    std.debug.print("{f}\n", .{try tree.put(&b)});
-    std.debug.print("{f}\n", .{try tree.put(&c)});
+    try std.testing.expectEqual(.waiting_for_child, try tree.put(&a));
+    try std.testing.expectEqual(.waiting_for_child, try tree.put(&b));
+    try std.testing.expectEqual(.chain_complete, try tree.put(&c));
 }
 
-fn Tree(
-    Node: type,
-    comptime capacity: usize,
-    // comptime parent_field: []const u8,
-    // comptime child_field: []const u8,
-    // comptime sibling_field: []const u8,
-) type {
+test "MerkleForest fec set completion out of order" {
+    const allocator = std.testing.allocator;
+
+    var forest = try MerkleForest.init(allocator);
+    defer forest.deinit(allocator);
+
+    // a <- b <- c <- d, inserted in order: a, c, b, d
+    const a_hash: Hash = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
+    const b_hash: Hash = .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd");
+    const c_hash: Hash = .parse("2GyMeUytf6fcsfNP2QQ6F5e5qwAUoMtKUbnH6QU6bTNm");
+    const d_hash: Hash = .parse("Cg37799xhTFEGyqXSEekbVbiCZKQAjzc6CQC75Hk91S9");
+
+    const a_result = try forest.put(&.{
+        .merkle_root = a_hash,
+        .chained_merkle_root = .parse("DWCWjQciWoWDzJKwqUZ1ntKqTyXtLVt4C8aL7biBJZ4z"), // prev slot
+        .id = .{ .slot = 409284941, .fec_set_idx = 0 },
+        .slot_complete = false,
+
+        .data_complete = true,
+        .payload_len = undefined,
+        .payload_buf = undefined,
+    });
+
+    const c_result = try forest.put(&.{
+        .merkle_root = c_hash,
+        .chained_merkle_root = b_hash,
+        .id = .{ .slot = 409284941, .fec_set_idx = 64 },
+        .slot_complete = false,
+
+        .data_complete = true,
+        .payload_len = undefined,
+        .payload_buf = undefined,
+    });
+
+    const b_result = try forest.put(&.{
+        .merkle_root = b_hash,
+        .chained_merkle_root = a_hash,
+        .id = .{ .slot = 409284941, .fec_set_idx = 32 },
+        .slot_complete = false,
+
+        .data_complete = true,
+        .payload_len = undefined,
+        .payload_buf = undefined,
+    });
+
+    const d_result = try forest.put(&.{
+        .merkle_root = d_hash,
+        .chained_merkle_root = c_hash,
+        .id = .{ .slot = 409284941, .fec_set_idx = 96 },
+        .slot_complete = true,
+
+        .data_complete = true,
+        .payload_len = undefined,
+        .payload_buf = undefined,
+    });
+
+    try std.testing.expectEqual(.waiting_for_child, a_result);
+    try std.testing.expectEqual(.waiting_for_parent_and_child, c_result);
+    try std.testing.expectEqual(.chain_incomplete, b_result);
+    try std.testing.expectEqual(.chain_complete, d_result);
+}
+
+fn Tree(Node: type, comptime capacity: usize) type {
     const needed_fields: []const []const u8 = &.{ "parent", "child", "sibling" };
 
     for (needed_fields) |field| {
@@ -332,18 +425,17 @@ fn Tree(
             return @enumFromInt(idx);
         }
 
-        fn insert(self: *const Self, parent: *Node, new_node: *Node) void {
-            std.debug.assert(new_node.parent == .null);
-            std.debug.assert(new_node.child == .null);
-            std.debug.assert(new_node.sibling == .null);
+        fn linkOrphaned(self: *const Self, parent: *Node, orphan: *Node) void {
+            std.debug.assert(orphan.parent == .null);
+            std.debug.assert(orphan.sibling == .null);
 
-            new_node.parent = self.ptrToIdx(parent);
+            orphan.parent = self.ptrToIdx(parent);
 
             if (parent.child == .null) {
-                parent.child = self.ptrToIdx(new_node);
+                parent.child = self.ptrToIdx(orphan);
             } else {
-                new_node.sibling = parent.child;
-                parent.child = self.ptrToIdx(new_node);
+                orphan.sibling = parent.child;
+                parent.child = self.ptrToIdx(orphan);
             }
         }
     };
@@ -352,6 +444,11 @@ fn Tree(
 const PoolIdx = enum(usize) {
     null = std.math.maxInt(usize),
     _,
+
+    fn index(self: PoolIdx) ?usize {
+        if (self == .null) return null;
+        return @intFromEnum(self);
+    }
 };
 
 fn Pool(Item: type, comptime capacity: usize) type {
@@ -359,7 +456,7 @@ fn Pool(Item: type, comptime capacity: usize) type {
 
     return extern struct {
         free_list: Idx,
-        buf: [capacity]Node,
+        buf: *[capacity]Node,
 
         // We know when next_free is active when we walk the free_list
         const Node = extern union { next_free: Idx, item: Item };
@@ -378,10 +475,9 @@ fn Pool(Item: type, comptime capacity: usize) type {
 
         const Self = @This();
 
-        fn init() Self {
+        fn init(buf: *[capacity]Node) Self {
             // place all nodes in the free list
             // (0) -> (1) -> ... ->(buf.len - 1) -> (null)
-            var buf: [capacity]Node = undefined;
             for (buf[0 .. buf.len - 1], 0..) |*node, i| {
                 node.* = .{ .next_free = @enumFromInt(i + 1) };
             }
@@ -411,16 +507,22 @@ fn Pool(Item: type, comptime capacity: usize) type {
 
         fn ptrToIndex(self: *const Self, item: ItemPtr) Idx {
             const node: [*]const Node = @ptrCast(item);
-            const base: [*]const Node = &self.buf;
+            const base: [*]const Node = self.buf.ptr;
             return @enumFromInt(node - base);
         }
     };
 }
 
 test "pool create + destroy" {
-    const capacity = 1024;
+    const capacity = 2048;
+    const allocator = std.testing.allocator;
 
-    var pool: Pool(i64, capacity) = .init();
+    const P = Pool(i64, capacity);
+
+    const pool_buf = try allocator.alloc(P.Node, capacity);
+    defer allocator.free(pool_buf);
+
+    var pool: P = .init(pool_buf[0..capacity]);
 
     for (0..capacity + 1) |i| {
         if (i == capacity) {
@@ -451,7 +553,13 @@ test "pool create + destroy" {
 }
 
 test "pool create + destroy out of order" {
-    var pool: Pool(i64, 3) = .init();
+    const allocator = std.testing.allocator;
+    const P = Pool(i64, 3);
+
+    const pool_buf = try allocator.alloc(P.Node, 3);
+    defer allocator.free(pool_buf);
+
+    var pool: Pool(i64, 3) = .init(pool_buf[0..3]);
 
     const a = try pool.create();
     const b = try pool.create();
@@ -470,47 +578,3 @@ test "pool create + destroy out of order" {
     try std.testing.expectEqual(a, x);
     try std.testing.expectEqual(b, y);
 }
-
-// const MerkleForest = struct {
-//     /// Hash -> Node lookups
-//     map: State.MerkleRootMap,
-
-//     const MerkleRootMap = std.ArrayHashMapUnmanaged(Hash, Value, Context, true);
-
-//     const Node
-// };
-
-// std.heap.MemoryPool(comptime Item: type)
-
-// std.heap.MemoryPool(comptime Item: type)
-
-// fn ParentChildSiblingTree(Value: type, IntIndex: type) type {
-//     // if (@typeInfo(Value) != .pointer) @compileError("Value expected to be pointer");
-
-//     return extern struct {
-//         nodes: []Node,
-
-//         const Self = @This();
-
-//         const null_int_index = std.math.maxInt(IntIndex);
-
-//         const Idx = enum(IntIndex) { null = null_int_index };
-
-//         const Node = extern struct {
-//             parent: IntIndex,
-//             child: IntIndex,
-//             sibling: IntIndex,
-//             value: Value,
-//         };
-
-//         fn init(allocator: std.mem.Allocator, max_node_count: IntIndex) !Self {
-//             const max_idx = max_node_count - 1;
-//             std.debug.assert(max_idx < null_int_index); // must leave room for the null index
-//             return .{
-//                 .nodes = try allocator.alloc(Node, max_node_count),
-//             };
-//         }
-
-//         // fn insert(parent: *Value)
-//     };
-// }
