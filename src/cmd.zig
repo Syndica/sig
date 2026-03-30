@@ -3,10 +3,18 @@ const builtin = @import("builtin");
 const build_options = @import("build-options");
 const cli = @import("cli");
 const sig = @import("sig.zig");
+const xev = @import("xev");
 const config = @import("config.zig");
 const tracy = @import("tracy");
 
+const jrpc_ws = @import("rpc/jrpc_websockets/lib.zig");
+const socket_opts = @import("webzockets").socket_opts;
+
 const replay = sig.replay;
+
+const WSRPCHandler = jrpc_ws.handler.JRPCHandler;
+const WSRPCRuntimeContext = jrpc_ws.runtime.RuntimeContext;
+const WSRPCServer = WSRPCHandler.WebSocketServer;
 
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ContactInfo = sig.gossip.ContactInfo;
@@ -172,6 +180,7 @@ pub fn main() !void {
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.stop_at_slot = params.stop_at_slot;
+            current_config.rpc_port = params.rpc_port;
             try replayOffline(gpa, current_config);
         },
         .shred_network => |params| {
@@ -600,6 +609,7 @@ const Cmd = struct {
         skip_snapshot_validation: bool,
         dbg_db_init: bool,
         rpc_enable_owner_index: bool,
+        rpc_enable_spl_token_owner_index: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .n_threads_snapshot_load = .{
@@ -657,6 +667,17 @@ const Cmd = struct {
                     "slower writes. When disabled, the RPC calls fallback to a full " ++
                     "table scan - default: false",
             },
+            .rpc_enable_spl_token_owner_index = .{
+                .kind = .named,
+                .name_override = "rpc-enable-spl-token-owner-index",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "create an indexed token_owner column in accounts DB derived from " ++
+                    "SPL Token account data, speeding up getTokenAccountsByOwner RPC calls " ++
+                    "at the cost of increased storage and slower writes. When disabled, " ++
+                    "falls back to a full table scan - default: false",
+            },
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
@@ -666,6 +687,7 @@ const Cmd = struct {
             cfg.accounts_db.skip_snapshot_validation = args.skip_snapshot_validation;
             cfg.accounts_db.dbg_db_init = args.dbg_db_init;
             cfg.accounts_db.rpc_enable_owner_index = args.rpc_enable_owner_index;
+            cfg.accounts_db.rpc_enable_spl_token_owner_index = args.rpc_enable_spl_token_owner_index;
         }
     };
     const AccountsDbArgumentsDownload = struct {
@@ -1531,6 +1553,7 @@ fn validator(
     var rooted_db: sig.accounts_db.Db.Rooted = try .init(
         rooted_file,
         cfg.accounts_db.rpc_enable_owner_index,
+        cfg.accounts_db.rpc_enable_spl_token_owner_index,
     );
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
@@ -1657,6 +1680,14 @@ fn validator(
     var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
     defer prioritization_fee_cache.deinit(allocator);
 
+    const rpc_enabled = cfg.rpc_port != null;
+
+    const event_sink: ?*jrpc_ws.types.EventSink = if (rpc_enabled)
+        try jrpc_ws.types.EventSink.create(allocator)
+    else
+        null;
+    defer if (event_sink) |sink| sink.destroy(allocator);
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db = &new_db },
@@ -1668,33 +1699,43 @@ fn validator(
         .voting_enabled = voting_enabled,
         .vote_account_address = maybe_vote_pubkey,
         .stop_at_slot = cfg.stop_at_slot,
+        .event_sink = event_sink,
         .prioritization_fee_cache = &prioritization_fee_cache,
+        .rpc_enabled = rpc_enabled,
     });
     defer replay_service_state.deinit(allocator);
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
-        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-        .gossip_table_rw = &gossip_service.gossip_table_rw,
-        .my_shred_version = &gossip_service.my_shred_version,
-        .epoch_tracker = &epoch_tracker,
-    });
+    var max_retransmit_slot: std.atomic.Value(sig.core.Slot) = .init(0);
+    var max_shred_insert_slot: std.atomic.Value(sig.core.Slot) = .init(0);
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
-        .ledger = &ledger,
-        .epoch_schedule = loaded_snapshot.genesis_config.epoch_schedule,
-        .epoch_tracker = &epoch_tracker,
-        .commitments = &replay_service_state.replay_state.slot_tracker.commitments,
-    });
+    if (rpc_enabled) {
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+            .my_shred_version = &gossip_service.my_shred_version,
+            .epoch_tracker = &epoch_tracker,
+        });
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
-        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-        .account_reader = replay_service_state.replay_state.account_store.reader(),
-    });
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
+            .ledger = &ledger,
+            .epoch_tracker = &epoch_tracker,
+            .status_cache = &replay_service_state.replay_state.status_cache,
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .block_commitment_cache = &replay_service_state.replay_state.block_commitment_cache.?,
+            .max_retransmit_slot = &max_retransmit_slot,
+            .max_shred_insert_slot = &max_shred_insert_slot,
+        });
 
-    try app_base.rpc_hooks.set(
-        allocator,
-        sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
-    );
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .account_reader = replay_service_state.replay_state.account_store.reader(),
+        });
+
+        try app_base.rpc_hooks.set(
+            allocator,
+            sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
+        );
+    }
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
@@ -1720,6 +1761,8 @@ fn validator(
             .my_contact_info = my_contact_info,
             .n_retransmit_threads = turbine_config.num_retransmit_threads,
             .overwrite_turbine_stake_for_testing = turbine_config.overwrite_stake_for_testing,
+            .max_retransmit_slot = &max_retransmit_slot,
+            .max_shred_insert_slot = &max_shred_insert_slot,
             .rpc_hooks = null,
             .duplicate = if (replay_service_state.consensus) |consensus| .{
                 .shred_receiver = &duplicate_shreds,
@@ -1797,6 +1840,7 @@ fn validator(
             app_base.exit,
             std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
             &app_base.rpc_hooks,
+            event_sink.?,
         })
     else
         null;
@@ -1815,7 +1859,82 @@ fn runRPCServer(
     exit: *std.atomic.Value(bool),
     server_addr: std.net.Address,
     rpc_hooks: *sig.rpc.Hooks,
+    event_sink: *jrpc_ws.types.EventSink,
 ) !void {
+    var commit_queue = try sig.sync.Channel(jrpc_ws.types.CommitMsg).init(allocator);
+    defer commit_queue.deinit();
+
+    var xev_pool = xev.ThreadPool.init(.{});
+    defer {
+        xev_pool.shutdown();
+        xev_pool.deinit();
+    }
+
+    var loop = try xev.Loop.init(.{ .thread_pool = &xev_pool });
+    defer loop.deinit();
+
+    var serialization_pool = sig.sync.ThreadPool.init(.{ .max_threads = 4 });
+    defer {
+        serialization_pool.shutdown();
+        serialization_pool.deinit();
+    }
+
+    var metrics = jrpc_ws.metrics.Metrics{};
+
+    var sub_map = jrpc_ws.sub_map.RPCSubMap.init(allocator, 1024);
+    defer sub_map.deinit();
+
+    var ws_runtime_ctx = WSRPCRuntimeContext{
+        .allocator = allocator,
+        .sub_map = &sub_map,
+        .inbound_event_queue = &event_sink.channel,
+        .commit_queue = &commit_queue,
+        .loop_async = &event_sink.loop_async,
+        .serialization_pool = &serialization_pool,
+        .metrics = &metrics,
+        .max_batch_bytes = 64 * 1024,
+        .loop = &loop,
+        .notify_pending = &event_sink.notify_pending,
+    };
+    defer ws_runtime_ctx.deinit();
+
+    var ws_server = try WSRPCServer.initNoListen(allocator, &loop, .{
+        .address = server_addr,
+        .handler_context = &ws_runtime_ctx,
+        .tcp_nodelay = true,
+        .close_timeout_ms = 5_000,
+        .upgrade_timeout_ms = 5_000,
+    });
+    defer ws_server.deinit();
+
+    var pending_connections = try sig.sync.Channel(PendingConnection).init(allocator);
+    defer {
+        while (pending_connections.tryReceive()) |pending| {
+            allocator.free(pending.initial_data);
+            std.posix.close(pending.fd);
+        }
+        pending_connections.deinit();
+    }
+
+    var ws_bridge = WebSocketBridge{
+        .allocator = allocator,
+        .logger = logger.withScope("WebSocketBridge"),
+        .runtime_ctx = &ws_runtime_ctx,
+        .pending_connections = &pending_connections,
+        .ws_server = &ws_server,
+    };
+
+    ws_runtime_ctx.wakeup_hook = .{
+        .ptr = &ws_bridge,
+        .onWake = WebSocketBridge.onWake,
+    };
+    ws_runtime_ctx.armAsyncWait();
+
+    const ws_server_ref: sig.rpc.server.WsServerRef = .{
+        .ptr = &ws_bridge,
+        .feedFn = WebSocketBridge.feedConnection,
+    };
+
     var server_ctx = try sig.rpc.server.Context.init(.{
         .allocator = allocator,
         .logger = .from(logger),
@@ -1823,17 +1942,113 @@ fn runRPCServer(
         .read_buffer_size = sig.rpc.server.MIN_READ_BUFFER_SIZE,
         .socket_addr = server_addr,
         .reuse_address = true,
+        .ws_server = ws_server_ref,
     });
     defer server_ctx.joinDeinit();
+
+    const loop_thread = try std.Thread.spawn(
+        .{},
+        runXevLoopThread,
+        .{ &loop, logger.withScope("runXevLoopThread") },
+    );
+    defer loop_thread.join();
 
     // var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&server_ctx);
     // defer if (maybe_liou) |*liou| liou.deinit();
 
-    try sig.rpc.server.serve(
+    const serve_result = sig.rpc.server.serve(
         exit,
         &server_ctx,
         .basic, // if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else .basic,
     );
+
+    ws_bridge.shutdown_requested.store(true, .release);
+    ws_runtime_ctx.running = false;
+    ws_runtime_ctx.requestWakeup();
+    logger.info().log("Shutdown requested, waiting for WebSocketBridge to complete shutdown...");
+    ws_bridge.shutdown_complete.timedWait(15 * std.time.ns_per_s) catch {
+        logger.err().log("Timed out waiting for WebSocketBridge shutdown to complete");
+    };
+
+    try serve_result;
+}
+
+const PendingConnection = struct {
+    fd: std.posix.fd_t,
+    initial_data: []u8,
+};
+
+const WebSocketBridge = struct {
+    allocator: std.mem.Allocator,
+    logger: sig.trace.Logger("WebSocketBridge"),
+    runtime_ctx: *WSRPCRuntimeContext,
+    pending_connections: *sig.sync.Channel(PendingConnection),
+    ws_server: *WSRPCServer,
+    shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    shutdown_started: bool = false,
+    shutdown_complete: std.Thread.ResetEvent = .{},
+
+    fn feedConnection(ptr: *anyopaque, fd: std.posix.fd_t, initial_data: []const u8) !void {
+        const self: *WebSocketBridge = @ptrCast(@alignCast(ptr));
+        const data_copy = try self.allocator.dupe(u8, initial_data);
+        // TODO: add bounded queue/backpressure to avoid unbounded pending fd/data growth.
+        self.pending_connections.send(.{ .fd = fd, .initial_data = data_copy }) catch |err| {
+            // TODO: metric counter for failed send
+            self.allocator.free(data_copy);
+            return err;
+        };
+        self.runtime_ctx.requestWakeup();
+    }
+
+    fn onWake(ptr: *anyopaque) void {
+        const self: *WebSocketBridge = @ptrCast(@alignCast(ptr));
+        self.drainPendingConnections();
+
+        if (self.shutdown_requested.load(.acquire) and !self.shutdown_started) {
+            self.shutdown_started = true;
+            self.ws_server.shutdown(
+                10 * std.time.ms_per_s,
+                WebSocketBridge,
+                self,
+                onShutdownComplete,
+            );
+        }
+    }
+
+    fn onShutdownComplete(self_opt: ?*WebSocketBridge, _: WSRPCServer.ShutdownResult) void {
+        const self = self_opt orelse return;
+        self.runtime_ctx.loop.stop();
+        self.shutdown_complete.set();
+    }
+
+    fn drainPendingConnections(self: *WebSocketBridge) void {
+        while (self.pending_connections.tryReceive()) |pending| {
+            defer self.allocator.free(pending.initial_data);
+
+            socket_opts.setNonBlocking(pending.fd) catch |err| {
+                // should never happen
+                self.logger.err().logf(
+                    "Failed to set pending connection socket non-blocking: {}",
+                    .{err},
+                );
+                std.posix.close(pending.fd);
+                continue;
+            };
+
+            self.ws_server.feedConnection(pending.fd, pending.initial_data) catch {
+                // shutting down or oom
+                // TODO: metric counter?
+                std.posix.close(pending.fd);
+            };
+        }
+    }
+};
+
+fn runXevLoopThread(loop: *xev.Loop, logger: sig.trace.Logger("runXevLoopThread")) void {
+    loop.run(.until_done) catch |err| {
+        // This should never happen, but if it does log it.
+        logger.err().logf("jrpc websocket loop thread exited with error: {}", .{err});
+    };
 }
 
 /// entrypoint to run a minimal replay node
@@ -1889,6 +2104,7 @@ fn replayOffline(
     var rooted_db: sig.accounts_db.Db.Rooted = try .init(
         rooted_file,
         cfg.accounts_db.rpc_enable_owner_index,
+        cfg.accounts_db.rpc_enable_spl_token_owner_index,
     );
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
@@ -1969,6 +2185,17 @@ fn replayOffline(
     );
     defer epoch_tracker.deinit();
 
+    var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
+    defer prioritization_fee_cache.deinit(allocator);
+
+    const rpc_enabled = cfg.rpc_port != null;
+
+    const event_sink: ?*jrpc_ws.types.EventSink = if (rpc_enabled)
+        try jrpc_ws.types.EventSink.create(allocator)
+    else
+        null;
+    defer if (event_sink) |sink| sink.destroy(allocator);
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db = &new_db },
@@ -1980,8 +2207,38 @@ fn replayOffline(
         .voting_enabled = false,
         .vote_account_address = null,
         .stop_at_slot = cfg.stop_at_slot,
+        .prioritization_fee_cache = &prioritization_fee_cache,
+        .rpc_enabled = rpc_enabled,
+        .event_sink = event_sink,
     });
     defer replay_service_state.deinit(allocator);
+
+    if (rpc_enabled) {
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .gossip_table_rw = null,
+            .my_shred_version = null,
+            .epoch_tracker = &epoch_tracker,
+        });
+
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
+            .ledger = &ledger,
+            .epoch_tracker = &epoch_tracker,
+            .status_cache = &replay_service_state.replay_state.status_cache,
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .block_commitment_cache = &replay_service_state.replay_state.block_commitment_cache.?,
+        });
+
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .account_reader = replay_service_state.replay_state.account_store.reader(),
+        });
+
+        try app_base.rpc_hooks.set(
+            allocator,
+            sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
+        );
+    }
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
@@ -1990,6 +2247,19 @@ fn replayOffline(
         null,
     );
 
+    const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
+        try std.Thread.spawn(.{}, runRPCServer, .{
+            allocator,
+            app_base.logger,
+            app_base.exit,
+            std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
+            &app_base.rpc_hooks,
+            event_sink.?,
+        })
+    else
+        null;
+
+    if (rpc_server_thread) |thread| thread.join();
     replay_thread.join();
     ledger_cleanup_service.join();
 }
@@ -2086,6 +2356,8 @@ fn shredNetwork(
         .fromContactInfo(gossip_service.my_contact_info);
 
     // shred networking
+    var max_retransmit_slot_standalone: std.atomic.Value(sig.core.Slot) = .init(0);
+    var max_shred_insert_slot_standalone: std.atomic.Value(sig.core.Slot) = .init(0);
     var shred_network_manager = try sig.shred_network.start(shred_network_conf, .{
         .allocator = allocator,
         .logger = .from(app_base.logger),
@@ -2100,6 +2372,8 @@ fn shredNetwork(
         .my_contact_info = my_contact_info,
         .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
         .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
+        .max_retransmit_slot = &max_retransmit_slot_standalone,
+        .max_shred_insert_slot = &max_shred_insert_slot_standalone,
         .rpc_hooks = null,
         // No consensus in the standalone mode, so duplicate slots are not reported.
         .duplicate = null,
@@ -2236,6 +2510,7 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     var rooted_db: sig.accounts_db.Db.Rooted = try .init(
         rooted_file,
         cfg.accounts_db.rpc_enable_owner_index,
+        cfg.accounts_db.rpc_enable_spl_token_owner_index,
     );
     defer rooted_db.deinit();
 
@@ -2246,7 +2521,10 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         snapshot_files,
         .{
             .genesis_file_path = genesis_file_path,
-            .extract = .{ .entire_snapshot_and_validate = &rooted_db },
+            .extract = if (cfg.accounts_db.skip_snapshot_validation)
+                .{ .entire_snapshot = &rooted_db }
+            else
+                .{ .entire_snapshot_and_validate = &rooted_db },
         },
     );
     defer loaded_snapshot.deinit();
@@ -2699,7 +2977,9 @@ const ReplayAndConsensusServiceState = struct {
             voting_enabled: bool,
             vote_account_address: ?Pubkey,
             stop_at_slot: ?Slot,
+            event_sink: ?*jrpc_ws.types.EventSink = null,
             prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
+            rpc_enabled: bool,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -2727,37 +3007,41 @@ const ReplayAndConsensusServiceState = struct {
             const hard_forks = try bank_fields.hard_forks.clone(allocator);
             errdefer hard_forks.deinit(allocator);
 
-            break :replay_state try .init(.{
-                .allocator = allocator,
-                .logger = .from(params.app_base.logger),
-                .identity = .{
-                    .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),
-                    .vote_account = params.vote_account_address,
+            break :replay_state try .init(
+                .{
+                    .allocator = allocator,
+                    .logger = .from(params.app_base.logger),
+                    .identity = .{
+                        .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),
+                        .vote_account = params.vote_account_address,
+                    },
+                    .signing = .{
+                        .node = params.app_base.my_keypair,
+                        .authorized_voters = if (params.voting_enabled)
+                            // TODO: Parse authorized voter keypairs from CLI args (--authorized-voter)
+                            // For now, default to using the node keypair as the authorized voter
+                            // (same as Agave's default behavior when no --authorized-voter is specified)
+                            // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
+                            (&params.app_base.my_keypair)[0..1]
+                        else
+                            &.{},
+                    },
+                    .account_store = account_store,
+                    .ledger = params.ledger,
+                    .epoch_tracker = params.epoch_tracker,
+                    .root = .{
+                        .slot = bank_fields.slot,
+                        .constants = root_slot_constants,
+                        .state = root_slot_state,
+                    },
+                    .hard_forks = hard_forks,
+                    .replay_threads = params.replay_threads,
+                    .stop_at_slot = params.stop_at_slot,
+                    .prioritization_fee_cache = params.prioritization_fee_cache,
                 },
-                .signing = .{
-                    .node = params.app_base.my_keypair,
-                    .authorized_voters = if (params.voting_enabled)
-                        // TODO: Parse authorized voter keypairs from CLI args (--authorized-voter)
-                        // For now, default to using the node keypair as the authorized voter
-                        // (same as Agave's default behavior when no --authorized-voter is specified)
-                        // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
-                        (&params.app_base.my_keypair)[0..1]
-                    else
-                        &.{},
-                },
-                .account_store = account_store,
-                .ledger = params.ledger,
-                .epoch_tracker = params.epoch_tracker,
-                .root = .{
-                    .slot = bank_fields.slot,
-                    .constants = root_slot_constants,
-                    .state = root_slot_state,
-                },
-                .hard_forks = hard_forks,
-                .replay_threads = params.replay_threads,
-                .stop_at_slot = params.stop_at_slot,
-                .prioritization_fee_cache = params.prioritization_fee_cache,
-            }, if (params.disable_consensus) .disabled else .enabled);
+                if (params.disable_consensus) .disabled else .enabled,
+                if (params.rpc_enabled) .enabled else .disabled,
+            );
         };
         errdefer replay_state.deinit();
 

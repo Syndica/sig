@@ -1,55 +1,56 @@
 const std = @import("std");
 const sig = @import("sig");
-const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
+const types = @import("elf_types.zig");
 
-const ELFLoaderCtx = pb.ELFLoaderCtx;
-const ElfLoaderEffects = pb.ELFLoaderEffects;
+const ELFLoaderCtx = types.ELFLoaderCtx;
+const ElfLoaderEffects = types.ELFLoaderEffects;
 
 const svm = sig.vm;
 const elf = svm.elf;
 
-export fn sol_compat_elf_loader_v1(
+export fn sol_compat_elf_loader_v2(
     out_ptr: [*]u8,
     out_size: *u64,
     in_ptr: [*]const u8,
     in_size: u64,
 ) i32 {
-    errdefer |err| std.debug.panic("err: {s}", .{@errorName(err)});
-    const allocator = std.heap.c_allocator;
+    testAndHandleIO(out_ptr, out_size, in_ptr, in_size) catch |e| {
+        std.debug.print("error: {s}\n", .{@errorName(e)});
+        return -1;
+    };
+    return 0;
+}
 
-    _ = &allocator;
+fn testAndHandleIO(
+    out_ptr: [*]u8,
+    out_size: *u64,
+    in_ptr: [*]const u8,
+    in_size: u64,
+) !void {
+    const allocator = std.heap.c_allocator;
 
     // zig_protobuf leaks sometimes on invalid input, so we just work around with by using an arena
     var decode_arena = std.heap.ArenaAllocator.init(allocator);
     defer decode_arena.deinit();
 
-    var reader = std.io.Reader.fixed(in_ptr[0..in_size]);
-    var ctx = ELFLoaderCtx.decode(&reader, decode_arena.allocator()) catch return 0;
+    var ctx = try ELFLoaderCtx.decode(decode_arena.allocator(), in_ptr[0..in_size]);
     defer ctx.deinit(decode_arena.allocator());
 
-    var elf_effects = executeElfTest(ctx, allocator) catch return 0;
+    var elf_effects = try executeElfTest(ctx, allocator);
     defer elf_effects.deinit(allocator);
 
-    var writer: std.io.Writer.Allocating = .init(allocator);
-    defer writer.deinit();
-    try elf_effects.encode(&writer.writer, allocator);
-    const effect_bytes = writer.written();
-
-    const out_slice = out_ptr[0..out_size.*];
-    if (effect_bytes.len > out_slice.len) return 0;
-
-    @memcpy(out_slice[0..effect_bytes.len], effect_bytes);
+    const effect_bytes = elf_effects.encode();
+    if (out_size.* < effect_bytes.len) return error.OutputTooSmall;
+    @memcpy(out_ptr[0..effect_bytes.len], &effect_bytes);
     out_size.* = effect_bytes.len;
-    return 1;
 }
 
 fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEffects {
-    const ctx_elf = ctx.elf orelse return error.Unknown;
-    const elf_bytes = ctx_elf.data;
+    const elf_bytes = ctx.elf orelse return error.Unknown;
 
     var feature_set: sig.core.FeatureSet = .ALL_DISABLED;
     if (ctx.features) |features| for (features.features.items) |id| {
-        feature_set.setSlotId(id, 0) catch std.debug.panic("unknown id: 0x{x}", .{id});
+        feature_set.setSlotId(id, 0) catch std.debug.print("unknown feature id: 0x{x}\n", .{id});
     };
 
     const env: svm.Environment = .initV1(

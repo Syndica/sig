@@ -68,37 +68,6 @@ jobs:
           name: Run Tests
           command: zig-out/bin/test 2>&1 | cat
 
-  build_linux_release:
-    executor: linux-executor
-    steps:
-      - checkout
-      - attach_workspace:
-          at: workspace
-      - restore_cache:
-          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted-release
-      - run:
-          name: Build
-          command: |
-            sudo apt-get update -y && sudo apt-get install wget -y
-            ./scripts/proxy_workaround.sh workspace/zig/zig
-            workspace/zig/zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p workspace/zig-out-release --summary all
-      - run:
-          name: Build Conformance
-          command: |
-            cd conformance
-            ../workspace/zig/zig build -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p ../workspace/conformance-release --summary all
-      - save_cache:
-          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted-release
-          paths:
-            - .zig-cache
-            - ~/.cache/zig
-      - persist_to_workspace:
-          root: workspace
-          paths:
-            - "zig-out-release/bin/sig"
-            - "zig-out-release/bin/fuzz"
-            - "conformance-release/lib/libsolfuzz_sig.so"
-
   build_check_macos:
     executor: macos-executor
     steps:
@@ -242,6 +211,19 @@ jobs:
       - checkout
       - attach_workspace:
           at: workspace
+      - restore_cache:
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted-release
+      - run:
+          name: Build
+          command: |
+            sudo apt-get update -y && sudo apt-get install wget -y
+            ./scripts/proxy_workaround.sh workspace/zig/zig
+            workspace/zig/zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p workspace/zig-out-release --summary all
+      - save_cache:
+          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted-release
+          paths:
+            - .zig-cache
+            - ~/.cache/zig
       - run:
           name: Run Gossip
           command: bash scripts/gossip_test.sh 120 workspace/zig-out-release/bin/sig
@@ -258,6 +240,29 @@ jobs:
           name: Run Ledger Fuzzer
           command: workspace/zig-out-release/bin/fuzz --seed 19 ledger 10000
 
+  build_conformance:
+    executor: linux-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: workspace
+      - restore_cache:
+          key: build_conformance-v1-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-{{ checksum "conformance/build.zig" }}-{{ checksum "conformance/build.zig.zon" }}
+      - run:
+          name: Build Conformance
+          command: |
+            cd conformance
+            ../workspace/zig/zig build -p ../workspace/conformance-release --summary all
+      - save_cache:
+          key: build_conformance-v1-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-{{ checksum "conformance/build.zig" }}-{{ checksum "conformance/build.zig.zon" }}
+          paths:
+            - .zig-cache
+            - ~/.cache/zig
+      - persist_to_workspace:
+          root: workspace
+          paths:
+            - "conformance-release/lib/libsolfuzz_sig.so"
+
   solana_conformance:
     executor: linux-executor
     # We need a pretty high parallelism since the vm_interp harness has a *lot* of fixtures. Perhaps
@@ -267,11 +272,35 @@ jobs:
       - checkout
       - attach_workspace:
           at: workspace
+      - run:
+          name: Prepare /nix permissions so cache restore works
+          command: |
+            sudo mkdir -p /nix
+            sudo chown "$USER" /nix
       - restore_cache:
-          key: linux-x86_64-0.15.2-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-selfhosted-release
+          key: nix-v1-{{ checksum "conformance/flake.nix" }}-{{ checksum "conformance/flake.lock" }}-{{ checksum "conformance/commits.env" }}
+      - run:
+          name: Install nix
+          command: |
+            sh <(curl --proto '=https' --tlsv1.2 -L https://nixos.org/nix/install) --no-daemon
+            mkdir -p ~/.config/nix
+            echo 'experimental-features = nix-command flakes' > ~/.config/nix/nix.conf
+            echo '. /home/circleci/.nix-profile/etc/profile.d/nix.sh' >> "$BASH_ENV"
       - run:
           name: Run Fixtures
-          command: ./conformance/scripts/ci-run.sh
+          command: |
+            cd conformance
+            nix develop \
+              -s SPLIT_TESTS true \
+              -s PREBUILT_LIB_DIR ../workspace/conformance-release/lib \
+              -c ./scripts/ci-run.sh
+      - save_cache:
+          key: nix-v1-{{ checksum "conformance/flake.nix" }}-{{ checksum "conformance/flake.lock" }}-{{ checksum "conformance/commits.env" }}
+          paths:
+            - /nix/store
+            - /nix/var/nix/db
+            - /nix/var/nix/profiles
+            - ~/.cache/nix
 
   linux_misc_checks:
     executor: linux-executor
@@ -297,13 +326,12 @@ jobs:
           command: |
             python3 scripts/style.py --check src
             python3 scripts/style.py --check conformance/src
-            python3 scripts/style.py --check v2/src
+            python3 scripts/style.py --check v2/lib
+            python3 scripts/style.py --check v2/services
+            python3 scripts/style.py --check v2/init
       - run:
           name: Check docs
           command: python3 docs/check.py ./
-      - run:
-          name: Check conformance commits
-          command: conformance/scripts/verify-commits.sh
       - run:
           name: V2 checks
           command: |
@@ -333,7 +361,7 @@ workflows:
       - test_kcov_linux:
           requires:
             - setup_zig_linux
-      - build_linux_release:
+      - gossip_and_fuzz:
           requires:
             - setup_zig_linux
       - build_and_test_linux:
@@ -342,12 +370,12 @@ workflows:
       - linux_misc_checks:
           requires:
             - setup_zig_linux
+      - build_conformance:
+          requires:
+            - setup_zig_linux
       - solana_conformance:
           requires:
-            - build_linux_release
-      - gossip_and_fuzz:
-          requires:
-            - build_linux_release
+            - build_conformance
 
   check_macos:
     jobs:

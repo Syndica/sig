@@ -449,21 +449,19 @@ const LeaderInfo = struct {
         if (self.tpu_cache.count() >= self.tpu_cache.capacity() -| 1) {
             self.logger.info().log("tpu cache is full, pruning old entries.");
             var threshold = TPU_REFRESH_INTERVAL;
-            var pruned_count: usize = 0;
-            while (pruned_count == 0) : (threshold = .fromSecs(threshold.asSecs() / 2)) {
-                const current_count = self.tpu_cache.count();
+            var remaining = @max(1, self.tpu_cache.capacity() / 10);
+            while (remaining > 0) : (threshold = .fromSecs(threshold.asSecs() / 2)) {
                 var i: usize = 0;
-                while (i < self.tpu_cache.count()) {
+                while (remaining > 0 and i < self.tpu_cache.count()) {
                     const item = self.tpu_cache.values()[i];
-                    if (item.time.elapsed().lt(threshold))
-                        i += 1
-                    else
+                    if (item.time.elapsed().gte(threshold)) {
                         self.tpu_cache.swapRemoveAt(i);
+                        remaining -= 1;
+                    } else i += 1;
                 }
-                pruned_count += current_count - self.tpu_cache.count();
             }
-            self.logger.info().logf("pruned {d} entries from tpu cache.", .{
-                pruned_count,
+            self.logger.info().logf("pruned {} entries from tpu cache.", .{
+                self.tpu_cache.capacity() - self.tpu_cache.count(),
             });
         }
 
@@ -793,8 +791,8 @@ test "fillLeaderAddresses" {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    const root_slot: u64 = 5e6;
-    var test_ctx = try TestContext.init(allocator, random, root_slot);
+    var slot: u64 = 5e6;
+    var test_ctx = try TestContext.init(allocator, random, slot);
     defer test_ctx.deinit(allocator);
 
     const leader_addresses_null = [_]?SocketAddr{null} ** 5;
@@ -815,7 +813,7 @@ test "fillLeaderAddresses" {
     try std.testing.expectError(
         error.NoLeaderForSlot,
         leader_info.fillLeaderAddresses(
-            root_slot + 2 * test_ctx.epoch_tracker.epoch_schedule.slots_per_epoch,
+            slot + 2 * test_ctx.epoch_tracker.epoch_schedule.slots_per_epoch,
             &leader_addresses,
         ),
     );
@@ -823,7 +821,7 @@ test "fillLeaderAddresses" {
     // Fill leader addresses repeatedly to force pruning of the cache.
     for (0..10) |i| {
         try leader_info.fillLeaderAddresses(
-            root_slot + i * leader_addresses.len,
+            slot + i * leader_addresses.len,
             &leader_addresses,
         );
     }
@@ -833,11 +831,14 @@ test "fillLeaderAddresses" {
         &leader_addresses,
     );
 
+    // Advance slot beyond the last fill to ensure cache entries are refreshed from gossip
+    slot = slot + 10 * leader_addresses.len;
+
     // Insert contact info for the first 5 leaders into the gossip table.
     // Check that the correct addresses are filled into the leader_addresses array.
     var tpu_addresses = [_]?SocketAddr{null} ** 5;
     for (0..leader_addresses.len) |i| {
-        const leader_slot = root_slot + i * NUM_CONSECUTIVE_LEADER_SLOTS;
+        const leader_slot = slot + i * NUM_CONSECUTIVE_LEADER_SLOTS;
         const leader_schedules = &leader_info.leader_schedules.leader_schedules;
         const leader_pubkey = try leader_schedules.getLeader(leader_slot);
 
@@ -855,7 +856,7 @@ test "fillLeaderAddresses" {
     }
 
     try leader_info.fillLeaderAddresses(
-        root_slot,
+        slot,
         &leader_addresses,
     );
     try std.testing.expectEqualSlices(
@@ -867,7 +868,7 @@ test "fillLeaderAddresses" {
     // Fill leader addresses repeatedly to force pruning of the cache.
     for (0..10) |i| {
         try leader_info.fillLeaderAddresses(
-            root_slot + i * leader_addresses.len,
+            slot + i * leader_addresses.len,
             &leader_addresses,
         );
     }

@@ -33,7 +33,8 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
         error.WouldBlock => return,
         else => return error.AcceptError,
     };
-    defer conn.stream.close();
+    var close_conn = true;
+    defer if (close_conn) conn.stream.close();
 
     server_ctx.wait_group.start();
     defer server_ctx.wait_group.finish();
@@ -60,6 +61,22 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
         "Responding to request: {f} {s}",
         .{ requests.httpMethodFmt(request.head.method), request.head.target },
     );
+
+    if (head_info.method == .GET and isWebSocketUpgrade(&request)) {
+        if (server_ctx.ws_server) |ws_server| {
+            // head buffer is just prefix slice of reader buffer
+            // so handoff is just head len + reader buffered len
+            const handoff_len = request.head_buffer.len + reader.interface().bufferedLen();
+            const handoff_data = request.head_buffer.ptr[0..handoff_len];
+            ws_server.feedConnection(conn.stream.handle, handoff_data) catch {
+                try respondSimpleErrorStatusBody(&request, logger, .internal_server_error, "");
+                try writer.interface.flush();
+                return;
+            };
+            close_conn = false;
+            return;
+        }
+    }
 
     switch (head_info.method) {
         .HEAD => try handleGetOrHead(.HEAD, server_ctx, &request, logger),
@@ -125,6 +142,24 @@ fn parseAndHandleHead(
             return null;
         },
     };
+}
+
+fn isWebSocketUpgrade(request: *const std.http.Server.Request) bool {
+    var headers = request.iterateHeaders();
+    while (headers.next()) |header| {
+        if (!std.ascii.eqlIgnoreCase(header.name, "upgrade")) {
+            continue;
+        }
+
+        var tokens = std.mem.tokenizeScalar(u8, header.value, ',');
+        while (tokens.next()) |token_raw| {
+            const token = std.mem.trim(u8, token_raw, " \t");
+            if (std.ascii.eqlIgnoreCase(token, "websocket")) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 fn handleGetOrHead(
