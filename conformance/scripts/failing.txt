@@ -78,7 +78,3 @@ instr/fixtures/zk_sdk/wacc6_5f3bf70e8572e52b.fix
 instr/fixtures/zk_sdk/wacc7_a08f10406aee35a4.fix
 instr/fixtures/zk_sdk/wacc8_4370fd00b238a5a0.fix
 instr/fixtures/zk_sdk/wacc9_d13848d723bd8cfa.fix
-txn/fixtures/1a729174d141352354cb70c0e74bd0521c17888e_1656878.fix
-txn/fixtures/55b9b95d1d6ce9783d3ed11f9f53695363a9c701_1655830.fix
-txn/fixtures/9be1ddb02934e8c8876427e2b074a5051f713a32_1656662.fix
-txn/fixtures/fb1305b2e30e46cc2a321004c061888e84953432_1657414.fix
