@@ -180,6 +180,7 @@ pub fn main() !void {
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.stop_at_slot = params.stop_at_slot;
+            current_config.rpc_port = params.rpc_port;
             try replayOffline(gpa, current_config);
         },
         .shred_network => |params| {
@@ -1718,14 +1719,16 @@ fn validator(
     else
         null;
 
-    const event_sink: ?*jrpc_ws.types.EventSink = if (cfg.rpc_port != null)
+    var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
+    defer prioritization_fee_cache.deinit(allocator);
+
+    const rpc_enabled = cfg.rpc_port != null;
+
+    const event_sink: ?*jrpc_ws.types.EventSink = if (rpc_enabled)
         try jrpc_ws.types.EventSink.create(allocator)
     else
         null;
     defer if (event_sink) |sink| sink.destroy(allocator);
-
-    var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
-    defer prioritization_fee_cache.deinit(allocator);
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
@@ -1740,37 +1743,41 @@ fn validator(
         .stop_at_slot = cfg.stop_at_slot,
         .event_sink = event_sink,
         .prioritization_fee_cache = &prioritization_fee_cache,
+        .rpc_enabled = rpc_enabled,
     });
     defer replay_service_state.deinit(allocator);
-
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
-        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-        .gossip_table_rw = &gossip_service.gossip_table_rw,
-        .my_shred_version = &gossip_service.my_shred_version,
-        .epoch_tracker = &epoch_tracker,
-    });
 
     var max_retransmit_slot: std.atomic.Value(sig.core.Slot) = .init(0);
     var max_shred_insert_slot: std.atomic.Value(sig.core.Slot) = .init(0);
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
-        .ledger = &ledger,
-        .epoch_schedule = loaded_snapshot.genesis_config.epoch_schedule,
-        .epoch_tracker = &epoch_tracker,
-        .commitments = &replay_service_state.replay_state.slot_tracker.commitments,
-        .max_retransmit_slot = &max_retransmit_slot,
-        .max_shred_insert_slot = &max_shred_insert_slot,
-    });
+    if (rpc_enabled) {
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+            .my_shred_version = &gossip_service.my_shred_version,
+            .epoch_tracker = &epoch_tracker,
+        });
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
-        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-        .account_reader = replay_service_state.replay_state.account_store.reader(),
-    });
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
+            .ledger = &ledger,
+            .epoch_tracker = &epoch_tracker,
+            .status_cache = &replay_service_state.replay_state.status_cache,
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .block_commitment_cache = &replay_service_state.replay_state.block_commitment_cache.?,
+            .max_retransmit_slot = &max_retransmit_slot,
+            .max_shred_insert_slot = &max_shred_insert_slot,
+        });
 
-    try app_base.rpc_hooks.set(
-        allocator,
-        sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
-    );
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .account_reader = replay_service_state.replay_state.account_store.reader(),
+        });
+
+        try app_base.rpc_hooks.set(
+            allocator,
+            sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
+        );
+    }
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
@@ -2159,6 +2166,17 @@ fn replayOffline(
     );
     defer epoch_tracker.deinit();
 
+    var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
+    defer prioritization_fee_cache.deinit(allocator);
+
+    const rpc_enabled = cfg.rpc_port != null;
+
+    const event_sink: ?*jrpc_ws.types.EventSink = if (rpc_enabled)
+        try jrpc_ws.types.EventSink.create(allocator)
+    else
+        null;
+    defer if (event_sink) |sink| sink.destroy(allocator);
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db = &new_db },
@@ -2170,9 +2188,38 @@ fn replayOffline(
         .voting_enabled = false,
         .vote_account_address = null,
         .stop_at_slot = cfg.stop_at_slot,
-        .event_sink = null,
+        .prioritization_fee_cache = &prioritization_fee_cache,
+        .rpc_enabled = rpc_enabled,
+        .event_sink = event_sink,
     });
     defer replay_service_state.deinit(allocator);
+
+    if (rpc_enabled) {
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .gossip_table_rw = null,
+            .my_shred_version = null,
+            .epoch_tracker = &epoch_tracker,
+        });
+
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
+            .ledger = &ledger,
+            .epoch_tracker = &epoch_tracker,
+            .status_cache = &replay_service_state.replay_state.status_cache,
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .block_commitment_cache = &replay_service_state.replay_state.block_commitment_cache.?,
+        });
+
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .account_reader = replay_service_state.replay_state.account_store.reader(),
+        });
+
+        try app_base.rpc_hooks.set(
+            allocator,
+            sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
+        );
+    }
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
@@ -2181,6 +2228,19 @@ fn replayOffline(
         null,
     );
 
+    const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
+        try std.Thread.spawn(.{}, runRPCServer, .{
+            allocator,
+            app_base.logger,
+            app_base.exit,
+            std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
+            &app_base.rpc_hooks,
+            event_sink.?,
+        })
+    else
+        null;
+
+    if (rpc_server_thread) |thread| thread.join();
     replay_thread.join();
     ledger_cleanup_service.join();
 }
@@ -2987,6 +3047,7 @@ const ReplayAndConsensusServiceState = struct {
             stop_at_slot: ?Slot,
             event_sink: ?*jrpc_ws.types.EventSink = null,
             prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
+            rpc_enabled: bool,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -3014,38 +3075,41 @@ const ReplayAndConsensusServiceState = struct {
             const hard_forks = try bank_fields.hard_forks.clone(allocator);
             errdefer hard_forks.deinit(allocator);
 
-            break :replay_state try .init(.{
-                .allocator = allocator,
-                .logger = .from(params.app_base.logger),
-                .identity = .{
-                    .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),
-                    .vote_account = params.vote_account_address,
+            break :replay_state try .init(
+                .{
+                    .allocator = allocator,
+                    .logger = .from(params.app_base.logger),
+                    .identity = .{
+                        .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),
+                        .vote_account = params.vote_account_address,
+                    },
+                    .signing = .{
+                        .node = params.app_base.my_keypair,
+                        .authorized_voters = if (params.voting_enabled)
+                            // TODO: Parse authorized voter keypairs from CLI args (--authorized-voter)
+                            // For now, default to using the node keypair as the authorized voter
+                            // (same as Agave's default behavior when no --authorized-voter is specified)
+                            // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
+                            (&params.app_base.my_keypair)[0..1]
+                        else
+                            &.{},
+                    },
+                    .account_store = account_store,
+                    .ledger = params.ledger,
+                    .epoch_tracker = params.epoch_tracker,
+                    .root = .{
+                        .slot = bank_fields.slot,
+                        .constants = root_slot_constants,
+                        .state = root_slot_state,
+                    },
+                    .hard_forks = hard_forks,
+                    .replay_threads = params.replay_threads,
+                    .stop_at_slot = params.stop_at_slot,
+                    .prioritization_fee_cache = params.prioritization_fee_cache,
                 },
-                .signing = .{
-                    .node = params.app_base.my_keypair,
-                    .authorized_voters = if (params.voting_enabled)
-                        // TODO: Parse authorized voter keypairs from CLI args (--authorized-voter)
-                        // For now, default to using the node keypair as the authorized voter
-                        // (same as Agave's default behavior when no --authorized-voter is specified)
-                        // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
-                        (&params.app_base.my_keypair)[0..1]
-                    else
-                        &.{},
-                },
-                .account_store = account_store,
-                .ledger = params.ledger,
-                .epoch_tracker = params.epoch_tracker,
-                .root = .{
-                    .slot = bank_fields.slot,
-                    .constants = root_slot_constants,
-                    .state = root_slot_state,
-                },
-                .hard_forks = hard_forks,
-                .replay_threads = params.replay_threads,
-                .stop_at_slot = params.stop_at_slot,
-                .event_sink = params.event_sink,
-                .prioritization_fee_cache = params.prioritization_fee_cache,
-            }, if (params.disable_consensus) .disabled else .enabled);
+                if (params.disable_consensus) .disabled else .enabled,
+                if (params.rpc_enabled) .enabled else .disabled,
+            );
         };
         errdefer replay_state.deinit();
 
