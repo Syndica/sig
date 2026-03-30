@@ -15,7 +15,7 @@ pub fn build(b: *Build) void {
     const solfuzz_sig_step = b.step("solfuzz_sig", "The solfuzz sig library.");
     const test_step = b.step("test", "Run unit tests");
 
-    // current commit: 3dea3808eab107f3010ddd3bbc24a31cc4b07c40
+    // current commit in commits.env
     const proto_step = b.step(
         "protobuf",
         "Re-generate protobuf definitions based on the `protosol` directory." ++
@@ -91,7 +91,6 @@ pub fn build(b: *Build) void {
     const protoc_run = pb.RunProtocStep.create(pb_dep.builder, target, .{
         .destination_directory = b.path("src/proto"),
         .source_files = &.{
-            "protosol/proto/elf.proto",
             "protosol/proto/vm.proto",
             "protosol/proto/shred.proto",
             "protosol/proto/txn.proto",

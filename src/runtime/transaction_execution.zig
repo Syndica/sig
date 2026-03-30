@@ -198,6 +198,17 @@ pub fn loadAndExecuteTransaction(
         return .{ .err = .AccountLoadedTwice };
     }
 
+    // Compute budget sanitization must come before checkAge to match agave's
+    // check_age_and_compute_budget_limits ordering (agave v4.0).
+    const compute_budget_limits = switch (compute_budget_program.sanitize(
+        transaction.compute_budget_instruction_details,
+        env.feature_set,
+        env.slot,
+    )) {
+        .ok => |x| x,
+        .err => |e| return .{ .err = e },
+    };
+
     const maybe_nonce_info = switch (try sig.runtime.check_transactions.checkAge(
         tmp_allocator,
         transaction,
@@ -212,15 +223,6 @@ pub fn loadAndExecuteTransaction(
     };
     var nonce_account_is_owned = true;
     defer if (nonce_account_is_owned) if (maybe_nonce_info) |n| tmp_allocator.free(n.account.data);
-
-    const compute_budget_limits = switch (compute_budget_program.sanitize(
-        transaction.compute_budget_instruction_details,
-        env.feature_set,
-        env.slot,
-    )) {
-        .ok => |x| x,
-        .err => |e| return .{ .err = e },
-    };
 
     if (sig.runtime.check_transactions.checkStatusCache(
         &transaction.msg_hash,

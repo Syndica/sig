@@ -137,13 +137,16 @@ pub const TestEnv = struct {
         conn: anytype,
         config: ClientType.Config,
     ) ClientType {
+        var client_config = config;
+        client_config.tcp_nodelay = true;
+
         return ClientType.init(
             std.testing.allocator,
             &self.loop,
             handler,
             conn,
             &self.csprng,
-            config,
+            client_config,
         );
     }
 

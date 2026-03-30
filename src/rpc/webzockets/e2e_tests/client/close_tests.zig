@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const ws = @import("webzockets_lib");
 
+const socket_opts = ws.socket_opts;
 const servers = @import("../support/test_servers.zig");
 const clients = @import("../support/test_clients.zig");
 const FdLeakDetector = @import("../support/FdLeakDetector.zig");
@@ -135,6 +136,7 @@ fn acceptAndCaptureFrames(listener: std.posix.socket_t, ctx: *CaptureContext) !v
         0,
     );
     defer std.posix.close(conn_fd);
+    try socket_opts.setTcpNoDelay(conn_fd);
 
     const stream = std.net.Stream{ .handle = conn_fd };
 

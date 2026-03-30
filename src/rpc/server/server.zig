@@ -37,6 +37,15 @@ pub const WorkPool = union(enum) {
     // linux_io_uring: noreturn,
 };
 
+pub const WsServerRef = struct {
+    ptr: *anyopaque,
+    feedFn: *const fn (*anyopaque, std.posix.fd_t, []const u8) anyerror!void,
+
+    pub fn feedConnection(self: WsServerRef, fd: std.posix.fd_t, data: []const u8) anyerror!void {
+        return self.feedFn(self.ptr, fd, data);
+    }
+};
+
 /// The basic state required for the server to operate.
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -49,6 +58,7 @@ pub const Context = struct {
     tcp: std.net.Server,
     /// Must not be mutated.
     read_buffer_size: u32,
+    ws_server: ?WsServerRef,
 
     /// The returned result must be pinned to a memory location before calling any methods.
     pub fn init(params: struct {
@@ -64,6 +74,7 @@ pub const Context = struct {
         socket_addr: std.net.Address,
         /// See `@FieldType(std.net.Address.ListenOptions, "reuse_address")`.
         reuse_address: bool = false,
+        ws_server: ?WsServerRef = null,
     }) std.net.Address.ListenError!Context {
         var tcp_server = try params.socket_addr.listen(.{
             .force_nonblocking = true,
@@ -79,6 +90,7 @@ pub const Context = struct {
             .wait_group = .{},
             .read_buffer_size = @max(params.read_buffer_size, MIN_READ_BUFFER_SIZE),
             .tcp = tcp_server,
+            .ws_server = params.ws_server,
         };
     }
 

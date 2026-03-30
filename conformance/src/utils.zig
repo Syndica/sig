@@ -106,7 +106,7 @@ pub fn createTransactionContext(
     const log_collector = try sig.runtime.LogCollector.default(allocator);
     errdefer log_collector.deinit(allocator);
 
-    const slot = if (instr_ctx.slot_context) |slot_ctx| slot_ctx.slot else 0;
+    const slot = 0;
     tc.* = TransactionContext{
         .allocator = allocator,
         .programs_allocator = allocator,
@@ -173,17 +173,16 @@ pub fn deinitTransactionContext(
 }
 
 pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
-    const epoch_context = switch (@TypeOf(ctx)) {
-        *pb.TxnContext, *const pb.TxnContext => ctx.epoch_ctx,
-        pb.InstrContext => ctx.epoch_context,
+    const pb_features = switch (@TypeOf(ctx)) {
+        *pb.TxnContext, *const pb.TxnContext => (ctx.bank orelse return .ALL_DISABLED).features,
+        pb.InstrContext => ctx.features,
         else => comptime unreachable,
     } orelse return .ALL_DISABLED;
-    const pb_features = epoch_context.features orelse return .ALL_DISABLED;
 
     var feature_set: FeatureSet = .ALL_DISABLED;
     for (pb_features.features.items) |id| {
         // only way for `setSlotId` to fail is if the `id` doesn't exist.
-        feature_set.setSlotId(id, 0) catch std.debug.panic("unknown id: 0x{x}", .{id});
+        feature_set.setSlotId(id, 0) catch std.debug.print("unknown feature id: 0x{x}\n", .{id});
     }
     return feature_set;
 }

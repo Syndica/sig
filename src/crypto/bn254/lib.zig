@@ -520,6 +520,15 @@ pub fn pairingSyscall(out: *[32]u8, input: []const u8) !void {
             q.clear();
         }
     }
+    // If the last pair would have resulted in the point at infinity, we
+    // will have continued out of the loop with an unfinished batch.
+    if (p.len > 0) {
+        @branchHint(.unlikely);
+        const tmp = pairing.millerLoop(p.constSlice(), q.constSlice());
+        r = r.mul(tmp);
+        p.clear();
+        q.clear();
+    }
 
     r = pairing.finalExp(r);
     // Output is 0 or 1 as a big-endian u256.
