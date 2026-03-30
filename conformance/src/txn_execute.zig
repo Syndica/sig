@@ -921,7 +921,12 @@ fn serializeOutput(
     errdefer modified_accounts.deinit(allocator);
     errdefer rollback_accounts.deinit(allocator);
 
-    if (result.ok.outputs != null and result.ok.err != null) {
+    if (result.ok.err != null) {
+        for (txn.writes.constSlice()) |account| try rollback_accounts.append(
+            allocator,
+            try sharedAccountToState(allocator, account.pubkey, account.account),
+        );
+
         // In the event that the transaction is executed and fails, agave
         // returns *all* the loaded accounts, including all the modifications
         // from the failed transaction, whereas we only return the rollback
@@ -929,7 +934,7 @@ fn serializeOutput(
         // validator, but for compatibility with solfuzz_agave's outputs, we
         // need to return the "modified" loaded accounts that aren't actually
         // modified since the transaction failed.
-        for (failed_accounts) |account| {
+        if (result.ok.outputs != null) for (failed_accounts) |account| {
             const was_an_input_and_is_writable = for (
                 sanitized.accounts.items(.pubkey),
                 sanitized.accounts.items(.is_writable),
@@ -941,13 +946,7 @@ fn serializeOutput(
                 allocator,
                 try sharedAccountToState(allocator, account.pubkey, account.account),
             );
-        }
-        for (txn.writes.constSlice()) |account| {
-            try rollback_accounts.append(
-                allocator,
-                try sharedAccountToState(allocator, account.pubkey, account.account),
-            );
-        }
+        };
     } else for (txn.writes.constSlice()) |account| {
         try modified_accounts.append(
             allocator,
