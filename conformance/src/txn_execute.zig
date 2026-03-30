@@ -221,6 +221,7 @@ fn executeTxnContext(
     // https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L1162
     {
         try ancestors.addSlot(allocator, 0);
+        try ancestors.addSlot(allocator, fixture_slot);
         // bank.compute_budget = runtime_config.compute_budget;
         // bank.transaction_account_lock_limit = null;
         // bank.transaction_debug_keys = null;
@@ -374,44 +375,6 @@ fn executeTxnContext(
         for (0..epoch_schedule.getLeaderScheduleEpoch(epoch)) |e| {
             try epoch_stakes_map.put(allocator, e, .EMPTY);
         }
-
-        const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-            .slot = slot,
-            .slot_store = account_store.forSlot(slot, &ancestors),
-            .capitalization = &capitalization,
-            .rent = &genesis_config.rent,
-        };
-
-        try update_sysvar.updateStakeHistory(
-            allocator,
-            .{
-                .epoch = epoch,
-                .parent_slots_epoch = null, // no parent yet
-                .stakes_cache = &stakes_cache,
-                .update_sysvar_deps = update_sysvar_deps,
-            },
-        );
-        _ = try update_sysvar.updateClock(allocator, .{
-            .feature_set = &feature_set,
-            .epoch_schedule = &epoch_schedule,
-            .epoch_stakes = epoch_stakes_map.getPtr(epoch),
-            .stakes_cache = &stakes_cache,
-            .epoch = epoch,
-            .parent_slots_epoch = null, // no parent yet
-            .genesis_creation_time = genesis_config.creation_time,
-            .ns_per_slot = @intCast(genesis_config.nsPerSlot()),
-            .update_sysvar_deps = update_sysvar_deps,
-        });
-        try update_sysvar.updateRent(allocator, genesis_config.rent, update_sysvar_deps);
-        try update_sysvar.updateEpochSchedule(allocator, epoch_schedule, update_sysvar_deps);
-        try update_sysvar.updateRecentBlockhashes(allocator, &blockhash_queue, update_sysvar_deps);
-        try update_sysvar.updateLastRestartSlot(
-            allocator,
-            &feature_set,
-            slot,
-            &hard_forks,
-            update_sysvar_deps,
-        );
 
         // NOTE: Agave fills the sysvar cache here, we should not need for txn fuzzing as the sysvar cache is only used in the SVM, so we can
         // populate immediately before executing transactions. (I think....)
@@ -591,50 +554,6 @@ fn executeTxnContext(
 
         // Prepare program cache for upcoming feature set
 
-        // Update sysvars
-        {
-            const update_sysvar_deps: update_sysvar.UpdateSysvarAccountDeps = .{
-                .slot = slot,
-                .slot_store = account_store.forSlot(slot, &ancestors),
-                .capitalization = &capitalization,
-                .rent = &genesis_config.rent,
-            };
-
-            try update_sysvar.updateSlotHashes(
-                allocator,
-                parent_slot,
-                parent_hash,
-                update_sysvar_deps,
-            );
-            try update_sysvar.updateStakeHistory(
-                allocator,
-                .{
-                    .epoch = epoch,
-                    .parent_slots_epoch = parent_slots_epoch,
-                    .stakes_cache = &stakes_cache,
-                    .update_sysvar_deps = update_sysvar_deps,
-                },
-            );
-            _ = try update_sysvar.updateClock(allocator, .{
-                .feature_set = &feature_set,
-                .epoch_schedule = &epoch_schedule,
-                .epoch_stakes = epoch_stakes_map.getPtr(epoch),
-                .stakes_cache = &stakes_cache,
-                .epoch = epoch,
-                .parent_slots_epoch = parent_slots_epoch,
-                .genesis_creation_time = genesis_config.creation_time,
-                .ns_per_slot = @intCast(genesis_config.nsPerSlot()),
-                .update_sysvar_deps = update_sysvar_deps,
-            });
-            try update_sysvar.updateLastRestartSlot(
-                allocator,
-                &feature_set,
-                slot,
-                &hard_forks,
-                update_sysvar_deps,
-            );
-        }
-
         // Get num accounts modified by this slot if accounts lt hash enabled
 
         // A bunch of stats stuff...
@@ -671,19 +590,6 @@ fn executeTxnContext(
     try account_store.put(slot, program.config.ID, .EMPTY);
     try account_store.put(slot, program.stake.ID, .EMPTY);
 
-    // Update epoch schedule and rent to minimum rent exempt balance
-    {
-        const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-            .slot = slot,
-            .slot_store = account_store.forSlot(slot, &ancestors),
-            .capitalization = &capitalization,
-            .rent = &genesis_config.rent,
-        };
-
-        try update_sysvar.updateRent(allocator, genesis_config.rent, update_sysvar_deps);
-        try update_sysvar.updateEpochSchedule(allocator, epoch_schedule, update_sysvar_deps);
-    }
-
     // Get lamports per signature from first entry in recent blockhashes (read from fixture data directly)
     const lamports_per_signature = blk: {
         const rbh_account = accounts_map.get(RecentBlockhashes.ID) orelse break :blk null;
@@ -711,17 +617,7 @@ fn executeTxnContext(
     for (blockhashes) |blockhash| {
         try blockhash_queue.insertHash(allocator, blockhash, lamports_per_signature);
     }
-    const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
-        .slot = slot,
-        .slot_store = account_store.forSlot(slot, &ancestors),
-        .capitalization = &capitalization,
-        .rent = &genesis_config.rent,
-    };
-    try update_sysvar.updateRecentBlockhashes(allocator, &blockhash_queue, update_sysvar_deps);
 
-    // Load fixture accounts into accounts db AFTER sysvar updates,
-    // so fixture data takes precedence (matches agave's behavior where
-    // accounts are stored at parent_slot before bank construction).
     for (accounts_map.keys(), accounts_map.values()) |pubkey, account| {
         try account_store.put(slot, pubkey, .{
             .lamports = account.lamports,
