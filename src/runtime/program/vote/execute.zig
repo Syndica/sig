@@ -999,6 +999,12 @@ fn getVoteStateChecked(
 
     switch (target_version) {
         .v3 => {
+            // V0_23_5 is no longer supported. agave's
+            // VoteStateV3::deserialize_into_ptr returns InvalidAccountData for variant 0
+            // when compiled for target_os = "solana".
+            if (versioned_state == .v0_23_5) {
+                return InstructionError.InvalidAccountData;
+            }
             // Existing flow before v4 feature gate activation:
             // Deserialize as VoteStateVersions (converting during deserialization).
             // Some callsites deserialize without checking initialization status.
