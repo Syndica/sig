@@ -234,7 +234,12 @@ fn handleGetOrHead(
                     var send_buffer: [4096]u8 = undefined;
                     var response = request.respondStreaming(&send_buffer, .{
                         .content_length = archive_len,
-                        .respond_options = .{},
+                        .respond_options = .{
+                            // This server currently serves a single request per accepted socket
+                            // and closes the connection afterwards, so responses must advertise
+                            // non-persistent semantics.
+                            .keep_alive = false,
+                        },
                     }) catch |err| switch (err) {
                         error.HttpExpectationFailed => return,
                         error.WriteFailed => return error.SystemIoError,
@@ -610,7 +615,13 @@ fn writeFinalJsonResponse(
     var send_buffer: [4096]u8 = undefined;
     var response = request.respondStreaming(&send_buffer, .{
         .content_length = content_length,
-        .respond_options = http_respond_opts,
+        .respond_options = blk: {
+            var opts = http_respond_opts;
+            // The connection is closed at the end of request handling.
+            // Keep-alive must be disabled to avoid clients reusing dead sockets.
+            opts.keep_alive = false;
+            break :blk opts;
+        },
     }) catch |err| switch (err) {
         error.HttpExpectationFailed => return,
         error.WriteFailed => return error.SystemIoError,
