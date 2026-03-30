@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 
 comptime {
     _ = std.testing.refAllDecls(@This());
@@ -39,6 +40,9 @@ pub const Signature = extern struct {
     }
 
     pub fn verify(self: *const Signature, pubkey: *const Pubkey, message: []const u8) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "Sig.verify" });
+        defer zone.deinit();
+
         try ed25519.verifySignature(self, pubkey, message, true);
     }
 

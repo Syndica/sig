@@ -112,8 +112,20 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         var state: State = .empty;
     };
 
+    const idle_src = @src();
+
+    var maybe_idle_zone: ?tracy.Zone = tracy.Zone.init(idle_src, .{ .name = "idle" });
+
     while (true) {
-        var recv_slice = rw.tvu_socket.recv.getReadable() catch continue;
+        var recv_slice = rw.tvu_socket.recv.getReadable() catch {
+            if (maybe_idle_zone == null) maybe_idle_zone = tracy.Zone.init(idle_src, .{ .name = "idle" });
+            continue;
+        };
+
+        if (maybe_idle_zone) |idle_zone| {
+            idle_zone.deinit();
+            maybe_idle_zone = null;
+        }
 
         const recv_zone = tracy.Zone.init(@src(), .{ .name = "shred recv" });
         defer recv_zone.deinit();
