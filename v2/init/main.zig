@@ -5,11 +5,12 @@ comptime {
 }
 
 const services = @import("services.zig");
+const lib = @import("lib");
 
 const Config = struct {
     sandboxing_mode: SandboxingMode,
 
-    cluster: Cluster,
+    cluster: lib.solana.Cluster,
 
     /// path to a file containing the output of `solana leader-schedule`
     leader_schedule_file: []const u8,
@@ -18,8 +19,6 @@ const Config = struct {
     shred_network: ShredNetwork,
 
     const SandboxingMode = enum { sandboxed, threaded };
-
-    const Cluster = enum { testnet, devnet, mainnet };
 
     const Gossip = struct {
         port: u16,
@@ -58,6 +57,9 @@ pub fn main() !void {
 
     std.log.info("config: {}", .{config});
 
+    const gossip_cluster_info: lib.gossip.ClusterInfo =
+        try .getFromEcho(config.gossip.port, config.cluster);
+
     const schedule_file = try std.fs.cwd().openFile(config.leader_schedule_file, .{});
     defer schedule_file.close();
     var reader_buf: [4096]u8 = undefined;
@@ -66,34 +68,39 @@ pub fn main() !void {
     const service_instances: []const services.ServiceInstance = &.{
         .{ .service = .shred_receiver },
         .{ .service = .net },
+        .{ .service = .gossip },
     };
 
-    const shared_regions: []const services.SharedRegion = &.{
-        .{
-            .region = .{ .net_pair = .{ .port = config.shred_network.recv_port } },
-            .shares = &.{
-                .{ .instance = .{ .service = .shred_receiver }, .rw = true },
-                .{ .instance = .{ .service = .net }, .rw = true },
-            },
+    const shared_regions = services.toSharedRegions(.{
+        // net -> shred
+        .net_to_shred = .{ .port = config.shred_network.recv_port },
+        // shred constants
+        .shred_recv_config = .{
+            .schedule_string = &reader.interface,
+            .shred_version = gossip_cluster_info.shred_version,
         },
-        .{
-            .region = .{ .leader_schedule = .{ .schedule_string = &reader.interface } },
-            .shares = &.{
-                .{ .instance = .{ .service = .shred_receiver } },
-            },
+
+        // net -> gossip
+        .net_to_gossip = .{ .port = config.gossip.port },
+        // gossip constants
+        .gossip_config = .{
+            .cluster_info = gossip_cluster_info,
+            // TODO: read this from identity file in signer service
+            .keypair = .fromKeyPair(.generate()),
+            .turbine_recv_port = config.shred_network.recv_port,
         },
-    };
+    });
 
     switch (config.sandboxing_mode) {
         .sandboxed => try services.spawnAndWait(
             allocator,
             service_instances,
-            shared_regions,
+            &shared_regions,
         ),
         .threaded => try services.spawnAndWaitNoSandbox(
             allocator,
             service_instances,
-            shared_regions,
+            &shared_regions,
         ),
     }
 }

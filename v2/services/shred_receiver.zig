@@ -3,17 +3,16 @@
 
 const std = @import("std");
 const start = @import("start");
-const common = @import("common");
+const lib = @import("lib");
 const tracy = @import("tracy");
 
-const shred = common.shred;
+const shred = lib.shred;
 const layout = shred.layout;
 
-const Pair = common.net.Pair;
-const Packet = common.net.Packet;
-const Slot = common.solana.Slot;
-const Hash = common.solana.Hash;
-const Atomic = std.atomic.Value;
+const Pair = lib.net.Pair;
+const Packet = lib.net.Packet;
+const Slot = lib.solana.Slot;
+const Hash = lib.solana.Hash;
 
 comptime {
     _ = start;
@@ -28,12 +27,11 @@ pub const ReadWrite = struct {
 };
 
 pub const ReadOnly = struct {
-    leader_schedule: *const common.solana.LeaderSchedule,
+    config: *const lib.shred.RecvConfig,
 };
 
 // stubs
 const stub_root_slot = 0;
-const stub_shred_version: Atomic(u16) = .{ .raw = 29062 }; // TODO: port over getShredAndIPFromEchoServer
 const stub_max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
@@ -55,12 +53,12 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         const packet = slice.get(0);
         defer slice.markUsed(1);
 
-        validateShred(packet, stub_root_slot, &stub_shred_version, stub_max_slot) catch |err| {
+        validateShred(packet, stub_root_slot, ro.config.shred_version, stub_max_slot) catch |err| {
             std.log.debug("invalid shred: {}", .{err});
             continue;
         };
 
-        verifyShred(packet, ro.leader_schedule, &verified_roots) catch |err| {
+        verifyShred(packet, &ro.config.leader_schedule, &verified_roots) catch |err| {
             std.log.debug("failed to verify shred: {}", .{err});
             continue;
         };
@@ -136,7 +134,7 @@ const VerifiedMerkleRoots = struct {
 fn validateShred(
     packet: *const Packet,
     root: Slot,
-    shred_version: *const Atomic(u16),
+    shred_version: u16,
     max_slot: Slot,
 ) ShredValidationError!void {
     const packet_shred = layout.getShred(packet, false) orelse return error.InsufficientShredSize;
@@ -145,7 +143,7 @@ fn validateShred(
     const index = layout.getIndex(packet_shred) orelse return error.IndexMissing;
     const variant = layout.getShredVariant(packet_shred) orelse return error.VariantMissing;
 
-    if (version != shred_version.load(.acquire)) return error.WrongVersion;
+    if (version != shred_version) return error.WrongVersion;
     if (slot > max_slot) return error.SlotTooNew;
     switch (variant.shred_type) {
         .code => {
@@ -184,7 +182,7 @@ fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
 /// Analogous to [verify_shred_cpu](https://github.com/anza-xyz/agave/blob/83e7d84bcc4cf438905d07279bc07e012a49afd9/ledger/src/sigverify_shreds.rs#L35)
 pub fn verifyShred(
     packet: *const Packet,
-    leader_schedule: *const common.solana.LeaderSchedule,
+    leader_schedule: *const lib.solana.LeaderSchedule,
     verified_merkle_roots: *VerifiedMerkleRoots,
 ) ShredVerificationFailure!void {
     const zone = tracy.Zone.init(@src(), .{ .name = "verifyShred" });

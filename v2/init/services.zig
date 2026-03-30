@@ -15,54 +15,142 @@ comptime {
 
 const page_size_min = std.heap.page_size_min;
 
-const common = @import("common");
-const ServiceEntrypoint = common.ServiceFn;
+const lib = @import("lib");
+const ServiceEntrypoint = lib.ipc.ServiceFn;
 
 const linux = std.os.linux;
 const sigaction_fn = linux.Sigaction.sigaction_fn;
-const memfd = common.linux.memfd;
+const memfd = lib.linux.memfd;
 const E = linux.E;
 const e = E.init;
 
-pub const Service = enum {
-    net,
-    shred_receiver,
+const services_zon = @import("./services.zon");
 
-    pub fn entrypoint(self: Service) ServiceEntrypoint {
-        return switch (self) {
-            inline else => |s| @extern(
-                ServiceEntrypoint,
-                .{ .name = "svc_main_" ++ @tagName(s) },
-            ),
-        };
+pub const Service = blk: {
+    var fields: []const std.builtin.Type.EnumField = &.{};
+    for (services_zon.services) |instance| {
+        const exists = for (fields) |f| {
+            if (std.mem.eql(u8, f.name, @tagName(instance.name))) break true;
+        } else false;
+
+        if (!exists) {
+            fields = fields ++ &[_]std.builtin.Type.EnumField{
+                .{ .name = @tagName(instance.name), .value = fields.len },
+            };
+        }
     }
 
-    pub fn faultHandler(self: Service) sigaction_fn {
-        return switch (self) {
-            inline else => |s| @extern(
-                sigaction_fn,
-                .{ .name = "svc_fault_handler_" ++ @tagName(s) },
-            ),
-        };
-    }
-
-    pub fn requiredRegions(self: Service) []const RequiredRegion {
-        return switch (self) {
-            .net => &.{
-                .{ .region = .net_pair, .rw = true },
-            },
-            .shred_receiver => &.{
-                .{ .region = .net_pair, .rw = true },
-                .{ .region = .leader_schedule },
-            },
-        };
-    }
+    break :blk @Type(.{ .@"enum" = .{
+        .decls = &.{},
+        .fields = fields,
+        .is_exhaustive = true,
+        .tag_type = u8,
+    } });
 };
+
+fn getRequiredRegions(service: Service) []const RequiredRegion {
+    switch (service) {
+        inline else => |s| {
+            inline for (services_zon.services) |_service| {
+                if (comptime std.mem.eql(u8, @tagName(_service.name), @tagName(s))) {
+                    comptime var required: []const RequiredRegion = &.{};
+                    inline for (_service.regions) |r| {
+                        required = required ++ &[_]RequiredRegion{.{
+                            .region = @field(services_zon.regions, @tagName(r.name)),
+                            .rw = switch (r.access) {
+                                .rw => true,
+                                .readonly => false,
+                                else => @compileError("invalid access: " ++ @tagName(r.access)),
+                            },
+                        }};
+                    }
+                    return required;
+                }
+            } else comptime unreachable;
+        },
+    }
+}
+
+fn getFaultHandler(service: Service) sigaction_fn {
+    return switch (service) {
+        inline else => |s| @extern(
+            sigaction_fn,
+            .{ .name = "svc_fault_handler_" ++ @tagName(s) },
+        ),
+    };
+}
+
+pub fn getEntrypoint(service: Service) ServiceEntrypoint {
+    return switch (service) {
+        inline else => |s| @extern(
+            ServiceEntrypoint,
+            .{ .name = "svc_main_" ++ @tagName(s) },
+        ),
+    };
+}
 
 const RequiredRegion = struct {
-    region: RegionType,
+    region: std.meta.Tag(Region),
     rw: bool = false,
 };
+
+const service_region_fields = std.meta.fields(@TypeOf(services_zon.regions));
+
+pub const SharedRegionInstances = blk: {
+    var fields: []const std.builtin.Type.StructField = &.{};
+    for (service_region_fields) |r| {
+        const RegionType = @TypeOf(@field(
+            @as(Region, undefined),
+            @tagName(@field(services_zon.regions, r.name)),
+        ));
+        fields = fields ++ [_]std.builtin.Type.StructField{.{
+            .name = r.name,
+            .type = RegionType,
+            .default_value_ptr = null,
+            .is_comptime = false,
+            .alignment = @alignOf(RegionType),
+        }};
+    }
+    break :blk @Type(.{ .@"struct" = .{
+        .layout = .auto,
+        .is_tuple = false,
+        .decls = &.{},
+        .fields = fields,
+    } });
+};
+
+pub fn toSharedRegions(
+    instances: SharedRegionInstances,
+) [service_region_fields.len]SharedRegion {
+    var shared_regions: [service_region_fields.len]SharedRegion = undefined;
+    inline for (service_region_fields, 0..) |r, i| {
+        comptime var shares: []const Share = &.{};
+        inline for (services_zon.services) |s| {
+            inline for (s.regions) |s_reg| {
+                if (comptime std.mem.eql(u8, @tagName(s_reg.name), r.name)) {
+                    // TODO: support referencing multiple service instances (.n > 0)
+                    shares = shares ++ &[_]Share{.{
+                        .instance = .{ .service = s.name, .n = 0 },
+                        .rw = switch (s_reg.access) {
+                            .rw => true,
+                            .readonly => false,
+                            else => @compileError("invalid access: " ++ @tagName(s_reg.access)),
+                        },
+                    }};
+                }
+            }
+        }
+        shared_regions[i] = .{
+            .region = @unionInit(
+                Region,
+                @tagName(@field(services_zon.regions, r.name)),
+                @field(instances, r.name),
+            ),
+            .shares = shares,
+        };
+    }
+    return shared_regions;
+}
 
 pub const SharedRegion = struct {
     region: Region,
@@ -79,42 +167,57 @@ pub const SharedRegion = struct {
     }
 };
 
-pub const RegionType = enum {
-    net_pair,
-    leader_schedule,
-};
-
-pub const Region = union(RegionType) {
+pub const Region = union(enum) {
     net_pair: struct { port: u16 },
-    leader_schedule: struct {
+    gossip_config: struct {
+        cluster_info: lib.gossip.ClusterInfo,
+        // TODO: this should live in signing service
+        keypair: lib.gossip.KeyPair,
+        turbine_recv_port: u16,
+    },
+    shred_recv_config: struct {
         // TODO: this should not exist - remove once we can open snapshots again
         schedule_string: *std.Io.Reader,
+        shred_version: u16,
     },
 
     pub fn size(self: Region) usize {
         return switch (self) {
-            .net_pair => @sizeOf(common.net.Pair),
-            .leader_schedule => @sizeOf(common.solana.LeaderSchedule),
+            .net_pair => @sizeOf(lib.net.Pair),
+            .gossip_config => @sizeOf(lib.gossip.Config),
+            .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
         };
     }
 
     pub fn init(self: Region, buf: []align(page_size_min) u8) !void {
-        std.log.info("Initialising: {}", .{@as(RegionType, self)});
+        std.log.info("Initialising: {}", .{std.meta.activeTag(self)});
 
         return switch (self) {
             .net_pair => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(common.net.Pair));
-                const data: *common.net.Pair = @ptrCast(buf);
+                std.debug.assert(buf.len == @sizeOf(lib.net.Pair));
+                const data: *lib.net.Pair = @ptrCast(buf);
 
                 data.recv.init();
                 data.send.init();
                 data.port = cfg.port;
             },
-            .leader_schedule => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(common.solana.LeaderSchedule));
-                const data: *common.solana.LeaderSchedule = @ptrCast(buf);
+            .gossip_config => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(lib.gossip.Config));
+                const data: *lib.gossip.Config = @ptrCast(buf);
 
-                try common.solana.LeaderSchedule.fromCommand(data, cfg.schedule_string);
+                data.keypair = cfg.keypair;
+                data.cluster_info = cfg.cluster_info;
+                data.turbine_recv_port = cfg.turbine_recv_port;
+            },
+            .shred_recv_config => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(lib.shred.RecvConfig));
+                const data: *lib.shred.RecvConfig = @ptrCast(buf);
+
+                try lib.solana.LeaderSchedule.fromCommand(
+                    &data.leader_schedule,
+                    cfg.schedule_string,
+                );
+                data.shred_version = cfg.shred_version;
             },
         };
     }
@@ -140,6 +243,7 @@ const Map = std.AutoArrayHashMapUnmanaged(ServiceInstance, MapEntry);
 const MapEntry = std.ArrayListUnmanaged(LookupResult);
 
 const LookupResult = struct {
+    n: usize, // for supporting multiple regions of the same kind
     shared: SharedRegion,
     rw: bool,
     memfd: memfd.RW,
@@ -173,23 +277,37 @@ fn serviceMap(
 
     // check all service instances request regions which are shared with them
     inline for (services) |instance| {
-        for (instance.service.requiredRegions()) |required_region| {
+        for (getRequiredRegions(instance.service)) |required_region| {
             const found_region: LookupResult = blk: for (
                 regions,
                 region_memfds,
-            ) |shared_region, region_memfd| {
+                0..,
+            ) |shared_region, region_memfd, n| {
                 if (shared_region.region != required_region.region) continue;
 
                 for (shared_region.shares) |share| {
                     if (instance.service == share.instance.service and
                         instance.n == share.instance.n)
                     {
-                        std.debug.assert(region_memfd.size == shared_region.region.size());
-                        break :blk .{
+                        const result: LookupResult = .{
+                            .n = n,
                             .shared = shared_region,
                             .rw = required_region.rw,
                             .memfd = region_memfd,
                         };
+
+                        var exists = false;
+                        if (map.getPtr(instance)) |entry| {
+                            for (entry.items) |existing_result| {
+                                if (std.meta.eql(existing_result, result)) {
+                                    exists = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        std.debug.assert(region_memfd.size == shared_region.region.size());
+                        if (!exists) break :blk result;
                     }
                 }
             } else std.debug.panic(
@@ -232,7 +350,7 @@ pub fn spawnAndWait(
         }
     }
 
-    // Creates a memfd for every service, to be used for storing a common.Exit value, which is used
+    // Creates a memfd for every service, to be used for storing a lib.Exit value, which is used
     // for reporting traces+errors back to the main process.
     const exit_memfds: []memfd.RW = try allocator.alloc(memfd.RW, services.len);
     defer allocator.free(exit_memfds);
@@ -245,7 +363,7 @@ pub fn spawnAndWait(
                     "exit_{s}_{}",
                     .{ @tagName(service_instance.service), service_instance.n },
                 ),
-                .size = @sizeOf(common.Exit),
+                .size = @sizeOf(lib.ipc.Exit),
             });
         }
     }
@@ -268,7 +386,7 @@ pub fn spawnAndWait(
 
     const ExitMeta = struct {
         pid: i32,
-        exit: ?*common.Exit,
+        exit: ?*lib.ipc.Exit,
     };
 
     var exit_meta: std.MultiArrayList(ExitMeta) = .{};
@@ -323,7 +441,7 @@ fn spawnService(
 ) !i32 {
     const parent_pid = std.os.linux.getpid();
 
-    const maybe_child_pid = common.linux.clone3.clone3(&.{
+    const maybe_child_pid = lib.linux.clone3.clone3(&.{
         .flags = .{
             // NOTE: all FDs currently open will remain open in the child
             // There is no way around this, except
@@ -346,7 +464,7 @@ fn spawnService(
     // register fault handlers
     {
         const act: *const std.os.linux.Sigaction = &.{
-            .handler = .{ .sigaction = service_instance.service.faultHandler() },
+            .handler = .{ .sigaction = getFaultHandler(service_instance.service) },
             .mask = std.os.linux.sigemptyset(),
             .flags = (std.posix.SA.SIGINFO | std.posix.SA.RESTART | std.posix.SA.RESETHAND),
         };
@@ -385,7 +503,7 @@ fn spawnService(
     // mseal our shared VMAs (essentially making sure their mapping can't be tampered with)
     for (resolved_args.ro, resolved_args.ro_len) |ptr, len| mseal(ptr orelse continue, len);
     for (resolved_args.rw, resolved_args.rw_len) |ptr, len| mseal(ptr orelse continue, len);
-    mseal(resolved_args.exit, @sizeOf(common.Exit));
+    mseal(resolved_args.exit, @sizeOf(lib.ipc.Exit));
 
     closeAllFdsExceptStderr(stderr.handle);
 
@@ -394,8 +512,8 @@ fn spawnService(
 
     // install a basic seccomp filter that bans syscalls except write+sleep
     {
-        const bpf_filters = common.linux.bpf.printSleepExit(stderr.handle);
-        const program: common.linux.bpf.sock_fprog = .{
+        const bpf_filters = lib.linux.bpf.printSleepExit(stderr.handle);
+        const program: lib.linux.bpf.sock_fprog = .{
             .len = bpf_filters.len,
             .sock_filter = &bpf_filters,
         };
@@ -408,7 +526,7 @@ fn spawnService(
         }
     }
 
-    service_instance.service.entrypoint()(resolved_args);
+    getEntrypoint(service_instance.service)(resolved_args);
     std.process.exit(255);
 }
 
@@ -417,8 +535,8 @@ fn resolveArgs(
     exit: memfd.RW,
     stderr: std.fs.File,
     regions: []const LookupResult,
-) !common.ResolvedArgs {
-    var args: common.ResolvedArgs = .{
+) !lib.ipc.ResolvedArgs {
+    var args: lib.ipc.ResolvedArgs = .{
         .stderr = stderr.handle,
         .exit = (try exit.mmap(null)).ptr,
 
@@ -477,7 +595,7 @@ fn closeAllFdsExceptStderr(maybe_stderr: ?linux.fd_t) void {
 }
 
 fn dumpOnExit(
-    meta: *common.Exit,
+    meta: *lib.ipc.Exit,
     service_instance: ServiceInstance,
     pid: i32,
     status: u32,
@@ -548,7 +666,7 @@ pub fn spawnAndWaitNoSandbox(
         }
     }
 
-    // Creates a memfd for every service, to be used for storing a common.Exit value, which is used
+    // Creates a memfd for every service, to be used for storing a lib.ipc.Exit value, which is used
     // for reporting traces+errors back to the main process.
     const exit_memfds: []memfd.RW = try allocator.alloc(memfd.RW, services.len);
     defer allocator.free(exit_memfds);
@@ -561,7 +679,7 @@ pub fn spawnAndWaitNoSandbox(
                     "exit_{s}_{}",
                     .{ @tagName(service_instance.service), service_instance.n },
                 ),
-                .size = @sizeOf(common.Exit),
+                .size = @sizeOf(lib.ipc.Exit),
             });
         }
     }
@@ -609,7 +727,7 @@ pub fn spawnAndWaitNoSandbox(
 fn threadEntry(
     entry_point: ServiceEntrypoint,
     service: Service,
-    args: common.ResolvedArgs,
+    args: lib.ipc.ResolvedArgs,
     service_idx: u16,
     finished_idx: *std.atomic.Value(u16),
     reset_event: *std.Thread.ResetEvent,
@@ -638,7 +756,7 @@ fn spawnServiceNoSandbox(
         .{},
         threadEntry,
         .{
-            service_instance.service.entrypoint(),
+            getEntrypoint(service_instance.service),
             service_instance.service,
             resolved_args,
             service_idx,

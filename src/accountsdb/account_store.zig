@@ -323,6 +323,21 @@ pub const SlotAccountReader = union(enum) {
         };
     }
 
+    /// Returns the top `limit` accounts by lamport balance (descending).
+    pub fn getLargest(
+        self: SlotAccountReader,
+        allocator: Allocator,
+        limit: u32,
+    ) ![]const struct { sig.core.Pubkey, u64 } {
+        return switch (self) {
+            .accounts_db, .accounts_db_owned => |pair| {
+                const db, const ancestors = pair;
+                return db.getLargest(allocator, ancestors, limit);
+            },
+            else => &.{},
+        };
+    }
+
     pub const OwnerIterator = union(enum) {
         accounts_db: accounts_db.Db.OwnerQuery,
         noop: void,
@@ -916,7 +931,7 @@ test "insertion out of order" {
 
     for (0..100) |i| {
         const slot: Slot = while (true) {
-            const slot = random.uintLessThan(Slot, 1000);
+            const slot = random.intRangeAtMost(Slot, 1, 999);
             if (ancestor_set.containsSlot(slot)) continue;
             break slot;
         };
