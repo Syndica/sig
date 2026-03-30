@@ -694,7 +694,12 @@ fn executeTxnContext(
         if (len == 0) break :blk null;
 
         var fbs = std.io.fixedBufferStream(rbh_data[8..]);
-        const first_entry = sig.bincode.read(allocator, RecentBlockhashes.Entry, fbs.reader(), .{}) catch break :blk null;
+        const first_entry = sig.bincode.read(
+            allocator,
+            RecentBlockhashes.Entry,
+            fbs.reader(),
+            .{},
+        ) catch break :blk null;
 
         break :blk if (first_entry.lamports_per_signature != 0)
             first_entry.lamports_per_signature
