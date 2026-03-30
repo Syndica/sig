@@ -671,17 +671,6 @@ fn executeTxnContext(
     try account_store.put(slot, program.config.ID, .EMPTY);
     try account_store.put(slot, program.stake.ID, .EMPTY);
 
-    // Load accounts into accounts db
-    for (accounts_map.keys(), accounts_map.values()) |pubkey, account| {
-        try account_store.put(slot, pubkey, .{
-            .lamports = account.lamports,
-            .data = account.data,
-            .owner = account.owner,
-            .executable = account.executable,
-            .rent_epoch = account.rent_epoch,
-        });
-    }
-
     // Update epoch schedule and rent to minimum rent exempt balance
     {
         const update_sysvar_deps = update_sysvar.UpdateSysvarAccountDeps{
@@ -695,22 +684,17 @@ fn executeTxnContext(
         try update_sysvar.updateEpochSchedule(allocator, epoch_schedule, update_sysvar_deps);
     }
 
-    // Get lamports per signature from first entry in recent blockhashes
+    // Get lamports per signature from first entry in recent blockhashes (read from fixture data directly)
     const lamports_per_signature = blk: {
-        const account = try account_store.reader().forSlot(&ancestors).get(
-            allocator,
-            RecentBlockhashes.ID,
-        ) orelse break :blk null;
-        defer account.deinit(allocator);
+        const rbh_account = accounts_map.get(RecentBlockhashes.ID) orelse break :blk null;
+        const rbh_data = rbh_account.data;
+        if (rbh_data.len < 8) break :blk null;
 
-        var data = account.data.iterator();
-        const reader = data.reader();
-
-        const len = try sig.bincode.readInt(u64, reader, .{});
-
+        const len = std.mem.readInt(u64, rbh_data[0..8], .little);
         if (len == 0) break :blk null;
 
-        const first_entry = try sig.bincode.read(allocator, RecentBlockhashes.Entry, reader, .{});
+        var fbs = std.io.fixedBufferStream(rbh_data[8..]);
+        const first_entry = sig.bincode.read(allocator, RecentBlockhashes.Entry, fbs.reader(), .{}) catch break :blk null;
 
         break :blk if (first_entry.lamports_per_signature != 0)
             first_entry.lamports_per_signature
@@ -729,6 +713,19 @@ fn executeTxnContext(
         .rent = &genesis_config.rent,
     };
     try update_sysvar.updateRecentBlockhashes(allocator, &blockhash_queue, update_sysvar_deps);
+
+    // Load fixture accounts into accounts db AFTER sysvar updates,
+    // so fixture data takes precedence (matches agave's behavior where
+    // accounts are stored at parent_slot before bank construction).
+    for (accounts_map.keys(), accounts_map.values()) |pubkey, account| {
+        try account_store.put(slot, pubkey, .{
+            .lamports = account.lamports,
+            .data = account.data,
+            .owner = account.owner,
+            .executable = account.executable,
+            .rent_epoch = account.rent_epoch,
+        });
+    }
 
     // Checkpoint 3
     // NOTE: For basic fixtures, we produce equivalent state up until this point, excluding the
