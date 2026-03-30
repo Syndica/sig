@@ -69,10 +69,6 @@ pub const RPCSubMap = struct {
     /// Heap data in `key` (program filters) must point to memory owned by the
     /// caller (e.g., the JSON parse tree). On match, the caller's data is not
     /// retained. On new entry, heap fields are deep-copied into the map's allocator.
-    ///
-    /// Queue commit path policy:
-    /// - `.slot`, `.root`, `.program`, and `.account` use `.reserved` to preserve event order
-    /// - all other methods (`.logs`, `.vote`, `.signature`) use `.direct`
     pub fn getOrCreate(
         self: *RPCSubMap,
         key: *const SubReqKey,
@@ -90,8 +86,12 @@ pub const RPCSubMap = struct {
 
         const queue = try self.allocator.create(NotifQueue);
         const commit_path: NotifQueue.CommitPath = switch (key.method) {
+            // These subscriptions can emit multiple notifications per subscription and must
+            // preserve the order they were produced in.
             .slot, .root, .program, .account, .logs => .reserved,
-            else => .direct,
+            // voteSubscribe and signatureSubscribe each multiplex to a single stream, so they
+            // can commit serialized payloads directly.
+            .signature, .vote => .direct,
         };
         queue.* = try NotifQueue.init(self.allocator, self.queue_capacity, commit_path);
         errdefer {
