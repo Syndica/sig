@@ -43,9 +43,10 @@ pub fn checkStatusCache(
     ancestors: *const Ancestors,
     status_cache: *sig.core.StatusCache,
 ) ?TransactionError {
-    if (status_cache.getStatus(&msg_hash.data, recent_blockhash, ancestors) != null)
-        return .AlreadyProcessed;
-    return null;
+    return switch (status_cache.getStatus(&msg_hash.data, recent_blockhash, ancestors)) {
+        .pending => null,
+        .failed, .succeeded => .AlreadyProcessed,
+    };
 }
 
 /// Requires full transaction to find nonce account in the event that the transactions recent blockhash
@@ -453,7 +454,7 @@ pub fn loadMessageNonceAccount(
     return .{ nonce_address, nonce_account, nonce_data };
 }
 
-fn verifyNonceAccount(account: Account, recent_blockhash: *const Hash) ?NonceData {
+pub fn verifyNonceAccount(account: Account, recent_blockhash: *const Hash) ?NonceData {
     if (!account.owner.equals(&sig.runtime.program.system.ID)) return null;
 
     // could probably be smaller

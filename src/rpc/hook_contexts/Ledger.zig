@@ -646,7 +646,7 @@ pub fn getSignatureStatuses(
 
     for (params.signatures, results) |signature, *result| {
         // Tier 1: StatusCache (recent in-memory transactions)
-        if (self.getTransactionStatus(
+        if (try self.getTransactionStatus(
             arena,
             signature,
             &processed_slot_ref,
@@ -789,8 +789,9 @@ fn getTransactionStatus(
     arena: Allocator,
     signature: Signature,
     slot_ref: *const sig.replay.trackers.SlotTracker.Reference,
-) ?GetSignatureStatuses.Response.TransactionStatus {
-    const fork = self.status_cache.getStatusAnyBlockhash(
+) !?GetSignatureStatuses.Response.TransactionStatus {
+    const fork = try self.status_cache.getForkAnyBlockhash(
+        arena,
         &signature.toBytes(),
         &slot_ref.constants().ancestors,
     ) orelse return null;
@@ -799,7 +800,8 @@ fn getTransactionStatus(
 
     const confirmed_slot_ref = self.slot_tracker.get(self.slot_tracker.commitments.get(.confirmed));
     defer if (confirmed_slot_ref) |ref| ref.release();
-    const confirmed_fork = if (confirmed_slot_ref) |ref| self.status_cache.getStatusAnyBlockhash(
+    const confirmed_fork = if (confirmed_slot_ref) |ref| try self.status_cache.getForkAnyBlockhash(
+        arena,
         &signature.toBytes(),
         &ref.constants().ancestors,
     ) else null;

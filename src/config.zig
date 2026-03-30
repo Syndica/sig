@@ -11,8 +11,6 @@ pub const Cmd = struct {
     geyser: Geyser = .{},
     turbine: Turbine = .{},
 
-    test_transaction_sender: TestTransactionSender = .{},
-
     validator_dir: []const u8 = sig.VALIDATOR_DIR,
     max_shreds: u64 = 5_000_000,
     leader_schedule_path: ?[]const u8 = null,
@@ -35,6 +33,7 @@ pub const Cmd = struct {
     rpc_port: ?u16 = null,
     vote_account: ?[]const u8 = null,
     stop_at_slot: ?sig.core.Slot = null,
+    mock_transfer_transactions: ?u64 = null,
 
     pub fn getCluster(self: Cmd) error{UnknownCluster}!?sig.core.ClusterType {
         return if (self.cluster) |cluster_str|
@@ -80,11 +79,6 @@ pub const Cmd = struct {
         }
         return try allocator.dupe(u8, param_value);
     }
-};
-
-pub const TestTransactionSender = struct {
-    n_transactions: u64 = 3,
-    n_lamports_per_transaction: u64 = 1e7,
 };
 
 pub const Turbine = struct {

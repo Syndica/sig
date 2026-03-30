@@ -35,7 +35,7 @@ pub fn Response(comptime T: type) type {
                 },
                 arena.allocator(),
                 response_json,
-                .{},
+                .{ .allocate = .alloc_always },
             );
             return .{
                 .arena = arena,
