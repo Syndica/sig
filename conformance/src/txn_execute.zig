@@ -73,7 +73,6 @@ const Atomic = std.atomic.Value;
 const features = sig.core.features;
 const freeze = sig.replay.freeze;
 const program = sig.runtime.program;
-const sysvars = sig.runtime.sysvar;
 const vm = sig.vm;
 const transaction_execution = sig.runtime.transaction_execution;
 const update_sysvar = sig.replay.update_sysvar;
