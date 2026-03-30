@@ -12,4 +12,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
-python_files = ["parser.py", "differ.py"]
+python_files = ["parser.py", "differ.py", "fixture.py"]

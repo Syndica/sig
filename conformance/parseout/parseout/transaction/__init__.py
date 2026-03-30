@@ -21,6 +21,13 @@ from .differ import (
     diff,
     diff_files,
 )
+from .fixture import (
+    programs_for_fixture,
+    programs_for_fixtures,
+    label_program,
+    label_programs,
+    KNOWN_PROGRAMS,
+)
 
 __all__ = [
     "parse",
@@ -36,4 +43,9 @@ __all__ = [
     "Mismatch",
     "diff",
     "diff_files",
+    "programs_for_fixture",
+    "programs_for_fixtures",
+    "label_program",
+    "label_programs",
+    "KNOWN_PROGRAMS",
 ]

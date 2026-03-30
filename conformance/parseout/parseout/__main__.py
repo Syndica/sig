@@ -18,12 +18,13 @@ from pathlib import Path
 
 from .parser import parse_file as _generic_parse_file
 from .differ import diff_files as _generic_diff_files
-from .transaction import diff_files as _txn_diff_files, Category
+from .transaction import diff_files as _txn_diff_files, Category, label_programs
 
 
 _TXN_FIXTURES = Path("env/test-outputs/txn/fixtures")
 _TXN_EXPECTED_GLOB = str(_TXN_FIXTURES / "expected" / "*.txt")
 _TXN_ACTUAL_GLOB = str(_TXN_FIXTURES / "actual" / "*.txt")
+_TXN_FIXTURE_INPUT_DIR = Path("env/test-vectors/txn/fixtures")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -44,6 +45,11 @@ def main(argv: list[str] | None = None) -> None:
     p_txn = subs.add_parser("txn", help="Transaction diff producing txn.csv, txn-category.json, txn-combo.json")
     p_txn.add_argument("expected", nargs="?", default=None, help="Path to the expected file (default: first match in env/test-outputs/txn/fixtures/expected/*.txt)")
     p_txn.add_argument("actual", nargs="?", default=None, help="Path to the actual file (default: first match in env/test-outputs/txn/fixtures/actual/*.txt)")
+    p_txn.add_argument("--fixtures", default=None, metavar="DIR",
+                        help="Directory containing .fix protobuf fixtures for program classification "
+                             "(default: env/test-vectors/txn/fixtures when using default expected/actual)")
+    p_txn.add_argument("--no-fixtures", action="store_true",
+                        help="Disable automatic fixture loading (skip program classification)")
 
     args = top.parse_args(argv)
 
@@ -139,7 +145,16 @@ def _cmd_txn(args: argparse.Namespace) -> None:
     out_dir = Path(_TXN_FIXTURES) if use_fixtures else Path(".")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    mismatches = _txn_diff_files(expected, actual)
+    # Determine fixture directory for program classification
+    fixture_dir: str | Path | None = None
+    if not args.no_fixtures:
+        if args.fixtures:
+            fixture_dir = args.fixtures
+        elif use_fixtures and _TXN_FIXTURE_INPUT_DIR.is_dir():
+            fixture_dir = _TXN_FIXTURE_INPUT_DIR
+
+    has_programs = fixture_dir is not None
+    mismatches = _txn_diff_files(expected, actual, fixture_dir=fixture_dir)
 
     # --- txn.csv (sorted by combo so same-category rows are adjacent) ---
     sorted_mismatches = sorted(
@@ -149,15 +164,21 @@ def _cmd_txn(args: argparse.Namespace) -> None:
     csv_path = out_dir / "txn.csv"
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["test_id", "categories"])
+        header = ["test_id", "categories"]
+        if has_programs:
+            header.append("programs")
+        writer.writerow(header)
         for m in sorted_mismatches:
             cats = sorted(c.name for c in m.categories)
-            writer.writerow([m.test_id, ",".join(cats)])
+            row: list[str] = [m.test_id, ",".join(cats)]
+            if has_programs:
+                row.append(",".join(label_programs(m.programs)))
+            writer.writerow(row)
 
     # --- txn-category.json ---
     by_category: dict[str, list] = {}
     for m in mismatches:
-        entry = _mismatch_to_dict(m)
+        entry = _mismatch_to_dict(m, include_programs=has_programs)
         for cat in m.categories:
             by_category.setdefault(cat.name, []).append(entry)
 
@@ -176,7 +197,7 @@ def _cmd_txn(args: argparse.Namespace) -> None:
     combo_counts: Counter[str] = Counter()
     for m in mismatches:
         key = " + ".join(sorted(c.name for c in m.categories))
-        by_combo.setdefault(key, []).append(_mismatch_to_dict(m))
+        by_combo.setdefault(key, []).append(_mismatch_to_dict(m, include_programs=has_programs))
         combo_counts[key] += 1
 
     # Sort keys by frequency (most common first)
@@ -187,8 +208,28 @@ def _cmd_txn(args: argparse.Namespace) -> None:
         json.dump(combo_ordered, f, indent=2)
         f.write("\n")
 
+    # --- txn-program.json (mismatches grouped by invoked program) ---
+    if has_programs:
+        by_program: dict[str, list] = {}
+        program_counts: Counter[str] = Counter()
+        for m in mismatches:
+            labels = label_programs(m.programs) if m.programs else ["(unknown)"]
+            entry = _mismatch_to_dict(m, include_programs=True)
+            for label in labels:
+                by_program.setdefault(label, []).append(entry)
+                program_counts[label] += 1
+
+        program_ordered = {k: by_program[k] for k, _ in program_counts.most_common()}
+        prog_path = out_dir / "txn-program.json"
+        with open(prog_path, "w") as f:
+            json.dump(program_ordered, f, indent=2)
+            f.write("\n")
+
     total = len(mismatches)
-    print(f"{total} mismatches written to {csv_path}, {cat_path}, {combo_path}")
+    output_files = f"{csv_path}, {cat_path}, {combo_path}"
+    if has_programs:
+        output_files += f", {prog_path}"
+    print(f"{total} mismatches written to {output_files}")
 
     # --- per-category counts ---
     print("\nCategories:")
@@ -201,6 +242,12 @@ def _cmd_txn(args: argparse.Namespace) -> None:
     for combo, count in combo_counts.most_common():
         print(f"  {combo}: {count}")
 
+    # --- per-program counts ---
+    if has_programs:
+        print("\nPrograms:")
+        for prog, count in program_counts.most_common():
+            print(f"  {prog}: {count}")
+
 
 def _resolve_glob(pattern: str, label: str) -> str:
     """Resolve a glob pattern to a single file path, or exit with an error."""
@@ -211,10 +258,14 @@ def _resolve_glob(pattern: str, label: str) -> str:
     return matches[0]
 
 
-def _mismatch_to_dict(m) -> dict:
+def _mismatch_to_dict(m, include_programs: bool = False) -> dict:
     """Convert a transaction Mismatch to a JSON-serialisable dict."""
     d = asdict(m)
     d["categories"] = sorted(c.name for c in m.categories)
+    if include_programs:
+        d["programs"] = label_programs(m.programs)
+    else:
+        del d["programs"]
     return d
 
 

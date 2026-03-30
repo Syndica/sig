@@ -51,12 +51,15 @@ class Mismatch:
     Attributes:
         test_id: The shared record test_id.
         categories: Set of ``Category`` values describing what differs.
+        programs: Sorted list of base58 program addresses invoked by the
+            transaction.  Populated when fixture data is available.
         left: The Record from the first file.
         right: The Record from the second file.
     """
 
     test_id: str
     categories: set[Category] = field(default_factory=set)
+    programs: list[str] = field(default_factory=list)
     left: Record = field(default_factory=Record)
     right: Record = field(default_factory=Record)
 
@@ -64,6 +67,7 @@ class Mismatch:
 def diff(
     a: OrderedDict[str, Record],
     b: OrderedDict[str, Record],
+    programs: dict[str, list[str]] | None = None,
 ) -> list[Mismatch]:
     """Compare two parsed transaction OrderedDicts and return categorised mismatches.
 
@@ -73,6 +77,9 @@ def diff(
     Args:
         a: First parsed result (``transaction_parser.parse`` output).
         b: Second parsed result.
+        programs: Optional mapping from test_id to list of invoked program
+            addresses (base58).  When provided, each ``Mismatch`` is
+            annotated with the programs for its test_id.
 
     Returns:
         List of ``Mismatch`` objects, one per differing test_id, in the
@@ -86,16 +93,33 @@ def diff(
         if rec_a.result == rec_b.result:
             continue
         cats = _categorize(rec_a.result, rec_b.result)
-        result.append(Mismatch(test_id=test_id, categories=cats, left=rec_a, right=rec_b))
+        progs = programs.get(test_id, []) if programs else []
+        result.append(Mismatch(test_id=test_id, categories=cats, programs=progs, left=rec_a, right=rec_b))
     return result
 
 
-def diff_files(path_a: str | Path, path_b: str | Path) -> list[Mismatch]:
+def diff_files(
+    path_a: str | Path,
+    path_b: str | Path,
+    fixture_dir: str | Path | None = None,
+) -> list[Mismatch]:
     """Parse two files and return categorised mismatches.
 
     Convenience wrapper around ``diff(parse_file(a), parse_file(b))``.
+
+    Args:
+        path_a: Path to the expected output file.
+        path_b: Path to the actual output file.
+        fixture_dir: Optional path to directory containing ``.fix`` protobuf
+            fixtures.  When provided, each mismatch is annotated with the
+            invoked program addresses extracted from the fixture inputs.
     """
-    return diff(_parse_file(path_a), _parse_file(path_b))
+    programs: dict[str, list[str]] | None = None
+    if fixture_dir is not None:
+        from .fixture import programs_for_fixtures
+
+        programs = programs_for_fixtures(fixture_dir)
+    return diff(_parse_file(path_a), _parse_file(path_b), programs=programs)
 
 
 # ---------------------------------------------------------------------------
