@@ -109,7 +109,7 @@ def main():
             failures.append(os.path.join(result["name"], fixture + ".fix\n"))
     failures.sort()
     
-    with open("env/test-outputs/failures.txt", "w") as f:
+    with open("env/test-outputs/failing.txt", "w") as f:
         f.writelines(failures)
 
     print(f"\nDetailed test results saved to env/test-outputs/\n")
