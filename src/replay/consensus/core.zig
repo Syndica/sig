@@ -409,6 +409,7 @@ pub const TowerConsensus = struct {
                     .verified_vote = params.senders.verified_vote,
                     .gossip_verified_vote_hashes = params.gossip_verified_vote_hashes,
                     .duplicate_confirmed_slots = params.duplicate_confirmed_slots,
+                    .event_sink = params.event_sink,
                 },
                 .receivers = .{ .replay_votes = params.receivers.replay_votes },
                 .ledger = params.ledger,

@@ -304,6 +304,35 @@ pub fn serializeLogsNotification(
     });
 }
 
+pub fn serializeVoteNotification(
+    allocator: std.mem.Allocator,
+    sub_id: types.SubId,
+    data: types.VoteEventData,
+) !NotifPayload {
+    return serializeToPayload(allocator, .{
+        .jsonrpc = "2.0",
+        .method = "voteNotification",
+        .params = .{
+            .result = VoteValue{
+                .votePubkey = data.vote_pubkey,
+                .slots = data.slots,
+                .hash = data.hash,
+                .timestamp = data.timestamp,
+                .signature = data.signature,
+            },
+            .subscription = sub_id,
+        },
+    });
+}
+
+const VoteValue = struct {
+    votePubkey: sig.core.Pubkey,
+    slots: []const u64,
+    hash: sig.core.Hash,
+    timestamp: ?i64,
+    signature: sig.core.Signature,
+};
+
 pub fn serializeNotification(
     allocator: std.mem.Allocator,
     sub_id: types.SubId,
@@ -313,6 +342,7 @@ pub fn serializeNotification(
         .slot => |data| serializeSlotNotification(allocator, sub_id, data),
         .root => |data| serializeRootNotification(allocator, sub_id, data),
         .logs => |data| serializeLogsNotification(allocator, sub_id, data),
+        .vote => |data| serializeVoteNotification(allocator, sub_id, data),
         .account => |job| serializeAccountNotification(
             allocator,
             sub_id,

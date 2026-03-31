@@ -78,6 +78,7 @@ pub const Senders = struct {
     verified_vote: *sig.sync.Channel(VerifiedVote),
     gossip_verified_vote_hashes: *std.ArrayListUnmanaged(GossipVerifiedVoteHash),
     duplicate_confirmed_slots: *std.ArrayListUnmanaged(ThresholdConfirmedSlot),
+    event_sink: ?*sig.rpc.jrpc_websockets.types.EventSink = null,
 
     const test_setup_enabled = @import("builtin").is_test;
 
@@ -788,13 +789,20 @@ fn trackNewVotesAndNotifyConfirmations(
                 // By now:
                 // 1) The vote must have come from ReplayStage,
                 // 2) We've seen this vote from replay for this hash before
-                // (`track_optimistic_confirmation_vote()` will not set `is_new == true`
-                // for same slot different hash), so short circuit because this vote
-                // has no new information
-
-                // Note gossip votes will always be processed because those should be unique
-                // and we need to update the gossip-only stake in the `VoteTracker`.
-                return;
+                // (track_optimistic_confirmation_vote() will not set
+                // is_new == true for same slot different hash), so short
+                // circuit because this vote has no new information.
+                //
+                // Note gossip votes will always be processed because those
+                // should be unique and we need to update the gossip-only
+                // stake in the VoteTracker.
+                //
+                // Must break (not return) to preserve is_new_vote
+                // from a prior iteration (e.g. the tip slot) so that
+                // post-loop notification logic still fires.
+                // This matches agave's control flow:
+                // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L560-L571
+                break;
             }
 
             is_new_vote = is_new;
@@ -823,9 +831,44 @@ fn trackNewVotesAndNotifyConfirmations(
     latest_vote_slot.* = @max(latest_vote_slot.*, last_vote_slot);
 
     if (is_new_vote) {
-        // TODO: here is where Agave notifies new vote for RPC websocket voteSubscribe
-        // (signature is included in the notification)
-        _ = vote_transaction_signature;
+        // Notify RPC websocket voteSubscribe subscribers.
+        // [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L595
+        //
+        // Sig emits ~5x more vote notifications than Agave. This is
+        // expected and not a bug: Agave's gossip consumer polls CRDS
+        // with a cursor every 100ms, coalescing intermediate vote
+        // replacements for the same label (vote_index, pubkey).
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/gossip/src/crds.rs#L349-L360
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L252-L268
+        // Sig delivers votes via LocalMessageBroker.publish() on
+        // every successful CRDS insert (both new and replaced), so
+        // each intermediate tip-slot advance produces a notification.
+        // Every notification is accurate and unique, deduped by
+        // (slot, hash, pubkey) in trackOptimisticConfirmationVote.
+        // This leads to subscribers simply seeing finer-grained data.
+        //
+        // Slots are duped because the event sink takes ownership;
+        // the runtime frees them via InboundEvent.deinit after
+        // dispatch (see Runtime.handleInboundEvent).
+        if (senders.event_sink) |event_sink| {
+            // Best-effort: vote notifications are non-critical.
+            // TODO: add error logging once a logger is threaded
+            // through (see replay/service.zig:629).
+            const event_slots = allocator.dupe(Slot, vote_slots) catch null;
+            if (event_slots) |duped_slots| {
+                event_sink.send(.{
+                    .vote = .{
+                        .vote_pubkey = vote_pubkey,
+                        .slots = duped_slots,
+                        .hash = last_vote_hash,
+                        .timestamp = vote.timestamp(),
+                        .signature = vote_transaction_signature,
+                    },
+                }) catch {
+                    allocator.free(duped_slots);
+                };
+            }
+        }
         errdefer allocator.free(vote_slots);
         // TODO: Uncomment when our RepairService implements vote-weighted repair heuristic.
         //
