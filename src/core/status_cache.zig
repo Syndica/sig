@@ -73,6 +73,15 @@ pub const StatusCache = struct {
         fork_status.deinit(allocator);
     }
 
+    fn deinitStatusValues(allocator: std.mem.Allocator, status_values: *StatusValues) void {
+        for (status_values.items) |value| {
+            if (value.maybe_err) |err| {
+                err.deinit(allocator);
+            }
+        }
+        status_values.deinit(allocator);
+    }
+
     fn findVisibleFork(
         roots: *const HashMap(Slot, void),
         ancestors: *const Ancestors,
@@ -103,7 +112,7 @@ pub const StatusCache = struct {
 
         for (state.mut().slot_deltas.values()) |*status_kv| {
             for (status_kv.values()) |*value| {
-                value.status.deinit(allocator);
+                deinitStatusValues(allocator, &value.status);
             }
             status_kv.deinit(allocator);
         }
@@ -247,8 +256,13 @@ pub const StatusCache = struct {
             blockhash.*,
             .{ .status = .{}, .key_index = key_index },
         );
-        const hash_entry_map: *StatusValues = &hash_entry.value_ptr.status;
-        try hash_entry_map.append(allocator, .{ .key = lookup_key, .maybe_err = maybe_err });
+        {
+            const owned_err = if (maybe_err) |err| try err.clone(allocator) else null;
+            errdefer if (owned_err) |err| err.deinit(allocator);
+
+            const hash_entry_map: *StatusValues = &hash_entry.value_ptr.status;
+            try hash_entry_map.append(allocator, .{ .key = lookup_key, .maybe_err = owned_err });
+        }
     }
 
     /// Returns the status-cache root slots as a sorted slice, allocated from `allocator`.
@@ -318,7 +332,7 @@ pub const StatusCache = struct {
             while (i < slot_deltas.count()) {
                 if (entries.items(.key)[i] <= min_root) {
                     var status_kv = entries.items(.value)[i];
-                    for (status_kv.values()) |*value| value.status.deinit(allocator);
+                    for (status_kv.values()) |*value| deinitStatusValues(allocator, &value.status);
                     status_kv.deinit(allocator);
 
                     slot_deltas.swapRemoveAt(i);
