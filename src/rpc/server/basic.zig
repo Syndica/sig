@@ -615,6 +615,10 @@ fn handleRpcRequest(
                     @field(rpc_request.method, @tagName(method)),
                 ) catch |e| switch (e) {
                     error.MethodNotImplemented => {
+                        if (method == .requestAirdrop) {
+                            try sendFinalInvalidRequest(request, rpc_request.id);
+                            return;
+                        }
                         try sendFinalMethodNotFound(request, logger, method, rpc_request.id);
                         return;
                     },
@@ -658,6 +662,20 @@ fn sendFinalMethodNotFound(
         .@"error" = rpc.response.Error{
             .code = .method_not_found,
             .message = message,
+        },
+    });
+}
+
+fn sendFinalInvalidRequest(
+    request: *std.http.Server.Request,
+    request_id: anytype,
+) !void {
+    return try writeFinalJsonResponse(request, .{}, .{
+        .jsonrpc = "2.0",
+        .id = request_id,
+        .@"error" = rpc.response.Error{
+            .code = .invalid_request,
+            .message = "Invalid request",
         },
     });
 }

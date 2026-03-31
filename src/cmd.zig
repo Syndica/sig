@@ -130,6 +130,7 @@ pub fn main() !void {
             current_config.shred_version = params.shred_version;
             current_config.leader_schedule_path = params.leader_schedule;
             current_config.vote_account = params.vote_account;
+            current_config.faucet_keypair = params.faucet_keypair;
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
@@ -530,6 +531,16 @@ const Cmd = struct {
         .config = .string,
         .help = "Base58 string of the vote account's address, or a path to vote account json" ++
             " keypair file. Defaults to sig/vote-account.json in your system's app config folder",
+    };
+
+    const faucet_keypair_arg: cli.ArgumentInfo(?[]const u8) = .{
+        .kind = .named,
+        .name_override = "faucet-keypair",
+        .alias = .none,
+        .default_value = null,
+        .config = .string,
+        .help = "Path to a faucet json keypair file used by requestAirdrop RPC. " ++
+            "When omitted, requestAirdrop is not registered.",
     };
 
     const GossipArgumentsCommon = struct {
@@ -952,6 +963,7 @@ const Cmd = struct {
         shred_version: ?u16,
         leader_schedule: ?[]const u8,
         vote_account: ?[]const u8,
+        faucet_keypair: ?[]const u8,
         gossip_base: GossipArgumentsCommon,
         gossip_node: GossipArgumentsNode,
         repair: RepairArgumentsBase,
@@ -977,6 +989,7 @@ const Cmd = struct {
                 .shred_version = shred_version_arg,
                 .leader_schedule = leader_schedule_arg,
                 .vote_account = vote_account_arg,
+                .faucet_keypair = faucet_keypair_arg,
                 .gossip_base = GossipArgumentsCommon.cmd_info,
                 .gossip_node = GossipArgumentsNode.cmd_info,
                 .repair = RepairArgumentsBase.cmd_info,
@@ -1673,6 +1686,18 @@ fn validator(
     // If voting was enabled but no vote account is available, disable voting.
     const voting_enabled = cfg.voting_enabled and maybe_vote_pubkey != null;
 
+    var maybe_faucet_keypair: ?sig.identity.KeyPair = null;
+    if (cfg.faucet_keypair) |faucet_keypair_path| {
+        if (try cfg.getCluster() == .mainnet) @panic("Cannot use a faucet keypair on mainnet.");
+        maybe_faucet_keypair = sig.identity.readKeypair(faucet_keypair_path) catch |err| blk: {
+            app_base.logger.err().logf(
+                "faucet-keypair: failed to read {s}: {}; requestAirdrop will be disabled",
+                .{ faucet_keypair_path, err },
+            );
+            break :blk null;
+        };
+    }
+
     const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (voting_enabled)
         try replay.consensus.core.VoteSockets.init()
     else
@@ -1802,6 +1827,15 @@ fn validator(
         .epoch_tracker = &epoch_tracker,
         .status_cache = &replay_service_state.replay_state.status_cache,
     });
+
+    if (maybe_faucet_keypair) |*faucet_keypair| {
+        if (try cfg.getCluster() == .mainnet) @panic("Cannot use a faucet keypair on mainnet.");
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.RequestAirdropHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .tx_svc_channel = transaction_sender_service.receiver,
+            .faucet_keypair = faucet_keypair,
+        });
+    }
 
     const transaction_sender_handle = try std.Thread.spawn(
         .{},
