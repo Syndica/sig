@@ -5039,7 +5039,7 @@ test "edge cases - gossip verified vote hashes" {
     );
 
     // Optimisic confirmation threshold not reached during this test.
-    try std.testing.expectEqual(0, result.optimistically_confirmed);
+    try std.testing.expectEqual(null, result.optimistically_confirmed);
 }
 
 // TODO: Re-implement tests for the new consolidated API
@@ -5248,7 +5248,7 @@ test "vote on heaviest frozen descendant with no switch" {
     // processed slot is updated to slot_1 when the tower votes on it
     try std.testing.expectEqual(slot_1, result.voted);
     // confirmed slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, result.optimistically_confirmed);
+    try std.testing.expectEqual(null, result.optimistically_confirmed);
 }
 
 // State setup
@@ -5478,7 +5478,7 @@ test "vote accounts with landed votes populate bank stats" {
     // processed slot is updated to slot_1 when the tower votes on it
     try std.testing.expectEqual(slot_1, result.voted);
     // confirmed slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, result.optimistically_confirmed);
+    try std.testing.expectEqual(null, result.optimistically_confirmed);
 }
 
 // Test case:
@@ -5924,7 +5924,7 @@ test "root advances after vote satisfies lockouts" {
     // processed slot is updated to slot 33 when the tower votes on it
     try std.testing.expectEqual(33, result.voted);
     // confirmed slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, result.optimistically_confirmed);
+    try std.testing.expectEqual(null, result.optimistically_confirmed);
 }
 
 // Test case:
@@ -6085,7 +6085,7 @@ test "vote refresh when no new vote available" {
     });
 
     try std.testing.expectEqual(1, result.voted);
-    try std.testing.expectEqual(0, result.optimistically_confirmed);
+    try std.testing.expectEqual(null, result.optimistically_confirmed);
 
     const initial_last_voted = consensus.replay_tower.lastVotedSlot();
     try std.testing.expectEqual(1, initial_last_voted);
