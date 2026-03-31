@@ -11,6 +11,7 @@ const AccountKeys = parse_instruction.AccountKeys;
 const Allocator = std.mem.Allocator;
 const AncestorIterator = sig.ledger.Reader.AncestorIterator;
 const GetBlock = methods.GetBlock;
+const GetBlockCommitment = methods.GetBlockCommitment;
 const GetBlockProduction = methods.GetBlockProduction;
 const GetBlocks = methods.GetBlocks;
 const GetBlockTime = methods.GetBlockTime;
@@ -21,6 +22,7 @@ const GetBlocksWithLimit = methods.GetBlocksWithLimit;
 const GetHealth = methods.GetHealth;
 const GetInflationReward = methods.GetInflationReward;
 const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
+const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetTransaction = methods.GetTransaction;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
@@ -37,17 +39,21 @@ const TransactionEncoding = methods.common.TransactionEncoding;
 // Maximum allowed slot distance before node is considered unhealthy.
 // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L158
 const DELINQUENT_VALIDATOR_SLOT_DISTANCE: u64 = 128;
+/// Maximum allowed number of signatures in a single getSignatureStatuses query.
+/// See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L144
+const MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS: usize = 256;
 
 const LedgerHookContext = @This();
 
 ledger: *sig.ledger.Ledger,
 /// Maximum allowed slot distance before node is considered unhealthy.
 health_check_slot_distance: u64 = DELINQUENT_VALIDATOR_SLOT_DISTANCE,
-epoch_schedule: sig.core.EpochSchedule,
 epoch_tracker: *sig.core.EpochTracker,
-commitments: *const sig.replay.trackers.CommitmentTracker,
-max_retransmit_slot: *const std.atomic.Value(Slot),
-max_shred_insert_slot: *const std.atomic.Value(Slot),
+status_cache: *sig.core.StatusCache,
+slot_tracker: *sig.replay.trackers.SlotTracker,
+block_commitment_cache: *sig.replay.trackers.BlockCommitmentCache,
+max_retransmit_slot: ?*const std.atomic.Value(Slot) = null,
+max_shred_insert_slot: ?*const std.atomic.Value(Slot) = null,
 
 pub fn getBlock(
     self: LedgerHookContext,
@@ -71,7 +77,7 @@ pub fn getBlock(
     // matching Agave's get_rooted_block).
     // Confirmed path uses getCompleteBlock (no cleanup check, slot may not be rooted yet).
     const reader = self.ledger.reader();
-    const latest_confirmed_slot = self.commitments.get(.confirmed);
+    const latest_confirmed_slot = self.slot_tracker.commitments.get(.confirmed);
     const block = if (params.slot <= latest_confirmed_slot) reader.getRootedBlock(
         arena,
         params.slot,
@@ -106,11 +112,11 @@ pub fn getBlocks(
     const commitment = params.commitment();
     if (commitment == .processed) return error.ProcessedNotSupported;
 
-    const highest_root = self.commitments.get(.finalized);
+    const highest_root = self.slot_tracker.commitments.get(.finalized);
     const upper_bound = if (commitment == .finalized)
         highest_root
     else
-        self.commitments.get(.confirmed);
+        self.slot_tracker.commitments.get(.confirmed);
 
     const end_slot = @min(
         params.endSlot() orelse params.start_slot +| GetBlocks.MAX_GET_CONFIRMED_BLOCKS_RANGE,
@@ -148,7 +154,7 @@ pub fn getBlocks(
             params.start_slot -| 1;
 
         if (last_rooted < end_slot) {
-            const latest_confirmed = self.commitments.get(.confirmed);
+            const latest_confirmed = self.slot_tracker.commitments.get(.confirmed);
             const confirmed = try self.getConfirmedUnrootedSlots(
                 arena,
                 latest_confirmed,
@@ -178,7 +184,7 @@ pub fn getBlocksWithLimit(
         return error.SlotRangeTooLarge;
     }
 
-    const highest_root = self.commitments.get(.finalized);
+    const highest_root = self.slot_tracker.commitments.get(.finalized);
 
     // Collect rooted (finalized) slots starting from start_slot, up to limit.
     var blocks = try std.ArrayList(Slot).initCapacity(arena, params.limit);
@@ -203,7 +209,7 @@ pub fn getBlocksWithLimit(
         else
             params.start_slot -| 1;
 
-        const latest_confirmed = self.commitments.get(.confirmed);
+        const latest_confirmed = self.slot_tracker.commitments.get(.confirmed);
         const confirmed = try self.getConfirmedUnrootedSlots(
             arena,
             latest_confirmed,
@@ -218,6 +224,29 @@ pub fn getBlocksWithLimit(
     }
 
     return try blocks.toOwnedSlice(arena);
+}
+
+/// Returns the commitment data for a given slot along with the total active stake.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/rpc/src/rpc.rs#L940
+pub fn getBlockCommitment(
+    self: LedgerHookContext,
+    arena: Allocator,
+    params: GetBlockCommitment,
+) !GetBlockCommitment.Response {
+    const result = self.block_commitment_cache.getBlockCommitment(params.slot);
+    if (result.commitment) |commitment| {
+        const slice = try arena.alloc(u64, commitment.len);
+        @memcpy(slice, &commitment);
+        return .{
+            .commitment = slice,
+            .totalStake = result.total_stake,
+        };
+    }
+    return .{
+        .commitment = null,
+        .totalStake = result.total_stake,
+    };
 }
 
 pub fn getBlockProduction(
@@ -236,7 +265,7 @@ pub fn getBlockProduction(
         null;
 
     // Resolve current slot and epoch schedule.
-    const current_slot = self.commitments.get(commitment);
+    const current_slot = self.slot_tracker.commitments.get(commitment);
     const epoch_schedule = &self.epoch_tracker.epoch_schedule;
 
     // Determine slot range (default: current epoch start to current slot).
@@ -262,7 +291,7 @@ pub fn getBlockProduction(
     var slot_set: std.AutoHashMapUnmanaged(Slot, void) = .empty;
 
     // Collect rooted slots in range using forward iterator
-    const highest_root = self.commitments.get(.finalized);
+    const highest_root = self.slot_tracker.commitments.get(.finalized);
     {
         var rooted_iter = try self.ledger.db.iterator(
             sig.ledger.schema.schema.rooted_slots,
@@ -277,7 +306,7 @@ pub fn getBlockProduction(
     }
     // For confirmed commitment, also collect confirmed-but-unrooted slots.
     if (commitment == .confirmed) {
-        const latest_confirmed = self.commitments.get(.confirmed);
+        const latest_confirmed = self.slot_tracker.commitments.get(.confirmed);
         const confirmed_slots = try self.getConfirmedUnrootedSlots(
             arena,
             latest_confirmed,
@@ -326,7 +355,7 @@ pub fn getBlockTime(
     params: GetBlockTime,
 ) !GetBlockTime.Response {
     const reader = self.ledger.reader();
-    const highest_root = self.commitments.get(.finalized);
+    const highest_root = self.slot_tracker.commitments.get(.finalized);
 
     if (params.slot <= highest_root) {
         return reader.getRootedBlockTime(arena, params.slot) catch |err| switch (err) {
@@ -365,7 +394,7 @@ pub fn getHealth(
     _: GetHealth,
 ) !GetHealth.Response {
     // Get the node's latest optimistically confirmed slot from replay
-    const latest_optimistically_confirmed_slot = self.commitments.get(.confirmed);
+    const latest_optimistically_confirmed_slot = self.slot_tracker.commitments.get(.confirmed);
 
     // Get the cluster's latest optimistically confirmed slot from ledger
     var optimistic_slots = self.ledger.reader().getLatestOptimisticSlots(arena, 1) catch {
@@ -399,7 +428,7 @@ pub fn getInflationReward(
     const commitment = config.commitment orelse .finalized;
 
     // Determine the epoch to query. Default: current_epoch - 1.
-    const current_slot = self.commitments.get(commitment);
+    const current_slot = self.slot_tracker.commitments.get(commitment);
 
     try slot_resolution.validateMinContextSlot(current_slot, config.minContextSlot);
 
@@ -532,7 +561,8 @@ pub fn getMaxRetransmitSlot(
     _: Allocator,
     _: GetMaxRetransmitSlot,
 ) !GetMaxRetransmitSlot.Response {
-    return self.max_retransmit_slot.load(.monotonic);
+    const max_retransmit_slot = self.max_retransmit_slot orelse return error.MethodUnavailable;
+    return max_retransmit_slot.load(.monotonic);
 }
 
 pub fn getMaxShredInsertSlot(
@@ -540,7 +570,8 @@ pub fn getMaxShredInsertSlot(
     _: Allocator,
     _: GetMaxShredInsertSlot,
 ) !GetMaxShredInsertSlot.Response {
-    return self.max_shred_insert_slot.load(.monotonic);
+    const max_shred_insert_slot = self.max_shred_insert_slot orelse return error.MethodUnavailable;
+    return max_shred_insert_slot.load(.monotonic);
 }
 
 pub fn getRecentPerformanceSamples(
@@ -579,6 +610,78 @@ pub fn getRecentPerformanceSamples(
     return result;
 }
 
+/// Look up the status of one or more transaction signatures.
+///
+/// Tier 1: Check the in-memory StatusCache for recent transactions (covers
+/// processed, confirmed, and finalized that haven't been evicted yet).
+/// Tier 2: If `searchTransactionHistory` is true, fall back to the on-disk
+/// ledger for older finalized transactions.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.9/rpc/src/rpc.rs#L1641
+pub fn getSignatureStatuses(
+    self: LedgerHookContext,
+    arena: Allocator,
+    params: GetSignatureStatuses,
+) !GetSignatureStatuses.Response {
+    const config: GetSignatureStatuses.Config = params.config orelse .{};
+    const search_history = config.searchTransactionHistory orelse false;
+
+    if (params.signatures.len > MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS) {
+        // TODO: invalid params should return a more specific error
+        return error.InvalidParams;
+    }
+
+    const processed_slot = self.slot_tracker.commitments.get(.processed);
+    const processed_slot_ref = self.slot_tracker.get(
+        processed_slot,
+    ) orelse return error.InternalError;
+    defer processed_slot_ref.release();
+
+    const results = try arena.alloc(
+        ?GetSignatureStatuses.Response.TransactionStatus,
+        params.signatures.len,
+    );
+    @memset(results, null);
+
+    for (params.signatures, results) |signature, *result| {
+        // Tier 1: StatusCache (recent in-memory transactions)
+        if (try self.getTransactionStatus(
+            arena,
+            signature,
+            &processed_slot_ref,
+        )) |status| {
+            result.* = status;
+            continue;
+        }
+
+        // Tier 2: Blockstore (historical finalized transactions)
+        // getRootedTransactionStatus only returns transactions from rooted slots
+        // (via isRoot check in the blockstore), which ensures fork safety — orphaned
+        // fork slots are never rooted. The finalized_slot bound is an additional
+        // consistency filter matching Agave's highest_super_majority_root() check.
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.9/rpc/src/rpc.rs#L1660-1670
+        if (!search_history) continue;
+
+        if (try self.ledger.reader().getRootedTransactionStatus(arena, signature)) |status| {
+            const slot, const status_meta = status;
+            if (slot <= self.slot_tracker.commitments.get(.finalized)) {
+                result.* = .{
+                    .slot = slot,
+                    .status = if (status_meta.status) |err| .{ .Err = err } else .{ .Ok = .{} },
+                    .confirmations = null,
+                    .err = status_meta.status,
+                    .confirmationStatus = .finalized,
+                };
+            }
+        }
+    }
+
+    return .{
+        .context = .{ .slot = processed_slot },
+        .value = results,
+    };
+}
+
 pub fn getSignaturesForAddress(
     self: LedgerHookContext,
     arena: std.mem.Allocator,
@@ -590,22 +693,10 @@ pub fn getSignaturesForAddress(
     // processed is not supported
     if (commitment == .processed) return error.ProcessedNotSupported;
 
-    const highest_finalized_slot = try slot_resolution.slotFromCommitment(
-        self.commitments,
-        .finalized,
-        null,
-    );
+    const highest_finalized_slot = self.slot_tracker.commitments.get(.finalized);
     const highest_slot: Slot = switch (commitment) {
-        .confirmed => try slot_resolution.slotFromCommitment(
-            self.commitments,
-            .confirmed,
-            config.minContextSlot,
-        ),
-        .finalized => try slot_resolution.slotFromCommitment(
-            self.commitments,
-            .finalized,
-            config.minContextSlot,
-        ),
+        .confirmed => self.slot_tracker.commitments.get(.confirmed),
+        .finalized => highest_finalized_slot,
         .processed => unreachable,
     };
 
@@ -652,7 +743,7 @@ pub fn getTransaction(
     const max_supported_version = config.maxSupportedTransactionVersion;
 
     const reader = self.ledger.reader();
-    const highest_confirmed_slot = self.commitments.get(.confirmed);
+    const highest_confirmed_slot = self.slot_tracker.commitments.get(.confirmed);
 
     // Get transaction from ledger.
     const confirmed_tx_with_meta = switch (commitment) {
@@ -686,6 +777,52 @@ pub fn minimumLedgerSlot(
     var meta_iter = try self.ledger.reader().slotMetaIterator(0);
     defer meta_iter.deinit();
     return try meta_iter.nextKey() orelse 0;
+}
+
+fn getTransactionStatus(
+    self: LedgerHookContext,
+    arena: Allocator,
+    signature: Signature,
+    slot_ref: *const sig.replay.trackers.SlotTracker.Reference,
+) !?GetSignatureStatuses.Response.TransactionStatus {
+    const fork = try self.status_cache.getForkAnyBlockhash(
+        arena,
+        &signature.toBytes(),
+        &slot_ref.constants().ancestors,
+    ) orelse return null;
+    const slot = fork.slot;
+    const status = fork.maybe_err;
+
+    const confirmed_slot_ref = self.slot_tracker.get(self.slot_tracker.commitments.get(.confirmed));
+    defer if (confirmed_slot_ref) |ref| ref.release();
+    const confirmed_fork = if (confirmed_slot_ref) |ref| try self.status_cache.getForkAnyBlockhash(
+        arena,
+        &signature.toBytes(),
+        &ref.constants().ancestors,
+    ) else null;
+
+    const is_finalized: bool =
+        slot <= self.slot_tracker.commitments.get(.finalized) and
+        (slot_ref.constants().ancestors.containsSlot(slot) or
+            self.ledger.reader().isRoot(arena, slot) catch false);
+
+    const confirmations = if (self.slot_tracker.root.load(.monotonic) >= slot and is_finalized)
+        null
+    else
+        self.block_commitment_cache.getConfirmationCount(slot) orelse 0;
+
+    return .{
+        .slot = slot,
+        .status = if (status) |err| .{ .Err = err } else .{ .Ok = .{} },
+        .confirmations = confirmations,
+        .err = status,
+        .confirmationStatus = if (confirmations == null)
+            .finalized
+        else if (confirmed_fork != null)
+            .confirmed
+        else
+            .processed,
+    };
 }
 
 /// Walk from latest_confirmed back to the root, collecting confirmed-but-unrooted slots.
@@ -1698,9 +1835,9 @@ test "validateVersion: v0 without max_supported_version errors" {
 }
 
 test "buildSimpleUiTransactionStatusMeta: basic" {
-    const arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
-    const allocator = arena.allocator();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena_state.reset(.free_all);
+    const allocator = arena_state.allocator();
 
     const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
     const result = try LedgerHookContext.buildSimpleUiTransactionStatusMeta(allocator, meta, false);
@@ -1716,21 +1853,21 @@ test "buildSimpleUiTransactionStatusMeta: basic" {
 }
 
 test "buildSimpleUiTransactionStatusMeta: show_rewards true with empty rewards" {
-    const arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
-    const allocator = arena.allocator();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena_state.reset(.free_all);
+    const arena = arena_state.allocator();
 
     const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
-    const result = try LedgerHookContext.buildSimpleUiTransactionStatusMeta(allocator, meta, true);
+    const result = try LedgerHookContext.buildSimpleUiTransactionStatusMeta(arena, meta, true);
 
     // show_rewards true but meta.rewards is null → empty value
     try std.testing.expect(result.rewards == .value);
 }
 
 test "encodeLegacyTransactionMessage: json encoding" {
-    const arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
-    const allocator = arena.allocator();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena_state.reset(.free_all);
+    const arena = arena_state.allocator();
 
     const msg = sig.core.transaction.Message{
         .signature_count = 1,
@@ -1742,7 +1879,7 @@ test "encodeLegacyTransactionMessage: json encoding" {
         .address_lookups = &.{},
     };
 
-    const result = try LedgerHookContext.encodeLegacyTransactionMessage(allocator, msg, .json);
+    const result = try LedgerHookContext.encodeLegacyTransactionMessage(arena, msg, .json);
     // Result should be a raw message
     const raw = result.raw;
 
@@ -1756,9 +1893,9 @@ test "encodeLegacyTransactionMessage: json encoding" {
 }
 
 test "jsonEncodeV0TransactionMessage: with address lookups" {
-    const arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
-    const allocator = arena.allocator();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena_state.reset(.free_all);
+    const arena = arena_state.allocator();
 
     const msg = sig.core.transaction.Message{
         .signature_count = 1,
@@ -1774,7 +1911,7 @@ test "jsonEncodeV0TransactionMessage: with address lookups" {
         }},
     };
 
-    const result = try LedgerHookContext.jsonEncodeV0TransactionMessage(allocator, msg);
+    const result = try LedgerHookContext.jsonEncodeV0TransactionMessage(arena, msg);
     const raw = result.raw;
 
     try std.testing.expectEqual(@as(usize, 1), raw.account_keys.len);
@@ -1798,9 +1935,9 @@ test "jsonEncodeV0TransactionMessage: with address lookups" {
 }
 
 test "encodeLegacyTransactionMessage: base64 encoding" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
-    const allocator = arena.allocator();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena_state.reset(.free_all);
+    const arena = arena_state.allocator();
 
     const msg = sig.core.transaction.Message{
         .signature_count = 1,
@@ -1813,7 +1950,7 @@ test "encodeLegacyTransactionMessage: base64 encoding" {
     };
 
     // Non-json encodings fall through to the else branch producing raw messages
-    const result = try LedgerHookContext.encodeLegacyTransactionMessage(allocator, msg, .base64);
+    const result = try LedgerHookContext.encodeLegacyTransactionMessage(arena, msg, .base64);
     const raw = result.raw;
 
     try std.testing.expectEqual(@as(u8, 1), raw.header.numRequiredSignatures);
@@ -1824,12 +1961,12 @@ test "encodeLegacyTransactionMessage: base64 encoding" {
 }
 
 test "encodeTransactionWithoutMeta: base64 encoding" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
-    const allocator = arena.allocator();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena_state.reset(.free_all);
+    const arena = arena_state.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
-    const result = try LedgerHookContext.encodeTransactionWithoutMeta(allocator, tx, .base64);
+    const result = try LedgerHookContext.encodeTransactionWithoutMeta(arena, tx, .base64);
     const binary = result.binary;
 
     try std.testing.expect(binary[1] == .base64);
@@ -1838,12 +1975,12 @@ test "encodeTransactionWithoutMeta: base64 encoding" {
 }
 
 test "encodeTransactionWithoutMeta: json encoding" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
-    const allocator = arena.allocator();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena_state.reset(.free_all);
+    const arena = arena_state.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
-    const result = try LedgerHookContext.encodeTransactionWithoutMeta(allocator, tx, .json);
+    const result = try LedgerHookContext.encodeTransactionWithoutMeta(arena, tx, .json);
     const json = result.json;
 
     // Should produce a json result with signatures and message
@@ -1855,12 +1992,12 @@ test "encodeTransactionWithoutMeta: json encoding" {
 }
 
 test "encodeTransactionWithoutMeta: base58 encoding" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
-    const allocator = arena.allocator();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena_state.reset(.free_all);
+    const arena = arena_state.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
-    const result = try LedgerHookContext.encodeTransactionWithoutMeta(allocator, tx, .base58);
+    const result = try LedgerHookContext.encodeTransactionWithoutMeta(arena, tx, .base58);
     const binary = result.binary;
 
     try std.testing.expect(binary[1] == .base58);
@@ -1868,24 +2005,24 @@ test "encodeTransactionWithoutMeta: base58 encoding" {
 }
 
 test "encodeTransactionWithoutMeta: legacy binary encoding" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
-    const allocator = arena.allocator();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena_state.reset(.free_all);
+    const arena = arena_state.allocator();
     const tx = sig.core.Transaction.EMPTY;
 
-    const result = try LedgerHookContext.encodeTransactionWithoutMeta(allocator, tx, .binary);
+    const result = try LedgerHookContext.encodeTransactionWithoutMeta(arena, tx, .binary);
     const legacy_binary = result.legacy_binary;
 
     try std.testing.expect(legacy_binary.len > 0);
 }
 
 test "parseUiTransactionStatusMetaFromLedger: always includes loadedAddresses" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
-    const allocator = arena.allocator();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena_state.reset(.free_all);
+    const arena = arena_state.allocator();
     const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
     const result = try parseUiTransactionStatusMetaFromLedger(
-        allocator,
+        arena,
         meta,
         true,
     );
@@ -1902,12 +2039,12 @@ test "parseUiTransactionStatusMetaFromLedger: always includes loadedAddresses" {
 }
 
 test "parseUiTransactionStatusMetaFromLedger: show_rewards false skips rewards" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
-    const allocator = arena.allocator();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena_state.reset(.free_all);
+    const arena = arena_state.allocator();
     const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
     const result = try parseUiTransactionStatusMetaFromLedger(
-        allocator,
+        arena,
         meta,
         false,
     );
@@ -1920,12 +2057,12 @@ test "parseUiTransactionStatusMetaFromLedger: show_rewards false skips rewards" 
 }
 
 test "parseUiTransactionStatusMetaFromLedger: show_rewards true includes rewards" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
-    const allocator = arena.allocator();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena_state.reset(.free_all);
+    const arena = arena_state.allocator();
     const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
     const result = try parseUiTransactionStatusMetaFromLedger(
-        allocator,
+        arena,
         meta,
         true,
     );
@@ -1938,14 +2075,14 @@ test "parseUiTransactionStatusMetaFromLedger: show_rewards true includes rewards
 }
 
 test "parseUiTransactionStatusMetaFromLedger: compute_units_consumed present" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
-    const allocator = arena.allocator();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena_state.reset(.free_all);
+    const arena = arena_state.allocator();
 
     var meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
     meta.compute_units_consumed = 42_000;
     const result = try parseUiTransactionStatusMetaFromLedger(
-        allocator,
+        arena,
         meta,
         false,
     );
@@ -1954,13 +2091,13 @@ test "parseUiTransactionStatusMetaFromLedger: compute_units_consumed present" {
 }
 
 test "parseUiTransactionStatusMetaFromLedger: compute_units_consumed absent" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.reset(.free_all);
-    const allocator = arena.allocator();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena_state.reset(.free_all);
+    const arena = arena_state.allocator();
 
     const meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST;
     const result = try parseUiTransactionStatusMetaFromLedger(
-        allocator,
+        arena,
         meta,
         false,
     );

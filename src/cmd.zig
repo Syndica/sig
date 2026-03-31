@@ -17,7 +17,6 @@ const WSRPCRuntimeContext = jrpc_ws.runtime.RuntimeContext;
 const WSRPCServer = WSRPCHandler.WebSocketServer;
 
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
-const ClusterType = sig.core.ClusterType;
 const ContactInfo = sig.gossip.ContactInfo;
 const Gauge = sig.prometheus.gauge.Gauge;
 const FullAndIncrementalManifest = sig.accounts_db.snapshot.FullAndIncrementalManifest;
@@ -155,6 +154,7 @@ pub fn main() !void {
             current_config.stop_at_slot = params.stop_at_slot;
             current_config.voting_enabled = params.voting_enabled or params.vote_account != null;
             current_config.rpc_port = params.rpc_port;
+            current_config.mock_transfer_transactions = params.mock_transfer_transactions;
             try validator(gpa, gossip_gpa, current_config);
         },
         .replay_offline => |params| {
@@ -180,6 +180,7 @@ pub fn main() !void {
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
             current_config.stop_at_slot = params.stop_at_slot;
+            current_config.rpc_port = params.rpc_port;
             try replayOffline(gpa, current_config);
         },
         .shred_network => |params| {
@@ -255,16 +256,6 @@ pub fn main() !void {
             params.accountsdb_download.apply(&current_config);
             try printLeaderSchedule(gpa, current_config);
         },
-        .test_transaction_sender => |params| {
-            current_config.shred_version = params.shred_version;
-            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
-            current_config.test_transaction_sender.n_transactions = params.n_transactions;
-            current_config.test_transaction_sender.n_lamports_per_transaction =
-                params.n_lamports_per_tx;
-            params.gossip_base.apply(&current_config);
-            params.gossip_node.apply(&current_config);
-            try testTransactionSenderService(gpa, gossip_gpa, current_config);
-        },
         // NOTE: mock_rpc_server is disabled because AccountsDB v2 does not yet support:
         // - loadWithDefaults (snapshot loading into AccountsDB)
         // - registerRPCHooks (RPC hooks for snapshot serving)
@@ -334,7 +325,6 @@ const Cmd = struct {
         snapshot_create: SnapshotCreate,
         print_manifest: PrintManifest,
         leader_schedule: LeaderScheduleSubCmd,
-        test_transaction_sender: TestTransactionSender,
         // NOTE: mock_rpc_server is disabled because AccountsDB v2 does not yet support
         // snapshot loading (loadWithDefaults) and RPC hook registration (registerRPCHooks).
         // TODO: Re-enable when v2 implements these features.
@@ -365,7 +355,6 @@ const Cmd = struct {
                 .snapshot_create = SnapshotCreate.cmd_info,
                 .print_manifest = PrintManifest.cmd_info,
                 .leader_schedule = LeaderScheduleSubCmd.cmd_info,
-                .test_transaction_sender = TestTransactionSender.cmd_info,
                 // NOTE: mock_rpc_server is disabled - see MockRpcServer struct below for details.
                 // .mock_rpc_server = MockRpcServer.cmd_info,
                 .agave_migration_tool = AgaveMigrationTool.cmd_info,
@@ -502,6 +491,16 @@ const Cmd = struct {
         .default_value = null,
         .config = {},
         .help = "Stop processing at this slot.",
+    };
+
+    const mock_transfer_transactions_arg: cli.ArgumentInfo(?u64) = .{
+        .kind = .named,
+        .name_override = "mock-transfer-transactions",
+        .alias = .none,
+        .default_value = null,
+        .config = {},
+        .help = "Runs the mock transfer service." ++
+            " Sending `n` transfer transactions between two test accounts. ",
     };
 
     const voting_enabled_arg: cli.ArgumentInfo(bool) = .{
@@ -966,6 +965,7 @@ const Cmd = struct {
         stop_at_slot: ?sig.core.Slot,
         voting_enabled: bool,
         rpc_port: ?u16,
+        mock_transfer_transactions: ?u64,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -990,6 +990,7 @@ const Cmd = struct {
                 .voting_enabled = voting_enabled_arg,
                 .rpc_port = rpc_port_arg,
                 .stop_at_slot = stop_at_slot_arg,
+                .mock_transfer_transactions = mock_transfer_transactions_arg,
             },
         };
     };
@@ -1163,48 +1164,6 @@ const Cmd = struct {
                 .accountsdb_base = AccountsDbArgumentsBase.cmd_info,
                 .accountsdb_download = AccountsDbArgumentsDownload.cmd_info,
                 .force_new_snapshot_download = force_new_snapshot_download_arg,
-            },
-        };
-    };
-
-    const TestTransactionSender = struct {
-        shred_version: ?u16,
-        genesis_file_path: ?[]const u8,
-        n_transactions: u64,
-        n_lamports_per_tx: u64,
-        gossip_base: GossipArgumentsCommon,
-        gossip_node: GossipArgumentsNode,
-
-        const cmd_info: cli.CommandInfo(@This()) = .{
-            .help = .{
-                .short = "Test transaction sender service.",
-                .long =
-                \\Simulates a stream of transaction being sent to the transaction sender by
-                \\running a mock transaction generator thread. For the moment this just sends
-                \\transfer transactions between to hard coded testnet accounts.
-                ,
-            },
-            .sub = .{
-                .shred_version = shred_version_arg,
-                .genesis_file_path = genesis_file_path_arg,
-                .n_transactions = .{
-                    .kind = .named,
-                    .name_override = "n-transactions",
-                    .alias = .t,
-                    .default_value = 3,
-                    .config = {},
-                    .help = "number of transactions to send",
-                },
-                .n_lamports_per_tx = .{
-                    .kind = .named,
-                    .name_override = "n-lamports-per-tx",
-                    .alias = .l,
-                    .default_value = 1e7,
-                    .config = {},
-                    .help = "number of lamports to send per transaction",
-                },
-                .gossip_base = GossipArgumentsCommon.cmd_info,
-                .gossip_node = GossipArgumentsNode.cmd_info,
             },
         };
     };
@@ -1718,14 +1677,16 @@ fn validator(
     else
         null;
 
-    const event_sink: ?*jrpc_ws.types.EventSink = if (cfg.rpc_port != null)
+    var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
+    defer prioritization_fee_cache.deinit(allocator);
+
+    const rpc_enabled = cfg.rpc_port != null;
+
+    const event_sink: ?*jrpc_ws.types.EventSink = if (rpc_enabled)
         try jrpc_ws.types.EventSink.create(allocator)
     else
         null;
     defer if (event_sink) |sink| sink.destroy(allocator);
-
-    var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
-    defer prioritization_fee_cache.deinit(allocator);
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
@@ -1740,37 +1701,41 @@ fn validator(
         .stop_at_slot = cfg.stop_at_slot,
         .event_sink = event_sink,
         .prioritization_fee_cache = &prioritization_fee_cache,
+        .rpc_enabled = rpc_enabled,
     });
     defer replay_service_state.deinit(allocator);
-
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
-        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-        .gossip_table_rw = &gossip_service.gossip_table_rw,
-        .my_shred_version = &gossip_service.my_shred_version,
-        .epoch_tracker = &epoch_tracker,
-    });
 
     var max_retransmit_slot: std.atomic.Value(sig.core.Slot) = .init(0);
     var max_shred_insert_slot: std.atomic.Value(sig.core.Slot) = .init(0);
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
-        .ledger = &ledger,
-        .epoch_schedule = loaded_snapshot.genesis_config.epoch_schedule,
-        .epoch_tracker = &epoch_tracker,
-        .commitments = &replay_service_state.replay_state.slot_tracker.commitments,
-        .max_retransmit_slot = &max_retransmit_slot,
-        .max_shred_insert_slot = &max_shred_insert_slot,
-    });
+    if (rpc_enabled) {
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+            .my_shred_version = &gossip_service.my_shred_version,
+            .epoch_tracker = &epoch_tracker,
+        });
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
-        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-        .account_reader = replay_service_state.replay_state.account_store.reader(),
-    });
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
+            .ledger = &ledger,
+            .epoch_tracker = &epoch_tracker,
+            .status_cache = &replay_service_state.replay_state.status_cache,
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .block_commitment_cache = &replay_service_state.replay_state.block_commitment_cache.?,
+            .max_retransmit_slot = &max_retransmit_slot,
+            .max_shred_insert_slot = &max_shred_insert_slot,
+        });
 
-    try app_base.rpc_hooks.set(
-        allocator,
-        sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
-    );
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .account_reader = replay_service_state.replay_state.account_store.reader(),
+        });
+
+        try app_base.rpc_hooks.set(
+            allocator,
+            sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
+        );
+    }
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
@@ -1808,6 +1773,59 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
+    var transaction_sender_service = try sig.TransactionSenderService.init(
+        allocator,
+        .{ .unordered = app_base.exit },
+        .from(app_base.logger),
+        .{
+            .process_interval = .fromSecs(1),
+            .retry_interval = .fromSecs(5),
+            .max_pooled = 1_000,
+            .max_retries = 3,
+            .max_leaders = 5,
+        },
+        .{
+            .account_store = .{ .accounts_db = &new_db },
+            .epoch_tracker = &epoch_tracker,
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .status_cache = &replay_service_state.replay_state.status_cache,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+        },
+    );
+    defer transaction_sender_service.deinit();
+    const transaction_sender_handle = try std.Thread.spawn(
+        .{},
+        sig.TransactionSenderService.run,
+        .{ &transaction_sender_service, gpa },
+    );
+
+    var mock_transfer_service: ?sig.MockTransferService = null;
+    defer if (mock_transfer_service) |*service| service.deinit();
+    var mock_transfer_handle: ?std.Thread = null;
+    defer if (mock_transfer_handle) |thread| thread.join();
+
+    if (cfg.mock_transfer_transactions) |n| {
+        if (try cfg.getCluster() == .mainnet)
+            @panic("Cannot run mock transfers on mainnet.");
+
+        mock_transfer_service = sig.MockTransferService{
+            .exit = .{ .unordered = app_base.exit },
+            .logger = .from(app_base.logger),
+            .client = try .init(gpa, rpc_url, .{
+                .max_retries = 5,
+                .logger = .noop,
+            }),
+            .submit = .{ .direct = transaction_sender_service.receiver },
+            .transfers = n,
+        };
+
+        mock_transfer_handle = try std.Thread.spawn(
+            .{},
+            sig.MockTransferService.run,
+            .{ &mock_transfer_service.?, gpa },
+        );
+    }
+
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
         try std.Thread.spawn(.{}, runRPCServer, .{
             allocator,
@@ -1821,6 +1839,7 @@ fn validator(
         null;
 
     if (rpc_server_thread) |thread| thread.join();
+    transaction_sender_handle.join();
     replay_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
@@ -2159,6 +2178,17 @@ fn replayOffline(
     );
     defer epoch_tracker.deinit();
 
+    var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
+    defer prioritization_fee_cache.deinit(allocator);
+
+    const rpc_enabled = cfg.rpc_port != null;
+
+    const event_sink: ?*jrpc_ws.types.EventSink = if (rpc_enabled)
+        try jrpc_ws.types.EventSink.create(allocator)
+    else
+        null;
+    defer if (event_sink) |sink| sink.destroy(allocator);
+
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
         .account_store = .{ .accounts_db = &new_db },
@@ -2170,9 +2200,38 @@ fn replayOffline(
         .voting_enabled = false,
         .vote_account_address = null,
         .stop_at_slot = cfg.stop_at_slot,
-        .event_sink = null,
+        .prioritization_fee_cache = &prioritization_fee_cache,
+        .rpc_enabled = rpc_enabled,
+        .event_sink = event_sink,
     });
     defer replay_service_state.deinit(allocator);
+
+    if (rpc_enabled) {
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .gossip_table_rw = null,
+            .my_shred_version = null,
+            .epoch_tracker = &epoch_tracker,
+        });
+
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
+            .ledger = &ledger,
+            .epoch_tracker = &epoch_tracker,
+            .status_cache = &replay_service_state.replay_state.status_cache,
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .block_commitment_cache = &replay_service_state.replay_state.block_commitment_cache.?,
+        });
+
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .account_reader = replay_service_state.replay_state.account_store.reader(),
+        });
+
+        try app_base.rpc_hooks.set(
+            allocator,
+            sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
+        );
+    }
 
     const replay_thread = try replay_service_state.spawnService(
         &app_base,
@@ -2181,6 +2240,19 @@ fn replayOffline(
         null,
     );
 
+    const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
+        try std.Thread.spawn(.{}, runRPCServer, .{
+            allocator,
+            app_base.logger,
+            app_base.exit,
+            std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
+            &app_base.rpc_hooks,
+            event_sink.?,
+        })
+    else
+        null;
+
+    if (rpc_server_thread) |thread| thread.join();
     replay_thread.join();
     ledger_cleanup_service.join();
 }
@@ -2509,93 +2581,6 @@ fn getLeaderScheduleFromCli(
             )
     else
         null;
-}
-
-fn testTransactionSenderService(
-    allocator: std.mem.Allocator,
-    gossip_value_allocator: std.mem.Allocator,
-    cfg: config.Cmd,
-) !void {
-    var app_base = try AppBase.init(allocator, cfg);
-    defer {
-        if (!app_base.closed) app_base.shutdown(); // we have this incase an error occurs
-        app_base.deinit();
-    }
-
-    // read genesis (used for leader schedule)
-    const genesis_file_path = try ensureGenesis(allocator, cfg, .from(app_base.logger));
-    defer allocator.free(genesis_file_path);
-
-    const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
-
-    // start gossip (used to get TPU ports of leaders)
-    const gossip_service = try startGossip(
-        allocator,
-        gossip_value_allocator,
-        cfg,
-        &app_base,
-        &.{},
-        .{},
-    );
-    defer {
-        gossip_service.deinit();
-        allocator.destroy(gossip_service);
-    }
-
-    // define cluster of where to land transactions
-    const rpc_cluster: ClusterType = try cfg.getCluster() orelse {
-        @panic("cluster option (-c) not provided");
-    };
-    app_base.logger.warn().logf(
-        "Starting transaction sender service on {s}...",
-        .{@tagName(rpc_cluster)},
-    );
-
-    // setup channel for communication to the tx-sender service
-    const transaction_channel =
-        try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(allocator);
-    defer transaction_channel.destroy();
-
-    // this handles transactions and forwards them to leaders TPU ports
-    var transaction_sender_service = try sig.transaction_sender.Service.init(
-        allocator,
-        .from(app_base.logger),
-        .{ .cluster = rpc_cluster, .socket = SocketAddr.init(app_base.my_ip, 0) },
-        transaction_channel,
-        &gossip_service.gossip_table_rw,
-        genesis_config.epoch_schedule,
-        app_base.exit,
-    );
-    const transaction_sender_handle = try std.Thread.spawn(
-        .{},
-        sig.transaction_sender.Service.run,
-        .{&transaction_sender_service},
-    );
-
-    // rpc is used to get blockhashes and other balance information
-    const rpc_url = rpc_cluster.getRpcUrl() orelse @panic("No RPC Url for cluster type!");
-    var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{
-        .logger = .from(app_base.logger),
-    });
-    defer rpc_client.deinit();
-
-    // this sends mock txs to the transaction sender
-    var mock_transfer_service = try sig.transaction_sender.MockTransferService.init(
-        allocator,
-        transaction_channel,
-        rpc_client,
-        app_base.exit,
-        .from(app_base.logger),
-    );
-    // send and confirm mock transactions
-    try mock_transfer_service.run(
-        cfg.test_transaction_sender.n_transactions,
-        cfg.test_transaction_sender.n_lamports_per_transaction,
-    );
-
-    gossip_service.shutdown();
-    app_base.shutdown();
-    transaction_sender_handle.join();
 }
 
 // NOTE: mockRpcServer is disabled because AccountsDB v2 does not yet support:
@@ -2987,6 +2972,7 @@ const ReplayAndConsensusServiceState = struct {
             stop_at_slot: ?Slot,
             event_sink: ?*jrpc_ws.types.EventSink = null,
             prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
+            rpc_enabled: bool,
         },
     ) !ReplayAndConsensusServiceState {
         var replay_state: replay.service.ReplayState = replay_state: {
@@ -3014,38 +3000,41 @@ const ReplayAndConsensusServiceState = struct {
             const hard_forks = try bank_fields.hard_forks.clone(allocator);
             errdefer hard_forks.deinit(allocator);
 
-            break :replay_state try .init(.{
-                .allocator = allocator,
-                .logger = .from(params.app_base.logger),
-                .identity = .{
-                    .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),
-                    .vote_account = params.vote_account_address,
+            break :replay_state try .init(
+                .{
+                    .allocator = allocator,
+                    .logger = .from(params.app_base.logger),
+                    .identity = .{
+                        .validator = .fromPublicKey(&params.app_base.my_keypair.public_key),
+                        .vote_account = params.vote_account_address,
+                    },
+                    .signing = .{
+                        .node = params.app_base.my_keypair,
+                        .authorized_voters = if (params.voting_enabled)
+                            // TODO: Parse authorized voter keypairs from CLI args (--authorized-voter)
+                            // For now, default to using the node keypair as the authorized voter
+                            // (same as Agave's default behavior when no --authorized-voter is specified)
+                            // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
+                            (&params.app_base.my_keypair)[0..1]
+                        else
+                            &.{},
+                    },
+                    .account_store = account_store,
+                    .ledger = params.ledger,
+                    .epoch_tracker = params.epoch_tracker,
+                    .root = .{
+                        .slot = bank_fields.slot,
+                        .constants = root_slot_constants,
+                        .state = root_slot_state,
+                    },
+                    .hard_forks = hard_forks,
+                    .replay_threads = params.replay_threads,
+                    .stop_at_slot = params.stop_at_slot,
+                    .prioritization_fee_cache = params.prioritization_fee_cache,
                 },
-                .signing = .{
-                    .node = params.app_base.my_keypair,
-                    .authorized_voters = if (params.voting_enabled)
-                        // TODO: Parse authorized voter keypairs from CLI args (--authorized-voter)
-                        // For now, default to using the node keypair as the authorized voter
-                        // (same as Agave's default behavior when no --authorized-voter is specified)
-                        // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
-                        (&params.app_base.my_keypair)[0..1]
-                    else
-                        &.{},
-                },
-                .account_store = account_store,
-                .ledger = params.ledger,
-                .epoch_tracker = params.epoch_tracker,
-                .root = .{
-                    .slot = bank_fields.slot,
-                    .constants = root_slot_constants,
-                    .state = root_slot_state,
-                },
-                .hard_forks = hard_forks,
-                .replay_threads = params.replay_threads,
-                .stop_at_slot = params.stop_at_slot,
-                .event_sink = params.event_sink,
-                .prioritization_fee_cache = params.prioritization_fee_cache,
-            }, if (params.disable_consensus) .disabled else .enabled);
+                if (params.disable_consensus) .disabled else .enabled,
+                if (params.rpc_enabled) .enabled else .disabled,
+            );
         };
         errdefer replay_state.deinit();
 

@@ -278,13 +278,13 @@ pub fn prepareCpiInstructionInfo(
 
         const index_in_callee_ptr = &dedupe_map[index_in_transaction];
         if (index_in_callee_ptr.* < deduped_account_metas.items.len) {
+            try deduped_account_metas.ensureUnusedCapacity(tc.allocator, 1);
             const prev = &deduped_account_metas.items[index_in_callee_ptr.*];
             prev.is_signer = prev.is_signer or account.is_signer;
             prev.is_writable = prev.is_writable or account.is_writable;
 
             std.debug.assert(prev.index_in_transaction < InstructionInfo.MAX_ACCOUNT_METAS);
-            const new = prev.*; // this avoids a bug caused by Parameter Reference Optimisation (PRO)
-            try deduped_account_metas.append(tc.allocator, new);
+            deduped_account_metas.addOneAssumeCapacity().* = prev.*; // this avoids a bug caused by Parameter Reference Optimisation (PRO)
         } else {
             index_in_callee_ptr.* = @intCast(deduped_account_metas.items.len);
             try deduped_account_metas.append(tc.allocator, .{
@@ -297,9 +297,8 @@ pub fn prepareCpiInstructionInfo(
     }
 
     for (deduped_account_metas.items, 0..) |*account_meta, index_in_instruction| {
-        std.debug.assert(account_meta.index_in_transaction < InstructionInfo.MAX_ACCOUNT_METAS);
-
         const index_in_callee = dedupe_map[account_meta.index_in_transaction];
+        std.debug.assert(account_meta.index_in_transaction < InstructionInfo.MAX_ACCOUNT_METAS);
 
         if (index_in_callee != index_in_instruction) {
             if (index_in_callee >= deduped_account_metas.items.len) return error.MissingAccount;

@@ -671,6 +671,7 @@ fn testConsensusHookContextWithEpochTracker(
 test "ConsensusHookContext.getBlockHeight - returns block height for finalized slot" {
     var slot_tracker = try testSetupSlotTracker(42, 100, 0);
     defer slot_tracker.deinit(testing.allocator);
+    slot_tracker.commitments.finalized.store(42, .monotonic);
 
     const ctx = testConsensusHookContext(&slot_tracker);
     const result = try ctx.getBlockHeight(testing.allocator, .{});
@@ -680,6 +681,7 @@ test "ConsensusHookContext.getBlockHeight - returns block height for finalized s
 test "ConsensusHookContext.getBlockHeight - respects commitment level" {
     var slot_tracker = try testSetupSlotTracker(10, 50, 0);
     defer slot_tracker.deinit(testing.allocator);
+    slot_tracker.commitments.finalized.store(10, .monotonic);
 
     // Add a processed slot with different block height
     try slot_tracker.put(testing.allocator, 15, .{
@@ -687,7 +689,7 @@ test "ConsensusHookContext.getBlockHeight - respects commitment level" {
         .state = testDummySlotState(0),
         .allocator = testing.allocator,
     });
-    slot_tracker.latest_processed_slot.set(15);
+    slot_tracker.commitments.processed.store(15, .monotonic);
 
     const ctx = testConsensusHookContext(&slot_tracker);
 
@@ -705,6 +707,7 @@ test "ConsensusHookContext.getBlockHeight - respects commitment level" {
 test "ConsensusHookContext.getBlockHeight - minContextSlot enforcement" {
     var slot_tracker = try testSetupSlotTracker(10, 50, 0);
     defer slot_tracker.deinit(testing.allocator);
+    slot_tracker.commitments.finalized.store(10, .monotonic);
 
     const ctx = testConsensusHookContext(&slot_tracker);
 
@@ -735,6 +738,7 @@ test "ConsensusHookContext.getBlockHeight - slot not available" {
 test "ConsensusHookContext.getSlotLeader - returns collector_id for slot" {
     var slot_tracker = try testSetupSlotTracker(42, 100, 0);
     defer slot_tracker.deinit(testing.allocator);
+    slot_tracker.commitments.finalized.store(42, .monotonic);
 
     const ctx = testConsensusHookContext(&slot_tracker);
     const result = try ctx.getSlotLeader(testing.allocator, .{});
@@ -806,6 +810,7 @@ test "ConsensusHookContext.getLeaderSchedule - slot in far future returns null" 
 test "ConsensusHookContext.getTransactionCount - returns transaction count for finalized slot" {
     var slot_tracker = try testSetupSlotTracker(42, 0, 999_999);
     defer slot_tracker.deinit(testing.allocator);
+    slot_tracker.commitments.finalized.store(42, .monotonic);
 
     const ctx = testConsensusHookContext(&slot_tracker);
     const result = try ctx.getTransactionCount(testing.allocator, .{});
@@ -815,6 +820,7 @@ test "ConsensusHookContext.getTransactionCount - returns transaction count for f
 test "ConsensusHookContext.getTransactionCount - respects commitment level" {
     var slot_tracker = try testSetupSlotTracker(10, 0, 1000);
     defer slot_tracker.deinit(testing.allocator);
+    slot_tracker.commitments.finalized.store(10, .monotonic);
 
     // Add a processed slot with different transaction count
     try slot_tracker.put(testing.allocator, 15, .{
@@ -822,7 +828,7 @@ test "ConsensusHookContext.getTransactionCount - respects commitment level" {
         .state = testDummySlotState(2000),
         .allocator = testing.allocator,
     });
-    slot_tracker.latest_processed_slot.set(15);
+    slot_tracker.commitments.processed.store(15, .monotonic);
 
     const ctx = testConsensusHookContext(&slot_tracker);
 
@@ -840,6 +846,7 @@ test "ConsensusHookContext.getTransactionCount - respects commitment level" {
 test "ConsensusHookContext.getTransactionCount - minContextSlot enforcement" {
     var slot_tracker = try testSetupSlotTracker(10, 0, 1000);
     defer slot_tracker.deinit(testing.allocator);
+    slot_tracker.commitments.finalized.store(10, .monotonic);
 
     const ctx = testConsensusHookContext(&slot_tracker);
 
@@ -887,6 +894,7 @@ test "ConsensusHookContext.getEpochInfo - returns epoch info for finalized slot"
     //   epoch = 42 / 32 = 1, slot_index = 42 % 32 = 10, slots_in_epoch = 32
     var slot_tracker = try testSetupSlotTracker(42, 100, 5000);
     defer slot_tracker.deinit(testing.allocator);
+    slot_tracker.commitments.finalized.store(42, .monotonic);
 
     const ctx = testConsensusHookContextWithEpochTracker(&slot_tracker, &epoch_tracker);
     const result = try ctx.getEpochInfo(testing.allocator, .{});
@@ -909,6 +917,7 @@ test "ConsensusHookContext.getEpochInfo - respects commitment level" {
 
     var slot_tracker = try testSetupSlotTracker(10, 50, 1000);
     defer slot_tracker.deinit(testing.allocator);
+    slot_tracker.commitments.finalized.store(10, .monotonic);
 
     // Add a processed slot in a different epoch
     try slot_tracker.put(testing.allocator, 35, .{
@@ -916,7 +925,7 @@ test "ConsensusHookContext.getEpochInfo - respects commitment level" {
         .state = testDummySlotState(2000),
         .allocator = testing.allocator,
     });
-    slot_tracker.latest_processed_slot.set(35);
+    slot_tracker.commitments.processed.store(35, .monotonic);
 
     const ctx = testConsensusHookContextWithEpochTracker(&slot_tracker, &epoch_tracker);
 
@@ -947,6 +956,7 @@ test "ConsensusHookContext.getEpochInfo - minContextSlot enforcement" {
 
     var slot_tracker = try testSetupSlotTracker(10, 50, 1000);
     defer slot_tracker.deinit(testing.allocator);
+    slot_tracker.commitments.finalized.store(10, .monotonic);
 
     const ctx = testConsensusHookContextWithEpochTracker(&slot_tracker, &epoch_tracker);
 
@@ -997,6 +1007,7 @@ test "ConsensusHookContext.getLatestBlockhash - returns blockhash and last valid
         .allocator = testing.allocator,
     });
     defer slot_tracker.deinit(testing.allocator);
+    slot_tracker.commitments.finalized.store(42, .monotonic);
 
     const ctx = testConsensusHookContext(&slot_tracker);
     const result = try ctx.getLatestBlockhash(testing.allocator, .{});
