@@ -238,9 +238,9 @@ pub fn sortedRecentProcessedAncestors(
     const roots = state.get().roots;
     const keys = roots.keys();
 
-    var sorted_recent_processed_ancestors: std.ArrayList(Slot) = .{};
+    var sorted_recent_processed_ancestors: std.ArrayList(Slot) = .empty;
     try sorted_recent_processed_ancestors.ensureTotalCapacity(allocator, keys.len);
-    sorted_recent_processed_ancestors.expandToCapacity();
+    sorted_recent_processed_ancestors.items.len = keys.len;
     @memcpy(sorted_recent_processed_ancestors.items, keys);
 
     var max_root: Slot = 0;
