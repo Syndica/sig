@@ -132,6 +132,10 @@ pub fn advanceReplay(
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
             .results = slot_results,
+            .block_commitment_cache = if (replay_state.block_commitment_cache) |*cache|
+                cache
+            else
+                null,
         });
     } else {
         try bypassConsensus(replay_state);
@@ -201,6 +205,11 @@ pub const ConsensusStatus = enum {
     disabled,
 };
 
+pub const RPCStatus = enum {
+    enabled,
+    disabled,
+};
+
 pub const ReplayState = struct {
     allocator: Allocator,
     logger: Logger,
@@ -215,6 +224,7 @@ pub const ReplayState = struct {
     progress_map: ProgressMap,
     ledger: *Ledger,
     status_cache: sig.core.StatusCache,
+    block_commitment_cache: ?sig.replay.trackers.BlockCommitmentCache,
     execution_log_helper: replay.execution.LogHelper,
     replay_votes_channel: ?*Channel(ParsedVote),
     event_sink: ?*jrpc_types.EventSink,
@@ -235,10 +245,15 @@ pub const ReplayState = struct {
 
         self.slot_tree.deinit(self.allocator);
         self.status_cache.deinit(self.allocator);
+        if (self.block_commitment_cache) |*cache| cache.deinit(self.allocator);
         self.hard_forks.deinit(self.allocator);
     }
 
-    pub fn init(deps: Dependencies, consensus_status: ConsensusStatus) !ReplayState {
+    pub fn init(
+        deps: Dependencies,
+        consensus_status: ConsensusStatus,
+        rpc_status: RPCStatus,
+    ) !ReplayState {
         const zone = tracy.Zone.init(@src(), .{ .name = "ReplayState init" });
         defer zone.deinit();
 
@@ -291,6 +306,10 @@ pub const ReplayState = struct {
             .ledger = deps.ledger,
             .progress_map = progress_map,
             .status_cache = .DEFAULT,
+            .block_commitment_cache = switch (rpc_status) {
+                .enabled => .DEFAULT,
+                .disabled => null,
+            },
             .execution_log_helper = .init(.from(deps.logger)),
             .replay_votes_channel = replay_votes_channel,
             .event_sink = deps.event_sink,
@@ -658,6 +677,8 @@ fn bypassConsensus(state: *ReplayState) !void {
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
         slot_tracker.root.store(new_root, .monotonic);
+        // In bypass-consensus mode there is no BlockCommitmentCache to compute
+        // highest_super_majority_root, so we approximate finalized = root.
         slot_tracker.commitments.update(.finalized, new_root);
         slot_tracker.pruneNonRooted(&state.thread_pool);
 
@@ -915,7 +936,7 @@ test "Service clean init and deinit" {
             var dep_stubs = try DependencyStubs.init(allocator, .noop);
             defer dep_stubs.deinit();
 
-            var service = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
+            var service = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .disabled);
             defer {
                 service.deinit();
                 service.epoch_tracker.deinit();
@@ -927,6 +948,23 @@ test "Service clean init and deinit" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, ns.run, .{});
 }
 
+test "Service clean init and deinit with RPC enabled" {
+    const allocator = std.testing.allocator;
+
+    var dep_stubs = try DependencyStubs.init(allocator, .noop);
+    defer dep_stubs.deinit();
+
+    var service = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .enabled);
+    defer {
+        service.deinit();
+        service.epoch_tracker.deinit();
+        allocator.destroy(service.epoch_tracker);
+    }
+
+    // block_commitment_cache should be initialised when rpc_status is .enabled.
+    try std.testing.expect(service.block_commitment_cache != null);
+}
+
 test "process runs without error with no replay results" {
     const allocator = std.testing.allocator;
 
@@ -936,7 +974,7 @@ test "process runs without error with no replay results" {
     var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
     defer dep_stubs.deinit();
 
-    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
+    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .disabled);
     defer {
         replay_state.deinit();
         replay_state.epoch_tracker.deinit();
@@ -1001,12 +1039,37 @@ test "advance calls consensus.process with empty replay results" {
     var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
     defer dep_stubs.deinit();
 
-    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
+    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .disabled);
     defer {
         replay_state.deinit();
         replay_state.epoch_tracker.deinit();
         allocator.destroy(replay_state.epoch_tracker);
     }
+
+    try advanceReplay(&replay_state, try registry.initStruct(Metrics), null);
+
+    // No slots were replayed
+    try std.testing.expectEqual(0, replay_state.slot_tracker.root.load(.monotonic));
+}
+
+test "advance with RPC enabled passes block commitment cache" {
+    const allocator = std.testing.allocator;
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
+    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
+    defer dep_stubs.deinit();
+
+    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .enabled);
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit();
+        allocator.destroy(replay_state.epoch_tracker);
+    }
+
+    // block_commitment_cache should be initialised.
+    try std.testing.expect(replay_state.block_commitment_cache != null);
 
     try advanceReplay(&replay_state, try registry.initStruct(Metrics), null);
 
@@ -1045,7 +1108,11 @@ test "freezeCompletedSlots handles errors correctly" {
     var dep_stubs = try DependencyStubs.init(allocator, .from(logger.logger("", .warn)));
     defer dep_stubs.deinit();
 
-    var replay_state = try dep_stubs.stubbedState(allocator, .from(logger.logger("", .warn)));
+    var replay_state = try dep_stubs.stubbedState(
+        allocator,
+        .from(logger.logger("", .warn)),
+        .disabled,
+    );
     defer {
         replay_state.deinit();
         replay_state.epoch_tracker.deinit();
@@ -1295,6 +1362,7 @@ pub const DependencyStubs = struct {
         self: *DependencyStubs,
         allocator: Allocator,
         logger: Logger,
+        rpc_status: RPCStatus,
     ) !ReplayState {
         const root_slot_constants = try sig.core.SlotConstants.genesis(allocator, .DEFAULT);
         errdefer root_slot_constants.deinit(allocator);
@@ -1346,7 +1414,7 @@ pub const DependencyStubs = struct {
 
             .replay_threads = 1,
             .stop_at_slot = null,
-        }, .enabled);
+        }, .enabled, rpc_status);
     }
 
     // TODO: consider deduplicating with above and similar function in cmd.zig
@@ -1418,7 +1486,7 @@ pub const DependencyStubs = struct {
 
             .replay_threads = num_threads,
             .stop_at_slot = null,
-        }, .enabled);
+        }, .enabled, .disabled);
     }
 };
 
