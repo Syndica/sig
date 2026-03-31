@@ -164,6 +164,7 @@ pub fn commitTransactions(
                 recent_blockhash,
                 &message_hash.data,
                 slot,
+                tx_result.err,
             );
         }
         {
@@ -179,6 +180,7 @@ pub fn commitTransactions(
                 recent_blockhash,
                 &signature.toBytes(),
                 slot,
+                tx_result.err,
             );
         }
 

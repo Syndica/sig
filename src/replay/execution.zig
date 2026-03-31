@@ -914,7 +914,7 @@ test "prepareSlot: empty and dead slots are handled correctly" {
     var dep_stubs = try sig.replay.service.DependencyStubs.init(allocator, .FOR_TESTS);
     defer dep_stubs.deinit();
 
-    var state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
+    var state = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .disabled);
     defer {
         state.deinit();
         state.epoch_tracker.deinit();

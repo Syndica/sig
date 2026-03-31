@@ -55,7 +55,7 @@ fn executeVmTest(
     var instr_context = syscall_context.instr_ctx.?;
     const vm_context = syscall_context.vm_ctx.?;
 
-    const slot = if (instr_context.slot_context) |slot_ctx| slot_ctx.slot else 0;
+    const slot = 0;
 
     for (instr_context.accounts.items) |acc| {
         if (std.mem.eql(u8, acc.address, instr_context.program_id)) break;

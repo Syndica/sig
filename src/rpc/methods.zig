@@ -1229,7 +1229,7 @@ pub const GetLeaderSchedule = struct {
     pub const LeaderScheduleValue = struct {
         value: sig.utils.collections.PubkeyMap([]const u64),
 
-        pub fn deinit(self: LeaderScheduleValue, allocator: std.mem.Allocator) void {
+        pub fn deinit(self: *LeaderScheduleValue, allocator: std.mem.Allocator) void {
             self.value.deinit(allocator);
         }
 
@@ -1351,10 +1351,11 @@ pub const GetSignatureStatuses = struct {
 
         pub const TransactionStatus = struct {
             slot: u64,
+            status: GetBlock.Response.UiTransactionResultStatus,
             confirmations: ?usize = null,
             // TODO: should transaction_status move to core?
             err: ?sig.ledger.transaction_status.TransactionError = null,
-            confirmationStatus: ?[]const u8 = null,
+            confirmationStatus: ?common.Commitment = null,
         };
     };
 };

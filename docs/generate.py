@@ -1,3 +1,4 @@
+import subprocess
 import os
 
 # get all the markdown files in the source repo
@@ -26,15 +27,24 @@ def get_markdown_files(
         # add all markdown files to list
         for file in files:
             if file.endswith(".md"):
-                dir_name = os.path.basename(root)
-                if dir_name == "" or dir_name == "." or dir_name == "..":
+                if file == "README.md" and root == src_path:
                     # this is the root readme.md -- we dont include
                     # it in the docs for now
                     continue
-
-                docs_path = os.path.join(code_dir_path, dir_name + ".md")
-                if dir_name == "metrics" :
+                
+                if subprocess.run(
+                    ["git", "check-ignore", os.path.join(root, file)],
+                    stdout=subprocess.DEVNULL,
+                ).returncode == 0:
+                     continue
+                
+                dir_name = os.path.basename(root)
+                if dir_name == "metrics":
                     docs_path = os.path.join(docs_dir_path, "usage/metrics.md")
+                elif file.lower() == "readme.md":
+                    docs_path = os.path.join(code_dir_path, dir_name + ".md")
+                else:
+                    docs_path = os.path.join(code_dir_path, dir_name + "_" + file)
 
                 doc_files.append([
                     # src/ path
@@ -45,22 +55,24 @@ def get_markdown_files(
 
     return doc_files
 
+
 # generate the docs from the source files
 if __name__ == "__main__":
     # point to the source sig/ repo
     # (should be run from the docs/ directory)
-    src_path = "../"
-    code_docs_path = "docusaurus/docs"
+    docs_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.abspath(os.path.join(docs_dir, ".."))
+    code_docs_path = os.path.join(docs_dir, "docusaurus", "docs")
 
     # dirs which not to search
     exclude_dirs = [
-        src_path + "docs", # dont search yourself
-        src_path + "data", # this should only include data
-        src_path + "conformance/env", # other repositories
-        src_path + "workspace", # CI workspace (e.g. zig toolchain), not source
+        os.path.join(repo_root, "docs"), # dont search yourself
+        os.path.join(repo_root, "data"), # this should only include data
+        os.path.join(repo_root, "conformance/env"), # other repositories
+        os.path.join(repo_root, "workspace"), # CI workspace (e.g. zig toolchain), not source
     ]
 
-    for src_path, docs_path in get_markdown_files(src_path, exclude_dirs, code_docs_path):
+    for src_path, docs_path in get_markdown_files(repo_root, exclude_dirs, code_docs_path):
         print(src_path)
         # copy the file to the docs/code directory
         with open(src_path, "r") as f:
