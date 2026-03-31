@@ -359,7 +359,7 @@ pub const VoteCollector = struct {
             ledger: *Ledger,
             gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
         },
-    ) !Slot {
+    ) !?Slot {
         const slot_data_provider = params.slot_data_provider;
         const senders = params.senders;
         const receivers = params.receivers;
@@ -416,9 +416,12 @@ pub const VoteCollector = struct {
             .from(logger),
         );
 
-        var optimistically_confirmed_slot: Slot = 0;
+        var optimistically_confirmed_slot: ?Slot = null;
         for (confirmed_slots) |confirmed| {
-            optimistically_confirmed_slot = @max(optimistically_confirmed_slot, confirmed.slot);
+            optimistically_confirmed_slot = if (optimistically_confirmed_slot) |current|
+                @max(current, confirmed.slot)
+            else
+                confirmed.slot;
         }
 
         return optimistically_confirmed_slot;
