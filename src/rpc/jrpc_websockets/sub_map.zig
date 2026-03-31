@@ -86,11 +86,10 @@ pub const RPCSubMap = struct {
 
         const queue = try self.allocator.create(NotifQueue);
         const commit_path: NotifQueue.CommitPath = switch (key.method) {
-            // These subscriptions can emit multiple notifications per subscription and must
-            // preserve the order they were produced in.
+            // These methods require strict event-sink arrival-order preservation.
             .slot, .root, .program, .account, .logs => .reserved,
-            // voteSubscribe and signatureSubscribe each multiplex to a single stream, so they
-            // can commit serialized payloads directly.
+            // These methods don't require strict ordering, so serialized
+            // payloads can be committed directly.
             .signature, .vote => .direct,
         };
         queue.* = try NotifQueue.init(self.allocator, self.queue_capacity, commit_path);
