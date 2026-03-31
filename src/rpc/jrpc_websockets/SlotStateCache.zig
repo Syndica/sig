@@ -89,7 +89,7 @@ pub fn init(slot_read_ctx: SlotReadContext, logger: Logger) SlotStateCache {
     const processed_tip = slot_read_ctx.slot_tracker.commitments.get(.processed);
     const processed_tip_info = slot_read_ctx.slot_tracker.get(processed_tip);
     return .{
-        .logger = .from(logger),
+        .logger = logger,
         .processed_tip = processed_tip,
         .processed_tip_info = processed_tip_info,
     };
@@ -675,7 +675,7 @@ test "SlotStateCache: tip change updates processed_tip and fork membership" {
     try std.testing.expect(state.isSlotOnCurrentFork(3));
     try std.testing.expect(!state.isSlotOnCurrentFork(4));
     try std.testing.expect(!state.isSlotOnCurrentFork(5));
-    try std.testing.expectEqual(@as(Slot, 3), state.processed_tip);
+    try std.testing.expectEqual(3, state.processed_tip);
 
     const second = state.onTipChanged(ctx, 5);
     try std.testing.expect(second.notify_commitments.processed);
@@ -683,7 +683,7 @@ test "SlotStateCache: tip change updates processed_tip and fork membership" {
     try std.testing.expect(!state.isSlotOnCurrentFork(3));
     try std.testing.expect(state.isSlotOnCurrentFork(4));
     try std.testing.expect(state.isSlotOnCurrentFork(5));
-    try std.testing.expectEqual(@as(Slot, 5), state.processed_tip);
+    try std.testing.expectEqual(5, state.processed_tip);
 }
 
 test "SlotStateCache: off-fork frozen slot is not on current fork" {
@@ -726,15 +726,15 @@ test "SlotStateCache: ancestor iterator walks cached parents" {
 
     var ancestors = state.ancestorIterator(3);
     const first = ancestors.next().?;
-    try std.testing.expectEqual(@as(Slot, 3), first.slot);
+    try std.testing.expectEqual(3, first.slot);
     try std.testing.expectEqual(@as(?Slot, 2), first.cached_slot.parent);
 
     const second = ancestors.next().?;
-    try std.testing.expectEqual(@as(Slot, 2), second.slot);
+    try std.testing.expectEqual(2, second.slot);
     try std.testing.expectEqual(@as(?Slot, 1), second.cached_slot.parent);
 
     const third = ancestors.next().?;
-    try std.testing.expectEqual(@as(Slot, 1), third.slot);
+    try std.testing.expectEqual(1, third.slot);
     try std.testing.expectEqual(@as(?Slot, 0), third.cached_slot.parent);
 
     try std.testing.expect(ancestors.next() == null);
@@ -757,10 +757,10 @@ test "SlotStateCache: collectPublishableConfirmedSlots returns newest first and 
     var slots = try state.collectPublishableConfirmedSlots(allocator, 3);
     defer slots.deinit(allocator);
 
-    try std.testing.expectEqual(@as(usize, 3), slots.items.len);
-    try std.testing.expectEqual(@as(Slot, 3), slots.items[0].slot);
-    try std.testing.expectEqual(@as(Slot, 2), slots.items[1].slot);
-    try std.testing.expectEqual(@as(Slot, 1), slots.items[2].slot);
+    try std.testing.expectEqual(3, slots.items.len);
+    try std.testing.expectEqual(3, slots.items[0].slot);
+    try std.testing.expectEqual(2, slots.items[1].slot);
+    try std.testing.expectEqual(1, slots.items[2].slot);
     try std.testing.expect(state.cached_slots.getPtr(1).?.published.confirmed);
     try std.testing.expect(state.cached_slots.getPtr(2).?.published.confirmed);
     try std.testing.expect(state.cached_slots.getPtr(3).?.published.confirmed);

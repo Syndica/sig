@@ -1246,9 +1246,9 @@ test "freezeCompletedSlots emits slot_frozen event with slot metadata" {
     defer event.deinit(event_sink.channel.allocator);
     switch (event) {
         .slot_frozen => |slot_frozen| {
-            try std.testing.expectEqual(@as(Slot, 1), slot_frozen.slot);
-            try std.testing.expectEqual(@as(Slot, 0), slot_frozen.parent);
-            try std.testing.expectEqual(@as(Slot, 0), slot_frozen.root);
+            try std.testing.expectEqual(1, slot_frozen.slot);
+            try std.testing.expectEqual(0, slot_frozen.parent);
+            try std.testing.expectEqual(0, slot_frozen.root);
         },
         else => return error.TestUnexpectedResult,
     }
@@ -1291,29 +1291,29 @@ test "bypassConsensus emits tip_changed and rooted chain events" {
     const tip_event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
     defer tip_event.deinit(event_sink.channel.allocator);
     switch (tip_event) {
-        .tip_changed => |slot| try std.testing.expectEqual(@as(Slot, 34), slot),
+        .tip_changed => |slot| try std.testing.expectEqual(34, slot),
         else => return error.TestUnexpectedResult,
     }
 
     const rooted_event_1 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
     defer rooted_event_1.deinit(event_sink.channel.allocator);
     switch (rooted_event_1) {
-        .slot_rooted => |slot| try std.testing.expectEqual(@as(Slot, 1), slot),
+        .slot_rooted => |slot| try std.testing.expectEqual(1, slot),
         else => return error.TestUnexpectedResult,
     }
 
     const rooted_event_2 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
     defer rooted_event_2.deinit(event_sink.channel.allocator);
     switch (rooted_event_2) {
-        .slot_rooted => |slot| try std.testing.expectEqual(@as(Slot, 2), slot),
+        .slot_rooted => |slot| try std.testing.expectEqual(2, slot),
         else => return error.TestUnexpectedResult,
     }
 
     try std.testing.expectEqual(
-        @as(Slot, 34),
+        34,
         replay_state.slot_tracker.commitments.get(.processed),
     );
-    try std.testing.expectEqual(@as(Slot, 2), replay_state.slot_tracker.root.load(.monotonic));
+    try std.testing.expectEqual(2, replay_state.slot_tracker.root.load(.monotonic));
     try std.testing.expect(event_sink.channel.tryReceive() == null);
 }
 

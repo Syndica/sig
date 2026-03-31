@@ -106,8 +106,7 @@ test "programSubscribe confirmed flushes frozen ancestors in order" {
     const account_shared1 = try sig.runtime.AccountSharedData.fromAccount(allocator, &account1);
     defer account_shared1.deinit(allocator);
 
-    var pk2: Pubkey = undefined;
-    @memset(&pk2.data, 0xA2);
+    const pk2: Pubkey = .{ .data = @splat(0xA2) };
     const data_buf2 = try allocator.alloc(u8, 1);
     data_buf2[0] = 0x02;
     const account2 = Account{
