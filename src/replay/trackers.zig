@@ -271,13 +271,12 @@ pub const SlotTracker = struct {
         new_root: Slot,
     ) ![]const Slot {
         var rooted_path = std.ArrayListUnmanaged(Slot).empty;
+        defer rooted_path.deinit(allocator);
 
         {
             var slots_lg = self.slots.read();
             defer slots_lg.unlock();
             const slots = slots_lg.get();
-
-            errdefer rooted_path.deinit(allocator);
 
             try rooted_path.ensureTotalCapacity(allocator, slots.count());
 
