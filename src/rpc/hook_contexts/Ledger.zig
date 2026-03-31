@@ -2103,3 +2103,28 @@ test "parseUiTransactionStatusMetaFromLedger: compute_units_consumed absent" {
     );
     try std.testing.expect(result.computeUnitsConsumed == .skip);
 }
+
+test "getInflationReward enforces minContextSlot" {
+    // Only slot_tracker is dereferenced before the minContextSlot check (line 433).
+    // All other pointer fields (ledger, epoch_tracker, status_cache) are unused
+    // in this error path, following the same `undefined` pattern as Consensus.zig tests.
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(std.testing.allocator, 5);
+    defer slot_tracker.deinit(std.testing.allocator);
+
+    // CommitmentTracker.init(5) sets finalized=0, confirmed=0, processed=5.
+    // Default commitment is .finalized, so current_slot will be 0.
+    const ctx = LedgerHookContext{
+        .ledger = undefined,
+        .epoch_tracker = undefined,
+        .status_cache = undefined,
+        .slot_tracker = &slot_tracker,
+        .block_commitment_cache = undefined,
+    };
+
+    const result = ctx.getInflationReward(std.testing.allocator, .{
+        .addresses = &.{},
+        .config = .{ .minContextSlot = 1 },
+    });
+
+    try std.testing.expectError(error.RpcMinContextSlotNotMet, result);
+}

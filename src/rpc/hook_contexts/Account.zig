@@ -907,3 +907,316 @@ pub fn getLargestAccounts(
         .value = values,
     };
 }
+
+const testing = std.testing;
+
+fn testSlotConstants(slot: Slot, ancestors: sig.core.Ancestors) sig.core.SlotConstants {
+    return .{
+        .parent_slot = slot -| 1,
+        .parent_hash = .ZEROES,
+        .parent_lt_hash = .IDENTITY,
+        .block_height = slot,
+        .collector_id = .ZEROES,
+        .max_tick_height = 0,
+        .fee_rate_governor = .DEFAULT,
+        .ancestors = ancestors,
+        .feature_set = .ALL_DISABLED,
+        .reserved_accounts = .empty,
+        .inflation = .DEFAULT,
+        .rent_collector = .DEFAULT,
+    };
+}
+
+fn testSlotState() sig.core.SlotState {
+    return .GENESIS;
+}
+
+fn testSetupContext(
+    db: *sig.accounts_db.Db,
+    slot_tracker: *sig.replay.trackers.SlotTracker,
+) AccountHookContext {
+    return .{
+        .slot_tracker = slot_tracker,
+        .account_reader = .{ .accounts_db = db },
+    };
+}
+
+/// Helper to create a SlotTracker with ancestors for tests.
+/// The returned slot_tracker owns the ancestors; caller must only deinit slot_tracker.
+fn testInitSlotTracker(
+    slot: Slot,
+    ancestors_slots: []const Slot,
+) !sig.replay.trackers.SlotTracker {
+    const ancestors: sig.core.Ancestors = try .initWithSlots(testing.allocator, ancestors_slots);
+    // SlotTracker.init takes ownership of ancestors via SlotConstants.
+    // Only slot_tracker.deinit should be called (not ancestors.deinit).
+    var slot_tracker: sig.replay.trackers.SlotTracker = try .init(testing.allocator, slot, .{
+        .constants = testSlotConstants(slot, ancestors),
+        .state = testSlotState(),
+        .allocator = testing.allocator,
+    });
+    slot_tracker.commitments.finalized.store(slot, .monotonic);
+    return slot_tracker;
+}
+
+test "getBalance - returns balance for existing account" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const test_slot: Slot = 42;
+    const test_pubkey = sig.core.Pubkey.ZEROES;
+    const test_lamports: u64 = 1_000_000;
+
+    try db.put(test_slot, test_pubkey, .{
+        .lamports = test_lamports,
+        .data = &.{},
+        .owner = sig.core.Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker);
+    const result = try ctx.getBalance(testing.allocator, .{ .pubkey = test_pubkey });
+    try testing.expectEqual(test_lamports, result.value);
+    try testing.expectEqual(test_slot, result.context.slot);
+}
+
+test "getBalance - returns zero for non-existent account" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const test_slot: Slot = 42;
+    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker);
+    const result = try ctx.getBalance(testing.allocator, .{ .pubkey = sig.core.Pubkey.ZEROES });
+    try testing.expectEqual(@as(u64, 0), result.value);
+}
+
+test "getBalance - minContextSlot enforcement" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const test_slot: Slot = 10;
+    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker);
+    const err = ctx.getBalance(testing.allocator, .{
+        .pubkey = sig.core.Pubkey.ZEROES,
+        .config = .{ .minContextSlot = 100 },
+    });
+    try testing.expectError(error.RpcMinContextSlotNotMet, err);
+}
+
+test "getAccountInfo - returns account data" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const test_slot: Slot = 42;
+    const test_pubkey = sig.core.Pubkey.ZEROES;
+    const test_lamports: u64 = 500_000;
+
+    try db.put(test_slot, test_pubkey, .{
+        .lamports = test_lamports,
+        .data = &.{},
+        .owner = sig.core.Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker);
+    const result = try ctx.getAccountInfo(testing.allocator, .{
+        .pubkey = test_pubkey,
+        .config = .{ .encoding = .base64 },
+    });
+    try testing.expectEqual(test_slot, result.context.slot);
+    try testing.expect(result.value != null);
+    try testing.expectEqual(test_lamports, result.value.?.lamports);
+}
+
+test "getAccountInfo - returns null for non-existent account" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const test_slot: Slot = 42;
+    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker);
+    const result = try ctx.getAccountInfo(testing.allocator, .{
+        .pubkey = sig.core.Pubkey.ZEROES,
+        .config = .{ .encoding = .base64 },
+    });
+    try testing.expectEqual(test_slot, result.context.slot);
+    try testing.expect(result.value == null);
+}
+
+test "getAccountInfo - minContextSlot enforcement" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const test_slot: Slot = 10;
+    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker);
+    const err = ctx.getAccountInfo(testing.allocator, .{
+        .pubkey = sig.core.Pubkey.ZEROES,
+        .config = .{ .minContextSlot = 100 },
+    });
+    try testing.expectError(error.RpcMinContextSlotNotMet, err);
+}
+
+test "getMultipleAccounts - returns accounts" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const test_slot: Slot = 42;
+    var pubkey1: sig.core.Pubkey = .ZEROES;
+    pubkey1.data[0] = 1;
+    var pubkey2: sig.core.Pubkey = .ZEROES;
+    pubkey2.data[0] = 2;
+
+    try db.put(test_slot, pubkey1, .{
+        .lamports = 100,
+        .data = &.{},
+        .owner = sig.core.Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const ctx = testSetupContext(db, &slot_tracker);
+    const result = try ctx.getMultipleAccounts(arena, .{
+        .pubkeys = &.{ pubkey1, pubkey2 },
+    });
+    try testing.expectEqual(test_slot, result.context.slot);
+    try testing.expectEqual(@as(usize, 2), result.value.len);
+    try testing.expect(result.value[0] != null); // pubkey1 exists
+    try testing.expect(result.value[1] == null); // pubkey2 doesn't exist
+    try testing.expectEqual(@as(u64, 100), result.value[0].?.lamports);
+}
+
+test "getMultipleAccounts - minContextSlot enforcement" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const test_slot: Slot = 10;
+    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker);
+    const err = ctx.getMultipleAccounts(testing.allocator, .{
+        .pubkeys = &.{sig.core.Pubkey.ZEROES},
+        .config = .{ .minContextSlot = 100 },
+    });
+    try testing.expectError(error.RpcMinContextSlotNotMet, err);
+}
+
+test "getFeeForMessage - minContextSlot enforcement" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const test_slot: Slot = 10;
+    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker);
+    const err = ctx.getFeeForMessage(testing.allocator, .{
+        .message = "AQABA",
+        .config = .{ .minContextSlot = 100 },
+    });
+    try testing.expectError(error.RpcMinContextSlotNotMet, err);
+}
+
+test "getProgramAccounts - minContextSlot enforcement" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const test_slot: Slot = 10;
+    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker);
+    const err = ctx.getProgramAccounts(testing.allocator, .{
+        .program_id = sig.core.Pubkey.ZEROES,
+        .config = .{ .minContextSlot = 100 },
+    });
+    try testing.expectError(error.RpcMinContextSlotNotMet, err);
+}
+
+test "getTokenAccountsByOwner - minContextSlot enforcement" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const test_slot: Slot = 10;
+    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker);
+    const err = ctx.getTokenAccountsByOwner(testing.allocator, .{
+        .owner = sig.core.Pubkey.ZEROES,
+        .filter = .{ .programId = sig.runtime.ids.TOKEN_PROGRAM_ID },
+        .config = .{ .minContextSlot = 100 },
+    });
+    try testing.expectError(error.RpcMinContextSlotNotMet, err);
+}
+
+test "getTokenAccountBalance - resolves commitment slot" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const test_slot: Slot = 42;
+    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker);
+    // Non-existent account should return RpcAccountNotFound
+    const err = ctx.getTokenAccountBalance(testing.allocator, .{
+        .pubkey = sig.core.Pubkey.ZEROES,
+    });
+    try testing.expectError(error.RpcAccountNotFound, err);
+}
+
+test "getTokenSupply - resolves commitment slot" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const test_slot: Slot = 42;
+    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker);
+    // Non-existent mint should return RpcAccountNotFound
+    const err = ctx.getTokenSupply(testing.allocator, .{
+        .mint = sig.core.Pubkey.ZEROES,
+    });
+    try testing.expectError(error.RpcAccountNotFound, err);
+}
