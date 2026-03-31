@@ -108,17 +108,18 @@ pub fn advanceReplay(
 
     // prepare data used for communication between consensus and RPC
     var recent_processed_ancestors: ?[]const Slot = null;
-    var vote_account_visitor: ?sig.consensus.replay_tower.VoteAccountVisitor = null;
+    var commitment_txn: ?*replay.trackers.CommitmentStakes.Transaction = null;
     defer if (recent_processed_ancestors) |r| allocator.free(r);
-    if (replay_state.commitments) |*c| {
+    if (replay_state.commitments) |*commitments| {
         recent_processed_ancestors = try sortedRecentProcessedAncestors(
             allocator,
             &replay_state.slot_tracker,
-            c,
+            commitments,
             &replay_state.status_cache,
         );
-        vote_account_visitor = c.stakes.voteAccountVisitor(recent_processed_ancestors.?);
+        commitment_txn = commitments.stakes.beginTransaction(recent_processed_ancestors.?);
     }
+    defer if (commitment_txn) |t| t.reset();
 
     // run consensus
     const slot_update = if (consensus_params) |consensus| slot_update: {
@@ -143,7 +144,7 @@ pub fn advanceReplay(
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
             .results = slot_results,
-            .vote_account_visitor = vote_account_visitor,
+            .vote_account_visitor = if (commitment_txn) |t| t.voteAccountVisitor() else null,
         });
     } else slot_update: {
         // NOTE: Processed slot semantics differ from Agave when Sig is in bypass-consensus mode.
@@ -177,7 +178,7 @@ pub fn advanceReplay(
     );
 
     // Pass along consensus updates to downstream consumers. None of this fed back into replay.
-    if (replay_state.commitments) |*c| c.commit(slot_update);
+    if (replay_state.commitments) |*c| c.commit(slot_update, commitment_txn.?);
     if (slot_update.root) |new_root| {
         const rooted_slots = try replay_state.slot_tracker.parents(allocator, new_root);
         defer allocator.free(rooted_slots);

@@ -354,12 +354,13 @@ pub const CommitmentTracker = struct {
     pub fn commit(
         self: *CommitmentTracker,
         slot_update: sig.replay.service.SlotUpdate,
+        transaction: *CommitmentStakes.Transaction,
     ) void {
         if (slot_update.voted) |s| self.update(.processed, s);
         if (slot_update.optimistically_confirmed) |s| self.update(.confirmed, s);
 
         // Commit accumulated commitment data to the cache in one atomic swap.
-        self.stakes.commit();
+        self.stakes.commit(transaction);
 
         // Update finalized commitment from the highest supermajority root,
         // matching Agave's commitment_service semantics.
@@ -383,7 +384,7 @@ pub const CommitmentTracker = struct {
 /// https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/rpc-client-api/src/response.rs#L452
 pub const CommitmentStakes = struct {
     state: RwMux(State),
-    accumulator: Accumulator,
+    transaction: Transaction,
 
     const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
     pub const BlockCommitmentArray = [MAX_LOCKOUT_HISTORY + 1]u64;
@@ -407,7 +408,7 @@ pub const CommitmentStakes = struct {
                 .total_stake = 0,
                 .highest_super_majority_root = 0,
             }),
-            .accumulator = .{
+            .transaction = .{
                 .allocator = allocator,
                 .ancestors = undefined, // populated on first use
             },
@@ -419,7 +420,7 @@ pub const CommitmentStakes = struct {
             @panic("attempted to deinit CommitmentStakes while still in use");
         defer state.unlock();
         state.mut().block_commitment.deinit(allocator);
-        self.accumulator.deinit();
+        self.transaction.deinit();
     }
 
     /// Returns the commitment data for a given slot along with the total active stake.
@@ -464,27 +465,53 @@ pub const CommitmentStakes = struct {
         return 0;
     }
 
-    /// This must only be used by a single thread at a time.
-    pub fn voteAccountVisitor(
+    /// Returns a Transaction that can be used to gradually accumulate
+    /// commitment stakes data, to be committed atomically when done.
+    ///
+    /// This must only ever be called by a single thread.
+    ///
+    /// Commit the Transaction if you'd like to persist the stake it captured.
+    ///
+    /// reset the Transaction when done, regardless of whether you have
+    /// committed it.
+    pub fn beginTransaction(
         self: *CommitmentStakes,
-        /// borrowed until commit. caller manages lifetime.
+        /// borrowed for lifetime of Transaction. caller manages lifetime.
         sorted_recent_processed_ancestors: []const Slot,
-    ) sig.consensus.replay_tower.VoteAccountVisitor {
-        if (!self.accumulator.mutex.tryLock()) @panic("only safe in one thread");
-        self.accumulator.ancestors = sorted_recent_processed_ancestors;
-        return .{
-            .context = &self.accumulator,
-            .visitFn = struct {
-                fn visit(
-                    ctx_ptr: *anyopaque,
-                    tower: *const sig.consensus.tower.Tower,
-                    stake: u64,
-                ) error{OutOfMemory}!void {
-                    const ctx: *Accumulator = @ptrCast(@alignCast(ctx_ptr));
-                    try ctx.observeVoteAccount(tower, stake);
-                }
-            }.visit,
+    ) *Transaction {
+        if (self.transaction.status != .free) {
+            // we limit this to a single concurrent transaction. in principle we
+            // could allow multiple, but it's not actually useful, the code
+            // would be more complicated, it has a performance penalty, and it's
+            // more likely to be used by accident than on purpose, so we just
+            // panic to reveal the accident.
+            @panic("transaction already in progress");
+        }
+        self.transaction.status = .in_use;
+        self.transaction.ancestors = sorted_recent_processed_ancestors;
+        return &self.transaction;
+    }
+
+    /// Persists the accumulated data.
+    ///
+    /// Atomically swap the cache contents with the data from an Transaction.
+    /// The transaction's map is consumed (moved); the caller must not call
+    /// commit again until they get a new visitor.
+    pub fn commit(self: *CommitmentStakes, transaction: *Transaction) void {
+        std.debug.assert(&self.transaction == transaction);
+        std.debug.assert(self.transaction.status == .in_use);
+        const hsmr = transaction.highestSuperMajorityRoot();
+        var state = self.state.write();
+        defer state.unlock();
+        const old = state.mut().block_commitment;
+        state.mut().* = .{
+            .block_commitment = transaction.new_commitment,
+            .total_stake = transaction.total_stake,
+            .highest_super_majority_root = @max(state.get().highest_super_majority_root, hsmr),
         };
+        // Give the old map back to the transaction for reuse next cycle.
+        transaction.new_commitment = old;
+        transaction.status = .committed;
     }
 
     /// Builder that collects per-slot commitment data from multiple vote
@@ -492,17 +519,42 @@ pub const CommitmentStakes = struct {
     /// Designed to be fed from `collectClusterVoteState`'s vote-account
     /// loop via `VoteAccountVisitor`, avoiding the need to iterate vote
     /// accounts a second time.
-    const Accumulator = struct {
+    pub const Transaction = struct {
         allocator: Allocator,
         new_commitment: std.AutoArrayHashMapUnmanaged(Slot, BlockCommitmentArray) = .empty,
         rooted_stake: std.ArrayListUnmanaged(RootedStake) = .empty,
         total_stake: u64 = 0,
         ancestors: []const Slot,
-        mutex: std.Thread.Mutex = .{},
+        status: enum { free, in_use, committed } = .free,
 
         const RootedStake = struct { slot: Slot, stake: u64 };
 
-        /// Record one vote account's lockout tower into the accumulator.
+        /// you must call this when done with the *Transaction
+        pub fn reset(self: *Transaction) void {
+            std.debug.assert(self.status != .free);
+            self.total_stake = 0;
+            self.new_commitment.clearRetainingCapacity();
+            self.rooted_stake.clearRetainingCapacity();
+            self.status = .free;
+        }
+
+        pub fn voteAccountVisitor(self: *Transaction) sig.consensus.replay_tower.VoteAccountVisitor {
+            return .{
+                .context = self,
+                .visitFn = struct {
+                    fn visit(
+                        ctx_ptr: *anyopaque,
+                        tower: *const sig.consensus.tower.Tower,
+                        stake: u64,
+                    ) error{OutOfMemory}!void {
+                        const ctx: *Transaction = @ptrCast(@alignCast(ctx_ptr));
+                        try ctx.observeVoteAccount(tower, stake);
+                    }
+                }.visit,
+            };
+        }
+
+        /// Record one vote account's lockout tower into the transaction.
         ///
         /// When `ancestors` is provided (a sorted slice of status-cache root
         /// slots), the function matches Agave's
@@ -519,7 +571,7 @@ pub const CommitmentStakes = struct {
         ///
         /// Analogous to [AggregateCommitmentService::aggregate_commitment_for_vote_account](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/core/src/commitment_service.rs#L226)
         pub fn observeVoteAccount(
-            self: *Accumulator,
+            self: *Transaction,
             tower: *const Tower,
             stake: u64,
         ) error{OutOfMemory}!void {
@@ -572,7 +624,7 @@ pub const CommitmentStakes = struct {
         /// of total stake, matching Agave's `get_highest_super_majority_root`.
         ///
         /// [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/core/src/commitment_service.rs#L27
-        pub fn highestSuperMajorityRoot(self: *const Accumulator) Slot {
+        fn highestSuperMajorityRoot(self: *const Transaction) Slot {
             if (self.total_stake == 0) return 0;
 
             // Sort descending by slot.
@@ -593,34 +645,13 @@ pub const CommitmentStakes = struct {
             return 0;
         }
 
-        pub fn deinit(self: *const Accumulator) void {
+        fn deinit(self: *const Transaction) void {
             var new_commitment = self.new_commitment;
             var rooted_stake = self.rooted_stake;
             new_commitment.deinit(self.allocator);
             rooted_stake.deinit(self.allocator);
         }
     };
-
-    /// Atomically swap the cache contents with the data from an Accumulator.
-    /// The accumulator's map is consumed (moved); the caller must not use it
-    /// afterwards.
-    pub fn commit(self: *CommitmentStakes) void {
-        const hsmr = self.accumulator.highestSuperMajorityRoot();
-        var state = self.state.write();
-        defer state.unlock();
-        const old = state.mut().block_commitment;
-        state.mut().* = .{
-            .block_commitment = self.accumulator.new_commitment,
-            .total_stake = self.accumulator.total_stake,
-            .highest_super_majority_root = @max(state.get().highest_super_majority_root, hsmr),
-        };
-        // Give the old map back to the accumulator for reuse next cycle.
-        self.accumulator.new_commitment = old;
-        self.accumulator.new_commitment.clearRetainingCapacity();
-        self.accumulator.rooted_stake.clearRetainingCapacity();
-        self.accumulator.total_stake = 0;
-        self.accumulator.mutex.unlock();
-    }
 
     /// Returns the highest slot where >2/3 of total stake has rooted.
     pub fn highestSuperMajorityRoot(self: *CommitmentStakes) Slot {
@@ -1191,16 +1222,20 @@ test "CommitmentStakes commit swaps data atomically" {
         state.mut().total_stake = 999;
     }
 
-    // Build accumulator with new data
+    // Build transaction with new data
     var tower: Tower = .{ .root = 10 };
     try tower.votes.append(.{ .slot = 42, .confirmation_count = 5 });
 
-    try cache.voteAccountVisitor(&.{ 10, 42 }).visit(&tower, 700);
+    {
+        const transaction = cache.beginTransaction(&.{ 10, 42 });
+        defer transaction.reset();
+        try transaction.voteAccountVisitor().visit(&tower, 700);
 
-    // Commit: should swap cache contents
-    cache.commit();
+        // Commit: should swap cache contents
+        cache.commit(transaction);
+    }
 
-    // Cache should now have the accumulator's data
+    // Cache should now have the transaction's data
     const result = cache.getBlockCommitment(42);
     try std.testing.expectEqual(@as(u64, 700), result.total_stake);
     try std.testing.expectEqual(@as(u64, 700), result.commitment.?[4]);
@@ -1218,15 +1253,15 @@ test "CommitmentStakes commit swaps data atomically" {
         cache.getBlockCommitment(1).commitment,
     );
 
-    // Accumulator should be reset for reuse
-    try std.testing.expectEqual(@as(u64, 0), cache.accumulator.total_stake);
-    try std.testing.expectEqual(@as(usize, 0), cache.accumulator.new_commitment.count());
+    // Transaction should be reset for reuse
+    try std.testing.expectEqual(@as(u64, 0), cache.transaction.total_stake);
+    try std.testing.expectEqual(@as(usize, 0), cache.transaction.new_commitment.count());
 }
 
-test "CommitmentStakes Accumulator multiple vote accounts accumulate" {
+test "CommitmentStakes Transaction multiple vote accounts accumulate" {
     const allocator = std.testing.allocator;
 
-    var acc: CommitmentStakes.Accumulator = .{
+    var acc: CommitmentStakes.Transaction = .{
         .allocator = allocator,
         .ancestors = &.{100},
     };
@@ -1248,7 +1283,7 @@ test "CommitmentStakes Accumulator multiple vote accounts accumulate" {
     try std.testing.expectEqual(@as(u64, 800), entry[1]); // depth index = min(2-1, 30) = 1
 }
 
-test "CommitmentStakes Accumulator ancestor-filtered walk credits intermediate ancestors" {
+test "CommitmentStakes Transaction ancestor-filtered walk credits intermediate ancestors" {
     const allocator = std.testing.allocator;
 
     // Tower: root=80, votes at 100 (conf 5) and 200 (conf 1).
@@ -1257,7 +1292,7 @@ test "CommitmentStakes Accumulator ancestor-filtered walk credits intermediate a
     try tower.votes.append(.{ .slot = 100, .confirmation_count = 5 });
     try tower.votes.append(.{ .slot = 200, .confirmation_count = 1 });
 
-    var acc: CommitmentStakes.Accumulator = .{
+    var acc: CommitmentStakes.Transaction = .{
         .allocator = allocator,
         .ancestors = &.{ 70, 80, 90, 95, 100, 150, 200 },
     };
@@ -1285,14 +1320,14 @@ test "CommitmentStakes Accumulator ancestor-filtered walk credits intermediate a
     try std.testing.expectEqual(@as(usize, 7), acc.new_commitment.count());
 }
 
-test "CommitmentStakes Accumulator ancestor-filtered walk excludes non-ancestor slots" {
+test "CommitmentStakes Transaction ancestor-filtered walk excludes non-ancestor slots" {
     const allocator = std.testing.allocator;
 
     // Tower with vote at slot 500, but ancestors only cover slots up to 300.
     var tower: Tower = .{ .root = null };
     try tower.votes.append(.{ .slot = 500, .confirmation_count = 3 });
 
-    var acc: CommitmentStakes.Accumulator = .{
+    var acc: CommitmentStakes.Transaction = .{
         .allocator = allocator,
         .ancestors = &.{ 100, 200, 300 },
     };
@@ -1312,13 +1347,13 @@ test "CommitmentStakes Accumulator ancestor-filtered walk excludes non-ancestor 
     );
 }
 
-test "CommitmentStakes Accumulator ancestor-filtered root-only tower" {
+test "CommitmentStakes Transaction ancestor-filtered root-only tower" {
     const allocator = std.testing.allocator;
 
     // Tower with root but no votes.
     var tower: Tower = .{ .root = 100 };
 
-    var acc: CommitmentStakes.Accumulator = .{
+    var acc: CommitmentStakes.Transaction = .{
         .allocator = allocator,
         .ancestors = &.{ 50, 75, 100, 150 },
     };
