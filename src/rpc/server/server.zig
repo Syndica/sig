@@ -175,6 +175,46 @@ test "serveSpawn hook missing" {
     try std.testing.expectEqual(rpc_err.code, .method_not_found);
 }
 
+test "serveSpawn requestAirdrop missing hook" {
+    const allocator = std.testing.allocator;
+
+    const logger_unscoped: Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
+
+    var rpc_hooks = sig.rpc.Hooks{};
+    defer rpc_hooks.deinit(allocator);
+
+    const sock_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
+    var server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = .from(logger),
+        .rpc_hooks = &rpc_hooks,
+        .socket_addr = sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    const resp_str, const resp_json = try testHttpRpcJsonRequest(
+        allocator,
+        &server_ctx,
+        .basic,
+        .requestAirdrop,
+        .{
+            .pubkey = sig.core.Pubkey.ZEROES,
+            .lamports = 1,
+        },
+    );
+    defer {
+        resp_json.deinit();
+        allocator.free(resp_str);
+    }
+
+    const rpc_err = resp_json.payload.err;
+    try std.testing.expectEqual(rpc_err.code, .invalid_request);
+    try std.testing.expectEqualStrings("Invalid request", rpc_err.message);
+}
+
 test "serveSpawn hook alloc" {
     const allocator = std.testing.allocator;
 
