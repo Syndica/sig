@@ -869,8 +869,6 @@ test "handleNewRoot - missing slot" {
     );
 
     try std.testing.expectError(error.MissingSlot, result);
-
-    // Verify slot trackers remain at initial state after failure
 }
 
 test "handleNewRoot - empty slot tracker" {
