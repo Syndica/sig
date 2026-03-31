@@ -783,9 +783,7 @@ pub fn handleNewRoot(
     // Tell the status_cache about it for its tracking.
     if (status_cache) |s| try s.addRoot(allocator, new_root);
     // Tell the account_store about it for its unrooted accounts
-    const slot_constants = slot_tracker.get(new_root).?;
-    defer slot_constants.release();
-    try account_store.onSlotRooted(new_root, &slot_constants.constants().ancestors);
+    try account_store.onSlotRooted(new_root, &root_tracker.constants().ancestors);
 
     // TODO
     // - Prune program cache bank_forks.read().unwrap().prune_program_cache(new_root);
