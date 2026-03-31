@@ -54,7 +54,13 @@ pub const HeadInfo = struct {
 
         const content_type: ?ContentType = ct: {
             const str = std_head.content_type orelse break :ct null;
-            break :ct std.meta.stringToEnum(ContentType, str) orelse
+            // Strip MIME parameters (e.g. "; charset=utf-8") before matching.
+            // Browsers commonly send "application/json; charset=utf-8".
+            const mime_type = if (std.mem.indexOfScalar(u8, str, ';')) |sep|
+                std.mem.trim(u8, str[0..sep], " \t")
+            else
+                str;
+            break :ct std.meta.stringToEnum(ContentType, mime_type) orelse
                 return error.RequestContentTypeUnrecognized;
         };
 
