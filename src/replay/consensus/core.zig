@@ -1720,10 +1720,9 @@ fn checkAndHandleNewRoot(
 
     // Audit: The rest of the code maps to Self::handle_new_root in Agave.
     // Update the slot tracker.
-    // Set new root.
+    // Root and finalized are distinct: this updates the local root only.
+    // Finalized commitment is updated separately from the highest supermajority root.
     slot_tracker.root.store(new_root, .monotonic);
-    // Note: finalized commitment is updated separately from
-    // highest_super_majority_root computed in BlockCommitmentCache.
 
     // Tell the status_cache about it for its tracking.
     if (status_cache) |sc| try sc.addRoot(allocator, new_root);
