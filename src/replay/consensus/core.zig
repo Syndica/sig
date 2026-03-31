@@ -6130,7 +6130,7 @@ test "vote refresh when no new vote available" {
     // already voted previously, not voting again.
     try std.testing.expectEqual(null, result2.voted);
     // confirmed slot remains at 0 (no optimistic confirmation votes processed)
-    try std.testing.expectEqual(0, result2.optimistically_confirmed);
+    try std.testing.expectEqual(null, result2.optimistically_confirmed);
 }
 
 // Test case:

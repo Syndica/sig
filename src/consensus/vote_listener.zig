@@ -1813,7 +1813,7 @@ test "simple usage" {
 
     // Since no votes were sent, slot trackers should remain at their initialized state.
     // NOTE: processed slot is not used here, but required to construct SlotTracker.
-    try std.testing.expectEqual(0, confirmed);
+    try std.testing.expectEqual(null, confirmed);
 }
 
 test "check trackers" {
@@ -2025,7 +2025,7 @@ test "check trackers" {
 
     // Votes were processed but no stake was delegated to validators, so
     // optimisitic confirmation was not reached.
-    try std.testing.expectEqual(0, confirmed);
+    try std.testing.expectEqual(null, confirmed);
 }
 
 // tests for OptimisticConfirmationVerifier moved to optimistic_vote_verifier.zig
