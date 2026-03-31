@@ -1,5 +1,9 @@
 const std = @import("std");
 
+comptime {
+    _ = std.testing.refAllDecls(@This());
+}
+
 pub const net = @import("net.zig");
 pub const crypto = @import("crypto.zig");
 pub const solana = @import("solana.zig");
