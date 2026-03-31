@@ -948,3 +948,33 @@ fn testIpv6Format(expected: []const u8, addr: Ipv6Addr) !void {
     try addr.format(&w);
     try std.testing.expectEqualStrings(expected, buf[0..w.end]);
 }
+
+test "AddressFamily.fromAddress - ipv4" {
+    try std.testing.expectEqual(
+        AddressFamily.ipv4,
+        try AddressFamily.fromAddress(std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 1234)),
+    );
+}
+
+test "AddressFamily.fromAddress - ipv6" {
+    try std.testing.expectEqual(
+        AddressFamily.ipv6,
+        try AddressFamily.fromAddress(std.net.Address.initIp6(.{0} ** 16, 1234, 0, 0)),
+    );
+}
+
+test "AddressFamily.fromAddress - unsupported family" {
+    const unsupported = try std.net.Address.initUnix("/tmp/sig-fromAddress.sock");
+    try std.testing.expectError(
+        error.UnsupportedAddressFamily,
+        AddressFamily.fromAddress(unsupported),
+    );
+}
+
+test "SocketAddr.getFamily" {
+    const v4 = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    try std.testing.expectEqual(AddressFamily.ipv4, v4.getFamily());
+
+    const v6 = SocketAddr.initIpv6(.{0} ** 16, 0);
+    try std.testing.expectEqual(AddressFamily.ipv6, v6.getFamily());
+}
