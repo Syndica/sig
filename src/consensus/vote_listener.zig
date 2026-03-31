@@ -1018,31 +1018,35 @@ test "trackNewVotesAndNotifyConfirmations records confirmed slots" {
     const validator_vote_kp: sig.identity.KeyPair = try randomKeyPair(prng);
     const vote_pubkey = Pubkey.fromPublicKey(&validator_vote_kp.public_key);
 
-    var epoch_stakes = sig.core.EpochStakes.EMPTY_WITH_GENESIS;
-    errdefer epoch_stakes.deinit(allocator);
+    var epoch_tracker = epoch_tracker: {
+        var epoch_stakes = sig.core.EpochStakes.EMPTY_WITH_GENESIS;
+        errdefer epoch_stakes.deinit(allocator);
 
-    const vote_account = try sig.core.stakes.VoteAccount.initRandom(
-        allocator,
-        prng,
-        Pubkey.fromPublicKey(&validator_node_kp.public_key),
-    );
-    errdefer {
-        var vote_account_to_deinit = vote_account;
-        vote_account_to_deinit.deinit(allocator);
-    }
+        {
+            const vote_account = try sig.core.stakes.VoteAccount.initRandom(
+                allocator,
+                prng,
+                Pubkey.fromPublicKey(&validator_node_kp.public_key),
+            );
+            errdefer {
+                var vote_account_to_deinit = vote_account;
+                vote_account_to_deinit.deinit(allocator);
+            }
 
-    try epoch_stakes.stakes.vote_accounts.vote_accounts.put(allocator, vote_pubkey, .{
-        .account = vote_account,
-        .stake = 70,
-    });
-    epoch_stakes.total_stake = 100;
-    try epoch_stakes.epoch_authorized_voters.put(allocator, vote_pubkey, vote_pubkey);
+            try epoch_stakes.stakes.vote_accounts.vote_accounts.put(allocator, vote_pubkey, .{
+                .account = vote_account,
+                .stake = 70,
+            });
+        }
+        epoch_stakes.total_stake = 100;
+        try epoch_stakes.epoch_authorized_voters.put(allocator, vote_pubkey, vote_pubkey);
 
-    var epoch_stakes_slice = [_]sig.core.EpochStakes{epoch_stakes};
-    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
-        allocator,
-        &epoch_stakes_slice,
-    );
+        var epoch_stakes_slice = [_]sig.core.EpochStakes{epoch_stakes};
+        break :epoch_tracker try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+            allocator,
+            &epoch_stakes_slice,
+        );
+    };
     defer epoch_tracker.deinit();
 
     const slot_data_provider: SlotDataProvider = .{
