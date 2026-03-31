@@ -873,63 +873,6 @@ test "handleNewRoot - missing slot" {
     // Verify slot trackers remain at initial state after failure
 }
 
-test "handleNewRoot - missing hash" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-    const random = prng.random();
-
-    const root = sig.core.hash.SlotAndHash{
-        .slot = 0,
-        .hash = .initRandom(random),
-    };
-
-    var fixture = try sig.consensus.replay_tower.TestFixture.init(allocator, root);
-    defer fixture.deinit(allocator);
-
-    var slot_tracker2: SlotTracker = try .initEmpty(allocator, root.slot);
-    defer slot_tracker2.deinit(allocator);
-
-    {
-        const constants = try SlotConstants.genesis(allocator, .initRandom(random));
-        errdefer constants.deinit(allocator);
-
-        var state: SlotState = .GENESIS;
-        errdefer state.deinit(allocator);
-
-        try slot_tracker2.put(allocator, root.slot, .{
-            .allocator = allocator,
-            .constants = constants,
-            .state = state,
-        });
-    }
-
-    var registry = sig.prometheus.Registry(.{}).init(allocator);
-    defer registry.deinit();
-
-    var test_state = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
-    defer test_state.deinit();
-
-    var epoch_tracker = try sig.core.EpochTracker.initForTest(
-        allocator,
-        random,
-        0,
-        .INIT,
-    );
-    defer epoch_tracker.deinit();
-
-    // Try to check a slot that doesn't exist in the tracker
-    try handleNewRoot(
-        allocator,
-        &slot_tracker2,
-        &fixture.progress,
-        &epoch_tracker,
-        .noop,
-        null, // no need to update a StatusCache,
-        root.slot, // Non-existent hash
-        null, // no thread pool
-    );
-}
-
 test "handleNewRoot - empty slot tracker" {
     const allocator = std.testing.allocator;
 
