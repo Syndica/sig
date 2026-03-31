@@ -1,0 +1,15 @@
+[project]
+name = "parseout"
+version = "0.1.0"
+requires-python = ">=3.10"
+readme = "README.md"
+
+[project.scripts]
+parseout = "parseout.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+python_files = ["parser.py", "differ.py", "fixture.py"]
