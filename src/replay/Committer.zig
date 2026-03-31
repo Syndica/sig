@@ -164,7 +164,7 @@ pub fn commitTransactions(
                 recent_blockhash,
                 &message_hash.data,
                 slot,
-                null,
+                tx_result.err,
             );
         }
         {

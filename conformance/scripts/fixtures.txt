@@ -38,11 +38,4 @@ syscall/fixtures/sol_get_sysvar
 syscall/fixtures/stack_height
 syscall/fixtures/try_find_program_address
 syscall/fixtures/vm
-txn/fixtures/precompile/ed25519
-txn/fixtures/precompile/secp256k1
-txn/fixtures/precompile/secp256r1
-txn/fixtures/programs
-vm_interp/fixtures/latest
-vm_interp/fixtures/v0
-vm_interp/fixtures/v1
-vm_interp/fixtures/v2
+txn/fixtures

@@ -127,7 +127,13 @@ pub fn serve(
     tracy.setThreadName("RPC");
     while (!exit.load(.acquire)) {
         switch (work_pool) {
-            .basic => try basic.acceptAndServeConnection(ctx),
+            .basic => basic.acceptAndServeConnection(ctx) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => |e| {
+                    ctx.logger.err().logf("error accepting/serving connection: {}", .{e});
+                    continue;
+                },
+            },
             // .linux_io_uring => |linux| try linux.acceptAndServeConnections(ctx),
         }
     }

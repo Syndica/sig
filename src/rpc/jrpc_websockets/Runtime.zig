@@ -655,7 +655,7 @@ fn maybeEnqueueFinalSignatureNotification(
 
     // TODO(perf): similar to accountSubscribe this reevaluation lookup should not be on the
     // IO loop thread
-    var status = self.slot_read_ctx.status_cache.getOwnedStatusAnyBlockhash(
+    var status = self.slot_read_ctx.status_cache.getForkAnyBlockhash(
         self.allocator,
         &params.sig_value.toBytes(),
         &slot_ref.constants().ancestors,

@@ -72,7 +72,7 @@ pub const LookupTableMeta = struct {
             return LookupTableStatus.Activated;
         }
         if (self.deactivation_slot == current_slot) {
-            return LookupTableStatus{ .Deactivating = .{ .remaining_blocks = MAX_ENTRIES } };
+            return LookupTableStatus{ .Deactivating = .{ .remaining_blocks = MAX_ENTRIES +| 1 } };
         }
         if (slot_hashes.getIndex(self.deactivation_slot)) |slot_hash_position| {
             return LookupTableStatus{
