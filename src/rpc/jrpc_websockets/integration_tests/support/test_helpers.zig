@@ -20,25 +20,6 @@ pub fn filledPubkey(fill: u8) Pubkey {
     return pubkey;
 }
 
-pub fn createAccountShared(
-    allocator: std.mem.Allocator,
-    owner: Pubkey,
-    lamports: u64,
-    data: []const u8,
-) !sig.runtime.AccountSharedData {
-    const owned_data = try allocator.dupe(u8, data);
-    var account = Account{
-        .lamports = lamports,
-        .data = sig.accounts_db.buffer_pool.AccountDataHandle.initAllocatedOwned(owned_data),
-        .owner = owner,
-        .executable = false,
-        .rent_epoch = 0,
-    };
-    defer account.deinit(allocator);
-
-    return try sig.runtime.AccountSharedData.fromAccount(allocator, &account);
-}
-
 pub fn putAccountAtSlot(
     server: *TestServer,
     slot: u64,
@@ -47,7 +28,13 @@ pub fn putAccountAtSlot(
     lamports: u64,
     data: []const u8,
 ) !sig.runtime.AccountSharedData {
-    const account_shared = try createAccountShared(server.allocator, owner, lamports, data);
+    const account_shared: sig.runtime.AccountSharedData = .{
+        .lamports = lamports,
+        .data = try server.allocator.dupe(u8, data),
+        .owner = owner,
+        .executable = false,
+        .rent_epoch = 0,
+    };
     errdefer account_shared.deinit(server.allocator);
 
     try server.account_db.db.put(slot, pubkey, account_shared);
@@ -152,7 +139,7 @@ pub const TestServer = struct {
             .slot_frozen => |*slot_data| {
                 slot_data.accounts.deinit();
                 slot_data.accounts = self.event_sink.materializeSlotModifiedAccounts(
-                    @as(sig.trace.Logger("jrpc_ws_integration_tests"), .noop),
+                    sig.trace.Logger("jrpc_ws_integration_tests").noop,
                     .{ .accounts_db = &self.account_db.db },
                     slot_data.slot,
                 ) catch {
@@ -161,7 +148,11 @@ pub const TestServer = struct {
             },
             else => {},
         }
-        self.event_sink.send(event) catch {
+        self.event_sink.send(event) catch |err| {
+            sig.trace.Logger("jrpc_ws_integration_tests").FOR_TESTS.warn().logf(
+                "failed to send injected event: {}",
+                .{err},
+            );
             event.deinit(self.event_sink.channel.allocator);
         };
     }
@@ -384,7 +375,7 @@ pub const IntegratedTestServer = struct {
             .slot_frozen => |*slot_data| {
                 slot_data.accounts.deinit();
                 slot_data.accounts = self.event_sink.materializeSlotModifiedAccounts(
-                    @as(sig.trace.Logger("jrpc_ws_integration_tests"), .noop),
+                    sig.trace.Logger("jrpc_ws_integration_tests").noop,
                     .{ .accounts_db = &self.account_db.db },
                     slot_data.slot,
                 ) catch {
@@ -393,7 +384,11 @@ pub const IntegratedTestServer = struct {
             },
             else => {},
         }
-        self.event_sink.send(event) catch {
+        self.event_sink.send(event) catch |err| {
+            sig.trace.Logger("jrpc_ws_integration_tests").FOR_TESTS.warn().logf(
+                "failed to send injected event: {}",
+                .{err},
+            );
             event.deinit(self.event_sink.channel.allocator);
         };
     }
