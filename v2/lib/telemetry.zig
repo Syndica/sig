@@ -1,13 +1,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub const log = @import("observability/log.zig");
+pub const log = @import("telemetry/log.zig");
 
 comptime {
     _ = log;
 }
 
-/// This comprises all the regions exposed by observability for other services to write to.
+/// This comprises all the regions exposed by telemetry for other services to write to.
 pub const Regions = struct {
     startup: *Startup,
     id_mem: []u8,
@@ -17,7 +17,7 @@ pub const Regions = struct {
     histogram_data: []u64,
     log_streams: []log.MessageStream,
 
-    /// A service should call this when they want to signal to the observability service
+    /// A service should call this when they want to signal to the telemetry service
     /// that it has acquired a logger stream, and has registered all desired metrics.
     pub fn signalReady(self: Regions) void {
         std.debug.assert(self.startup.pending_services.fetchSub(1, .release) != 0);
@@ -29,8 +29,8 @@ pub const Regions = struct {
         name: []const u8,
         comptime scope: []const u8,
     ) Logger(scope) {
-        const obs_log_stream_index = self.startup.log_streams.fetchAdd(1, .release);
-        const stream = &self.log_streams[obs_log_stream_index];
+        const log_stream_index = self.startup.log_streams.fetchAdd(1, .release);
+        const stream = &self.log_streams[log_stream_index];
 
         std.debug.assert(name.len <= log.MessageStream.Name.MAX_LEN); // see `stream.name.init`
         stream.name.init(name);
@@ -86,7 +86,7 @@ pub const Startup = extern struct {
         port: u16,
         /// The maximum log level to emit.
         max_log_level: log.Level,
-        /// Number of other services excluding the observability service (of which there is presumably only instance).
+        /// Number of other services excluding the telemetry service (of which there is presumably only instance).
         service_count: u32,
     };
 

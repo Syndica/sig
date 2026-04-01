@@ -16,7 +16,7 @@ comptime {
 const page_size_min = std.heap.page_size_min;
 
 const lib = @import("lib");
-const obs = lib.observability;
+const tel = lib.telemetry;
 const ServiceEntrypoint = lib.ipc.ServiceFn;
 
 const linux = std.os.linux;
@@ -121,6 +121,11 @@ pub const SharedRegionInstances = blk: {
 pub fn toSharedRegions(
     instances: SharedRegionInstances,
 ) [service_region_fields.len]SharedRegion {
+    @setEvalBranchQuota(
+        service_region_fields.len * services_zon.services.len *
+            128 * // reasonable upper bound of 128 services
+            100, // reasonable upper bound of 100 bytes per service name
+    );
     var shared_regions: [service_region_fields.len]SharedRegion = undefined;
     inline for (service_region_fields, 0..) |r, i| {
         comptime var shares: []const Share = &.{};
@@ -180,20 +185,20 @@ pub const Region = union(enum) {
         shred_version: u16,
     },
 
-    obs_startup: obs.Startup.InitParams,
-    obs_id_mem: struct {
+    telemetry_startup: tel.Startup.InitParams,
+    telemetry_id_mem: struct {
         /// The maximum number of bytes to allow for storing metric ids.
         max_bytes: usize,
     },
-    obs_gauges: struct {
+    telemetry_gauges: struct {
         /// The maximum number of (`u64`-sized) elements to support.
         max_elements: usize,
     },
-    obs_histogram_data: struct {
+    telemetry_histogram_data: struct {
         /// The maximum number of histogram (`u64`-sized) elements to support.
         max_elements: usize,
     },
-    obs_log_streams: struct {
+    telemetry_log_streams: struct {
         /// Maximum number of log streams to support.
         max_log_streams: usize,
     },
@@ -204,11 +209,11 @@ pub const Region = union(enum) {
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
 
-            .obs_startup => @sizeOf(obs.Startup),
-            .obs_id_mem => |cfg| cfg.max_bytes,
-            .obs_gauges => |cfg| cfg.max_elements * @sizeOf(u64),
-            .obs_histogram_data => |cfg| cfg.max_elements * @sizeOf(u64),
-            .obs_log_streams => |cfg| cfg.max_log_streams * @sizeOf(obs.log.MessageStream),
+            .telemetry_startup => @sizeOf(tel.Startup),
+            .telemetry_id_mem => |cfg| cfg.max_bytes,
+            .telemetry_gauges => |cfg| cfg.max_elements * @sizeOf(u64),
+            .telemetry_histogram_data => |cfg| cfg.max_elements * @sizeOf(u64),
+            .telemetry_log_streams => |cfg| cfg.max_log_streams * @sizeOf(tel.log.MessageStream),
         };
     }
 
@@ -243,33 +248,33 @@ pub const Region = union(enum) {
                 data.shred_version = cfg.shred_version;
             },
 
-            .obs_startup => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(obs.Startup));
-                const data: *obs.Startup = @ptrCast(buf);
+            .telemetry_startup => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(tel.Startup));
+                const data: *tel.Startup = @ptrCast(buf);
 
                 data.init(cfg);
             },
-            .obs_id_mem => |cfg| {
+            .telemetry_id_mem => |cfg| {
                 std.debug.assert(buf.len == cfg.max_bytes);
                 const data: []u8 = buf;
 
                 _ = data; // currently don't need to do anything else; could @memset(data, 0), but that seems wasteful.
             },
-            .obs_gauges => |cfg| {
+            .telemetry_gauges => |cfg| {
                 std.debug.assert(buf.len == cfg.max_elements * @sizeOf(u64));
                 const data: []std.atomic.Value(u64) = @ptrCast(buf);
 
                 _ = data; // currently don't need to do anything else; could @memset(data, .init(0)), but that seems wasteful.
             },
-            .obs_histogram_data => |cfg| {
+            .telemetry_histogram_data => |cfg| {
                 std.debug.assert(buf.len == cfg.max_elements * @sizeOf(u64));
                 const data: []u64 = @ptrCast(buf);
 
                 _ = data; // currently don't need to do anything else; could @memset(data, 0), but that seems wasteful.
             },
-            .obs_log_streams => |cfg| {
-                std.debug.assert(buf.len == cfg.max_log_streams * @sizeOf(obs.log.MessageStream));
-                const data: []obs.log.MessageStream = @ptrCast(buf);
+            .telemetry_log_streams => |cfg| {
+                std.debug.assert(buf.len == cfg.max_log_streams * @sizeOf(tel.log.MessageStream));
+                const data: []tel.log.MessageStream = @ptrCast(buf);
 
                 for (data) |*stream| {
                     stream.name.init("");

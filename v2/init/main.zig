@@ -6,7 +6,7 @@ comptime {
 
 const services = @import("services.zig");
 const lib = @import("lib");
-const obs = lib.observability;
+const tel = lib.telemetry;
 
 const Config = struct {
     sandboxing_mode: SandboxingMode,
@@ -19,7 +19,7 @@ const Config = struct {
     gossip: Gossip,
     shred_network: ShredNetwork,
 
-    observability: Observability,
+    telemetry: Telemetry,
 
     const SandboxingMode = enum { sandboxed, threaded };
 
@@ -31,7 +31,7 @@ const Config = struct {
         recv_port: u16,
     };
 
-    const Observability = struct {
+    const Telemetry = struct {
         port: u16,
     };
 };
@@ -42,14 +42,14 @@ pub fn main() !void {
     const allocator = dba_state.allocator();
 
     const config: Config, //
-    const log_level: obs.log.Level //
+    const log_level: tel.log.Level //
     = cfg: {
         var args = std.process.args();
         _ = args.next();
         const cfg_path = args.next() orelse return error.ConfigPathMissing;
         const log_level = level: {
             const str = args.next() orelse "info";
-            break :level std.meta.stringToEnum(obs.log.Level, str) orelse {
+            break :level std.meta.stringToEnum(tel.log.Level, str) orelse {
                 std.log.err("Invalid log level '{s}'", .{str});
                 return error.InvalidLogLevel;
             };
@@ -86,7 +86,7 @@ pub fn main() !void {
         .{ .service = .shred_receiver },
         .{ .service = .net },
         .{ .service = .gossip },
-        .{ .service = .observability },
+        .{ .service = .telemetry },
     };
 
     const shared_regions = services.toSharedRegions(.{
@@ -108,21 +108,21 @@ pub fn main() !void {
             .turbine_recv_port = config.shred_network.recv_port,
         },
 
-        .obs_startup = .{
-            .port = config.observability.port,
+        .telemetry_startup = .{
+            .port = config.telemetry.port,
             .max_log_level = log_level,
             .service_count = service_instances.len - 1,
         },
-        .obs_id_mem = .{
+        .telemetry_id_mem = .{
             .max_bytes = 4096 * 16,
         },
-        .obs_gauges = .{
+        .telemetry_gauges = .{
             .max_elements = 4096 * 2,
         },
-        .obs_histogram_data = .{
+        .telemetry_histogram_data = .{
             .max_elements = 4096 * 3,
         },
-        .obs_log_streams = .{
+        .telemetry_log_streams = .{
             .max_log_streams = service_instances.len - 1,
         },
     });
