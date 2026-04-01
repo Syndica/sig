@@ -643,7 +643,9 @@ pub fn getTransactionStatus(
     self: *const Reader,
     allocator: Allocator,
     signature: Signature,
-    confirmed_unrooted_slots: *const AutoHashMap(Slot, void),
+    /// This function will return null unless the transaction is in a rooted
+    /// slot or in a slot contained in this map.
+    unrooted_slots_to_include: *const AutoHashMap(Slot, void),
 ) !?struct { Slot, TransactionStatusMeta } {
     if (self.rpc_metrics) |m| m.num_get_transaction_status.inc();
 
@@ -651,7 +653,7 @@ pub fn getTransactionStatus(
         self,
         allocator,
         signature,
-        confirmed_unrooted_slots,
+        unrooted_slots_to_include,
     );
     return status[0];
 }
@@ -663,7 +665,9 @@ fn getTransactionStatusWithCounter(
     self: *const Reader,
     allocator: Allocator,
     signature: Signature,
-    confirmed_unrooted_slots: *const AutoHashMap(Slot, void),
+    /// This function will return null unless the transaction is in a rooted
+    /// slot or in a slot contained in this map.
+    unrooted_slots_to_include: *const AutoHashMap(Slot, void),
 ) !struct { ?struct { Slot, TransactionStatusMeta }, u64 } {
     var counter: u64 = 0;
     var lock, _ = try ensureLowestCleanupSlot(self);
@@ -682,7 +686,7 @@ fn getTransactionStatusWithCounter(
         if (!signature.eql(&found_signature)) {
             break;
         }
-        if (!try self.isRoot(allocator, slot) and !confirmed_unrooted_slots.contains(slot)) {
+        if (!try self.isRoot(allocator, slot) and !unrooted_slots_to_include.contains(slot)) {
             continue;
         }
         // TODO get from iterator
@@ -721,7 +725,7 @@ pub fn getCompleteTransaction(
     if (self.rpc_metrics) |m| m.num_get_complete_transaction.inc();
 
     const max_root = self.ledger.max_root.load(.monotonic);
-    var confirmed_unrooted_slots = AutoHashMap(Slot, void).init(allocator);
+    var unrooted_slots_to_include = AutoHashMap(Slot, void).init(allocator);
     var iterator = AncestorIterator{
         .allocator = allocator,
         .db = &self.ledger.db,
@@ -729,10 +733,10 @@ pub fn getCompleteTransaction(
     };
     while (try iterator.next()) |slot| {
         if (slot <= max_root) break;
-        try confirmed_unrooted_slots.put(slot, {});
+        try unrooted_slots_to_include.put(slot, {});
     }
 
-    return self.getTransactionWithStatus(allocator, signature, &confirmed_unrooted_slots);
+    return self.getTransactionWithStatus(allocator, signature, &unrooted_slots_to_include);
 }
 
 /// Analogous to [get_transaction_with_status](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3090)
@@ -740,9 +744,11 @@ fn getTransactionWithStatus(
     self: *const Reader,
     allocator: Allocator,
     signature: Signature,
-    confirmed_unrooted_slots: *const AutoHashMap(Slot, void),
+    /// This function will return null unless the transaction is in a rooted
+    /// slot or in a slot contained in this map.
+    unrooted_slots_to_include: *const AutoHashMap(Slot, void),
 ) !?ConfirmedTransactionWithStatusMeta {
-    const status = try self.getTransactionStatus(allocator, signature, confirmed_unrooted_slots);
+    const status = try self.getTransactionStatus(allocator, signature, unrooted_slots_to_include);
     const slot, const meta = status orelse return null;
     const transaction = if (try self.findTransactionInSlot(allocator, slot, signature)) |t|
         t
@@ -809,8 +815,8 @@ pub fn getConfirmedSignaturesForAddress(
 ) !SignatureInfosForAddress {
     if (self.rpc_metrics) |m| m.num_get_confirmed_signatures_for_address2.inc();
 
-    var confirmed_unrooted_slots = AutoHashMap(Slot, void).init(allocator);
-    defer confirmed_unrooted_slots.deinit();
+    var unrooted_slots_to_include = AutoHashMap(Slot, void).init(allocator);
+    defer unrooted_slots_to_include.deinit();
     const max_root = self.ledger.max_root.load(.monotonic);
     var ancestor_iterator = AncestorIterator{
         .allocator = allocator,
@@ -819,7 +825,7 @@ pub fn getConfirmedSignaturesForAddress(
     };
     while (try ancestor_iterator.next()) |slot| {
         if (slot <= max_root) break;
-        try confirmed_unrooted_slots.put(slot, {});
+        try unrooted_slots_to_include.put(slot, {});
     }
 
     // Figure the `slot` to start listing signatures at, based on the ledger location of the
@@ -832,7 +838,7 @@ pub fn getConfirmedSignaturesForAddress(
         if (try self.getTransactionStatus(
             allocator,
             before_signature,
-            &confirmed_unrooted_slots,
+            &unrooted_slots_to_include,
         )) |status| {
             const slot, _ = status;
             const slot_signatures = try self.getBlockSignaturesReversed(allocator, slot);
@@ -858,7 +864,7 @@ pub fn getConfirmedSignaturesForAddress(
         if (try self.getTransactionStatus(
             allocator,
             until_signature,
-            &confirmed_unrooted_slots,
+            &unrooted_slots_to_include,
         )) |status| {
             const lowest_slot, _ = status;
             const slot_signatures = try self.getBlockSignatures(allocator, lowest_slot);
@@ -924,7 +930,7 @@ pub fn getConfirmedSignaturesForAddress(
         }
         if (address.equals(&key.address) and
             (try self.isRoot(allocator, key.slot) or
-                confirmed_unrooted_slots.contains(key.slot)) and
+                unrooted_slots_to_include.contains(key.slot)) and
             !until_excluded_signatures.contains(key.signature))
         {
             try address_signatures.append(.{ key.slot, key.signature });
@@ -944,7 +950,7 @@ pub fn getConfirmedSignaturesForAddress(
         const maybe_status = try self.getTransactionStatus(
             allocator,
             signature,
-            &confirmed_unrooted_slots,
+            &unrooted_slots_to_include,
         );
         const err = if (maybe_status) |status| status[1].status else null;
         const memo = if (try self.ledger.db.getBytes(
