@@ -824,12 +824,6 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
     };
 }
 
-fn testDummySlotConstantsWithHeight(slot: Slot, block_height: u64) SlotConstants {
-    var constants = testDummySlotConstants(slot);
-    constants.block_height = block_height;
-    return constants;
-}
-
 test "SlotTracker.prune removes all slots less than root" {
     const allocator = std.testing.allocator;
     const root_slot: Slot = 4;

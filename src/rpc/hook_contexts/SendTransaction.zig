@@ -118,7 +118,9 @@ fn decodeAndDeserialize(
                 return error.InvalidParams;
             }
             var decoded_buf: [base58.decodedMaxSize(MAX_BASE58_SIZE)]u8 = undefined;
-            const decoded_len = try base58.Table.BITCOIN.decode(&decoded_buf, encoded);
+            const decoded_len = base58.Table.BITCOIN.decode(&decoded_buf, encoded) catch {
+                return error.InvalidParams;
+            };
             if (decoded_len > PACKET_DATA_SIZE) return error.InvalidParams;
             @memcpy(wire_transaction[0..decoded_len], decoded_buf[0..decoded_len]);
             break :blk decoded_len;
@@ -173,6 +175,8 @@ fn sendTransactionImpl(
         durable_nonce_info,
         max_retries,
     );
+    // NOTE: Agave returns the signature even if they fail to send the transaction to the pool for submission.
+    // We intentially fail and return an RPC error instead.
     try transaction_sender.send(transaction_info);
     return signature;
 }
