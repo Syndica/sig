@@ -12,7 +12,7 @@ pub const gossip = @import("gossip.zig");
 pub const ipc = @import("ipc.zig");
 pub const linux = @import("linux.zig");
 pub const util = @import("util.zig");
-pub const observability = @import("observability.zig");
+pub const telemetry = @import("telemetry.zig");
 
 comptime {
     _ = net;
@@ -22,7 +22,7 @@ comptime {
     _ = gossip;
     _ = ipc;
     _ = linux;
-    _ = observability;
+    _ = telemetry;
 }
 
 pub const test_data_dir = "../data/test-data/";

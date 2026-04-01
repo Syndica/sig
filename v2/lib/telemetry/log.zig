@@ -1,5 +1,5 @@
 const std = @import("std");
-const obs = @import("../observability.zig");
+const tel = @import("../telemetry.zig");
 
 pub const Level = enum(u8) {
     /// Critical failure; may or may not be recoverable.
@@ -138,7 +138,7 @@ pub const Message = struct {
     /// IMPORTANT: This should be kept in sync with `computeHeader` & `Header.logfmtStream`.
     pub fn write(self: Message, w: *std.Io.Writer) std.Io.Writer.Error!Header {
         const header = self.computeHeader();
-        try w.writeStruct(header, obs.endian);
+        try w.writeStruct(header, tel.endian);
         try w.writeAll(self.scope);
         try EntryField.writeFields(self.fields, w);
         std.debug.assert(self.msg.surround == .literal);
@@ -226,7 +226,7 @@ test Message {
     );
 
     var encoded_r: std.Io.Reader = .fixed(encoded.written());
-    const decoded_header = try encoded_r.takeStruct(Message.Header, obs.endian);
+    const decoded_header = try encoded_r.takeStruct(Message.Header, tel.endian);
     try std.testing.expectEqual(written_header, decoded_header);
 
     const decoded_slices = decoded_header.getSlicesFromFixedBuffer(&encoded_r) orelse
@@ -388,7 +388,7 @@ pub fn streamLogs(
     while (log_reader.bufferedLen() != 0) {
         const log_msg_header = log_reader.takeStruct(
             Message.Header,
-            obs.endian,
+            tel.endian,
         ) catch |err| switch (err) {
             error.ReadFailed => unreachable,
             error.EndOfStream => {

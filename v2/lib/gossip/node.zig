@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const lib = @import("../lib.zig");
-const obs = lib.observability;
+const tel = lib.telemetry;
 
 const assert = std.debug.assert;
 
@@ -275,7 +275,7 @@ pub fn GossipNode(comptime Effects: type) type {
             };
         }
 
-        pub fn poll(self: *Self, logger: obs.Logger("poll"), now: u64) !void {
+        pub fn poll(self: *Self, logger: tel.Logger("poll"), now: u64) !void {
             if (self.pull_timeout <= now) {
                 self.pull_timeout = now + PULL_INTERVAL_MS;
                 try self.sendPullRequests(.from(logger), now);
@@ -294,7 +294,7 @@ pub fn GossipNode(comptime Effects: type) type {
 
         pub fn processPacket(
             self: *Self,
-            logger: obs.Logger("processPacket"),
+            logger: tel.Logger("processPacket"),
             now: u64,
             packet: *const Packet,
         ) void {
@@ -320,7 +320,7 @@ pub fn GossipNode(comptime Effects: type) type {
 
         fn processMessage(
             self: *Self,
-            logger: obs.Logger("processMessage"),
+            logger: tel.Logger("processMessage"),
             now: u64,
             addr: std.net.Address,
             msg: GossipMessage,
@@ -555,7 +555,7 @@ pub fn GossipNode(comptime Effects: type) type {
             }
         }
 
-        fn updatePushSet(self: *Self, logger: obs.Logger("updatePushSet"), now: u64) !void {
+        fn updatePushSet(self: *Self, logger: tel.Logger("updatePushSet"), now: u64) !void {
             // refresh what nodes we will be sending push messages to for the near future.
             self.refreshPushActiveSet(now);
 
@@ -674,7 +674,7 @@ pub fn GossipNode(comptime Effects: type) type {
             }
         }
 
-        fn sendPullRequests(self: *Self, logger: obs.Logger("sendPullRequests"), now: u64) !void {
+        fn sendPullRequests(self: *Self, logger: tel.Logger("sendPullRequests"), now: u64) !void {
             const num_items: f64 = @floatFromInt(self.table.count() + self.expired.items.len);
             const mask_bits: u6 = blk: {
                 comptime assert(std.math.isPowerOfTwo(MAX_PULL_REQUESTS));
@@ -815,7 +815,7 @@ pub fn GossipNode(comptime Effects: type) type {
 
         fn insertSigned(
             self: *Self,
-            logger: obs.Logger("insertSigned"),
+            logger: tel.Logger("insertSigned"),
             now: u64,
             value: GossipValue,
         ) !void {
@@ -825,7 +825,7 @@ pub fn GossipNode(comptime Effects: type) type {
 
         fn insertValue(
             self: *Self,
-            logger: obs.Logger("insertValue"),
+            logger: tel.Logger("insertValue"),
             now: u64,
             caller: enum { us, pull, push },
             value: GossipValue,
@@ -973,7 +973,7 @@ pub fn GossipNode(comptime Effects: type) type {
 
         fn onDiscoveredValue(
             self: *Self,
-            logger: obs.Logger("onDiscoveredValue"),
+            logger: tel.Logger("onDiscoveredValue"),
             now: u64,
             key: Key,
             value: GossipValue,

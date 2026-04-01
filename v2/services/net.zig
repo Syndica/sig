@@ -5,7 +5,7 @@ const std = @import("std");
 const start = @import("start");
 const lib = @import("lib");
 const Pair = lib.net.Pair;
-const obs = lib.observability;
+const tel = lib.telemetry;
 
 comptime {
     _ = start;
@@ -20,16 +20,16 @@ pub const ReadOnly = struct {};
 pub const ReadWrite = struct {
     gossip_pair: *Pair,
     shred_pair: *Pair,
-    obs: obs.Regions,
+    tel: tel.Regions,
 };
 
 pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
-    const logger = rw.obs.acquireLogger(@tagName(name), "main");
+    const logger = rw.tel.acquireLogger(@tagName(name), "main");
 
-    const metric_appender = rw.obs.metricAppender();
+    const metric_appender = rw.tel.metricAppender();
     _ = metric_appender;
 
-    rw.obs.signalReady();
+    rw.tel.signalReady();
 
     try mainInner(
         logger,
@@ -41,7 +41,7 @@ const MAX_SOCKETS = 10;
 
 /// `ports` is the list of ports it'll listen on.
 fn mainInner(
-    logger: obs.Logger("main"),
+    logger: tel.Logger("main"),
     pairs: []const *Pair,
 ) !noreturn {
     std.debug.assert(pairs.len <= MAX_SOCKETS);

@@ -283,7 +283,7 @@ pub const bpf = struct {
             allowSyscall(@intFromEnum(syscalls.close)) ++
             allowSyscall(@intFromEnum(syscalls.bind)) ++
             allowSyscall(@intFromEnum(syscalls.socket)) ++
-            // observability
+            // telemetry
             allowSyscall(@intFromEnum(syscalls.getsockname)) ++
             allowSyscall(@intFromEnum(syscalls.listen)) ++
             allowSyscall(@intFromEnum(syscalls.accept4)) ++

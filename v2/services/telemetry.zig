@@ -1,17 +1,17 @@
 /// This service consumes information from other services,
 /// and sends them to an aggregator (prometheus).
-const obs = @This();
+const tel = @This();
 
 const std = @import("std");
 const start = @import("start");
 const lib = @import("lib");
-const api = lib.observability;
+const api = lib.telemetry;
 
 comptime {
     _ = start;
 }
 
-pub const name = .observability;
+pub const name = .telemetry;
 pub const panic = start.panic;
 pub const std_options = start.options;
 

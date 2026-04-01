@@ -6,7 +6,7 @@ const start = @import("start");
 const lib = @import("lib");
 const tracy = @import("tracy");
 
-const obs = lib.observability;
+const tel = lib.telemetry;
 const shred = lib.shred;
 const layout = shred.layout;
 
@@ -29,7 +29,7 @@ pub const ReadOnly = struct {
 
 pub const ReadWrite = struct {
     net_pair: *Pair,
-    obs: obs.Regions,
+    tel: tel.Regions,
 };
 
 // stubs
@@ -37,14 +37,14 @@ const stub_root_slot = 0;
 const stub_max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
-    const logger = rw.obs.acquireLogger(@tagName(name), "main");
+    const logger = rw.tel.acquireLogger(@tagName(name), "main");
 
     {
-        const metric_appender = rw.obs.metricAppender();
+        const metric_appender = rw.tel.metricAppender();
         _ = metric_appender;
     }
 
-    rw.obs.signalReady();
+    rw.tel.signalReady();
 
     logger.info().logf("Waiting for shreds on port {}", .{rw.net_pair.port});
 
