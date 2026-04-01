@@ -24,7 +24,7 @@ pub const std_options = start.options;
 
 pub const ReadWrite = struct {
     net_pair: *Pair,
-    tel: tel.Regions,
+    tel: *tel.Region,
 };
 
 pub const ReadOnly = struct {

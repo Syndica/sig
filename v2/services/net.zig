@@ -20,7 +20,7 @@ pub const ReadOnly = struct {};
 pub const ReadWrite = struct {
     gossip_pair: *Pair,
     shred_pair: *Pair,
-    tel: tel.Regions,
+    tel: *tel.Region,
 };
 
 pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {

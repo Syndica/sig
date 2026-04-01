@@ -15,30 +15,27 @@ pub const name = .telemetry;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadOnly = struct {
-    startup: *const api.Startup,
-    id_mem: []const u8,
-    /// NOTE: Some of these are actually `f64`s.
-    gauges: []const std.atomic.Value(u64),
-};
+pub const ReadOnly = struct {};
 
 pub const ReadWrite = struct {
-    /// NOTE: some of these actually represent floats, and `std.atomic.Value(T)`s.
-    histogram_data: []u64,
-    log_streams: []api.log.MessageStream,
+    region: *api.Region,
 };
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
+    _ = ro;
+
     var fba_state: std.heap.FixedBufferAllocator = .init(&struct {
         var buffer: [4096 * 4096 * 16]u8 = @splat(0);
     }.buffer);
     const gpa = fba_state.allocator();
 
+    const region = rw.region;
+
     var metrics: MetricsMap = .empty;
     defer metrics.deinit(gpa);
 
     { // wait until all pending services have registered their metrics
-        const pending_services = &ro.startup.pending_services;
+        const pending_services: *const std.atomic.Value(u32) = &region.pending_services;
         var previous = pending_services.load(.acquire);
         while (previous != 0) {
             const current = pending_services.load(.acquire);
@@ -53,15 +50,18 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             return error.PendingServicesIncremented;
         }
     }
-    const log_streams = rw.log_streams[0..ro.startup.log_streams.load(.acquire)];
+    const log_streams = region.getSlices().log_streams[0..region.log_streams.load(.acquire)];
 
-    try collectMetrics(gpa, &metrics, .{
-        .id_mem = ro.id_mem[0..ro.startup.id_mem_end.load(.acquire)],
-        .gauges = ro.gauges,
-        .histogram_data = rw.histogram_data,
-    });
+    {
+        const slices = region.getSlices();
+        try collectMetrics(gpa, &metrics, .{
+            .id_mem = slices.id_mem[0..region.id_mem_end.load(.acquire)],
+            .gauges = slices.gauges[0..region.gauges_end.load(.acquire)],
+            .histogram_data = slices.histogram_data[0..region.histogram_data_end.load(.acquire)],
+        });
+    }
 
-    const listen_addr: std.net.Address = .initIp4(.{ 0, 0, 0, 0 }, ro.startup.port);
+    const listen_addr: std.net.Address = .initIp4(.{ 0, 0, 0, 0 }, region.info.port);
     var server = try listen_addr.listen(.{ .force_nonblocking = true });
     defer server.deinit();
 

@@ -6,11 +6,7 @@
         .net_to_gossip = .net_pair,
         .gossip_config = .gossip_config,
 
-        .telemetry_startup = .telemetry_startup,
-        .telemetry_id_mem = .telemetry_id_mem,
-        .telemetry_gauges = .telemetry_gauges,
-        .telemetry_histogram_data = .telemetry_histogram_data,
-        .telemetry_log_streams = .telemetry_log_streams,
+        .telemetry = .telemetry,
     },
     .services = .{
         .{
@@ -18,11 +14,7 @@
             .regions = .{
                 .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .net_to_gossip, .access = .rw },
-                .{ .name = .telemetry_startup, .access = .rw },
-                .{ .name = .telemetry_id_mem, .access = .rw },
-                .{ .name = .telemetry_gauges, .access = .rw },
-                .{ .name = .telemetry_histogram_data, .access = .rw },
-                .{ .name = .telemetry_log_streams, .access = .rw },
+                .{ .name = .telemetry, .access = .rw },
             },
         },
         .{
@@ -30,11 +22,7 @@
             .regions = .{
                 .{ .name = .net_to_gossip, .access = .rw },
                 .{ .name = .gossip_config, .access = .readonly },
-                .{ .name = .telemetry_startup, .access = .rw },
-                .{ .name = .telemetry_id_mem, .access = .rw },
-                .{ .name = .telemetry_gauges, .access = .rw },
-                .{ .name = .telemetry_histogram_data, .access = .rw },
-                .{ .name = .telemetry_log_streams, .access = .rw },
+                .{ .name = .telemetry, .access = .rw },
             },
         },
         .{
@@ -42,21 +30,13 @@
             .regions = .{
                 .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .shred_recv_config, .access = .readonly },
-                .{ .name = .telemetry_startup, .access = .rw },
-                .{ .name = .telemetry_id_mem, .access = .rw },
-                .{ .name = .telemetry_gauges, .access = .rw },
-                .{ .name = .telemetry_histogram_data, .access = .rw },
-                .{ .name = .telemetry_log_streams, .access = .rw },
+                .{ .name = .telemetry, .access = .rw },
             },
         },
         .{
             .name = .telemetry,
             .regions = .{
-                .{ .name = .telemetry_startup, .access = .readonly },
-                .{ .name = .telemetry_id_mem, .access = .readonly },
-                .{ .name = .telemetry_gauges, .access = .readonly },
-                .{ .name = .telemetry_histogram_data, .access = .rw },
-                .{ .name = .telemetry_log_streams, .access = .rw },
+                .{ .name = .telemetry, .access = .rw },
             },
         },
     },
