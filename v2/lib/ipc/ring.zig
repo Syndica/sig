@@ -404,8 +404,6 @@ test "ring with capacity 1" {
     var r: Ring(1, u8) = undefined;
     r.init();
 
-    std.debug.print("hi\n", .{});
-
     var writer = r.get(.writer);
     var reader = r.get(.reader);
 
