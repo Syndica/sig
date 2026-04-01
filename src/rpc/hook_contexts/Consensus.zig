@@ -213,16 +213,15 @@ pub fn getLatestBlockhash(
     const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
     defer resolved.ref.release();
 
-    const last_blockhash = blk: {
+    const last_blockhash, const last_valid_block_height = blk: {
         const bq, var bq_lock = resolved.ref.state().blockhash_queue.readWithLock();
         defer bq_lock.unlock();
 
-        break :blk bq.last_hash orelse return error.SlotNotAvailable;
+        const last_hash = bq.last_hash orelse return error.SlotNotAvailable;
+        const lvbh = bq.getLastValidBlockHeight(resolved.ref.constants().block_height, last_hash) orelse
+            return error.SlotNotAvailable;
+        break :blk .{ last_hash, lvbh };
     };
-
-    const last_valid_block_height = resolved.ref.getBlockhashLastValidBlockHeight(
-        last_blockhash,
-    ) orelse return error.SlotNotAvailable;
 
     return .{
         .context = .{ .slot = resolved.slot },
