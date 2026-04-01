@@ -2900,6 +2900,11 @@ test "checkAndHandleNewRoot - success" {
         constants1.parent_slot = root.slot;
         constants2.parent_slot = hash1.slot;
         constants3.parent_slot = hash2.slot;
+
+        // Populate ancestors so rootedPathForward can find the rooted path
+        try constants2.ancestors.addSlot(allocator, hash1.slot);
+        try constants3.ancestors.addSlot(allocator, hash1.slot);
+        try constants3.ancestors.addSlot(allocator, hash2.slot);
         state1.hash = .init(hash1.hash);
         state2.hash = .init(hash2.hash);
         state3.hash = .init(hash3.hash);
