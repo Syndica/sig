@@ -1,7 +1,8 @@
 const std = @import("std");
-
 const lib = @import("lib.zig");
+
 pub const bincode = @import("gossip/bincode.zig");
+pub const GossipNode = @import("gossip/node.zig").GossipNode;
 
 const Signature = lib.solana.Signature;
 const Pubkey = lib.solana.Pubkey;
@@ -30,6 +31,7 @@ pub const KeyPair = extern struct {
     }
 };
 
+/// Read-only config information needed to run a gossip service instance.
 pub const Config = extern struct {
     keypair: KeyPair,
     cluster_info: ClusterInfo,
@@ -68,6 +70,7 @@ pub const Address = extern struct {
     }
 };
 
+/// Bootstrapping network information needed to run a Gossip Node
 pub const ClusterInfo = extern struct {
     public_ip: Address,
     shred_version: u16,
@@ -177,6 +180,8 @@ pub const ClusterInfo = extern struct {
     };
 };
 
+// ---- Gossip Protocol type definitions ----
+
 const IpAddr = union(enum(u32)) {
     v4: [4]u8,
     v6: [16]u8,
@@ -211,6 +216,7 @@ pub const BloomFilter = struct {
     }
 };
 
+/// Gossip nodes communicate with this message type (bincode serialized) to pass GossipValues around.
 pub const GossipMessage = union(enum(u32)) {
     pull_request: struct {
         ignoring: BloomFilter,
@@ -248,6 +254,7 @@ pub const GossipMessage = union(enum(u32)) {
     },
 };
 
+/// Gossip values are (bincode serialized) gossip data signed by `data.*.from` Pubkey identity.
 pub const GossipValue = struct {
     signature: Signature,
     data: GossipData,
@@ -332,14 +339,15 @@ pub const GossipData = union(enum(u32)) {
         observed_stake: u64,
         shred_version: u16,
     },
+
+    const SlotAndHash = struct {
+        slot: Slot,
+        hash: Hash,
+    };
 };
 
-const SlotAndHash = struct {
-    slot: Slot,
-    hash: Hash,
-};
-
-// TODO: use for Consensus IPC
+/// A vote transaction from a node submitted as a GossipValue in the protocol.
+// TODO: use same type definition for Consensus service.
 pub const Vote = struct {
     index: u8,
     from: Pubkey,
@@ -361,6 +369,9 @@ pub const Vote = struct {
     wallclock: u64,
 };
 
+/// The addresses and service information for a gossip node instance participating in the cluster.
+/// Its handled specially in the gossip protocol, so the concrete type definition is exported instead
+/// of living only in GossipData.
 pub const ContactInfo = struct {
     from: Pubkey,
     wallclock: bincode.VarInt(u64),
@@ -379,6 +390,8 @@ pub const ContactInfo = struct {
     }),
 };
 
+/// A map of validator services (e.g. serve_repair, rpc, gossip, tvu) to `Address`
+/// that a given gossip node identity broadcasts to the cluster.
 pub const SocketMap = struct {
     ips: bincode.ShortVec(IpAddr),
     entries: bincode.ShortVec(Entry),
@@ -430,6 +443,7 @@ pub const SocketMap = struct {
         const max_count = std.meta.fields(Key).len;
 
         pub fn set(self: *Builder, key: Key, addr: Address) void {
+            // Address.ip -> IpAddr, then dedup
             const ip: IpAddr = if (addr.is_v6) .{ .v6 = addr.ip } else .{ .v4 = addr.ip[0..4].* };
             const ip_idx = for (self.ips[0..self.num_ips], 0..) |existing, i| {
                 if (std.meta.eql(existing, ip)) break i;
@@ -439,6 +453,7 @@ pub const SocketMap = struct {
                 break :blk self.num_ips;
             };
 
+            // (Key + Address.port) -> SocketEntry, then dedup
             const entry: Entry = .{
                 .key = key,
                 .ip_idx = @intCast(ip_idx),
@@ -456,6 +471,9 @@ pub const SocketMap = struct {
             self.entries[entry_idx] = entry;
         }
 
+        /// Prepares the builder's internal data structures to be used inside a ContactInfo,
+        /// then returns a SocketMap instance which refers back into the Builder's memory.
+        /// `Builder.set()` must no longer be called after this.
         pub fn asSocketMap(self: *Builder) SocketMap {
             // sort entries by port
             const entries = self.entries[0..self.num_entries];
