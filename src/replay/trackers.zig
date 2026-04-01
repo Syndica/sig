@@ -270,31 +270,24 @@ pub const SlotTracker = struct {
         old_root: Slot,
         new_root: Slot,
     ) ![]const Slot {
+        std.debug.assert(old_root <= new_root);
+
         var rooted_path = std.ArrayListUnmanaged(Slot).empty;
         defer rooted_path.deinit(allocator);
 
+        try rooted_path.ensureTotalCapacity(allocator, new_root - old_root);
         {
-            var slots_lg = self.slots.read();
-            defer slots_lg.unlock();
-            const slots = slots_lg.get();
+            const root_info = self.get(new_root) orelse return error.NewRootNotFound;
+            defer root_info.release();
 
-            try rooted_path.ensureTotalCapacity(allocator, slots.count());
-
-            var current_slot = new_root;
-            while (current_slot != old_root) {
-                const current = slots.get(current_slot) orelse return error.MissingSlot;
-                rooted_path.appendAssumeCapacity(current_slot);
-
-                const parent_slot = current.constants.parent_slot;
-                if (parent_slot == current_slot) {
-                    return error.RootNotAncestor;
+            for (old_root + 1..new_root) |slot| {
+                if (root_info.constants().ancestors.containsSlot(slot)) {
+                    rooted_path.appendAssumeCapacity(slot);
                 }
-
-                current_slot = parent_slot;
             }
         }
+        rooted_path.appendAssumeCapacity(new_root);
 
-        std.mem.reverse(Slot, rooted_path.items);
         return try rooted_path.toOwnedSlice(allocator);
     }
 
@@ -872,8 +865,12 @@ test "SlotTracker.rootedPathForward returns forward rooted chain" {
     defer tracker.deinit(allocator);
 
     for (2..5) |slot| {
+        var constants = testDummySlotConstants(slot);
+        for (root_slot..slot) |ancestor_slot| {
+            try constants.ancestors.addSlot(allocator, ancestor_slot);
+        }
         const gop = try tracker.getOrPut(allocator, slot, .{
-            .constants = testDummySlotConstants(slot),
+            .constants = constants,
             .state = .GENESIS,
             .allocator = allocator,
         });
