@@ -179,7 +179,7 @@ pub const Dependencies = struct {
     hard_forks: sig.core.HardForks,
     replay_threads: u32,
     stop_at_slot: ?Slot,
-    event_sink: ?*jrpc_types.EventSink = null,
+    event_sink: ?*jrpc_types.EventSink,
     prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
 };
 
@@ -1595,6 +1595,7 @@ pub const DependencyStubs = struct {
 
             .replay_threads = 1,
             .stop_at_slot = null,
+            .event_sink = null,
         }, .enabled, rpc_status);
     }
 
@@ -1667,6 +1668,7 @@ pub const DependencyStubs = struct {
 
             .replay_threads = num_threads,
             .stop_at_slot = null,
+            .event_sink = null,
         }, .enabled, .disabled);
     }
 };

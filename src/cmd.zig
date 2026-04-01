@@ -3051,6 +3051,7 @@ const ReplayAndConsensusServiceState = struct {
                     .hard_forks = hard_forks,
                     .replay_threads = params.replay_threads,
                     .stop_at_slot = params.stop_at_slot,
+                    .event_sink = params.event_sink,
                     .prioritization_fee_cache = params.prioritization_fee_cache,
                 },
                 if (params.disable_consensus) .disabled else .enabled,
