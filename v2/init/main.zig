@@ -108,22 +108,15 @@ pub fn main() !void {
             .turbine_recv_port = config.shred_network.recv_port,
         },
 
-        .telemetry_startup = .{
+        .telemetry = .{
             .port = config.telemetry.port,
             .max_log_level = log_level,
             .service_count = service_instances.len - 1,
-        },
-        .telemetry_id_mem = .{
-            .max_bytes = 4096 * 16,
-        },
-        .telemetry_gauges = .{
-            .max_elements = 4096 * 2,
-        },
-        .telemetry_histogram_data = .{
-            .max_elements = 4096 * 3,
-        },
-        .telemetry_log_streams = .{
-            .max_log_streams = service_instances.len - 1,
+
+            .id_mem_len = 4096 * 16,
+            .gauges_len = 4096 * 2,
+
+            .histogram_data_len = 4096 * 3,
         },
     });
 

@@ -29,7 +29,7 @@ pub const ReadOnly = struct {
 
 pub const ReadWrite = struct {
     net_pair: *Pair,
-    tel: tel.Regions,
+    tel: *tel.Region,
 };
 
 // stubs

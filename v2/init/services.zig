@@ -185,35 +185,14 @@ pub const Region = union(enum) {
         shred_version: u16,
     },
 
-    telemetry_startup: tel.Startup.InitParams,
-    telemetry_id_mem: struct {
-        /// The maximum number of bytes to allow for storing metric ids.
-        max_bytes: usize,
-    },
-    telemetry_gauges: struct {
-        /// The maximum number of (`u64`-sized) elements to support.
-        max_elements: usize,
-    },
-    telemetry_histogram_data: struct {
-        /// The maximum number of histogram (`u64`-sized) elements to support.
-        max_elements: usize,
-    },
-    telemetry_log_streams: struct {
-        /// Maximum number of log streams to support.
-        max_log_streams: usize,
-    },
+    telemetry: tel.Region.Info,
 
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(lib.net.Pair),
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
-
-            .telemetry_startup => @sizeOf(tel.Startup),
-            .telemetry_id_mem => |cfg| cfg.max_bytes,
-            .telemetry_gauges => |cfg| cfg.max_elements * @sizeOf(u64),
-            .telemetry_histogram_data => |cfg| cfg.max_elements * @sizeOf(u64),
-            .telemetry_log_streams => |cfg| cfg.max_log_streams * @sizeOf(tel.log.MessageStream),
+            .telemetry => |cfg| cfg.regionSize(),
         };
     }
 
@@ -248,38 +227,11 @@ pub const Region = union(enum) {
                 data.shred_version = cfg.shred_version;
             },
 
-            .telemetry_startup => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(tel.Startup));
-                const data: *tel.Startup = @ptrCast(buf);
+            .telemetry => |info| {
+                std.debug.assert(buf.len == info.regionSize());
+                const data: *tel.Region = @ptrCast(buf);
 
-                data.init(cfg);
-            },
-            .telemetry_id_mem => |cfg| {
-                std.debug.assert(buf.len == cfg.max_bytes);
-                const data: []u8 = buf;
-
-                _ = data; // currently don't need to do anything else; could @memset(data, 0), but that seems wasteful.
-            },
-            .telemetry_gauges => |cfg| {
-                std.debug.assert(buf.len == cfg.max_elements * @sizeOf(u64));
-                const data: []std.atomic.Value(u64) = @ptrCast(buf);
-
-                _ = data; // currently don't need to do anything else; could @memset(data, .init(0)), but that seems wasteful.
-            },
-            .telemetry_histogram_data => |cfg| {
-                std.debug.assert(buf.len == cfg.max_elements * @sizeOf(u64));
-                const data: []u64 = @ptrCast(buf);
-
-                _ = data; // currently don't need to do anything else; could @memset(data, 0), but that seems wasteful.
-            },
-            .telemetry_log_streams => |cfg| {
-                std.debug.assert(buf.len == cfg.max_log_streams * @sizeOf(tel.log.MessageStream));
-                const data: []tel.log.MessageStream = @ptrCast(buf);
-
-                for (data) |*stream| {
-                    stream.name.init("");
-                    stream.swap_buffer.init();
-                }
+                data.init(info);
             },
         };
     }

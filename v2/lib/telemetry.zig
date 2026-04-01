@@ -7,62 +7,10 @@ comptime {
     _ = log;
 }
 
-/// This comprises all the regions exposed by telemetry for other services to write to.
-pub const Regions = struct {
-    startup: *Startup,
-    id_mem: []u8,
-    /// NOTE: Some of these are actually `f64`s.
-    gauges: []std.atomic.Value(u64),
-    /// NOTE: some of these actually represent floats, and `std.atomic.Value(T)`s.
-    histogram_data: []u64,
-    log_streams: []log.MessageStream,
-
-    /// A service should call this when they want to signal to the telemetry service
-    /// that it has acquired a logger stream, and has registered all desired metrics.
-    pub fn signalReady(self: Regions) void {
-        std.debug.assert(self.startup.pending_services.fetchSub(1, .release) != 0);
-    }
-
-    pub fn acquireLogger(
-        self: Regions,
-        /// Asserts `str.len <= log.MessageStream.Name.MAX_LEN`.
-        name: []const u8,
-        comptime scope: []const u8,
-    ) Logger(scope) {
-        const log_stream_index = self.startup.log_streams.fetchAdd(1, .release);
-        const stream = &self.log_streams[log_stream_index];
-
-        std.debug.assert(name.len <= log.MessageStream.Name.MAX_LEN); // see `stream.name.init`
-        stream.name.init(name);
-        return .{
-            .sink = .{ .swap_buffer = &stream.swap_buffer },
-            .max_level = self.startup.max_log_level,
-        };
-    }
-
-    /// Low-level helper for registering metrics.
-    pub fn metricAppender(self: Regions) MetricAppender {
-        return .{
-            .id_mem = self.id_mem,
-            .id_mem_end = &self.startup.id_mem_end,
-
-            .gauges = self.gauges,
-            .gauges_end = &self.startup.gauges_end,
-
-            .histogram_data = self.histogram_data,
-            .histogram_data_end = &self.startup.histogram_data_end,
-        };
-    }
-};
-
 /// Data that's only relevant during startup.
-pub const Startup = extern struct {
-    /// The port to listen on for the prometheus client.
+pub const Region = extern struct {
     /// Mutating this is after initialization illegal.
-    port: u16,
-    /// The maximum log level to emit.
-    /// Mutating this after initialization is illegal.
-    max_log_level: log.Level,
+    info: Info align(@alignOf(u64)),
     /// Should start with a value equal to the number of other services that are going to
     /// be writing metrics to the trace service. The trace service will wait until this
     /// value is equal to zero before starting up, giving all other services a chance to
@@ -81,27 +29,151 @@ pub const Startup = extern struct {
     /// claim elements in `log_streams`.
     log_streams: std.atomic.Value(u32),
 
-    pub const InitParams = struct {
+    pub const Info = extern struct {
         /// The port to listen on for the prometheus client.
         port: u16,
         /// The maximum log level to emit.
         max_log_level: log.Level,
+
         /// Number of other services excluding the telemetry service (of which there is presumably only instance).
+        /// This is also the maximum number of log streams to support.
         service_count: u32,
+
+        /// The maximum number of bytes to allow for storing metric ids.
+        id_mem_len: u32,
+        /// The maximum number of (`u64`-sized) elements to support.
+        gauges_len: u32,
+        /// The maximum number of histogram (`u64`-sized) elements to support.
+        histogram_data_len: u32,
+
+        /// NOTE: keep in sync with `Region.getSlices`.
+        pub fn regionSize(self: Info) usize {
+            var size: usize = 0;
+            size += @sizeOf(Region);
+
+            size = std.mem.alignForward(usize, size, @alignOf(u64));
+            size += self.gauges_len * @sizeOf(u64);
+
+            size = std.mem.alignForward(usize, size, @alignOf(u64));
+            size += self.histogram_data_len * @sizeOf(u64);
+
+            size = std.mem.alignForward(usize, size, @alignOf(log.MessageStream));
+            size += self.service_count * @sizeOf(log.MessageStream);
+
+            size += std.mem.alignForward(usize, size, @sizeOf(u8));
+            size += self.id_mem_len;
+            return size;
+        }
     };
 
     pub fn init(
-        self: *Startup,
-        params: InitParams,
+        self: *Region,
+        info: Info,
     ) void {
         self.* = .{
-            .port = params.port,
-            .max_log_level = params.max_log_level,
-            .pending_services = .init(params.service_count),
+            .info = info,
+            .pending_services = .init(info.service_count),
             .id_mem_end = .init(0),
             .gauges_end = .init(0),
             .histogram_data_end = .init(0),
             .log_streams = .init(0),
+        };
+    }
+
+    pub const Slices = struct {
+        id_mem: []u8,
+        /// NOTE: Some of these are actually `f64`s.
+        gauges: []std.atomic.Value(u64),
+        /// NOTE: some of these actually represent floats, and `std.atomic.Value(T)`s.
+        histogram_data: []u64,
+        log_streams: []log.MessageStream,
+    };
+
+    /// NOTE: keep in sync with `Info.regionSize`.
+    pub fn getSlices(self: *Region) Slices {
+        const buf: []align(@alignOf(u64)) u8 = trailing: {
+            const ptr: [*]align(@alignOf(u64)) u8 = @ptrCast(self);
+            const full: []align(@alignOf(u64)) u8 = ptr[0..self.info.regionSize()];
+            const header_padded_size = comptime Info.regionSize(.{
+                .port = 0,
+                .max_log_level = .err,
+                .service_count = 0,
+                .id_mem_len = 0,
+                .gauges_len = 0,
+                .histogram_data_len = 0,
+            });
+            break :trailing full[header_padded_size..];
+        };
+        var seek: usize = 0;
+        const gauges =
+            skipPaddingTakeElements(buf, &seek, self.info.gauges_len, std.atomic.Value(u64));
+        const histogram_data =
+            skipPaddingTakeElements(buf, &seek, self.info.histogram_data_len, u64);
+        const log_streams =
+            skipPaddingTakeElements(buf, &seek, self.info.service_count, log.MessageStream);
+        const id_mem =
+            skipPaddingTakeElements(buf, &seek, self.info.id_mem_len, u8);
+        return .{
+            .id_mem = id_mem,
+            .gauges = gauges,
+            .histogram_data = histogram_data,
+            .log_streams = log_streams,
+        };
+    }
+
+    fn skipPaddingTakeElements(
+        buffer: []align(@alignOf(u64)) u8,
+        seek: *usize,
+        n: usize,
+        comptime T: type,
+    ) []T {
+        seek.* += paddingSize(seek.*, .of(T));
+        const bytes = buffer[seek.*..][0 .. n * @sizeOf(T)];
+        seek.* += n * @sizeOf(T);
+        return @ptrCast(@alignCast(bytes));
+    }
+
+    fn paddingSize(seek: usize, alignment: std.mem.Alignment) usize {
+        return std.mem.alignForward(usize, seek, alignment.toByteUnits()) - seek;
+    }
+
+    /// A service should call this when they want to signal to the telemetry service
+    /// that it has acquired a logger stream, and has registered all desired metrics.
+    pub fn signalReady(self: *Region) void {
+        std.debug.assert(self.pending_services.fetchSub(1, .release) != 0);
+    }
+
+    pub fn acquireLogger(
+        self: *Region,
+        /// Asserts `str.len <= log.MessageStream.Name.MAX_LEN`.
+        name: []const u8,
+        comptime scope: []const u8,
+    ) Logger(scope) {
+        const slices = self.getSlices();
+
+        const log_stream_index = self.log_streams.fetchAdd(1, .release);
+        const stream = &slices.log_streams[log_stream_index];
+
+        std.debug.assert(name.len <= log.MessageStream.Name.MAX_LEN); // see `stream.name.init`
+        stream.name.init(name);
+        return .{
+            .sink = .{ .swap_buffer = &stream.swap_buffer },
+            .max_level = self.info.max_log_level,
+        };
+    }
+
+    /// Low-level helper for registering metrics.
+    pub fn metricAppender(self: *Region) MetricAppender {
+        const slices = self.getSlices();
+        return .{
+            .id_mem = slices.id_mem,
+            .id_mem_end = &self.id_mem_end,
+
+            .gauges = slices.gauges,
+            .gauges_end = &self.gauges_end,
+
+            .histogram_data = slices.histogram_data,
+            .histogram_data_end = &self.histogram_data_end,
         };
     }
 };
