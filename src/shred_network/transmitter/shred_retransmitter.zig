@@ -46,6 +46,7 @@ pub const ShredRetransmitterParams = struct {
     exit: *AtomicBool,
     rand: Random,
     logger: Logger,
+    forward_shreds_to: ?sig.net.SocketAddr = null,
     max_retransmit_slot: *AtomicU64,
 };
 
@@ -97,6 +98,7 @@ pub fn runShredRetransmitter(params: ShredRetransmitterParams) !void {
             params.logger,
             &metrics,
             params.overwrite_stake_for_testing,
+            params.forward_shreds_to,
             params.max_retransmit_slot,
         },
     ));
@@ -142,10 +144,19 @@ fn receiveShreds(
     logger: Logger,
     metrics: *RetransmitServiceMetrics,
     overwrite_stake_for_testing: bool,
+    forward_shreds_to: ?sig.net.SocketAddr,
     max_retransmit_slot: *AtomicU64,
 ) !void {
     var turbine_tree_cache = TurbineTreeCache.init(allocator);
     defer turbine_tree_cache.deinit();
+
+    const forward_addr, var forward_socket = if (forward_shreds_to) |a| blk: {
+        const sock: UdpSocket = try .create(a.getFamily());
+        errdefer sock.close();
+        try sock.bindToPort(0);
+        break :blk .{ a.toAddress(), sock };
+    } else .{ null, null };
+    defer if (forward_socket) |s| s.close();
 
     var deduper = try ShredDeduper(2).init(
         allocator,
@@ -209,6 +220,14 @@ fn receiveShreds(
         metrics.receive_shreds_nanos.observe(receive_shreds_timer.read().asNanos());
 
         metrics.maybeLog(logger);
+
+        // Forward raw shreds for v2 testing.
+        if (forward_socket) |*sock| {
+            for (shreds.items) |p| _ = sock.sendTo(
+                forward_addr.?,
+                p.buffer[0..p.size],
+            ) catch |err| logger.err().logf("failed to forward shred: {}", .{err});
+        }
     }
 }
 
@@ -536,4 +555,89 @@ test "createAndSendRetransmitInfo" {
     );
 
     try std.testing.expectEqual(@as(u64, 1), max_retransmit_slot.load(.monotonic));
+}
+
+test "forward: socket creation from SocketAddr for both families" {
+    // Mirrors the inline socket creation in receiveShreds:
+    //   const sock: UdpSocket = try .create(a.getFamily());
+    //   try sock.bindToPort(0);
+    {
+        const v4_addr = sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+        const sock: UdpSocket = try .create(v4_addr.getFamily());
+        defer sock.close();
+        try sock.bindToPort(0);
+    }
+    {
+        const v6_addr = sig.net.SocketAddr.initIpv6(.{0} ** 16, 0);
+        const sock: UdpSocket = try .create(v6_addr.getFamily());
+        defer sock.close();
+        try sock.bindToPort(0);
+    }
+}
+
+test "forward: null SocketAddr produces null socket" {
+    // Mirrors the inline pattern:
+    //   const forward_addr, var forward_socket = if (forward_shreds_to) |a| blk: { ... }
+    //   else .{ null, null };
+    const forward_shreds_to: ?sig.net.SocketAddr = null;
+    const forward_addr, const forward_socket = if (forward_shreds_to) |a| blk: {
+        const sock: UdpSocket = try .create(a.getFamily());
+        errdefer sock.close();
+        try sock.bindToPort(0);
+        break :blk .{ a.toAddress(), sock };
+    } else .{ @as(?std.net.Address, null), @as(?UdpSocket, null) };
+    defer if (forward_socket) |s| s.close();
+
+    try std.testing.expect(forward_addr == null);
+    try std.testing.expect(forward_socket == null);
+}
+
+test "forward: sends raw packets via sendTo" {
+    // Mirrors the inline forwarding in receiveShreds:
+    //   for (shreds.items) |p| _ = sock.sendTo(forward_addr.?, p.buffer[0..p.size], ...) catch ...;
+    var receiver = try UdpSocket.create(.ipv4);
+    defer receiver.close();
+    try receiver.bind(std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0));
+    try receiver.setReadTimeout(250_000); // 250ms
+    const receiver_addr = try receiver.getLocalEndPoint();
+
+    var sender = try UdpSocket.create(.ipv4);
+    defer sender.close();
+    try sender.bindToPort(0);
+
+    var p1: Packet = .ANY_EMPTY;
+    p1.size = 3;
+    p1.buffer[0] = 1;
+    p1.buffer[1] = 2;
+    p1.buffer[2] = 3;
+
+    var p2: Packet = .ANY_EMPTY;
+    p2.size = 1;
+    p2.buffer[0] = 9;
+
+    const shreds = [_]Packet{ p1, p2 };
+    for (shreds) |p| _ = try sender.sendTo(receiver_addr, p.buffer[0..p.size]);
+
+    var buf: [Packet.DATA_SIZE]u8 = undefined;
+    const len1, _ = try receiver.receiveFrom(buf[0..]);
+    const len2, _ = try receiver.receiveFrom(buf[0..]);
+    try std.testing.expectEqual(@as(usize, 4), len1 + len2);
+}
+
+test "forward: no packets sends nothing" {
+    var receiver = try UdpSocket.create(.ipv4);
+    defer receiver.close();
+    try receiver.bind(std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0));
+    try receiver.setReadTimeout(50_000); // 50ms
+    const receiver_addr = try receiver.getLocalEndPoint();
+
+    var sender = try UdpSocket.create(.ipv4);
+    defer sender.close();
+    try sender.bindToPort(0);
+
+    const empty = [_]Packet{};
+    for (empty) |p| _ = try sender.sendTo(receiver_addr, p.buffer[0..p.size]);
+
+    var buf: [Packet.DATA_SIZE]u8 = undefined;
+    try std.testing.expectError(error.WouldBlock, receiver.receiveFrom(buf[0..]));
 }
