@@ -187,6 +187,16 @@ pub const ReplayTower = struct {
     stray_restored_slot: ?Slot,
     last_switch_threshold_check: ?struct { Slot, SwitchForkDecision },
     metrics: ReplayTowerMetrics,
+    /// remember the last "cannot vote" message to avoid spamming it repeatedly
+    last_cannot_vote_log: ?CannotVoteLog = null,
+
+    const CannotVoteLog = packed struct(u64) {
+        locked_out: bool,
+        threshold_passed: bool,
+        propagation_confirmed: bool,
+        switch_fork_can_vote: bool,
+        slot: u60,
+    };
 
     const Self = @This();
 
@@ -1300,7 +1310,8 @@ pub const ReplayTower = struct {
     /// bank. Records any failure reasons, and doesn't early return so we can be sure
     /// to record all possible reasons.
     pub fn canVoteOnCandidateSlot(
-        self: *const ReplayTower,
+        /// mutable only for the log message tracking to reduce logging noise
+        self: *ReplayTower,
         allocator: std.mem.Allocator,
         candidate_vote_bank_slot: Slot,
         progress: *const ProgressMap,
@@ -1370,28 +1381,26 @@ pub const ReplayTower = struct {
             switch_fork_can_vote;
 
         if (can_vote) {
+            self.last_cannot_vote_log = null;
             self.logger.info().logf(
                 "Can vote on: {d} {d:.1}%",
                 .{ candidate_vote_bank_slot, 100.0 * fork_weight },
             );
         } else {
-            self.logger.info().logf(
-                \\Cannot vote on slot {d}:
-                \\ locked_out={}
-                \\ threshold_passed={}
-                \\ propagation_confirmed={}
-                \\ switch_fork_can_vote={}
-                \\ switch_fork_decision={any}"
-            ,
-                .{
-                    candidate_vote_bank_slot,
-                    is_locked_out,
-                    threshold_passed,
-                    propagation_confirmed,
-                    switch_fork_can_vote,
-                    switch_fork_decision.*,
-                },
-            );
+            const cannot_vote_log: CannotVoteLog = .{
+                .slot = @intCast(candidate_vote_bank_slot),
+                .locked_out = is_locked_out,
+                .threshold_passed = threshold_passed,
+                .propagation_confirmed = propagation_confirmed,
+                .switch_fork_can_vote = switch_fork_can_vote,
+            };
+            if (self.last_cannot_vote_log != cannot_vote_log) {
+                self.last_cannot_vote_log = cannot_vote_log;
+                self.logger.info().logf(
+                    "Cannot vote on slot: {any}, switch_fork_decision: {any}",
+                    .{ cannot_vote_log, switch_fork_decision.* },
+                );
+            }
         }
 
         return can_vote;
