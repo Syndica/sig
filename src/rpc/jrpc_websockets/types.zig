@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const xev = @import("xev");
+const tracy = @import("tracy");
 const NotifPayload = sig.sync.RcSlice(u8);
 const methods = @import("methods.zig");
 const ws_request = @import("ws_request.zig");
@@ -424,6 +425,8 @@ pub const EventSink = struct {
         account_reader: sig.accounts_db.AccountReader,
         slot: u64,
     ) !SlotModifiedAccounts {
+        const zone = tracy.Zone.init(@src(), .{ .name = "materialize slot modified accounts" });
+        defer zone.deinit();
         var arena = std.heap.ArenaAllocator.init(self.channel.allocator);
         errdefer arena.deinit();
         const arena_allocator = arena.allocator();
