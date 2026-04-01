@@ -10,14 +10,31 @@ const connection = server.connection;
 
 const Logger = sig.trace.Logger("rpc.server.basic");
 
+/// CORS headers included on every response.
+/// Matches Agave which uses `AccessControlAllowOrigin::Any` with `cors_max_age(86400)`.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc_service.rs#L842-L845
+const cors_headers: []const std.http.Header = &.{
+    .{ .name = "Access-Control-Allow-Origin", .value = "*" },
+    .{ .name = "Access-Control-Allow-Methods", .value = "GET, POST, HEAD, OPTIONS" },
+    .{ .name = "Access-Control-Allow-Headers", .value = "Content-Type, Authorization, Accept, Solana-Client" },
+    .{ .name = "Access-Control-Max-Age", .value = "86400" },
+};
+
+/// Headers for JSON RPC responses: Content-Type + CORS.
+const json_headers: []const std.http.Header = &.{
+    .{ .name = "Content-Type", .value = "application/json" },
+    .{ .name = "Access-Control-Allow-Origin", .value = "*" },
+    .{ .name = "Access-Control-Allow-Methods", .value = "GET, POST, HEAD, OPTIONS" },
+    .{ .name = "Access-Control-Allow-Headers", .value = "Content-Type, Authorization, Accept, Solana-Client" },
+    .{ .name = "Access-Control-Max-Age", .value = "86400" },
+};
+
 pub const AcceptAndServeConnectionError =
     error{AcceptError} ||
     error{SetSocketSyncError} ||
     error{SystemIoError} ||
     error{NoSpaceLeft} ||
     std.mem.Allocator.Error ||
-    // TODO: eventually remove this once we move accountsdb operations to a separate thread, and/or handle them in a way that doesn't kill the server.
-    error{AccountsDbError} ||
     error{WriteFailed};
 
 pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConnectionError!void {
@@ -82,6 +99,17 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
         .HEAD => try handleGetOrHead(.HEAD, server_ctx, &request, logger),
         .GET => try handleGetOrHead(.GET, server_ctx, &request, logger),
         .POST => try handlePost(server_ctx, &request, logger, head_info, conn.address),
+        .OPTIONS => {
+            // CORS preflight response.
+            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc_service.rs#L842-L845
+            request.respond("", .{
+                .status = .no_content,
+                .keep_alive = false,
+                .extra_headers = cors_headers,
+            }) catch {
+                return error.SystemIoError;
+            };
+        },
         else => try respondSimpleErrorStatusBody(&request, logger, .not_found, ""),
     }
 
@@ -106,6 +134,7 @@ fn respondSimpleErrorStatusBody(
     request.respond(body, .{
         .status = status,
         .keep_alive = false,
+        .extra_headers = cors_headers,
     }) catch {
         return error.SystemIoError;
     };
@@ -185,6 +214,7 @@ fn handleGetOrHead(
                     request.respond("unknown", .{
                         .status = .ok,
                         .keep_alive = false,
+                        .extra_headers = cors_headers,
                     }) catch |err| switch (err) {
                         error.WriteFailed => return error.SystemIoError,
                         error.HttpExpectationFailed => return error.SystemIoError,
@@ -202,6 +232,7 @@ fn handleGetOrHead(
             request.respond(status_str, .{
                 .status = .ok,
                 .keep_alive = false,
+                .extra_headers = cors_headers,
             }) catch |err| switch (err) {
                 error.WriteFailed => return error.SystemIoError,
                 error.HttpExpectationFailed => return error.SystemIoError,
@@ -234,7 +265,13 @@ fn handleGetOrHead(
                     var send_buffer: [4096]u8 = undefined;
                     var response = request.respondStreaming(&send_buffer, .{
                         .content_length = archive_len,
-                        .respond_options = .{},
+                        .respond_options = .{
+                            // This server currently serves a single request per accepted socket
+                            // and closes the connection afterwards, so responses must advertise
+                            // non-persistent semantics.
+                            .keep_alive = false,
+                            .extra_headers = cors_headers,
+                        },
                     }) catch |err| switch (err) {
                         error.HttpExpectationFailed => return,
                         error.WriteFailed => return error.SystemIoError,
@@ -610,7 +647,14 @@ fn writeFinalJsonResponse(
     var send_buffer: [4096]u8 = undefined;
     var response = request.respondStreaming(&send_buffer, .{
         .content_length = content_length,
-        .respond_options = http_respond_opts,
+        .respond_options = blk: {
+            var opts = http_respond_opts;
+            // The connection is closed at the end of request handling.
+            // Keep-alive must be disabled to avoid clients reusing dead sockets.
+            opts.keep_alive = false;
+            opts.extra_headers = json_headers;
+            break :blk opts;
+        },
     }) catch |err| switch (err) {
         error.HttpExpectationFailed => return,
         error.WriteFailed => return error.SystemIoError,

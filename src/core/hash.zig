@@ -125,6 +125,25 @@ pub const Hash = extern struct {
         };
     }
 
+    // When decoding JSON-RPC `params`, the server parses each element as a
+    // `std.json.Value` and then calls `std.json.innerParseFromValue(...)`.
+    //
+    // `Pubkey` provides `jsonParseFromValue`, but `Hash` previously only
+    // implemented `jsonParse`, which meant parameter decoding for
+    // `isBlockhashValid` always failed with `Invalid method parameters`.
+    pub fn jsonParseFromValue(
+        _: std.mem.Allocator,
+        source: std.json.Value,
+        _: std.json.ParseOptions,
+    ) std.json.ParseFromValueError!Hash {
+        return switch (source) {
+            .string => |str| parseRuntime(str) catch |err| switch (err) {
+                error.InvalidHash => error.InvalidCharacter,
+            },
+            else => error.UnexpectedToken,
+        };
+    }
+
     pub fn jsonStringify(self: Hash, write_stream: anytype) !void {
         try write_stream.write(self.base58String().constSlice());
     }
@@ -602,5 +621,35 @@ test "Hash format" {
     try std.testing.expectEqualStrings(
         "DULfJyE3WQqNxy3ymuhAChyNR3yufT88pmqvAazKFMG4",
         buf[0..w.end],
+    );
+}
+
+test "jsonParseFromValue for rpc params" {
+    const valid_hash_str = "DULfJyE3WQqNxy3ymuhAChyNR3yufT88pmqvAazKFMG4";
+    const expected = try Hash.parseRuntime(valid_hash_str);
+
+    const parsed = try Hash.jsonParseFromValue(
+        std.testing.allocator,
+        .{ .string = valid_hash_str },
+        .{},
+    );
+    try std.testing.expectEqual(expected, parsed);
+
+    try std.testing.expectError(
+        error.InvalidCharacter,
+        Hash.jsonParseFromValue(
+            std.testing.allocator,
+            .{ .string = "not-a-valid-base58-hash" },
+            .{},
+        ),
+    );
+
+    try std.testing.expectError(
+        error.UnexpectedToken,
+        Hash.jsonParseFromValue(
+            std.testing.allocator,
+            .null,
+            .{},
+        ),
     );
 }

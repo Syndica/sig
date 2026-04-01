@@ -35,7 +35,7 @@ pub fn Response(comptime T: type) type {
                 },
                 arena.allocator(),
                 response_json,
-                .{},
+                .{ .allocate = .alloc_always },
             );
             return .{
                 .arena = arena,
@@ -95,27 +95,6 @@ pub const ErrorCode = enum(i64) {
     internal_error = -32603,
 
     _,
-
-    pub const server_error_first: ErrorCode = @enumFromInt(-32_000);
-    pub const server_error_last: ErrorCode = @enumFromInt(-32_099);
-
-    pub const reserved_error_first: ErrorCode = @enumFromInt(-32_100);
-    pub const reserved_error_last: ErrorCode = @enumFromInt(-32_768);
-
-    pub fn isServerError(code: ErrorCode) bool {
-        return switch (code) {
-            server_error_first...server_error_last => true,
-            else => false,
-        };
-    }
-
-    pub fn isAppError(code: ErrorCode) bool {
-        return switch (code) {
-            server_error_first...server_error_last => false,
-            reserved_error_first...reserved_error_last => false,
-            else => true,
-        };
-    }
 
     pub fn jsonParse(
         allocator: std.mem.Allocator,

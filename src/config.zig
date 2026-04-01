@@ -11,8 +11,6 @@ pub const Cmd = struct {
     geyser: Geyser = .{},
     turbine: Turbine = .{},
 
-    test_transaction_sender: TestTransactionSender = .{},
-
     validator_dir: []const u8 = sig.VALIDATOR_DIR,
     max_shreds: u64 = 5_000_000,
     leader_schedule_path: ?[]const u8 = null,
@@ -35,6 +33,7 @@ pub const Cmd = struct {
     rpc_port: ?u16 = null,
     vote_account: ?[]const u8 = null,
     stop_at_slot: ?sig.core.Slot = null,
+    mock_transfer_transactions: ?u64 = null,
 
     pub fn getCluster(self: Cmd) error{UnknownCluster}!?sig.core.ClusterType {
         return if (self.cluster) |cluster_str|
@@ -62,6 +61,13 @@ pub const Cmd = struct {
         return local_path;
     }
 
+    /// Returns the ledger directory path: `<validator-dir>/ledger`.
+    ///
+    /// The returned path is **allocated** and must be freed by the caller using the same `allocator`.
+    pub fn ledgerDir(self: Cmd, allocator: std.mem.Allocator) ![]const u8 {
+        return try std.fs.path.join(allocator, &.{ self.validator_dir, "ledger" });
+    }
+
     /// Derives a path relative to validator_dir if the param equals the default value.
     /// This is used to allow paths like snapshot_dir and geyser.pipe_path to be relative
     /// to validator_dir when using their default values, while still allowing explicit
@@ -80,11 +86,6 @@ pub const Cmd = struct {
         }
         return try allocator.dupe(u8, param_value);
     }
-};
-
-pub const TestTransactionSender = struct {
-    n_transactions: u64 = 3,
-    n_lamports_per_transaction: u64 = 1e7,
 };
 
 pub const Turbine = struct {
@@ -110,6 +111,7 @@ pub const ShredNetwork = struct {
     no_retransmit: bool = true,
     dump_shred_tracker: bool = false,
     log_finished_slots: bool = false,
+    forward_shreds_to: ?[]const u8 = null,
 
     /// Converts from the CLI args into the `shred_network.start` parameters
     pub fn toConfig(self: ShredNetwork, fallback_slot: sig.core.Slot) ShredNetworkConfig {
@@ -120,6 +122,7 @@ pub const ShredNetwork = struct {
             .retransmit = !self.no_retransmit,
             .dump_shred_tracker = self.dump_shred_tracker,
             .log_finished_slots = self.log_finished_slots,
+            .forward_shreds_to = null,
         };
     }
 };

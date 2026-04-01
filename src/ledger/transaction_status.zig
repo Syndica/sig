@@ -528,6 +528,18 @@ pub const TransactionError = union(enum(u32)) {
         }
     }
 
+    pub fn clone(self: @This(), allocator: Allocator) !TransactionError {
+        return switch (self) {
+            .InstructionError => |payload| switch (payload[1]) {
+                .BorshIoError => |borsh_err| .{ .InstructionError = .{
+                    payload[0], .{ .BorshIoError = try allocator.dupe(u8, borsh_err) },
+                } },
+                else => self,
+            },
+            else => self,
+        };
+    }
+
     /// Serialize to JSON matching Agave's serde format for UiTransactionError.
     /// - Unit variants: "VariantName"
     /// - Tuple variants: {"VariantName": value}

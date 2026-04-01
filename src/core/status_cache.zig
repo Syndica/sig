@@ -14,7 +14,23 @@ const Ancestors = sig.core.Ancestors;
 // StatusCache is only used with <Result<(), TransactionError>>
 const T = ?sig.ledger.transaction_status.TransactionError;
 
-const Fork = struct { slot: Slot, maybe_err: T = null };
+const Fork = struct {
+    slot: Slot,
+    maybe_err: T = null,
+
+    pub fn deinit(self: *Fork, allocator: std.mem.Allocator) void {
+        if (self.maybe_err) |err| err.deinit(allocator);
+    }
+
+    pub fn clone(self: *const Fork, allocator: std.mem.Allocator) !Fork {
+        return .{
+            .slot = self.slot,
+            .maybe_err = if (self.maybe_err) |err| try err.clone(allocator) else null,
+        };
+    }
+};
+
+pub const Status = enum { pending, failed, succeeded };
 
 /// This is internally locking and thread safe.
 /// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/runtime/src/status_cache.rs#L39
@@ -73,19 +89,17 @@ pub const StatusCache = struct {
         state.mut().slot_deltas.deinit(allocator);
     }
 
-    fn cachedKeySlice(key: []const u8, map_index: usize) [CACHED_KEY_SIZE]u8 {
-        const max_key_index = key.len -| (CACHED_KEY_SIZE + 1);
-        const index = @min(map_index, max_key_index);
-        return key[index..][0..CACHED_KEY_SIZE].*;
-    }
-
-    pub fn getStatus(
+    /// Returns the fork for the given key and blockhash, if it exists and is in the ancestors or roots.
+    /// The returned fork is owned by the caller, allocation only occurs if the inner transaction error
+    /// contains an instruction error of the borsh variant which stores a heap string.
+    fn getFork(
         self: *StatusCache,
+        allocator: std.mem.Allocator,
         key: []const u8,
         blockhash: *const Hash,
         ancestors: *const Ancestors,
-    ) ?Fork {
-        const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.getStatus" });
+    ) !?Fork {
+        const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.getFork" });
         defer zone.deinit();
 
         var state = self.state.read();
@@ -97,21 +111,51 @@ pub const StatusCache = struct {
         const stored_forks: ArrayList(Fork) = map.key_map.get(lookup_key) orelse return null;
         return for (stored_forks.items) |fork| {
             if (ancestors.ancestors.contains(fork.slot) or state.get().roots.contains(fork.slot)) {
-                break fork;
+                break try fork.clone(allocator);
             }
         } else null;
     }
 
-    /// Like `getStatus`, but iterates all blockhashes in the cache.
+    fn cachedKeySlice(key: []const u8, map_index: usize) [CACHED_KEY_SIZE]u8 {
+        const max_key_index = key.len -| (CACHED_KEY_SIZE + 1);
+        const index = @min(map_index, max_key_index);
+        return key[index..][0..CACHED_KEY_SIZE].*;
+    }
+
+    pub fn getStatus(
+        self: *StatusCache,
+        key: []const u8,
+        blockhash: *const Hash,
+        ancestors: *const Ancestors,
+    ) Status {
+        const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.getStatus" });
+        defer zone.deinit();
+
+        var state = self.state.read();
+        defer state.unlock();
+
+        const map = state.get().cache.get(blockhash.*) orelse return .pending;
+        const lookup_key = cachedKeySlice(key, map.index);
+
+        const stored_forks: ArrayList(Fork) = map.key_map.get(lookup_key) orelse return .pending;
+        return for (stored_forks.items) |fork| {
+            if (ancestors.ancestors.contains(fork.slot) or state.get().roots.contains(fork.slot)) {
+                break if (fork.maybe_err) |_| .failed else .succeeded;
+            }
+        } else .pending;
+    }
+
+    /// Like `getFork`, but iterates all blockhashes in the cache.
     /// Used when the caller doesn't know which blockhash the transaction used
     /// (e.g. RPC `getSignatureStatuses`).
     /// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/runtime/src/status_cache.rs#L146
-    pub fn getStatusAnyBlockhash(
+    pub fn getForkAnyBlockhash(
         self: *StatusCache,
+        allocator: std.mem.Allocator,
         key: []const u8,
         ancestors: *const Ancestors,
-    ) ?Fork {
-        const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.getStatusAnyBlockhash" });
+    ) !?Fork {
+        const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.getForkAnyBlockhash" });
         defer zone.deinit();
 
         var state = self.state.read();
@@ -123,7 +167,7 @@ pub const StatusCache = struct {
             const stored_forks: ArrayList(Fork) = map.key_map.get(lookup_key) orelse continue;
             for (stored_forks.items) |fork| {
                 if (ancestors.ancestors.contains(fork.slot) or
-                    state.get().roots.contains(fork.slot)) return fork;
+                    state.get().roots.contains(fork.slot)) return try fork.clone(allocator);
             }
         }
         return null;
@@ -275,7 +319,8 @@ test "status cache empty" {
 
     try std.testing.expectEqual(
         null,
-        status_cache.getStatus(
+        try status_cache.getFork(
+            std.testing.failing_allocator,
             &signature.toBytes(),
             &block_hash,
             &Ancestors{},
@@ -283,7 +328,7 @@ test "status cache empty" {
     );
 }
 
-test "status cache getStatusAnyBlockhash finds across blockhashes" {
+test "status cache getForkAnyBlockhash finds across blockhashes" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -301,25 +346,33 @@ test "status cache getStatusAnyBlockhash finds across blockhashes" {
 
     try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0, null);
 
-    // getStatusAnyBlockhash should find it without needing the blockhash
+    // getForkAnyBlockhash should find it without needing the blockhash
     try std.testing.expectEqual(
         Fork{ .slot = 0 },
-        status_cache.getStatusAnyBlockhash(&signature.toBytes(), &ancestors),
+        try status_cache.getForkAnyBlockhash(
+            std.testing.failing_allocator,
+            &signature.toBytes(),
+            &ancestors,
+        ),
     );
 }
 
-test "status cache getStatusAnyBlockhash returns null when empty" {
+test "status cache getForkAnyBlockhash returns null when empty" {
     const signature = sig.core.Signature.ZEROES;
 
     var status_cache: StatusCache = .DEFAULT;
 
     try std.testing.expectEqual(
         null,
-        status_cache.getStatusAnyBlockhash(&signature.toBytes(), &Ancestors{}),
+        try status_cache.getForkAnyBlockhash(
+            std.testing.failing_allocator,
+            &signature.toBytes(),
+            &Ancestors{},
+        ),
     );
 }
 
-test "status cache getStatusAnyBlockhash finds with root" {
+test "status cache getForkAnyBlockhash finds with root" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -336,11 +389,15 @@ test "status cache getStatusAnyBlockhash finds with root" {
     // Empty ancestors but root matches
     try std.testing.expectEqual(
         Fork{ .slot = 0 },
-        status_cache.getStatusAnyBlockhash(&signature.toBytes(), &Ancestors{}),
+        try status_cache.getForkAnyBlockhash(
+            std.testing.failing_allocator,
+            &signature.toBytes(),
+            &Ancestors{},
+        ),
     );
 }
 
-test "status cache getStatusAnyBlockhash returns null when fork does not match" {
+test "status cache getForkAnyBlockhash returns null when fork does not match" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -362,7 +419,11 @@ test "status cache getStatusAnyBlockhash returns null when fork does not match" 
     // Stored fork (slot 5) is neither in ancestors nor roots → should return null.
     try std.testing.expectEqual(
         null,
-        status_cache.getStatusAnyBlockhash(&signature.toBytes(), &ancestors),
+        try status_cache.getForkAnyBlockhash(
+            std.testing.failing_allocator,
+            &signature.toBytes(),
+            &ancestors,
+        ),
     );
 }
 
@@ -386,7 +447,12 @@ test "status cache find with ancestor fork" {
 
     try std.testing.expectEqual(
         Fork{ .slot = 0 },
-        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
+        try status_cache.getFork(
+            std.testing.failing_allocator,
+            &signature.toBytes(),
+            &blockhash,
+            &ancestors,
+        ),
     );
 }
 
@@ -407,7 +473,12 @@ test "status cache find without ancestor fork" {
 
     try std.testing.expectEqual(
         null,
-        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
+        try status_cache.getFork(
+            std.testing.failing_allocator,
+            &signature.toBytes(),
+            &blockhash,
+            &ancestors,
+        ),
     );
 }
 
@@ -429,7 +500,12 @@ test "status cache find with root ancestor fork" {
 
     try std.testing.expectEqual(
         Fork{ .slot = 0 },
-        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
+        try status_cache.getFork(
+            std.testing.failing_allocator,
+            &signature.toBytes(),
+            &blockhash,
+            &ancestors,
+        ),
     );
 }
 
@@ -454,9 +530,12 @@ test "status cache insert picks latest blockhash fork" {
 
     for (0..StatusCache.MAX_CACHE_ENTRIES + 1) |i| try status_cache.addRoot(allocator, i);
 
-    try std.testing.expect(
-        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors) != null,
-    );
+    try std.testing.expect(try status_cache.getFork(
+        std.testing.failing_allocator,
+        &signature.toBytes(),
+        &blockhash,
+        &ancestors,
+    ) != null);
 }
 
 test "status cache root expires" {
@@ -477,7 +556,12 @@ test "status cache root expires" {
 
     try std.testing.expectEqual(
         null,
-        status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors),
+        try status_cache.getFork(
+            std.testing.failing_allocator,
+            &signature.toBytes(),
+            &blockhash,
+            &ancestors,
+        ),
     );
 }
 
@@ -501,13 +585,22 @@ test "status cache insert and retrieve with transaction error" {
     try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0, tx_err);
 
     // getStatus should return a Fork with the error set.
-    const result = status_cache.getStatus(&signature.toBytes(), &blockhash, &ancestors);
+    const result = try status_cache.getFork(
+        std.testing.failing_allocator,
+        &signature.toBytes(),
+        &blockhash,
+        &ancestors,
+    );
     try std.testing.expect(result != null);
     try std.testing.expectEqual(@as(Slot, 0), result.?.slot);
     try std.testing.expectEqual(tx_err, result.?.maybe_err.?);
 
-    // getStatusAnyBlockhash should also return the error.
-    const result2 = status_cache.getStatusAnyBlockhash(&signature.toBytes(), &ancestors);
+    // getForkAnyBlockhash should also return the error.
+    const result2 = try status_cache.getForkAnyBlockhash(
+        std.testing.failing_allocator,
+        &signature.toBytes(),
+        &ancestors,
+    );
     try std.testing.expect(result2 != null);
     try std.testing.expectEqual(tx_err, result2.?.maybe_err.?);
 }

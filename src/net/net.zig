@@ -7,6 +7,14 @@ pub const AddressFamily = enum(u32) {
     ipv4 = posix.AF.INET,
     ipv6 = posix.AF.INET6,
 
+    pub fn fromAddress(addr: std.net.Address) !AddressFamily {
+        return switch (addr.any.family) {
+            posix.AF.INET => .ipv4,
+            posix.AF.INET6 => .ipv6,
+            else => error.UnsupportedAddressFamily,
+        };
+    }
+
     fn fromNativeAddressFamily(domain: u32) ?AddressFamily {
         return std.meta.intToEnum(AddressFamily, domain) catch null;
     }
@@ -195,6 +203,13 @@ pub const SocketAddr = union(enum(u8)) {
             .flowinfo = 0,
             .scope_id = 0,
         } };
+    }
+
+    pub fn getFamily(self: SocketAddr) AddressFamily {
+        return switch (self) {
+            .V4 => .ipv4,
+            .V6 => .ipv6,
+        };
     }
 
     pub fn getPort(self: *const SocketAddr) u16 {
@@ -932,4 +947,34 @@ fn testIpv6Format(expected: []const u8, addr: Ipv6Addr) !void {
     var w: std.io.Writer = .fixed(&buf);
     try addr.format(&w);
     try std.testing.expectEqualStrings(expected, buf[0..w.end]);
+}
+
+test "AddressFamily.fromAddress - ipv4" {
+    try std.testing.expectEqual(
+        AddressFamily.ipv4,
+        try AddressFamily.fromAddress(std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 1234)),
+    );
+}
+
+test "AddressFamily.fromAddress - ipv6" {
+    try std.testing.expectEqual(
+        AddressFamily.ipv6,
+        try AddressFamily.fromAddress(std.net.Address.initIp6(.{0} ** 16, 1234, 0, 0)),
+    );
+}
+
+test "AddressFamily.fromAddress - unsupported family" {
+    const unsupported = try std.net.Address.initUnix("/tmp/sig-fromAddress.sock");
+    try std.testing.expectError(
+        error.UnsupportedAddressFamily,
+        AddressFamily.fromAddress(unsupported),
+    );
+}
+
+test "SocketAddr.getFamily" {
+    const v4 = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    try std.testing.expectEqual(AddressFamily.ipv4, v4.getFamily());
+
+    const v6 = SocketAddr.initIpv6(.{0} ** 16, 0);
+    try std.testing.expectEqual(AddressFamily.ipv6, v6.getFamily());
 }

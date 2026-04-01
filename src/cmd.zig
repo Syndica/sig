@@ -17,7 +17,6 @@ const WSRPCRuntimeContext = jrpc_ws.runtime.RuntimeContext;
 const WSRPCServer = WSRPCHandler.WebSocketServer;
 
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
-const ClusterType = sig.core.ClusterType;
 const ContactInfo = sig.gossip.ContactInfo;
 const Gauge = sig.prometheus.gauge.Gauge;
 const FullAndIncrementalManifest = sig.accounts_db.snapshot.FullAndIncrementalManifest;
@@ -155,6 +154,7 @@ pub fn main() !void {
             current_config.stop_at_slot = params.stop_at_slot;
             current_config.voting_enabled = params.voting_enabled or params.vote_account != null;
             current_config.rpc_port = params.rpc_port;
+            current_config.mock_transfer_transactions = params.mock_transfer_transactions;
             try validator(gpa, gossip_gpa, current_config);
         },
         .replay_offline => |params| {
@@ -195,8 +195,13 @@ pub fn main() !void {
             current_config.turbine.overwrite_stake_for_testing =
                 params.overwrite_stake_for_testing;
             current_config.shred_network.no_retransmit = params.no_retransmit;
+            current_config.shred_network.forward_shreds_to = params.forward_shreds_to;
             current_config.accounts_db.snapshot_metadata_only = params.snapshot_metadata_only;
             try shredNetwork(gpa, gossip_gpa, current_config);
+        },
+        .stream_ledger => |params| {
+            current_config.shred_network.forward_shreds_to = params.forward_shreds_to;
+            try streamLedger(gpa, current_config);
         },
         .snapshot_download => |params| {
             current_config.shred_version = params.shred_version;
@@ -255,16 +260,6 @@ pub fn main() !void {
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_download.apply(&current_config);
             try printLeaderSchedule(gpa, current_config);
-        },
-        .test_transaction_sender => |params| {
-            current_config.shred_version = params.shred_version;
-            current_config.cli_provided_genesis_file_path = params.genesis_file_path;
-            current_config.test_transaction_sender.n_transactions = params.n_transactions;
-            current_config.test_transaction_sender.n_lamports_per_transaction =
-                params.n_lamports_per_tx;
-            params.gossip_base.apply(&current_config);
-            params.gossip_node.apply(&current_config);
-            try testTransactionSenderService(gpa, gossip_gpa, current_config);
         },
         // NOTE: mock_rpc_server is disabled because AccountsDB v2 does not yet support:
         // - loadWithDefaults (snapshot loading into AccountsDB)
@@ -330,12 +325,12 @@ const Cmd = struct {
         validator: Validator,
         replay_offline: Validator,
         shred_network: ShredNetwork,
+        stream_ledger: StreamLedger,
         snapshot_download: SnapshotDownload,
         snapshot_validate: SnapshotValidate,
         snapshot_create: SnapshotCreate,
         print_manifest: PrintManifest,
         leader_schedule: LeaderScheduleSubCmd,
-        test_transaction_sender: TestTransactionSender,
         // NOTE: mock_rpc_server is disabled because AccountsDB v2 does not yet support
         // snapshot loading (loadWithDefaults) and RPC hook registration (registerRPCHooks).
         // TODO: Re-enable when v2 implements these features.
@@ -361,12 +356,12 @@ const Cmd = struct {
                 .validator = Validator.cmd_info,
                 .replay_offline = Validator.cmd_info,
                 .shred_network = ShredNetwork.cmd_info,
+                .stream_ledger = StreamLedger.cmd_info,
                 .snapshot_download = SnapshotDownload.cmd_info,
                 .snapshot_validate = SnapshotValidate.cmd_info,
                 .snapshot_create = SnapshotCreate.cmd_info,
                 .print_manifest = PrintManifest.cmd_info,
                 .leader_schedule = LeaderScheduleSubCmd.cmd_info,
-                .test_transaction_sender = TestTransactionSender.cmd_info,
                 // NOTE: mock_rpc_server is disabled - see MockRpcServer struct below for details.
                 // .mock_rpc_server = MockRpcServer.cmd_info,
                 .agave_migration_tool = AgaveMigrationTool.cmd_info,
@@ -503,6 +498,16 @@ const Cmd = struct {
         .default_value = null,
         .config = {},
         .help = "Stop processing at this slot.",
+    };
+
+    const mock_transfer_transactions_arg: cli.ArgumentInfo(?u64) = .{
+        .kind = .named,
+        .name_override = "mock-transfer-transactions",
+        .alias = .none,
+        .default_value = null,
+        .config = {},
+        .help = "Runs the mock transfer service." ++
+            " Sending `n` transfer transactions between two test accounts. ",
     };
 
     const voting_enabled_arg: cli.ArgumentInfo(bool) = .{
@@ -967,6 +972,7 @@ const Cmd = struct {
         stop_at_slot: ?sig.core.Slot,
         voting_enabled: bool,
         rpc_port: ?u16,
+        mock_transfer_transactions: ?u64,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -991,6 +997,7 @@ const Cmd = struct {
                 .voting_enabled = voting_enabled_arg,
                 .rpc_port = rpc_port_arg,
                 .stop_at_slot = stop_at_slot_arg,
+                .mock_transfer_transactions = mock_transfer_transactions_arg,
             },
         };
     };
@@ -1006,6 +1013,7 @@ const Cmd = struct {
         overwrite_stake_for_testing: bool,
         no_retransmit: bool,
         snapshot_metadata_only: bool,
+        forward_shreds_to: ?[]const u8,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -1046,6 +1054,14 @@ const Cmd = struct {
                     .config = {},
                     .help = "Shreds will be received and stored but not retransmitted",
                 },
+                .forward_shreds_to = .{
+                    .kind = .named,
+                    .name_override = "forward-shreds-to",
+                    .alias = .none,
+                    .default_value = null,
+                    .config = .string,
+                    .help = "Forward deduped shreds (raw UDP payload) to ip:port",
+                },
                 .snapshot_metadata_only = .{
                     .kind = .named,
                     .name_override = null,
@@ -1053,6 +1069,30 @@ const Cmd = struct {
                     .default_value = false,
                     .config = {},
                     .help = "load only the snapshot metadata",
+                },
+            },
+        };
+    };
+
+    const StreamLedger = struct {
+        forward_shreds_to: ?[]const u8,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Stream shreds from an existing ledger.",
+                .long =
+                \\Reads shreds from the local ledger database and streams them slot-by-slot
+                \\to a UDP socket. Intended for v2 testing.
+                ,
+            },
+            .sub = .{
+                .forward_shreds_to = .{
+                    .kind = .named,
+                    .name_override = "forward-shreds-to",
+                    .alias = .none,
+                    .default_value = null,
+                    .config = .string,
+                    .help = "Forward shreds (raw UDP payload) to ip:port",
                 },
             },
         };
@@ -1164,48 +1204,6 @@ const Cmd = struct {
                 .accountsdb_base = AccountsDbArgumentsBase.cmd_info,
                 .accountsdb_download = AccountsDbArgumentsDownload.cmd_info,
                 .force_new_snapshot_download = force_new_snapshot_download_arg,
-            },
-        };
-    };
-
-    const TestTransactionSender = struct {
-        shred_version: ?u16,
-        genesis_file_path: ?[]const u8,
-        n_transactions: u64,
-        n_lamports_per_tx: u64,
-        gossip_base: GossipArgumentsCommon,
-        gossip_node: GossipArgumentsNode,
-
-        const cmd_info: cli.CommandInfo(@This()) = .{
-            .help = .{
-                .short = "Test transaction sender service.",
-                .long =
-                \\Simulates a stream of transaction being sent to the transaction sender by
-                \\running a mock transaction generator thread. For the moment this just sends
-                \\transfer transactions between to hard coded testnet accounts.
-                ,
-            },
-            .sub = .{
-                .shred_version = shred_version_arg,
-                .genesis_file_path = genesis_file_path_arg,
-                .n_transactions = .{
-                    .kind = .named,
-                    .name_override = "n-transactions",
-                    .alias = .t,
-                    .default_value = 3,
-                    .config = {},
-                    .help = "number of transactions to send",
-                },
-                .n_lamports_per_tx = .{
-                    .kind = .named,
-                    .name_override = "n-lamports-per-tx",
-                    .alias = .l,
-                    .default_value = 1e7,
-                    .config = {},
-                    .help = "number of lamports to send per transaction",
-                },
-                .gossip_base = GossipArgumentsCommon.cmd_info,
-                .gossip_node = GossipArgumentsNode.cmd_info,
             },
         };
     };
@@ -1514,7 +1512,7 @@ fn validator(
     const turbine_recv_port: u16 = cfg.shred_network.turbine_recv_port;
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
 
-    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    const ledger_dir = try cfg.ledgerDir(allocator);
     defer allocator.free(ledger_dir);
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{
@@ -1817,6 +1815,60 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
+    var transaction_sender_service = try sig.TransactionSenderService.init(
+        allocator,
+        .{ .unordered = app_base.exit },
+        .from(app_base.logger),
+        .{
+            .process_interval = .fromSecs(1),
+            .retry_interval = .fromSecs(5),
+            .max_pooled = 1_000,
+            .max_retries = 3,
+            .max_leaders = 5,
+        },
+        .{
+            .account_store = .{ .accounts_db = &new_db },
+            .epoch_tracker = &epoch_tracker,
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .commitments = &replay_service_state.replay_state.commitments.?,
+            .status_cache = &replay_service_state.replay_state.status_cache,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+        },
+    );
+    defer transaction_sender_service.deinit();
+    const transaction_sender_handle = try std.Thread.spawn(
+        .{},
+        sig.TransactionSenderService.run,
+        .{ &transaction_sender_service, gpa },
+    );
+
+    var mock_transfer_service: ?sig.MockTransferService = null;
+    defer if (mock_transfer_service) |*service| service.deinit();
+    var mock_transfer_handle: ?std.Thread = null;
+    defer if (mock_transfer_handle) |thread| thread.join();
+
+    if (cfg.mock_transfer_transactions) |n| {
+        if (try cfg.getCluster() == .mainnet)
+            @panic("Cannot run mock transfers on mainnet.");
+
+        mock_transfer_service = sig.MockTransferService{
+            .exit = .{ .unordered = app_base.exit },
+            .logger = .from(app_base.logger),
+            .client = try .init(gpa, rpc_url, .{
+                .max_retries = 5,
+                .logger = .noop,
+            }),
+            .submit = .{ .direct = transaction_sender_service.receiver },
+            .transfers = n,
+        };
+
+        mock_transfer_handle = try std.Thread.spawn(
+            .{},
+            sig.MockTransferService.run,
+            .{ &mock_transfer_service.?, gpa },
+        );
+    }
+
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
         try std.Thread.spawn(.{}, runRPCServer, .{
             allocator,
@@ -1830,6 +1882,7 @@ fn validator(
         null;
 
     if (rpc_server_thread) |thread| thread.join();
+    transaction_sender_handle.join();
     replay_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
@@ -2068,7 +2121,7 @@ fn replayOffline(
     );
     defer snapshot_dir.close();
 
-    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    const ledger_dir = try cfg.ledgerDir(allocator);
     defer allocator.free(ledger_dir);
 
     const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
@@ -2264,7 +2317,7 @@ fn shredNetwork(
     defer allocator.free(genesis_file_path);
     const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
 
-    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    const ledger_dir = try cfg.ledgerDir(allocator);
     defer allocator.free(ledger_dir);
 
     const rpc_url = genesis_config.cluster_type.getRpcUrl() orelse
@@ -2272,12 +2325,20 @@ fn shredNetwork(
     var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{});
     defer rpc_client.deinit();
 
-    const shred_network_conf = cfg.shred_network.toConfig(
+    var shred_network_conf = cfg.shred_network.toConfig(
         cfg.shred_network.root_slot orelse blk: {
             const response = try rpc_client.getSlot(.{});
             break :blk try response.result();
         },
     );
+    if (cfg.shred_network.forward_shreds_to) |target| {
+        const socket_addr = sig.net.SocketAddr.parse(target) catch try sig.net.net.resolveSocketAddr(
+            allocator,
+            target,
+        );
+        try sig.net.SocketAddr.sanitize(&socket_addr);
+        shred_network_conf.forward_shreds_to = socket_addr;
+    }
     app_base.logger.info().logf(
         "Starting after assumed root slot: {any}",
         .{shred_network_conf.root_slot},
@@ -2370,6 +2431,63 @@ fn shredNetwork(
     gossip_service.service_manager.join();
     shred_network_manager.join();
     ledger_cleanup_service.join();
+}
+
+/// Streams shreds from the local ledger DB to `--forward-shreds-to`.
+///
+/// Reads shreds slot-by-slot from `<validator-dir>/ledger` and forwards both data and coding
+/// shreds as raw UDP payloads. This is intended for v2 testing using an existing ledger.
+fn streamLedger(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
+    var app_base = try AppBase.init(allocator, cfg);
+    defer {
+        if (!app_base.closed) app_base.shutdown();
+        app_base.deinit();
+    }
+
+    const target = cfg.shred_network.forward_shreds_to orelse return error.MissingValue;
+    const socket_addr = sig.net.SocketAddr.parse(target) catch try sig.net.net.resolveSocketAddr(
+        allocator,
+        target,
+    );
+    try sig.net.SocketAddr.sanitize(&socket_addr);
+    const forward_addr = socket_addr.toAddress();
+
+    const ledger_dir = try cfg.ledgerDir(allocator);
+    defer allocator.free(ledger_dir);
+
+    var ledger = try Ledger.init(
+        allocator,
+        .from(app_base.logger),
+        ledger_dir,
+        app_base.metrics_registry,
+    );
+    defer ledger.deinit();
+
+    const sock: sig.net.UdpSocket = try .create(try .fromAddress(forward_addr));
+    defer sock.close();
+    try sock.bindToPort(0);
+
+    const reader = ledger.reader();
+    const start_slot = try reader.lowestSlot();
+    var it = try reader.slotMetaIterator(start_slot);
+    defer it.deinit();
+
+    while (try it.next()) |entry| {
+        const slot, const meta = entry;
+        if (slot == 0 or meta.received == 0) continue;
+
+        var data_shreds = try reader.getDataShredsForSlot(allocator, slot, 0);
+        defer data_shreds.deinit();
+        for (data_shreds.items) |shred| {
+            _ = sock.sendTo(forward_addr, shred.payload()) catch {};
+        }
+
+        var code_shreds = try reader.getCodeShredsForSlot(allocator, slot, 0);
+        defer code_shreds.deinit();
+        for (code_shreds.items) |shred| {
+            _ = sock.sendTo(forward_addr, shred.payload()) catch {};
+        }
+    }
 }
 
 fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
@@ -2575,93 +2693,6 @@ fn getLeaderScheduleFromCli(
         null;
 }
 
-fn testTransactionSenderService(
-    allocator: std.mem.Allocator,
-    gossip_value_allocator: std.mem.Allocator,
-    cfg: config.Cmd,
-) !void {
-    var app_base = try AppBase.init(allocator, cfg);
-    defer {
-        if (!app_base.closed) app_base.shutdown(); // we have this incase an error occurs
-        app_base.deinit();
-    }
-
-    // read genesis (used for leader schedule)
-    const genesis_file_path = try ensureGenesis(allocator, cfg, .from(app_base.logger));
-    defer allocator.free(genesis_file_path);
-
-    const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
-
-    // start gossip (used to get TPU ports of leaders)
-    const gossip_service = try startGossip(
-        allocator,
-        gossip_value_allocator,
-        cfg,
-        &app_base,
-        &.{},
-        .{},
-    );
-    defer {
-        gossip_service.deinit();
-        allocator.destroy(gossip_service);
-    }
-
-    // define cluster of where to land transactions
-    const rpc_cluster: ClusterType = try cfg.getCluster() orelse {
-        @panic("cluster option (-c) not provided");
-    };
-    app_base.logger.warn().logf(
-        "Starting transaction sender service on {s}...",
-        .{@tagName(rpc_cluster)},
-    );
-
-    // setup channel for communication to the tx-sender service
-    const transaction_channel =
-        try sig.sync.Channel(sig.transaction_sender.TransactionInfo).create(allocator);
-    defer transaction_channel.destroy();
-
-    // this handles transactions and forwards them to leaders TPU ports
-    var transaction_sender_service = try sig.transaction_sender.Service.init(
-        allocator,
-        .from(app_base.logger),
-        .{ .cluster = rpc_cluster, .socket = SocketAddr.init(app_base.my_ip, 0) },
-        transaction_channel,
-        &gossip_service.gossip_table_rw,
-        genesis_config.epoch_schedule,
-        app_base.exit,
-    );
-    const transaction_sender_handle = try std.Thread.spawn(
-        .{},
-        sig.transaction_sender.Service.run,
-        .{&transaction_sender_service},
-    );
-
-    // rpc is used to get blockhashes and other balance information
-    const rpc_url = rpc_cluster.getRpcUrl() orelse @panic("No RPC Url for cluster type!");
-    var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{
-        .logger = .from(app_base.logger),
-    });
-    defer rpc_client.deinit();
-
-    // this sends mock txs to the transaction sender
-    var mock_transfer_service = try sig.transaction_sender.MockTransferService.init(
-        allocator,
-        transaction_channel,
-        rpc_client,
-        app_base.exit,
-        .from(app_base.logger),
-    );
-    // send and confirm mock transactions
-    try mock_transfer_service.run(
-        cfg.test_transaction_sender.n_transactions,
-        cfg.test_transaction_sender.n_lamports_per_transaction,
-    );
-
-    gossip_service.shutdown();
-    app_base.shutdown();
-    transaction_sender_handle.join();
-}
-
 // NOTE: mockRpcServer is disabled because AccountsDB v2 does not yet support:
 // - loadWithDefaults (snapshot loading into AccountsDB)
 // - registerRPCHooks (RPC hooks for snapshot serving)
@@ -2751,7 +2782,7 @@ fn ledgerTool(
     var stdout_file_writer = std.fs.File.stdout().writer(&.{});
     const stdout = &stdout_file_writer.interface;
 
-    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    const ledger_dir = try cfg.ledgerDir(allocator);
     defer allocator.free(ledger_dir);
 
     var ledger_state = Ledger.init(allocator, .from(logger), ledger_dir, null) catch |err| {
