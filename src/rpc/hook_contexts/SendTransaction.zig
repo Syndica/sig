@@ -1,5 +1,4 @@
 //! RPC hook context for transaction sending-related methods.
-//! Requires access to ... for ... .
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const base58 = @import("base58");
@@ -92,10 +91,10 @@ pub fn sendTransaction(
         null;
 
     const last_valid_block_height = blk: {
-        const value = preflight_slot_ref.getBlockhashLastValidBlockHeight(
-            unsanitized_tx.msg.recent_blockhash,
-        );
+        const bq, var bq_lg = preflight_slot_ref.state().blockhash_queue.readWithLock();
+        defer bq_lg.unlock();
         const block_height = preflight_slot_ref.constants().block_height;
+        const value = bq.getLastValidBlockHeight(block_height, unsanitized_tx.msg.recent_blockhash);
         break :blk if (durable_nonce_info != null or (skip_preflight and value == null))
             block_height + sig.core.BlockhashQueue.MAX_PROCESSING_AGE
         else
@@ -371,7 +370,7 @@ fn sendTransactionImpl(
     return signature;
 }
 
-/// Analagous to [sanitize_transaction](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4405)
+/// Analogous to [sanitize_transaction](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4405)
 fn sanitizeTransaction(
     arena: Allocator,
     tx: Transaction,
@@ -871,4 +870,101 @@ test "sendTransactionImpl: with durable nonce info" {
     const received = channel.tryReceive().?;
     try std.testing.expect(received.durable_nonce_info != null);
     try std.testing.expectEqual(@as(usize, 5), received.max_retries);
+}
+
+test sendTransaction {
+    const allocator = std.testing.allocator;
+
+    var slot_tracker: SlotTracker = try .init(allocator, 0, .{
+        .constants = .{
+            .parent_slot = 0,
+            .parent_hash = .ZEROES,
+            .parent_lt_hash = .IDENTITY,
+            .block_height = 0,
+            .collector_id = .ZEROES,
+            .max_tick_height = 0,
+            .fee_rate_governor = .DEFAULT,
+            .ancestors = .{ .ancestors = .empty },
+            .feature_set = .ALL_DISABLED,
+            .reserved_accounts = .empty,
+            .inflation = .DEFAULT,
+            .rent_collector = .DEFAULT,
+        },
+        .state = .GENESIS,
+        .allocator = allocator,
+    });
+    defer slot_tracker.deinit(allocator);
+
+    const channel = try Channel(TransactionInfo).create(allocator);
+    defer channel.destroy();
+
+    const ctx: SendTransactionHookContext = .{
+        .slot_tracker = &slot_tracker,
+        .account_reader = .noop,
+        .tx_svc_channel = channel,
+    };
+
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const tx_bytes = sig.core.transaction.transaction_legacy_example.as_bytes;
+    var encode_buf_58: [base58.encodedMaxSize(tx_bytes.len)]u8 = undefined;
+    const encoded_58_len = base58.Table.BITCOIN.encode(&encode_buf_58, &tx_bytes);
+    const encoded_58 = encode_buf_58[0..encoded_58_len];
+
+    { // Success
+        var encode_buf_64: [std.base64.standard.Encoder.calcSize(tx_bytes.len)]u8 = undefined;
+        const encoded_64 = std.base64.standard.Encoder.encode(&encode_buf_64, &tx_bytes);
+        const result = try ctx.sendTransaction(arena, .{
+            .transaction = encoded_64,
+            .config = .{
+                .skipPreflight = true,
+                .encoding = .base64,
+            },
+        });
+        const expected_sig = sig.core.transaction.transaction_legacy_example.as_struct.signatures[0];
+        try std.testing.expect(expected_sig.eql(&result));
+        const txn_info = channel.tryReceive().?;
+        try std.testing.expectEqual(expected_sig, txn_info.signature);
+    }
+
+    { // Unknown encoding
+        try std.testing.expectError(
+            error.UnsupportedEncoding,
+            ctx.sendTransaction(arena, .{
+                .transaction = "anything",
+                .config = .{ .encoding = .json },
+            }),
+        );
+    }
+
+    { // Min context slot not met
+        try std.testing.expectError(
+            error.RpcMinContextSlotNotMet,
+            ctx.sendTransaction(arena, .{
+                .transaction = encoded_58,
+                .config = .{ .minContextSlot = 1 },
+            }),
+        );
+    }
+
+    { // Slot not found
+        slot_tracker.commitments.finalized.store(1, .monotonic);
+        slot_tracker.commitments.confirmed.store(1, .monotonic);
+        slot_tracker.commitments.processed.store(1, .monotonic);
+        defer {
+            slot_tracker.commitments.finalized.store(0, .monotonic);
+            slot_tracker.commitments.confirmed.store(0, .monotonic);
+            slot_tracker.commitments.processed.store(0, .monotonic);
+        }
+
+        try std.testing.expectError(
+            error.SlotNotFound,
+            ctx.sendTransaction(arena, .{
+                .transaction = encoded_58,
+                .config = .{ .preflightCommitment = .finalized },
+            }),
+        );
+    }
 }

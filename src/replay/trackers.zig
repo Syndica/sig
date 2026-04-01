@@ -78,23 +78,6 @@ pub const SlotTracker = struct {
         pub fn release(self: Reference) void {
             self.element.releaseRef();
         }
-
-        /// Analogous to [Bank::get_blockhash_last_valid_block_height](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/runtime/src/bank.rs#L2765)
-        pub fn getBlockhashLastValidBlockHeight(
-            self: *const Reference,
-            blockhash: sig.core.Hash,
-        ) ?Slot {
-            const MAX_PROCESSING_AGE = sig.core.blockhash_queue.BlockhashQueue.MAX_PROCESSING_AGE;
-
-            var ref_self = self.*;
-
-            const blockhash_queue, var lg = ref_self.state().blockhash_queue.readWithLock();
-            defer lg.unlock();
-            if (blockhash_queue.getHashAge(blockhash)) |age|
-                return ref_self.constants().block_height + MAX_PROCESSING_AGE - age
-            else
-                return null;
-        }
     };
 
     pub fn initEmpty(allocator: Allocator, root_slot: Slot) !SlotTracker {
@@ -845,89 +828,6 @@ fn testDummySlotConstantsWithHeight(slot: Slot, block_height: u64) SlotConstants
     var constants = testDummySlotConstants(slot);
     constants.block_height = block_height;
     return constants;
-}
-
-test "Reference.getBlockhashLastValidBlockHeight: returns valid block height for known hash" {
-    const allocator = std.testing.allocator;
-    const block_height: u64 = 100;
-
-    var bq = sig.core.blockhash_queue.BlockhashQueue.init(300);
-
-    const test_hash = sig.core.Hash.ZEROES;
-    try bq.insertGenesisHash(allocator, test_hash, 5000);
-
-    var state: SlotState = .GENESIS;
-    state.blockhash_queue = .init(bq);
-
-    var tracker: SlotTracker = try .init(allocator, 1, .{
-        .constants = testDummySlotConstantsWithHeight(1, block_height),
-        .state = state,
-        .allocator = allocator,
-    });
-    defer tracker.deinit(allocator);
-
-    var ref = tracker.get(1).?;
-    defer ref.release();
-
-    // age = last_hash_index(0) - hash_info.index(0) = 0
-    // result = block_height(100) + MAX_PROCESSING_AGE(150) - age(0) = 250
-    const result = ref.getBlockhashLastValidBlockHeight(test_hash);
-    try std.testing.expectEqual(@as(u64, 250), result.?);
-}
-
-test "Reference.getBlockhashLastValidBlockHeight: returns null for unknown hash" {
-    const allocator = std.testing.allocator;
-
-    var tracker: SlotTracker = try .init(allocator, 1, .{
-        .constants = testDummySlotConstantsWithHeight(1, 100),
-        .state = .GENESIS,
-        .allocator = allocator,
-    });
-    defer tracker.deinit(allocator);
-
-    var ref = tracker.get(1).?;
-    defer ref.release();
-
-    const unknown_hash = sig.core.Hash.ZEROES;
-    const result = ref.getBlockhashLastValidBlockHeight(unknown_hash);
-    try std.testing.expectEqual(@as(?Slot, null), result);
-}
-
-test "Reference.getBlockhashLastValidBlockHeight: accounts for hash age" {
-    const allocator = std.testing.allocator;
-    const block_height: u64 = 200;
-
-    var bq = sig.core.blockhash_queue.BlockhashQueue.init(300);
-
-    const first_hash = sig.core.Hash.ZEROES;
-    try bq.insertGenesisHash(allocator, first_hash, 5000);
-
-    // Insert more hashes to increase last_hash_index
-    const second_hash = sig.core.Hash.parse("8RBsoeyoRwajj86MZfZE6gMDJQVYGYcdSfx1zxqxNHbr");
-    try bq.insertHash(allocator, second_hash, 5000);
-    const third_hash = sig.core.Hash.parse("4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS");
-    try bq.insertHash(allocator, third_hash, 5000);
-
-    var state: SlotState = .GENESIS;
-    state.blockhash_queue = .init(bq);
-
-    var tracker: SlotTracker = try .init(allocator, 1, .{
-        .constants = testDummySlotConstantsWithHeight(1, block_height),
-        .state = state,
-        .allocator = allocator,
-    });
-    defer tracker.deinit(allocator);
-
-    var ref = tracker.get(1).?;
-    defer ref.release();
-
-    // first_hash: index=0, last_hash_index=2, age=2
-    // result = 200 + 150 - 2 = 348
-    try std.testing.expectEqual(@as(u64, 348), ref.getBlockhashLastValidBlockHeight(first_hash).?);
-
-    // third_hash: index=2, last_hash_index=2, age=0
-    // result = 200 + 150 - 0 = 350
-    try std.testing.expectEqual(@as(u64, 350), ref.getBlockhashLastValidBlockHeight(third_hash).?);
 }
 
 test "SlotTracker.prune removes all slots less than root" {
