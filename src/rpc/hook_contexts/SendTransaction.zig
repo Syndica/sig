@@ -156,7 +156,7 @@ pub fn simulateTransaction(
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
-    var slot_ref = self.slot_tracker.get(slot) orelse unreachable;
+    var slot_ref = self.slot_tracker.get(slot) orelse return error.SlotNotFound;
     defer slot_ref.release();
 
     const blockhash: ?GetLatestBlockhashValue = if (config.replaceRecentBlockhash) blk: {
@@ -170,9 +170,15 @@ pub fn simulateTransaction(
             break :last_bh bq.last_hash orelse return error.SlotNotAvailable;
         };
         unsanitized_tx.msg.recent_blockhash = recent_blockhash;
-        const last_valid_block_height = slot_ref.getBlockhashLastValidBlockHeight(
-            recent_blockhash,
-        ) orelse return error.SlotNotAvailable;
+
+        const last_valid_block_height = lvbh: {
+            const bq, var bq_lg = slot_ref.state().blockhash_queue.readWithLock();
+            defer bq_lg.unlock();
+            break :lvbh bq.getLastValidBlockHeight(
+                slot_ref.constants().block_height,
+                unsanitized_tx.msg.recent_blockhash,
+            ) orelse return error.NoLastValidBlockheight;
+        };
 
         break :blk .{
             .blockhash = recent_blockhash,
