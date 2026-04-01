@@ -16,8 +16,6 @@ pub const AcceptAndServeConnectionError =
     error{SystemIoError} ||
     error{NoSpaceLeft} ||
     std.mem.Allocator.Error ||
-    // TODO: eventually remove this once we move accountsdb operations to a separate thread, and/or handle them in a way that doesn't kill the server.
-    error{AccountsDbError} ||
     error{WriteFailed};
 
 pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConnectionError!void {

@@ -735,10 +735,11 @@ const SimulationFallbackAccountReader = struct {
 test "decodeAndDeserialize: base64 encoding succeeds" {
     const tx_bytes = sig.core.transaction.transaction_legacy_example.as_bytes;
     var encode_buf: [std.base64.standard.Encoder.calcSize(tx_bytes.len)]u8 = undefined;
-    const encoded = std.base64.standard.Encoder.encode(&encode_buf, tx_bytes);
+    const encoded = std.base64.standard.Encoder.encode(&encode_buf, &tx_bytes);
 
     const result = try decodeAndDeserialize(std.testing.allocator, encoded, .base64);
-    const tx = result[1];
+    const tx = result[2];
+    defer tx.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 1), tx.signatures.len);
     try std.testing.expectEqual(.legacy, tx.version);
@@ -747,11 +748,12 @@ test "decodeAndDeserialize: base64 encoding succeeds" {
 test "decodeAndDeserialize: base58 encoding succeeds" {
     const tx_bytes = sig.core.transaction.transaction_legacy_example.as_bytes;
     var encode_buf: [base58.encodedMaxSize(tx_bytes.len)]u8 = undefined;
-    const encoded_len = base58.Table.BITCOIN.encode(&encode_buf, tx_bytes);
+    const encoded_len = base58.Table.BITCOIN.encode(&encode_buf, &tx_bytes);
     const encoded = encode_buf[0..encoded_len];
 
     const result = try decodeAndDeserialize(std.testing.allocator, encoded, .base58);
-    const tx = result[1];
+    const tx = result[2];
+    defer tx.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 1), tx.signatures.len);
     try std.testing.expectEqual(.legacy, tx.version);
@@ -783,7 +785,7 @@ test "decodeAndDeserialize: invalid base64 returns InvalidParams" {
 test "decodeAndDeserialize: invalid base58 returns error" {
     // 'l' is not a valid base58 character
     try std.testing.expectError(
-        error.NonBase58Character,
+        error.InvalidCharacter,
         decodeAndDeserialize(std.testing.allocator, "lll", .base58),
     );
 }
@@ -804,11 +806,14 @@ test "decodeAndDeserialize: base64 invalid transaction data returns InvalidParam
 test "decodeAndDeserialize: wire_transaction contains decoded bytes" {
     const tx_bytes = sig.core.transaction.transaction_legacy_example.as_bytes;
     var encode_buf: [std.base64.standard.Encoder.calcSize(tx_bytes.len)]u8 = undefined;
-    const encoded = std.base64.standard.Encoder.encode(&encode_buf, tx_bytes);
+    const encoded = std.base64.standard.Encoder.encode(&encode_buf, &tx_bytes);
 
-    const wire_transaction = (try decodeAndDeserialize(std.testing.allocator, encoded, .base64))[0];
+    const result = try decodeAndDeserialize(std.testing.allocator, encoded, .base64);
+    const wire_transaction = result[0];
+    const tx = result[2];
+    defer tx.deinit(std.testing.allocator);
 
-    try std.testing.expectEqualSlices(u8, tx_bytes, wire_transaction[0..tx_bytes.len]);
+    try std.testing.expectEqualSlices(u8, &tx_bytes, wire_transaction[0..tx_bytes.len]);
     // Rest should be zero-filled
     for (wire_transaction[tx_bytes.len..]) |b| try std.testing.expectEqual(@as(u8, 0), b);
 }
@@ -826,13 +831,14 @@ test "sendTransactionImpl: sends transaction and returns signature" {
         tx,
         msg_hash,
         wire,
+        wire.len,
         1000,
         null,
         null,
     );
 
     // Should return the first signature
-    try std.testing.expectEqualSlices(u8, &tx.signatures[0].data, &result.data);
+    try std.testing.expect(tx.signatures[0].eql(&result));
 
     // Channel should have received the transaction info
     const received = channel.tryReceive().?;
@@ -856,6 +862,7 @@ test "sendTransactionImpl: with durable nonce info" {
         tx,
         Hash.ZEROES,
         wire,
+        wire.len,
         500,
         .{ nonce_pubkey, nonce_hash },
         5,

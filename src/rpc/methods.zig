@@ -1229,7 +1229,7 @@ pub const GetLeaderSchedule = struct {
     pub const LeaderScheduleValue = struct {
         value: sig.utils.collections.PubkeyMap([]const u64),
 
-        pub fn deinit(self: LeaderScheduleValue, allocator: std.mem.Allocator) void {
+        pub fn deinit(self: *LeaderScheduleValue, allocator: std.mem.Allocator) void {
             self.value.deinit(allocator);
         }
 
