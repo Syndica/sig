@@ -4,7 +4,9 @@ const lib = @import("lib");
 const tracy = @import("tracy");
 
 const Packet = lib.net.Packet;
+
 const Hash = lib.solana.Hash;
+const Slot = lib.solana.Slot;
 
 const Shred = lib.shred.Shred;
 const FecSetId = lib.shred.FecSetId;
@@ -44,6 +46,217 @@ pub fn serviceMain(rw: ReadWrite) !noreturn {
         const result = try map_tree.put(deshredded_fec_set);
         std.log.info("{}: {f}, last? {}", .{ deshredded_fec_set.id, result, deshredded_fec_set.slot_complete });
     }
+}
+
+const BlockTree = struct {
+    node_pool: NodePool,
+    node_tree: NodeTree,
+
+    /// The latest block that has been rooted by consensus
+    /// This node may have parents if other subsystems are still holding references to previous
+    /// slots.
+    /// For example, accountsdb may want to hold onto data for blocks for a while longer before it
+    /// flushes to disk.
+    /// Such subsystems may want to hold onto their own root?
+    consensus_rooted_block: BlockId,
+
+    // // NOTE: It would probably better to traverse the tree from a given root instead of using a map,
+    // // as it would be easier to make lock-free. Currently if made multithreaded, value mutations
+    // // could race with map inclusion.
+    // last_merkle_map: LastMerkleMap,
+
+    const capacity = 1024;
+
+    const NodePool = Pool(Node, capacity);
+    const NodeTree = Tree(Node, capacity);
+
+    const BlockId = PoolIdx;
+
+    // TODO: large values (e.g. Hashes) should probably live elsewhere in memory to keep tree
+    // traversal fast
+    // This could maybe be 24 bytes (u32 idx * 3, slot u64, last merkle root hash u32)
+    const Node = extern struct {
+        parent: PoolIdx = .null,
+        child: PoolIdx = .null,
+        sibling: PoolIdx = .null,
+
+        slot: Slot,
+
+        // true when inside last_merkle_map
+        last_fecset_received: bool,
+
+        first_fecset_chained_merkle_root: Hash,
+
+        // only valid when last_fecset_received is true
+        // this is the safe way to identify a block
+        last_fecset_merkle_root: Hash,
+    };
+
+    // You must get the root slot's last fec set's merkle root as this is used to identify blocks.
+    // Currently, this is (very annoyingly) not part of the snapshot. This means we must repair the
+    // snapshot slot in order to properly identify it.
+    // SIMD-0333 `Serialize Block ID in Bank into Snapshot` fixes this problem.
+    fn init(
+        allocator: std.mem.Allocator,
+        root_slot: Slot,
+        root_slot_last_fec_set_merkle_root: *const Hash,
+    ) !BlockTree {
+        const pool_buf = (try allocator.alloc(Node, capacity))[0..capacity];
+        errdefer allocator.free(pool_buf);
+
+        var pool: NodePool = .init(@ptrCast(pool_buf));
+        const root_node = try pool.create();
+
+        root_node.* = .{
+            .slot = root_slot,
+            .last_fecset_received = true,
+            .first_fecset_chained_merkle_root = undefined, // we don't need this
+            .last_fecset_merkle_root = root_slot_last_fec_set_merkle_root.*,
+        };
+
+        return .{
+            .node_pool = pool,
+            .node_tree = .{ .buf = pool_buf },
+            .consensus_rooted_block = pool.ptrToIndex(root_node),
+        };
+    }
+
+    fn deinit(self: *BlockTree, allocator: std.mem.Allocator) void {
+        allocator.free(self.node_pool.buf);
+    }
+
+    fn findUnrootedParent(
+        self: *const BlockTree,
+        parent_slot: Slot,
+        parent_last_fecset_merkle_root: *const Hash,
+    ) ?*Node {
+        std.debug.assert(self.consensus_rooted_block != .null);
+
+        const root_node: *Node = &self.node_pool.buf[@intFromEnum(self.consensus_rooted_block)].item;
+
+        return self.findUnrootedParentRecursive(
+            root_node,
+            parent_slot,
+            parent_last_fecset_merkle_root,
+        );
+    }
+
+    fn findUnrootedParentRecursive(
+        self: *const BlockTree,
+        node: *Node,
+        parent_slot: Slot,
+        parent_last_fecset_merkle_root: *const Hash,
+    ) ?*Node {
+        // assuming for now we don't want to assign blockids until we have at least *received*
+        // all of the parent
+        if (node.slot == parent_slot and
+            node.last_fecset_received and
+            node.last_fecset_merkle_root.eql(parent_last_fecset_merkle_root))
+            return node;
+
+        // if the node's slot is >= the parent's slot, we can skip the child traversal, as children
+        // always have increasing slots
+        if (parent_slot > node.slot and node.child != .null) {
+            const child_node: *Node = @ptrCast(&self.node_pool.buf[@intFromEnum(node.child)]);
+            if (findUnrootedParentRecursive(
+                self,
+                child_node,
+                parent_slot,
+                parent_last_fecset_merkle_root,
+            )) |found| return found;
+        }
+
+        // NOTE: siblings can have greater, equal, or lesser slot numbers than the current node, as
+        // siblings are nodes which have chained off the same parent node, which does not imply
+        // ordering.
+        if (node.sibling != .null) {
+            const sibling_node: *Node = @ptrCast(&self.node_pool.buf[@intFromEnum(node.child)]);
+            if (findUnrootedParentRecursive(
+                self,
+                sibling_node,
+                parent_slot,
+                parent_last_fecset_merkle_root,
+            )) |found| return found;
+        }
+
+        return null;
+    }
+
+    /// Should be called when
+    ///  a) A new chain of fec sets "reaches" back to its parent slot. In the most basic case, this
+    ///     should happen with all (valid) first fec sets.
+    ///  b) A conflicting fec set is found.
+    ///
+    /// Attempts to find parent
+    /// Tries to allocate new block ID
+    /// Links parent and child
+    ///
+    fn tryAllocNewBlockId(
+        self: *BlockTree,
+        parent_slot: Slot,
+        new_slot: Slot,
+        // i.e. the last merke root of its parent
+        first_fecset_chained_merkle_root: *const Hash,
+    ) !?BlockId {
+        std.debug.assert(new_slot > parent_slot);
+
+        const parent: *Node = self.findUnrootedParent(parent_slot, first_fecset_chained_merkle_root) orelse {
+            std.log.warn(
+                \\ Failed to find parent block {}:{f}, is this block missing?
+                \\ NOTE: parent blocks cannot be found unless they have received all their fecsets.
+            ,
+                .{ parent_slot, first_fecset_chained_merkle_root },
+            );
+            return null;
+        };
+
+        const new_child = try self.node_pool.create();
+        errdefer self.node_pool.destroy(new_child);
+
+        new_child.* = .{
+            .slot = new_slot,
+            .last_fecset_received = false,
+            .first_fecset_chained_merkle_root = first_fecset_chained_merkle_root.*,
+            .last_fecset_merkle_root = undefined, // only set once the last fecset is received
+        };
+
+        self.node_tree.linkOrphaned(parent, new_child);
+
+        return self.node_pool.ptrToIndex(new_child);
+    }
+
+    /// Asserts node is already linked to parent
+    /// Assumes node is that of a block which has received all fec sets
+    fn markBlockFullyReceived(
+        self: *const BlockTree,
+        block: BlockId,
+        last_fecset_merkle_root: *const Hash,
+    ) void {
+        std.debug.assert(block != .null);
+
+        const node: *Node = @ptrCast(&self.node_pool.buf[@intFromEnum(block)]);
+
+        std.debug.assert(node.parent != .null);
+        node.last_fecset_received = true;
+        node.last_fecset_merkle_root = last_fecset_merkle_root.*;
+    }
+};
+
+test "Basic blocktree" {
+    const allocator = std.testing.allocator;
+
+    const root_hash: Hash = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
+
+    var blocks: BlockTree = try .init(allocator, 0, &root_hash);
+    defer blocks.deinit(allocator);
+
+    const slot_1_block = (try blocks.tryAllocNewBlockId(0, 1, &root_hash)).?;
+    const slot_1_hash: Hash = .parse("2GyMeUytf6fcsfNP2QQ6F5e5qwAUoMtKUbnH6QU6bTNm");
+    blocks.markBlockFullyReceived(slot_1_block, &slot_1_hash);
+
+    const slot_2_block = (try blocks.tryAllocNewBlockId(1, 2, &slot_1_hash)).?;
+    const slot_2_hash: Hash = .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd");
+    blocks.markBlockFullyReceived(slot_2_block, &slot_2_hash);
 }
 
 /// A hashmap value, and a tree node.
@@ -425,6 +638,7 @@ fn Tree(Node: type, comptime capacity: usize) type {
             return @enumFromInt(idx);
         }
 
+        // NOTE: should be atomic
         fn linkOrphaned(self: *const Self, parent: *Node, orphan: *Node) void {
             std.debug.assert(orphan.parent == .null);
             std.debug.assert(orphan.sibling == .null);
@@ -441,6 +655,7 @@ fn Tree(Node: type, comptime capacity: usize) type {
     };
 }
 
+// TODO: allow for generic PoolIdx, to support smaller tree nodes, e.g. u32
 const PoolIdx = enum(usize) {
     null = std.math.maxInt(usize),
     _,
