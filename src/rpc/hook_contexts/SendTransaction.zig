@@ -235,6 +235,7 @@ test "decodeAndDeserialize: base64 encoding succeeds" {
 
     const result = try decodeAndDeserialize(std.testing.allocator, encoded, .base64);
     const tx = result[2];
+    defer tx.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 1), tx.signatures.len);
     try std.testing.expectEqual(.legacy, tx.version);
@@ -248,6 +249,7 @@ test "decodeAndDeserialize: base58 encoding succeeds" {
 
     const result = try decodeAndDeserialize(std.testing.allocator, encoded, .base58);
     const tx = result[2];
+    defer tx.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 1), tx.signatures.len);
     try std.testing.expectEqual(.legacy, tx.version);
@@ -279,7 +281,7 @@ test "decodeAndDeserialize: invalid base64 returns InvalidParams" {
 test "decodeAndDeserialize: invalid base58 returns error" {
     // 'l' is not a valid base58 character
     try std.testing.expectError(
-        error.NonBase58Character,
+        error.InvalidCharacter,
         decodeAndDeserialize(std.testing.allocator, "lll", .base58),
     );
 }
@@ -302,7 +304,10 @@ test "decodeAndDeserialize: wire_transaction contains decoded bytes" {
     var encode_buf: [std.base64.standard.Encoder.calcSize(tx_bytes.len)]u8 = undefined;
     const encoded = std.base64.standard.Encoder.encode(&encode_buf, &tx_bytes);
 
-    const wire_transaction = (try decodeAndDeserialize(std.testing.allocator, encoded, .base64))[0];
+    const result = try decodeAndDeserialize(std.testing.allocator, encoded, .base64);
+    const wire_transaction = result[0];
+    const tx = result[2];
+    defer tx.deinit(std.testing.allocator);
 
     try std.testing.expectEqualSlices(u8, &tx_bytes, wire_transaction[0..tx_bytes.len]);
     // Rest should be zero-filled
