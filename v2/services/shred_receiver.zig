@@ -23,7 +23,7 @@ pub const panic = start.panic;
 pub const std_options = start.options;
 
 pub const ReadWrite = struct {
-    pair: *Pair,
+    net_pair: *Pair,
 };
 
 pub const ReadOnly = struct {
@@ -35,7 +35,7 @@ const stub_root_slot = 0;
 const stub_max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
-    std.log.info("Waiting for shreds on port {}", .{rw.pair.port});
+    std.log.info("Waiting for shreds on port {}", .{rw.net_pair.port});
 
     var verified_roots_fba_buf: [64 * 1024]u8 = undefined;
     var verified_roots_fba: std.heap.FixedBufferAllocator = .init(&verified_roots_fba_buf);
@@ -44,14 +44,13 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var verified_roots: VerifiedMerkleRoots = try .init(roots_allocator, 128);
     defer verified_roots.deinit(roots_allocator);
 
+    var it = rw.net_pair.recv.get(.reader);
     while (true) {
-        var slice = rw.pair.recv.getReadable() catch continue;
+        const packet = it.next() orelse continue;
+        defer it.markUsed();
 
         const zone = tracy.Zone.init(@src(), .{ .name = "shred recv" });
         defer zone.deinit();
-
-        const packet = slice.get(0);
-        defer slice.markUsed(1);
 
         validateShred(packet, stub_root_slot, ro.config.shred_version, stub_max_slot) catch |err| {
             std.log.debug("invalid shred: {}", .{err});

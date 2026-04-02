@@ -792,7 +792,7 @@ pub const check_slot_agrees_with_cluster = struct {
         purge_repair_slot_counter: *SlotData.PurgeRepairSlotCounters,
         slot_frozen_state: SlotFrozenState,
     ) !void {
-        logger.info().logf(
+        logger.debug().logf(
             "check_slot_agrees_with_cluster() slot: {}, root: {}, slot_state_update: {}",
             .{ slot, root, slot_frozen_state },
         );

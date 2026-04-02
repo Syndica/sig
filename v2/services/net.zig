@@ -53,41 +53,42 @@ fn mainInner(pairs: []const *Pair) !noreturn {
     while (true) {
         // send
         for (pairs, sockets[0..sockets_len]) |pair, sock| {
-            var slice = pair.send.getReadable() catch continue;
-            const flags = std.posix.MSG.NOSIGNAL;
-            var counter: u32 = 0;
-            inline for (.{ slice.first(), slice.second() }) |packets| {
-                for (packets) |p| {
-                    const bytes = try std.posix.sendto(
-                        sock,
-                        p.data[0..p.size],
-                        flags,
-                        &p.addr.any,
-                        p.addr.getOsSockLen(),
-                    );
-                    std.debug.assert(bytes == p.size);
-                    counter += 1;
-                }
+            var it = pair.send.get(.reader);
+            defer it.markUsed();
+
+            // TODO: use std.os.linux.sendmmsg
+            while (it.next()) |p| {
+                const bytes = try std.posix.sendto(
+                    sock,
+                    p.data[0..p.size],
+                    std.posix.MSG.NOSIGNAL,
+                    &p.addr.any,
+                    p.addr.getOsSockLen(),
+                );
+                std.debug.assert(bytes == p.size);
             }
-            slice.markUsed(counter);
         }
 
         // recv
         for (pairs, sockets[0..sockets_len]) |pair, sock| {
-            var slice = pair.recv.getWritable() catch continue;
-            const ptr = slice.get(0);
-            var addr_len: std.posix.socklen_t = @sizeOf(std.net.Address);
-            ptr.size = @intCast(std.posix.recvfrom(
-                sock,
-                &ptr.data,
-                0,
-                &ptr.addr.any,
-                &addr_len,
-            ) catch |err| switch (err) {
-                error.WouldBlock => continue,
-                else => |e| return e,
-            });
-            slice.markUsed(1);
+            var it = pair.recv.get(.writer);
+            defer it.markUsed();
+
+            // TODO: use std.os.linux.recvmmsg
+            while (it.peek()) |ptr| {
+                var addr_len: std.posix.socklen_t = @sizeOf(std.net.Address);
+                ptr.size = @intCast(std.posix.recvfrom(
+                    sock,
+                    &ptr.data,
+                    0,
+                    &ptr.addr.any,
+                    &addr_len,
+                ) catch |err| switch (err) {
+                    error.WouldBlock => break,
+                    else => |e| return e,
+                });
+                _ = it.next();
+            }
         }
     }
 }

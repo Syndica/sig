@@ -461,6 +461,23 @@ fn handleRecvBody(
     }
 
     switch (body.head_info.method) {
+        .OPTIONS => {
+            // CORS preflight response.
+            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc_service.rs#L842-L845
+            entry_data.state = .{
+                .send_static_string = EntryState.SendStaticString.initRawString(
+                    comptime EntryState.SendStaticString.statusLineStr(.no_content) ++
+                        "Access-Control-Allow-Origin: *\r\n" ++
+                        "Access-Control-Allow-Methods: GET, POST, HEAD, OPTIONS\r\n" ++
+                        "Access-Control-Allow-Headers: Content-Type, Authorization, Accept, Solana-Client\r\n" ++
+                        "Access-Control-Max-Age: 86400\r\n" ++
+                        "\r\n",
+                ),
+            };
+            const snb = &entry_data.state.send_static_string;
+            try snb.prepSend(entry, &liou.io_uring);
+            return;
+        },
         inline .HEAD, .GET => |method| switch (requests.getRequestTargetResolve(
             .from(logger),
             body.head_info.target.constSlice(),

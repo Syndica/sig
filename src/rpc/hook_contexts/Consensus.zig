@@ -4,6 +4,7 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const common = sig.rpc.methods.common;
+const slot_resolution = @import("./slot_resolution.zig");
 
 const Slot = sig.core.Slot;
 const SlotRef = sig.replay.trackers.SlotTracker.Reference;
@@ -43,14 +44,11 @@ fn resolveCommitmentSlot(
     commitment: ?Commitment,
     min_context_slot: ?Slot,
 ) !Slot {
-    const resolved_commitment = commitment orelse .finalized;
-    const slot = self.slot_tracker.commitments.get(resolved_commitment);
-
-    if (min_context_slot) |min_slot| {
-        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
-
-    return slot;
+    return slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        commitment,
+        min_context_slot,
+    );
 }
 
 /// Resolves commitment config to a slot and returns the slot number along
