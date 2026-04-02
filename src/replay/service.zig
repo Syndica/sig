@@ -633,30 +633,19 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
 
                 if (state.event_sink) |event_sink| {
                     // send out frozen event with modified acconts for slot
-                    const accounts = event_sink.materializeSlotModifiedAccounts(
+                    var accounts = try event_sink.materializeSlotModifiedAccounts(
                         state.logger,
                         state.account_store.reader(),
                         slot,
                     );
+                    errdefer accounts.deinit();
 
-                    if (accounts) |modified_accounts| {
-                        event_sink.send(.{ .slot_frozen = .{
-                            .slot = slot,
-                            .parent = slot_info.constants().parent_slot,
-                            .root = slot_tracker.root.load(.monotonic),
-                            .accounts = modified_accounts,
-                        } }) catch |err| {
-                            state.logger.err().logf(
-                                "failed to send frozen slot event {}: {}",
-                                .{ slot, err },
-                            );
-                        };
-                    } else |err| {
-                        state.logger.err().logf(
-                            "failed to materialize modified accounts for frozen slot {}: {}",
-                            .{ slot, err },
-                        );
-                    }
+                    try event_sink.send(.{ .slot_frozen = .{
+                        .slot = slot,
+                        .parent = slot_info.constants().parent_slot,
+                        .root = slot_tracker.root.load(.monotonic),
+                        .accounts = accounts,
+                    } });
                 }
             } else {
                 state.logger.info().logf("partially replayed slot: {}", .{slot});
@@ -686,12 +675,7 @@ fn bypassConsensus(state: *ReplayState) !void {
     state.slot_tracker.commitments.update(.processed, new_tip);
     if (new_tip != old_tip) {
         if (state.event_sink) |sink| {
-            sink.send(.{ .tip_changed = new_tip }) catch |err| {
-                state.logger.err().logf(
-                    "failed to send tip_changed event {}: {}",
-                    .{ new_tip, err },
-                );
-            };
+            try sink.send(.{ .tip_changed = new_tip });
         }
     }
 
@@ -724,12 +708,7 @@ fn bypassConsensus(state: *ReplayState) !void {
             defer state.allocator.free(rooted_slots);
 
             for (rooted_slots) |rooted_slot| {
-                sink.send(.{ .slot_rooted = rooted_slot }) catch |err| {
-                    state.logger.err().logf(
-                        "failed to send rooted slot event {}: {}",
-                        .{ rooted_slot, err },
-                    );
-                };
+                try sink.send(.{ .slot_rooted = rooted_slot });
             }
         }
 
