@@ -91,16 +91,19 @@ pub fn sendTransaction(
         @panic("TODO");
     }
 
-    return try sendTransactionImpl(
-        self.tx_svc_channel,
+    // NOTE: Agave returns the signature even if they fail to send the transaction to the pool for submission.
+    // We intentially fail and return an RPC error instead.
+    try self.tx_svc_channel.send(.initWithWire(
         unsanitized_tx,
-        transaction.msg_hash,
         wire_transaction,
         wire_len,
+        transaction.msg_hash,
         last_valid_block_height,
         durable_nonce_info,
         config.maxRetries,
-    );
+    ));
+
+    return unsanitized_tx.signatures[0];
 }
 
 /// Analogous to [decode_and_deserialize](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4343)
@@ -154,33 +157,6 @@ fn decodeAndDeserialize(
     return .{ wire_transaction, wire_len, unsanitized_tx };
 }
 
-/// Analogous to [_send_transaction](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L2675)
-fn sendTransactionImpl(
-    transaction_sender: *Channel(TransactionInfo),
-    transaction: Transaction,
-    message_hash: Hash,
-    wire_transaction: [PACKET_DATA_SIZE]u8,
-    wire_transaction_size: usize,
-    last_valid_block_height: u64,
-    durable_nonce_info: ?struct { Pubkey, Hash },
-    max_retries: ?usize,
-) !SendTransaction.Response {
-    const signature = transaction.signatures[0];
-    const transaction_info: TransactionInfo = .initWithWire(
-        transaction,
-        wire_transaction,
-        wire_transaction_size,
-        message_hash,
-        last_valid_block_height,
-        durable_nonce_info,
-        max_retries,
-    );
-    // NOTE: Agave returns the signature even if they fail to send the transaction to the pool for submission.
-    // We intentially fail and return an RPC error instead.
-    try transaction_sender.send(transaction_info);
-    return signature;
-}
-
 /// Analogous to [sanitize_transaction](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4405)
 fn sanitizeTransaction(
     arena: Allocator,
@@ -199,11 +175,11 @@ fn sanitizeTransaction(
 
     try tx.validate();
 
-    const slot_hashes = getSysvarFromAccount(
+    const slot_hashes = try getSysvarFromAccount(
         SlotHashes,
         arena,
         slot_account_reader,
-    ) catch null orelse SlotHashes.INIT;
+    ) orelse SlotHashes.INIT;
 
     const resolved = try resolveTransaction(arena, tx, .{
         .slot = preflight_slot,
@@ -284,7 +260,7 @@ test "decodeAndDeserialize: invalid base64 returns InvalidParams" {
 test "decodeAndDeserialize: invalid base58 returns error" {
     // 'l' is not a valid base58 character
     try std.testing.expectError(
-        error.InvalidCharacter,
+        error.InvalidParams,
         decodeAndDeserialize(std.testing.allocator, "lll", .base58),
     );
 }
@@ -315,61 +291,6 @@ test "decodeAndDeserialize: wire_transaction contains decoded bytes" {
     try std.testing.expectEqualSlices(u8, &tx_bytes, wire_transaction[0..tx_bytes.len]);
     // Rest should be zero-filled
     for (wire_transaction[tx_bytes.len..]) |b| try std.testing.expectEqual(@as(u8, 0), b);
-}
-
-test "sendTransactionImpl: sends transaction and returns signature" {
-    const channel = try Channel(TransactionInfo).create(std.testing.allocator);
-    defer channel.destroy();
-
-    const tx = sig.core.transaction.transaction_legacy_example.as_struct;
-    const wire: [PACKET_DATA_SIZE]u8 = @splat(0);
-    const msg_hash = Hash.ZEROES;
-
-    const result = try sendTransactionImpl(
-        channel,
-        tx,
-        msg_hash,
-        wire,
-        wire.len,
-        1000,
-        null,
-        null,
-    );
-
-    // Should return the first signature
-    try std.testing.expect(tx.signatures[0].eql(&result));
-
-    // Channel should have received the transaction info
-    const received = channel.tryReceive().?;
-    try std.testing.expectEqual(msg_hash, received.message_hash);
-    try std.testing.expectEqual(@as(u64, 1000), received.last_valid_block_height);
-    try std.testing.expectEqual(@as(?struct { Pubkey, Hash }, null), received.durable_nonce_info);
-    try std.testing.expectEqual(std.math.maxInt(usize), received.max_retries);
-}
-
-test "sendTransactionImpl: with durable nonce info" {
-    const channel = try Channel(TransactionInfo).create(std.testing.allocator);
-    defer channel.destroy();
-
-    const tx = sig.core.transaction.transaction_legacy_example.as_struct;
-    const wire: [PACKET_DATA_SIZE]u8 = @splat(0);
-    const nonce_pubkey = Pubkey.ZEROES;
-    const nonce_hash = Hash.ZEROES;
-
-    _ = try sendTransactionImpl(
-        channel,
-        tx,
-        Hash.ZEROES,
-        wire,
-        wire.len,
-        500,
-        .{ nonce_pubkey, nonce_hash },
-        5,
-    );
-
-    const received = channel.tryReceive().?;
-    try std.testing.expect(received.durable_nonce_info != null);
-    try std.testing.expectEqual(@as(usize, 5), received.max_retries);
 }
 
 test sendTransaction {
