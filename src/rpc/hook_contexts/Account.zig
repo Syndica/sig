@@ -34,6 +34,7 @@ const GetTokenSupply = sig.rpc.methods.GetTokenSupply;
 const GetMultipleAccounts = sig.rpc.methods.GetMultipleAccounts;
 const GetProgramAccounts = sig.rpc.methods.GetProgramAccounts;
 const GetTokenAccountsByOwner = sig.rpc.methods.GetTokenAccountsByOwner;
+const GetTokenAccountsByDelegate = sig.rpc.methods.GetTokenAccountsByDelegate;
 
 const AccountEncoding = account_codec.AccountEncoding;
 const CommitmentSlotConfig = sig.rpc.methods.common.CommitmentSlotConfig;
@@ -561,7 +562,107 @@ pub fn getProgramAccounts(
     return .{ .list = values };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2091-L2130
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2132
+pub fn getTokenAccountsByDelegate(
+    self: AccountHookContext,
+    arena: std.mem.Allocator,
+    params: GetTokenAccountsByDelegate,
+) !GetTokenAccountsByDelegate.Response {
+    const zone = tracy.Zone.init(@src(), .{ .name = "rpc.gTABD" });
+    defer zone.deinit();
+
+    const config = params.config orelse GetTokenAccountsByOwner.Config{};
+    const commitment = config.commitment orelse .finalized;
+    // [agave] Default encoding for gTABD is `Binary` (legacy base58), not base64.
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2149
+    const encoding = config.encoding orelse AccountEncoding.binary;
+
+    const slot = self.slot_tracker.commitments.get(commitment);
+    if (config.minContextSlot) |min_slot| {
+        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+    }
+
+    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    defer ref.release();
+    const ancestors = &ref.constants().ancestors;
+    const slot_reader = self.account_reader.forSlot(ancestors).toOwnedReader();
+
+    // Resolve filter -> token program ID + optional mint.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2150
+    const resolved = try params.filter.resolve(arena, slot_reader);
+
+    // Build auto-filters: delegate option tag + delegate address + tokenAccountState + optional mint.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2152
+    const delegate_option_tag = [4]u8{ 0x01, 0x00, 0x00, 0x00 }; // COption<Pubkey>::Some, little-endian u32
+    var filters: [4]RpcFilterType = undefined;
+    var filter_count: usize = 0;
+    // Filter on Delegate is_some() — COption tag at offset 72 == 1.
+    filters[filter_count] = .{ .memcmp = .{ .offset = 72, .bytes = &delegate_option_tag } };
+    filter_count += 1;
+    // Filter on Delegate address at offset 76.
+    filters[filter_count] = .{ .memcmp = .{ .offset = 76, .bytes = &params.delegate.data } };
+    filter_count += 1;
+    // Token account state: data.len == 165 && data[108] != 0.
+    filters[filter_count] = .tokenAccountState;
+    filter_count += 1;
+    if (resolved.mint) |mint| {
+        filters[filter_count] = .{ .memcmp = .{ .offset = 0, .bytes = &mint.data } };
+        filter_count += 1;
+    }
+    const f = filters[0..filter_count];
+
+    // [agave] No dedicated delegate index exists — scan all accounts of the token program.
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2174-L2180
+    var iter = blk: {
+        const z = tracy.Zone.init(@src(), .{ .name = "rpc.gTABD.ownerQuery" });
+        defer z.deinit();
+        break :blk try slot_reader.getByOwner(arena, &resolved.token_program_id);
+    };
+    defer iter.deinit();
+
+    var results = std.ArrayListUnmanaged(GetTokenAccountsByDelegate.Value){};
+
+    while (try iter.next()) |entry| {
+        const pubkey, const account = entry;
+
+        if (!sig.rpc.filters.filtersAllow(f, &account.data)) continue;
+
+        const data = try account_codec.encodeAccount(
+            arena,
+            pubkey,
+            account,
+            encoding,
+            slot_reader,
+            config.dataSlice,
+        );
+        try results.append(arena, .{
+            .pubkey = pubkey,
+            .account = .from(account, data),
+        });
+    }
+
+    // [agave] gTABD always sorts results by pubkey.
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2182
+    {
+        const z = tracy.Zone.init(@src(), .{ .name = "rpc.gTABD.sort" });
+        defer z.deinit();
+        std.mem.sortUnstable(GetTokenAccountsByDelegate.Value, results.items, {}, struct {
+            fn lessThan(
+                _: void,
+                a: GetTokenAccountsByDelegate.Value,
+                b: GetTokenAccountsByDelegate.Value,
+            ) bool {
+                return std.mem.order(u8, &a.pubkey.data, &b.pubkey.data) == .lt;
+            }
+        }.lessThan);
+    }
+
+    return .{
+        .context = .{ .slot = slot },
+        .value = try results.toOwnedSlice(arena),
+    };
+}
+
 pub fn getTokenAccountsByOwner(
     self: AccountHookContext,
     arena: std.mem.Allocator,
