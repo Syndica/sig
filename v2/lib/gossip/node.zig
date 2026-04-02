@@ -128,7 +128,8 @@ pub fn GossipNode(comptime Effects: type) type {
 
             fn getExpiryWallclock(self: *const Peer) u64 {
                 return self.last_pong orelse {
-                    const since = @as(u64, self.last_ping.count_since_pong) * ACTIVE_PONG_THRESHOLD_MS;
+                    const since = @as(u64, self.last_ping.count_since_pong) *
+                        ACTIVE_PONG_THRESHOLD_MS;
                     return self.last_ping.wallclock -| since;
                 };
             }
@@ -145,7 +146,11 @@ pub fn GossipNode(comptime Effects: type) type {
                 return .{ .keys = keys, .words = @splat(0) };
             }
 
-            fn asBloomFilter(self: *BlockBloomFilter, num_keys: ?usize, num_bits: ?usize) BloomFilter {
+            fn asBloomFilter(
+                self: *BlockBloomFilter,
+                num_keys: ?usize,
+                num_bits: ?usize,
+            ) BloomFilter {
                 const n_keys = num_keys orelse self.keys.len;
                 const n_bits = num_bits orelse self.words.len * 64;
                 const num_words = std.math.divCeil(usize, n_bits, 64) catch unreachable;
@@ -291,12 +296,18 @@ pub fn GossipNode(comptime Effects: type) type {
             var msg_fba = std.heap.FixedBufferAllocator.init(&msg_buf);
             var msg_reader: std.Io.Reader = .fixed(packet.data[0..packet.size]);
             const msg = bincode.read(&msg_fba, &msg_reader, GossipMessage) catch |e| {
-                std.log.err("invalid msg from ({f}, size={}): {}", .{ packet.addr, packet.size, e });
+                std.log.err(
+                    "invalid msg from ({f}, size={}): {}",
+                    .{ packet.addr, packet.size, e },
+                );
                 return;
             };
 
             self.processMessage(now, packet.addr, msg) catch |e| {
-                std.log.err("failed to process msg ({f}, {s}) {}", .{ packet.addr, @tagName(msg), e });
+                std.log.err(
+                    "failed to process msg ({f}, {s}) {}",
+                    .{ packet.addr, @tagName(msg), e },
+                );
                 return;
             };
         }
@@ -751,7 +762,12 @@ pub fn GossipNode(comptime Effects: type) type {
             var data = data_;
             switch (std.meta.activeTag(data)) {
                 .contact_info => data.contact_info.wallclock = .{ .value = now },
-                inline .vote, .lowest_slot, .epoch_slots, .duplicate_shred, .snapshot_hashes => |tag| {
+                inline .vote,
+                .lowest_slot,
+                .epoch_slots,
+                .duplicate_shred,
+                .snapshot_hashes,
+                => |tag| {
                     @field(data, @tagName(tag)).wallclock = now;
                 },
                 else => return error.SigningDeprecatedValue,
@@ -793,7 +809,10 @@ pub fn GossipNode(comptime Effects: type) type {
                 .contact_info => |ci| blk: {
                     break :blk .{ ci.from, ci.wallclock.value, 0 };
                 },
-                inline .snapshot_hashes, .restart_heaviest_fork, .restart_last_voted_fork => |v| blk: {
+                inline .snapshot_hashes,
+                .restart_heaviest_fork,
+                .restart_last_voted_fork,
+                => |v| blk: {
                     deprecated = value.data != .snapshot_hashes;
                     break :blk .{ v.from, v.wallclock, 0 };
                 },
@@ -814,7 +833,11 @@ pub fn GossipNode(comptime Effects: type) type {
             const hash = Hash.init(value_bytes);
 
             // Check wallclock in general
-            const key: Key = .{ .from = from, .tag = std.meta.activeTag(value.data), .index = index };
+            const key: Key = .{
+                .from = from,
+                .tag = std.meta.activeTag(value.data),
+                .index = index,
+            };
             const update_contact = (switch (caller) {
                 .us => blk: {
                     assert(!deprecated); // we should not be inserting our own deprecated data
@@ -930,7 +953,12 @@ pub fn GossipNode(comptime Effects: type) type {
                     .snapshot_hashes => {}, // TODO: send to snapshot service
                     .contact_info => |ci| {
                         if (ci.socket_map.get(.gossip)) |addr| {
-                            if (try self.getOrTrackPeer(now, ci.shred_version, addr, key.from)) |peer| {
+                            if (try self.getOrTrackPeer(
+                                now,
+                                ci.shred_version,
+                                addr,
+                                key.from,
+                            )) |peer| {
                                 peer.addr = addr;
                                 peer.shred_version = ci.shred_version;
                             }
@@ -978,7 +1006,9 @@ pub fn GossipNode(comptime Effects: type) type {
                     // findOldest (TODO: replace with accompanied min-heap)
                     var i: usize = 0;
                     for (self.peers.values()[1..], 1..) |*p, j| {
-                        if (p.getExpiryWallclock() < self.peers.values()[i].getExpiryWallclock()) i = j;
+                        if (p.getExpiryWallclock() < self.peers.values()[i].getExpiryWallclock()) {
+                            i = j;
+                        }
                     }
                     self.peers.swapRemoveAt(i);
                 }

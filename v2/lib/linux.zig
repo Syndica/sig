@@ -38,6 +38,7 @@ pub const clone3 = struct {
     comptime {
         const expectEqual = std.testing.expectEqual;
 
+        // sig fmt: off
         expectEqual(0x00000080, @as(u64, @bitCast(Flags{ .newtime = true }))) catch unreachable;
         expectEqual(0x00000100, @as(u64, @bitCast(Flags{ .vm = true }))) catch unreachable;
         expectEqual(0x00000200, @as(u64, @bitCast(Flags{ .fs = true }))) catch unreachable;
@@ -65,6 +66,7 @@ pub const clone3 = struct {
         expectEqual(0x80000000, @as(u64, @bitCast(Flags{ .io = true }))) catch unreachable;
         expectEqual(0x100000000, @as(u64, @bitCast(Flags{ .clear_sighand = true }))) catch unreachable;
         expectEqual(0x200000000, @as(u64, @bitCast(Flags{ .into_cgroup = true }))) catch unreachable;
+        // sig fmt: on
     }
 
     /// original:
