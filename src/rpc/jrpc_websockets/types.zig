@@ -485,6 +485,8 @@ pub const TransactionLogsEntry = struct {
     logs: []const []const u8,
     mentioned_pubkeys: []const Pubkey,
 
+    /// Returns a deep-cloned LogsNotificationData, allocated using the provided allocator,
+    /// caller must call deinit.
     pub fn toOwnedNotificationData(
         self: *const TransactionLogsEntry,
         allocator: std.mem.Allocator,
