@@ -3035,7 +3035,7 @@ test "generateVoteTx - success with tower_sync vote" {
     defer ancestors.deinit(gpa);
 
     try db.put(0, vote_account_pubkey, vote_account);
-    db.onSlotRooted(0, &ancestors);
+    db.updateRoot(0, &ancestors);
 
     const result = try generateVoteTx(
         gpa,
@@ -3151,7 +3151,7 @@ test "generateVoteTx - success with vote_state_update compacted" {
     defer ancestors.deinit(gpa);
 
     try db.put(0, vote_account_pubkey, vote_account);
-    db.onSlotRooted(0, &ancestors);
+    db.updateRoot(0, &ancestors);
 
     const result = try generateVoteTx(
         gpa,
@@ -3266,7 +3266,7 @@ test "generateVoteTx - success with switch proof" {
     defer ancestors.deinit(gpa);
 
     try db.put(0, vote_account_pubkey, vote_account);
-    db.onSlotRooted(0, &ancestors);
+    db.updateRoot(0, &ancestors);
 
     const switch_proof_hash: Hash = .initRandom(prng);
     const result = try generateVoteTx(
@@ -3362,7 +3362,7 @@ test "generateVoteTx - hot spare validator returns hot_spare" {
     defer ancestors.deinit(gpa);
 
     try db.put(0, vote_account_pubkey, vote_account);
-    db.onSlotRooted(0, &ancestors);
+    db.updateRoot(0, &ancestors);
 
     const result = try generateVoteTx(
         gpa,
@@ -3454,7 +3454,7 @@ test "generateVoteTx - wrong authorized voter returns non_voting" {
     defer ancestors.deinit(allocator);
 
     try db.put(0, vote_account_pubkey, vote_account);
-    db.onSlotRooted(0, &ancestors);
+    db.updateRoot(0, &ancestors);
 
     const result = try generateVoteTx(
         allocator,

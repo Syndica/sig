@@ -260,14 +260,16 @@ pub const SlotTracker = struct {
         return try parents_list.toOwnedSlice(allocator);
     }
 
+    /// Removes all tracked slots other than state_root and its descendants.
+    ///
     /// Analogous to [prune_non_rooted](https://github.com/anza-xyz/agave/blob/441258229dfed75e45be8f99c77865f18886d4ba/runtime/src/bank_forks.rs#L591)
-    //  TODO Revisit: Currently this removes all slots less than the rooted slot.
-    // In Agave, only the slots not in the root path are removed.
-    pub fn pruneNonRooted(
+    pub fn prune(
         self: *SlotTracker,
         maybe_thread_pool: ?*ThreadPool,
+        /// Only slots that are known to be descendants of this slot will be kept.
+        state_root: Slot,
     ) void {
-        const zone = tracy.Zone.init(@src(), .{ .name = "SlotTracker.pruneNonRooted" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "SlotTracker.prune" });
         defer zone.deinit();
 
         var slots_lg = self.slots.write();
@@ -284,10 +286,9 @@ pub const SlotTracker = struct {
 
         var slice = slots.entries.slice();
         var index: usize = 0;
-        const root = self.root.load(.monotonic);
         while (index < slice.len) {
-            if (slice.items(.key)[index] < root) {
-                const element = slice.items(.value)[index];
+            const element = slice.items(.value)[index];
+            if (!element.constants.ancestors.containsSlot(state_root)) {
                 slots.swapRemoveAt(index);
                 slice = slots.entries.slice();
 
@@ -899,7 +900,12 @@ pub const SlotTree = struct {
     };
 };
 
-fn testDummySlotConstants(slot: Slot) SlotConstants {
+fn testDummySlotConstants(allocator: Allocator, slot: Slot) Allocator.Error!SlotConstants {
+    var ancestors: sig.core.Ancestors = .{};
+    // Build a linear ancestor chain: 1, 2, ..., slot
+    for (1..slot + 1) |s| {
+        try ancestors.addSlot(allocator, s);
+    }
     return .{
         .parent_slot = slot - 1,
         .parent_hash = .ZEROES,
@@ -908,7 +914,7 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
         .collector_id = .ZEROES,
         .max_tick_height = 0,
         .fee_rate_governor = .DEFAULT,
-        .ancestors = .{ .ancestors = .empty },
+        .ancestors = ancestors,
         .feature_set = .ALL_DISABLED,
         .reserved_accounts = .empty,
         .inflation = .DEFAULT,
@@ -916,7 +922,7 @@ fn testDummySlotConstants(slot: Slot) SlotConstants {
     };
 }
 
-test "SlotTracker.prune removes all slots less than root" {
+test "SlotTracker.prune removes slots that are not descendants of state root" {
     const allocator = std.testing.allocator;
     const root_slot: Slot = 4;
 
@@ -928,7 +934,7 @@ test "SlotTracker.prune removes all slots less than root" {
 
     for ([_]?*ThreadPool{ null, &pool }) |maybe_thread_pool| {
         var tracker: SlotTracker = try .init(allocator, root_slot, .{
-            .constants = testDummySlotConstants(root_slot),
+            .constants = try testDummySlotConstants(allocator, root_slot),
             .state = .GENESIS,
             .allocator = allocator,
         });
@@ -936,17 +942,23 @@ test "SlotTracker.prune removes all slots less than root" {
 
         // Add slots 1, 2, 3, 4, 5
         for (1..6) |slot| {
+            var constants = try testDummySlotConstants(allocator, slot);
             const gop = try tracker.getOrPut(allocator, slot, .{
-                .constants = testDummySlotConstants(slot),
+                .constants = constants,
                 .state = .GENESIS,
                 .allocator = allocator,
             });
             gop.reference.release();
-            if (gop.found_existing) std.debug.assert(slot == root_slot);
+            if (gop.found_existing) {
+                // Slot 4 (root_slot) was already added during init; free the
+                // unused constants that getOrPut didn't store.
+                std.debug.assert(slot == root_slot);
+                constants.ancestors.deinit(allocator);
+            }
         }
 
         // Prune slots less than root (4)
-        tracker.pruneNonRooted(maybe_thread_pool);
+        tracker.prune(maybe_thread_pool, 4);
 
         // Only slots 4 and 5 should remain
         try std.testing.expect(tracker.contains(4));
