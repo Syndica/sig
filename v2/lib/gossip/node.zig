@@ -425,17 +425,23 @@ pub fn GossipNode(comptime Effects: type) type {
                     var sign_buf: [Packet.len]u8 = undefined;
                     var sign_writer: std.Io.Writer = .fixed(&sign_buf);
                     try bincode.write(&sign_writer, .{
-                        .prefix = PRUNE_PREFIX.*,
+                        .prefix = bincode.Vec(u8){ .items = PRUNE_PREFIX },
                         .pubkey = prune.data.pubkey,
                         .prunes = prune.data.prunes,
                         .destination = prune.data.destination,
                         .wallclock = prune.data.wallclock,
                     });
 
-                    // Prune can be signed with or without prefix...
-                    const sign_msg = sign_writer.buffered();
-                    prune.data.signature.verify(&prune.from, sign_msg) catch {
-                        prune.data.signature.verify(&prune.from, sign_msg[PRUNE_PREFIX.len..]) catch {
+                    // PruneData can be signed with or without prefix...
+                    prune.data.signature.verify(&prune.from, sign_writer.buffered()) catch {
+                        sign_writer = .fixed(&sign_buf);
+                        try bincode.write(&sign_writer, .{
+                            .pubkey = prune.data.pubkey,
+                            .prunes = prune.data.prunes,
+                            .destination = prune.data.destination,
+                            .wallclock = prune.data.wallclock,
+                        });
+                        prune.data.signature.verify(&prune.from, sign_writer.buffered()) catch {
                             return error.InvalidPruneSignature;
                         };
                     };
