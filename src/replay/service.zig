@@ -985,10 +985,12 @@ test "pruneStaleData - state root older than root keeps more slots" {
     var slot_tracker: SlotTracker = try .initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    try putTestSlot(allocator, random, &slot_tracker, 0, 0, &.{});
+    try putTestSlot(allocator, random, &slot_tracker, 0, 0, &.{0});
+    try putTestSlot(allocator, random, &slot_tracker, 1, 0, &.{ 0, 1 });
     try putTestSlot(allocator, random, &slot_tracker, 2, 1, &.{ 1, 2 });
     try putTestSlot(allocator, random, &slot_tracker, 3, 2, &.{ 1, 2, 3 });
     try putTestSlot(allocator, random, &slot_tracker, 4, 1, &.{ 1, 4 });
+    try putTestSlot(allocator, random, &slot_tracker, 5, 2, &.{ 1, 2, 5 });
     slot_tracker.consensus_root.store(3, .monotonic);
 
     var progress: ProgressMap = .INIT;
@@ -1004,17 +1006,19 @@ test "pruneStaleData - state root older than root keeps more slots" {
         &epoch_tracker,
         .noop,
         null,
-        1, // state_root is older than root — keep descendants of slot 1
+        2, // state_root is older than root — keep descendants of slot 2
     );
 
-    // Slot 0 is pruned (ancestors don't include 1)
+    // Slots 0 and 4 are pruned (ancestors don't include 2)
     try std.testing.expect(!slot_tracker.contains(0));
-    // Slots 2, 3, and 4 are all descendants of slot 1, so they survive
+    try std.testing.expect(!slot_tracker.contains(1));
+    try std.testing.expect(!slot_tracker.contains(4));
+    // Slots 2, 3 and 5 are all descendants of slot 2, so they survive
     try std.testing.expect(slot_tracker.contains(2));
     try std.testing.expect(slot_tracker.contains(3));
-    try std.testing.expect(slot_tracker.contains(4));
+    try std.testing.expect(slot_tracker.contains(5));
 
-    try std.testing.expectEqual(1, epoch_tracker.state_root.load(.monotonic));
+    try std.testing.expectEqual(2, epoch_tracker.state_root.load(.monotonic));
 }
 
 fn putTestSlot(
