@@ -28,7 +28,7 @@ pub const SlotDataProvider = struct {
     epoch_tracker: *EpochTracker,
 
     pub fn rootSlot(self: *const SlotDataProvider) Slot {
-        return self.slot_tracker.root.load(.monotonic);
+        return self.slot_tracker.consensus_root.load(.monotonic);
     }
 
     fn getSlotHash(self: *const SlotDataProvider, slot: Slot) ?Hash {

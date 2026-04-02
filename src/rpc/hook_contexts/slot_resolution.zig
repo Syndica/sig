@@ -33,7 +33,7 @@ pub fn resolveReadableCommitmentSlot(
 ) !Slot {
     const resolved_commitment = commitment orelse .finalized;
     var slot = commitments.get(resolved_commitment);
-    if (!slot_tracker.contains(slot)) slot = slot_tracker.root.load(.monotonic);
+    if (!slot_tracker.contains(slot)) slot = slot_tracker.consensus_root.load(.monotonic);
     try validateMinContextSlot(slot, min_context_slot);
     return slot;
 }

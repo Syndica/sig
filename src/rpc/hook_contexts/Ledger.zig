@@ -806,10 +806,11 @@ fn getTransactionStatus(
         (slot_ref.constants().ancestors.containsSlot(slot) or
             self.ledger.reader().isRoot(arena, slot) catch false);
 
-    const confirmations = if (self.slot_tracker.root.load(.monotonic) >= slot and is_finalized)
-        null
-    else
-        self.commitments.stakes.getConfirmationCount(slot) orelse 0;
+    const confirmations =
+        if (self.slot_tracker.consensus_root.load(.monotonic) >= slot and is_finalized)
+            null
+        else
+            self.commitments.stakes.getConfirmationCount(slot) orelse 0;
 
     return .{
         .slot = slot,

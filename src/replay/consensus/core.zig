@@ -151,7 +151,7 @@ pub const TowerConsensus = struct {
         );
         errdefer fork_choice.deinit(allocator);
 
-        const root = deps.slot_tracker.root.load(.monotonic);
+        const root = deps.slot_tracker.consensus_root.load(.monotonic);
         const root_ref = deps.slot_tracker.get(root).?;
         defer root_ref.release();
         const root_ancestors = &root_ref.constants().ancestors;
@@ -204,7 +204,7 @@ pub const TowerConsensus = struct {
         const root_slot, const root_hash = blk: {
             const root = slot_tracker.getRoot();
             defer root.release();
-            const root_slot = slot_tracker.root.load(.monotonic);
+            const root_slot = slot_tracker.consensus_root.load(.monotonic);
             const root_hash = root.state().hash.readCopy();
             break :blk .{ root_slot, root_hash.? };
         };
@@ -593,7 +593,7 @@ pub const TowerConsensus = struct {
             }
             // Update cluster with the duplicate confirmation status.
             // Analogous to [ReplayStage::mark_slots_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3876)
-            const root_slot = slot_tracker.root.load(.monotonic);
+            const root_slot = slot_tracker.consensus_root.load(.monotonic);
             for (duplicate_confirmed_forks.items) |duplicate_confirmed_fork| {
                 const slot, const frozen_hash = duplicate_confirmed_fork.tuple();
                 try self.handleDuplicateConfirmedFork(
@@ -4513,7 +4513,7 @@ test "edge cases - duplicate slot" {
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
-    const root_slot0 = slot_tracker.root.load(.monotonic);
+    const root_slot0 = slot_tracker.consensus_root.load(.monotonic);
     std.debug.assert(root_slot0 == 0);
 
     const root_slot0_hash = blk: {
@@ -4692,7 +4692,7 @@ test "edge cases - duplicate confirmed slot" {
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
-    const root_slot0 = slot_tracker.root.load(.monotonic);
+    const root_slot0 = slot_tracker.consensus_root.load(.monotonic);
     std.debug.assert(root_slot0 == 0);
 
     const root_slot0_hash = blk: {
@@ -4872,7 +4872,7 @@ test "edge cases - gossip verified vote hashes" {
 
     const slot_tracker = &replay_state.slot_tracker;
     const progress_map = &replay_state.progress_map;
-    const root_slot0 = slot_tracker.root.load(.monotonic);
+    const root_slot0 = slot_tracker.consensus_root.load(.monotonic);
     std.debug.assert(root_slot0 == 0); // assert initial root value
 
     var vote_collector: sig.consensus.vote_listener.VoteCollector =

@@ -24,7 +24,11 @@ const Tower = sig.consensus.tower.Tower;
 /// This struct is thread safe for concurrent reads / exclusive writes on slots.
 pub const SlotTracker = struct {
     slots: RwMux(std.AutoArrayHashMapUnmanaged(Slot, *Element)),
-    root: std.atomic.Value(Slot),
+    /// the root of this data structure. this struct contains data for all forks
+    /// starting with this slot
+    state_root: std.atomic.Value(Slot),
+    /// this validator's tower's root
+    consensus_root: std.atomic.Value(Slot),
     wg: *std.Thread.WaitGroup,
 
     pub const Element = struct {
@@ -83,7 +87,8 @@ pub const SlotTracker = struct {
         const wg = try allocator.create(std.Thread.WaitGroup);
         wg.* = .{};
         return .{
-            .root = .init(root_slot),
+            .consensus_root = .init(root_slot),
+            .state_root = .init(root_slot),
             .slots = .init(.empty),
             .wg = wg,
         };
@@ -180,7 +185,7 @@ pub const SlotTracker = struct {
     }
 
     pub fn getRoot(self: *SlotTracker) Reference {
-        return self.get(self.root.load(.monotonic)).?; // root slot's bank must exist
+        return self.get(self.consensus_root.load(.monotonic)).?; // root slot's bank must exist
     }
 
     pub fn contains(self: *SlotTracker, slot: Slot) bool {
@@ -303,6 +308,8 @@ pub const SlotTracker = struct {
                 index += 1;
             }
         }
+
+        self.state_root.store(state_root, .monotonic);
     }
 };
 
@@ -967,7 +974,7 @@ test "SlotTracker.prune removes slots that are not descendants of state root" {
         try std.testing.expect(!tracker.contains(2));
         try std.testing.expect(!tracker.contains(3));
 
-        try std.testing.expectEqual(4, tracker.root.load(.monotonic));
+        try std.testing.expectEqual(4, tracker.consensus_root.load(.monotonic));
     }
 }
 

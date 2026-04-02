@@ -448,7 +448,7 @@ pub fn trackNewSlots(
     var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
     defer zone.deinit();
 
-    const root = slot_tracker.root.load(.monotonic);
+    const root = slot_tracker.consensus_root.load(.monotonic);
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
     defer for (frozen_slots.values()) |ref| ref.release();
@@ -734,22 +734,12 @@ pub fn handleSlotUpdate(
     slot_update: SlotUpdate,
     commitment_txn: ?*CommitmentStakes.Transaction,
 ) !void {
-    // update commitment levels for rpc, and determine what slot to use as the
-    // state root (should be either the tower's root, or for RPC we may be
-    // keeping everything back until the latest finalized slot)
-    var maybe_new_state_root: ?Slot = null;
-    if (replay_state.commitments) |*c| {
-        const old = c.get(.finalized);
-        c.commit(slot_update, commitment_txn.?);
-        const new = c.get(.finalized);
-        if (new != old) maybe_new_state_root = new;
-    } else {
-        maybe_new_state_root = slot_update.root;
-    }
+    // update commitment levels
+    if (replay_state.commitments) |*c| c.commit(slot_update, commitment_txn.?);
 
     if (slot_update.root) |new_root| {
         // update replay's internal state to reflect the newly rooted slot
-        replay_state.slot_tracker.root.store(new_root, .monotonic);
+        replay_state.slot_tracker.consensus_root.store(new_root, .monotonic);
         try replay_state.status_cache.addRoot(allocator, new_root);
 
         // Pass along consensus updates to downstream consumers. None of this fed back into replay.
@@ -762,6 +752,23 @@ pub fn handleSlotUpdate(
                 .event_data = .{ .root = .{ .root = new_root } },
             });
         }
+    }
+
+    // determine what slot to use as the state root. either the tower's root or
+    // the finalized slot, whatever is older.
+    var maybe_new_state_root: ?Slot = null;
+    if (replay_state.commitments) |*c| {
+        const old_state_root = replay_state.slot_tracker.state_root.load(.monotonic);
+        const proposed_state_root = @min(
+            c.get(.finalized),
+            replay_state.slot_tracker.consensus_root.load(.monotonic),
+        );
+
+        if (proposed_state_root > old_state_root) {
+            maybe_new_state_root = proposed_state_root;
+        }
+    } else {
+        maybe_new_state_root = slot_update.root;
     }
 
     // clean up old data from replay's internal state
@@ -793,16 +800,16 @@ pub fn pruneStaleData(
     state_root: Slot,
 ) !void {
     {
-        const root_info = slot_tracker.get(slot_tracker.root.load(.monotonic)) orelse
-            return error.MissingRoot;
-        defer root_info.release();
-        if (!root_info.constants().ancestors.containsSlot(state_root)) {
+        const consensus_root_info = slot_tracker
+            .get(slot_tracker.consensus_root.load(.monotonic)) orelse return error.MissingRoot;
+        defer consensus_root_info.release();
+
+        if (!consensus_root_info.constants().ancestors.containsSlot(state_root)) {
             return error.StateRootIsNotAncestorOfConsensusRoot;
         }
     }
 
-    const state_root_info = slot_tracker.get(slot_tracker.root.load(.monotonic)) orelse
-        return error.MissingRoot;
+    const state_root_info = slot_tracker.get(state_root) orelse return error.MissingRoot;
     defer state_root_info.release();
 
     // clean up the unrooted slot stores
@@ -907,7 +914,7 @@ test "pruneStaleData - prunes non-descendant slots and stale progress" {
     try putTestSlot(allocator, random, &slot_tracker, 2, 1, &.{ 1, 2 });
     try putTestSlot(allocator, random, &slot_tracker, 3, 2, &.{ 1, 2, 3 });
     try putTestSlot(allocator, random, &slot_tracker, 4, 1, &.{ 1, 4 });
-    slot_tracker.root.store(3, .monotonic);
+    slot_tracker.consensus_root.store(3, .monotonic);
 
     // Progress map with entries for slots 0, 1, 2, 3 (slot 1 is only in
     // progress, never in the tracker — it should also get cleaned up).
@@ -982,7 +989,7 @@ test "pruneStaleData - state root older than root keeps more slots" {
     try putTestSlot(allocator, random, &slot_tracker, 2, 1, &.{ 1, 2 });
     try putTestSlot(allocator, random, &slot_tracker, 3, 2, &.{ 1, 2, 3 });
     try putTestSlot(allocator, random, &slot_tracker, 4, 1, &.{ 1, 4 });
-    slot_tracker.root.store(3, .monotonic);
+    slot_tracker.consensus_root.store(3, .monotonic);
 
     var progress: ProgressMap = .INIT;
     defer progress.deinit(allocator);
@@ -1383,7 +1390,7 @@ test "advance calls consensus.process with empty replay results" {
     try advanceReplay(&replay_state, try registry.initStruct(Metrics), null);
 
     // No slots were replayed
-    try std.testing.expectEqual(0, replay_state.slot_tracker.root.load(.monotonic));
+    try std.testing.expectEqual(0, replay_state.slot_tracker.consensus_root.load(.monotonic));
 }
 
 test "advance with RPC enabled passes block commitment cache" {
@@ -1408,7 +1415,7 @@ test "advance with RPC enabled passes block commitment cache" {
     try advanceReplay(&replay_state, try registry.initStruct(Metrics), null);
 
     // No slots were replayed
-    try std.testing.expectEqual(0, replay_state.slot_tracker.root.load(.monotonic));
+    try std.testing.expectEqual(0, replay_state.slot_tracker.consensus_root.load(.monotonic));
 }
 
 test "Execute testnet block single threaded" {

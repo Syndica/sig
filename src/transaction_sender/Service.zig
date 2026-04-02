@@ -223,7 +223,7 @@ fn processTransactions(
         self.metrics.pool_size.set(txn_pool.count());
     }
 
-    const root_slot = self.ctx.slot_tracker.root.load(.monotonic);
+    const root_slot = self.ctx.slot_tracker.consensus_root.load(.monotonic);
     const root_ref = self.ctx.slot_tracker.get(root_slot) orelse
         return error.RootSlotNotAvailable;
     defer root_ref.release();
@@ -595,7 +595,7 @@ test "handleTransactions" {
             .state = .GENESIS,
         });
     }
-    test_ctx.slot_tracker.root.store(root_slot, .monotonic);
+    test_ctx.slot_tracker.consensus_root.store(root_slot, .monotonic);
 
     {
         var working_ancestors = sig.core.Ancestors.EMPTY;
