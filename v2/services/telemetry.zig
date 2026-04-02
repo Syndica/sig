@@ -103,7 +103,29 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             conn_reader_state.interface(),
             &conn_writer_state.interface,
         );
-        var http_request = try http_server.receiveHead();
+        var http_request = http_server.receiveHead() catch |err| switch (err) {
+            error.HttpHeadersOversize,
+            error.HttpRequestTruncated,
+            error.HttpConnectionClosing,
+            error.HttpHeadersInvalid,
+            => |e| {
+                std.log.warn("{}", .{e});
+                continue;
+            },
+            error.ReadFailed => switch (conn_reader_state.getError().?) {
+                error.WouldBlock,
+                error.Canceled,
+                error.MessageTooBig,
+                error.ConnectionTimedOut,
+                error.ConnectionResetByPeer,
+                => |e| {
+                    std.log.debug("{}", .{e});
+                    continue;
+                },
+                else => |e| return e,
+            },
+        };
+        std.log.err("Handling prometheus", .{});
 
         if (!std.mem.eql(u8, http_request.head.target, "/metrics")) {
             try http_request.respond(
