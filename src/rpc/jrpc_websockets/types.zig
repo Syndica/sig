@@ -434,7 +434,7 @@ pub const EventSink = struct {
         var iterator = account_reader.slotModifiedIterator(slot) orelse {
             // Logging for observability, there should always be modified accounts for a slot in
             // Solana and likely indicates a bug
-            logger.warn().logf(
+            logger.err().logf(
                 "frozen slot {} had no modified accounts to materialize",
                 .{slot},
             );
