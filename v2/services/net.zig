@@ -27,21 +27,27 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
 
     const metric_appender = rw.tel.metricAppender();
-    _ = metric_appender;
-
+    const metrics = metric_appender.appendFields(Metrics, .{});
     rw.tel.signalReady();
 
     try mainInner(
         logger,
+        metrics,
         &.{ rw.gossip_pair, rw.shred_pair },
     );
 }
+
+const Metrics = struct {
+    recv_packets: tel.Counter,
+    send_packets: tel.Counter,
+};
 
 const MAX_SOCKETS = 10;
 
 /// `ports` is the list of ports it'll listen on.
 fn mainInner(
     logger: tel.Logger("main"),
+    metrics: Metrics,
     pairs: []const *Pair,
 ) !noreturn {
     std.debug.assert(pairs.len <= MAX_SOCKETS);
@@ -83,6 +89,7 @@ fn mainInner(
                     p.addr.getOsSockLen(),
                 );
                 std.debug.assert(bytes == p.size);
+                metrics.send_packets.increment(1);
             }
         }
 
@@ -105,6 +112,7 @@ fn mainInner(
                     else => |e| return e,
                 });
                 _ = it.next();
+                metrics.recv_packets.increment(1);
             }
         }
     }

@@ -59,6 +59,14 @@ pub const Id = struct {
     /// * `count(u8, labels, ',') + 1 == label_count`.
     labels: [:'}']const u8,
 
+    pub fn initNameOnly(name: []const u8) Id {
+        return .{
+            .name = name,
+            .label_count = 0,
+            .labels = &.{},
+        };
+    }
+
     pub fn eql(a: Id, b: Id) bool {
         if (a.label_count != b.label_count) return false;
         if (!std.mem.eql(u8, a.name, b.name)) return false;
@@ -157,6 +165,47 @@ pub const Appender = struct {
         }
     };
 
+    pub fn appendCounter(self: Appender, id: Id) tel.Counter {
+        return .{ .value = self.appendGaugeRaw(id, .int, 0) };
+    }
+
+    pub fn appendHistogram(
+        self: Appender,
+        id: Id,
+        upper_bounds: []const f64,
+    ) tel.Histogram {
+        const raw = self.appendHistogramRaw(id, @intCast(upper_bounds.len));
+        raw.init(upper_bounds);
+        return .fromRaw(raw);
+    }
+
+    pub fn appendFields(
+        self: Appender,
+        comptime S: type,
+        comptime fields_config: FieldsConfig(S),
+    ) S {
+        var result: S = undefined;
+        inline for (@typeInfo(S).@"struct".fields) |s_field| {
+            const field_ptr = &@field(result, s_field.name);
+            const field_config = @field(fields_config, s_field.name);
+
+            const id: Id =
+                field_config.id_override orelse
+                .initNameOnly(s_field.name);
+
+            field_ptr.* = switch (s_field.type) {
+                tel.Counter => self.appendCounter(id),
+                tel.Histogram => self.appendHistogram(
+                    id,
+                    field_config.upper_bounds orelse
+                        &tel.Histogram.DEFAULT_UPPER_BOUNDS,
+                ),
+                else => comptime unreachable,
+            };
+        }
+        return result;
+    }
+
     pub fn appendGaugeRaw(
         self: Appender,
         id: Id,
@@ -203,3 +252,48 @@ pub const Appender = struct {
         };
     }
 };
+
+pub const FieldConfigCounter = struct {
+    id_override: ?[]const u8,
+
+    const default: FieldConfigCounter = .{
+        .id_override = null,
+    };
+};
+
+pub const FieldConfigHistogram = struct {
+    id_override: ?[]const u8,
+    upper_bounds: ?[]const f64,
+
+    const default: FieldConfigHistogram = .{
+        .id_override = null,
+        .upper_bounds = null,
+    };
+};
+
+pub fn FieldsConfig(comptime S: type) type {
+    const s_info = @typeInfo(S).@"struct";
+    var new_fields: [s_info.fields.len]std.builtin.Type.StructField = undefined;
+    @setEvalBranchQuota(s_info.fields.len);
+    for (s_info.fields, &new_fields) |s_field, *new_field| {
+        const Field = switch (s_field.type) {
+            tel.Counter => FieldConfigCounter,
+            tel.Histogram => FieldConfigHistogram,
+            else => @compileError("Unsupported: " ++ @typeName(s_field.type)),
+        };
+        new_field.* = .{
+            .name = s_field.name,
+            .type = Field,
+            .default_value_ptr = &@as(Field, .default),
+            .is_comptime = false,
+            .alignment = @alignOf(Field),
+        };
+    }
+    return @Type(.{ .@"struct" = .{
+        .layout = .auto,
+        .backing_integer = null,
+        .fields = &new_fields,
+        .decls = &.{},
+        .is_tuple = false,
+    } });
+}
