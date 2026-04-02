@@ -14,12 +14,14 @@ pub const name = .net;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
+pub const ReadOnly = struct {};
+
 pub const ReadWrite = struct {
     gossip_pair: *Pair,
     shred_pair: *Pair,
 };
 
-pub fn serviceMain(rw: ReadWrite) !noreturn {
+pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     try mainInner(&.{ rw.gossip_pair, rw.shred_pair });
 }
 
