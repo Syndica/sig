@@ -496,7 +496,7 @@ pub const TransactionLogsEntry = struct {
         const cloned_mentions = try allocator.dupe(Pubkey, self.mentioned_pubkeys);
         errdefer allocator.free(cloned_mentions);
 
-        const cloned_err = try cloneTransactionError(self.err, allocator);
+        const cloned_err = if (self.err) |tx_err| try tx_err.clone(allocator) else null;
         errdefer if (cloned_err) |tx_err| tx_err.deinit(allocator);
 
         return .{
@@ -556,26 +556,6 @@ fn freeLogLines(allocator: std.mem.Allocator, log_lines: []const []const u8) voi
     if (log_lines.len > 0) {
         allocator.free(log_lines);
     }
-}
-
-fn cloneTransactionError(
-    tx_err: ?TransactionError,
-    allocator: std.mem.Allocator,
-) !?TransactionError {
-    const tx_err_value = tx_err orelse return null;
-    if (tx_err_value != .InstructionError) {
-        return tx_err_value;
-    }
-
-    const instruction_error = tx_err_value.InstructionError;
-    if (instruction_error.@"1" != .BorshIoError) {
-        return tx_err_value;
-    }
-
-    return .{ .InstructionError = .{
-        instruction_error.@"0",
-        .{ .BorshIoError = try allocator.dupe(u8, instruction_error.@"1".BorshIoError) },
-    } };
 }
 
 pub const RootEventData = struct {

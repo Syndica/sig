@@ -254,7 +254,7 @@ fn appendSlotTransactionLogsEntry(
     const mentioned_pubkeys = try allocator.dupe(Pubkey, transaction.accounts.items(.pubkey));
     errdefer allocator.free(mentioned_pubkeys);
 
-    const cloned_err = try cloneTransactionError(tx_err, allocator);
+    const cloned_err = if (tx_err) |err_value| try err_value.clone(allocator) else null;
     errdefer if (cloned_err) |err_value| err_value.deinit(allocator);
 
     try batch_log_entries.append(allocator, .{
@@ -291,28 +291,6 @@ fn cloneLogMessages(
     }
 
     return log_messages;
-}
-
-fn cloneTransactionError(
-    tx_err: ?TransactionError,
-    allocator: Allocator,
-) !?TransactionError {
-    const tx_err_value = tx_err orelse return null;
-    if (tx_err_value != .InstructionError) {
-        // Only InstructionError has heap data to clone
-        return tx_err_value;
-    }
-
-    const instruction_index, const err = tx_err_value.InstructionError;
-    if (err != .BorshIoError) {
-        // Only BorshIoError error has heap data to clone
-        return tx_err_value;
-    }
-
-    return .{ .InstructionError = .{
-        instruction_index,
-        .{ .BorshIoError = try allocator.dupe(u8, err.BorshIoError) },
-    } };
 }
 
 /// Build and write TransactionStatusMeta to the ledger for a single transaction.
