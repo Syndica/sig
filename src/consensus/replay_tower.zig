@@ -1739,7 +1739,7 @@ pub fn collectClusterVoteState(
         var vote_state = try Tower.fromAccount(&vote.account.state);
 
         // Invoke visitor with the pre-simulation tower state so callers
-        // (e.g. BlockCommitmentCache) see actual on-chain lockouts.
+        // (e.g. CommitmentStakes) see actual on-chain lockouts.
         if (visitor) |v| try v.visit(&vote_state, vote.stake);
 
         for (vote_state.votes.constSlice()) |lockout_vote| {

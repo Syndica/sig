@@ -88,8 +88,8 @@ pub const DuplicateShredHandler = struct {
 
                     const chained_merkle_conflict_duplicate_proofs: bool = feature: {
                         const epoch_tracker = self.epoch_tracker orelse break :feature false;
-                        const root_slot = epoch_tracker.root_slot.load(.monotonic);
-                        const root_epoch = epoch_tracker.epoch_schedule.getEpoch(root_slot);
+                        const epoch_tracker_root = epoch_tracker.state_root.load(.monotonic);
+                        const root_epoch = epoch_tracker.epoch_schedule.getEpoch(epoch_tracker_root);
                         const epoch_info = epoch_tracker.getEpochInfo(root_epoch) catch
                             break :feature false;
                         defer epoch_info.release();

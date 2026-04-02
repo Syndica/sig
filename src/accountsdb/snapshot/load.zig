@@ -147,7 +147,7 @@ pub fn loadSnapshot(
     if (validate_snapshot) blk: {
         // Due to Rooted DB only storing latest accounts, the accounts lt hash can only be verified
         // if the incremental snapshot hasnt been inserted yet:
-        if (snapshot_files.incremental() != null and !db_has_entries)
+        if (snapshot_files.incremental() != null and db_has_entries)
             break :blk; // incremental exists & db was already populated
 
         var timer = try std.time.Timer.start();
