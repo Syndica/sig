@@ -5,6 +5,7 @@ const sig = @import("../../sig.zig");
 const base58 = @import("base58");
 const methods = @import("../methods.zig");
 const parse_instruction = @import("../parse_instruction/lib.zig");
+const slot_resolution = @import("./slot_resolution.zig");
 
 const AccountKeys = parse_instruction.AccountKeys;
 const Allocator = std.mem.Allocator;
@@ -429,9 +430,7 @@ pub fn getInflationReward(
     // Determine the epoch to query. Default: current_epoch - 1.
     const current_slot = self.slot_tracker.commitments.get(commitment);
 
-    if (config.minContextSlot) |min_slot| {
-        if (current_slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
+    try slot_resolution.validateMinContextSlot(current_slot, config.minContextSlot);
 
     const epoch = config.epoch orelse self.epoch_tracker.epoch_schedule.getEpoch(current_slot) -| 1;
 
@@ -700,10 +699,6 @@ pub fn getSignaturesForAddress(
         .finalized => highest_finalized_slot,
         .processed => unreachable,
     };
-
-    if (config.minContextSlot) |min_slot| {
-        if (highest_slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
 
     const limit = config.getLimit();
     if (limit == 0 or limit > 1000) return error.InvalidParams; // TODO: invalid params should return a more specific error
@@ -2107,4 +2102,29 @@ test "parseUiTransactionStatusMetaFromLedger: compute_units_consumed absent" {
         false,
     );
     try std.testing.expect(result.computeUnitsConsumed == .skip);
+}
+
+test "getInflationReward enforces minContextSlot" {
+    // Only slot_tracker is dereferenced before the minContextSlot check (line 433).
+    // All other pointer fields (ledger, epoch_tracker, status_cache) are unused
+    // in this error path, following the same `undefined` pattern as Consensus.zig tests.
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(std.testing.allocator, 5);
+    defer slot_tracker.deinit(std.testing.allocator);
+
+    // CommitmentTracker.init(5) sets finalized=0, confirmed=0, processed=5.
+    // Default commitment is .finalized, so current_slot will be 0.
+    const ctx = LedgerHookContext{
+        .ledger = undefined,
+        .epoch_tracker = undefined,
+        .status_cache = undefined,
+        .slot_tracker = &slot_tracker,
+        .block_commitment_cache = undefined,
+    };
+
+    const result = ctx.getInflationReward(std.testing.allocator, .{
+        .addresses = &.{},
+        .config = .{ .minContextSlot = 1 },
+    });
+
+    try std.testing.expectError(error.RpcMinContextSlotNotMet, result);
 }

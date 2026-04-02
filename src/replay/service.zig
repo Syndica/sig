@@ -179,7 +179,7 @@ pub const Dependencies = struct {
     hard_forks: sig.core.HardForks,
     replay_threads: u32,
     stop_at_slot: ?Slot,
-    event_sink: ?*jrpc_types.EventSink = null,
+    event_sink: ?*jrpc_types.EventSink,
     prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
 };
 
@@ -633,30 +633,19 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
 
                 if (state.event_sink) |event_sink| {
                     // send out frozen event with modified acconts for slot
-                    const accounts = event_sink.materializeSlotModifiedAccounts(
+                    var accounts = try event_sink.materializeSlotModifiedAccounts(
                         state.logger,
                         state.account_store.reader(),
                         slot,
                     );
+                    errdefer accounts.deinit();
 
-                    if (accounts) |modified_accounts| {
-                        event_sink.send(.{ .slot_frozen = .{
-                            .slot = slot,
-                            .parent = slot_info.constants().parent_slot,
-                            .root = slot_tracker.root.load(.monotonic),
-                            .accounts = modified_accounts,
-                        } }) catch |err| {
-                            state.logger.err().logf(
-                                "failed to send frozen slot event {}: {}",
-                                .{ slot, err },
-                            );
-                        };
-                    } else |err| {
-                        state.logger.err().logf(
-                            "failed to materialize modified accounts for frozen slot {}: {}",
-                            .{ slot, err },
-                        );
-                    }
+                    try event_sink.send(.{ .slot_frozen = .{
+                        .slot = slot,
+                        .parent = slot_info.constants().parent_slot,
+                        .root = slot_tracker.root.load(.monotonic),
+                        .accounts = accounts,
+                    } });
                 }
             } else {
                 state.logger.info().logf("partially replayed slot: {}", .{slot});
@@ -686,12 +675,7 @@ fn bypassConsensus(state: *ReplayState) !void {
     state.slot_tracker.commitments.update(.processed, new_tip);
     if (new_tip != old_tip) {
         if (state.event_sink) |sink| {
-            sink.send(.{ .tip_changed = new_tip }) catch |err| {
-                state.logger.err().logf(
-                    "failed to send tip_changed event {}: {}",
-                    .{ new_tip, err },
-                );
-            };
+            try sink.send(.{ .tip_changed = new_tip });
         }
     }
 
@@ -724,12 +708,7 @@ fn bypassConsensus(state: *ReplayState) !void {
             defer state.allocator.free(rooted_slots);
 
             for (rooted_slots) |rooted_slot| {
-                sink.send(.{ .slot_rooted = rooted_slot }) catch |err| {
-                    state.logger.err().logf(
-                        "failed to send rooted slot event {}: {}",
-                        .{ rooted_slot, err },
-                    );
-                };
+                try sink.send(.{ .slot_rooted = rooted_slot });
             }
         }
 
@@ -1246,9 +1225,9 @@ test "freezeCompletedSlots emits slot_frozen event with slot metadata" {
     defer event.deinit(event_sink.channel.allocator);
     switch (event) {
         .slot_frozen => |slot_frozen| {
-            try std.testing.expectEqual(@as(Slot, 1), slot_frozen.slot);
-            try std.testing.expectEqual(@as(Slot, 0), slot_frozen.parent);
-            try std.testing.expectEqual(@as(Slot, 0), slot_frozen.root);
+            try std.testing.expectEqual(1, slot_frozen.slot);
+            try std.testing.expectEqual(0, slot_frozen.parent);
+            try std.testing.expectEqual(0, slot_frozen.root);
         },
         else => return error.TestUnexpectedResult,
     }
@@ -1291,29 +1270,29 @@ test "bypassConsensus emits tip_changed and rooted chain events" {
     const tip_event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
     defer tip_event.deinit(event_sink.channel.allocator);
     switch (tip_event) {
-        .tip_changed => |slot| try std.testing.expectEqual(@as(Slot, 34), slot),
+        .tip_changed => |slot| try std.testing.expectEqual(34, slot),
         else => return error.TestUnexpectedResult,
     }
 
     const rooted_event_1 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
     defer rooted_event_1.deinit(event_sink.channel.allocator);
     switch (rooted_event_1) {
-        .slot_rooted => |slot| try std.testing.expectEqual(@as(Slot, 1), slot),
+        .slot_rooted => |slot| try std.testing.expectEqual(1, slot),
         else => return error.TestUnexpectedResult,
     }
 
     const rooted_event_2 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
     defer rooted_event_2.deinit(event_sink.channel.allocator);
     switch (rooted_event_2) {
-        .slot_rooted => |slot| try std.testing.expectEqual(@as(Slot, 2), slot),
+        .slot_rooted => |slot| try std.testing.expectEqual(2, slot),
         else => return error.TestUnexpectedResult,
     }
 
     try std.testing.expectEqual(
-        @as(Slot, 34),
+        34,
         replay_state.slot_tracker.commitments.get(.processed),
     );
-    try std.testing.expectEqual(@as(Slot, 2), replay_state.slot_tracker.root.load(.monotonic));
+    try std.testing.expectEqual(2, replay_state.slot_tracker.root.load(.monotonic));
     try std.testing.expect(event_sink.channel.tryReceive() == null);
 }
 
@@ -1595,6 +1574,7 @@ pub const DependencyStubs = struct {
 
             .replay_threads = 1,
             .stop_at_slot = null,
+            .event_sink = null,
         }, .enabled, rpc_status);
     }
 
@@ -1667,6 +1647,7 @@ pub const DependencyStubs = struct {
 
             .replay_threads = num_threads,
             .stop_at_slot = null,
+            .event_sink = null,
         }, .enabled, .disabled);
     }
 };

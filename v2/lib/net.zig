@@ -18,9 +18,11 @@ pub const Packet = extern struct {
 };
 
 pub const Pair = extern struct {
-    recv: Ring(MAX_PACKETS, Packet),
-    send: Ring(MAX_PACKETS, Packet),
+    recv: PacketRing,
+    send: PacketRing,
     port: u16,
+
+    pub const PacketRing = Ring(MAX_PACKETS, Packet);
 
     pub fn init(p: *Pair, port: u16) void {
         p.recv.init();
