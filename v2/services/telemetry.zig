@@ -65,6 +65,9 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var server = try listen_addr.listen(.{ .force_nonblocking = true });
     defer server.deinit();
 
+    try setRecvTimeOut(server.stream.handle, .{ .sec = 1, .usec = 0 });
+    try setSendTimeOut(server.stream.handle, .{ .sec = 1, .usec = 0 });
+
     while (true) {
         {
             var stderr_buf: [4096]u8 = undefined;
@@ -138,6 +141,30 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         try writePrometheusBody(response_body_writer, &metrics);
         try response_body_writer_state.end();
     }
+}
+
+fn setRecvTimeOut(
+    handle: std.os.linux.socket_t,
+    timeout: std.os.linux.timeval,
+) !void {
+    try std.posix.setsockopt(
+        handle,
+        std.os.linux.SOL.SOCKET,
+        std.os.linux.SO.RCVTIMEO,
+        @ptrCast(&timeout),
+    );
+}
+
+fn setSendTimeOut(
+    handle: std.os.linux.socket_t,
+    timeout: std.os.linux.timeval,
+) !void {
+    try std.posix.setsockopt(
+        handle,
+        std.os.linux.SOL.SOCKET,
+        std.os.linux.SO.SNDTIMEO,
+        @ptrCast(&timeout),
+    );
 }
 
 const MetricPtrs = union(api.MetricKind) {
