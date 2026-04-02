@@ -480,7 +480,10 @@ pub const ForkStats = struct {
     slot_hash: Hash,
     my_latest_landed_vote: ?Slot,
 
-    pub const VoteThreshold = std.ArrayListUnmanaged(ThresholdDecision);
+    pub const VoteThreshold = struct {
+        buf: [3]ThresholdDecision = undefined,
+        len: u2 = 0,
+    };
 
     pub const EMPTY_ZEROES: ForkStats = .{
         .fork_stake = 0,
@@ -500,9 +503,6 @@ pub const ForkStats = struct {
     };
 
     pub fn deinit(self: ForkStats, allocator: std.mem.Allocator) void {
-        var vote_threshold = self.vote_threshold;
-        vote_threshold.deinit(allocator);
-
         var voted_stakes = self.voted_stakes;
         voted_stakes.deinit(allocator);
 
@@ -514,9 +514,6 @@ pub const ForkStats = struct {
         self: ForkStats,
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!ForkStats {
-        var vote_threshold = try self.vote_threshold.clone(allocator);
-        errdefer vote_threshold.deinit(allocator);
-
         var voted_stakes = try self.voted_stakes.clone(allocator);
         errdefer voted_stakes.deinit(allocator);
 
@@ -530,7 +527,7 @@ pub const ForkStats = struct {
             .has_voted = self.has_voted,
             .is_recent = self.is_recent,
             .is_empty = self.is_empty,
-            .vote_threshold = vote_threshold,
+            .vote_threshold = self.vote_threshold,
             .is_locked_out = self.is_locked_out,
             .voted_stakes = voted_stakes,
             .duplicate_confirmed_hash = self.duplicate_confirmed_hash,
@@ -1683,7 +1680,7 @@ fn forkProgressInitRandom(
     random: std.Random,
 ) std.mem.Allocator.Error!ForkProgress {
     const fork_stats = try forkStatsInitRandom(allocator, random, .{
-        .vote_threshold_len = 1 + random.uintAtMost(u32, 31),
+        .vote_threshold_len = 1 + random.uintAtMost(u2, 2),
         .voted_stakes_len = 1 + random.uintAtMost(u32, 31),
         .lockout_intervals_len = 1 + random.uintAtMost(u32, 31),
         .lockout_interval_entry_len = .{
@@ -1800,7 +1797,7 @@ fn forkStatsInitRandom(
     allocator: std.mem.Allocator,
     random: std.Random,
     params: struct {
-        vote_threshold_len: u32,
+        vote_threshold_len: u2,
         voted_stakes_len: u32,
         lockout_intervals_len: u32,
         lockout_interval_entry_len: struct {
@@ -1808,13 +1805,11 @@ fn forkStatsInitRandom(
             max: u32,
         },
     },
-) std.mem.Allocator.Error!ForkStats {
-    const vote_threshold = try allocator.alloc(ThresholdDecision, params.vote_threshold_len);
-    errdefer allocator.free(vote_threshold);
-
-    for (vote_threshold) |*vt| {
+) !ForkStats {
+    var vote_threshold: ForkStats.VoteThreshold = .{ .len = params.vote_threshold_len };
+    for (vote_threshold.buf[0..params.vote_threshold_len]) |*threshold_decision| {
         const Tag = @typeInfo(ThresholdDecision).@"union".tag_type.?;
-        vt.* = switch (random.enumValueWithIndex(Tag, u1)) {
+        threshold_decision.* = switch (random.enumValueWithIndex(Tag, u1)) {
             inline .passed_threshold => |tag| tag,
             inline .failed_threshold => |tag| @unionInit(ThresholdDecision, @tagName(tag), .{
                 .vote_depth = random.int(u64),
@@ -1825,7 +1820,7 @@ fn forkStatsInitRandom(
 
     var voted_stakes: consensus.VotedStakes = .{};
     errdefer voted_stakes.deinit(allocator);
-    try voted_stakes.ensureTotalCapacity(allocator, params.vote_threshold_len);
+    try voted_stakes.ensureTotalCapacity(allocator, params.voted_stakes_len);
     for (0..params.voted_stakes_len) |_| voted_stakes.putAssumeCapacity(
         random.int(Slot),
         random.int(consensus.Stake),
@@ -1845,7 +1840,7 @@ fn forkStatsInitRandom(
         .has_voted = random.boolean(),
         .is_recent = random.boolean(),
         .is_empty = random.boolean(),
-        .vote_threshold = .fromOwnedSlice(vote_threshold),
+        .vote_threshold = vote_threshold,
         .is_locked_out = random.boolean(),
         .voted_stakes = voted_stakes,
         .duplicate_confirmed_hash = .initRandom(random),

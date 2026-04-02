@@ -29,6 +29,7 @@ const TowerError = sig.consensus.tower.TowerError;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
 const LockoutIntervals = sig.consensus.progress_map.LockoutIntervals;
+const VoteThreshold = sig.consensus.progress_map.ForkStats.VoteThreshold;
 
 const Stake = u64;
 
@@ -848,13 +849,12 @@ pub const ReplayTower = struct {
     /// Analogous to [check_vote_stake_thresholds](https://github.com/anza-xyz/agave/blob/3572983cc28393e3c39a971c274cdac9b2eb902a/core/src/consensus.rs#L1346)
     pub fn checkVoteStakeThresholds(
         self: *const ReplayTower,
-        allocator: std.mem.Allocator,
         slot: Slot,
         voted_stakes: *const VotedStakes,
         total_stake: Stake,
-    ) ![]ThresholdDecision {
+    ) !VoteThreshold {
         const threshold_size = 3;
-        var threshold_decisions: [threshold_size]ThresholdDecision = undefined;
+        var threshold_decisions: VoteThreshold = .{};
 
         // Generate the vote state assuming this vote is included.
         var vote_state = self.tower;
@@ -872,9 +872,9 @@ pub const ReplayTower = struct {
         };
 
         // Check one by one and add any failures to be returned
-        var index: usize = 0;
+        var index: u2 = 0;
         for (vote_thresholds_and_depths) |threshold| {
-            const vote_threshold = checkVoteStakeThreshold(
+            const vote_threshold_decision = checkVoteStakeThreshold(
                 .from(self.logger),
                 vote_state.nthRecentLockout(threshold.depth),
                 self.tower.votes.constSlice(),
@@ -885,13 +885,14 @@ pub const ReplayTower = struct {
                 total_stake,
             );
 
-            if (std.mem.eql(u8, @tagName(vote_threshold), "failed_threshold")) {
-                threshold_decisions[index] = vote_threshold;
+            if (vote_threshold_decision == .failed_threshold) {
+                threshold_decisions.buf[index] = vote_threshold_decision;
                 index += 1;
             }
         }
+        threshold_decisions.len = index;
 
-        return allocator.dupe(ThresholdDecision, threshold_decisions[0..index]);
+        return threshold_decisions;
     }
 
     fn lastVoteSignal(self: *const ReplayTower) LastVoteSignal {
@@ -1344,7 +1345,7 @@ pub const ReplayTower = struct {
 
         // Check vote thresholds
         var threshold_passed = true;
-        for (vote_thresholds.items) |threshold_failure| {
+        for (vote_thresholds.buf[0..vote_thresholds.len]) |threshold_failure| {
             if (threshold_failure != .failed_threshold) continue;
 
             const vote_depth = threshold_failure.failed_threshold.vote_depth;
@@ -2041,12 +2042,11 @@ test "check_vote_threshold_forks" {
         );
         defer computed_banks.deinit(allocator);
         const result = try replay_tower.checkVoteStakeThresholds(
-            std.testing.allocator,
             vote_to_evaluate,
             &computed_banks.voted_stakes,
             computed_banks.total_stake,
         );
-        std.testing.allocator.free(result);
+
         try std.testing.expectEqual(0, result.len);
     }
 
@@ -2073,12 +2073,11 @@ test "check_vote_threshold_forks" {
         );
         defer computed_banks.deinit(allocator);
         const result = try replay_tower.checkVoteStakeThresholds(
-            std.testing.allocator,
             vote_to_evaluate,
             &computed_banks.voted_stakes,
             computed_banks.total_stake,
         );
-        std.testing.allocator.free(result);
+
         try std.testing.expectEqual(0, result.len);
     }
 }
@@ -2306,13 +2305,8 @@ test "check vote threshold without votes" {
 
     stakes.putAssumeCapacity(0, 1);
 
-    const result = try tower.checkVoteStakeThresholds(
-        std.testing.allocator,
-        0,
-        &stakes,
-        2,
-    );
-    std.testing.allocator.free(result);
+    const result = try tower.checkVoteStakeThresholds(0, &stakes, 2);
+
     try std.testing.expectEqual(0, result.len);
 }
 
@@ -2334,12 +2328,11 @@ test "check vote threshold no skip lockout with new root" {
     }
 
     const result = try replay_tower.checkVoteStakeThresholds(
-        std.testing.allocator,
         MAX_LOCKOUT_HISTORY + 1,
         &stakes,
         2,
     );
-    std.testing.allocator.free(result);
+
     try std.testing.expect(result.len != 0);
 }
 
@@ -2558,12 +2551,11 @@ test "check vote threshold below threshold" {
     );
 
     const result = try replay_tower.checkVoteStakeThresholds(
-        std.testing.allocator,
         1,
         &stakes,
         2,
     );
-    std.testing.allocator.free(result);
+
     try std.testing.expect(result.len != 0);
 }
 
@@ -2584,12 +2576,11 @@ test "check vote threshold above threshold" {
     );
 
     const result = try replay_tower.checkVoteStakeThresholds(
-        std.testing.allocator,
         1,
         &stakes,
         2,
     );
-    std.testing.allocator.free(result);
+
     try std.testing.expectEqual(0, result.len);
 }
 
@@ -2613,14 +2604,8 @@ test "check vote thresholds above thresholds" {
         );
     }
 
-    const result = try tower.checkVoteStakeThresholds(
-        std.testing.allocator,
-        VOTE_THRESHOLD_DEPTH,
-        &stakes,
-        4,
-    );
+    const result = try tower.checkVoteStakeThresholds(VOTE_THRESHOLD_DEPTH, &stakes, 4);
 
-    std.testing.allocator.free(result);
     try std.testing.expectEqual(0, result.len);
 }
 
@@ -2643,14 +2628,8 @@ test "check vote threshold deep below threshold" {
         );
     }
 
-    const result = try tower.checkVoteStakeThresholds(
-        std.testing.allocator,
-        VOTE_THRESHOLD_DEPTH,
-        &stakes,
-        10,
-    );
+    const result = try tower.checkVoteStakeThresholds(VOTE_THRESHOLD_DEPTH, &stakes, 10);
 
-    std.testing.allocator.free(result);
     try std.testing.expect(result.len != 0);
 }
 
@@ -2673,14 +2652,8 @@ test "check vote threshold shallow below threshold" {
         );
     }
 
-    const result = try tower.checkVoteStakeThresholds(
-        std.testing.allocator,
-        VOTE_THRESHOLD_DEPTH,
-        &stakes,
-        10,
-    );
+    const result = try tower.checkVoteStakeThresholds(VOTE_THRESHOLD_DEPTH, &stakes, 10);
 
-    std.testing.allocator.free(result);
     try std.testing.expect(result.len != 0);
 }
 
@@ -2702,14 +2675,8 @@ test "check vote threshold above threshold after pop" {
         );
     }
 
-    const result = try tower.checkVoteStakeThresholds(
-        std.testing.allocator,
-        6,
-        &stakes,
-        2,
-    );
+    const result = try tower.checkVoteStakeThresholds(6, &stakes, 2);
 
-    std.testing.allocator.free(result);
     try std.testing.expectEqual(0, result.len);
 }
 
@@ -2726,14 +2693,8 @@ test "check vote threshold above threshold no stake" {
         Hash.ZEROES,
     );
 
-    const result = try tower.checkVoteStakeThresholds(
-        std.testing.allocator,
-        1,
-        &stakes,
-        2,
-    );
+    const result = try tower.checkVoteStakeThresholds(1, &stakes, 2);
 
-    std.testing.allocator.free(result);
     try std.testing.expect(result.len != 0);
 }
 
@@ -2756,14 +2717,8 @@ test "check vote threshold lockouts not updated" {
         );
     }
 
-    const result = try tower.checkVoteStakeThresholds(
-        std.testing.allocator,
-        6,
-        &stakes,
-        2,
-    );
+    const result = try tower.checkVoteStakeThresholds(6, &stakes, 2);
 
-    std.testing.allocator.free(result);
     try std.testing.expect(result.len == 0);
 }
 
@@ -2804,9 +2759,10 @@ test "default thresholds" {
 
     // Inject a failed threshold at vote_depth=0 into fork stats
     const stats = fixture.progress.getForkStats(candidate_slot).?;
-    try stats.vote_threshold.append(allocator, .{
+    stats.vote_threshold.buf[0] = .{
         .failed_threshold = .{ .vote_depth = 0, .observed_stake = 0 },
-    });
+    };
+    stats.vote_threshold.len = 1;
 
     // Now verify that canVoteOnCandidateSlot returns true and does not treat
     // vote_depth=0 as disqualifying with non-zero default threshold_depth

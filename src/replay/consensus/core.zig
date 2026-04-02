@@ -1848,7 +1848,6 @@ fn computeConsensusInputs(
             try new_stats.append(allocator, slot);
         }
         try cacheVotingSafetyChecks(
-            allocator,
             progress,
             replay_tower,
             slot,
@@ -1871,7 +1870,6 @@ fn computeConsensusInputs(
 ///
 /// Analogous to [cache_tower_stats](https://github.com/anza-xyz/agave/blob/3572983cc28393e3c39a971c274cdac9b2eb902a/core/src/replay_stage.rs#L3799)
 fn cacheVotingSafetyChecks(
-    allocator: std.mem.Allocator,
     progress: *ProgressMap,
     replay_tower: *const ReplayTower,
     slot: Slot,
@@ -1882,15 +1880,11 @@ fn cacheVotingSafetyChecks(
 
     const stats = progress.getForkStats(slot) orelse return error.MissingSlot;
 
-    const slice = try replay_tower.checkVoteStakeThresholds(
-        allocator,
+    stats.vote_threshold = try replay_tower.checkVoteStakeThresholds(
         slot,
         &stats.voted_stakes,
         stats.total_stake,
     );
-    // Free old vote_threshold before replacing it to avoid memory leak
-    stats.vote_threshold.deinit(allocator);
-    stats.vote_threshold = .fromOwnedSlice(slice);
 
     const slot_ancestors = ancestors.get(slot) orelse return error.MissingAncestor;
 
@@ -2027,7 +2021,6 @@ test "cacheTowerStats - missing ancestor" {
     var empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
 
     const result = cacheVotingSafetyChecks(
-        testing.allocator,
         &fixture.progress,
         &replay_tower,
         root.slot,
@@ -2053,7 +2046,6 @@ test "cacheTowerStats - missing slot" {
     const empty_ancestors: std.AutoArrayHashMapUnmanaged(Slot, Ancestors) = .empty;
 
     const result = cacheVotingSafetyChecks(
-        testing.allocator,
         &fixture.progress,
         &replay_tower,
         root.slot,
@@ -2084,7 +2076,6 @@ test "cacheTowerStats - success sets flags and empty thresholds" {
     defer replay_tower.deinit(std.testing.allocator);
 
     try cacheVotingSafetyChecks(
-        testing.allocator,
         &fixture.progress,
         &replay_tower,
         root.slot,
@@ -2092,7 +2083,7 @@ test "cacheTowerStats - success sets flags and empty thresholds" {
     );
 
     const stats = fixture.progress.getForkStats(root.slot).?;
-    try testing.expectEqual(0, stats.vote_threshold.items.len);
+    try testing.expectEqual(0, stats.vote_threshold.len);
     try testing.expectEqual(true, stats.is_locked_out);
     try testing.expectEqual(false, stats.has_voted);
     try testing.expectEqual(false, stats.is_recent);
@@ -2121,7 +2112,6 @@ test "cacheTowerStats - records failed threshold at depth 0" {
     defer replay_tower.deinit(std.testing.allocator);
 
     try cacheVotingSafetyChecks(
-        testing.allocator,
         &fixture.progress,
         &replay_tower,
         root.slot,
@@ -2129,8 +2119,8 @@ test "cacheTowerStats - records failed threshold at depth 0" {
     );
 
     const stats = fixture.progress.getForkStats(root.slot).?;
-    try testing.expectEqual(1, stats.vote_threshold.items.len);
-    const t = stats.vote_threshold.items[0];
+    try testing.expectEqual(1, stats.vote_threshold.len);
+    const t = stats.vote_threshold.buf[0];
     try testing.expect(t == .failed_threshold);
     try testing.expectEqual(0, t.failed_threshold.vote_depth);
     try testing.expectEqual(true, stats.is_locked_out);
