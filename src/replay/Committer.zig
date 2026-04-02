@@ -225,7 +225,7 @@ pub fn commitTransactions(
                     "failed to send transaction logs batch for slot {}: {}",
                     .{ slot, err },
                 );
-                event.deinit(persistent_allocator);
+                event.deinit();
             };
         }
     }

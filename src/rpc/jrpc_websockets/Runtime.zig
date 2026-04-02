@@ -331,7 +331,7 @@ fn handleInboundEvent(
     // TODO: review how ownership should flow in Zig for this situation,
     // .slot_frozen and .logs cases take ownership of the inner data
     var e = event;
-    defer e.deinit(self.inbound_event_queue.allocator);
+    defer e.deinit();
 
     switch (e) {
         .logs => |*log_data| {

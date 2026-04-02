@@ -342,8 +342,7 @@ pub const InboundEvent = union(enum) {
     slot_rooted: u64,
     tip_changed: u64,
 
-    pub fn deinit(self: InboundEvent, allocator: std.mem.Allocator) void {
-        _ = allocator;
+    pub fn deinit(self: InboundEvent) void {
         switch (self) {
             .logs => |slot_logs| {
                 var logs = slot_logs;
@@ -384,7 +383,7 @@ pub const EventSink = struct {
 
     pub fn destroy(self: *EventSink) void {
         while (self.channel.tryReceive()) |msg| {
-            msg.deinit(self.channel.allocator);
+            msg.deinit();
         }
         self.channel.deinit();
         self.loop_async.deinit();

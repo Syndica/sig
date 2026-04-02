@@ -153,7 +153,7 @@ pub const TestServer = struct {
                 "failed to send injected event: {}",
                 .{err},
             );
-            event.deinit(self.event_sink.channel.allocator);
+            event.deinit();
         };
     }
 
@@ -389,7 +389,7 @@ pub const IntegratedTestServer = struct {
                 "failed to send injected event: {}",
                 .{err},
             );
-            event.deinit(self.event_sink.channel.allocator);
+            event.deinit();
         };
     }
 
