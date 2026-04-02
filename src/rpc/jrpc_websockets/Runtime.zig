@@ -648,11 +648,18 @@ fn programAccountMatchesFilters(
     filters: ?[]const methods.ProgramSubscribe.Filter,
 ) !bool {
     const program_filters = filters orelse return true;
-    // Some filters need the full account bytes; load them lazily once and reuse them.
-    var account_data: ?[]u8 = null;
-    defer if (account_data) |bytes| {
-        self.allocator.free(bytes);
+    // Some filters need the full account bytes. Reuse the existing allocation when
+    // available and otherwise materialize them lazily once.
+    var bytes: ?[]const u8 = switch (account.data) {
+        // NOTE: currently it is always a .owned_allocation due to how we receive events.
+        .owned_allocation => |account_bytes| account_bytes,
+        .unowned_allocation => |account_bytes| account_bytes,
+        else => null,
     };
+    var bytes_need_free = false;
+    // This is ugly doing constCast, the problem is `.unowned_allocation` is `[]const u8`
+    // and we only free if we allocated but we want to use same variable
+    defer if (bytes_need_free) self.allocator.free(@constCast(bytes.?));
 
     for (program_filters) |filter| {
         switch (filter) {
@@ -663,44 +670,42 @@ fn programAccountMatchesFilters(
                 }
             },
             .memcmp => |memcmp_filter| {
-                const bytes = if (account_data) |cached_bytes|
-                    cached_bytes
-                else blk: {
-                    account_data = try account.data.readAllAllocate(self.allocator);
-                    break :blk account_data.?;
-                };
-                if (memcmp_filter.offset > bytes.len) {
+                if (bytes == null) {
+                    bytes = try account.data.readAllAllocate(self.allocator);
+                    bytes_need_free = true;
+                }
+                const account_bytes = bytes.?;
+                if (memcmp_filter.offset > account_bytes.len) {
                     return false;
                 }
-                const remaining_len = bytes.len - memcmp_filter.offset;
+                const remaining_len = account_bytes.len - memcmp_filter.offset;
                 if (memcmp_filter.bytes.len > remaining_len) {
                     return false;
                 }
                 if (!std.mem.eql(
                     u8,
-                    bytes[memcmp_filter.offset..][0..memcmp_filter.bytes.len],
+                    account_bytes[memcmp_filter.offset..][0..memcmp_filter.bytes.len],
                     memcmp_filter.bytes,
                 )) {
                     return false;
                 }
             },
             .tokenAccountState => {
-                const bytes = if (account_data) |cached_bytes|
-                    cached_bytes
-                else blk: {
-                    account_data = try account.data.readAllAllocate(self.allocator);
-                    break :blk account_data.?;
-                };
-                if (bytes.len < sig.rpc.account_codec.parse_token.TokenAccount.LEN) {
+                if (bytes == null) {
+                    bytes = try account.data.readAllAllocate(self.allocator);
+                    bytes_need_free = true;
+                }
+                const account_bytes = bytes.?;
+                if (account_bytes.len < sig.rpc.account_codec.parse_token.TokenAccount.LEN) {
                     return false;
                 }
-                const disc = if (bytes.len > sig.rpc.account_codec.parse_token.TokenAccount.LEN)
-                    bytes[sig.rpc.account_codec.parse_token.TokenAccount.LEN]
+                const disc = if (account_bytes.len > sig.rpc.account_codec.parse_token.TokenAccount.LEN)
+                    account_bytes[sig.rpc.account_codec.parse_token.TokenAccount.LEN]
                 else
                     0;
                 if (!sig.rpc.account_codec.parse_token.isValidTokenAccount(
-                    bytes.len,
-                    bytes[sig.rpc.account_codec.parse_token.ACCOUNT_INITIALIZED_INDEX],
+                    account_bytes.len,
+                    account_bytes[sig.rpc.account_codec.parse_token.ACCOUNT_INITIALIZED_INDEX],
                     disc,
                 )) {
                     return false;
