@@ -367,12 +367,18 @@ pub const CommitmentTracker = struct {
         if (slot_update.voted) |s| self.update(.processed, s);
         if (slot_update.optimistically_confirmed) |s| self.update(.confirmed, s);
 
-        // Commit accumulated commitment data to the cache in one atomic swap.
-        self.stakes.commit(transaction);
+        // Only commit when the visitor actually collected vote data this tick.
+        // On ticks with no newly frozen slots, the transaction is empty
+        // (total_stake=0, empty map) and committing it would wipe out valid
+        // data from the previous cycle.
+        if (transaction.total_stake > 0) {
+            // Commit accumulated commitment data to the cache in one atomic swap.
+            self.stakes.commit(transaction);
 
-        // Update finalized commitment from the highest supermajority root,
-        // matching Agave's commitment_service semantics.
-        self.update(.finalized, self.stakes.highestSuperMajorityRoot());
+            // Update finalized commitment from the highest supermajority root,
+            // matching Agave's commitment_service semantics.
+            self.update(.finalized, self.stakes.highestSuperMajorityRoot());
+        }
     }
 };
 
