@@ -2960,17 +2960,17 @@ test "checkAndHandleNewRoot - success" {
     }
 
     const rooted_event_1 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer rooted_event_1.deinit(event_sink.channel.allocator);
+    defer rooted_event_1.deinit();
     try testing.expect(rooted_event_1 == .slot_rooted);
     try testing.expectEqual(1, rooted_event_1.slot_rooted);
 
     const rooted_event_2 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer rooted_event_2.deinit(event_sink.channel.allocator);
+    defer rooted_event_2.deinit();
     try testing.expect(rooted_event_2 == .slot_rooted);
     try testing.expectEqual(2, rooted_event_2.slot_rooted);
 
     const rooted_event_3 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer rooted_event_3.deinit(event_sink.channel.allocator);
+    defer rooted_event_3.deinit();
     try testing.expect(rooted_event_3 == .slot_rooted);
     try testing.expectEqual(3, rooted_event_3.slot_rooted);
     try testing.expect(event_sink.channel.tryReceive() == null);

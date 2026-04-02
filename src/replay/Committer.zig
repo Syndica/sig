@@ -700,7 +700,7 @@ test "commitTransactions emits transaction logs batch with transaction metadata"
     );
 
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer event.deinit(event_sink.channel.allocator);
+    defer event.deinit();
 
     switch (event) {
         .logs => |logs_event| {
@@ -829,7 +829,7 @@ test "commitTransactions emits empty transaction logs batch when execution has n
     );
 
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer event.deinit(event_sink.channel.allocator);
+    defer event.deinit();
 
     switch (event) {
         .logs => |logs_event| {

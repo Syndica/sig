@@ -1222,7 +1222,7 @@ test "freezeCompletedSlots emits slot_frozen event with slot metadata" {
 
     try std.testing.expect(processed_a_slot);
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer event.deinit(event_sink.channel.allocator);
+    defer event.deinit();
     switch (event) {
         .slot_frozen => |slot_frozen| {
             try std.testing.expectEqual(1, slot_frozen.slot);
@@ -1268,21 +1268,21 @@ test "bypassConsensus emits tip_changed and rooted chain events" {
     try bypassConsensus(&replay_state);
 
     const tip_event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer tip_event.deinit(event_sink.channel.allocator);
+    defer tip_event.deinit();
     switch (tip_event) {
         .tip_changed => |slot| try std.testing.expectEqual(34, slot),
         else => return error.TestUnexpectedResult,
     }
 
     const rooted_event_1 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer rooted_event_1.deinit(event_sink.channel.allocator);
+    defer rooted_event_1.deinit();
     switch (rooted_event_1) {
         .slot_rooted => |slot| try std.testing.expectEqual(1, slot),
         else => return error.TestUnexpectedResult,
     }
 
     const rooted_event_2 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer rooted_event_2.deinit(event_sink.channel.allocator);
+    defer rooted_event_2.deinit();
     switch (rooted_event_2) {
         .slot_rooted => |slot| try std.testing.expectEqual(2, slot),
         else => return error.TestUnexpectedResult,
