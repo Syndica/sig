@@ -353,7 +353,9 @@ pub const InboundEvent = union(enum) {
                 var accounts = slot_data.accounts;
                 accounts.deinit();
             },
-            else => {},
+            .slot_confirmed => {},
+            .slot_rooted => {},
+            .tip_changed => {},
         }
     }
 };
