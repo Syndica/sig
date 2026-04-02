@@ -695,19 +695,7 @@ fn programAccountMatchesFilters(
                     bytes = try account.data.readAllAllocate(self.allocator);
                     bytes_need_free = true;
                 }
-                const account_bytes = bytes.?;
-                if (account_bytes.len < sig.rpc.account_codec.parse_token.TokenAccount.LEN) {
-                    return false;
-                }
-                const disc = if (account_bytes.len > sig.rpc.account_codec.parse_token.TokenAccount.LEN)
-                    account_bytes[sig.rpc.account_codec.parse_token.TokenAccount.LEN]
-                else
-                    0;
-                if (!sig.rpc.account_codec.parse_token.isValidTokenAccount(
-                    account_bytes.len,
-                    account_bytes[sig.rpc.account_codec.parse_token.ACCOUNT_INITIALIZED_INDEX],
-                    disc,
-                )) {
+                if (!sig.rpc.account_codec.parse_token.isValidTokenAccountData(bytes.?)) {
                     return false;
                 }
             },
