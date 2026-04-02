@@ -219,8 +219,8 @@ pub fn onSlotFrozen(
     slot_data.accounts = SlotModifiedAccounts.empty();
 
     if (duplicate_frozen) {
-        // TODO: for not not emitting a second time, not actually sure what should happen
-        // at processed commitment in this event.
+        // TODO: for now just not emitting anything, this needs to be addressed by tracking more
+        // than just slot numbers as a larger refactor in Sig
         return .{};
     }
 
