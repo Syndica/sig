@@ -43,6 +43,17 @@ pub const Logger = sig.trace.Logger("replay");
 
 pub const Metrics = struct {
     slot_execution_time: *sig.prometheus.Histogram,
+    voted_slot_update_count: *sig.prometheus.Counter,
+    optimistically_confirmed_update_count: *sig.prometheus.Counter,
+    root_update_count: *sig.prometheus.Counter,
+    state_root_update_count: *sig.prometheus.Counter,
+    consensus_root: *sig.prometheus.Gauge(u64),
+    state_root: *sig.prometheus.Gauge(u64),
+    slot_tracker_count: *sig.prometheus.Gauge(u64),
+    epoch_tracker_state_root: *sig.prometheus.Gauge(u64),
+    commitment_processed: *sig.prometheus.Gauge(u64),
+    commitment_confirmed: *sig.prometheus.Gauge(u64),
+    commitment_finalized: *sig.prometheus.Gauge(u64),
 
     pub const prefix = "replay";
     pub const histogram_buckets = b: {
@@ -166,7 +177,8 @@ pub fn advanceReplay(
         break :slot_update slot_update;
     };
 
-    try handleSlotUpdate(allocator, replay_state, slot_update, commitment_txn);
+    try handleSlotUpdate(allocator, replay_state, slot_update, commitment_txn, metrics);
+    recordSlotMetrics(replay_state, metrics);
 
     if (slot_results.len != 0) {
         const elapsed = start_time.read().asNanos();
@@ -733,6 +745,7 @@ pub fn handleSlotUpdate(
     replay_state: *ReplayState,
     slot_update: SlotUpdate,
     commitment_txn: ?*CommitmentStakes.Transaction,
+    metrics: Metrics,
 ) !void {
     // update commitment levels
     if (replay_state.commitments) |*c| c.commit(slot_update, commitment_txn.?);
@@ -781,10 +794,16 @@ pub fn handleSlotUpdate(
         &replay_state.thread_pool,
         new_state_root,
     );
+
+    // Record update in logs + metrics
+    replay_state.logger.info().logf("slot state update from consensus: {any}", .{slot_update});
+    if (slot_update.voted != null) metrics.voted_slot_update_count.inc();
+    if (slot_update.optimistically_confirmed != null) metrics.optimistically_confirmed_update_count.inc();
+    if (slot_update.root != null) metrics.root_update_count.inc();
+    if (maybe_new_state_root != null) metrics.state_root_update_count.inc();
 }
 
-/// Removes all slot-scoped data for slots that do not branch off the specified
-/// root.
+/// Removes all slot-scoped data for slots that do not branch off the specified root.
 pub fn pruneStaleData(
     allocator: std.mem.Allocator,
     slot_tracker: *SlotTracker,
@@ -831,6 +850,53 @@ pub fn pruneStaleData(
         } else {
             index += 1;
         }
+    }
+}
+
+/// publishes logs and metrics to reflect a snapshot of the current slots being tracked by replay
+pub fn recordSlotMetrics(replay_state: *ReplayState, metrics: Metrics) void {
+    // Record current state as gauges
+    const current_consensus_root = replay_state.slot_tracker.consensus_root.load(.monotonic);
+    const current_state_root = replay_state.slot_tracker.state_root.load(.monotonic);
+    const current_slot_tracker_count = replay_state.slot_tracker.count();
+    const current_epoch_tracker_state_root = replay_state.epoch_tracker.state_root.load(.monotonic);
+
+    metrics.consensus_root.set(current_consensus_root);
+    metrics.state_root.set(current_state_root);
+    metrics.slot_tracker_count.set(current_slot_tracker_count);
+    metrics.epoch_tracker_state_root.set(current_epoch_tracker_state_root);
+
+    // Log the same state for debugging
+    replay_state.logger.debug().logf(
+        \\slot_tracker.consensus_root = {}
+        \\slot_tracker.state_root = {}
+        \\slot_tracker.count = {}
+        \\epoch_tracker.state_root = {}
+    ,
+        .{
+            current_consensus_root,
+            current_state_root,
+            current_slot_tracker_count,
+            current_epoch_tracker_state_root,
+        },
+    );
+
+    // Apply the same pattern (log + metrics) to commitment levels if they are being recorded
+    if (replay_state.commitments) |commitments| {
+        const processed = commitments.get(.processed);
+        const confirmed = commitments.get(.confirmed);
+        const finalized = commitments.get(.finalized);
+
+        metrics.commitment_processed.set(processed);
+        metrics.commitment_confirmed.set(confirmed);
+        metrics.commitment_finalized.set(finalized);
+
+        replay_state.logger.info()
+            .field("processed", processed)
+            .field("confirmed", confirmed)
+            .field("finalized", finalized)
+            .field("behind", confirmed -| processed)
+            .log("Commitments");
     }
 }
 

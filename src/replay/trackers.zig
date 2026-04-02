@@ -194,6 +194,12 @@ pub const SlotTracker = struct {
         return slots_lg.get().contains(slot);
     }
 
+    pub fn count(self: *SlotTracker) usize {
+        var slots_lg = self.slots.read();
+        defer slots_lg.unlock();
+        return slots_lg.get().count();
+    }
+
     pub fn activeSlots(
         self: *SlotTracker,
         allocator: Allocator,
