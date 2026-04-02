@@ -12,6 +12,7 @@ const Pubkey = lib.solana.Pubkey;
 const Signature = lib.solana.Signature;
 
 const GossipNode = lib.gossip.GossipNode;
+const SnapshotQueue = lib.gossip.SnapshotQueue;
 
 comptime {
     _ = start;
@@ -23,6 +24,7 @@ pub const std_options = start.options;
 
 pub const ReadWrite = struct {
     net_pair: *Pair,
+    snapshot_queue: *SnapshotQueue,
 };
 
 pub const ReadOnly = struct {
@@ -45,6 +47,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     const Effects = struct {
         packet_writer: *lib.net.Pair.PacketRing.Iterator(.writer),
         keypair: *const lib.gossip.KeyPair,
+        snapshot_writer: *SnapshotQueue.Incoming.Iterator(.writer),
 
         const Self = @This();
 
@@ -66,12 +69,21 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         pub fn sign(self: Self, msg: []const u8) Signature {
             return self.keypair.sign(msg) catch |e| std.debug.panic("signing failed: {}", .{e});
         }
+
+        pub fn onSnapshot(self: Self, slot_hash: lib.gossip.SlotAndHash, rpc_address: lib.gossip.Address) void {
+            // if SnapshotQueue is full, drop snapshot notifications (receiver likely already busy with existing ones)
+            const ptr = self.snapshot_writer.next() orelse return;
+            ptr.* = .{ .slot = slot_hash.slot, .hash = slot_hash.hash, .rpc_address = rpc_address };
+            self.snapshot_writer.markUsed();
+        }
     };
 
     var packet_writer = rw.net_pair.send.get(.writer);
+    var snapshot_writer = rw.snapshot_queue.incoming.get(.writer);
     const effects: Effects = .{
         .packet_writer = &packet_writer,
         .keypair = &ro.config.keypair,
+        .snapshot_writer = &snapshot_writer,
     };
 
     // TODO: add .rpc for serving snapshots
@@ -88,13 +100,24 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         .entrypoints = ro.config.cluster_info.getEntryAddresses(),
     });
 
-    var it = rw.net_pair.recv.get(.reader);
+    var snapshot_available = rw.snapshot_queue.outgoing.get(.reader);
+    var packet_recv = rw.net_pair.recv.get(.reader);
     while (true) {
         now = @intCast(std.time.milliTimestamp());
         try gossip.poll(now);
 
-        const packet = it.next() orelse continue;
+        // Send snapshots made available over to gossip
+        if (snapshot_available.next()) |slot_hash| {
+            try gossip.insert(now, .{ .snapshot_hashes = .{
+                .from = effects.getIdentity(),
+                .full = slot_hash.*,
+                .incremental = .{ .items = &.{} },
+                .wallclock = now,
+            } });
+        }
+
+        const packet = packet_recv.next() orelse continue;
         gossip.processPacket(now, packet);
-        it.markUsed();
+        packet_recv.markUsed();
     }
 }

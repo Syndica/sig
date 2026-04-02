@@ -5,6 +5,9 @@
 
         .net_to_gossip = .net_pair,
         .gossip_config = .gossip_config,
+
+        .snapshot_queue = .snapshot_queue,
+        .accounts_db_config = .accounts_db_config,
     },
     .services = .{
         .{
@@ -19,6 +22,7 @@
             .regions = .{
                 .{ .name = .net_to_gossip, .access = .rw },
                 .{ .name = .gossip_config, .access = .readonly },
+                .{ .name = .snapshot_queue, .access = .rw },
             },
         },
         .{
@@ -26,6 +30,13 @@
             .regions = .{
                 .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .shred_recv_config, .access = .readonly },
+            },
+        },
+        .{
+            .name = .accounts_db,
+            .regions = .{
+                .{ .name = .snapshot_queue, .access = .rw },
+                .{ .name = .accounts_db_config, .access = .readonly },
             },
         },
     },

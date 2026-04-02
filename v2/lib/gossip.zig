@@ -9,6 +9,22 @@ const Pubkey = lib.solana.Pubkey;
 const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;
 
+const Ring = lib.ipc.Ring;
+
+pub const SnapshotQueue = extern struct {
+    incoming: Incoming,
+    outgoing: Outgoing,
+
+    pub const Incoming = Ring(1024, Entry);
+    pub const Outgoing = Ring(1, SlotAndHash);
+
+    pub const Entry = extern struct {
+        slot: Slot,
+        hash: Hash,
+        rpc_address: Address,
+    };
+};
+
 /// Extern struct compatibility for stdlib KeyPair type
 /// TODO: move this to signer service.
 pub const KeyPair = extern struct {
@@ -339,11 +355,11 @@ pub const GossipData = union(enum(u32)) {
         observed_stake: u64,
         shred_version: u16,
     },
+};
 
-    const SlotAndHash = struct {
-        slot: Slot,
-        hash: Hash,
-    };
+pub const SlotAndHash = extern struct {
+    slot: Slot,
+    hash: Hash,
 };
 
 /// A vote transaction from a node submitted as a GossipValue in the protocol.
