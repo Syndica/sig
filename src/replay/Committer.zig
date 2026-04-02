@@ -215,18 +215,15 @@ pub fn commitTransactions(
 
     if (self.event_sink) |event_sink| {
         if (maybe_logs_batch_event) |*logs_batch_event| {
+            // NOTE: it's fine to just assign the slice here since the arena allocator will free
+            // everything, so we don't need to track actual capacity of the ArrayList
             logs_batch_event.entries = batch_log_entries.items;
 
             const event: jrpc_types.InboundEvent = .{ .logs = logs_batch_event.* };
             maybe_logs_batch_event = null;
+            errdefer event.deinit();
 
-            event_sink.send(event) catch |err| {
-                self.logger.err().logf(
-                    "failed to send transaction logs batch for slot {}: {}",
-                    .{ slot, err },
-                );
-                event.deinit();
-            };
+            try event_sink.send(event);
         }
     }
 }
