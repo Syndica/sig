@@ -21,7 +21,7 @@ const NotifPayload = sig.sync.RcSlice(u8);
 pub const ReleasedPayloadBytes = @TypeOf((@as(NotifPayload, undefined)).release().?);
 pub const SlotReadContext = types.SlotReadContext;
 
-const RuntimeContext = @This();
+const Runtime = @This();
 
 allocator: std.mem.Allocator,
 logger: Logger,
@@ -82,8 +82,8 @@ pub const Dependencies = struct {
     wakeup_hook: ?WakeupHook = null,
 };
 
-pub fn init(deps: Dependencies) RuntimeContext {
-    const runtime: RuntimeContext = .{
+pub fn init(deps: Dependencies) Runtime {
+    return .{
         .allocator = deps.allocator,
         .logger = .from(deps.logger),
         .sub_map = deps.sub_map,
@@ -100,12 +100,11 @@ pub fn init(deps: Dependencies) RuntimeContext {
         .threadpool_wg = .{},
         .wakeup_hook = deps.wakeup_hook,
     };
-    return runtime;
 }
 
 /// Get or create a subscription entry for the given key.
 pub fn getOrCreateSubscription(
-    self: *RuntimeContext,
+    self: *Runtime,
     key: *const types.SubReqKey,
 ) !sub_map_mod.GetOrCreateResult {
     const result = try self.sub_map.getOrCreate(key);
@@ -119,7 +118,7 @@ pub fn getOrCreateSubscription(
 }
 
 const SerializeTask = struct {
-    runtime: *RuntimeContext,
+    runtime: *Runtime,
     task: ThreadPool.Task,
     job: types.SerializeJob,
 
@@ -179,7 +178,7 @@ const SerializeTask = struct {
 };
 
 const FreePayloadTask = struct {
-    runtime: *RuntimeContext,
+    runtime: *Runtime,
     task: ThreadPool.Task,
     bytes: ReleasedPayloadBytes,
 
@@ -201,7 +200,7 @@ const FreePayloadTask = struct {
 ///
 /// IMPORTANT: callers must shutdown the websocket server and stop sending messages to the
 /// inbound event channel before calling `shutdown()`.
-pub fn shutdown(self: *RuntimeContext, timeout_ms: u64) error{Timeout}!void {
+pub fn shutdown(self: *Runtime, timeout_ms: u64) error{Timeout}!void {
     self.drainCommitQueue();
     try self.waitForThreadpoolTasks(timeout_ms);
 
@@ -214,12 +213,12 @@ pub fn shutdown(self: *RuntimeContext, timeout_ms: u64) error{Timeout}!void {
     }
 }
 
-pub fn deinit(self: *RuntimeContext) void {
+pub fn deinit(self: *Runtime) void {
     self.slot_state_cache.deinit(self.allocator);
     self.pending_wake_queues.deinit(self.allocator);
 }
 
-fn waitForThreadpoolTasks(self: *RuntimeContext, timeout_ms: u64) error{Timeout}!void {
+fn waitForThreadpoolTasks(self: *Runtime, timeout_ms: u64) error{Timeout}!void {
     var timer = std.time.Timer.start() catch unreachable;
     const timeout_ns = timeout_ms * std.time.ns_per_ms;
 
@@ -235,7 +234,7 @@ fn waitForThreadpoolTasks(self: *RuntimeContext, timeout_ms: u64) error{Timeout}
 }
 
 /// Request an async wake on the loop, coalescing duplicate wakeups.
-pub fn requestWakeup(self: *RuntimeContext) void {
+pub fn requestWakeup(self: *Runtime) void {
     const already_pending = self.notify_pending.swap(true, .release);
     if (!already_pending) {
         self.loop_async.notify() catch |err| {
@@ -245,12 +244,12 @@ pub fn requestWakeup(self: *RuntimeContext) void {
     }
 }
 
-pub fn armAsyncWait(self: *RuntimeContext) void {
-    self.loop_async.wait(self.loop, &self.async_completion, RuntimeContext, self, onAsyncWakeup);
+pub fn armAsyncWait(self: *Runtime) void {
+    self.loop_async.wait(self.loop, &self.async_completion, Runtime, self, onAsyncWakeup);
 }
 
 fn onAsyncWakeup(
-    self_opt: ?*RuntimeContext,
+    self_opt: ?*Runtime,
     _: *xev.Loop,
     _: *xev.Completion,
     result: xev.Async.WaitError!void,
@@ -275,7 +274,7 @@ fn onAsyncWakeup(
 }
 
 fn appendSerializeTask(
-    self: *RuntimeContext,
+    self: *Runtime,
     job: types.SerializeJob,
     task_batch: *ThreadPool.Batch,
 ) !void {
@@ -290,7 +289,7 @@ fn appendSerializeTask(
     task_batch.push(.from(&serialize_task.task));
 }
 
-fn submitPayloadFree(self: *RuntimeContext, bytes: ReleasedPayloadBytes) !void {
+fn submitPayloadFree(self: *Runtime, bytes: ReleasedPayloadBytes) !void {
     // TODO(perf): we could pool these task structs to avoid allocator churn,
     // but notably this is quite fast when benchmarked due to same-size allocations.
     const free_task = try self.allocator.create(FreePayloadTask);
@@ -308,7 +307,7 @@ fn submitPayloadFree(self: *RuntimeContext, bytes: ReleasedPayloadBytes) !void {
 }
 
 /// Drain all pending inbound events from producers.
-fn drainInboundEvents(self: *RuntimeContext) void {
+fn drainInboundEvents(self: *Runtime) void {
     var task_batch = ThreadPool.Batch{};
     defer {
         if (task_batch.len > 0) {
@@ -326,14 +325,14 @@ fn drainInboundEvents(self: *RuntimeContext) void {
 }
 
 fn handleInboundEvent(
-    self: *RuntimeContext,
+    self: *Runtime,
     event: types.InboundEvent,
     task_batch: *ThreadPool.Batch,
 ) void {
     // TODO: review how ownership should flow in Zig for this situation,
     // .slot_frozen and .logs cases take ownership of the inner data
     var e = event;
-    defer e.deinit(self.inbound_event_queue.allocator);
+    defer e.deinit(self.allocator);
 
     switch (e) {
         .logs => |*log_data| {
@@ -408,7 +407,7 @@ fn handleInboundEvent(
 }
 
 fn handleReceivedSignaturesEvent(
-    self: *RuntimeContext,
+    self: *Runtime,
     data: types.ReceivedSignaturesEvent,
     task_batch: *ThreadPool.Batch,
 ) void {
@@ -449,12 +448,12 @@ const SlotEventKind = union(enum) {
 /// Lazily collects the unpublished frozen ancestor chain for a confirmed slot and
 /// iterates it oldest-first so slot-derived notifications preserve slot order.
 const PublishableConfirmedSlots = struct {
-    runtime: *RuntimeContext,
+    runtime: *Runtime,
     trigger_slot: Slot,
     slots: ?std.ArrayList(SlotStateCache.AncestorItem) = null,
     attempted: bool = false,
 
-    fn init(runtime: *RuntimeContext, trigger_slot: Slot) PublishableConfirmedSlots {
+    fn init(runtime: *Runtime, trigger_slot: Slot) PublishableConfirmedSlots {
         return .{ .runtime = runtime, .trigger_slot = trigger_slot };
     }
 
@@ -502,7 +501,7 @@ const PublishableConfirmedSlots = struct {
 };
 
 fn handleSlotTransition(
-    self: *RuntimeContext,
+    self: *Runtime,
     event_kind: SlotEventKind,
     slot: Slot,
     transition: SlotStateCache.Transition,
@@ -628,7 +627,7 @@ fn transitionMatchesCommitment(
 }
 
 fn maybeEnqueueFinalSignatureNotification(
-    self: *RuntimeContext,
+    self: *Runtime,
     entry: *sub_map_mod.MapEntry,
     transition: SlotStateCache.Transition,
     task_batch: *ThreadPool.Batch,
@@ -697,7 +696,7 @@ fn maybeEnqueueFinalSignatureNotification(
 /// Initialize last notified modified slot for an account subscription entry, this matches
 /// Agave's approach such that last modified is set but no replay notification is emitted.
 fn initializeAccountSubscriptionEntry(
-    self: *RuntimeContext,
+    self: *Runtime,
     entry: *sub_map_mod.MapEntry,
 ) void {
     const params = entry.key.params.account;
@@ -739,7 +738,7 @@ fn initializeAccountSubscriptionEntry(
 /// actual fork occurs, and even when a fork occurs we may already have the account in the
 /// slot state cache.
 fn enqueueAccountReevaluation(
-    self: *RuntimeContext,
+    self: *Runtime,
     entry: *sub_map_mod.MapEntry,
     commitment_slot: Slot,
     task_batch: *ThreadPool.Batch,
@@ -806,7 +805,7 @@ fn enqueueAccountReevaluation(
 fn deletedAccountPlaceholder() sig.core.Account {
     return .{
         .lamports = 0,
-        .data = sig.accounts_db.buffer_pool.AccountDataHandle.initEmpty(0),
+        .data = .initEmpty(0),
         .owner = sig.core.Pubkey.ZEROES,
         .executable = false,
         .rent_epoch = 0,
@@ -814,7 +813,7 @@ fn deletedAccountPlaceholder() sig.core.Account {
 }
 
 fn publishLogsSubscriptionForEntry(
-    self: *RuntimeContext,
+    self: *Runtime,
     entry: *sub_map_mod.MapEntry,
     cached_slot: *const SlotStateCache.CachedSlot,
     slot: Slot,
@@ -866,7 +865,7 @@ fn logsEventMatchesFilter(
 /// programSubscribe publishes from the cached modified accounts for one slot once that slot
 // becomes visible at the requested commitment.
 fn publishProgramSubscriptionForEntry(
-    self: *RuntimeContext,
+    self: *Runtime,
     entry: *sub_map_mod.MapEntry,
     cached_slot: *const SlotStateCache.CachedSlot,
     slot: Slot,
@@ -919,7 +918,7 @@ fn publishProgramSubscriptionForEntry(
 }
 
 fn programAccountMatchesFilters(
-    self: *RuntimeContext,
+    self: *Runtime,
     account: *const sig.core.Account,
     filters: ?[]const methods.ProgramSubscribe.Filter,
 ) !bool {
@@ -977,7 +976,7 @@ fn programAccountMatchesFilters(
 }
 
 fn enqueueJobForEntry(
-    self: *RuntimeContext,
+    self: *Runtime,
     entry: sub_map_mod.MapEntry,
     job_type: types.SerializeJob.JobType,
     is_final: bool,
@@ -1026,7 +1025,7 @@ fn enqueueJobForEntry(
 }
 
 /// Drain all pending commit messages from serialization workers.
-fn drainCommitQueue(self: *RuntimeContext) void {
+fn drainCommitQueue(self: *Runtime) void {
     // TODO: this is draining *all* pending, this could overwhelm queue capacity
     // before clients have a chance to consume. I don't think there's really a way
     // around it, the clients must keep up with the commit rate or messages will be
@@ -1042,7 +1041,7 @@ fn drainCommitQueue(self: *RuntimeContext) void {
     self.metrics.commit_drain_calls += 1;
 }
 
-fn handleCommitMsg(self: *RuntimeContext, msg: types.CommitMsg) void {
+fn handleCommitMsg(self: *Runtime, msg: types.CommitMsg) void {
     self.metrics.inflight_jobs -= 1;
     self.metrics.serialize_jobs += 1;
     self.metrics.serialize_ns += msg.serialize_ns;
@@ -1101,7 +1100,7 @@ fn handleCommitMsg(self: *RuntimeContext, msg: types.CommitMsg) void {
     }
 }
 
-fn markQueueForWaking(self: *RuntimeContext, q: *NotifQueue) void {
+fn markQueueForWaking(self: *Runtime, q: *NotifQueue) void {
     if (!q.wake_pending) {
         self.pending_wake_queues.append(self.allocator, q) catch {
             // Best-effort only under OOM. There is no reliable local recovery here beyond a
@@ -1115,7 +1114,7 @@ fn markQueueForWaking(self: *RuntimeContext, q: *NotifQueue) void {
     }
 }
 
-fn wakePendingQueueSubscribers(self: *RuntimeContext) void {
+fn wakePendingQueueSubscribers(self: *Runtime) void {
     for (self.pending_wake_queues.items) |q| {
         q.wake_pending = false;
         for (q.subscribers.items) |h| {
@@ -1125,7 +1124,7 @@ fn wakePendingQueueSubscribers(self: *RuntimeContext) void {
     self.pending_wake_queues.clearRetainingCapacity();
 }
 
-pub fn maybeRemoveIdleQueue(self: *RuntimeContext, sub_id: types.SubId, q: *NotifQueue) void {
+pub fn maybeRemoveIdleQueue(self: *Runtime, sub_id: types.SubId, q: *NotifQueue) void {
     if (q.subscriberCount() == 0) {
         self.sub_map.removeById(sub_id);
     }
@@ -1133,7 +1132,7 @@ pub fn maybeRemoveIdleQueue(self: *RuntimeContext, sub_id: types.SubId, q: *Noti
 
 /// Release a refcounted notification payload, freeing the backing
 /// allocation when the last reference is dropped.
-pub fn releasePayload(ctx: *RuntimeContext, payload: NotifPayload) void {
+pub fn releasePayload(ctx: *Runtime, payload: NotifPayload) void {
     if (payload.release()) |bytes| {
         ctx.submitPayloadFree(bytes) catch {
             freePayloadBytes(ctx, bytes);
@@ -1141,7 +1140,7 @@ pub fn releasePayload(ctx: *RuntimeContext, payload: NotifPayload) void {
     }
 }
 
-fn freePayloadBytes(ctx: *RuntimeContext, bytes: ReleasedPayloadBytes) void {
+fn freePayloadBytes(ctx: *Runtime, bytes: ReleasedPayloadBytes) void {
     var free_timer = std.time.Timer.start() catch unreachable;
     ctx.allocator.free(bytes);
     const elapsed_ns = free_timer.read();
@@ -1151,63 +1150,7 @@ fn freePayloadBytes(ctx: *RuntimeContext, bytes: ReleasedPayloadBytes) void {
 }
 
 test "releasePayload frees payloads on the threadpool" {
-    const CountingAllocator = struct {
-        backing: std.mem.Allocator,
-        free_calls: std.atomic.Value(u32) = .init(0),
-
-        fn allocator(self: *@This()) std.mem.Allocator {
-            return .{
-                .ptr = @ptrCast(self),
-                .vtable = &.{
-                    .alloc = alloc,
-                    .resize = resize,
-                    .remap = remap,
-                    .free = free,
-                },
-            };
-        }
-
-        fn alloc(
-            ctx: *anyopaque,
-            len: usize,
-            alignment: std.mem.Alignment,
-            ret_addr: usize,
-        ) ?[*]u8 {
-            const self: *@This() = @ptrCast(@alignCast(ctx));
-            return self.backing.rawAlloc(len, alignment, ret_addr);
-        }
-
-        fn resize(
-            ctx: *anyopaque,
-            memory: []u8,
-            alignment: std.mem.Alignment,
-            new_len: usize,
-            ret_addr: usize,
-        ) bool {
-            const self: *@This() = @ptrCast(@alignCast(ctx));
-            return self.backing.rawResize(memory, alignment, new_len, ret_addr);
-        }
-
-        fn remap(
-            ctx: *anyopaque,
-            memory: []u8,
-            alignment: std.mem.Alignment,
-            new_len: usize,
-            ret_addr: usize,
-        ) ?[*]u8 {
-            const self: *@This() = @ptrCast(@alignCast(ctx));
-            return self.backing.rawRemap(memory, alignment, new_len, ret_addr);
-        }
-
-        fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
-            const self: *@This() = @ptrCast(@alignCast(ctx));
-            _ = self.free_calls.fetchAdd(1, .monotonic);
-            self.backing.rawFree(memory, alignment, ret_addr);
-        }
-    };
-
-    var allocator_state = CountingAllocator{ .backing = std.testing.allocator };
-    const allocator = allocator_state.allocator();
+    const allocator = std.testing.allocator;
 
     var commit_queue = try Channel(types.CommitMsg).init(allocator);
     defer commit_queue.deinit();
@@ -1245,7 +1188,7 @@ test "releasePayload frees payloads on the threadpool" {
         .account_reader = .noop,
         .status_cache = &status_cache,
     };
-    var runtime = RuntimeContext.init(.{
+    var runtime = Runtime.init(.{
         .allocator = allocator,
         .logger = .FOR_TESTS,
         .sub_map = &sub_map,
@@ -1266,7 +1209,6 @@ test "releasePayload frees payloads on the threadpool" {
     try runtime.waitForThreadpoolTasks(5 * std.time.ms_per_s);
 
     try std.testing.expectEqual(1, metrics.payloads_freed.load(.acquire));
-    try std.testing.expect(allocator_state.free_calls.load(.acquire) > 0);
 }
 
 test "shutdown times out while runtime tasks remain unfinished" {
@@ -1308,7 +1250,7 @@ test "shutdown times out while runtime tasks remain unfinished" {
         .account_reader = .noop,
         .status_cache = &status_cache,
     };
-    var runtime = RuntimeContext.init(.{
+    var runtime = Runtime.init(.{
         .allocator = allocator,
         .logger = .FOR_TESTS,
         .sub_map = &sub_map,
@@ -1371,7 +1313,7 @@ test "handleCommitMsg drops payload for removed queue" {
         .account_reader = .noop,
         .status_cache = &status_cache,
     };
-    var runtime = RuntimeContext.init(.{
+    var runtime = Runtime.init(.{
         .allocator = allocator,
         .logger = .FOR_TESTS,
         .sub_map = &sub_map,
@@ -1452,7 +1394,7 @@ test "handleCommitMsg ignores serialize error for removed queue" {
         .account_reader = .noop,
         .status_cache = &status_cache,
     };
-    var runtime = RuntimeContext.init(.{
+    var runtime = Runtime.init(.{
         .allocator = allocator,
         .logger = .FOR_TESTS,
         .sub_map = &sub_map,
@@ -1527,7 +1469,7 @@ test "handleReceivedSignaturesEvent skips received notifications once final is q
         .account_reader = .noop,
         .status_cache = &status_cache,
     };
-    var runtime = RuntimeContext.init(.{
+    var runtime = Runtime.init(.{
         .allocator = allocator,
         .logger = .FOR_TESTS,
         .sub_map = &sub_map,

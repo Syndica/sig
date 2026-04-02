@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const xev = @import("xev");
+const tracy = @import("tracy");
 const NotifPayload = sig.sync.RcSlice(u8);
 const methods = @import("methods.zig");
 const ws_request = @import("ws_request.zig");
@@ -365,7 +366,9 @@ pub const InboundEvent = union(enum) {
                 var accounts = slot_data.accounts;
                 accounts.deinit();
             },
-            else => {},
+            .slot_confirmed => {},
+            .slot_rooted => {},
+            .tip_changed => {},
         }
     }
 };
@@ -418,11 +421,15 @@ pub const EventSink = struct {
         account_reader: sig.accounts_db.AccountReader,
         slot: u64,
     ) !SlotModifiedAccounts {
+        const zone = tracy.Zone.init(@src(), .{ .name = "materialize slot modified accounts" });
+        defer zone.deinit();
         var arena = std.heap.ArenaAllocator.init(self.channel.allocator);
         errdefer arena.deinit();
         const arena_allocator = arena.allocator();
 
         var iterator = account_reader.slotModifiedIterator(slot) orelse {
+            // Logging for observability, there should always be modified accounts for a slot in
+            // Solana and likely indicates a bug
             logger.err().logf(
                 "frozen slot {} had no modified accounts to materialize",
                 .{slot},
@@ -493,6 +500,8 @@ pub const TransactionLogsEntry = struct {
     logs: []const []const u8,
     mentioned_pubkeys: []const Pubkey,
 
+    /// Returns a deep-cloned LogsNotificationData, allocated using the provided allocator,
+    /// caller must call deinit.
     pub fn toOwnedNotificationData(
         self: *const TransactionLogsEntry,
         allocator: std.mem.Allocator,
@@ -504,7 +513,7 @@ pub const TransactionLogsEntry = struct {
         const cloned_mentions = try allocator.dupe(Pubkey, self.mentioned_pubkeys);
         errdefer allocator.free(cloned_mentions);
 
-        const cloned_err = if (self.err) |err| try err.clone(allocator) else null;
+        const cloned_err = if (self.err) |tx_err| try tx_err.clone(allocator) else null;
         errdefer if (cloned_err) |tx_err| tx_err.deinit(allocator);
 
         return .{

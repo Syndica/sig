@@ -195,8 +195,13 @@ pub fn main() !void {
             current_config.turbine.overwrite_stake_for_testing =
                 params.overwrite_stake_for_testing;
             current_config.shred_network.no_retransmit = params.no_retransmit;
+            current_config.shred_network.forward_shreds_to = params.forward_shreds_to;
             current_config.accounts_db.snapshot_metadata_only = params.snapshot_metadata_only;
             try shredNetwork(gpa, gossip_gpa, current_config);
+        },
+        .stream_ledger => |params| {
+            current_config.shred_network.forward_shreds_to = params.forward_shreds_to;
+            try streamLedger(gpa, current_config);
         },
         .snapshot_download => |params| {
             current_config.shred_version = params.shred_version;
@@ -320,6 +325,7 @@ const Cmd = struct {
         validator: Validator,
         replay_offline: Validator,
         shred_network: ShredNetwork,
+        stream_ledger: StreamLedger,
         snapshot_download: SnapshotDownload,
         snapshot_validate: SnapshotValidate,
         snapshot_create: SnapshotCreate,
@@ -350,6 +356,7 @@ const Cmd = struct {
                 .validator = Validator.cmd_info,
                 .replay_offline = Validator.cmd_info,
                 .shred_network = ShredNetwork.cmd_info,
+                .stream_ledger = StreamLedger.cmd_info,
                 .snapshot_download = SnapshotDownload.cmd_info,
                 .snapshot_validate = SnapshotValidate.cmd_info,
                 .snapshot_create = SnapshotCreate.cmd_info,
@@ -1006,6 +1013,7 @@ const Cmd = struct {
         overwrite_stake_for_testing: bool,
         no_retransmit: bool,
         snapshot_metadata_only: bool,
+        forward_shreds_to: ?[]const u8,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -1046,6 +1054,14 @@ const Cmd = struct {
                     .config = {},
                     .help = "Shreds will be received and stored but not retransmitted",
                 },
+                .forward_shreds_to = .{
+                    .kind = .named,
+                    .name_override = "forward-shreds-to",
+                    .alias = .none,
+                    .default_value = null,
+                    .config = .string,
+                    .help = "Forward deduped shreds (raw UDP payload) to ip:port",
+                },
                 .snapshot_metadata_only = .{
                     .kind = .named,
                     .name_override = null,
@@ -1053,6 +1069,30 @@ const Cmd = struct {
                     .default_value = false,
                     .config = {},
                     .help = "load only the snapshot metadata",
+                },
+            },
+        };
+    };
+
+    const StreamLedger = struct {
+        forward_shreds_to: ?[]const u8,
+
+        const cmd_info: cli.CommandInfo(@This()) = .{
+            .help = .{
+                .short = "Stream shreds from an existing ledger.",
+                .long =
+                \\Reads shreds from the local ledger database and streams them slot-by-slot
+                \\to a UDP socket. Intended for v2 testing.
+                ,
+            },
+            .sub = .{
+                .forward_shreds_to = .{
+                    .kind = .named,
+                    .name_override = "forward-shreds-to",
+                    .alias = .none,
+                    .default_value = null,
+                    .config = .string,
+                    .help = "Forward shreds (raw UDP payload) to ip:port",
                 },
             },
         };
@@ -1472,7 +1512,7 @@ fn validator(
     const turbine_recv_port: u16 = cfg.shred_network.turbine_recv_port;
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
 
-    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    const ledger_dir = try cfg.ledgerDir(allocator);
     defer allocator.free(ledger_dir);
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{
@@ -2101,7 +2141,7 @@ fn replayOffline(
     );
     defer snapshot_dir.close();
 
-    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    const ledger_dir = try cfg.ledgerDir(allocator);
     defer allocator.free(ledger_dir);
 
     const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
@@ -2298,7 +2338,7 @@ fn shredNetwork(
     defer allocator.free(genesis_file_path);
     const genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
 
-    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    const ledger_dir = try cfg.ledgerDir(allocator);
     defer allocator.free(ledger_dir);
 
     const rpc_url = genesis_config.cluster_type.getRpcUrl() orelse
@@ -2306,12 +2346,20 @@ fn shredNetwork(
     var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{});
     defer rpc_client.deinit();
 
-    const shred_network_conf = cfg.shred_network.toConfig(
+    var shred_network_conf = cfg.shred_network.toConfig(
         cfg.shred_network.root_slot orelse blk: {
             const response = try rpc_client.getSlot(.{});
             break :blk try response.result();
         },
     );
+    if (cfg.shred_network.forward_shreds_to) |target| {
+        const socket_addr = sig.net.SocketAddr.parse(target) catch try sig.net.net.resolveSocketAddr(
+            allocator,
+            target,
+        );
+        try sig.net.SocketAddr.sanitize(&socket_addr);
+        shred_network_conf.forward_shreds_to = socket_addr;
+    }
     app_base.logger.info().logf(
         "Starting after assumed root slot: {any}",
         .{shred_network_conf.root_slot},
@@ -2405,6 +2453,63 @@ fn shredNetwork(
     gossip_service.service_manager.join();
     shred_network_manager.join();
     ledger_cleanup_service.join();
+}
+
+/// Streams shreds from the local ledger DB to `--forward-shreds-to`.
+///
+/// Reads shreds slot-by-slot from `<validator-dir>/ledger` and forwards both data and coding
+/// shreds as raw UDP payloads. This is intended for v2 testing using an existing ledger.
+fn streamLedger(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
+    var app_base = try AppBase.init(allocator, cfg);
+    defer {
+        if (!app_base.closed) app_base.shutdown();
+        app_base.deinit();
+    }
+
+    const target = cfg.shred_network.forward_shreds_to orelse return error.MissingValue;
+    const socket_addr = sig.net.SocketAddr.parse(target) catch try sig.net.net.resolveSocketAddr(
+        allocator,
+        target,
+    );
+    try sig.net.SocketAddr.sanitize(&socket_addr);
+    const forward_addr = socket_addr.toAddress();
+
+    const ledger_dir = try cfg.ledgerDir(allocator);
+    defer allocator.free(ledger_dir);
+
+    var ledger = try Ledger.init(
+        allocator,
+        .from(app_base.logger),
+        ledger_dir,
+        app_base.metrics_registry,
+    );
+    defer ledger.deinit();
+
+    const sock: sig.net.UdpSocket = try .create(try .fromAddress(forward_addr));
+    defer sock.close();
+    try sock.bindToPort(0);
+
+    const reader = ledger.reader();
+    const start_slot = try reader.lowestSlot();
+    var it = try reader.slotMetaIterator(start_slot);
+    defer it.deinit();
+
+    while (try it.next()) |entry| {
+        const slot, const meta = entry;
+        if (slot == 0 or meta.received == 0) continue;
+
+        var data_shreds = try reader.getDataShredsForSlot(allocator, slot, 0);
+        defer data_shreds.deinit();
+        for (data_shreds.items) |shred| {
+            _ = sock.sendTo(forward_addr, shred.payload()) catch {};
+        }
+
+        var code_shreds = try reader.getCodeShredsForSlot(allocator, slot, 0);
+        defer code_shreds.deinit();
+        for (code_shreds.items) |shred| {
+            _ = sock.sendTo(forward_addr, shred.payload()) catch {};
+        }
+    }
 }
 
 fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
@@ -2699,7 +2804,7 @@ fn ledgerTool(
     var stdout_file_writer = std.fs.File.stdout().writer(&.{});
     const stdout = &stdout_file_writer.interface;
 
-    const ledger_dir = try std.fs.path.join(allocator, &.{ cfg.validator_dir, "ledger" });
+    const ledger_dir = try cfg.ledgerDir(allocator);
     defer allocator.free(ledger_dir);
 
     var ledger_state = Ledger.init(allocator, .from(logger), ledger_dir, null) catch |err| {
@@ -3057,6 +3162,7 @@ const ReplayAndConsensusServiceState = struct {
                     .hard_forks = hard_forks,
                     .replay_threads = params.replay_threads,
                     .stop_at_slot = params.stop_at_slot,
+                    .event_sink = params.event_sink,
                     .prioritization_fee_cache = params.prioritization_fee_cache,
                 },
                 if (params.disable_consensus) .disabled else .enabled,

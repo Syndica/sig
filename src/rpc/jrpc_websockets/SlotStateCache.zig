@@ -131,7 +131,7 @@ pub fn init(slot_read_ctx: SlotReadContext, logger: Logger) SlotStateCache {
     const processed_tip = slot_read_ctx.slot_tracker.commitments.get(.processed);
     const processed_tip_info = slot_read_ctx.slot_tracker.get(processed_tip);
     return .{
-        .logger = .from(logger),
+        .logger = logger,
         .processed_tip = processed_tip,
         .processed_tip_info = processed_tip_info,
     };
@@ -219,8 +219,8 @@ pub fn onSlotFrozen(
     slot_data.accounts = SlotModifiedAccounts.empty();
 
     if (duplicate_frozen) {
-        // TODO: for not not emitting a second time, not actually sure what should happen
-        // at processed commitment in this event.
+        // TODO: for now just not emitting anything, this needs to be addressed by tracking more
+        // than just slot numbers as a larger refactor in Sig
         return .{};
     }
 
@@ -901,6 +901,7 @@ test "tip change updates processed_tip and fork membership" {
     try std.testing.expect(state.isSlotOnCurrentFork(5));
     try std.testing.expect(!state.cached_slots.getPtr(4).?.published.processed);
     try std.testing.expect(state.cached_slots.getPtr(5).?.published.processed);
+    try std.testing.expectEqual(5, state.processed_tip);
 }
 
 test "off-fork frozen slot is not on current fork" {

@@ -215,18 +215,15 @@ pub fn commitTransactions(
 
     if (self.event_sink) |event_sink| {
         if (maybe_logs_batch_event) |*logs_batch_event| {
+            // NOTE: it's fine to just assign the slice here since the arena allocator will free
+            // everything, so we don't need to track actual capacity of the ArrayList
             logs_batch_event.entries = batch_log_entries.items;
 
             const event: jrpc_types.InboundEvent = .{ .logs = logs_batch_event.* };
             maybe_logs_batch_event = null;
+            errdefer event.deinit(persistent_allocator);
 
-            event_sink.send(event) catch |err| {
-                self.logger.err().logf(
-                    "failed to send transaction logs batch for slot {}: {}",
-                    .{ slot, err },
-                );
-                event.deinit(persistent_allocator);
-            };
+            try event_sink.send(event);
         }
     }
 }
@@ -254,7 +251,7 @@ fn appendSlotTransactionLogsEntry(
     const mentioned_pubkeys = try allocator.dupe(Pubkey, transaction.accounts.items(.pubkey));
     errdefer allocator.free(mentioned_pubkeys);
 
-    const cloned_err = if (tx_err) |err| try err.clone(allocator) else null;
+    const cloned_err = if (tx_err) |err_value| try err_value.clone(allocator) else null;
     errdefer if (cloned_err) |err_value| err_value.deinit(allocator);
 
     try batch_log_entries.append(allocator, .{
@@ -703,7 +700,7 @@ test "commitTransactions emits transaction logs batch with transaction metadata"
     );
 
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer event.deinit(event_sink.channel.allocator);
+    defer event.deinit(allocator);
 
     switch (event) {
         .logs => |logs_event| {
@@ -832,7 +829,7 @@ test "commitTransactions emits empty transaction logs batch when execution has n
     );
 
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer event.deinit(event_sink.channel.allocator);
+    defer event.deinit(allocator);
 
     switch (event) {
         .logs => |logs_event| {

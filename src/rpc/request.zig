@@ -101,8 +101,17 @@ pub const Request = struct {
                 return diag.initErr(error.MissingJsonRpcVersion, .{ .id = id });
             const method_str = self.method orelse
                 return diag.initErr(error.MissingMethod, .{ .id = id });
-            const params_values = self.params orelse
-                return diag.initErr(error.MissingParams, .{ .id = id });
+            // Agave / solana-client compatibility:
+            // Solana clients can send `"params": null` (or omit `params`) for
+            // zero-argument methods like `getVersion` and `getIdentity`.
+            // Agave accepts this and treats it like `params: []`.
+            //
+            // [agave] Agave unit tests call `create_test_request(..., None)`, which
+            // serializes as `"params": null` and still expects success.
+            // - test_rpc_get_version: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L7151-L7163
+            // - test_rpc_get_identity: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L7126-L7133
+            const empty_params: []const std.json.Value = &[_]std.json.Value{};
+            const params_values = self.params orelse empty_params;
 
             if (!std.mem.eql(u8, jsonrpc, "2.0")) {
                 return diag.initErr(error.InvalidJsonRpcVersion, .{ .id = id });
@@ -352,14 +361,14 @@ test "Request duplicate & ignored fields (non-standard)" {
 
 test "Request parse errors" {
     try std.testing.expectError(
-        error.MissingField,
+        error.LengthMismatch,
         std.json.parseFromSliceLeaky(Request, std.testing.allocator,
             \\{"jsonrpc":"2.0","id":42,"id":"33","method":"getBalance","method":"getAccountInfo"}
         , .{ .duplicate_field_behavior = .use_first }),
     );
 
     try std.testing.expectError(
-        error.MissingField,
+        error.LengthMismatch,
         std.json.parseFromSliceLeaky(Request, std.testing.allocator,
             \\{"jsonrpc":"2.0","id":null,"method":"getBalance"}
         , .{}),
@@ -408,7 +417,7 @@ test "Request parse errors" {
     );
 
     try std.testing.expectError(
-        error.MissingField,
+        error.UnexpectedToken,
         std.json.parseFromSliceLeaky(Request, std.testing.allocator,
             \\{"jsonrpc":"2.0","id":null,"method":"foo","params":null}
         , .{}),
@@ -436,7 +445,7 @@ test "Request parse errors" {
     );
 
     try std.testing.expectError(
-        error.MissingField,
+        error.UnexpectedToken,
         std.json.parseFromSliceLeaky(Request, std.testing.allocator,
             \\{"jsonrpc":"2.0","id":null,"method":"foo"}
         , .{}),

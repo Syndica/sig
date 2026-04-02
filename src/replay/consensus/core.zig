@@ -418,12 +418,7 @@ pub const TowerConsensus = struct {
         defer allocator.free(confirmed_slots);
         for (confirmed_slots) |confirmed_slot| {
             if (params.event_sink) |sink| {
-                sink.send(.{ .slot_confirmed = confirmed_slot.slot }) catch |err| {
-                    self.logger.err().logf(
-                        "failed to send confirmed slot event {}: {}",
-                        .{ confirmed_slot.slot, err },
-                    );
-                };
+                try sink.send(.{ .slot_confirmed = confirmed_slot.slot });
             }
         }
 
@@ -753,12 +748,7 @@ pub const TowerConsensus = struct {
             slot_tracker.commitments.update(.processed, voted.slot);
             // emit event for the new processed tip slot
             if (event_sink) |sink| {
-                sink.send(.{ .tip_changed = voted.slot }) catch |err| {
-                    self.logger.err().logf(
-                        "failed to send tip_changed event {}: {}",
-                        .{ voted.slot, err },
-                    );
-                };
+                try sink.send(.{ .tip_changed = voted.slot });
             }
         }
 
@@ -1057,7 +1047,6 @@ fn handleVotableBank(
         // handling the rooting in the caller
         try checkAndHandleNewRoot(
             allocator,
-            logger,
             ledger_result_writer,
             slot_tracker,
             progress,
@@ -1680,7 +1669,6 @@ fn createVoteInstruction(
 /// Analogous to [check_and_handle_new_root](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L4002)
 fn checkAndHandleNewRoot(
     allocator: std.mem.Allocator,
-    logger: Logger,
     ledger: Ledger.ResultWriter,
     slot_tracker: *SlotTracker,
     progress: *ProgressMap,
@@ -1738,12 +1726,7 @@ fn checkAndHandleNewRoot(
         defer allocator.free(newly_rooted_slots);
 
         for (newly_rooted_slots) |rooted_slot| {
-            sink.send(.{ .slot_rooted = rooted_slot }) catch |err| {
-                logger.err().logf(
-                    "failed to send rooted slot event {}: {}",
-                    .{ rooted_slot, err },
-                );
-            };
+            try sink.send(.{ .slot_rooted = rooted_slot });
         }
     }
 
@@ -2705,7 +2688,6 @@ test "checkAndHandleNewRoot - missing slot" {
     // Try to check a slot that doesn't exist in the tracker
     const result = checkAndHandleNewRoot(
         allocator,
-        Logger.noop,
         test_state.resultWriter(),
         &slot_tracker,
         &fixture.progress,
@@ -2772,7 +2754,6 @@ test "checkAndHandleNewRoot - missing hash" {
     // Try to check a slot that doesn't exist in the tracker
     const result = checkAndHandleNewRoot(
         allocator,
-        Logger.noop,
         test_state.resultWriter(),
         &slot_tracker2,
         &fixture.progress,
@@ -2826,7 +2807,6 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     // Try to check a slot that doesn't exist in the tracker
     const result = checkAndHandleNewRoot(
         testing.allocator,
-        Logger.noop,
         test_state.resultWriter(),
         &slot_tracker3,
         &fixture.progress,
@@ -2900,6 +2880,11 @@ test "checkAndHandleNewRoot - success" {
         constants1.parent_slot = root.slot;
         constants2.parent_slot = hash1.slot;
         constants3.parent_slot = hash2.slot;
+
+        // Populate ancestors so rootedPathForward can find the rooted path
+        try constants2.ancestors.addSlot(allocator, hash1.slot);
+        try constants3.ancestors.addSlot(allocator, hash1.slot);
+        try constants3.ancestors.addSlot(allocator, hash2.slot);
         state1.hash = .init(hash1.hash);
         state2.hash = .init(hash2.hash);
         state3.hash = .init(hash3.hash);
@@ -2961,7 +2946,6 @@ test "checkAndHandleNewRoot - success" {
         defer slot_tracker4_lg.unlock();
         try checkAndHandleNewRoot(
             allocator,
-            Logger.noop,
             test_state.resultWriter(),
             slot_tracker4_ptr,
             &fixture.progress,
@@ -2976,19 +2960,19 @@ test "checkAndHandleNewRoot - success" {
     }
 
     const rooted_event_1 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer rooted_event_1.deinit(event_sink.channel.allocator);
+    defer rooted_event_1.deinit(allocator);
     try testing.expect(rooted_event_1 == .slot_rooted);
-    try testing.expectEqual(@as(Slot, 1), rooted_event_1.slot_rooted);
+    try testing.expectEqual(1, rooted_event_1.slot_rooted);
 
     const rooted_event_2 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer rooted_event_2.deinit(event_sink.channel.allocator);
+    defer rooted_event_2.deinit(allocator);
     try testing.expect(rooted_event_2 == .slot_rooted);
-    try testing.expectEqual(@as(Slot, 2), rooted_event_2.slot_rooted);
+    try testing.expectEqual(2, rooted_event_2.slot_rooted);
 
     const rooted_event_3 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer rooted_event_3.deinit(event_sink.channel.allocator);
+    defer rooted_event_3.deinit(allocator);
     try testing.expect(rooted_event_3 == .slot_rooted);
-    try testing.expectEqual(@as(Slot, 3), rooted_event_3.slot_rooted);
+    try testing.expectEqual(3, rooted_event_3.slot_rooted);
     try testing.expect(event_sink.channel.tryReceive() == null);
 
     try testing.expectEqual(1, fixture.progress.map.count());

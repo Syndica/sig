@@ -590,12 +590,10 @@ test "serializeAccountNotification explicit base64" {
 
 test "serializeAccountNotification applies dataSlice" {
     const allocator = std.testing.allocator;
-    const data_buf = try allocator.alloc(u8, 4);
-    @memcpy(data_buf, &[_]u8{ 1, 2, 3, 4 });
     const pk = sig.core.Pubkey.ZEROES;
-    const account = sig.core.Account{
+    const account: sig.core.Account = .{
         .lamports = 500,
-        .data = sig.accounts_db.buffer_pool.AccountDataHandle.initAllocatedOwned(data_buf),
+        .data = .{ .unowned_allocation = &.{ 1, 2, 3, 4 } },
         .owner = pk,
         .executable = false,
         .rent_epoch = 0,
@@ -783,13 +781,11 @@ test "serializeProgramNotification wraps value with pubkey and account" {
 
 test "serializeProgramNotification applies dataSlice" {
     const allocator = std.testing.allocator;
-    const data_buf = try allocator.alloc(u8, 4);
-    @memcpy(data_buf, &[_]u8{ 1, 2, 3, 4 });
     const account_pk = sig.core.Pubkey.ZEROES;
-    const account = sig.core.Account{
+    const account: sig.core.Account = .{
         .lamports = 999,
-        .data = sig.accounts_db.buffer_pool.AccountDataHandle.initAllocatedOwned(data_buf),
-        .owner = sig.core.Pubkey.ZEROES,
+        .data = .{ .unowned_allocation = &.{ 1, 2, 3, 4 } },
+        .owner = .ZEROES,
         .executable = false,
         .rent_epoch = 7,
     };
