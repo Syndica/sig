@@ -577,7 +577,7 @@ pub fn getTokenAccountsByDelegate(
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2149
     const encoding = config.encoding orelse AccountEncoding.binary;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
