@@ -162,28 +162,32 @@ pub fn getTokenAccountOwner(data: []const u8) ?Pubkey {
 /// Check if the account data represents a valid, initialized token account.
 /// Handles both standard SPL Token (165 bytes) and Token-2022 extended accounts.
 /// [spl] Account::valid_account_data in spl-token-2022 interface/src/state.rs
-pub fn isValidTokenAccountData(data: []const u8) bool {
-    // Standard token account: exactly 165 bytes and initialized
-    if (data.len == TokenAccount.LEN) {
-        return isInitializedAccount(data);
-    }
-    // Token-2022 extended account: >165 bytes, NOT multisig size (355),
-    // and has AccountTypeDiscriminator.account at offset 165
-    if (data.len > TokenAccount.LEN and data.len != Multisig.LEN) {
-        if (data[TokenAccount.LEN] == @intFromEnum(AccountTypeDiscriminator.account)) {
-            return isInitializedAccount(data);
-        }
-    }
-    return false;
+fn isValidTokenAccountData(data: []const u8) bool {
+    if (data.len < TokenAccount.LEN) return false;
+    const disc = if (data.len > TokenAccount.LEN) data[TokenAccount.LEN] else 0;
+    return isValidTokenAccount(data.len, data[ACCOUNT_INITIALIZED_INDEX], disc);
 }
 
-/// Check if the state byte at ACCOUNT_INITIALIZED_INDEX indicates initialized or frozen.
+/// Core validation logic for token accounts, usable with any data source
+/// (slices, AccountDataHandle, etc.) that can provide the three required values.
+/// Handles both standard SPL Token (165 bytes) and Token-2022 extended accounts.
+/// [spl] Account::valid_account_data in spl-token-2022 interface/src/state.rs
+pub fn isValidTokenAccount(data_len: usize, state_byte: u8, type_discriminator: u8) bool {
+    if (data_len < TokenAccount.LEN) return false;
+    if (!isInitializedState(state_byte)) return false;
+    // Standard token account: exactly 165 bytes.
+    if (data_len == TokenAccount.LEN) return true;
+    // Token-2022 extended account: >165 bytes, NOT multisig size (355),
+    // and has AccountTypeDiscriminator.account at offset 165.
+    return data_len != Multisig.LEN and
+        type_discriminator == @intFromEnum(AccountTypeDiscriminator.account);
+}
+
+/// Check if a state byte value indicates initialized or frozen.
 /// [spl] is_initialized_account in generic_token_account.rs
-fn isInitializedAccount(data: []const u8) bool {
-    if (data.len <= ACCOUNT_INITIALIZED_INDEX) return false;
-    const state = data[ACCOUNT_INITIALIZED_INDEX];
-    return state == @intFromEnum(AccountState.initialized) or
-        state == @intFromEnum(AccountState.frozen);
+fn isInitializedState(state_byte: u8) bool {
+    return state_byte == @intFromEnum(AccountState.initialized) or
+        state_byte == @intFromEnum(AccountState.frozen);
 }
 
 /// Additional data needed for token account parsing (from mint lookup).

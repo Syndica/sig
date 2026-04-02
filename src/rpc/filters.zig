@@ -26,9 +26,6 @@ pub const MAX_DATA_BASE64_SIZE: usize = 172;
 
 /// SPL Token account length.
 const TOKEN_ACCOUNT_LEN: usize = parse_token.TokenAccount.LEN;
-/// Offset of the `AccountState` byte within an SPL Token account.
-/// [spl] https://github.com/solana-program/token-2022/blob/main/interface/src/generic_token_account.rs#L56
-const TOKEN_ACCOUNT_STATE_OFFSET: usize = parse_token.ACCOUNT_INITIALIZED_INDEX;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L12-L18
 pub const RpcFilterType = union(enum) {
@@ -42,14 +39,18 @@ pub const RpcFilterType = union(enum) {
             .dataSize => |size| account_data.len() == size,
             .memcmp => |m| m.matches(account_data),
             .tokenAccountState => {
-                // [agave] Account::valid_account_data: data.len == TokenAccount::LEN (165)
-                // and AccountState byte at offset 108 is Initialized (1) or Frozen (2), not
-                // Uninitialized (0).
+                // Delegate to parse_token's shared validation which handles both
+                // standard SPL Token (165 bytes) and Token-2022 extended accounts.
                 // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/filter.rs#L11
-                if (account_data.len() != TOKEN_ACCOUNT_LEN) return false;
-                var buf: [1]u8 = undefined;
-                _ = account_data.read(TOKEN_ACCOUNT_STATE_OFFSET, &buf);
-                return buf[0] != 0;
+                const data_len = account_data.len();
+                if (data_len < TOKEN_ACCOUNT_LEN) return false;
+                var state_buf: [1]u8 = undefined;
+                _ = account_data.read(parse_token.ACCOUNT_INITIALIZED_INDEX, &state_buf);
+                var disc_buf: [1]u8 = .{0};
+                if (data_len > TOKEN_ACCOUNT_LEN) {
+                    _ = account_data.read(TOKEN_ACCOUNT_LEN, &disc_buf);
+                }
+                return parse_token.isValidTokenAccount(data_len, state_buf[0], disc_buf[0]);
             },
         };
     }
@@ -274,17 +275,38 @@ test "rpc.filters" {
         try testing.expect(!(RpcFilterType{ .tokenAccountState = {} }).allows(&d));
     }
 
-    // allows: tokenAccountState rejects wrong length
+    // allows: tokenAccountState rejects too-short data
     {
         var data = [_]u8{0} ** 100;
         data[99] = 1;
         const d1 = h(&data);
         try testing.expect(!(RpcFilterType{ .tokenAccountState = {} }).allows(&d1));
-        // Also 166 bytes (too long).
-        var data2 = [_]u8{0} ** 166;
-        data2[108] = 1;
-        const d2 = h(&data2);
-        try testing.expect(!(RpcFilterType{ .tokenAccountState = {} }).allows(&d2));
+    }
+
+    // allows: tokenAccountState accepts Token-2022 extended account (170 bytes with correct discriminator)
+    {
+        var data = [_]u8{0} ** 170;
+        data[108] = 1; // Initialized
+        data[165] = 2; // AccountTypeDiscriminator.account
+        const d = h(&data);
+        try testing.expect((RpcFilterType{ .tokenAccountState = {} }).allows(&d));
+    }
+
+    // allows: tokenAccountState rejects Token-2022 without account discriminator
+    {
+        var data = [_]u8{0} ** 170;
+        data[108] = 1; // Initialized
+        data[165] = 0; // Uninitialized discriminator
+        const d = h(&data);
+        try testing.expect(!(RpcFilterType{ .tokenAccountState = {} }).allows(&d));
+    }
+
+    // allows: tokenAccountState rejects multisig-sized data (355 bytes)
+    {
+        var data = [_]u8{0} ** 355;
+        data[108] = 1; // Initialized
+        const d = h(&data);
+        try testing.expect(!(RpcFilterType{ .tokenAccountState = {} }).allows(&d));
     }
 
     // filtersAllow: conjunction of multiple filters

@@ -691,7 +691,18 @@ fn programAccountMatchesFilters(
                     account_data = try account.data.readAllAllocate(self.allocator);
                     break :blk account_data.?;
                 };
-                if (!sig.rpc.account_codec.parse_token.isValidTokenAccountData(bytes)) {
+                if (bytes.len < sig.rpc.account_codec.parse_token.TokenAccount.LEN) {
+                    return false;
+                }
+                const disc = if (bytes.len > sig.rpc.account_codec.parse_token.TokenAccount.LEN)
+                    bytes[sig.rpc.account_codec.parse_token.TokenAccount.LEN]
+                else
+                    0;
+                if (!sig.rpc.account_codec.parse_token.isValidTokenAccount(
+                    bytes.len,
+                    bytes[sig.rpc.account_codec.parse_token.ACCOUNT_INITIALIZED_INDEX],
+                    disc,
+                )) {
                     return false;
                 }
             },
