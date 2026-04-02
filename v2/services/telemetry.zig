@@ -167,14 +167,14 @@ fn setSendTimeOut(
     );
 }
 
-const MetricPtrs = union(api.MetricKind) {
+const MetricPtrs = union(api.metric.Kind) {
     gauge_int: *const std.atomic.Value(u64),
     gauge_float: *const std.atomic.Value(f64),
     histogram: api.Histogram,
 };
 
 const MetricsMap = std.ArrayHashMapUnmanaged(
-    api.MetricId,
+    api.metric.Id,
     MetricPtrs,
     MetricIdHashCtx,
     true,
@@ -183,8 +183,8 @@ const MetricsMap = std.ArrayHashMapUnmanaged(
 const MetricIdHashCtx = struct {
     pub fn eql(
         ctx: MetricIdHashCtx,
-        a: api.MetricId,
-        b: api.MetricId,
+        a: api.metric.Id,
+        b: api.metric.Id,
         b_index: usize,
     ) bool {
         _ = ctx;
@@ -194,7 +194,7 @@ const MetricIdHashCtx = struct {
 
     pub fn hash(
         ctx: MetricIdHashCtx,
-        key: api.MetricId,
+        key: api.metric.Id,
     ) u32 {
         _ = ctx;
         return @truncate(key.hash());
@@ -215,7 +215,7 @@ fn collectMetrics(
 
     var metric_id_r: std.Io.Reader = .fixed(params.id_mem);
     while (metric_id_r.bufferedLen() != 0) {
-        const detail: api.MetricDetail = try .fromFixedReader(&metric_id_r);
+        const detail: api.metric.Detail = try .fromFixedReader(&metric_id_r);
         const gop = try metrics.getOrPut(gpa, detail.id);
         if (gop.found_existing) {
             std.log.err(
@@ -244,7 +244,7 @@ fn collectMetrics(
     }
 
     const SortCtx = struct {
-        ids: []const api.MetricId,
+        ids: []const api.metric.Id,
 
         pub fn lessThan(ctx: *const @This(), a_index: usize, b_index: usize) bool {
             return switch (std.mem.order(u8, ctx.ids[a_index].name, ctx.ids[b_index].name)) {
@@ -290,7 +290,7 @@ fn writePrometheusBody(
 /// This does mutate pointers to write a snapshot of the histogram atomically.
 fn writeHistogramPrometheusBody(
     histogram: *const api.Histogram,
-    metric_id: api.MetricId,
+    metric_id: api.metric.Id,
     w: *std.Io.Writer,
 ) std.Io.Writer.Error!void {
     if (histogram.upper_bounds.len == 0) return;

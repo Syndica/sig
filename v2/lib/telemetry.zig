@@ -1,11 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+pub const metric = @import("telemetry/metric.zig");
 pub const log = @import("telemetry/log.zig");
 
 comptime {
+    _ = metric;
     _ = log;
 }
+
+/// The native endian, which is what is used by telemetry for `std.Io.Writer` and `std.Io.Reader` IPC data.
+pub const endian = builtin.target.cpu.arch.endian();
 
 /// Data that's only relevant during startup.
 pub const Region = extern struct {
@@ -163,7 +168,7 @@ pub const Region = extern struct {
     }
 
     /// Low-level helper for registering metrics.
-    pub fn metricAppender(self: *Region) MetricAppender {
+    pub fn metricAppender(self: *Region) metric.Appender {
         const slices = self.getSlices();
         return .{
             .id_mem = slices.id_mem,
@@ -177,8 +182,6 @@ pub const Region = extern struct {
         };
     }
 };
-
-pub const endian = builtin.target.cpu.arch.endian();
 
 pub fn Logger(comptime scope_str: []const u8) type {
     return struct {
@@ -325,206 +328,15 @@ pub fn Logger(comptime scope_str: []const u8) type {
     };
 }
 
-pub const MetricKind = enum(u8) {
-    gauge_int,
-    gauge_float,
-    histogram,
-};
+pub const Counter = struct {
+    value: *std.atomic.Value(u64),
 
-/// This represents the metric detail that appears before the metric value in memory.
-pub const MetricDetail = struct {
-    id: MetricId,
-    kind: MetricKind,
-    /// The index representing the location of the metric, with its meaning depending on `kind`:
-    /// * `gauge_int` & `gauge_float`: index of element in the `gauges` region.
-    /// * `histogram`: index of a `bucket_count` element in `histogram_data`, which will be
-    /// followed by a number of elements corresponding to a `Histogram` with that bucket_count.
-    index: u32,
-
-    /// Returns the number of bytes that would be written by `self.binaryWrite(w)`.
-    pub fn binaryLength(self: MetricDetail) usize {
-        var trash_buffer: [128]u8 = undefined;
-        var dw: std.Io.Writer.Discarding = .init(&trash_buffer);
-        self.binaryWrite(&dw.writer) catch |err| switch (err) {
-            error.WriteFailed => unreachable,
-        };
-        return dw.fullCount();
+    pub fn reset(self: Counter) void {
+        self.value.store(0, .monotonic);
     }
 
-    /// Write metric detail in binary format.
-    pub fn binaryWrite(
-        self: MetricDetail,
-        w: *std.Io.Writer,
-    ) std.Io.Writer.Error!void {
-        try self.id.writeBinary(w);
-        try w.writeInt(u8, @intFromEnum(self.kind), endian);
-        try w.writeInt(u32, self.index, endian);
-    }
-
-    /// Expects `r` to be a reader that contains the full serialized metric detail,
-    /// such that calls to '`r.take`*' never invalidate previous calls to '`r.take`*'.
-    /// This is most easily achieved when `r.* = .fixed(buffer)`.
-    pub fn fromFixedReader(
-        r: *std.Io.Reader,
-    ) (std.Io.Reader.Error || std.Io.Reader.TakeEnumError)!MetricDetail {
-        return .{
-            .id = try .fromFixedReader(r),
-            .kind = try r.takeEnum(MetricKind, endian),
-            .index = try r.takeInt(u32, endian),
-        };
-    }
-};
-
-pub const MetricId = struct {
-    name: []const u8,
-    label_count: usize,
-    /// Should be a list of comma-separated strings.
-    /// It is asserted that:
-    /// * `count(u8, labels, ',') + 1 == label_count`.
-    labels: [:'}']const u8,
-
-    pub fn eql(a: MetricId, b: MetricId) bool {
-        if (a.label_count != b.label_count) return false;
-        if (!std.mem.eql(u8, a.name, b.name)) return false;
-        if (!std.mem.eql(u8, a.labels, b.labels)) return false;
-        return true;
-    }
-
-    pub fn hash(self: MetricId) u64 {
-        var hashing_ws_buf: [4096]u8 = undefined;
-        var hashing_ws: std.Io.Writer.Hashing(std.hash.Wyhash) =
-            .initHasher(.init(0), &hashing_ws_buf);
-        const hashing_w = &hashing_ws.writer;
-        self.writeBinary(hashing_w) catch unreachable;
-        return hashing_ws.hasher.final();
-    }
-
-    /// Returns a formatter for the metric id using `writeText`.
-    pub fn fmtText(self: MetricId) std.fmt.Alt(MetricId, writeText) {
-        return .{ .data = self };
-    }
-
-    pub fn writeText(self: MetricId, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        try w.writeAll(self.name);
-        try w.writeByte('{');
-        try w.writeAll(self.labels);
-        try w.writeByte('}');
-    }
-
-    pub fn writeBinary(self: MetricId, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        try w.writeInt(usize, self.name.len, endian);
-        try w.writeAll(self.name);
-
-        try w.writeInt(usize, self.label_count, endian);
-        try w.writeAll(self.labels);
-        try w.writeByte('}');
-    }
-
-    /// Expects `r` to be a reader that contains the full serialized metric id,
-    /// such that consecutive calls to '`r.take`*' never invalidate previous calls
-    /// to '`r.take`*'.
-    /// This is most easily achieved when `r.* = .fixed(buffer)`.
-    ///
-    /// This is bijective with `writeBinary`.
-    pub fn fromFixedReader(
-        r: *std.Io.Reader,
-    ) std.Io.Reader.Error!MetricId {
-        const name_len = try r.takeInt(usize, endian);
-        const name = try r.take(name_len);
-
-        const label_count = try r.takeInt(usize, endian);
-
-        var index: usize = 0;
-        for (0..label_count) |label_index| while (true) : (index += 1) {
-            try r.fill(index + 1);
-            switch (r.buffered()[index]) {
-                ',' => {
-                    std.debug.assert(label_index < label_count - 1);
-                    break;
-                },
-                '}' => {
-                    std.debug.assert(label_index == label_count - 1);
-                    break;
-                },
-                else => {},
-            }
-        };
-        const labels = try r.take(index + 1);
-
-        return .{
-            .name = name,
-            .label_count = label_count,
-            .labels = labels[0 .. labels.len - 1 :'}'],
-        };
-    }
-};
-
-pub const MetricAppender = struct {
-    id_mem: []u8,
-    id_mem_end: *std.atomic.Value(u32),
-
-    gauges: []std.atomic.Value(u64),
-    gauges_end: *std.atomic.Value(u32),
-
-    histogram_data: []u64,
-    histogram_data_end: *std.atomic.Value(u32),
-
-    pub const GaugeKind = enum {
-        int,
-        float,
-
-        pub fn Type(comptime kind: GaugeKind) type {
-            return switch (kind) {
-                .int => u64,
-                .float => f64,
-            };
-        }
-    };
-
-    pub fn appendGauge(
-        self: MetricAppender,
-        metric_id: MetricId,
-        comptime kind: GaugeKind,
-        init_value: kind.Type(),
-    ) *std.atomic.Value(kind.Type()) {
-        const gauge_index = self.gauges_end.fetchAdd(1, .monotonic);
-        self.appendMetricId(.{
-            .id = metric_id,
-            .kind = switch (kind) {
-                .int => .gauge_int,
-                .float => .gauge_float,
-            },
-            .index = gauge_index,
-        });
-        const gauge = &self.gauges[gauge_index];
-        gauge.* = .init(init_value);
-        return @ptrCast(gauge);
-    }
-
-    pub fn appendHistogram(
-        self: MetricAppender,
-        metric_id: MetricId,
-        bucket_count: u32,
-    ) Histogram.Raw {
-        const elem_count = Histogram.elementsFromBucketCount(bucket_count);
-        const elem_offs = self.histogram_data_end.fetchAdd(elem_count + 1, .acq_rel);
-        self.appendMetricId(.{
-            .id = metric_id,
-            .kind = .histogram,
-            .index = elem_offs,
-        });
-        self.histogram_data[elem_offs] = bucket_count;
-        return .{ .elements = self.histogram_data[elem_offs + 1 ..][0..elem_count] };
-    }
-
-    fn appendMetricId(self: MetricAppender, metric_detail: MetricDetail) void {
-        const id_mem_len = metric_detail.binaryLength();
-        const id_mem_offset = self.id_mem_end.fetchAdd(@intCast(id_mem_len), .acq_rel);
-
-        var id_mem_w: std.Io.Writer = .fixed(self.id_mem[id_mem_offset..][0..id_mem_len]);
-        metric_detail.binaryWrite(&id_mem_w) catch |err| switch (err) {
-            error.WriteFailed => unreachable,
-        };
+    pub fn increment(self: Counter, amount: u64) void {
+        _ = self.value.fetchAdd(amount, .monotonic);
     }
 };
 
