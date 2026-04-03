@@ -765,8 +765,8 @@ pub fn handleSlotUpdate(
     metrics: Metrics,
 ) !void {
     const old_state_root = replay_state.slot_tracker.state_root.load(.monotonic);
-    var old_processed: ?Slot = null;
-    var old_confirmed: ?Slot = null;
+    var old_processed: Slot = 0;
+    var old_confirmed: Slot = 0;
     var old_finalized: Slot = 0;
     if (replay_state.commitments) |*c| {
         old_processed = c.get(.processed);
@@ -775,7 +775,38 @@ pub fn handleSlotUpdate(
     }
 
     // update commitment levels
-    if (replay_state.commitments) |*c| c.commit(slot_update, commitment_txn.?);
+    if (replay_state.commitments) |*c| {
+        c.commit(slot_update, commitment_txn.?);
+
+        // send events
+        if (replay_state.event_sink) |sink| {
+            if (slot_update.voted) |voted_slot| {
+                if (voted_slot != old_processed) {
+                    try sink.send(.{ .tip_changed = voted_slot });
+                }
+            }
+
+            if (slot_update.optimistically_confirmed) |confirmed_slot| {
+                if (confirmed_slot > old_confirmed) {
+                    try sink.send(.{ .slot_confirmed = confirmed_slot });
+                }
+            }
+
+            const finalized_slot = c.get(.finalized);
+            if (finalized_slot > old_finalized) {
+                const rooted_slots = try replay_state.slot_tracker.rootedPathForward(
+                    allocator,
+                    old_finalized,
+                    finalized_slot,
+                );
+                defer allocator.free(rooted_slots);
+
+                for (rooted_slots) |rooted_slot| {
+                    try sink.send(.{ .slot_rooted = rooted_slot });
+                }
+            }
+        }
+    }
 
     if (slot_update.root) |new_root| {
         // update replay's internal state to reflect the newly rooted slot
@@ -788,9 +819,6 @@ pub fn handleSlotUpdate(
         try replay_state.ledger.resultWriter().setRoots(rooted_slots);
     }
 
-    var newly_rooted_slots: ?[]const Slot = null;
-    defer if (newly_rooted_slots) |slots| allocator.free(slots);
-
     // determine what slot to use as the state root. either the tower's root or
     // the finalized slot, whatever is older.
     var maybe_new_state_root: ?Slot = null;
@@ -800,14 +828,6 @@ pub fn handleSlotUpdate(
             finalized_slot,
             replay_state.slot_tracker.consensus_root.load(.monotonic),
         );
-
-        if (finalized_slot > old_finalized) {
-            newly_rooted_slots = try replay_state.slot_tracker.rootedPathForward(
-                allocator,
-                old_finalized,
-                finalized_slot,
-            );
-        }
 
         if (proposed_state_root > old_state_root) {
             maybe_new_state_root = proposed_state_root;
@@ -827,26 +847,6 @@ pub fn handleSlotUpdate(
             &replay_state.thread_pool,
             new_state_root,
         );
-    }
-
-    if (replay_state.event_sink) |sink| {
-        if (slot_update.voted) |voted_slot| {
-            if (old_processed == null or voted_slot != old_processed.?) {
-                try sink.send(.{ .tip_changed = voted_slot });
-            }
-        }
-        if (old_confirmed) |previous_confirmed| {
-            if (slot_update.optimistically_confirmed) |confirmed_slot| {
-                if (confirmed_slot > previous_confirmed) {
-                    try sink.send(.{ .slot_confirmed = confirmed_slot });
-                }
-            }
-        }
-        if (newly_rooted_slots) |rooted_slots| {
-            for (rooted_slots) |rooted_slot| {
-                try sink.send(.{ .slot_rooted = rooted_slot });
-            }
-        }
     }
 
     // Record update in logs + metrics
