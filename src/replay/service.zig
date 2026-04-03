@@ -795,7 +795,7 @@ pub fn handleSlotUpdate(
     );
 
     // Record update in logs + metrics
-    if (replay_state.log_deduper.isNew(.slot_update, std.mem.asBytes(&slot_update)))
+    if (replay_state.log_deduper.isNew(.{ .slot_update = slot_update }))
         replay_state.logger
             .info()
             .logf("slot state update from consensus: {any}", .{slot_update});
@@ -893,8 +893,8 @@ pub fn recordSlotMetrics(replay_state: *ReplayState, metrics: Metrics) void {
         metrics.commitment_confirmed.set(confirmed);
         metrics.commitment_finalized.set(finalized);
 
-        const log_data = std.mem.sliceAsBytes(&[_]u64{ processed, confirmed, finalized });
-        if (replay_state.log_deduper.isNew(.commitments, log_data)) replay_state.logger
+        const log_data = .{ processed, confirmed, finalized };
+        if (replay_state.log_deduper.isNew(.{ .commitments = &log_data })) replay_state.logger
             .info()
             .field("processed", processed)
             .field("confirmed", confirmed)
@@ -906,18 +906,35 @@ pub fn recordSlotMetrics(replay_state: *ReplayState, metrics: Metrics) void {
 
 /// Helps prevent logging the same thing repeatedly.
 pub const LogDeduper = struct {
-    last_hashes: std.EnumMap(MessageKey, sig.core.Hash) = .{},
+    last_hashes: std.EnumMap(@typeInfo(MessageData).@"union".tag_type.?, u64) = .{},
 
-    const MessageKey = enum {
-        active_slots,
-        commitments,
-        slot_update,
-        entries_for_slot,
+    const MessageData = union(enum) {
+        active_slots: []const Slot,
+        commitments: []const Slot,
+        slot_update: SlotUpdate,
+        entries_for_slot: []const Slot,
+
+        fn hash(self: *const MessageData) u64 {
+            var hasher: sig.crypto.FnvHasher = .init;
+            switch (self.*) {
+                .active_slots => |p| hasher.update(std.mem.sliceAsBytes(p)),
+                .commitments => |p| hasher.update(std.mem.sliceAsBytes(p)),
+                .slot_update => |*update| for ([_]?u64{
+                    update.root,
+                    update.voted,
+                    update.optimistically_confirmed,
+                }) |maybe| hasher.update(std.mem.asBytes(
+                    &(if (maybe) |n| n else @as(u64, std.math.maxInt(Slot))),
+                )),
+                .entries_for_slot => |p| hasher.update(std.mem.sliceAsBytes(p)),
+            }
+            return hasher.final();
+        }
     };
 
-    pub fn isNew(self: *LogDeduper, key: MessageKey, data: []const u8) bool {
-        const hash: sig.core.Hash = .init(data);
-        if (self.last_hashes.get(key)) |last| if (last.eql(hash)) return false;
+    pub fn isNew(self: *LogDeduper, key: MessageData) bool {
+        const hash = key.hash();
+        if (self.last_hashes.get(key)) |last| if (last == hash) return false;
         self.last_hashes.put(key, hash);
         return true;
     }

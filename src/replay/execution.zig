@@ -78,10 +78,9 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]const ReplayResult {
 
         const active_slots = try slot_tracker.activeSlots(state.allocator);
         defer state.allocator.free(active_slots);
-        const active_slots_are_new =
-            state.log_deduper.isNew(.active_slots, std.mem.sliceAsBytes(active_slots));
+
         state.logger
-            .entry(if (active_slots_are_new) .info else .debug)
+            .entry(if (state.log_deduper.isNew(.{ .active_slots = active_slots })) .info else .debug)
             .logf("{} active slots to replay: {any}", .{ active_slots.len, active_slots });
 
         if (active_slots.len == 0) {
@@ -131,9 +130,8 @@ fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
 
     const active_slots = try slot_tracker.activeSlots(allocator);
     defer allocator.free(active_slots);
-    const log_data = std.mem.sliceAsBytes(active_slots);
     state.logger
-        .entry(if (state.log_deduper.isNew(.active_slots, log_data)) .info else .debug)
+        .entry(if (state.log_deduper.isNew(.{ .active_slots = active_slots })) .info else .debug)
         .logf("{} active slots to replay: {any}", .{ active_slots.len, active_slots });
 
     if (active_slots.len == 0) {
@@ -484,9 +482,10 @@ fn prepareSlot(
             state.allocator.free(entries);
         }
 
-        const log_data = std.mem.sliceAsBytes(&[_]u64{ entries.len, slot });
         state.logger
-            .entry(if (state.log_deduper.isNew(.entries_for_slot, log_data)) .info else .debug)
+            .entry(if (state.log_deduper.isNew(
+                .{ .entries_for_slot = &.{ entries.len, slot } },
+            )) .info else .debug)
             .logf("got {} entries for slot {}", .{ entries.len, slot });
 
         if (entries.len == 0) {
