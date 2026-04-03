@@ -37,12 +37,14 @@ pub const Detail = struct {
         try w.writeInt(u32, self.index, tel.endian);
     }
 
+    pub const FromFixedReaderError = std.Io.Reader.Error || std.Io.Reader.TakeEnumError;
+
     /// Expects `r` to be a reader that contains the full serialized metric detail,
     /// such that calls to '`r.take`*' never invalidate previous calls to '`r.take`*'.
     /// This is most easily achieved when `r.* = .fixed(buffer)`.
     pub fn fromFixedReader(
         r: *std.Io.Reader,
-    ) (std.Io.Reader.Error || std.Io.Reader.TakeEnumError)!Detail {
+    ) FromFixedReaderError!Detail {
         return .{
             .id = try .fromFixedReader(r),
             .kind = try r.takeEnum(Kind, tel.endian),
@@ -72,15 +74,6 @@ pub const Id = struct {
         if (!std.mem.eql(u8, a.name, b.name)) return false;
         if (!std.mem.eql(u8, a.labels, b.labels)) return false;
         return true;
-    }
-
-    pub fn hash(self: Id) u64 {
-        var hashing_ws_buf: [4096]u8 = undefined;
-        var hashing_ws: std.Io.Writer.Hashing(std.hash.Wyhash) =
-            .initHasher(.init(0), &hashing_ws_buf);
-        const hashing_w = &hashing_ws.writer;
-        self.writeBinary(hashing_w) catch unreachable;
-        return hashing_ws.hasher.final();
     }
 
     /// Returns a formatter for the metric id using `writeText`.
@@ -141,6 +134,28 @@ pub const Id = struct {
             .labels = labels[0 .. labels.len - 1 :'}'],
         };
     }
+
+    pub fn hash(self: Id) u64 {
+        var hashing_ws_buf: [4096]u8 = undefined;
+        var hashing_ws: std.Io.Writer.Hashing(std.hash.Wyhash) =
+            .initHasher(.init(0), &hashing_ws_buf);
+        const hashing_w = &hashing_ws.writer;
+        self.writeBinary(hashing_w) catch unreachable;
+        return hashing_ws.hasher.final();
+    }
+
+    pub const ArrayHashCtx = struct {
+        pub fn eql(ctx: ArrayHashCtx, a: Id, b: Id, b_index: usize) bool {
+            _ = ctx;
+            _ = b_index;
+            return a.eql(b);
+        }
+
+        pub fn hash(ctx: ArrayHashCtx, key: Id) u32 {
+            _ = ctx;
+            return @truncate(key.hash());
+        }
+    };
 };
 
 pub const Appender = struct {
@@ -296,4 +311,75 @@ pub fn FieldsConfig(comptime S: type) type {
         .decls = &.{},
         .is_tuple = false,
     } });
+}
+
+pub const Any = union(Kind) {
+    gauge_int: *const std.atomic.Value(u64),
+    gauge_float: *const std.atomic.Value(f64),
+    histogram: tel.Histogram,
+};
+
+pub const Map = std.ArrayHashMapUnmanaged(Id, Any, Id.ArrayHashCtx, true);
+
+pub fn collect(
+    gpa: std.mem.Allocator,
+    metrics: *Map,
+    params: struct {
+        id_mem: []const u8,
+        gauges: []const std.atomic.Value(u64),
+        histogram_data: []u64,
+    },
+) (std.mem.Allocator.Error || Detail.FromFixedReaderError || error{DuplicateGauge})!void {
+    try metrics.ensureUnusedCapacity(gpa, params.gauges.len + params.histogram_data.len);
+
+    var metric_id_r: std.Io.Reader = .fixed(params.id_mem);
+    while (metric_id_r.bufferedLen() != 0) {
+        const detail: Detail = try .fromFixedReader(&metric_id_r);
+        const gop = metrics.getOrPutAssumeCapacity(detail.id);
+        if (gop.found_existing) {
+            std.log.err(
+                "Multiple metrics with id '{f}' specified.",
+                .{detail.id.fmtText()},
+            );
+            return error.DuplicateGauge;
+        }
+
+        gop.value_ptr.* = switch (detail.kind) {
+            inline //
+            .gauge_int,
+            .gauge_float,
+            => |tag| @unionInit(Any, @tagName(tag), gauge: {
+                break :gauge @ptrCast(&params.gauges[detail.index]);
+            }),
+            .histogram => .{ .histogram = histogram: {
+                const bucket_count = params.histogram_data[detail.index];
+                const element_count = tel.Histogram.elementsFromBucketCount(@intCast(bucket_count));
+                const raw: tel.Histogram.Raw = .{
+                    .elements = params.histogram_data[detail.index + 1 ..][0..element_count],
+                };
+                break :histogram .fromRaw(raw);
+            } },
+        };
+    }
+
+    const SortCtx = struct {
+        ids: []const Id,
+
+        pub fn lessThan(ctx: *const @This(), a_index: usize, b_index: usize) bool {
+            return switch (std.mem.order(u8, ctx.ids[a_index].name, ctx.ids[b_index].name)) {
+                .lt => true,
+                .gt => false,
+                .eq => switch (std.mem.order(
+                    u8,
+                    ctx.ids[a_index].labels,
+                    ctx.ids[b_index].labels,
+                )) {
+                    .lt => true,
+                    .gt, .eq => false,
+                },
+            };
+        }
+    };
+    const sort_ctx: SortCtx = .{ .ids = metrics.keys() };
+    metrics.sort(sort_ctx);
 }

@@ -3,10 +3,12 @@ const builtin = @import("builtin");
 
 pub const metric = @import("telemetry/metric.zig");
 pub const log = @import("telemetry/log.zig");
+pub const prometheus = @import("telemetry/prometheus.zig");
 
 comptime {
     _ = metric;
     _ = log;
+    _ = prometheus;
 }
 
 /// The native endian, which is what is used by telemetry for `std.Io.Writer` and `std.Io.Reader` IPC data.
