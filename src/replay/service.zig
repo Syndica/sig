@@ -846,7 +846,7 @@ pub fn handleSlotUpdate(
                     ) catch |err| switch (err) {
                         error.NewRootNotFound => blk: {
                             replay_state.logger.warn().logf(
-                                "skipping slot_rooted events for finalized transition {} -> {} because finalized slot is not in slot tracker",
+                                "skipping slot_rooted for finalized {} -> {}: missing slot tracker entry",
                                 .{ old_finalized, finalized_slot },
                             );
                             break :blk null;
