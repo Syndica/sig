@@ -595,7 +595,7 @@ fn initializeAccountSubscriptionEntry(
     entry: *sub_map_mod.MapEntry,
 ) void {
     const params = entry.key.params.account;
-    const slot = self.slot_read_ctx.slot_tracker.commitments.get(switch (params.commitment) {
+    const slot = self.slot_read_ctx.commitments.get(switch (params.commitment) {
         .processed => .processed,
         .confirmed => .confirmed,
         .finalized => .finalized,
@@ -1064,12 +1064,16 @@ test "releasePayload frees payloads on the threadpool" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
     var event_sink = try types.EventSink.create(allocator);
     defer event_sink.destroy();
 
     var metrics = metrics_mod.Metrics{};
     const slot_read_ctx: SlotReadContext = .{
         .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
         .account_reader = .noop,
     };
     var runtime = Runtime.init(.{
@@ -1122,12 +1126,16 @@ test "shutdown times out while runtime tasks remain unfinished" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
     var event_sink = try types.EventSink.create(allocator);
     defer event_sink.destroy();
 
     var metrics = metrics_mod.Metrics{};
     const slot_read_ctx: SlotReadContext = .{
         .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
         .account_reader = .noop,
     };
     var runtime = Runtime.init(.{
@@ -1181,12 +1189,16 @@ test "handleCommitMsg drops payload for removed queue" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
     var event_sink = try types.EventSink.create(allocator);
     defer event_sink.destroy();
 
     var metrics = metrics_mod.Metrics{};
     const slot_read_ctx: SlotReadContext = .{
         .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
         .account_reader = .noop,
     };
     var runtime = Runtime.init(.{
@@ -1258,12 +1270,16 @@ test "handleCommitMsg ignores serialize error for removed queue" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
     var event_sink = try types.EventSink.create(allocator);
     defer event_sink.destroy();
 
     var metrics = metrics_mod.Metrics{};
     const slot_read_ctx: SlotReadContext = .{
         .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
         .account_reader = .noop,
     };
     var runtime = Runtime.init(.{

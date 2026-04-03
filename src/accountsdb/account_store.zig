@@ -52,19 +52,20 @@ pub const AccountStore = union(enum) {
         };
     }
 
-    /// To be called from consensus when a slot is rooted
-    pub fn onSlotRooted(
+    /// Prunes account state for all slots that are not a descendant of the provided slot.
+    /// Persists all accounts from this slot and its ancestors into the rooted db.
+    pub fn updateRoot(
         self: AccountStore,
         newly_rooted_slot: Slot,
         ancestors: *const Ancestors,
     ) !void {
-        var zone = tracy.Zone.init(@src(), .{ .name = "onSlotRooted" });
+        var zone = tracy.Zone.init(@src(), .{ .name = "updateRoot" });
         defer zone.deinit();
         zone.value(newly_rooted_slot);
 
         switch (self) {
-            .accounts_db => |db| db.onSlotRooted(newly_rooted_slot, ancestors),
-            .thread_safe_map => |db| try db.onSlotRooted(newly_rooted_slot),
+            .accounts_db => |db| db.updateRoot(newly_rooted_slot, ancestors),
+            .thread_safe_map => |db| try db.updateRoot(newly_rooted_slot),
             .noop => {},
         }
     }
@@ -625,7 +626,7 @@ const ThreadSafeAccountMap = struct {
         }
     }
 
-    fn onSlotRooted(
+    fn updateRoot(
         self: *ThreadSafeAccountMap,
         newly_rooted_slot: Slot,
     ) !void {
@@ -997,8 +998,8 @@ test "insertion basic" {
     var ancestors: Ancestors = try .initWithSlots(allocator, &.{ 1, 2 });
     defer ancestors.deinit(allocator);
 
-    try simple_state.onSlotRooted(2);
-    real_state.onSlotRooted(2, &ancestors);
+    try simple_state.updateRoot(2);
+    real_state.updateRoot(2, &ancestors);
     try putAccountIntoStores(error.CannotWriteRootedSlot, &stores, 1, .ZEROES, .EMPTY);
 
     // this backtracking wouldn't/shouldn't really ever happen, but just
@@ -1087,8 +1088,8 @@ test "insertion out of order" {
     defer ancestors_subset.deinit(allocator);
     try ancestor_set.subsetInto(slot_to_try_write_while_rooted, allocator, &ancestors_subset);
 
-    try simple_state.onSlotRooted(slot_to_try_write_while_rooted);
-    real_state.onSlotRooted(slot_to_try_write_while_rooted, &ancestors_subset);
+    try simple_state.updateRoot(slot_to_try_write_while_rooted);
+    real_state.updateRoot(slot_to_try_write_while_rooted, &ancestors_subset);
 
     try std.testing.expectEqual(
         error.CannotWriteRootedSlot,
@@ -1184,8 +1185,8 @@ test "put and get zero lamports before & after cleanup" {
     try expectDbUnrootedPubkeysInSlot(real_state, slot200, &.{ pk1, pk2, pk3, pk4 });
 
     // but after we run the manager on it to clean it up...
-    try real_store.onSlotRooted(slot100, &ancestors_before);
-    try simple_store.onSlotRooted(slot100, &ancestors_before);
+    try real_store.updateRoot(slot100, &ancestors_before);
+    try simple_store.updateRoot(slot100, &ancestors_before);
 
     // the unrooted entry for slot100 is removed, and all the zero-lamport accounts should
     // not be present in the flushed accounts.
@@ -1205,8 +1206,8 @@ test "put and get zero lamports before & after cleanup" {
     try expectAccountFromStores(&stores, &ancestors_after, pk4, one_lamport.asAccount());
 
     // and after we run the manager on it to clean up slot200 as well...
-    try real_store.onSlotRooted(slot200, &ancestors_after);
-    try simple_store.onSlotRooted(slot200, &ancestors_after);
+    try real_store.updateRoot(slot200, &ancestors_after);
+    try simple_store.updateRoot(slot200, &ancestors_after);
 
     try expectDbUnrootedPubkeysInSlot(real_state, slot200, null);
 }
@@ -1314,8 +1315,8 @@ test "put and get across competing forks" {
 
     // insert slot 1 state and root it (assume it exists in the ancestors)
     try putAccountIntoStores({}, &stores, slot1, pk, asd_a);
-    try simple_state.onSlotRooted(slot1);
-    real_state.onSlotRooted(slot1, &fork_a);
+    try simple_state.updateRoot(slot1);
+    real_state.updateRoot(slot1, &fork_a);
 
     // two unrooted entries, which will end up competing with the given ancestors
     try putAccountIntoStores({}, &stores, slot2, pk, asd_b);

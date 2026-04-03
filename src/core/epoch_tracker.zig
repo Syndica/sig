@@ -82,8 +82,11 @@ pub const ClusterConfig = struct {
 pub const EpochTracker = struct {
     cluster: ClusterConfig,
 
-    /// The most recently rooted slot, set by consensus.
-    root_slot: Atomic(Slot),
+    /// The slot being used as the root of this struct's state. This struct
+    /// keeps around data about any forks that are descendents of this slot.
+    /// This may or may not be the same as the root slot used by consensus.
+    /// Typically it should be the same or an ancestor of the consensus root slot.
+    state_root: Atomic(Slot),
 
     /// Epoch Schedule
     /// Used to map slots to epochs and vice versa.
@@ -118,12 +121,12 @@ pub const EpochTracker = struct {
 
     pub fn init(
         cluster: ClusterConfig,
-        root_slot: Slot,
+        state_root: Slot,
         epoch_schedule: EpochSchedule,
     ) EpochTracker {
         return .{
             .cluster = cluster,
-            .root_slot = .init(root_slot),
+            .state_root = .init(state_root),
             .epoch_schedule = epoch_schedule,
             .rooted_epochs = .init(.{}),
             .unrooted_epochs = .{},
@@ -211,7 +214,7 @@ pub const EpochTracker = struct {
     /// Each EpochInfo returned via the LeaderSchedules has its RC incremented.
     /// Caller MUST call releaseLeaderSchedules() when done.
     pub fn getLeaderSchedules(self: *EpochTracker) !LeaderSchedulesWithEpochInfos {
-        const slot = self.root_slot.load(.monotonic);
+        const slot = self.state_root.load(.monotonic);
 
         const epoch_info = try self.getEpochInfo(slot);
         errdefer epoch_info.release();
@@ -235,7 +238,8 @@ pub const EpochTracker = struct {
         };
     }
 
-    pub fn onSlotRooted(
+    /// Prunes any data for slots that are not a descendant of the provided slot
+    pub fn updateRoot(
         self: *EpochTracker,
         allocator: Allocator,
         slot: Slot,
@@ -249,7 +253,7 @@ pub const EpochTracker = struct {
         };
         if (is_next)
             try self.onFirstSlotInEpochRooted(allocator, epoch, ancestors);
-        self.root_slot.store(slot, .monotonic);
+        self.state_root.store(slot, .monotonic);
     }
 
     fn onFirstSlotInEpochRooted(
@@ -343,14 +347,14 @@ pub const EpochTracker = struct {
     pub fn initForTest(
         allocator: Allocator,
         random: Random,
-        root_slot: Slot,
+        state_root: Slot,
         epoch_schedule: EpochSchedule,
     ) !EpochTracker {
         if (!builtin.is_test) @compileError("only for tests");
-        var self = EpochTracker.init(.default, root_slot, epoch_schedule);
+        var self = EpochTracker.init(.default, state_root, epoch_schedule);
         errdefer self.deinit();
 
-        const epoch = epoch_schedule.getEpoch(root_slot);
+        const epoch = epoch_schedule.getEpoch(state_root);
         for (epoch -| 3..epoch + 1) |epoch_i| {
             const epoch_info_ptr = try allocator.create(EpochInfo);
             errdefer allocator.destroy(epoch_info_ptr);
@@ -881,7 +885,7 @@ test EpochTracker {
     defer epoch_tracker.deinit();
 
     // Only the root slot is set
-    try std.testing.expectEqual(31, epoch_tracker.root_slot.load(.monotonic));
+    try std.testing.expectEqual(31, epoch_tracker.state_root.load(.monotonic));
     try std.testing.expectError(error.EpochNotFound, epoch_tracker.getEpochInfo(0));
     {
         var lock = epoch_tracker.rooted_epochs.read();
@@ -913,11 +917,11 @@ test EpochTracker {
             &.ALL_DISABLED,
         );
 
-        try epoch_tracker.onSlotRooted(allocator, branch.last(), &branch);
+        try epoch_tracker.updateRoot(allocator, branch.last(), &branch);
     }
 
     // Check that the root slot is 9 * 32 and epochs 6, 7, 8, 9 are available
-    try std.testing.expectEqual(9 * 32, epoch_tracker.root_slot.load(.monotonic));
+    try std.testing.expectEqual(9 * 32, epoch_tracker.state_root.load(.monotonic));
     {
         var lock = epoch_tracker.rooted_epochs.read();
         defer lock.unlock();
@@ -1005,7 +1009,7 @@ test EpochTracker {
     ));
 
     // Root the first slot from branch 2
-    try epoch_tracker.onSlotRooted(allocator, branches[2].last(), &branches[2]);
+    try epoch_tracker.updateRoot(allocator, branches[2].last(), &branches[2]);
 
     // Check that the pointers returned from insert match the pointers returned from get
     for (0..4) |i| {

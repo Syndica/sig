@@ -421,7 +421,7 @@ test "logsSubscribe processed publishes current tip slot if frozen before tip ch
     runBothLoops(server, &client_env, &handler, 300);
     try std.testing.expectEqual(1, handler.received.items.len);
 
-    server.slot_tracker.commitments.update(.processed, 10);
+    server.commitments.update(.processed, 10);
     server.injectEvent(.{ .tip_changed = 10 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
@@ -434,7 +434,7 @@ test "logsSubscribe processed publishes current tip slot if frozen before tip ch
         notif1.params.result.value.logs[0],
     );
 
-    server.slot_tracker.commitments.update(.processed, 20);
+    server.commitments.update(.processed, 20);
     server.injectEvent(.{ .tip_changed = 20 });
 
     waitForMessages(server, &client_env, &handler, 3, 5000);
@@ -479,7 +479,7 @@ test "logsSubscribe processed does not publish frozen off-fork slot" {
     waitForMessages(server, &client_env, &handler, 1, 5000);
     try std.testing.expectEqual(1, handler.received.items.len);
 
-    server.slot_tracker.commitments.update(.processed, 10);
+    server.commitments.update(.processed, 10);
     server.injectEvent(.{ .tip_changed = 10 });
     runBothLoops(server, &client_env, &handler, 300);
     try std.testing.expectEqual(1, handler.received.items.len);

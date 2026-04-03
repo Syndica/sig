@@ -13,8 +13,10 @@ const ThreadPool = sig.sync.ThreadPool;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
+const SlotConstants = sig.core.SlotConstants;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
+const StatusCache = sig.core.StatusCache;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
@@ -27,6 +29,7 @@ const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 
 const ReplayResult = replay.execution.ReplayResult;
 
+const CommitmentStakes = replay.trackers.CommitmentStakes;
 const SlotTracker = replay.trackers.SlotTracker;
 const SlotTree = replay.trackers.SlotTree;
 
@@ -41,6 +44,17 @@ pub const Logger = sig.trace.Logger("replay");
 
 pub const Metrics = struct {
     slot_execution_time: *sig.prometheus.Histogram,
+    voted_slot_update_count: *sig.prometheus.Counter,
+    optimistically_confirmed_update_count: *sig.prometheus.Counter,
+    root_update_count: *sig.prometheus.Counter,
+    state_root_update_count: *sig.prometheus.Counter,
+    consensus_root: *sig.prometheus.Gauge(u64),
+    state_root: *sig.prometheus.Gauge(u64),
+    slot_tracker_count: *sig.prometheus.Gauge(u64),
+    epoch_tracker_state_root: *sig.prometheus.Gauge(u64),
+    commitment_processed: *sig.prometheus.Gauge(u64),
+    commitment_confirmed: *sig.prometheus.Gauge(u64),
+    commitment_finalized: *sig.prometheus.Gauge(u64),
 
     pub const prefix = "replay";
     pub const histogram_buckets = b: {
@@ -51,7 +65,7 @@ pub const Metrics = struct {
     };
 };
 
-pub const AvanceReplayConsensusParams = struct {
+pub const AdvanceReplayConsensusParams = struct {
     tower: *TowerConsensus,
     gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
     senders: TowerConsensus.Senders,
@@ -66,7 +80,7 @@ pub const AvanceReplayConsensusParams = struct {
 pub fn advanceReplay(
     replay_state: *ReplayState,
     metrics: Metrics,
-    consensus_params: ?AvanceReplayConsensusParams,
+    consensus_params: ?AdvanceReplayConsensusParams,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "advanceReplay" });
     defer zone.deinit();
@@ -105,16 +119,30 @@ pub fn advanceReplay(
     // freeze slots
     const processed_a_slot: bool = try freezeCompletedSlots(replay_state, slot_results);
 
+    // prepare data used for communication between consensus and RPC
+    var recent_processed_ancestors: ?[]const Slot = null;
+    var commitment_txn: ?*CommitmentStakes.Transaction = null;
+    defer if (recent_processed_ancestors) |r| allocator.free(r);
+    if (replay_state.commitments) |*commitments| {
+        recent_processed_ancestors = try sortedRecentProcessedAncestors(
+            allocator,
+            &replay_state.slot_tracker,
+            commitments,
+            &replay_state.status_cache,
+        );
+        commitment_txn = commitments.stakes.beginTransaction(recent_processed_ancestors.?);
+    }
+    defer if (commitment_txn) |t| t.reset();
+
     // run consensus
-    if (consensus_params) |consensus| {
+    const slot_update = if (consensus_params) |consensus| slot_update: {
         var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
         defer gossip_verified_vote_hashes.deinit(allocator);
 
         var duplicate_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
         defer duplicate_confirmed_slots.deinit(allocator);
 
-        try consensus.tower.process(allocator, .{
-            .maybe_thread_pool = &replay_state.thread_pool,
+        break :slot_update try consensus.tower.process(allocator, .{
             .account_store = replay_state.account_store,
             .gossip_votes = consensus.gossip_votes,
             .gossip_table = consensus.gossip_table,
@@ -122,7 +150,6 @@ pub fn advanceReplay(
             .slot_tracker = &replay_state.slot_tracker,
             .epoch_tracker = replay_state.epoch_tracker,
             .progress_map = &replay_state.progress_map,
-            .status_cache = &replay_state.status_cache,
             .senders = consensus.senders,
             .receivers = consensus.receivers,
             .vote_sockets = consensus.vote_sockets,
@@ -130,15 +157,29 @@ pub fn advanceReplay(
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
             .results = slot_results,
-            .event_sink = replay_state.event_sink,
-            .block_commitment_cache = if (replay_state.block_commitment_cache) |*cache|
-                cache
-            else
-                null,
+            .vote_account_visitor = if (commitment_txn) |t| t.voteAccountVisitor() else null,
         });
-    } else {
-        try bypassConsensus(replay_state);
-    }
+    } else slot_update: {
+        // NOTE: Processed slot semantics differ from Agave when Sig is in bypass-consensus mode.
+        // In bypass mode, `latest_processed_slot` is set to the highest slot among all fork
+        // leaves (SlotTree.tip()).
+        //
+        // This differs from Agave's behavior: the processed slot is only updated
+        // when `vote_bank.is_some()` (i.e., when the validator has selected a bank
+        // to vote on after passing all consensus checks like lockout, threshold, and
+        // switch proof). If the validator is locked out or fails
+        // threshold checks, the processed slot is NOT updated and can go stale.
+        // See: https://github.com/anza-xyz/agave/blob/5e900421520a10933642d5e9a21e191a70f9b125/core/src/replay_stage.rs#L2683
+        //
+        // TowerConsensus implements Agave's processed slot semantics when consensus is enabled.
+        const slot_update = replay_state.slot_tree.reRoot(replay_state.allocator);
+        if (slot_update.root) |new_root|
+            replay_state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
+        break :slot_update slot_update;
+    };
+
+    try handleSlotUpdate(allocator, replay_state, slot_update, commitment_txn, metrics);
+    recordSlotMetrics(replay_state, metrics);
 
     if (slot_results.len != 0) {
         const elapsed = start_time.read().asNanos();
@@ -154,6 +195,55 @@ pub fn advanceReplay(
     }
 
     if (!processed_a_slot) try std.Thread.yield();
+}
+
+pub const SlotUpdate = struct {
+    root: ?Slot,
+    voted: ?Slot,
+    optimistically_confirmed: ?Slot,
+};
+
+/// Extract StatusCache's sorted root slots so that the accumulator only tracks
+/// commitment for recent ancestor slots, matching Agave's
+/// `aggregate_commitment_for_vote_account` semantics.
+///
+/// Combines this with the processed slot's unrooted ancestors.
+///
+/// analogous to agave's usage of Bank::status_cache_ancestors when populating
+/// the block commitment cache.
+pub fn sortedRecentProcessedAncestors(
+    allocator: std.mem.Allocator,
+    slot_tracker: *SlotTracker,
+    commitments: *const replay.trackers.CommitmentTracker,
+    status_cache: *StatusCache,
+) ![]const Slot {
+    const processed_reader = slot_tracker.get(commitments.get(.processed)) orelse
+        return error.MissingProcessedSlot;
+    defer processed_reader.release();
+
+    const processed_ancestors = &processed_reader.constants().ancestors;
+
+    var state = status_cache.state.read();
+    defer state.unlock();
+
+    const roots = state.get().roots;
+    const keys = roots.keys();
+
+    var sorted_recent_processed_ancestors: std.ArrayList(Slot) = .empty;
+    try sorted_recent_processed_ancestors.ensureTotalCapacity(allocator, keys.len);
+    sorted_recent_processed_ancestors.items.len = keys.len;
+    @memcpy(sorted_recent_processed_ancestors.items, keys);
+
+    var max_root: Slot = 0;
+    for (sorted_recent_processed_ancestors.items) |slot| max_root = @max(slot, max_root);
+
+    for (processed_ancestors.ancestors.keys()) |slot| {
+        if (slot > max_root) try sorted_recent_processed_ancestors.append(allocator, slot);
+    }
+
+    std.mem.sort(Slot, sorted_recent_processed_ancestors.items, {}, std.sort.asc(Slot));
+
+    return try sorted_recent_processed_ancestors.toOwnedSlice(allocator);
 }
 
 pub const Dependencies = struct {
@@ -179,7 +269,7 @@ pub const Dependencies = struct {
     hard_forks: sig.core.HardForks,
     replay_threads: u32,
     stop_at_slot: ?Slot,
-    event_sink: ?*jrpc_types.EventSink,
+    event_sink: ?*jrpc_types.EventSink = null,
     prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
 };
 
@@ -207,7 +297,7 @@ pub const ReplayState = struct {
     progress_map: ProgressMap,
     ledger: *Ledger,
     status_cache: sig.core.StatusCache,
-    block_commitment_cache: ?sig.replay.trackers.BlockCommitmentCache,
+    commitments: ?replay.trackers.CommitmentTracker,
     execution_log_helper: replay.execution.LogHelper,
     replay_votes_channel: ?*Channel(ParsedVote),
     event_sink: ?*jrpc_types.EventSink,
@@ -215,6 +305,9 @@ pub const ReplayState = struct {
     prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
 
     pub fn deinit(self: *ReplayState) void {
+        self.thread_pool.shutdown();
+        self.thread_pool.deinit();
+
         self.slot_tracker.deinit(self.allocator);
         self.progress_map.deinit(self.allocator);
 
@@ -225,11 +318,8 @@ pub const ReplayState = struct {
 
         self.slot_tree.deinit(self.allocator);
         self.status_cache.deinit(self.allocator);
-        if (self.block_commitment_cache) |*cache| cache.deinit(self.allocator);
+        if (self.commitments) |*tracker| tracker.deinit(self.allocator);
         self.hard_forks.deinit(self.allocator);
-
-        self.thread_pool.shutdown();
-        self.thread_pool.deinit();
     }
 
     pub fn init(
@@ -289,8 +379,8 @@ pub const ReplayState = struct {
             .ledger = deps.ledger,
             .progress_map = progress_map,
             .status_cache = .DEFAULT,
-            .block_commitment_cache = switch (rpc_status) {
-                .enabled => .DEFAULT,
+            .commitments = switch (rpc_status) {
+                .enabled => .init(deps.allocator, deps.root.slot),
                 .disabled => null,
             },
             .execution_log_helper = .init(.from(deps.logger)),
@@ -371,7 +461,7 @@ pub fn trackNewSlots(
     var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
     defer zone.deinit();
 
-    const root = slot_tracker.root.load(.monotonic);
+    const root = slot_tracker.consensus_root.load(.monotonic);
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
     defer for (frozen_slots.values()) |ref| ref.release();
@@ -632,7 +722,6 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                 processed_a_slot = true;
 
                 if (state.event_sink) |event_sink| {
-                    // send out frozen event with modified acconts for slot
                     var accounts = try event_sink.materializeSlotModifiedAccounts(
                         state.logger,
                         state.account_store.reader(),
@@ -643,7 +732,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     try event_sink.send(.{ .slot_frozen = .{
                         .slot = slot,
                         .parent = slot_info.constants().parent_slot,
-                        .root = slot_tracker.root.load(.monotonic),
+                        .root = slot_tracker.state_root.load(.monotonic),
                         .accounts = accounts,
                     } });
                 }
@@ -656,64 +745,418 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
     return processed_a_slot;
 }
 
-/// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
-fn bypassConsensus(state: *ReplayState) !void {
-    // NOTE: Processed slot semantics differ from Agave when Sig is in bypass-consensus mode.
-    // In bypass mode, the processed commitment is set to the highest slot among all fork
-    // leaves (SlotTree.tip()).
-    //
-    // This differs from Agave's behavior: the processed slot is only updated
-    // when `vote_bank.is_some()` (i.e., when the validator has selected a bank
-    // to vote on after passing all consensus checks like lockout, threshold, and
-    // switch proof). If the validator is locked out or fails
-    // threshold checks, the processed slot is NOT updated and can go stale.
-    // See: https://github.com/anza-xyz/agave/blob/5e900421520a10933642d5e9a21e191a70f9b125/core/src/replay_stage.rs#L2683
-    //
-    // TowerConsensus implements Agave's processed slot semantics when consensus is enabled.
-    const new_tip = state.slot_tree.tip();
-    const old_tip = state.slot_tracker.commitments.get(.processed);
-    state.slot_tracker.commitments.update(.processed, new_tip);
-    if (new_tip != old_tip) {
-        if (state.event_sink) |sink| {
-            try sink.send(.{ .tip_changed = new_tip });
-        }
+/// Processes a slot update from consensus. This has three responsibilities:
+///
+/// 1. Update replay's internal state to reflect a new root slot (slot tracker,
+///    status cache)
+///
+/// 2. Notify downstream consumers of the slot update. (i.e. RPC, via
+///    CommitmentTracker, ledger, and event sink)
+///
+/// 3. When the "state root" advances (could be either the consensus root, or
+///    the supermajority-finalized slot when RPC is enabled), prunes stale data
+///    from the slot tracker, progress map, epoch tracker, and account store via
+///    `pruneStaleData`.
+pub fn handleSlotUpdate(
+    allocator: Allocator,
+    replay_state: *ReplayState,
+    slot_update: SlotUpdate,
+    commitment_txn: ?*CommitmentStakes.Transaction,
+    metrics: Metrics,
+) !void {
+    const old_state_root = replay_state.slot_tracker.state_root.load(.monotonic);
+    var old_processed: ?Slot = null;
+    var old_confirmed: ?Slot = null;
+    if (replay_state.commitments) |*c| {
+        old_processed = c.get(.processed);
+        old_confirmed = c.get(.confirmed);
     }
 
-    if (state.slot_tree.reRoot(state.allocator)) |new_root| {
-        const slot_tracker = &state.slot_tracker;
-        const old_root = slot_tracker.root.load(.monotonic);
+    // update commitment levels
+    if (replay_state.commitments) |*c| c.commit(slot_update, commitment_txn.?);
 
-        state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
-        slot_tracker.root.store(new_root, .monotonic);
-        // In bypass-consensus mode there is no BlockCommitmentCache to compute
-        // highest_super_majority_root, so we approximate finalized = root.
-        slot_tracker.commitments.update(.finalized, new_root);
+    if (slot_update.root) |new_root| {
+        // update replay's internal state to reflect the newly rooted slot
+        replay_state.slot_tracker.consensus_root.store(new_root, .monotonic);
+        try replay_state.status_cache.addRoot(allocator, new_root);
 
-        try state.status_cache.addRoot(state.allocator, new_root);
+        // Pass along consensus updates to downstream consumers. None of this fed back into replay.
+        const rooted_slots = try replay_state.slot_tracker.parents(allocator, new_root);
+        defer allocator.free(rooted_slots);
+        try replay_state.ledger.resultWriter().setRoots(rooted_slots);
+    }
 
-        const slot_constants = slot_tracker.get(new_root).?;
-        defer slot_constants.release();
-        try state.account_store.onSlotRooted(
-            new_root,
-            &slot_constants.constants().ancestors,
+    // determine what slot to use as the state root. either the tower's root or
+    // the finalized slot, whatever is older.
+    var maybe_new_state_root: ?Slot = null;
+    if (replay_state.commitments) |*c| {
+        const proposed_state_root = @min(
+            c.get(.finalized),
+            replay_state.slot_tracker.consensus_root.load(.monotonic),
         );
 
-        // Send events for rooted slots
-        if (state.event_sink) |sink| {
-            const rooted_slots = try slot_tracker.rootedPathForward(
-                state.allocator,
-                old_root,
-                new_root,
-            );
-            defer state.allocator.free(rooted_slots);
+        if (proposed_state_root > old_state_root) {
+            maybe_new_state_root = proposed_state_root;
+        }
+    } else {
+        maybe_new_state_root = slot_update.root;
+    }
 
+    var newly_rooted_slots: ?[]const Slot = null;
+    defer if (newly_rooted_slots) |slots| allocator.free(slots);
+
+    if (maybe_new_state_root) |new_state_root| {
+        if (new_state_root > old_state_root) {
+            newly_rooted_slots = try replay_state.slot_tracker.rootedPathForward(
+                allocator,
+                old_state_root,
+                new_state_root,
+            );
+        }
+
+        // clean up old data from replay's internal state
+        try pruneStaleData(
+            allocator,
+            &replay_state.slot_tracker,
+            &replay_state.progress_map,
+            replay_state.epoch_tracker,
+            replay_state.account_store,
+            &replay_state.thread_pool,
+            new_state_root,
+        );
+    }
+
+    if (replay_state.event_sink) |sink| {
+        if (slot_update.voted) |voted_slot| {
+            if (old_processed == null or voted_slot > old_processed.?) {
+                try sink.send(.{ .tip_changed = voted_slot });
+            }
+        }
+        if (old_confirmed) |previous_confirmed| {
+            if (slot_update.optimistically_confirmed) |confirmed_slot| {
+                if (confirmed_slot > previous_confirmed) {
+                    try sink.send(.{ .slot_confirmed = confirmed_slot });
+                }
+            }
+        }
+        if (newly_rooted_slots) |rooted_slots| {
             for (rooted_slots) |rooted_slot| {
                 try sink.send(.{ .slot_rooted = rooted_slot });
             }
         }
-
-        slot_tracker.pruneNonRooted(&state.thread_pool);
     }
+
+    // Record update in logs + metrics
+    replay_state.logger.info().logf("slot state update from consensus: {any}", .{slot_update});
+    if (slot_update.voted != null) metrics.voted_slot_update_count.inc();
+    if (slot_update.optimistically_confirmed != null) metrics.optimistically_confirmed_update_count.inc();
+    if (slot_update.root != null) metrics.root_update_count.inc();
+    if (maybe_new_state_root != null) metrics.state_root_update_count.inc();
+}
+
+/// Removes all slot-scoped data for slots that do not branch off the specified root.
+pub fn pruneStaleData(
+    allocator: std.mem.Allocator,
+    slot_tracker: *SlotTracker,
+    progress: *ProgressMap,
+    epoch_tracker: *sig.core.EpochTracker,
+    account_store: AccountStore,
+    maybe_thread_pool: ?*ThreadPool,
+    /// We'll only keep around data that's a descendant of this slot. This can
+    /// be the tower's root, or it can be an ancestor of the tower's root, if
+    /// we'd like to keep around some older state. For example, if we're running
+    /// rpc, it should be the supermajority root, so rpc can access data about
+    /// slots older than the tower's root.
+    state_root: Slot,
+) !void {
+    {
+        const consensus_root_info = slot_tracker
+            .get(slot_tracker.consensus_root.load(.monotonic)) orelse return error.MissingRoot;
+        defer consensus_root_info.release();
+
+        if (!consensus_root_info.constants().ancestors.containsSlot(state_root)) {
+            return error.StateRootIsNotAncestorOfConsensusRoot;
+        }
+    }
+
+    const state_root_info = slot_tracker.get(state_root) orelse return error.MissingRoot;
+    defer state_root_info.release();
+
+    // clean up the unrooted slot stores
+    slot_tracker.prune(maybe_thread_pool, state_root);
+    try epoch_tracker.updateRoot(allocator, state_root, &state_root_info.constants().ancestors);
+    try account_store.updateRoot(state_root, &state_root_info.constants().ancestors);
+
+    // Remove entries from the progress map no longer in the slot tracker.
+    var progress_keys = progress.map.keys();
+    var index: usize = 0;
+    while (index < progress_keys.len) {
+        const progress_slot = progress_keys[index];
+        const maybe_ref = slot_tracker.get(progress_slot);
+        if (maybe_ref) |ref| ref.release();
+        if (maybe_ref == null) {
+            const removed_value = progress.map.fetchSwapRemove(progress_slot) orelse continue;
+            defer removed_value.value.deinit(allocator);
+            progress_keys = progress.map.keys();
+        } else {
+            index += 1;
+        }
+    }
+}
+
+/// publishes logs and metrics to reflect a snapshot of the current slots being tracked by replay
+pub fn recordSlotMetrics(replay_state: *ReplayState, metrics: Metrics) void {
+    // Record current state as gauges
+    const current_consensus_root = replay_state.slot_tracker.consensus_root.load(.monotonic);
+    const current_state_root = replay_state.slot_tracker.state_root.load(.monotonic);
+    const current_slot_tracker_count = replay_state.slot_tracker.count();
+    const current_epoch_tracker_state_root = replay_state.epoch_tracker.state_root.load(.monotonic);
+
+    metrics.consensus_root.set(current_consensus_root);
+    metrics.state_root.set(current_state_root);
+    metrics.slot_tracker_count.set(current_slot_tracker_count);
+    metrics.epoch_tracker_state_root.set(current_epoch_tracker_state_root);
+
+    // Log the same state for debugging
+    replay_state.logger.debug().logf(
+        \\slot_tracker.consensus_root = {}
+        \\slot_tracker.state_root = {}
+        \\slot_tracker.count = {}
+        \\epoch_tracker.state_root = {}
+    ,
+        .{
+            current_consensus_root,
+            current_state_root,
+            current_slot_tracker_count,
+            current_epoch_tracker_state_root,
+        },
+    );
+
+    // Apply the same pattern (log + metrics) to commitment levels if they are being recorded
+    if (replay_state.commitments) |commitments| {
+        const processed = commitments.get(.processed);
+        const confirmed = commitments.get(.confirmed);
+        const finalized = commitments.get(.finalized);
+
+        metrics.commitment_processed.set(processed);
+        metrics.commitment_confirmed.set(confirmed);
+        metrics.commitment_finalized.set(finalized);
+
+        replay_state.logger.info()
+            .field("processed", processed)
+            .field("confirmed", confirmed)
+            .field("finalized", finalized)
+            .field("behind", confirmed -| processed)
+            .log("Commitments");
+    }
+}
+
+test "pruneStaleData - missing root in tracker" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    // Empty slot tracker: root is set to 0 but no entry exists for it.
+    var slot_tracker: SlotTracker = try .initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    var progress: ProgressMap = .INIT;
+    defer progress.deinit(allocator);
+
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(allocator, random, 0, .INIT);
+    defer epoch_tracker.deinit();
+
+    const result = pruneStaleData(
+        allocator,
+        &slot_tracker,
+        &progress,
+        &epoch_tracker,
+        .noop,
+        null,
+        0,
+    );
+
+    try std.testing.expectError(error.MissingRoot, result);
+}
+
+test "pruneStaleData - state root not in root ancestors" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    var slot_tracker: SlotTracker = try .initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    try putTestSlot(allocator, random, &slot_tracker, 0, 0, &.{});
+
+    var progress: ProgressMap = .INIT;
+    defer progress.deinit(allocator);
+
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(allocator, random, 0, .INIT);
+    defer epoch_tracker.deinit();
+
+    // Root is 0 (ancestors = {0}), but state_root 123 is not in those ancestors.
+    const result = pruneStaleData(
+        allocator,
+        &slot_tracker,
+        &progress,
+        &epoch_tracker,
+        .noop,
+        null,
+        123,
+    );
+
+    try std.testing.expectError(error.StateRootIsNotAncestorOfConsensusRoot, result);
+}
+
+test "pruneStaleData - prunes non-descendant slots and stale progress" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const ForkProgress = sig.consensus.progress_map.ForkProgress;
+
+    // Fork structure (slots tracked: 0, 2, 3, 4):
+    //
+    //   0 -> 1 -> 2 -> 3 (root)
+    //        |-> 4    (fork)
+    //
+    // After pruneStaleData(state_root=3), only slot 3 should remain because
+    // it is the only slot whose ancestors include 3.
+
+    var slot_tracker: SlotTracker = try .initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    try putTestSlot(allocator, random, &slot_tracker, 0, 0, &.{});
+    try putTestSlot(allocator, random, &slot_tracker, 2, 1, &.{ 1, 2 });
+    try putTestSlot(allocator, random, &slot_tracker, 3, 2, &.{ 1, 2, 3 });
+    try putTestSlot(allocator, random, &slot_tracker, 4, 1, &.{ 1, 4 });
+    slot_tracker.consensus_root.store(3, .monotonic);
+
+    // Progress map with entries for slots 0, 1, 2, 3 (slot 1 is only in
+    // progress, never in the tracker — it should also get cleaned up).
+    var progress: ProgressMap = .INIT;
+    defer progress.deinit(allocator);
+    try progress.map.put(allocator, 0, try ForkProgress.zeroes(allocator));
+    try progress.map.put(allocator, 1, try ForkProgress.zeroes(allocator));
+    try progress.map.put(allocator, 2, try ForkProgress.zeroes(allocator));
+    try progress.map.put(allocator, 3, try ForkProgress.zeroes(allocator));
+
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(allocator, random, 0, .INIT);
+    defer epoch_tracker.deinit();
+
+    // Pre-conditions
+    try std.testing.expectEqual(4, progress.map.count());
+    try std.testing.expect(slot_tracker.contains(0));
+    try std.testing.expect(slot_tracker.contains(2));
+    try std.testing.expect(slot_tracker.contains(3));
+    try std.testing.expect(slot_tracker.contains(4));
+
+    try pruneStaleData(
+        allocator,
+        &slot_tracker,
+        &progress,
+        &epoch_tracker,
+        .noop,
+        null,
+        3,
+    );
+
+    // Only slot 3 remains in tracker (the others' ancestors don't include 3)
+    try std.testing.expect(!slot_tracker.contains(0));
+    try std.testing.expect(!slot_tracker.contains(2));
+    try std.testing.expect(slot_tracker.contains(3));
+    try std.testing.expect(!slot_tracker.contains(4));
+
+    // Progress entries for slots no longer in the tracker are removed
+    try std.testing.expectEqual(1, progress.map.count());
+    try std.testing.expect(progress.map.contains(3));
+    try std.testing.expect(!progress.map.contains(0));
+    try std.testing.expect(!progress.map.contains(1));
+    try std.testing.expect(!progress.map.contains(2));
+
+    // Epoch tracker state root is updated
+    try std.testing.expectEqual(3, epoch_tracker.state_root.load(.monotonic));
+}
+
+test "pruneStaleData - state root older than root keeps more slots" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    // When state_root is an ancestor of root (e.g. the supermajority-finalized
+    // slot for RPC), descendant slots of state_root are kept even if they are
+    // ancestors of root.
+    //
+    // Fork structure (slots tracked: 0, 2, 3, 4):
+    //
+    //   0 -> 1 -> 2 -> 3 (root)
+    //        |-> 4    (fork)
+    //
+    // state_root = 1, root = 3
+    //  - slot 0 ancestors = {0}        -> no 1 -> pruned
+    //  - slot 2 ancestors = {0, 1, 2}  -> has 1 -> kept
+    //  - slot 3 ancestors = {0,1,2,3}  -> has 1 -> kept
+    //  - slot 4 ancestors = {0, 1, 4}  -> has 1 -> kept
+
+    var slot_tracker: SlotTracker = try .initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    try putTestSlot(allocator, random, &slot_tracker, 0, 0, &.{0});
+    try putTestSlot(allocator, random, &slot_tracker, 1, 0, &.{ 0, 1 });
+    try putTestSlot(allocator, random, &slot_tracker, 2, 1, &.{ 1, 2 });
+    try putTestSlot(allocator, random, &slot_tracker, 3, 2, &.{ 1, 2, 3 });
+    try putTestSlot(allocator, random, &slot_tracker, 4, 1, &.{ 1, 4 });
+    try putTestSlot(allocator, random, &slot_tracker, 5, 2, &.{ 1, 2, 5 });
+    slot_tracker.consensus_root.store(3, .monotonic);
+
+    var progress: ProgressMap = .INIT;
+    defer progress.deinit(allocator);
+
+    var epoch_tracker = try sig.core.EpochTracker.initForTest(allocator, random, 0, .INIT);
+    defer epoch_tracker.deinit();
+
+    try pruneStaleData(
+        allocator,
+        &slot_tracker,
+        &progress,
+        &epoch_tracker,
+        .noop,
+        null,
+        2, // state_root is older than root — keep descendants of slot 2
+    );
+
+    // Slots 0 and 4 are pruned (ancestors don't include 2)
+    try std.testing.expect(!slot_tracker.contains(0));
+    try std.testing.expect(!slot_tracker.contains(1));
+    try std.testing.expect(!slot_tracker.contains(4));
+    // Slots 2, 3 and 5 are all descendants of slot 2, so they survive
+    try std.testing.expect(slot_tracker.contains(2));
+    try std.testing.expect(slot_tracker.contains(3));
+    try std.testing.expect(slot_tracker.contains(5));
+
+    try std.testing.expectEqual(2, epoch_tracker.state_root.load(.monotonic));
+}
+
+fn putTestSlot(
+    allocator: Allocator,
+    random: std.Random,
+    slot_tracker: *SlotTracker,
+    slot: Slot,
+    parent_slot: Slot,
+    ancestors: []const Slot,
+) !void {
+    var constants = try SlotConstants.genesis(allocator, .initRandom(random));
+    errdefer constants.deinit(allocator);
+
+    constants.parent_slot = parent_slot;
+    for (ancestors) |ancestor| try constants.ancestors.addSlot(allocator, ancestor);
+
+    try slot_tracker.put(allocator, slot, .{
+        .allocator = allocator,
+        .constants = constants,
+        .state = .GENESIS,
+    });
 }
 
 test "getActiveFeatures rejects wrong ownership" {
@@ -925,9 +1368,6 @@ test trackNewSlots {
         &.{ .{ 0, 0 }, .{ 1, 0 }, .{ 2, 1 }, .{ 4, 1 }, .{ 6, 4 } },
         &.{ 3, 5 },
     );
-
-    try std.testing.expectEqual(0, slot_tracker.commitments.get(.processed));
-    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
 }
 
 fn expectSlotTracker(
@@ -984,8 +1424,8 @@ test "Service clean init and deinit with RPC enabled" {
         allocator.destroy(service.epoch_tracker);
     }
 
-    // block_commitment_cache should be initialised when rpc_status is .enabled.
-    try std.testing.expect(service.block_commitment_cache != null);
+    // commitments should be initialised when rpc_status is .enabled.
+    try std.testing.expect(service.commitments != null);
 }
 
 test "process runs without error with no replay results" {
@@ -1016,7 +1456,9 @@ test "process runs without error with no replay results" {
     });
     defer consensus.deinit(allocator);
 
-    const vc_senders: sig.consensus.vote_listener.Senders = try .createForTest(allocator);
+    const vc_senders: sig.consensus.vote_listener.Senders = try .createForTest(allocator, .{
+        .bank_notification = false,
+    });
     defer vc_senders.destroyForTest(allocator);
 
     const consensus_senders: TowerConsensus.Senders = try .create(allocator);
@@ -1032,7 +1474,7 @@ test "process runs without error with no replay results" {
 
     // TODO: run consensus in the tests that actually execute blocks for better
     // coverage. currently consensus panics or hangs if you run it with actual data
-    try consensus.process(allocator, .{
+    _ = try consensus.process(allocator, .{
         .account_store = dep_stubs.accountStore(),
         .ledger = &dep_stubs.ledger,
         .gossip_votes = null,
@@ -1040,7 +1482,6 @@ test "process runs without error with no replay results" {
         .slot_tracker = &replay_state.slot_tracker,
         .epoch_tracker = replay_state.epoch_tracker,
         .progress_map = &replay_state.progress_map,
-        .status_cache = &replay_state.status_cache,
         .senders = consensus_senders,
         .receivers = consensus_receivers,
         .vote_sockets = null,
@@ -1070,7 +1511,7 @@ test "advance calls consensus.process with empty replay results" {
     try advanceReplay(&replay_state, try registry.initStruct(Metrics), null);
 
     // No slots were replayed
-    try std.testing.expectEqual(0, replay_state.slot_tracker.root.load(.monotonic));
+    try std.testing.expectEqual(0, replay_state.slot_tracker.consensus_root.load(.monotonic));
 }
 
 test "advance with RPC enabled passes block commitment cache" {
@@ -1089,13 +1530,13 @@ test "advance with RPC enabled passes block commitment cache" {
         allocator.destroy(replay_state.epoch_tracker);
     }
 
-    // block_commitment_cache should be initialised.
-    try std.testing.expect(replay_state.block_commitment_cache != null);
+    // commitments should be initialised.
+    try std.testing.expect(replay_state.commitments != null);
 
     try advanceReplay(&replay_state, try registry.initStruct(Metrics), null);
 
     // No slots were replayed
-    try std.testing.expectEqual(0, replay_state.slot_tracker.root.load(.monotonic));
+    try std.testing.expectEqual(0, replay_state.slot_tracker.consensus_root.load(.monotonic));
 }
 
 test "Execute testnet block single threaded" {
@@ -1199,7 +1640,7 @@ test "freezeCompletedSlots emits slot_frozen event with slot metadata" {
     var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
     defer dep_stubs.deinit();
 
-    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .disabled);
+    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .enabled);
     defer {
         replay_state.deinit();
         replay_state.epoch_tracker.deinit();
@@ -1231,68 +1672,6 @@ test "freezeCompletedSlots emits slot_frozen event with slot metadata" {
         },
         else => return error.TestUnexpectedResult,
     }
-    try std.testing.expect(event_sink.channel.tryReceive() == null);
-}
-
-test "bypassConsensus emits tip_changed and rooted chain events" {
-    const allocator = std.testing.allocator;
-
-    var prng_state = std.Random.DefaultPrng.init(std.testing.random_seed);
-    const random = prng_state.random();
-
-    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
-    defer dep_stubs.deinit();
-
-    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .disabled);
-    defer {
-        replay_state.deinit();
-        replay_state.epoch_tracker.deinit();
-        allocator.destroy(replay_state.epoch_tracker);
-    }
-
-    const event_sink = try jrpc_types.EventSink.create(allocator);
-    defer event_sink.destroy();
-    replay_state.event_sink = event_sink;
-
-    for (1..35) |slot_num| {
-        const slot: Slot = @intCast(slot_num);
-        try addReplayStateSlotForTest(
-            &replay_state,
-            slot,
-            slot - 1,
-            Pubkey.ZEROES,
-            Hash.initRandom(random),
-        );
-    }
-
-    try bypassConsensus(&replay_state);
-
-    const tip_event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer tip_event.deinit();
-    switch (tip_event) {
-        .tip_changed => |slot| try std.testing.expectEqual(34, slot),
-        else => return error.TestUnexpectedResult,
-    }
-
-    const rooted_event_1 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer rooted_event_1.deinit();
-    switch (rooted_event_1) {
-        .slot_rooted => |slot| try std.testing.expectEqual(1, slot),
-        else => return error.TestUnexpectedResult,
-    }
-
-    const rooted_event_2 = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer rooted_event_2.deinit();
-    switch (rooted_event_2) {
-        .slot_rooted => |slot| try std.testing.expectEqual(2, slot),
-        else => return error.TestUnexpectedResult,
-    }
-
-    try std.testing.expectEqual(
-        34,
-        replay_state.slot_tracker.commitments.get(.processed),
-    );
-    try std.testing.expectEqual(2, replay_state.slot_tracker.root.load(.monotonic));
     try std.testing.expect(event_sink.channel.tryReceive() == null);
 }
 
@@ -1574,7 +1953,6 @@ pub const DependencyStubs = struct {
 
             .replay_threads = 1,
             .stop_at_slot = null,
-            .event_sink = null,
         }, .enabled, rpc_status);
     }
 
@@ -1647,7 +2025,6 @@ pub const DependencyStubs = struct {
 
             .replay_threads = num_threads,
             .stop_at_slot = null,
-            .event_sink = null,
         }, .enabled, .disabled);
     }
 };

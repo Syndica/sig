@@ -143,7 +143,7 @@ test "accountSubscribe processed publishes when tip change makes a frozen slot c
     runBothLoops(server, &client_env, &handler, 300);
     try std.testing.expectEqual(1, handler.received.items.len);
 
-    server.slot_tracker.commitments.update(.processed, 2);
+    server.commitments.update(.processed, 2);
     server.injectEvent(.{ .tip_changed = 2 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
@@ -187,7 +187,7 @@ test "accountSubscribe does not replay already-visible finalized account on late
     try addTrackedSlot(server, 3, 2, &.{ 1, 2, 3 });
     try addTrackedSlot(server, 4, 3, &.{ 1, 2, 3, 4 });
     try addTrackedSlot(server, 5, 4, &.{ 1, 2, 3, 4, 5 });
-    server.slot_tracker.commitments.update(.finalized, 3);
+    server.commitments.update(.finalized, 3);
 
     const account_shared = try putAccountAtSlot(
         server,

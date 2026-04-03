@@ -128,7 +128,7 @@ pub const AncestorIterator = struct {
 };
 
 pub fn init(slot_read_ctx: SlotReadContext, logger: Logger) SlotStateCache {
-    const processed_tip = slot_read_ctx.slot_tracker.commitments.get(.processed);
+    const processed_tip = slot_read_ctx.commitments.get(.processed);
     const processed_tip_info = slot_read_ctx.slot_tracker.get(processed_tip);
     return .{
         .logger = logger,
@@ -493,9 +493,13 @@ fn testAddTrackedSlot(
     gop.reference.release();
 }
 
-fn testSlotReadCtx(slot_tracker: *sig.replay.trackers.SlotTracker) SlotReadContext {
+fn testSlotReadCtx(
+    slot_tracker: *sig.replay.trackers.SlotTracker,
+    commitments: *sig.replay.trackers.CommitmentTracker,
+) SlotReadContext {
     return .{
         .slot_tracker = slot_tracker,
+        .commitments = commitments,
         .account_reader = .noop,
     };
 }
@@ -549,10 +553,13 @@ test "slot frozen returns transition and marks state" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    try testAddTrackedSlot(allocator, &slot_tracker, 10, 9, &.{10});
-    slot_tracker.commitments.update(.processed, 10);
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    try testAddTrackedSlot(allocator, &slot_tracker, 10, 9, &.{10});
+    commitments.update(.processed, 10);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
@@ -575,7 +582,10 @@ test "duplicate frozen overwrites cached slot data" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .noop);
     defer state.deinit(allocator);
 
@@ -596,7 +606,10 @@ test "transaction logs batch ownership transfers into cache" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
@@ -620,7 +633,10 @@ test "repeated transaction log batches append" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .noop);
     defer state.deinit(allocator);
 
@@ -652,7 +668,10 @@ test "log entry iterator spans all batches" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
@@ -682,10 +701,13 @@ test "confirmed before frozen buffers state" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    try testAddTrackedSlot(allocator, &slot_tracker, 10, 9, &.{10});
-    slot_tracker.commitments.update(.processed, 10);
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    try testAddTrackedSlot(allocator, &slot_tracker, 10, 9, &.{10});
+    commitments.update(.processed, 10);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
@@ -713,10 +735,13 @@ test "onSlotConfirmed marks confirmed transition only when actionable" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    try testAddTrackedSlot(allocator, &slot_tracker, 11, 10, &.{11});
-    slot_tracker.commitments.update(.processed, 11);
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    try testAddTrackedSlot(allocator, &slot_tracker, 11, 10, &.{11});
+    commitments.update(.processed, 11);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
@@ -740,7 +765,10 @@ test "onSlotRooted marks confirmed finalized and eviction" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
@@ -764,7 +792,10 @@ test "duplicate rooted returns error" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .noop);
     defer state.deinit(allocator);
 
@@ -784,7 +815,10 @@ test "eviction removes slots at or below rooted slot" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
@@ -808,7 +842,10 @@ test "capacity eviction removes minimum slot" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .noop);
     defer state.deinit(allocator);
 
@@ -833,7 +870,10 @@ test "capacity drop keeps minimum slot when incoming is lower" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .noop);
     defer state.deinit(allocator);
 
@@ -858,13 +898,16 @@ test "tip change updates processed_tip and fork membership" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
     try testAddTrackedSlot(allocator, &slot_tracker, 1, 0, &.{1});
     try testAddTrackedSlot(allocator, &slot_tracker, 2, 1, &.{ 1, 2 });
     try testAddTrackedSlot(allocator, &slot_tracker, 3, 2, &.{ 1, 2, 3 });
     try testAddTrackedSlot(allocator, &slot_tracker, 4, 1, &.{ 1, 4 });
     try testAddTrackedSlot(allocator, &slot_tracker, 5, 4, &.{ 1, 4, 5 });
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
@@ -906,15 +949,18 @@ test "off-fork frozen slot is not on current fork" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
     try testAddTrackedSlot(allocator, &slot_tracker, 1, 0, &.{1});
     try testAddTrackedSlot(allocator, &slot_tracker, 2, 1, &.{ 1, 2 });
     try testAddTrackedSlot(allocator, &slot_tracker, 3, 1, &.{ 1, 3 });
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
-    slot_tracker.commitments.update(.processed, 2);
+    commitments.update(.processed, 2);
     _ = state.onTipChanged(ctx, 2);
 
     const on_fork = try testOnSlotFrozen(&state, allocator, 2, 1, 0);
@@ -931,7 +977,10 @@ test "ancestor iterator walks cached parents" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
@@ -960,7 +1009,10 @@ test "collectPublishableConfirmedSlots returns newest first and marks published"
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
@@ -986,7 +1038,10 @@ test "root jump over multiple slots" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
@@ -1014,6 +1069,9 @@ test "slot frozen stores producer-owned modified accounts" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
     var pk: sig.core.Pubkey = undefined;
     @memset(&pk.data, 0xAA);
     var owner_pk: sig.core.Pubkey = undefined;
@@ -1035,7 +1093,7 @@ test "slot frozen stores producer-owned modified accounts" {
         },
     };
 
-    const ctx = testSlotReadCtx(&slot_tracker);
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
