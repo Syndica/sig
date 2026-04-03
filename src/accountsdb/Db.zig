@@ -74,7 +74,7 @@ pub fn put(self: *Db, slot: Slot, address: Pubkey, data: AccountSharedData) !voi
 
 // TODO: this should be trivial to put on another thread; this currently blocks the main replay
 // thread for 30-40ms per slot on testnet.
-pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot, ancestors: *const Ancestors) void {
+pub fn updateRoot(self: *Db, newly_rooted_slot: Slot, ancestors: *const Ancestors) void {
     self.rooted.beginTransaction();
     defer {
         self.rooted.commitTransaction();
@@ -353,7 +353,7 @@ test "many slots, many accounts" {
     defer ancestors.deinit(allocator);
 
     for (0..Unrooted.MAX_SLOTS * 2) |i| {
-        defer if (i > 50) db.onSlotRooted(i, &ancestors); // start rooting after 50 slots
+        defer if (i > 50) db.updateRoot(i, &ancestors); // start rooting after 50 slots
 
         const random_account = try Account.initRandom(allocator, random, 30);
         defer random_account.deinit(allocator);
@@ -367,7 +367,7 @@ test "many slots, many accounts" {
     // Ensure we end up with a clean slate, not leaking any entries.
     try ancestors.addSlot(allocator, Unrooted.MAX_SLOTS * 2);
     ancestors.cleanup();
-    db.onSlotRooted(Unrooted.MAX_SLOTS * 2, &ancestors);
+    db.updateRoot(Unrooted.MAX_SLOTS * 2, &ancestors);
     for (db.unrooted.slots) |entry| {
         std.debug.assert(entry.is_empty.load(.acquire));
     }
@@ -388,7 +388,7 @@ test "many slots, same account" {
 
     const random_pubkey = Pubkey.initRandom(random);
     for (0..Unrooted.MAX_SLOTS * 2) |i| {
-        defer if (i % 64 == 0) db.onSlotRooted(i, &ancestors); // root every 64 slots
+        defer if (i % 64 == 0) db.updateRoot(i, &ancestors); // root every 64 slots
 
         const random_account = try Account.initRandom(allocator, random, 30);
         defer random_account.deinit(allocator);
@@ -400,7 +400,7 @@ test "many slots, same account" {
     }
     try ancestors.addSlot(allocator, Unrooted.MAX_SLOTS * 2);
     ancestors.cleanup();
-    db.onSlotRooted(Unrooted.MAX_SLOTS * 2, &ancestors);
+    db.updateRoot(Unrooted.MAX_SLOTS * 2, &ancestors);
     for (db.unrooted.slots) |entry| {
         std.debug.assert(entry.is_empty.load(.acquire));
     }
@@ -435,7 +435,7 @@ test "rooting must handle wraparound and non-consecutive roots" {
         }
 
         if (slot % 2 == 0) {
-            db.onSlotRooted(slot, &ancestors);
+            db.updateRoot(slot, &ancestors);
             const account = try db.get(allocator, .ZEROES, &ancestors);
             defer account.?.deinit(allocator);
             try std.testing.expectEqual(slot * 10, account.?.lamports);
@@ -486,7 +486,7 @@ test "accounts_db: owner query" {
     });
 
     // Root slots 1 and 2
-    db.onSlotRooted(2, &ancestors);
+    db.updateRoot(2, &ancestors);
 
     // Slot 3, addr_a updated, still owned by owner_x (stays unrooted)
     try ancestors.addSlot(allocator, 3);
@@ -610,7 +610,7 @@ test "accounts_db: spl token owner query" {
     });
 
     // Root slots 1 and 2
-    db.onSlotRooted(2, &ancestors);
+    db.updateRoot(2, &ancestors);
 
     // Slot 3: addr_a updated, still token_owner_x (stays unrooted)
     try ancestors.addSlot(allocator, 3);

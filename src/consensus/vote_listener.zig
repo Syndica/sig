@@ -28,7 +28,7 @@ pub const SlotDataProvider = struct {
     epoch_tracker: *EpochTracker,
 
     pub fn rootSlot(self: *const SlotDataProvider) Slot {
-        return self.slot_tracker.root.load(.monotonic);
+        return self.slot_tracker.consensus_root.load(.monotonic);
     }
 
     fn getSlotHash(self: *const SlotDataProvider, slot: Slot) ?Hash {
@@ -78,6 +78,12 @@ pub const Senders = struct {
     verified_vote: *sig.sync.Channel(VerifiedVote),
     gossip_verified_vote_hashes: *std.ArrayListUnmanaged(GossipVerifiedVoteHash),
     duplicate_confirmed_slots: *std.ArrayListUnmanaged(ThresholdConfirmedSlot),
+    /// TODO: when the RPC hook design is closer to being finished,
+    /// see if this could be re-designed to use that, instead of this
+    /// slightly awkward channel design.
+    bank_notification: ?*sig.sync.Channel(BankNotification),
+    /// TODO: same advisory as on `bank_notification` wrt hooking into RPC.
+    subscriptions: RpcSubscriptionsStub,
 
     const test_setup_enabled = @import("builtin").is_test;
 
@@ -93,9 +99,17 @@ pub const Senders = struct {
 
         self.duplicate_confirmed_slots.deinit(allocator);
         allocator.destroy(self.duplicate_confirmed_slots);
+
+        if (self.bank_notification) |channel| channel.destroy();
     }
 
-    pub fn createForTest(allocator: std.mem.Allocator) !Senders {
+    pub const CreateForTestParams = struct {
+        bank_notification: bool,
+    };
+    pub fn createForTest(
+        allocator: std.mem.Allocator,
+        params: CreateForTestParams,
+    ) !Senders {
         if (!test_setup_enabled) @compileError("not allowed");
 
         const verified_vote: *sig.sync.Channel(VerifiedVote) = try .create(allocator);
@@ -115,13 +129,42 @@ pub const Senders = struct {
         };
         errdefer allocator.destroy(duplicate_confirmed_slots);
 
+        const bank_notification: ?*sig.sync.Channel(BankNotification) =
+            if (params.bank_notification) try .create(allocator) else null;
+        errdefer if (bank_notification) |channel| channel.destroy();
+
         return .{
             .verified_vote = verified_vote,
             .gossip_verified_vote_hashes = gossip_verified_vote_hashes,
+            .bank_notification = bank_notification,
             .duplicate_confirmed_slots = duplicate_confirmed_slots,
+            .subscriptions = .{},
         };
     }
 };
+
+// NOTE: this test exists purely to satisfy codecov
+test Senders {
+    const impl = struct {
+        fn createAndDestroy(
+            allocator: std.mem.Allocator,
+            params: Senders.CreateForTestParams,
+        ) std.mem.Allocator.Error!void {
+            const senders: Senders = try .createForTest(allocator, params);
+            senders.destroyForTest(allocator);
+        }
+    };
+    for ([_]Senders.CreateForTestParams{
+        .{ .bank_notification = false },
+        .{ .bank_notification = true },
+    }) |params| {
+        try std.testing.checkAllAllocationFailures(
+            std.testing.allocator,
+            impl.createAndDestroy,
+            .{params},
+        );
+    }
+}
 
 const GossipVoteReceptor = struct {
     vote_tx_buffer: std.ArrayListUnmanaged(vote_parser.ParsedVote),
@@ -304,6 +347,7 @@ pub const VoteCollector = struct {
         };
     }
 
+    /// returns the highest slot that was optimistically confirmed by this invocation
     pub fn collectAndProcessVotes(
         self: *VoteCollector,
         allocator: std.mem.Allocator,
@@ -315,7 +359,7 @@ pub const VoteCollector = struct {
             ledger: *Ledger,
             gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
         },
-    ) ![]const ThresholdConfirmedSlot {
+    ) !?Slot {
         const slot_data_provider = params.slot_data_provider;
         const senders = params.senders;
         const receivers = params.receivers;
@@ -353,6 +397,7 @@ pub const VoteCollector = struct {
 
         const confirmed_slots = try listenAndConfirmVotes(
             allocator,
+            logger,
             &self.vote_tracker,
             &slot_data_provider,
             senders,
@@ -362,7 +407,7 @@ pub const VoteCollector = struct {
             &self.latest_vote_slot_per_validator,
             self.metrics,
         );
-        errdefer allocator.free(confirmed_slots);
+        defer allocator.free(confirmed_slots);
 
         try self.confirmation_verifier.addNewOptimisticConfirmedSlots(
             allocator,
@@ -371,12 +416,21 @@ pub const VoteCollector = struct {
             .from(logger),
         );
 
-        return confirmed_slots;
+        var optimistically_confirmed_slot: ?Slot = null;
+        for (confirmed_slots) |confirmed| {
+            optimistically_confirmed_slot = if (optimistically_confirmed_slot) |current|
+                @max(current, confirmed.slot)
+            else
+                confirmed.slot;
+        }
+
+        return optimistically_confirmed_slot;
     }
 };
 
 fn listenAndConfirmVotes(
     allocator: std.mem.Allocator,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     slot_data_provider: *const SlotDataProvider,
     senders: Senders,
@@ -410,6 +464,7 @@ fn listenAndConfirmVotes(
     }
     return try filterAndConfirmWithNewVotes(
         allocator,
+        logger,
         vote_tracker,
         slot_data_provider,
         senders,
@@ -423,6 +478,7 @@ fn listenAndConfirmVotes(
 
 fn filterAndConfirmWithNewVotes(
     allocator: std.mem.Allocator,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     slot_data_provider: *const SlotDataProvider,
     senders: Senders,
@@ -454,6 +510,7 @@ fn filterAndConfirmWithNewVotes(
 
             try trackNewVotesAndNotifyConfirmations(
                 allocator,
+                logger,
                 vote_tracker,
                 slot_data_provider,
                 senders,
@@ -623,6 +680,52 @@ const AtomicInterval = struct {
     }
 };
 
+/// TODO: move this to its proper place or something
+const BankNotification = union(enum) {
+    optimistically_confirmed: Slot,
+    frozen: if (false) sig.core.BankFields else noreturn,
+    new_root_bank: if (false) sig.core.BankFields else noreturn,
+    /// The newly rooted slot chain including the parent slot of the oldest bank in the rooted chain.
+    new_rooted_chain: if (false) std.ArrayListUnmanaged(Slot) else noreturn,
+};
+
+const RpcSubscriptionsStub = struct {
+    pub const NotificationEntry = union(enum) {
+        slot: SlotInfo,
+        slot_update: SlotUpdate,
+        vote: struct { Pubkey, VoteTransaction, sig.core.Signature },
+        root: Slot,
+        bank: CommitmentSlots,
+        gossip: Slot,
+        signatures_received: struct { Slot, std.ArrayListUnmanaged(sig.core.Signature) },
+        subscribed: if (true) noreturn else struct { SubscriptionParams, SubscriptionId },
+        unsubscribed: if (true) noreturn else struct { SubscriptionParams, SubscriptionId },
+
+        const SlotInfo = noreturn;
+        const SlotUpdate = noreturn;
+        const CommitmentSlots = noreturn;
+        const SubscriptionParams = noreturn;
+        const SubscriptionId = noreturn;
+    };
+
+    fn notifyVote(
+        self: *const RpcSubscriptionsStub,
+        vote_pubkey: Pubkey,
+        vote: VoteTransaction,
+        signature: sig.core.Signature,
+    ) void {
+        self.enqueue_notification(.{ .vote = .{ vote_pubkey, vote, signature } });
+    }
+
+    fn enqueue_notification(
+        self: *const RpcSubscriptionsStub,
+        notification_entry: NotificationEntry,
+    ) void {
+        _ = self;
+        _ = notification_entry;
+    }
+};
+
 const SlotsDiff = struct {
     map: std.AutoArrayHashMapUnmanaged(Slot, PubkeysDiff),
 
@@ -671,6 +774,7 @@ const SlotsDiff = struct {
 
 fn trackNewVotesAndNotifyConfirmations(
     allocator: std.mem.Allocator,
+    logger: Logger,
     vote_tracker: *VoteTracker,
     slot_data_provider: *const SlotDataProvider,
     senders: Senders,
@@ -781,7 +885,14 @@ fn trackNewVotesAndNotifyConfirmations(
                     .slot = slot,
                     .hash = hash,
                 });
-                slot_data_provider.slot_tracker.commitments.update(.confirmed, slot);
+                // Notify subscribers about new optimistic confirmation
+                if (senders.bank_notification) |sender| {
+                    sender.send(.{ .optimistically_confirmed = slot }) catch |err| {
+                        logger.warn().logf("bank_notification_sender failed: {s}", .{
+                            @errorName(err),
+                        });
+                    };
+                }
             }
 
             if (!is_new and !is_gossip_vote) {
@@ -823,9 +934,7 @@ fn trackNewVotesAndNotifyConfirmations(
     latest_vote_slot.* = @max(latest_vote_slot.*, last_vote_slot);
 
     if (is_new_vote) {
-        // TODO: here is where Agave notifies new vote for RPC websocket voteSubscribe
-        // (signature is included in the notification)
-        _ = vote_transaction_signature;
+        senders.subscriptions.notifyVote(vote_pubkey, vote, vote_transaction_signature);
         errdefer allocator.free(vote_slots);
         // TODO: Uncomment when our RepairService implements vote-weighted repair heuristic.
         //
@@ -889,7 +998,9 @@ test "trackNewVotesAndNotifyConfirmations filter" {
         .epoch_tracker = &epoch_tracker,
     };
 
-    const senders: Senders = try .createForTest(allocator);
+    const senders: Senders = try .createForTest(allocator, .{
+        .bank_notification = true,
+    });
     defer senders.destroyForTest(allocator);
 
     const validator0_node_kp: sig.identity.KeyPair = try randomKeyPair(prng);
@@ -934,6 +1045,7 @@ test "trackNewVotesAndNotifyConfirmations filter" {
         const is_gossip_vote = true;
         try trackNewVotesAndNotifyConfirmations(
             allocator,
+            .FOR_TESTS,
             &vote_tracker,
             &slot_data_provider,
             senders,
@@ -982,6 +1094,7 @@ test "trackNewVotesAndNotifyConfirmations filter" {
         const is_gossip_vote = true;
         try trackNewVotesAndNotifyConfirmations(
             allocator,
+            .FOR_TESTS,
             &vote_tracker,
             &slot_data_provider,
             senders,
@@ -996,121 +1109,6 @@ test "trackNewVotesAndNotifyConfirmations filter" {
     }
     diff.sortAsc();
     try std.testing.expectEqualSlices(Slot, diff.map.keys(), &.{ 7, 8 });
-
-    // No stake delegated, so optimistic confirmation should not be reached.
-    try std.testing.expectEqual(0, slot_data_provider.slot_tracker.commitments.get(.confirmed));
-}
-
-test "trackNewVotesAndNotifyConfirmations records confirmed slots" {
-    const allocator = std.testing.allocator;
-
-    var prng_state: std.Random.DefaultPrng = .init(std.testing.random_seed);
-    const prng = prng_state.random();
-
-    var slot_tracker: SlotTracker = try .init(
-        allocator,
-        0,
-        try slotTrackerElementGenesis(allocator, .DEFAULT),
-    );
-    defer slot_tracker.deinit(allocator);
-
-    const validator_node_kp: sig.identity.KeyPair = try randomKeyPair(prng);
-    const validator_vote_kp: sig.identity.KeyPair = try randomKeyPair(prng);
-    const vote_pubkey = Pubkey.fromPublicKey(&validator_vote_kp.public_key);
-
-    var epoch_tracker = epoch_tracker: {
-        var epoch_stakes = sig.core.EpochStakes.EMPTY_WITH_GENESIS;
-        errdefer epoch_stakes.deinit(allocator);
-
-        {
-            const vote_account = try sig.core.stakes.VoteAccount.initRandom(
-                allocator,
-                prng,
-                Pubkey.fromPublicKey(&validator_node_kp.public_key),
-            );
-            errdefer {
-                var vote_account_to_deinit = vote_account;
-                vote_account_to_deinit.deinit(allocator);
-            }
-
-            try epoch_stakes.stakes.vote_accounts.vote_accounts.put(allocator, vote_pubkey, .{
-                .account = vote_account,
-                .stake = 70,
-            });
-        }
-        epoch_stakes.total_stake = 100;
-        try epoch_stakes.epoch_authorized_voters.put(allocator, vote_pubkey, vote_pubkey);
-
-        var epoch_stakes_slice = [_]sig.core.EpochStakes{epoch_stakes};
-        break :epoch_tracker try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
-            allocator,
-            &epoch_stakes_slice,
-        );
-    };
-    defer epoch_tracker.deinit();
-
-    const slot_data_provider: SlotDataProvider = .{
-        .slot_tracker = &slot_tracker,
-        .epoch_tracker = &epoch_tracker,
-    };
-
-    const senders: Senders = try .createForTest(allocator);
-    defer senders.destroyForTest(allocator);
-
-    var vote_tracker: VoteTracker = .EMPTY;
-    defer vote_tracker.deinit(allocator);
-
-    var latest_vote_slot_per_validator: sig.utils.collections.PubkeyMap(Slot) = .empty;
-    defer latest_vote_slot_per_validator.deinit(allocator);
-
-    var diff: SlotsDiff = .EMPTY;
-    defer diff.deinit(allocator);
-
-    var new_optimistic_confirmed_slots: std.ArrayListUnmanaged(ThresholdConfirmedSlot) = .empty;
-    defer new_optimistic_confirmed_slots.deinit(allocator);
-
-    const tower_sync_tx_parsed: vote_parser.ParsedVote = blk: {
-        const tower_sync: vote_program.state.TowerSync = try .fromLockouts(allocator, &.{.{
-            .slot = 1,
-            .confirmation_count = 1,
-        }});
-        defer tower_sync.deinit(allocator);
-
-        const tower_sync_tx = try newTowerSyncTransaction(allocator, .{
-            .tower_sync = tower_sync,
-            .recent_blockhash = .ZEROES,
-            .node_keypair = validator_node_kp,
-            .vote_keypair = validator_vote_kp,
-            .authorized_voter_keypair = validator_vote_kp,
-            .maybe_switch_proof_hash = null,
-        });
-        defer tower_sync_tx.deinit(allocator);
-
-        const maybe_tx_parsed = try vote_parser.parseVoteTransaction(allocator, tower_sync_tx);
-        break :blk maybe_tx_parsed.?;
-    };
-    defer tower_sync_tx_parsed.deinit(allocator);
-
-    try trackNewVotesAndNotifyConfirmations(
-        allocator,
-        &vote_tracker,
-        &slot_data_provider,
-        senders,
-        tower_sync_tx_parsed.vote,
-        tower_sync_tx_parsed.key,
-        tower_sync_tx_parsed.signature,
-        &diff,
-        &new_optimistic_confirmed_slots,
-        true,
-        &latest_vote_slot_per_validator,
-    );
-
-    try std.testing.expectEqual(1, new_optimistic_confirmed_slots.items.len);
-    try std.testing.expectEqual(1, new_optimistic_confirmed_slots.items[0].slot);
-    try std.testing.expectEqual(
-        @as(Slot, 1),
-        slot_data_provider.slot_tracker.commitments.get(.confirmed),
-    );
 }
 
 const ThresholdReachedResults = std.bit_set.IntegerBitSet(THRESHOLDS_TO_CHECK.len);
@@ -1790,7 +1788,9 @@ test "simple usage" {
     var ledger = try sig.ledger.tests.initTestLedger(allocator, @src(), .noop);
     defer ledger.deinit();
 
-    const senders: Senders = try .createForTest(allocator);
+    const senders: Senders = try .createForTest(allocator, .{
+        .bank_notification = true,
+    });
     defer senders.destroyForTest(allocator);
 
     const replay_votes_channel: *sig.sync.Channel(vote_parser.ParsedVote) = try .create(allocator);
@@ -1803,21 +1803,17 @@ test "simple usage" {
     );
     defer vote_collector.deinit(allocator);
 
-    const confirmed_slots = try vote_collector.collectAndProcessVotes(allocator, .FOR_TESTS, .{
+    const confirmed = try vote_collector.collectAndProcessVotes(allocator, .FOR_TESTS, .{
         .slot_data_provider = slot_data_provider,
         .senders = senders,
         .receivers = .{ .replay_votes = replay_votes_channel },
         .ledger = &ledger,
         .gossip_votes = null,
     });
-    defer allocator.free(confirmed_slots);
-
-    try std.testing.expectEqual(@as(usize, 0), confirmed_slots.len);
 
     // Since no votes were sent, slot trackers should remain at their initialized state.
     // NOTE: processed slot is not used here, but required to construct SlotTracker.
-    try std.testing.expectEqual(0, slot_tracker.commitments.get(.processed));
-    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
+    try std.testing.expectEqual(null, confirmed);
 }
 
 test "check trackers" {
@@ -1901,7 +1897,9 @@ test "check trackers" {
     const gossip_votes_channel: *sig.sync.Channel(sig.gossip.data.Vote) = try .create(allocator);
     defer gossip_votes_channel.destroy();
 
-    const senders: Senders = try .createForTest(allocator);
+    const senders: Senders = try .createForTest(allocator, .{
+        .bank_notification = true,
+    });
     defer senders.destroyForTest(allocator);
 
     const replay_votes_channel = try sig.sync.Channel(vote_parser.ParsedVote).create(allocator);
@@ -1974,16 +1972,13 @@ test "check trackers" {
         });
     }
 
-    const confirmed_slots = try vote_collector.collectAndProcessVotes(allocator, .FOR_TESTS, .{
+    const confirmed = try vote_collector.collectAndProcessVotes(allocator, .FOR_TESTS, .{
         .slot_data_provider = slot_data_provider,
         .senders = senders,
         .receivers = .{ .replay_votes = replay_votes_channel },
         .ledger = &state,
         .gossip_votes = gossip_votes_channel,
     });
-    defer allocator.free(confirmed_slots);
-
-    try std.testing.expectEqual(@as(usize, 0), confirmed_slots.len);
 
     var actual_trackers: std.ArrayListUnmanaged(struct { Slot, TestSlotVoteTracker }) = .empty;
     defer actual_trackers.deinit(allocator);
@@ -2030,8 +2025,7 @@ test "check trackers" {
 
     // Votes were processed but no stake was delegated to validators, so
     // optimisitic confirmation was not reached.
-    try std.testing.expectEqual(0, slot_data_provider.slot_tracker.commitments.get(.processed));
-    try std.testing.expectEqual(0, slot_data_provider.slot_tracker.commitments.get(.confirmed));
+    try std.testing.expectEqual(null, confirmed);
 }
 
 // tests for OptimisticConfirmationVerifier moved to optimistic_vote_verifier.zig

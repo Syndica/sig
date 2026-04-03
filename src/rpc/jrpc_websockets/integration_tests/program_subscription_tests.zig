@@ -246,7 +246,7 @@ test "programSubscribe processed only publishes frozen on-fork slots" {
     try std.testing.expect(handler.received.items.len >= 1);
 
     // Set tip to slot 10.
-    server.slot_tracker.commitments.update(.processed, 10);
+    server.commitments.update(.processed, 10);
     server.injectEvent(.{ .tip_changed = 10 });
 
     // Freeze slot 10 (on current fork) -> should publish.
@@ -320,7 +320,7 @@ test "programSubscribe no backfill on pure tip change" {
     try std.testing.expect(handler.received.items.len >= 1);
 
     // Freeze slot 10 with tip at 10 -> should publish.
-    server.slot_tracker.commitments.update(.processed, 10);
+    server.commitments.update(.processed, 10);
     server.injectEvent(.{ .tip_changed = 10 });
     server.injectEvent(.{ .slot_frozen = .{ .slot = 10, .parent = 0, .root = 0 } });
 
@@ -331,7 +331,7 @@ test "programSubscribe no backfill on pure tip change" {
     );
 
     // Pure tip change to slot 11 (no freeze of slot 11) -> should NOT backfill.
-    server.slot_tracker.commitments.update(.processed, 11);
+    server.commitments.update(.processed, 11);
     server.injectEvent(.{ .tip_changed = 11 });
     runBothLoops(server, &client_env, &handler, 300);
     try std.testing.expectEqual(@as(usize, 2), handler.received.items.len);

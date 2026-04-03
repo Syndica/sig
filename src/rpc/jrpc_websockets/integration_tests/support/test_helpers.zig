@@ -61,6 +61,7 @@ pub const TestServer = struct {
     sub_map: sub_map_mod.RPCSubMap,
     account_db: sig.accounts_db.Db.TestContext,
     slot_tracker: sig.replay.trackers.SlotTracker,
+    commitments: sig.replay.trackers.CommitmentTracker,
     ctx: Runtime,
     server: WebSocketServer,
     port: u16,
@@ -94,8 +95,12 @@ pub const TestServer = struct {
         self.slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
         errdefer self.slot_tracker.deinit(allocator);
 
+        self.commitments = .init(allocator, 0);
+        errdefer self.commitments.deinit(allocator);
+
         const slot_read_ctx: SlotReadContext = .{
             .slot_tracker = &self.slot_tracker,
+            .commitments = &self.commitments,
             .account_reader = .{ .accounts_db = &self.account_db.db },
         };
         const logger: sig.trace.Logger("jrpc_ws_integration_tests") = .noop;
@@ -187,6 +192,7 @@ pub const TestServer = struct {
         self.server.deinit();
         self.ctx.shutdown(runtime_shutdown_timeout_ms) catch unreachable;
         self.ctx.deinit();
+        self.commitments.deinit(allocator);
         self.slot_tracker.deinit(allocator);
         self.account_db.deinit();
         self.sub_map.deinit();
@@ -251,6 +257,7 @@ pub const IntegratedTestServer = struct {
     sub_map: sub_map_mod.RPCSubMap,
     account_db: sig.accounts_db.Db.TestContext,
     slot_tracker: sig.replay.trackers.SlotTracker,
+    commitments: sig.replay.trackers.CommitmentTracker,
     ctx: Runtime,
     ws_server: WebSocketServer,
     pending_connections: Channel(PendingConnection),
@@ -290,8 +297,12 @@ pub const IntegratedTestServer = struct {
         self.slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
         errdefer self.slot_tracker.deinit(allocator);
 
+        self.commitments = .init(allocator, 0);
+        errdefer self.commitments.deinit(allocator);
+
         const slot_read_ctx: SlotReadContext = .{
             .slot_tracker = &self.slot_tracker,
+            .commitments = &self.commitments,
             .account_reader = .{ .accounts_db = &self.account_db.db },
         };
         const logger: sig.trace.Logger("jrpc_ws_integration_tests") = .noop;
@@ -438,6 +449,7 @@ pub const IntegratedTestServer = struct {
         self.ws_server.deinit();
         self.ctx.shutdown(runtime_shutdown_timeout_ms) catch unreachable;
         self.ctx.deinit();
+        self.commitments.deinit(allocator);
         self.slot_tracker.deinit(allocator);
         self.account_db.deinit();
         self.sub_map.deinit();

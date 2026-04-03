@@ -17,6 +17,7 @@ pub const AccountWithPubkey = struct {
 
 pub const SlotReadContext = struct {
     slot_tracker: *sig.replay.trackers.SlotTracker,
+    commitments: *sig.replay.trackers.CommitmentTracker,
     account_reader: sig.accounts_db.AccountReader,
 };
 

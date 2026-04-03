@@ -226,24 +226,6 @@ pub const StatusCache = struct {
         try hash_entry_map.append(allocator, .{ .key = lookup_key, .maybe_err = maybe_err });
     }
 
-    /// Returns the status-cache root slots as a sorted slice, allocated from `allocator`.
-    /// In Agave this is `Bank::status_cache_ancestors()` and provides the recent
-    /// ~150 rooted slots used for commitment aggregation.
-    pub fn getSortedRoots(
-        self: *StatusCache,
-        allocator: std.mem.Allocator,
-    ) std.mem.Allocator.Error![]Slot {
-        var state = self.state.read();
-        defer state.unlock();
-
-        const roots = state.get().roots;
-        const keys = roots.keys();
-        const result = try allocator.alloc(Slot, keys.len);
-        @memcpy(result, keys);
-        std.mem.sort(Slot, result, {}, std.sort.asc(Slot));
-        return result;
-    }
-
     pub fn addRoot(self: *StatusCache, allocator: std.mem.Allocator, fork: Slot) !void {
         const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.addRoot" });
         defer zone.deinit();
