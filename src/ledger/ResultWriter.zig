@@ -95,6 +95,16 @@ pub fn setDeadSlot(
     try self.ledger.db.put(schema.dead_slots, slot, true);
 }
 
+/// Write a performance sample to the ledger.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/ledger/src/blockstore.rs#L3509
+pub fn writePerfSample(
+    self: *const ResultWriter,
+    slot: Slot,
+    sample: ledger_mod.meta.PerfSample,
+) !void {
+    try self.ledger.db.put(schema.perf_samples, slot, sample);
+}
+
 /// Store a duplicate slot proof for the given slot.
 ///
 /// Analogous to [store_duplicate_slot](https://github.com/anza-xyz/agave/blob/60ba168d54d7ac6683f8f2e41a0e325f29d9ab2b/ledger/src/blockstore.rs#L4005)

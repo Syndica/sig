@@ -199,6 +199,10 @@ pub const SlotState = struct {
     /// The number of committed transactions since genesis.
     transaction_count: Atomic(u64),
 
+    /// The number of committed non-vote transactions since restart.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L759
+    non_vote_transaction_count: Atomic(u64),
+
     /// The number of signatures from valid transactions in this slot
     signature_count: Atomic(u64),
 
@@ -240,6 +244,7 @@ pub const SlotState = struct {
         .hash = .init(null),
         .capitalization = .init(0),
         .transaction_count = .init(0),
+        .non_vote_transaction_count = .init(0),
         .signature_count = .init(0),
         .tick_height = .init(0),
         .collected_rent = .init(0),
@@ -267,6 +272,7 @@ pub const SlotState = struct {
             .hash = .init(bank_fields.hash),
             .capitalization = .init(bank_fields.capitalization),
             .transaction_count = .init(bank_fields.transaction_count),
+            .non_vote_transaction_count = .init(0),
             .signature_count = .init(bank_fields.signature_count),
             .tick_height = .init(bank_fields.tick_height),
             .collected_rent = .init(bank_fields.collected_rent),
@@ -303,6 +309,7 @@ pub const SlotState = struct {
             .hash = .init(null),
             .capitalization = .init(parent.capitalization.load(.monotonic)),
             .transaction_count = .init(parent.transaction_count.load(.monotonic)),
+            .non_vote_transaction_count = .init(parent.non_vote_transaction_count.load(.monotonic)),
             .signature_count = .init(0),
             .tick_height = .init(parent.tick_height.load(.monotonic)),
             .collected_rent = .init(0),
@@ -343,6 +350,7 @@ pub const SlotState = struct {
             .hash = .init(bank_fields.hash),
             .capitalization = .init(bank_fields.capitalization),
             .transaction_count = .init(bank_fields.transaction_count),
+            .non_vote_transaction_count = .init(0),
             .signature_count = .init(bank_fields.signature_count),
             .tick_height = .init(bank_fields.tick_height),
             .collected_rent = .init(bank_fields.collected_rent),

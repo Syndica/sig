@@ -1436,6 +1436,7 @@ const TestData = struct {
                     .hash = .init(slot_infos[self.slot].hash),
                     .capitalization = .init(random.int(u64)),
                     .transaction_count = .init(random.int(u64)),
+                    .non_vote_transaction_count = .init(random.int(u64)),
                     .signature_count = .init(random.int(u64)),
                     .tick_height = .init(random.int(u64)),
                     .collected_rent = .init(random.int(u64)),
