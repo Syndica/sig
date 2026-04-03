@@ -813,6 +813,22 @@ test sendTransaction {
             }),
         );
     }
+
+    { // Preflight failure (skipPreflight = false, corrupted signature)
+        var bad_tx_bytes = tx_bytes;
+        bad_tx_bytes[1] ^= 0xFF; // Corrupt first byte of signature
+        var encode_buf_64: [std.base64.standard.Encoder.calcSize(bad_tx_bytes.len)]u8 = undefined;
+        const encoded_64 = std.base64.standard.Encoder.encode(&encode_buf_64, &bad_tx_bytes);
+        const result = try ctx.sendTransaction(arena, .{
+            .transaction = encoded_64,
+            .config = .{
+                .encoding = .base64,
+                // skipPreflight defaults to false; verify() fails → preflight_failure
+            },
+        });
+        try std.testing.expect(result == .preflight_failure);
+        try std.testing.expectEqual(TransactionError.SignatureFailure, result.preflight_failure.err);
+    }
 }
 
 test simulateTransaction {
@@ -915,6 +931,88 @@ test simulateTransaction {
                 .config = .{
                     .replaceRecentBlockhash = true,
                     .sigVerify = true,
+                },
+            }),
+        );
+    }
+
+    // Corrupt the signature so verify() fails, allowing us to test the response
+    // building code paths without needing a fully initialized runtime.
+    var bad_tx_bytes = tx_bytes;
+    bad_tx_bytes[1] ^= 0xFF;
+    var encode_buf_64: [std.base64.standard.Encoder.calcSize(bad_tx_bytes.len)]u8 = undefined;
+    const encoded_64 = std.base64.standard.Encoder.encode(&encode_buf_64, &bad_tx_bytes);
+
+    { // sigVerify failure builds full response
+        const result = try ctx.simulateTransaction(arena, .{
+            .transaction = encoded_64,
+            .config = .{
+                .sigVerify = true,
+                .encoding = .base64,
+                .innerInstructions = true,
+            },
+        });
+        try std.testing.expectEqual(@as(u64, 0), result.context.slot);
+        try std.testing.expectEqual(TransactionError.SignatureFailure, result.value.err.?);
+        try std.testing.expectEqual(@as(?u64, 0), result.value.unitsConsumed);
+        try std.testing.expectEqual(@as(?u64, null), result.value.fee);
+        try std.testing.expect(result.value.accounts == null);
+        try std.testing.expect(result.value.innerInstructions == null);
+        try std.testing.expect(result.value.returnData == null);
+        try std.testing.expect(result.value.replacementBlockhash == null);
+        // Loaded addresses should be empty for legacy tx (no ALTs)
+        const la = result.value.loadedAddresses.?;
+        try std.testing.expectEqual(@as(usize, 0), la.writable.len);
+        try std.testing.expectEqual(@as(usize, 0), la.readonly.len);
+    }
+
+    { // sigVerify failure with accounts config returns nulls
+        const result = try ctx.simulateTransaction(arena, .{
+            .transaction = encoded_64,
+            .config = .{
+                .sigVerify = true,
+                .encoding = .base64,
+                .accounts = .{
+                    .addresses = &.{Pubkey.ZEROES},
+                },
+            },
+        });
+        try std.testing.expect(result.value.err != null);
+        const accounts = result.value.accounts.?;
+        try std.testing.expectEqual(@as(usize, 1), accounts.len);
+        try std.testing.expect(accounts[0] == null);
+    }
+
+    { // accounts config with base58 encoding returns InvalidParams
+        try std.testing.expectError(
+            error.InvalidParams,
+            ctx.simulateTransaction(arena, .{
+                .transaction = encoded_64,
+                .config = .{
+                    .sigVerify = true,
+                    .encoding = .base64,
+                    .accounts = .{
+                        .encoding = .base58,
+                        .addresses = &.{Pubkey.ZEROES},
+                    },
+                },
+            }),
+        );
+    }
+
+    { // accounts config with too many addresses returns InvalidParams
+        const many_addresses = try arena.alloc(Pubkey, 200);
+        @memset(many_addresses, Pubkey.ZEROES);
+        try std.testing.expectError(
+            error.InvalidParams,
+            ctx.simulateTransaction(arena, .{
+                .transaction = encoded_64,
+                .config = .{
+                    .sigVerify = true,
+                    .encoding = .base64,
+                    .accounts = .{
+                        .addresses = many_addresses,
+                    },
                 },
             }),
         );
