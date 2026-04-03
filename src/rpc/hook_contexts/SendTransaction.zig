@@ -3,13 +3,13 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 const base58 = @import("base58");
 const methods = @import("../methods.zig");
-const parse_instruction = @import("../parse_instruction/lib.zig");
 
 const Allocator = std.mem.Allocator;
 const Base64Decoder = std.base64.standard.Decoder;
 const Channel = sig.sync.Channel;
 const CommitmentTracker = sig.replay.trackers.CommitmentTracker;
 const EpochTracker = sig.core.EpochTracker;
+const FallbackAccountReader = sig.replay.Committer.FallbackAccountReader;
 const GetAccountInfo = methods.GetAccountInfo;
 const GetBlock = methods.GetBlock;
 const GetLatestBlockhashValue = methods.GetLatestBlockhash.Response.Value;
@@ -37,6 +37,7 @@ const computeBudgetExecute = sig.runtime.program.compute_budget.execute;
 const getDurableNonce = sig.runtime.check_transactions.getDurableNonce;
 const getSysvarFromAccount = sig.replay.update_sysvar.getSysvarFromAccount;
 const resolveTransaction = sig.replay.resolve_lookup.resolveTransaction;
+const executeTransaction = sig.replay.svm_gateway.executeTransaction;
 
 /// Analogous to [MAX_BASE58_SIZE](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4341)
 const MAX_BASE58_SIZE: usize = 1683;
@@ -253,19 +254,18 @@ pub fn simulateTransaction(
 
     // Convert inner instructions if requested.
     // [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4076-L4080
-    const inner_instructions: ?[]const parse_instruction.UiInnerInstructions =
-        if (config.innerInstructions)
-            if (simulation_result.inner_instructions) |iis|
-                try convertInnerInstructions(arena, iis)
-            else
-                null
+    const inner_instructions = if (config.innerInstructions)
+        if (simulation_result.inner_instructions) |iis|
+            try GetBlock.Response.UiInnerInstructions.fromLedger(arena, iis)
         else
-            null;
+            null
+    else
+        null;
 
     // Convert return data to UI format (base64 encode).
-    const return_data: ?GetBlock.Response.UiTransactionReturnData =
+    const return_data =
         if (simulation_result.return_data) |rd|
-            try convertReturnDataToUi(arena, rd)
+            try GetBlock.Response.UiTransactionReturnData.fromLedger(arena, rd)
         else
             null;
 
@@ -545,46 +545,6 @@ fn getSimulatedAccount(
     return .from(account, data);
 }
 
-/// Convert ledger InnerInstructions to RPC UiInnerInstructions.
-/// [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4076-L4080
-fn convertInnerInstructions(
-    arena: Allocator,
-    inner_instructions: []const InnerInstructions,
-) ![]const parse_instruction.UiInnerInstructions {
-    const result = try arena.alloc(parse_instruction.UiInnerInstructions, inner_instructions.len);
-    for (inner_instructions, 0..) |ii, i| {
-        const instructions = try arena.alloc(parse_instruction.UiInstruction, ii.instructions.len);
-        for (ii.instructions, 0..) |inner_ix, j| {
-            const data_str = data: {
-                var buf = try arena.alloc(u8, base58.encodedMaxSize(inner_ix.instruction.data.len));
-                break :data buf[0..base58.Table.BITCOIN.encode(buf, inner_ix.instruction.data)];
-            };
-            instructions[j] = .{ .compiled = .{
-                .programIdIndex = inner_ix.instruction.program_id_index,
-                .accounts = try arena.dupe(u8, inner_ix.instruction.accounts),
-                .data = data_str,
-                .stackHeight = inner_ix.stack_height,
-            } };
-        }
-        result[i] = .{ .index = ii.index, .instructions = instructions };
-    }
-    return result;
-}
-
-/// Convert ledger TransactionReturnData to RPC UiTransactionReturnData (base64 encoded).
-fn convertReturnDataToUi(
-    arena: Allocator,
-    rd: TransactionReturnData,
-) !GetBlock.Response.UiTransactionReturnData {
-    const encoded_len = std.base64.standard.Encoder.calcSize(rd.data.len);
-    const base64_data = try arena.alloc(u8, encoded_len);
-    _ = std.base64.standard.Encoder.encode(base64_data, rd.data);
-    return .{
-        .programId = rd.program_id,
-        .data = .{ base64_data, .base64 },
-    };
-}
-
 /// Extract loaded addresses (ALT-resolved writable/readonly) from the resolved transaction.
 /// The RuntimeTransaction accounts are ordered: [static keys] ++ [writable lookups] ++ [readonly lookups].
 /// [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4102
@@ -625,8 +585,8 @@ fn resolveAndConvertTokenBalances(
     raw_balances: ProcessedTransaction.PreTokenBalances,
     post_simulation_accounts: ProcessedTransaction.Writes,
     slot_reader: SlotAccountReader,
-) !?[]const GetBlock.Response.UiTransactionTokenBalance {
-    if (raw_balances.len == 0) return null;
+) !?GetBlock.Response.UiTransactionTokenBalances {
+    if (raw_balances.len == 0) return .{};
 
     const spl_token = sig.runtime.spl_token;
 
@@ -643,82 +603,22 @@ fn resolveAndConvertTokenBalances(
         }
     }
 
-    const mint_reader = SimulationFallbackAccountReader{
+    const mint_reader = FallbackAccountReader{
         .writes = post_simulation_accounts.constSlice(),
-        .slot_reader = slot_reader,
+        .account_store_reader = slot_reader,
     };
 
     const resolved = spl_token.resolveTokenBalances(
         arena,
         raw_balances,
         &mint_cache,
-        SimulationFallbackAccountReader,
+        FallbackAccountReader,
         mint_reader,
     ) catch return null;
     const balances = resolved orelse return null;
 
-    const result = try arena.alloc(GetBlock.Response.UiTransactionTokenBalance, balances.len);
-    for (balances, 0..) |b, i| {
-        result[i] = .{
-            .accountIndex = b.account_index,
-            .mint = b.mint,
-            .owner = b.owner,
-            .programId = b.program_id,
-            .uiTokenAmount = .{
-                .amount = b.ui_token_amount.amount,
-                .decimals = b.ui_token_amount.decimals,
-                .uiAmount = b.ui_token_amount.ui_amount,
-                .uiAmountString = b.ui_token_amount.ui_amount_string,
-            },
-        };
-    }
-    return result;
+    return try GetBlock.Response.UiTransactionTokenBalances.fromLedger(arena, balances);
 }
-
-/// Account reader that checks post-simulation writes first, then falls back to the
-/// SlotAccountReader for mint accounts not modified by the simulation.
-/// Returns a StubAccount with a `.data.constSlice()` interface that
-/// spl_token.getMintDecimals expects.
-const SimulationFallbackAccountReader = struct {
-    writes: []const sig.runtime.account_loader.LoadedAccount,
-    slot_reader: SlotAccountReader,
-
-    const StubAccount = struct {
-        data: DataHandle,
-
-        const DataHandle = struct {
-            slice: []const u8,
-
-            pub fn constSlice(self: DataHandle) []const u8 {
-                return self.slice;
-            }
-        };
-
-        pub fn deinit(self: StubAccount, allocator: Allocator) void {
-            allocator.free(self.data.slice);
-        }
-    };
-
-    pub fn get(
-        self: SimulationFallbackAccountReader,
-        allocator: Allocator,
-        pubkey: Pubkey,
-    ) !?StubAccount {
-        // Check post-simulation writes first.
-        for (self.writes) |*account| {
-            if (account.pubkey.equals(&pubkey)) {
-                const data_copy = try allocator.dupe(u8, account.account.data);
-                return StubAccount{ .data = .{ .slice = data_copy } };
-            }
-        }
-
-        // Fall back to bank state.
-        const account = try self.slot_reader.get(allocator, pubkey) orelse return null;
-        defer account.deinit(allocator);
-        const data_copy = try account.data.readAllAllocate(allocator);
-        return StubAccount{ .data = .{ .slice = data_copy } };
-    }
-};
 
 test "decodeAndDeserialize: base64 encoding succeeds" {
     const tx_bytes = sig.core.transaction.transaction_legacy_example.as_bytes;

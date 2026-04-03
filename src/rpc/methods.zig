@@ -657,17 +657,17 @@ pub const GetBlock = struct {
             fee: u64,
             preBalances: []const u64,
             postBalances: []const u64,
-            innerInstructions: JsonSkippable([]const parse_instruction.UiInnerInstructions) = .{
-                .value = &.{},
+            innerInstructions: JsonSkippable(UiInnerInstructions) = .{
+                .value = .{},
             },
             logMessages: JsonSkippable([]const []const u8) = .{
                 .value = &.{},
             },
-            preTokenBalances: JsonSkippable([]const UiTransactionTokenBalance) = .{
-                .value = &.{},
+            preTokenBalances: JsonSkippable(UiTransactionTokenBalances) = .{
+                .value = .{},
             },
-            postTokenBalances: JsonSkippable([]const UiTransactionTokenBalance) = .{
-                .value = &.{},
+            postTokenBalances: JsonSkippable(UiTransactionTokenBalances) = .{
+                .value = .{},
             },
             rewards: JsonSkippable([]const UiReward) = .{ .value = &.{} },
             loadedAddresses: JsonSkippable(UiLoadedAddresses) = .skip,
@@ -723,6 +723,46 @@ pub const GetBlock = struct {
             }
         };
 
+        pub const UiInnerInstructions = struct {
+            inner: []const parse_instruction.UiInnerInstructions = &.{},
+
+            /// Convert ledger InnerInstructions to RPC UiInnerInstructions (base58 encoding instruction data).
+            pub fn fromLedger(
+                arena: std.mem.Allocator,
+                inner_instructions: []const sig.ledger.transaction_status.InnerInstructions,
+            ) !UiInnerInstructions {
+                const result = try arena.alloc(
+                    parse_instruction.UiInnerInstructions,
+                    inner_instructions.len,
+                );
+                for (inner_instructions, 0..) |ii, i| {
+                    const instructions = try arena.alloc(
+                        parse_instruction.UiInstruction,
+                        ii.instructions.len,
+                    );
+                    for (ii.instructions, 0..) |inner_ix, j| {
+                        const data_str = blk: {
+                            const ix_data = inner_ix.instruction.data;
+                            var buf = try arena.alloc(u8, base58.encodedMaxSize(ix_data.len));
+                            break :blk buf[0..base58.Table.BITCOIN.encode(buf, ix_data)];
+                        };
+                        instructions[j] = .{ .compiled = .{
+                            .programIdIndex = inner_ix.instruction.program_id_index,
+                            .accounts = try arena.dupe(u8, inner_ix.instruction.accounts),
+                            .data = data_str,
+                            .stackHeight = inner_ix.stack_height,
+                        } };
+                    }
+                    result[i] = .{ .index = ii.index, .instructions = instructions };
+                }
+                return .{ .inner = result };
+            }
+
+            pub fn jsonStringify(self: UiInnerInstructions, jw: anytype) !void {
+                try jw.write(self.inner);
+            }
+        };
+
         /// Transaction result status for RPC compatibility.
         /// Serializes as `{"Ok": null}` on success or `{"Err": <error>}` on failure.
         pub const UiTransactionResultStatus = struct {
@@ -739,6 +779,37 @@ pub const GetBlock = struct {
                     try jw.write(null);
                 }
                 try jw.endObject();
+            }
+        };
+
+        pub const UiTransactionTokenBalances = struct {
+            inner: []const UiTransactionTokenBalance = &.{},
+
+            /// Convert resolved TransactionTokenBalance slice to RPC UiTransactionTokenBalance wire format.
+            pub fn fromLedger(
+                arena: std.mem.Allocator,
+                balances: []const sig.ledger.transaction_status.TransactionTokenBalance,
+            ) !UiTransactionTokenBalances {
+                const result = try arena.alloc(UiTransactionTokenBalance, balances.len);
+                for (balances, 0..) |b, i| {
+                    result[i] = .{
+                        .accountIndex = b.account_index,
+                        .mint = b.mint,
+                        .owner = b.owner,
+                        .programId = b.program_id,
+                        .uiTokenAmount = .{
+                            .amount = try arena.dupe(u8, b.ui_token_amount.amount),
+                            .decimals = b.ui_token_amount.decimals,
+                            .uiAmount = b.ui_token_amount.ui_amount,
+                            .uiAmountString = try arena.dupe(u8, b.ui_token_amount.ui_amount_string),
+                        },
+                    };
+                }
+                return .{ .inner = result };
+            }
+
+            pub fn jsonStringify(self: UiTransactionTokenBalances, jw: anytype) !void {
+                try jw.write(self.inner);
             }
         };
 
@@ -812,6 +883,20 @@ pub const GetBlock = struct {
         pub const UiTransactionReturnData = struct {
             programId: Pubkey,
             data: struct { []const u8, enum { base64 } },
+
+            /// Convert ledger TransactionReturnData to RPC UiTransactionReturnData (base64 encoded).
+            pub fn fromLedger(
+                arena: std.mem.Allocator,
+                data: sig.ledger.transaction_status.TransactionReturnData,
+            ) !UiTransactionReturnData {
+                const encoded_len = std.base64.standard.Encoder.calcSize(data.data.len);
+                const base64_data = try arena.alloc(u8, encoded_len);
+                _ = std.base64.standard.Encoder.encode(base64_data, data.data);
+                return .{
+                    .programId = data.program_id,
+                    .data = .{ base64_data, .base64 },
+                };
+            }
 
             pub fn jsonStringify(self: UiTransactionReturnData, jw: anytype) !void {
                 try jw.beginObject();
@@ -1937,13 +2022,13 @@ pub const SimulateTransaction = struct {
             unitsConsumed: ?u64 = null,
             loadedAccountsDataSize: ?u32 = null,
             returnData: ?GetBlock.Response.UiTransactionReturnData = null,
-            innerInstructions: ?[]const parse_instruction.UiInnerInstructions = null,
+            innerInstructions: ?GetBlock.Response.UiInnerInstructions = null,
             replacementBlockhash: ?GetLatestBlockhash.Response.Value = null,
             fee: ?u64 = null,
             preBalances: ?[]const u64 = null,
             postBalances: ?[]const u64 = null,
-            preTokenBalances: ?[]const GetBlock.Response.UiTransactionTokenBalance = null,
-            postTokenBalances: ?[]const GetBlock.Response.UiTransactionTokenBalance = null,
+            preTokenBalances: ?GetBlock.Response.UiTransactionTokenBalances = null,
+            postTokenBalances: ?GetBlock.Response.UiTransactionTokenBalances = null,
             loadedAddresses: ?GetBlock.Response.UiLoadedAddresses = null,
         },
     };
