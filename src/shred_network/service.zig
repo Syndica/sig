@@ -291,8 +291,8 @@ test "start and stop gracefully" {
 
     const config: ShredNetworkConfig = .{
         .root_slot = 0,
-        .repair_port = 50304,
-        .turbine_recv_port = 50305,
+        .repair_port = 0,
+        .turbine_recv_port = 0,
         .retransmit = true,
         .dump_shred_tracker = false,
         .log_finished_slots = false,

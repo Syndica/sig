@@ -648,7 +648,7 @@ fn maybeEnqueueFinalSignatureNotification(
         return;
     }
 
-    const commitment_slot = self.slot_read_ctx.slot_tracker.commitments.get(params.commitment);
+    const commitment_slot = self.slot_read_ctx.commitments.get(params.commitment);
     const slot_ref = self.slot_read_ctx.slot_tracker.get(commitment_slot) orelse return;
     defer slot_ref.release();
 
@@ -700,7 +700,7 @@ fn initializeAccountSubscriptionEntry(
     entry: *sub_map_mod.MapEntry,
 ) void {
     const params = entry.key.params.account;
-    const slot = self.slot_read_ctx.slot_tracker.commitments.get(switch (params.commitment) {
+    const slot = self.slot_read_ctx.commitments.get(switch (params.commitment) {
         .processed => .processed,
         .confirmed => .confirmed,
         .finalized => .finalized,
@@ -1180,6 +1180,9 @@ test "releasePayload frees payloads on the threadpool" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
     var event_sink = try types.EventSink.create(allocator);
     defer event_sink.destroy();
 
@@ -1189,6 +1192,7 @@ test "releasePayload frees payloads on the threadpool" {
     var metrics = metrics_mod.Metrics{};
     const slot_read_ctx: SlotReadContext = .{
         .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
         .account_reader = .noop,
         .status_cache = &status_cache,
     };
@@ -1242,6 +1246,9 @@ test "shutdown times out while runtime tasks remain unfinished" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
     var event_sink = try types.EventSink.create(allocator);
     defer event_sink.destroy();
 
@@ -1251,6 +1258,7 @@ test "shutdown times out while runtime tasks remain unfinished" {
     var metrics = metrics_mod.Metrics{};
     const slot_read_ctx: SlotReadContext = .{
         .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
         .account_reader = .noop,
         .status_cache = &status_cache,
     };
@@ -1305,6 +1313,9 @@ test "handleCommitMsg drops payload for removed queue" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
     var event_sink = try types.EventSink.create(allocator);
     defer event_sink.destroy();
 
@@ -1314,6 +1325,7 @@ test "handleCommitMsg drops payload for removed queue" {
     var metrics = metrics_mod.Metrics{};
     const slot_read_ctx: SlotReadContext = .{
         .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
         .account_reader = .noop,
         .status_cache = &status_cache,
     };
@@ -1386,6 +1398,9 @@ test "handleCommitMsg ignores serialize error for removed queue" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
 
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
     var event_sink = try types.EventSink.create(allocator);
     defer event_sink.destroy();
 
@@ -1395,6 +1410,7 @@ test "handleCommitMsg ignores serialize error for removed queue" {
     var metrics = metrics_mod.Metrics{};
     const slot_read_ctx: SlotReadContext = .{
         .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
         .account_reader = .noop,
         .status_cache = &status_cache,
     };
@@ -1464,12 +1480,16 @@ test "handleReceivedSignaturesEvent skips received notifications once final is q
     var event_sink = try types.EventSink.create(allocator);
     defer event_sink.destroy();
 
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
     var status_cache: sig.core.StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
     var metrics = metrics_mod.Metrics{};
     const slot_read_ctx: SlotReadContext = .{
         .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
         .account_reader = .noop,
         .status_cache = &status_cache,
     };

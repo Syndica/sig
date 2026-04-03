@@ -80,6 +80,7 @@ pub const TestServer = struct {
     account_db: sig.accounts_db.Db.TestContext,
     slot_tracker: sig.replay.trackers.SlotTracker,
     status_cache: sig.core.StatusCache,
+    commitments: sig.replay.trackers.CommitmentTracker,
     ctx: Runtime,
     server: WebSocketServer,
     port: u16,
@@ -116,8 +117,12 @@ pub const TestServer = struct {
         self.status_cache = .DEFAULT;
         errdefer self.status_cache.deinit(allocator);
 
+        self.commitments = .init(allocator, 0);
+        errdefer self.commitments.deinit(allocator);
+
         const slot_read_ctx: SlotReadContext = .{
             .slot_tracker = &self.slot_tracker,
+            .commitments = &self.commitments,
             .account_reader = .{ .accounts_db = &self.account_db.db },
             .status_cache = &self.status_cache,
         };
@@ -211,6 +216,7 @@ pub const TestServer = struct {
         self.ctx.shutdown(runtime_shutdown_timeout_ms) catch unreachable;
         self.ctx.deinit();
         self.status_cache.deinit(allocator);
+        self.commitments.deinit(allocator);
         self.slot_tracker.deinit(allocator);
         self.account_db.deinit();
         self.sub_map.deinit();
@@ -276,6 +282,7 @@ pub const IntegratedTestServer = struct {
     account_db: sig.accounts_db.Db.TestContext,
     slot_tracker: sig.replay.trackers.SlotTracker,
     status_cache: sig.core.StatusCache,
+    commitments: sig.replay.trackers.CommitmentTracker,
     ctx: Runtime,
     ws_server: WebSocketServer,
     pending_connections: Channel(PendingConnection),
@@ -318,8 +325,12 @@ pub const IntegratedTestServer = struct {
         self.status_cache = .DEFAULT;
         errdefer self.status_cache.deinit(allocator);
 
+        self.commitments = .init(allocator, 0);
+        errdefer self.commitments.deinit(allocator);
+
         const slot_read_ctx: SlotReadContext = .{
             .slot_tracker = &self.slot_tracker,
+            .commitments = &self.commitments,
             .account_reader = .{ .accounts_db = &self.account_db.db },
             .status_cache = &self.status_cache,
         };
@@ -468,6 +479,7 @@ pub const IntegratedTestServer = struct {
         self.ctx.shutdown(runtime_shutdown_timeout_ms) catch unreachable;
         self.ctx.deinit();
         self.status_cache.deinit(allocator);
+        self.commitments.deinit(allocator);
         self.slot_tracker.deinit(allocator);
         self.account_db.deinit();
         self.sub_map.deinit();

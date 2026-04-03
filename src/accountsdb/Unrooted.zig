@@ -108,7 +108,7 @@ pub const AccountWithModifiedSlot = struct {
 /// 2. Re-lock the winning index and clone once.
 ///
 /// If the winning index was modified between phases (e.g. pruned by
-/// `onSlotRooted`), the scan is retried. Retries are bounded to avoid
+/// `updateRoot`), the scan is retried. Retries are bounded to avoid
 /// unbounded looping. If exhausted, returns `error.UnrootedGetOwnedMaxRetries`
 /// because the account exists but could not be read.
 pub fn getWithModifiedSlotOwned(

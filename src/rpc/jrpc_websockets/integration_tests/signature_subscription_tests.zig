@@ -231,7 +231,7 @@ test "signatureSubscribe received notification ignores commitment and does not a
     try addTrackedSlot(server, 55, 0, &.{55});
     try addTrackedSlot(server, 56, 55, &.{ 55, 56 });
     try insertSignatureStatus(server, 55, Hash.ZEROES, signature, null);
-    server.slot_tracker.commitments.update(.finalized, 56);
+    server.commitments.update(.finalized, 56);
     server.injectEvent(.{ .slot_frozen = .{ .slot = 56, .parent = 55, .root = 0 } });
     server.injectEvent(.{ .slot_rooted = 56 });
 
@@ -317,7 +317,7 @@ test "signatureSubscribe orders received before final and auto-unsubscribes afte
     waitForMessages(server, &client_env, &handler, 1, 5000);
     const sub_id = try mustParseSubId(handler.received.items[0]);
 
-    server.slot_tracker.commitments.update(.processed, 71);
+    server.commitments.update(.processed, 71);
     server.injectEvent(try makeReceivedSignaturesEvent(allocator, 70, &.{signature}));
     server.injectEvent(.{ .slot_frozen = .{ .slot = 71, .parent = 70, .root = 0 } });
     server.injectEvent(.{ .tip_changed = 71 });
@@ -401,7 +401,7 @@ test "signatureSubscribe final notifications honor processed confirmed and final
     const confirmed_sub_id = try mustParseSubId(handler.received.items[1]);
     const finalized_sub_id = try mustParseSubId(handler.received.items[2]);
 
-    server.slot_tracker.commitments.update(.processed, 80);
+    server.commitments.update(.processed, 80);
     server.injectEvent(.{ .slot_frozen = .{ .slot = 80, .parent = 0, .root = 0 } });
     server.injectEvent(.{ .tip_changed = 80 });
 
@@ -411,7 +411,7 @@ test "signatureSubscribe final notifications honor processed confirmed and final
     try expectFinalNotificationNullErr(processed_notif.value, 80, processed_sub_id);
 
     try std.testing.expectEqual(4, handler.received.items.len);
-    server.slot_tracker.commitments.update(.confirmed, 81);
+    server.commitments.update(.confirmed, 81);
     server.injectEvent(.{ .slot_frozen = .{ .slot = 81, .parent = 80, .root = 0 } });
     server.injectEvent(.{ .slot_confirmed = 81 });
 
@@ -421,7 +421,7 @@ test "signatureSubscribe final notifications honor processed confirmed and final
     try expectFinalNotificationNullErr(confirmed_notif.value, 81, confirmed_sub_id);
 
     try std.testing.expectEqual(5, handler.received.items.len);
-    server.slot_tracker.commitments.update(.finalized, 82);
+    server.commitments.update(.finalized, 82);
     server.injectEvent(.{ .slot_frozen = .{ .slot = 82, .parent = 81, .root = 0 } });
     server.injectEvent(.{ .slot_rooted = 82 });
 
@@ -469,7 +469,7 @@ test "signatureSubscribe already-landed signatures notify asynchronously and sup
     waitForMessages(server, &client_env, &handler, 1, 5000);
     const sub_id = try mustParseSubId(handler.received.items[0]);
 
-    server.slot_tracker.commitments.update(.processed, 91);
+    server.commitments.update(.processed, 91);
     server.injectEvent(.{ .slot_frozen = .{ .slot = 91, .parent = 90, .root = 0 } });
     server.injectEvent(.{ .tip_changed = 91 });
     server.injectEvent(.{ .tip_changed = 91 });

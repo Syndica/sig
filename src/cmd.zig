@@ -1751,6 +1751,7 @@ fn validator(
     if (rpc_enabled) {
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .commitments = &replay_service_state.replay_state.commitments.?,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
             .epoch_tracker = &epoch_tracker,
@@ -1761,13 +1762,14 @@ fn validator(
             .epoch_tracker = &epoch_tracker,
             .status_cache = &replay_service_state.replay_state.status_cache,
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-            .block_commitment_cache = &replay_service_state.replay_state.block_commitment_cache.?,
+            .commitments = &replay_service_state.replay_state.commitments.?,
             .max_retransmit_slot = &max_retransmit_slot,
             .max_shred_insert_slot = &max_shred_insert_slot,
         });
 
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .commitments = &replay_service_state.replay_state.commitments.?,
             .account_reader = replay_service_state.replay_state.account_store.reader(),
         });
 
@@ -1829,6 +1831,7 @@ fn validator(
             .account_store = .{ .accounts_db = &new_db },
             .epoch_tracker = &epoch_tracker,
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .commitments = &replay_service_state.replay_state.commitments.?,
             .status_cache = &replay_service_state.replay_state.status_cache,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
         },
@@ -1875,6 +1878,7 @@ fn validator(
             std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
             &app_base.rpc_hooks,
             &replay_service_state.replay_state.slot_tracker,
+            &replay_service_state.replay_state.commitments.?,
             replay_service_state.replay_state.account_store.reader(),
             &replay_service_state.replay_state.status_cache,
             event_sink.?,
@@ -1897,6 +1901,7 @@ fn runRPCServer(
     server_addr: std.net.Address,
     rpc_hooks: *sig.rpc.Hooks,
     slot_tracker: *sig.replay.trackers.SlotTracker,
+    commitments: *sig.replay.trackers.CommitmentTracker,
     account_reader: sig.accounts_db.AccountReader,
     status_cache: *sig.core.StatusCache,
     event_sink: *jrpc_ws.types.EventSink,
@@ -1926,6 +1931,7 @@ fn runRPCServer(
 
     const slot_read_ctx: jrpc_ws.Runtime.SlotReadContext = .{
         .slot_tracker = slot_tracker,
+        .commitments = commitments,
         .account_reader = account_reader,
         .status_cache = status_cache,
     };
@@ -2272,6 +2278,7 @@ fn replayOffline(
     if (rpc_enabled) {
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .commitments = &replay_service_state.replay_state.commitments.?,
             .gossip_table_rw = null,
             .my_shred_version = null,
             .epoch_tracker = &epoch_tracker,
@@ -2282,11 +2289,12 @@ fn replayOffline(
             .epoch_tracker = &epoch_tracker,
             .status_cache = &replay_service_state.replay_state.status_cache,
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-            .block_commitment_cache = &replay_service_state.replay_state.block_commitment_cache.?,
+            .commitments = &replay_service_state.replay_state.commitments.?,
         });
 
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .commitments = &replay_service_state.replay_state.commitments.?,
             .account_reader = replay_service_state.replay_state.account_store.reader(),
         });
 
@@ -2311,6 +2319,7 @@ fn replayOffline(
             std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
             &app_base.rpc_hooks,
             &replay_service_state.replay_state.slot_tracker,
+            &replay_service_state.replay_state.commitments.?,
             replay_service_state.replay_state.account_store.reader(),
             &replay_service_state.replay_state.status_cache,
             event_sink.?,
@@ -3231,7 +3240,7 @@ const ReplayAndConsensusServiceState = struct {
             .{
                 &self.replay_state,
                 self.metrics,
-                if (self.consensus) |*c| replay.service.AvanceReplayConsensusParams{
+                if (self.consensus) |*c| replay.service.AdvanceReplayConsensusParams{
                     .tower = &c.tower,
                     .gossip_votes = gossip_votes,
                     .senders = c.senders,
