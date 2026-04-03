@@ -814,3 +814,109 @@ test sendTransaction {
         );
     }
 }
+
+test simulateTransaction {
+    const allocator = std.testing.allocator;
+
+    var slot_tracker: SlotTracker = try .init(allocator, 0, .{
+        .constants = .{
+            .parent_slot = 0,
+            .parent_hash = .ZEROES,
+            .parent_lt_hash = .IDENTITY,
+            .block_height = 0,
+            .collector_id = .ZEROES,
+            .max_tick_height = 0,
+            .fee_rate_governor = .DEFAULT,
+            .ancestors = .{ .ancestors = .empty },
+            .feature_set = .ALL_DISABLED,
+            .reserved_accounts = .empty,
+            .inflation = .DEFAULT,
+            .rent_collector = .DEFAULT,
+        },
+        .state = .GENESIS,
+        .allocator = allocator,
+    });
+    defer slot_tracker.deinit(allocator);
+
+    const channel = try Channel(TransactionInfo).create(allocator);
+    defer channel.destroy();
+
+    var commitments = CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    var epoch_tracker = try EpochTracker.initForTest(allocator, std.crypto.random, 0, .INIT);
+    defer epoch_tracker.deinit();
+
+    var status_cache = StatusCache.DEFAULT;
+    errdefer status_cache.deinit(allocator);
+
+    const ctx: SendTransactionHookContext = .{
+        .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
+        .account_store = .noop,
+        .epoch_tracker = &epoch_tracker,
+        .status_cache = &status_cache,
+        .tx_svc_channel = channel,
+    };
+
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const tx_bytes = sig.core.transaction.transaction_legacy_example.as_bytes;
+    var encode_buf_58: [base58.encodedMaxSize(tx_bytes.len)]u8 = undefined;
+    const encoded_58_len = base58.Table.BITCOIN.encode(&encode_buf_58, &tx_bytes);
+    const encoded_58 = encode_buf_58[0..encoded_58_len];
+
+    { // Unsupported encoding
+        try std.testing.expectError(
+            error.UnsupportedEncoding,
+            ctx.simulateTransaction(arena, .{
+                .transaction = "anything",
+                .config = .{ .encoding = .json },
+            }),
+        );
+    }
+
+    { // Min context slot not met
+        try std.testing.expectError(
+            error.RpcMinContextSlotNotMet,
+            ctx.simulateTransaction(arena, .{
+                .transaction = encoded_58,
+                .config = .{ .minContextSlot = 1 },
+            }),
+        );
+    }
+
+    { // Slot not found
+        commitments.finalized.store(1, .monotonic);
+        commitments.confirmed.store(1, .monotonic);
+        commitments.processed.store(1, .monotonic);
+        defer {
+            commitments.finalized.store(0, .monotonic);
+            commitments.confirmed.store(0, .monotonic);
+            commitments.processed.store(0, .monotonic);
+        }
+
+        try std.testing.expectError(
+            error.SlotNotFound,
+            ctx.simulateTransaction(arena, .{
+                .transaction = encoded_58,
+                .config = .{ .commitment = .finalized },
+            }),
+        );
+    }
+
+    { // replaceRecentBlockhash + sigVerify conflict
+        try std.testing.expectError(
+            error.InvalidParams,
+            ctx.simulateTransaction(arena, .{
+                .transaction = encoded_58,
+                .config = .{
+                    .replaceRecentBlockhash = true,
+                    .sigVerify = true,
+                },
+            }),
+        );
+    }
+}
