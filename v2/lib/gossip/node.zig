@@ -18,6 +18,8 @@ const GossipData = lib.gossip.GossipData;
 const GossipValue = lib.gossip.GossipValue;
 const ContactInfo = lib.gossip.ContactInfo;
 const BloomFilter = lib.gossip.BloomFilter;
+const SlotAndHash = lib.gossip.SlotAndHash;
+const Address = lib.gossip.Address;
 
 pub fn GossipNode(comptime Effects: type) type {
     lib.util.assertInterface(Effects, struct {
@@ -43,6 +45,12 @@ pub fn GossipNode(comptime Effects: type) type {
         /// Signs gossip messages using the node identity
         pub fn sign(self: Effects, msg: []const u8) Signature {
             _ = .{ self, msg };
+            return undefined;
+        }
+
+        /// Notifies caller that a snapshot was discovered at an address
+        pub fn onSnapshot(self: Effects, slot_hash: SlotAndHash, rpc_address: Address) void {
+            _ = .{ self, slot_hash, rpc_address };
             return undefined;
         }
     });
@@ -425,7 +433,7 @@ pub fn GossipNode(comptime Effects: type) type {
                     var sign_buf: [Packet.len]u8 = undefined;
                     var sign_writer: std.Io.Writer = .fixed(&sign_buf);
                     try bincode.write(&sign_writer, .{
-                        .prefix = PRUNE_PREFIX.*,
+                        .prefix = bincode.Vec(u8){ .items = PRUNE_PREFIX },
                         .pubkey = prune.data.pubkey,
                         .prunes = prune.data.prunes,
                         .destination = prune.data.destination,
@@ -435,7 +443,7 @@ pub fn GossipNode(comptime Effects: type) type {
                     // Prune can be signed with or without prefix...
                     const sign_msg = sign_writer.buffered();
                     prune.data.signature.verify(&prune.from, sign_msg) catch {
-                        prune.data.signature.verify(&prune.from, sign_msg[PRUNE_PREFIX.len..]) catch {
+                        prune.data.signature.verify(&prune.from, sign_msg[8 + PRUNE_PREFIX.len..]) catch {
                             return error.InvalidPruneSignature;
                         };
                     };
@@ -914,14 +922,25 @@ pub fn GossipNode(comptime Effects: type) type {
 
         fn onDiscoveredValue(self: *Self, now: u64, key: Key, value: GossipValue) !void {
             if (!key.from.equals(&self.identity())) {
-                std.log.debug("Discovered {f}", .{key});
+                // std.log.debug("Discovered {f}", .{key});
 
+                var alloc_buf: [16 * 1024]u8 = undefined;
                 switch (value.data) {
                     .vote => {}, // TODO: send to consensus service
                     .lowest_slot => {}, // TODO: send to repair service
                     .epoch_slots => {}, // TODO: send to consensus service
                     .duplicate_shred => {}, // TODO: send to shred/consensus service
-                    .snapshot_hashes => {}, // TODO: send to snapshot service
+                    .snapshot_hashes => |s| {
+                        // SnapshotHashes arrived after ContactInfo
+                        if (try self.getTableValue(
+                            .{ .from = s.from, .tag = .contact_info, .index = 0 },
+                            &alloc_buf,
+                        )) |ci_value| {
+                            if (ci_value.data.contact_info.socket_map.get(.rpc)) |addr| {
+                                self.config.effects.onSnapshot(s.full, .fromNetAddress(addr));
+                            }
+                        }
+                    },
                     .contact_info => |ci| {
                         if (ci.socket_map.get(.gossip)) |addr| {
                             if (try self.getOrTrackPeer(now, ci.shred_version, addr, key.from)) |peer| {
@@ -930,9 +949,21 @@ pub fn GossipNode(comptime Effects: type) type {
                             }
                         }
 
+                        // ContactInfo arrived after SnapshotHashes
+                        if (ci.socket_map.get(.rpc)) |addr| {
+                            if (try self.getTableValue(
+                                .{ .from = ci.from, .tag = .snapshot_hashes, .index = 0 },
+                                &alloc_buf,
+                            )) |snapshot_value| {
+                                self.config.effects.onSnapshot(
+                                    snapshot_value.data.snapshot_hashes.full,
+                                    .fromNetAddress(addr),
+                                );
+                            }
+                        }
+
                         // TODO: if ci.socket_map.get(.serve_repair): send to repair service
                         // TODO: if ci.socket_map.get(.tpu_vote): send to consensus service
-                        // TODO: if ci.socket_map.get(.rpc): send to snapshot service
                     },
                     .restart_heaviest_fork, .restart_last_voted_fork => {}, // deprecated
                     inline else => |v| {
@@ -941,6 +972,13 @@ pub fn GossipNode(comptime Effects: type) type {
                     },
                 }
             }
+        }
+
+        fn getTableValue(self: *const Self, key: Key, alloc_buf: []u8) !?GossipValue {
+            const v = self.table.getPtr(key) orelse return null;
+            var fba = std.heap.FixedBufferAllocator.init(alloc_buf);
+            var reader: std.Io.Reader = .fixed(v.value[0..v.size]);
+            return try bincode.read(&fba, &reader, GossipValue);
         }
 
         fn addExpired(self: *Self, now: u64, hash: Hash) void {

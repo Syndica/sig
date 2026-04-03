@@ -53,41 +53,70 @@ fn mainInner(pairs: []const *Pair) !noreturn {
     while (true) {
         // send
         for (pairs, sockets[0..sockets_len]) |pair, sock| {
-            var it = pair.send.get(.reader);
-            defer it.markUsed();
+            var packet_reader = pair.send.get(.reader);
+            defer packet_reader.markUsed();
 
-            // TODO: use std.os.linux.sendmmsg
-            while (it.next()) |p| {
-                const bytes = try std.posix.sendto(
+            // TODO: buffer up std.os.linux.sendmmsg across multiple pairs
+            while (packet_reader.peek()) |p| {
+                const bytes = std.posix.sendmsg(
                     sock,
-                    p.data[0..p.size],
+                    &.{
+                        .name = &p.addr.any,
+                        .namelen = p.addr.getOsSockLen(),
+                        .iov = &.{ .{ .base = &p.data, .len = p.size } },
+                        .iovlen = 1,
+                        .control = null,
+                        .controllen = 0,
+                        .flags = 0,
+                    },
                     std.posix.MSG.NOSIGNAL,
-                    &p.addr.any,
-                    p.addr.getOsSockLen(),
-                );
+                ) catch |e| switch (e) {
+                    error.WouldBlock => break,
+                    else => |err| return err,
+                };
                 std.debug.assert(bytes == p.size);
+                _ = packet_reader.next();
             }
         }
 
         // recv
         for (pairs, sockets[0..sockets_len]) |pair, sock| {
-            var it = pair.recv.get(.writer);
-            defer it.markUsed();
+            var packet_writer = pair.recv.get(.writer);
+            defer packet_writer.markUsed();
 
-            // TODO: use std.os.linux.recvmmsg
-            while (it.peek()) |ptr| {
-                var addr_len: std.posix.socklen_t = @sizeOf(std.net.Address);
-                ptr.size = @intCast(std.posix.recvfrom(
+            // TODO: buffer std.os.linux.recvmmsg across multiple pairs.
+            while (packet_writer.peek()) |p| {
+                var iovecs: [1]std.posix.iovec = .{ .{ .base = &p.data, .len = p.data.len } };
+                var msg_hdr: std.posix.system.msghdr = .{
+                    .name = &p.addr.any,
+                    .namelen = @sizeOf(std.net.Address),
+                    .iov = &iovecs,
+                    .iovlen = iovecs.len,
+                    .control = null,
+                    .controllen = 0,
+                    .flags = 0,
+                };
+                // stdlib doesn't seem to have a nice wrapper for this
+                const rc = std.posix.system.recvmsg(
                     sock,
-                    &ptr.data,
-                    0,
-                    &ptr.addr.any,
-                    &addr_len,
-                ) catch |err| switch (err) {
-                    error.WouldBlock => break,
-                    else => |e| return e,
-                });
-                _ = it.next();
+                    &msg_hdr,
+                    std.posix.MSG.NOSIGNAL,
+                );
+                switch (std.posix.errno(rc)) {
+                    .SUCCESS => p.size = @intCast(rc),
+                    .INTR => continue, // try again
+                    .AGAIN => break,
+                    .BADF => unreachable, // invalid sock fd (never invalidated)
+                    .CONNREFUSED => unreachable, // invalid connection (a datagram socket)
+                    .FAULT => unreachable, // invalid packet/msghdr/iov ptr (valid buffers)
+                    .INVAL => unreachable, // invalid argument somewhere (?)
+                    .NOMEM => return error.OutOfMemory,
+                    else => |errno| {
+                        std.log.err("recvmsg() = {}", .{errno});
+                        return error.Unexpected;
+                    },
+                }
+                _ = packet_writer.next();
             }
         }
     }

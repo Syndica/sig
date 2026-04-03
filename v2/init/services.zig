@@ -180,12 +180,20 @@ pub const Region = union(enum) {
         schedule_string: *std.Io.Reader,
         shred_version: u16,
     },
+    snapshot_queue: void,
+    accounts_db_config: struct {
+        folder: []const u8,
+        min_snapshot_download_speed_mb: u64,
+        min_snapshot_download_warmup_ns: u64,
+    },
 
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(lib.net.Pair),
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
+            .snapshot_queue => @sizeOf(lib.gossip.SnapshotQueue),
+            .accounts_db_config => @sizeOf(lib.accounts_db.Config),
         };
     }
 
@@ -218,6 +226,24 @@ pub const Region = union(enum) {
                     cfg.schedule_string,
                 );
                 data.shred_version = cfg.shred_version;
+            },
+            .snapshot_queue => {
+                std.debug.assert(buf.len == @sizeOf(lib.gossip.SnapshotQueue));
+                const data: *lib.gossip.SnapshotQueue = @ptrCast(buf);
+
+                data.incoming.init();
+                data.outgoing.init();
+            },
+            .accounts_db_config => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.Config));
+                const data: *lib.accounts_db.Config = @ptrCast(buf);
+
+                data.folder_path_len = std.math.cast(u8, cfg.folder.len) orelse
+                    return error.FolderPathTooLong;
+                @memcpy(data.folder_path[0..cfg.folder.len], cfg.folder);
+
+                data.min_snapshot_download_speed_mb = cfg.min_snapshot_download_speed_mb;
+                data.min_snapshot_download_warmup_ns = cfg.min_snapshot_download_warmup_ns;
             },
         };
     }
