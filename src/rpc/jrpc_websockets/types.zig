@@ -37,6 +37,7 @@ pub const SubscriptionKind = enum {
     root,
     signature,
     slot,
+    slots_updates,
 };
 
 /// Canonicalized subscription request key: subscription kind + kind-specific parameters.
@@ -57,6 +58,7 @@ pub const SubReqKey = struct {
         root: void,
         signature: SignatureParams,
         slot: void,
+        slots_updates: void,
     };
 
     pub const AccountParams = struct {
@@ -129,7 +131,7 @@ pub const SubReqKey = struct {
                     dataSliceEql(pa.data_slice, pb.data_slice) and
                     programFiltersEql(pa.filters, pb.filters);
             },
-            .root, .slot => return true,
+            .root, .slot, .slots_updates => return true,
             .signature => |pa| {
                 const pb = b.params.signature;
                 return std.mem.eql(u8, &pa.sig_value.r, &pb.sig_value.r) and
@@ -292,6 +294,10 @@ pub const SubReqKey = struct {
                 .method = .slot,
                 .params = .{ .slot = {} },
             },
+            .slotsUpdatesSubscribe => .{
+                .method = .slots_updates,
+                .params = .{ .slots_updates = {} },
+            },
             else => null,
         };
     }
@@ -395,6 +401,7 @@ pub const SlotFrozenEvent = struct {
     slot: u64,
     parent: u64,
     root: u64,
+    stats: SlotTransactionStats = .{},
     accounts: SlotModifiedAccounts = SlotModifiedAccounts.empty(),
     /// Block-level metadata populated at freeze time.
     blockhash: sig.core.Hash = .ZEROES,
@@ -414,6 +421,10 @@ pub const InboundEvent = union(enum) {
     slot_confirmed: u64,
     slot_rooted: u64,
     tip_changed: u64,
+    slot_dead: SlotDeadEvent,
+    first_shred_received: u64,
+    slot_completed: u64,
+    bank_created: BankCreatedEvent,
 
     pub fn deinit(self: InboundEvent) void {
         switch (self) {
@@ -426,9 +437,26 @@ pub const InboundEvent = union(enum) {
                 data.accounts.deinit();
                 data.distributed_rewards.deinit();
             },
-            .slot_confirmed, .slot_rooted, .tip_changed => {},
+            .slot_confirmed,
+            .slot_rooted,
+            .tip_changed,
+            .first_shred_received,
+            .slot_completed,
+            => {},
+            .bank_created => {},
+            .slot_dead => {},
         }
     }
+};
+
+pub const SlotDeadEvent = struct {
+    slot: u64,
+    err: []const u8,
+};
+
+pub const BankCreatedEvent = struct {
+    slot: u64,
+    parent: u64,
 };
 
 /// Sink to push events for jrpc ws runtime broadcasting.
@@ -519,6 +547,7 @@ pub const SlotEventData = struct {
     slot: u64,
     parent: u64,
     root: u64,
+    stats: SlotTransactionStats = .{},
 };
 
 pub const AccountEventData = struct {
@@ -650,6 +679,106 @@ pub const RootEventData = struct {
     root: u64,
 };
 
+/// Transaction stats included in slotsUpdatesSubscribe "frozen" notifications.
+pub const SlotTransactionStats = struct {
+    numTransactionEntries: u64 = 0,
+    numSuccessfulTransactions: u64 = 0,
+    numFailedTransactions: u64 = 0,
+    maxTransactionsPerEntry: u64 = 0,
+};
+
+/// Data for a single slotsUpdatesSubscribe notification.
+/// Each variant maps to one of the 7 Agave SlotUpdate event types.
+/// Uses custom JSON serialization to produce Agave-compatible
+/// internally-tagged format: `{"type": "<eventType>", ...}`.
+pub const SlotUpdateData = union(enum) {
+    first_shred_received: BasicSlotUpdate,
+    completed: BasicSlotUpdate,
+    created_bank: CreatedBankUpdate,
+    frozen: FrozenUpdate,
+    dead: DeadUpdate,
+    optimistic_confirmation: BasicSlotUpdate,
+    root: BasicSlotUpdate,
+
+    pub const BasicSlotUpdate = struct {
+        slot: u64,
+        timestamp: u64,
+    };
+
+    pub const CreatedBankUpdate = struct {
+        slot: u64,
+        parent: u64,
+        timestamp: u64,
+    };
+
+    pub const FrozenUpdate = struct {
+        slot: u64,
+        timestamp: u64,
+        stats: SlotTransactionStats,
+    };
+
+    pub const DeadUpdate = struct {
+        slot: u64,
+        timestamp: u64,
+        err: []const u8,
+    };
+
+    pub fn typeName(self: SlotUpdateData) []const u8 {
+        return switch (self) {
+            .first_shred_received => "firstShredReceived",
+            .completed => "completed",
+            .created_bank => "createdBank",
+            .frozen => "frozen",
+            .dead => "dead",
+            .optimistic_confirmation => "optimisticConfirmation",
+            .root => "root",
+        };
+    }
+
+    fn slotValue(self: SlotUpdateData) u64 {
+        return switch (self) {
+            inline else => |d| d.slot,
+        };
+    }
+
+    fn timestampValue(self: SlotUpdateData) u64 {
+        return switch (self) {
+            inline else => |d| d.timestamp,
+        };
+    }
+
+    /// Agave-compatible internally-tagged JSON:
+    /// `{"slot": N, "type": "eventName", "timestamp": N, ...}`
+    pub fn jsonStringify(
+        self: SlotUpdateData,
+        jw: anytype,
+    ) @TypeOf(jw.*).Error!void {
+        try jw.beginObject();
+        try jw.objectField("slot");
+        try jw.write(self.slotValue());
+        try jw.objectField("type");
+        try jw.write(self.typeName());
+        try jw.objectField("timestamp");
+        try jw.write(self.timestampValue());
+        switch (self) {
+            .created_bank => |d| {
+                try jw.objectField("parent");
+                try jw.write(d.parent);
+            },
+            .frozen => |d| {
+                try jw.objectField("stats");
+                try jw.write(d.stats);
+            },
+            .dead => |d| {
+                try jw.objectField("err");
+                try jw.write(d.err);
+            },
+            else => {},
+        }
+        try jw.endObject();
+    }
+};
+
 /// Data carried by a block serialization job.
 /// The block is pre-built from cached transaction data
 /// on the IO loop thread; the arena owns all block data
@@ -690,6 +819,7 @@ pub const SerializeJob = struct {
         },
         root: RootEventData,
         slot: SlotEventData,
+        slots_updates: SlotUpdateData,
 
         pub fn deinit(self: JobType, allocator: std.mem.Allocator) void {
             switch (self) {
@@ -1081,4 +1211,150 @@ test "SubReqKey equality - block different filter" {
         } } },
     };
     try std.testing.expect(!a.eql(&b));
+}
+
+// --- SlotUpdateData.jsonStringify tests ---
+
+fn stringifySlotUpdate(data: SlotUpdateData) ![]const u8 {
+    var buf: std.ArrayList(u8) = .{};
+    errdefer buf.deinit(std.testing.allocator);
+    var aw: std.Io.Writer.Allocating = .init(
+        std.testing.allocator,
+    );
+    errdefer aw.deinit();
+    try std.json.Stringify.value(data, .{}, &aw.writer);
+    buf = aw.toArrayList();
+    return buf.toOwnedSlice(std.testing.allocator);
+}
+
+test "SlotUpdateData json - first_shred_received" {
+    const json = try stringifySlotUpdate(.{
+        .first_shred_received = .{
+            .slot = 42,
+            .timestamp = 1000,
+        },
+    });
+    defer std.testing.allocator.free(json);
+    try std.testing.expectEqualStrings(
+        \\{"slot":42,"type":"firstShredReceived","timestamp":1000}
+    , json);
+}
+
+test "SlotUpdateData json - completed" {
+    const json = try stringifySlotUpdate(.{
+        .completed = .{ .slot = 99, .timestamp = 2000 },
+    });
+    defer std.testing.allocator.free(json);
+    try std.testing.expectEqualStrings(
+        \\{"slot":99,"type":"completed","timestamp":2000}
+    , json);
+}
+
+test "SlotUpdateData json - optimistic_confirmation" {
+    const json = try stringifySlotUpdate(.{
+        .optimistic_confirmation = .{
+            .slot = 55,
+            .timestamp = 3000,
+        },
+    });
+    defer std.testing.allocator.free(json);
+    try std.testing.expectEqualStrings(
+        \\{"slot":55,"type":"optimisticConfirmation","timestamp":3000}
+    , json);
+}
+
+test "SlotUpdateData json - root" {
+    const json = try stringifySlotUpdate(.{
+        .root = .{ .slot = 10, .timestamp = 4000 },
+    });
+    defer std.testing.allocator.free(json);
+    try std.testing.expectEqualStrings(
+        \\{"slot":10,"type":"root","timestamp":4000}
+    , json);
+}
+
+test "SlotUpdateData json - created_bank" {
+    const json = try stringifySlotUpdate(.{
+        .created_bank = .{
+            .slot = 77,
+            .parent = 76,
+            .timestamp = 5000,
+        },
+    });
+    defer std.testing.allocator.free(json);
+    try std.testing.expectEqualStrings(
+        \\{"slot":77,"type":"createdBank","timestamp":5000,"parent":76}
+    , json);
+}
+
+test "SlotUpdateData json - frozen" {
+    const json = try stringifySlotUpdate(.{
+        .frozen = .{
+            .slot = 33,
+            .timestamp = 6000,
+            .stats = .{
+                .numTransactionEntries = 100,
+                .numSuccessfulTransactions = 90,
+                .numFailedTransactions = 10,
+                .maxTransactionsPerEntry = 50,
+            },
+        },
+    });
+    defer std.testing.allocator.free(json);
+    try std.testing.expectEqualStrings(
+        \\{"slot":33,"type":"frozen","timestamp":6000,"stats":{"numTransactionEntries":100,"numSuccessfulTransactions":90,"numFailedTransactions":10,"maxTransactionsPerEntry":50}}
+    , json);
+}
+
+test "SlotUpdateData json - dead" {
+    const json = try stringifySlotUpdate(.{
+        .dead = .{
+            .slot = 44,
+            .timestamp = 7000,
+            .err = "slot marked dead",
+        },
+    });
+    defer std.testing.allocator.free(json);
+    try std.testing.expectEqualStrings(
+        \\{"slot":44,"type":"dead","timestamp":7000,"err":"slot marked dead"}
+    , json);
+}
+
+test "SlotUpdateData typeName" {
+    const cases = .{
+        .{ SlotUpdateData{ .first_shred_received = .{
+            .slot = 0,
+            .timestamp = 0,
+        } }, "firstShredReceived" },
+        .{ SlotUpdateData{ .completed = .{
+            .slot = 0,
+            .timestamp = 0,
+        } }, "completed" },
+        .{ SlotUpdateData{ .created_bank = .{
+            .slot = 0,
+            .parent = 0,
+            .timestamp = 0,
+        } }, "createdBank" },
+        .{ SlotUpdateData{ .frozen = .{
+            .slot = 0,
+            .timestamp = 0,
+            .stats = .{},
+        } }, "frozen" },
+        .{ SlotUpdateData{ .dead = .{
+            .slot = 0,
+            .timestamp = 0,
+            .err = "",
+        } }, "dead" },
+        .{ SlotUpdateData{ .optimistic_confirmation = .{
+            .slot = 0,
+            .timestamp = 0,
+        } }, "optimisticConfirmation" },
+        .{ SlotUpdateData{ .root = .{
+            .slot = 0,
+            .timestamp = 0,
+        } }, "root" },
+    };
+    inline for (cases) |c| {
+        try std.testing.expectEqualStrings(c[1], c[0].typeName());
+    }
 }

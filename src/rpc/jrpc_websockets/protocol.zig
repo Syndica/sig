@@ -130,6 +130,21 @@ pub fn serializeRootNotification(
     });
 }
 
+pub fn serializeSlotsUpdatesNotification(
+    allocator: std.mem.Allocator,
+    sub_id: types.SubId,
+    data: types.SlotUpdateData,
+) !NotifPayload {
+    return serializeToPayload(allocator, .{
+        .jsonrpc = "2.0",
+        .method = "slotsUpdatesNotification",
+        .params = .{
+            .result = data,
+            .subscription = sub_id,
+        },
+    });
+}
+
 /// Helper type to seralize all the account fields for encoded RPC notification
 const WireAccountValue = struct {
     acc: *const sig.core.Account,
@@ -411,6 +426,7 @@ pub fn serializeNotification(
         .root => |data| serializeRootNotification(allocator, sub_id, data),
         .logs => |data| serializeLogsNotification(allocator, sub_id, data),
         .block => |data| serializeBlockNotification(allocator, sub_id, data),
+        .slots_updates => |data| serializeSlotsUpdatesNotification(allocator, sub_id, data),
         .account => |job| serializeAccountNotification(
             allocator,
             sub_id,

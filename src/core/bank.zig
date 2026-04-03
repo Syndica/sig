@@ -208,6 +208,15 @@ pub const SlotState = struct {
     /// Total amount of rent collected so far during this slot.
     collected_rent: Atomic(u64),
 
+    /// Number of transactions that failed during this slot.
+    transaction_error_count: Atomic(u64),
+
+    /// Number of entry batches committed during this slot.
+    transaction_entries_count: Atomic(u64),
+
+    /// High-water mark of transactions in any single entry batch during this slot.
+    transactions_per_entry_max: Atomic(u64),
+
     /// The lattice hash of all accounts
     ///
     /// The value is only meaningful after freezing.
@@ -243,6 +252,9 @@ pub const SlotState = struct {
         .signature_count = .init(0),
         .tick_height = .init(0),
         .collected_rent = .init(0),
+        .transaction_error_count = .init(0),
+        .transaction_entries_count = .init(0),
+        .transactions_per_entry_max = .init(0),
         .accounts_lt_hash = .init(.IDENTITY),
         .stakes_cache = .EMPTY,
         .collected_transaction_fees = .init(0),
@@ -270,6 +282,9 @@ pub const SlotState = struct {
             .signature_count = .init(bank_fields.signature_count),
             .tick_height = .init(bank_fields.tick_height),
             .collected_rent = .init(bank_fields.collected_rent),
+            .transaction_error_count = .init(0),
+            .transaction_entries_count = .init(0),
+            .transactions_per_entry_max = .init(0),
             .accounts_lt_hash = .init(lt_hash),
             .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),
@@ -306,6 +321,9 @@ pub const SlotState = struct {
             .signature_count = .init(0),
             .tick_height = .init(parent.tick_height.load(.monotonic)),
             .collected_rent = .init(0),
+            .transaction_error_count = .init(0),
+            .transaction_entries_count = .init(0),
+            .transactions_per_entry_max = .init(0),
             .accounts_lt_hash = .init(parent.accounts_lt_hash.readCopy()),
             .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),
@@ -346,6 +364,9 @@ pub const SlotState = struct {
             .signature_count = .init(bank_fields.signature_count),
             .tick_height = .init(bank_fields.tick_height),
             .collected_rent = .init(bank_fields.collected_rent),
+            .transaction_error_count = .init(0),
+            .transaction_entries_count = .init(0),
+            .transactions_per_entry_max = .init(0),
             .accounts_lt_hash = .init(lt_hash),
             .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),

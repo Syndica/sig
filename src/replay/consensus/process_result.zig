@@ -38,6 +38,8 @@ const Logger = sig.trace.Logger("replay.process_result");
 
 const check_slot_agrees_with_cluster = replay.consensus.cluster_sync.check_slot_agrees_with_cluster;
 
+const jrpc_types = sig.rpc.jrpc_websockets.types;
+
 pub const ProcessResultParams = struct {
     allocator: Allocator,
     logger: Logger,
@@ -60,6 +62,9 @@ pub const ProcessResultParams = struct {
     unfrozen_gossip_verified_vote_hashes: *UnfrozenGossipVerifiedVoteHashes,
     epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
     purge_repair_slot_counter: *PurgeRepairSlotCounters,
+
+    // rpc event sink
+    event_sink: ?*jrpc_types.EventSink = null,
 };
 
 pub fn processResult(params: ProcessResultParams, result: sig.replay.execution.ReplayResult) !void {
@@ -105,6 +110,12 @@ fn markDeadSlot(
     // - blockstore.slots_stats.mark_dead(slot);
     // - slot_status_notifier
     // - rpc_subscriptions
+    if (params.event_sink) |sink| {
+        try sink.send(.{ .slot_dead = .{
+            .slot = dead_slot,
+            .err = "error",
+        } });
+    }
 
     const dead_state: replay.consensus.cluster_sync.DeadState = .fromState(
         .from(params.logger),
@@ -569,6 +580,10 @@ test "markDeadSlot: marks progress dead and writes to ledger" {
     };
     defer test_resources.deinit(allocator);
 
+    const event_sink = try jrpc_types.EventSink.create(allocator);
+    defer event_sink.destroy();
+    test_resources.params.event_sink = event_sink;
+
     const slot: Slot = 200;
 
     // Ensure progress map has an entry for the slot
@@ -599,7 +614,20 @@ test "markDeadSlot: marks progress dead and writes to ledger" {
     try testing.expect(test_resources.progress.isDead(slot) orelse false);
 
     // Validate ledger records the dead slot
-    try testing.expect(try test_resources.ledger.reader().isDead(allocator, slot));
+    try testing.expect(
+        try test_resources.ledger.reader().isDead(allocator, slot),
+    );
+
+    // Validate slot_dead event was emitted
+    const event = event_sink.channel.tryReceive() orelse
+        return error.TestUnexpectedResult;
+    defer event.deinit();
+    switch (event) {
+        .slot_dead => |dead| {
+            try testing.expectEqual(slot, dead.slot);
+        },
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot" {
