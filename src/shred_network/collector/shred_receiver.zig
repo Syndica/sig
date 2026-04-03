@@ -237,7 +237,7 @@ pub const ShredReceiver = struct {
             const max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
             validateShred(
                 &packet,
-                self.params.epoch_tracker.root_slot.load(.monotonic),
+                self.params.epoch_tracker.state_root.load(.monotonic),
                 self.params.shred_version,
                 max_slot,
             ) catch |err| {

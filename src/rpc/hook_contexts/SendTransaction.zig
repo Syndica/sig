@@ -6,8 +6,10 @@ const methods = @import("../methods.zig");
 const parse_instruction = @import("../parse_instruction/lib.zig");
 
 const Allocator = std.mem.Allocator;
-const Channel = sig.sync.Channel;
 const Base64Decoder = std.base64.standard.Decoder;
+const Channel = sig.sync.Channel;
+const CommitmentTracker = sig.replay.trackers.CommitmentTracker;
+const EpochTracker = sig.core.EpochTracker;
 const GetAccountInfo = methods.GetAccountInfo;
 const GetBlock = methods.GetBlock;
 const GetLatestBlockhashValue = methods.GetLatestBlockhash.Response.Value;
@@ -23,6 +25,7 @@ const Slot = sig.core.Slot;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const SlotTracker = sig.replay.trackers.SlotTracker;
+const StatusCache = sig.core.StatusCache;
 const SvmGateway = sig.replay.svm_gateway.SvmGateway;
 const Transaction = sig.core.Transaction;
 const TransactionInfo = sig.TransactionSenderService.TransactionInfo;
@@ -46,9 +49,10 @@ const PACKET_DATA_SIZE = sig.net.Packet.DATA_SIZE;
 const SendTransactionHookContext = @This();
 
 slot_tracker: *SlotTracker,
+commitments: *CommitmentTracker,
 account_store: sig.accounts_db.AccountStore,
-epoch_tracker: *sig.core.EpochTracker,
-status_cache: *sig.core.StatusCache,
+epoch_tracker: *EpochTracker,
+status_cache: *StatusCache,
 tx_svc_channel: *Channel(TransactionInfo),
 
 pub fn sendTransaction(
@@ -70,7 +74,7 @@ pub fn sendTransaction(
         .processed
     else
         config.preflightCommitment orelse .finalized;
-    const preflight_slot = self.slot_tracker.commitments.get(preflight_commitment);
+    const preflight_slot = self.commitments.get(preflight_commitment);
     if (config.minContextSlot) |min_slot| {
         if (preflight_slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
@@ -126,16 +130,19 @@ pub fn sendTransaction(
         }
     }
 
-    return .{ .signature = try sendTransactionImpl(
-        self.tx_svc_channel,
+    // NOTE: Agave returns the signature even if they fail to send the transaction to the pool for submission.
+    // We intentially fail and return an RPC error instead.
+    try self.tx_svc_channel.send(.initWithWire(
         unsanitized_tx,
-        transaction.msg_hash,
         wire_transaction,
         wire_len,
+        transaction.msg_hash,
         last_valid_block_height,
         durable_nonce_info,
         config.maxRetries,
-    ) };
+    ));
+
+    return .{ .signature = unsanitized_tx.signatures[0] };
 }
 
 pub fn simulateTransaction(
@@ -152,7 +159,7 @@ pub fn simulateTransaction(
     );
 
     const commitment = config.commitment orelse .finalized;
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
@@ -317,7 +324,9 @@ fn decodeAndDeserialize(
                 return error.InvalidParams;
             }
             var decoded_buf: [base58.decodedMaxSize(MAX_BASE58_SIZE)]u8 = undefined;
-            const decoded_len = try base58.Table.BITCOIN.decode(&decoded_buf, encoded);
+            const decoded_len = base58.Table.BITCOIN.decode(&decoded_buf, encoded) catch {
+                return error.InvalidParams;
+            };
             if (decoded_len > PACKET_DATA_SIZE) return error.InvalidParams;
             @memcpy(wire_transaction[0..decoded_len], decoded_buf[0..decoded_len]);
             break :blk decoded_len;
@@ -351,31 +360,6 @@ fn decodeAndDeserialize(
     return .{ wire_transaction, wire_len, unsanitized_tx };
 }
 
-/// Analogous to [_send_transaction](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L2675)
-fn sendTransactionImpl(
-    transaction_sender: *Channel(TransactionInfo),
-    transaction: Transaction,
-    message_hash: Hash,
-    wire_transaction: [PACKET_DATA_SIZE]u8,
-    wire_transaction_size: usize,
-    last_valid_block_height: u64,
-    durable_nonce_info: ?struct { Pubkey, Hash },
-    max_retries: ?usize,
-) !sig.core.Signature {
-    const signature = transaction.signatures[0];
-    const transaction_info: TransactionInfo = .initWithWire(
-        transaction,
-        wire_transaction,
-        wire_transaction_size,
-        message_hash,
-        last_valid_block_height,
-        durable_nonce_info,
-        max_retries,
-    );
-    try transaction_sender.send(transaction_info);
-    return signature;
-}
-
 /// Analogous to [sanitize_transaction](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4405)
 fn sanitizeTransaction(
     arena: Allocator,
@@ -394,11 +378,11 @@ fn sanitizeTransaction(
 
     try tx.validate();
 
-    const slot_hashes = getSysvarFromAccount(
+    const slot_hashes = try getSysvarFromAccount(
         SlotHashes,
         arena,
         slot_account_reader,
-    ) catch null orelse SlotHashes.INIT;
+    ) orelse SlotHashes.INIT;
 
     const resolved = try resolveTransaction(arena, tx, .{
         .slot = preflight_slot,
@@ -790,7 +774,7 @@ test "decodeAndDeserialize: invalid base64 returns InvalidParams" {
 test "decodeAndDeserialize: invalid base58 returns error" {
     // 'l' is not a valid base58 character
     try std.testing.expectError(
-        error.InvalidCharacter,
+        error.InvalidParams,
         decodeAndDeserialize(std.testing.allocator, "lll", .base58),
     );
 }
@@ -823,61 +807,6 @@ test "decodeAndDeserialize: wire_transaction contains decoded bytes" {
     for (wire_transaction[tx_bytes.len..]) |b| try std.testing.expectEqual(@as(u8, 0), b);
 }
 
-test "sendTransactionImpl: sends transaction and returns signature" {
-    const channel = try Channel(TransactionInfo).create(std.testing.allocator);
-    defer channel.destroy();
-
-    const tx = sig.core.transaction.transaction_legacy_example.as_struct;
-    const wire: [PACKET_DATA_SIZE]u8 = @splat(0);
-    const msg_hash = Hash.ZEROES;
-
-    const result = try sendTransactionImpl(
-        channel,
-        tx,
-        msg_hash,
-        wire,
-        wire.len,
-        1000,
-        null,
-        null,
-    );
-
-    // Should return the first signature
-    try std.testing.expect(tx.signatures[0].eql(&result));
-
-    // Channel should have received the transaction info
-    const received = channel.tryReceive().?;
-    try std.testing.expectEqual(msg_hash, received.message_hash);
-    try std.testing.expectEqual(@as(u64, 1000), received.last_valid_block_height);
-    try std.testing.expectEqual(@as(?struct { Pubkey, Hash }, null), received.durable_nonce_info);
-    try std.testing.expectEqual(std.math.maxInt(usize), received.max_retries);
-}
-
-test "sendTransactionImpl: with durable nonce info" {
-    const channel = try Channel(TransactionInfo).create(std.testing.allocator);
-    defer channel.destroy();
-
-    const tx = sig.core.transaction.transaction_legacy_example.as_struct;
-    const wire: [PACKET_DATA_SIZE]u8 = @splat(0);
-    const nonce_pubkey = Pubkey.ZEROES;
-    const nonce_hash = Hash.ZEROES;
-
-    _ = try sendTransactionImpl(
-        channel,
-        tx,
-        Hash.ZEROES,
-        wire,
-        wire.len,
-        500,
-        .{ nonce_pubkey, nonce_hash },
-        5,
-    );
-
-    const received = channel.tryReceive().?;
-    try std.testing.expect(received.durable_nonce_info != null);
-    try std.testing.expectEqual(@as(usize, 5), received.max_retries);
-}
-
 test sendTransaction {
     const allocator = std.testing.allocator;
 
@@ -904,9 +833,21 @@ test sendTransaction {
     const channel = try Channel(TransactionInfo).create(allocator);
     defer channel.destroy();
 
+    var commitments = CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    var epoch_tracker = try EpochTracker.initForTest(allocator, std.crypto.random, 0, .INIT);
+    defer epoch_tracker.deinit();
+
+    var status_cache = StatusCache.DEFAULT;
+    errdefer status_cache.deinit(allocator);
+
     const ctx: SendTransactionHookContext = .{
         .slot_tracker = &slot_tracker,
-        .account_reader = .noop,
+        .commitments = &commitments,
+        .account_store = .noop,
+        .epoch_tracker = &epoch_tracker,
+        .status_cache = &status_cache,
         .tx_svc_channel = channel,
     };
 
@@ -930,7 +871,7 @@ test sendTransaction {
             },
         });
         const expected_sig = sig.core.transaction.transaction_legacy_example.as_struct.signatures[0];
-        try std.testing.expect(expected_sig.eql(&result));
+        try std.testing.expect(expected_sig.eql(&result.signature));
         const txn_info = channel.tryReceive().?;
         try std.testing.expectEqual(expected_sig, txn_info.signature);
     }
@@ -956,13 +897,13 @@ test sendTransaction {
     }
 
     { // Slot not found
-        slot_tracker.commitments.finalized.store(1, .monotonic);
-        slot_tracker.commitments.confirmed.store(1, .monotonic);
-        slot_tracker.commitments.processed.store(1, .monotonic);
+        commitments.finalized.store(1, .monotonic);
+        commitments.confirmed.store(1, .monotonic);
+        commitments.processed.store(1, .monotonic);
         defer {
-            slot_tracker.commitments.finalized.store(0, .monotonic);
-            slot_tracker.commitments.confirmed.store(0, .monotonic);
-            slot_tracker.commitments.processed.store(0, .monotonic);
+            commitments.finalized.store(0, .monotonic);
+            commitments.confirmed.store(0, .monotonic);
+            commitments.processed.store(0, .monotonic);
         }
 
         try std.testing.expectError(

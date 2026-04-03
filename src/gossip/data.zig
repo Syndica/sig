@@ -1827,8 +1827,6 @@ test "ContactInfo bincode roundtrip maintains data integrity" {
 }
 
 test "SocketEntry serializer works" {
-    testing.log_level = .debug;
-
     comptime std.debug.assert(@intFromEnum(SocketTag.rpc_pubsub) == 3);
     const se: SocketEntry = .{ .key = .rpc_pubsub, .index = 3, .offset = 30304 };
 

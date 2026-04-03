@@ -122,6 +122,7 @@ pub const BlockhashQueue = struct {
 
     pub fn getLastValidBlockHeight(self: *const BlockhashQueue, block_height: u64, hash: Hash) ?u64 {
         const age = self.getHashAge(hash) orelse return null;
+        if (age > MAX_PROCESSING_AGE) return null;
         return block_height + MAX_PROCESSING_AGE - age;
     }
 

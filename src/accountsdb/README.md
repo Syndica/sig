@@ -54,10 +54,10 @@ defer if (account) |acc| acc.deinit(allocator);
 
 ### Rooting Slots
 
-When consensus determines a slot is finalized, call `onSlotRooted` to move accounts from unrooted to rooted storage:
+When consensus determines a slot is finalized, call `updateRoot` to move accounts from unrooted to rooted storage:
 
 ```zig
-account_store.onSlotRooted(newly_rooted_slot, &ancestors);
+account_store.updateRoot(newly_rooted_slot, &ancestors);
 ```
 
 ## Fuzzing

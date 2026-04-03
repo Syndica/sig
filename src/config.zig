@@ -61,6 +61,13 @@ pub const Cmd = struct {
         return local_path;
     }
 
+    /// Returns the ledger directory path: `<validator-dir>/ledger`.
+    ///
+    /// The returned path is **allocated** and must be freed by the caller using the same `allocator`.
+    pub fn ledgerDir(self: Cmd, allocator: std.mem.Allocator) ![]const u8 {
+        return try std.fs.path.join(allocator, &.{ self.validator_dir, "ledger" });
+    }
+
     /// Derives a path relative to validator_dir if the param equals the default value.
     /// This is used to allow paths like snapshot_dir and geyser.pipe_path to be relative
     /// to validator_dir when using their default values, while still allowing explicit
@@ -104,6 +111,7 @@ pub const ShredNetwork = struct {
     no_retransmit: bool = true,
     dump_shred_tracker: bool = false,
     log_finished_slots: bool = false,
+    forward_shreds_to: ?[]const u8 = null,
 
     /// Converts from the CLI args into the `shred_network.start` parameters
     pub fn toConfig(self: ShredNetwork, fallback_slot: sig.core.Slot) ShredNetworkConfig {
@@ -114,6 +122,7 @@ pub const ShredNetwork = struct {
             .retransmit = !self.no_retransmit,
             .dump_shred_tracker = self.dump_shred_tracker,
             .log_finished_slots = self.log_finished_slots,
+            .forward_shreds_to = null,
         };
     }
 };
