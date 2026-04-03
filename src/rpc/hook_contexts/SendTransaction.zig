@@ -16,6 +16,7 @@ const Slot = sig.core.Slot;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const SlotTracker = sig.replay.trackers.SlotTracker;
+const CommitmentTracker = sig.replay.trackers.CommitmentTracker;
 const Transaction = sig.core.Transaction;
 const TransactionInfo = sig.TransactionSenderService.TransactionInfo;
 
@@ -34,6 +35,7 @@ const PACKET_DATA_SIZE = sig.net.Packet.DATA_SIZE;
 const SendTransactionHookContext = @This();
 
 slot_tracker: *SlotTracker,
+commitments: *CommitmentTracker,
 account_reader: sig.accounts_db.AccountReader,
 tx_svc_channel: *Channel(TransactionInfo),
 
@@ -56,7 +58,7 @@ pub fn sendTransaction(
         .processed
     else
         config.preflightCommitment orelse .finalized;
-    const preflight_slot = self.slot_tracker.commitments.get(preflight_commitment);
+    const preflight_slot = self.commitments.get(preflight_commitment);
     if (config.minContextSlot) |min_slot| {
         if (preflight_slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
@@ -319,8 +321,12 @@ test sendTransaction {
     const channel = try Channel(TransactionInfo).create(allocator);
     defer channel.destroy();
 
+    var commitments = CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
     const ctx: SendTransactionHookContext = .{
         .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
         .account_reader = .noop,
         .tx_svc_channel = channel,
     };
@@ -371,13 +377,13 @@ test sendTransaction {
     }
 
     { // Slot not found
-        slot_tracker.commitments.finalized.store(1, .monotonic);
-        slot_tracker.commitments.confirmed.store(1, .monotonic);
-        slot_tracker.commitments.processed.store(1, .monotonic);
+        commitments.finalized.store(1, .monotonic);
+        commitments.confirmed.store(1, .monotonic);
+        commitments.processed.store(1, .monotonic);
         defer {
-            slot_tracker.commitments.finalized.store(0, .monotonic);
-            slot_tracker.commitments.confirmed.store(0, .monotonic);
-            slot_tracker.commitments.processed.store(0, .monotonic);
+            commitments.finalized.store(0, .monotonic);
+            commitments.confirmed.store(0, .monotonic);
+            commitments.processed.store(0, .monotonic);
         }
 
         try std.testing.expectError(
