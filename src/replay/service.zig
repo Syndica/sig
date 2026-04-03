@@ -767,9 +767,11 @@ pub fn handleSlotUpdate(
     const old_state_root = replay_state.slot_tracker.state_root.load(.monotonic);
     var old_processed: ?Slot = null;
     var old_confirmed: ?Slot = null;
+    var old_finalized: Slot = 0;
     if (replay_state.commitments) |*c| {
         old_processed = c.get(.processed);
         old_confirmed = c.get(.confirmed);
+        old_finalized = c.get(.finalized);
     }
 
     // update commitment levels
@@ -786,14 +788,26 @@ pub fn handleSlotUpdate(
         try replay_state.ledger.resultWriter().setRoots(rooted_slots);
     }
 
+    var newly_rooted_slots: ?[]const Slot = null;
+    defer if (newly_rooted_slots) |slots| allocator.free(slots);
+
     // determine what slot to use as the state root. either the tower's root or
     // the finalized slot, whatever is older.
     var maybe_new_state_root: ?Slot = null;
     if (replay_state.commitments) |*c| {
+        const finalized_slot = c.get(.finalized);
         const proposed_state_root = @min(
-            c.get(.finalized),
+            finalized_slot,
             replay_state.slot_tracker.consensus_root.load(.monotonic),
         );
+
+        if (finalized_slot > old_finalized) {
+            newly_rooted_slots = try replay_state.slot_tracker.rootedPathForward(
+                allocator,
+                old_finalized,
+                finalized_slot,
+            );
+        }
 
         if (proposed_state_root > old_state_root) {
             maybe_new_state_root = proposed_state_root;
@@ -802,18 +816,7 @@ pub fn handleSlotUpdate(
         maybe_new_state_root = slot_update.root;
     }
 
-    var newly_rooted_slots: ?[]const Slot = null;
-    defer if (newly_rooted_slots) |slots| allocator.free(slots);
-
     if (maybe_new_state_root) |new_state_root| {
-        if (new_state_root > old_state_root) {
-            newly_rooted_slots = try replay_state.slot_tracker.rootedPathForward(
-                allocator,
-                old_state_root,
-                new_state_root,
-            );
-        }
-
         // clean up old data from replay's internal state
         try pruneStaleData(
             allocator,
@@ -828,7 +831,7 @@ pub fn handleSlotUpdate(
 
     if (replay_state.event_sink) |sink| {
         if (slot_update.voted) |voted_slot| {
-            if (old_processed == null or voted_slot > old_processed.?) {
+            if (old_processed == null or voted_slot != old_processed.?) {
                 try sink.send(.{ .tip_changed = voted_slot });
             }
         }
@@ -1595,6 +1598,129 @@ fn addReplayStateSlotForTest(
         .state = state,
     });
     try replay_state.slot_tree.record(replay_state.allocator, slot, parent_slot);
+}
+
+test "handleSlotUpdate emits rooted events from finalized commitment, not consensus root" {
+    const allocator = std.testing.allocator;
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
+    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
+    defer dep_stubs.deinit();
+
+    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .enabled);
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit();
+        allocator.destroy(replay_state.epoch_tracker);
+    }
+
+    const event_sink = try jrpc_types.EventSink.create(allocator);
+    defer event_sink.destroy();
+    replay_state.event_sink = event_sink;
+
+    try addReplayStateSlotForTest(&replay_state, 1, 0, Pubkey.ZEROES, Hash.ZEROES);
+    try addReplayStateSlotForTest(&replay_state, 2, 1, Pubkey.ZEROES, Hash.ZEROES);
+
+    replay_state.commitments.?.update(.finalized, 1);
+    const metrics = try registry.initStruct(Metrics);
+
+    {
+        const commitment_txn = replay_state.commitments.?.stakes.beginTransaction(&.{});
+        defer commitment_txn.reset();
+
+        try handleSlotUpdate(
+            allocator,
+            &replay_state,
+            .{
+                .root = 2,
+                .voted = null,
+                .optimistically_confirmed = null,
+            },
+            commitment_txn,
+            metrics,
+        );
+    }
+
+    try std.testing.expect(event_sink.channel.tryReceive() == null);
+
+    {
+        const commitment_txn = replay_state.commitments.?.stakes.beginTransaction(&.{});
+        defer commitment_txn.reset();
+        commitment_txn.total_stake = 100;
+        try commitment_txn.rooted_stake.append(allocator, .{ .slot = 2, .stake = 100 });
+
+        try handleSlotUpdate(
+            allocator,
+            &replay_state,
+            .{
+                .root = null,
+                .voted = null,
+                .optimistically_confirmed = null,
+            },
+            commitment_txn,
+            metrics,
+        );
+    }
+
+    const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
+    defer event.deinit(event_sink.channel.allocator);
+    switch (event) {
+        .slot_rooted => |rooted_slot| {
+            try std.testing.expectEqual(2, rooted_slot);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(event_sink.channel.tryReceive() == null);
+}
+
+test "handleSlotUpdate emits tip_changed when voted slot decreases" {
+    const allocator = std.testing.allocator;
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
+    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
+    defer dep_stubs.deinit();
+
+    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .enabled);
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit();
+        allocator.destroy(replay_state.epoch_tracker);
+    }
+
+    const event_sink = try jrpc_types.EventSink.create(allocator);
+    defer event_sink.destroy();
+    replay_state.event_sink = event_sink;
+
+    replay_state.commitments.?.update(.processed, 5);
+
+    const commitment_txn = replay_state.commitments.?.stakes.beginTransaction(&.{});
+    defer commitment_txn.reset();
+
+    try handleSlotUpdate(
+        allocator,
+        &replay_state,
+        .{
+            .root = null,
+            .voted = 4,
+            .optimistically_confirmed = null,
+        },
+        commitment_txn,
+        try registry.initStruct(Metrics),
+    );
+
+    const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
+    defer event.deinit(event_sink.channel.allocator);
+    switch (event) {
+        .tip_changed => |tip_slot| {
+            try std.testing.expectEqual(4, tip_slot);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(event_sink.channel.tryReceive() == null);
 }
 
 test "freezeCompletedSlots handles errors correctly" {
