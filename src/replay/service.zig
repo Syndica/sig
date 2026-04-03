@@ -835,17 +835,31 @@ pub fn handleSlotUpdate(
                 }
             }
 
-            const finalized_slot = c.get(.finalized);
-            if (finalized_slot > old_finalized) {
-                const rooted_slots = try replay_state.slot_tracker.rootedPathForward(
-                    allocator,
-                    old_finalized,
-                    finalized_slot,
-                );
-                defer allocator.free(rooted_slots);
+            // don't fetch from 0 to finalized, wait for initialization
+            if (old_finalized != 0) {
+                const finalized_slot = c.get(.finalized);
+                if (finalized_slot > old_finalized) {
+                    const rooted_slots = replay_state.slot_tracker.rootedPathForward(
+                        allocator,
+                        old_finalized,
+                        finalized_slot,
+                    ) catch |err| switch (err) {
+                        error.NewRootNotFound => blk: {
+                            replay_state.logger.warn().logf(
+                                "skipping slot_rooted events for finalized transition {} -> {} because finalized slot is not in slot tracker",
+                                .{ old_finalized, finalized_slot },
+                            );
+                            break :blk null;
+                        },
+                        else => return err,
+                    };
+                    defer if (rooted_slots) |slots| allocator.free(slots);
 
-                for (rooted_slots) |rooted_slot| {
-                    try sink.send(.{ .slot_rooted = rooted_slot });
+                    if (rooted_slots) |slots| {
+                        for (slots) |rooted_slot| {
+                            try sink.send(.{ .slot_rooted = rooted_slot });
+                        }
+                    }
                 }
             }
         }
@@ -1722,6 +1736,49 @@ test "handleSlotUpdate emits tip_changed when voted slot decreases" {
         },
         else => return error.TestUnexpectedResult,
     }
+    try std.testing.expect(event_sink.channel.tryReceive() == null);
+}
+
+test "handleSlotUpdate ignores missing finalized slot when emitting rooted events" {
+    const allocator = std.testing.allocator;
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
+    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
+    defer dep_stubs.deinit();
+
+    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS, .enabled);
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit();
+        allocator.destroy(replay_state.epoch_tracker);
+    }
+
+    const event_sink = try jrpc_types.EventSink.create(allocator);
+    defer event_sink.destroy();
+    replay_state.event_sink = event_sink;
+
+    replay_state.commitments.?.update(.finalized, 1);
+
+    const commitment_txn = replay_state.commitments.?.stakes.beginTransaction(&.{});
+    defer commitment_txn.reset();
+    commitment_txn.total_stake = 100;
+    try commitment_txn.rooted_stake.append(allocator, .{ .slot = 2, .stake = 100 });
+
+    try handleSlotUpdate(
+        allocator,
+        &replay_state,
+        .{
+            .root = null,
+            .voted = null,
+            .optimistically_confirmed = null,
+        },
+        commitment_txn,
+        try registry.initStruct(Metrics),
+    );
+
+    try std.testing.expectEqual(@as(Slot, 2), replay_state.commitments.?.get(.finalized));
     try std.testing.expect(event_sink.channel.tryReceive() == null);
 }
 
