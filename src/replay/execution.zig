@@ -78,7 +78,11 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]const ReplayResult {
 
         const active_slots = try slot_tracker.activeSlots(state.allocator);
         defer state.allocator.free(active_slots);
-        state.execution_log_helper.logActiveSlots(active_slots);
+        const active_slots_are_new =
+            state.log_deduper.isNew(.active_slots, std.mem.sliceAsBytes(active_slots));
+        state.logger
+            .entry(if (active_slots_are_new) .info else .debug)
+            .logf("{} active slots to replay: {any}", .{ active_slots.len, active_slots });
 
         if (active_slots.len == 0) {
             return &.{};
@@ -127,7 +131,10 @@ fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
 
     const active_slots = try slot_tracker.activeSlots(allocator);
     defer allocator.free(active_slots);
-    state.execution_log_helper.logActiveSlots(active_slots);
+    const log_data = std.mem.sliceAsBytes(active_slots);
+    state.logger
+        .entry(if (state.log_deduper.isNew(.active_slots, log_data)) .info else .debug)
+        .logf("{} active slots to replay: {any}", .{ active_slots.len, active_slots });
 
     if (active_slots.len == 0) {
         return &.{};
@@ -477,7 +484,10 @@ fn prepareSlot(
             state.allocator.free(entries);
         }
 
-        state.execution_log_helper.logEntryCount(entries.len, slot);
+        const log_data = std.mem.sliceAsBytes(&[_]u64{ entries.len, slot });
+        state.logger
+            .entry(if (state.log_deduper.isNew(.entries_for_slot, log_data)) .info else .debug)
+            .logf("got {} entries for slot {}", .{ entries.len, slot });
 
         if (entries.len == 0) {
             return .empty;
@@ -673,41 +683,6 @@ pub const BlockError = enum {
     TrailingEntry,
 
     DuplicateBlock,
-};
-
-pub const LogHelper = struct {
-    logger: Logger,
-    // we store a hash of the previous set of active slots, to avoid printing duplicate sets
-    last_active_slots_hash: ?Hash,
-    slots_are_the_same: bool,
-
-    pub fn init(logger: Logger) LogHelper {
-        return .{
-            .logger = logger,
-            .last_active_slots_hash = null,
-            .slots_are_the_same = false,
-        };
-    }
-
-    pub fn logActiveSlots(self: *LogHelper, active_slots: []const u64) void {
-        const active_slots_hash = Hash.init(std.mem.sliceAsBytes(active_slots));
-
-        self.slots_are_the_same = if (self.last_active_slots_hash) |last_slots|
-            active_slots_hash.eql(last_slots)
-        else
-            false;
-        self.last_active_slots_hash = active_slots_hash;
-
-        self.logger
-            .entry(if (self.slots_are_the_same) .debug else .info)
-            .logf("{} active slots to replay: {any}", .{ active_slots.len, active_slots });
-    }
-
-    pub fn logEntryCount(self: *LogHelper, entry_count: usize, slot: Slot) void {
-        self.logger
-            .entry(if (self.slots_are_the_same and entry_count == 0) .debug else .info)
-            .logf("got {} entries for slot {}", .{ entry_count, slot });
-    }
 };
 
 test "replaySlot - happy path: trivial case" {
