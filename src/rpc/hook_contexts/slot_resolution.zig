@@ -27,12 +27,13 @@ pub fn validateMinContextSlot(slot: Slot, min_context_slot: ?Slot) !void {
 /// then validating `minContextSlot` on the chosen slot.
 pub fn resolveReadableCommitmentSlot(
     slot_tracker: *SlotTracker,
+    commitments: *const CommitmentTracker,
     commitment: ?Commitment,
     min_context_slot: ?Slot,
 ) !Slot {
     const resolved_commitment = commitment orelse .finalized;
-    var slot = slot_tracker.commitments.get(resolved_commitment);
-    if (!slot_tracker.contains(slot)) slot = slot_tracker.root.load(.monotonic);
+    var slot = commitments.get(resolved_commitment);
+    if (!slot_tracker.contains(slot)) slot = slot_tracker.consensus_root.load(.monotonic);
     try validateMinContextSlot(slot, min_context_slot);
     return slot;
 }

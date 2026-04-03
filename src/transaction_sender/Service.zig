@@ -26,6 +26,7 @@ const Gauge = sig.prometheus.Gauge;
 const GetMetricError = sig.prometheus.GetMetricError;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
+const CommitmentTracker = sig.replay.trackers.CommitmentTracker;
 
 const Channel = sig.sync.Channel;
 const ExitCondition = sig.sync.ExitCondition;
@@ -64,6 +65,7 @@ pub const Context = struct {
     account_store: AccountStore,
     epoch_tracker: *EpochTracker,
     slot_tracker: *SlotTracker,
+    commitments: *CommitmentTracker,
     status_cache: *StatusCache,
     gossip_table_rw: *RwMux(GossipTable),
 };
@@ -221,12 +223,12 @@ fn processTransactions(
         self.metrics.pool_size.set(txn_pool.count());
     }
 
-    const root_slot = self.ctx.slot_tracker.root.load(.monotonic);
+    const root_slot = self.ctx.slot_tracker.consensus_root.load(.monotonic);
     const root_ref = self.ctx.slot_tracker.get(root_slot) orelse
         return error.RootSlotNotAvailable;
     defer root_ref.release();
 
-    const working_slot = self.ctx.slot_tracker.commitments.processed.load(.monotonic);
+    const working_slot = self.ctx.commitments.processed.load(.monotonic);
     const working_ref = self.ctx.slot_tracker.get(working_slot) orelse
         return error.WorkingSlotNotAvailable;
     defer working_ref.release();
@@ -508,6 +510,7 @@ const TestContext = struct {
     db_ctx: sig.accounts_db.Db.TestContext,
     epoch_tracker: EpochTracker,
     slot_tracker: SlotTracker,
+    commitments: CommitmentTracker,
     status_cache: StatusCache,
     gossip_table_rw: RwMux(GossipTable),
     quic_sender: *Channel(Packet),
@@ -516,6 +519,7 @@ const TestContext = struct {
         self.db_ctx.deinit();
         self.epoch_tracker.deinit();
         self.slot_tracker.deinit(allocator);
+        self.commitments.deinit(allocator);
         self.status_cache.deinit(allocator);
         const table, var table_lg = self.gossip_table_rw.writeWithLock();
         table.deinit();
@@ -535,6 +539,9 @@ const TestContext = struct {
         var slot_tracker = try SlotTracker.initEmpty(allocator, root_slot);
         errdefer slot_tracker.deinit(allocator);
 
+        var commitments = CommitmentTracker.init(allocator, root_slot);
+        errdefer commitments.deinit(allocator);
+
         var status_cache = StatusCache.DEFAULT;
         errdefer status_cache.deinit(allocator);
 
@@ -553,6 +560,7 @@ const TestContext = struct {
             .db_ctx = db_ctx,
             .epoch_tracker = epoch_tracker,
             .slot_tracker = slot_tracker,
+            .commitments = commitments,
             .status_cache = status_cache,
             .gossip_table_rw = gossip_table_rw,
             .quic_sender = quic_sender,
@@ -587,7 +595,7 @@ test "handleTransactions" {
             .state = .GENESIS,
         });
     }
-    test_ctx.slot_tracker.root.store(root_slot, .monotonic);
+    test_ctx.slot_tracker.consensus_root.store(root_slot, .monotonic);
 
     {
         var working_ancestors = sig.core.Ancestors.EMPTY;
@@ -605,7 +613,7 @@ test "handleTransactions" {
             .state = .GENESIS,
         });
     }
-    test_ctx.slot_tracker.commitments.processed.store(working_slot, .monotonic);
+    test_ctx.commitments.processed.store(working_slot, .monotonic);
 
     var service = try Service.init(
         allocator,
@@ -622,6 +630,7 @@ test "handleTransactions" {
             .account_store = .{ .accounts_db = &test_ctx.db_ctx.db },
             .epoch_tracker = &test_ctx.epoch_tracker,
             .slot_tracker = &test_ctx.slot_tracker,
+            .commitments = &test_ctx.commitments,
             .status_cache = &test_ctx.status_cache,
             .gossip_table_rw = &test_ctx.gossip_table_rw,
         },
