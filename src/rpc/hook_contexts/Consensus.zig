@@ -9,7 +9,6 @@ const slot_resolution = @import("./slot_resolution.zig");
 const Slot = sig.core.Slot;
 const SlotRef = sig.replay.trackers.SlotTracker.Reference;
 const Commitment = common.Commitment;
-const BlockhashQueue = sig.core.blockhash_queue.BlockhashQueue;
 const ClientVersion = sig.version.ClientVersion;
 
 const GetSlot = sig.rpc.methods.GetSlot;
@@ -207,43 +206,27 @@ pub fn getEpochInfo(
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2352-L2365
 pub fn getLatestBlockhash(
     self: ConsensusHookContext,
-    arena: std.mem.Allocator,
+    _: std.mem.Allocator,
     params: GetLatestBlockhash,
 ) !GetLatestBlockhash.Response {
     const config: common.CommitmentSlotConfig = params.config orelse .{};
     const resolved = try self.resolveSlot(config.commitment, config.minContextSlot);
     defer resolved.ref.release();
 
-    const hash_data: struct { last_hash: sig.core.Hash, hash_age: u64 } = result: {
+    const last_blockhash, const last_valid_block_height = blk: {
         const bq, var bq_lock = resolved.ref.state().blockhash_queue.readWithLock();
         defer bq_lock.unlock();
 
         const last_hash = bq.last_hash orelse return error.SlotNotAvailable;
-        const hash_age = bq.getHashAge(last_hash) orelse return error.SlotNotAvailable;
-
-        break :result .{ .last_hash = last_hash, .hash_age = hash_age };
+        const lvbh = bq.getLastValidBlockHeight(resolved.ref.constants().block_height, last_hash) orelse
+            return error.SlotNotAvailable;
+        break :blk .{ last_hash, lvbh };
     };
 
-    // [agave] get_blockhash_last_valid_block_height:
-    // https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2765
-    // last_valid_block_height = block_height + MAX_PROCESSING_AGE - age
-    // where MAX_PROCESSING_AGE = MAX_RECENT_BLOCKHASHES / 2 = 150
-    const max_processing_age: u64 = BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2;
-    const block_height = resolved.ref.constants().block_height;
-    const last_valid_block_height = block_height + max_processing_age - hash_data.hash_age;
-
-    // Allocate the base58 string so it outlives the function scope.
-    // The server uses an arena allocator, so this will be freed with the arena.
-    const blockhash_str = hash_data.last_hash.base58String();
-    const blockhash = try arena.dupe(u8, blockhash_str.constSlice());
-
     return .{
-        .context = .{
-            .slot = resolved.slot,
-            .apiVersion = ClientVersion.API_VERSION,
-        },
+        .context = .{ .slot = resolved.slot },
         .value = .{
-            .blockhash = blockhash,
+            .blockhash = last_blockhash,
             .lastValidBlockHeight = last_valid_block_height,
         },
     };
@@ -585,10 +568,7 @@ pub fn getStakeMinimumDelegation(
     );
 
     return .{
-        .context = .{
-            .slot = resolved.slot,
-            .apiVersion = ClientVersion.API_VERSION,
-        },
+        .context = .{ .slot = resolved.slot },
         .value = stake_minimum_delegation,
     };
 }
@@ -1110,15 +1090,14 @@ test "ConsensusHookContext.getLatestBlockhash - returns blockhash and last valid
 
     const ctx = testConsensusHookContext(&slot_tracker, &commitments);
     const result = try ctx.getLatestBlockhash(testing.allocator, .{});
-    defer testing.allocator.free(result.value.blockhash);
 
     // Verify context
     try testing.expectEqual(@as(u64, 42), result.context.slot);
     try testing.expectEqualStrings(ClientVersion.API_VERSION, result.context.apiVersion);
 
     // Verify blockhash is the base58 encoding of ZEROES
-    const expected_hash_str = sig.core.Hash.ZEROES.base58String();
-    try testing.expectEqualStrings(expected_hash_str.constSlice(), result.value.blockhash);
+    const expected_hash = sig.core.Hash.ZEROES;
+    try testing.expectEqual(expected_hash.data, result.value.blockhash.data);
 
     // Verify lastValidBlockHeight:
     // block_height = 100, MAX_PROCESSING_AGE = 150, age = 0 (just inserted)

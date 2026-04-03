@@ -1208,7 +1208,7 @@ pub const GetLatestBlockhash = struct {
         value: Value,
 
         pub const Value = struct {
-            blockhash: []const u8,
+            blockhash: Hash,
             lastValidBlockHeight: u64,
         };
     };
@@ -1846,18 +1846,27 @@ pub const RequestAirdrop = struct {
 };
 
 pub const SendTransaction = struct {
-    transaction: sig.core.Transaction,
+    transaction: []const u8,
     config: ?Config = null,
 
     pub const Config = struct {
-        encoding: ?enum { base58, bas64 } = null,
         skipPreflight: ?bool = null,
         preflightCommitment: ?common.Commitment = null,
+        encoding: ?common.TransactionEncoding = null,
         maxRetries: ?usize = null,
         minContextSlot: ?Slot = null,
+
+        pub fn resolveEncoding(self: Config) ?common.TransactionBinaryEncoding {
+            const encoding = self.encoding orelse .base58;
+            return switch (encoding) {
+                .base58 => .base58,
+                .base64 => .base64,
+                else => null,
+            };
+        }
     };
 
-    pub const Response = sig.core.Signature;
+    pub const Response = Signature;
 };
 
 // TODO: simulateTransaction
@@ -1923,6 +1932,11 @@ pub const common = struct {
         base64,
         json,
         jsonParsed,
+    };
+
+    pub const TransactionBinaryEncoding = enum {
+        base58,
+        base64,
     };
 
     pub const TransactionDetails = enum {
