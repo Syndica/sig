@@ -517,6 +517,209 @@ fn hashSignature(a: *const Signature) u32 {
     return @bitCast((a.r[0..2] ++ a.s[0..2]).*);
 }
 
+const InProgressSets = struct {
+    ctx_pool: Pool,
+
+    ids: []FecSetId, // idx correspond with fecset idxs
+    signatures: []Signature, // idx correspond with fecset idxs
+
+    signature_map: SignatureMap,
+    eviction: Eviction,
+
+    const Eviction = std.PriorityQueue(u32, QueueContext, QueueContext.compare);
+    const Pool = lib.collections.Pool(FecSetCtx, u32);
+    const Idx = lib.collections.Id(u32);
+
+    // Key from signature-hash, rather than merkle root, as it's equivalent for lookup and we don't
+    // have to compute it.
+    const SignatureMap = std.ArrayHashMapUnmanaged(void, *FecSetCtx, SignatureContext, true);
+
+    fn init(allocator: std.mem.Allocator, capacity: u32) !InProgressSets {
+        const buf = try allocator.alloc(FecSetCtx, capacity);
+        errdefer allocator.free(buf);
+
+        const ctx_pool: Pool = .init(buf);
+
+        const ids = try allocator.alloc(FecSetId, capacity);
+        errdefer allocator.free(ids);
+
+        const signatures = try allocator.alloc(Signature, capacity);
+        errdefer allocator.free(signatures);
+
+        var signature_map: SignatureMap = .empty;
+        errdefer signature_map.deinit(allocator);
+        try signature_map.ensureTotalCapacity(allocator, capacity);
+
+        var eviction: Eviction = .init(allocator, .{ .ids = ids });
+        errdefer eviction.deinit();
+        try eviction.ensureTotalCapacity(capacity);
+
+        eviction.allocator = std.testing.failing_allocator;
+        return .{
+            .ctx_pool = ctx_pool,
+            .ids = ids,
+            .signatures = signatures,
+            .signature_map = signature_map,
+            .eviction = eviction,
+        };
+    }
+
+    fn deinit(self: *InProgressSets, allocator: std.mem.Allocator) void {
+        allocator.free(self.ctx_pool.buf[0..self.ctx_pool.len]);
+        allocator.free(self.ids);
+        allocator.free(self.signatures);
+        self.signature_map.deinit(allocator);
+
+        self.eviction.allocator = allocator;
+        self.eviction.deinit();
+    }
+
+    fn getFecSetCtx(self: *const InProgressSets, signature: *const Signature) ?*FecSetCtx {
+        return self.signature_map.getAdapted(
+            signature,
+            SignatureContext{ .signatures = self.signatures },
+        );
+    }
+
+    // returns undefined memory, which must be immediately set by the caller
+    fn createFecSetCtx(
+        self: *InProgressSets,
+        id: FecSetId,
+        signature: *const Signature,
+    ) !*FecSetCtx {
+        const map_ctx: SignatureContext = .{ .signatures = self.signatures };
+
+        const new_pool_id: Pool.ItemId = self.ctx_pool.createId() catch id: {
+            @branchHint(.likely);
+
+            const evicted_idx = self.eviction.remove();
+
+            self.removeSet(evicted_idx);
+            // const evicted_sig: *Signature = &self.signatures[evicted_idx];
+            // const node: *FecSetCtx = @ptrCast(&self.ctx_pool.buf[evicted_idx]);
+
+            // // deinit evicted
+            // self.ids[evicted_idx] =
+            //     // an impossible FecSetID which can never be matched with
+            //     .{ .slot = std.math.maxInt(Slot), .fec_set_idx = std.math.maxInt(u32) - 1 };
+            // self.ctx_pool.destroy(node);
+            // self.signature_map.swapRemoveAdapted(evicted_sig, map_ctx); // TODO: could use swapRemoveAt
+
+            // evicted_sig.* = undefined;
+
+            break :id self.ctx_pool.createId() catch unreachable;
+        };
+
+        const new_idx: u32 = new_pool_id.index().?;
+
+        self.ids[new_idx] = id;
+        self.eviction.add(new_idx) catch unreachable; // eviction can't be full, we *just* evicted
+        self.signatures[new_idx] = signature.*;
+        const result = self.signature_map.getOrPutAssumeCapacityAdapted(signature, map_ctx);
+        if (result.found_existing) unreachable; // you can't create a fecsetctx that already exists
+
+        const node: *FecSetCtx = self.ctx_pool.indexToPtr(@enumFromInt(new_idx));
+
+        result.value_ptr.* = node;
+
+        return node;
+    }
+
+    fn removeSet(self: *InProgressSets, evicted_idx: u32) void {
+        const map_ctx: SignatureContext = .{ .signatures = self.signatures };
+
+        const evicted_sig: *Signature = &self.signatures[evicted_idx];
+        const node: *FecSetCtx = @ptrCast(&self.ctx_pool.buf[evicted_idx]);
+        self.ids[evicted_idx] =
+            // an impossible FecSetID which can never be matched with
+            .{ .slot = std.math.maxInt(Slot), .fec_set_idx = std.math.maxInt(u32) - 1 };
+
+        self.ctx_pool.destroyId(@enumFromInt(evicted_idx));
+        const removed = self.signature_map.swapRemoveContextAdapted(evicted_sig, map_ctx, map_ctx); // TODO: could use swapRemoveAt
+        std.debug.assert(removed);
+
+        evicted_sig.* = undefined;
+        node.* = undefined;
+    }
+
+    fn containsId(self: *const InProgressSets, id: FecSetId) bool {
+        return for (self.ids) |fec_set_id| {
+            if (id.eql(&fec_set_id)) break true;
+        } else false;
+    }
+
+    const SignatureContext = struct {
+        signatures: []const Signature,
+
+        pub fn hash(ctx: SignatureContext, key: *const Signature) u32 {
+            _ = ctx;
+            return @bitCast(key.r[0..4].*);
+        }
+
+        // NOTE: we could optimise this by getting rid of the Signature and only storing the hash,
+        // as collisions aren't important.
+        pub fn eql(ctx: SignatureContext, a: *const Signature, _: void, key_idx: usize) bool {
+            const b: *const Signature = &ctx.signatures[key_idx];
+            return a.eql(b);
+        }
+    };
+
+    const QueueContext = struct {
+        ids: []const FecSetId,
+        fn compare(self: QueueContext, a: u32, b: u32) std.math.Order {
+            // remove greatest (slot, fec id) first
+            return std.math.Order.invert(FecSetId.compare(&self.ids[a], &self.ids[b]));
+        }
+    };
+
+    const Queue = std.PriorityQueue(Idx, QueueContext, QueueContext.compare);
+
+    const IdContext = struct {
+        ids: []const FecSetId,
+
+        pub fn hash(ctx: IdContext, key: FecSetId) u32 {
+            _ = ctx;
+            return std.hash.Murmur3_32.hashUint64WithSeed(key.slot, key.fec_set_idx);
+        }
+
+        pub fn eql(ctx: SignatureContext, a: FecSetId, _: void, key_idx: usize) bool {
+            const b = &ctx.ids[key_idx];
+            return a.eql(b);
+        }
+    };
+};
+
+test "InProgressSets basic usage" {
+    const allocator = std.testing.allocator;
+    const set_signature: Signature = .ZEROES;
+    const set_id: FecSetId = .{ .slot = 123, .fec_set_idx = 32 };
+
+    var in_progress: InProgressSets = try .init(allocator, 16);
+    defer in_progress.deinit(allocator);
+
+    // doesn't contain anything yet
+    try std.testing.expect(!in_progress.containsId(set_id));
+    try std.testing.expectEqual(null, in_progress.getFecSetCtx(&Signature.ZEROES));
+
+    // add set
+    const ctx = try in_progress.createFecSetCtx(set_id, &set_signature);
+
+    // find set
+    const found_ctx = in_progress.getFecSetCtx(&set_signature) orelse unreachable;
+    try std.testing.expectEqual(ctx, found_ctx);
+    try std.testing.expect(in_progress.containsId(set_id));
+
+    // context is evicted
+    {
+        const ctx_idx = in_progress.eviction.remove();
+        in_progress.removeSet(ctx_idx);
+    }
+
+    // can't find set
+    try std.testing.expectEqual(null, in_progress.getFecSetCtx(&set_signature));
+    try std.testing.expect(!in_progress.containsId(set_id));
+}
+
 // TODO: this datastructure is a bit silly, worth profiling to see how slow it is
 //
 // TODO: once we have root slot tracking, we should aggressively prune entries where slot < root.
