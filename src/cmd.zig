@@ -1806,6 +1806,7 @@ fn validator(
             .max_retransmit_slot = &max_retransmit_slot,
             .max_shred_insert_slot = &max_shred_insert_slot,
             .rpc_hooks = null,
+            .event_sink = event_sink,
             .duplicate = if (replay_service_state.consensus) |consensus| .{
                 .shred_receiver = &duplicate_shreds,
                 .slots_sender = consensus.receivers.duplicate_slots,

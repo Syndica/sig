@@ -110,6 +110,7 @@ pub fn advanceReplay(
         slot_leaders,
         &replay_state.hard_forks,
         &replay_state.progress_map,
+        replay_state.event_sink,
     );
 
     // replay slots
@@ -457,6 +458,7 @@ pub fn trackNewSlots(
     hard_forks: *const sig.core.HardForks,
     /// needed for update_fork_propagated_threshold_from_votes
     _: *ProgressMap,
+    event_sink: ?*jrpc_types.EventSink,
 ) !void {
     var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
     defer zone.deinit();
@@ -561,6 +563,12 @@ pub fn trackNewSlots(
             });
             try slot_tree.record(allocator, slot, constants.parent_slot);
 
+            if (event_sink) |sink| {
+                try sink.send(.{ .bank_created = .{
+                    .slot = slot,
+                    .parent = constants.parent_slot,
+                } });
+            }
             // TODO: update_fork_propagated_threshold_from_votes
         }
     }
@@ -735,6 +743,21 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                 processed_a_slot = true;
 
                 if (state.event_sink) |event_sink| {
+                    const slot_state = slot_info.state();
+                    const parent_slot = slot_info.constants().parent_slot;
+
+                    const parent_tx_count = if (slot_tracker.get(parent_slot)) |parent_info| blk: {
+                        defer parent_info.release();
+                        break :blk parent_info.state().transaction_count.load(.monotonic);
+                    } else 0;
+
+                    const stats: jrpc_types.SlotTransactionStats = .{
+                        .numTransactionEntries = slot_state.transaction_entries_count.load(.monotonic),
+                        .numSuccessfulTransactions = slot_state.transaction_count.load(.monotonic) - parent_tx_count,
+                        .numFailedTransactions = slot_state.transaction_error_count.load(.monotonic),
+                        .maxTransactionsPerEntry = slot_state.transactions_per_entry_max.load(.monotonic),
+                    };
+
                     // send out frozen event with modified accounts for slot
                     var accounts = try event_sink.materializeSlotModifiedAccounts(
                         state.logger,
@@ -748,6 +771,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                             .slot = slot,
                             .parent = slot_info.constants().parent_slot,
                             .root = slot_tracker.state_root.load(.monotonic),
+                            .stats = stats,
                             .accounts = accounts,
                             .blockhash = last_entry_hash,
                             .previous_blockhash = prev_blockhash,
@@ -1311,6 +1335,7 @@ test trackNewSlots {
         slot_leaders,
         &hard_forks,
         undefined,
+        null,
     );
     try expectSlotTracker(
         &slot_tracker,
@@ -1331,6 +1356,7 @@ test trackNewSlots {
         slot_leaders,
         &hard_forks,
         undefined,
+        null,
     );
     try expectSlotTracker(
         &slot_tracker,
@@ -1357,6 +1383,7 @@ test trackNewSlots {
         slot_leaders,
         &hard_forks,
         undefined,
+        null,
     );
     try expectSlotTracker(
         &slot_tracker,
@@ -1377,6 +1404,9 @@ test trackNewSlots {
         ref4.state().hash.set(.ZEROES);
     }
 
+    const event_sink = try jrpc_types.EventSink.create(allocator);
+    defer event_sink.destroy();
+
     try trackNewSlots(
         allocator,
         .FOR_TESTS,
@@ -1388,12 +1418,28 @@ test trackNewSlots {
         slot_leaders,
         &hard_forks,
         undefined,
+        event_sink,
     );
     try expectSlotTracker(
         &slot_tracker,
         leader_schedule,
         &.{ .{ 0, 0 }, .{ 1, 0 }, .{ 2, 1 }, .{ 4, 1 }, .{ 6, 4 } },
         &.{ 3, 5 },
+    );
+
+    // Validate bank_created event for newly tracked slot 6
+    const event = event_sink.channel.tryReceive() orelse
+        return error.TestUnexpectedResult;
+    defer event.deinit();
+    switch (event) {
+        .bank_created => |bc| {
+            try std.testing.expectEqual(@as(Slot, 6), bc.slot);
+            try std.testing.expectEqual(@as(Slot, 4), bc.parent);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(
+        event_sink.channel.tryReceive() == null,
     );
 }
 

@@ -46,8 +46,6 @@ pub const WsMethodAndParams = union(enum) {
     // more specific error codes or message along with the error code.
     pub fn validate(self: *const WsMethodAndParams) VerifyError!void {
         switch (self.*) {
-            .slotsUpdatesSubscribe,
-            .slotsUpdatesUnsubscribe,
             .voteSubscribe,
             .voteUnsubscribe,
             => return error.MethodNotImplemented,
