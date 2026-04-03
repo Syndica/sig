@@ -271,8 +271,8 @@ pub const SlotTracker = struct {
         return try parents_list.toOwnedSlice(allocator);
     }
 
-    /// Returns the rooted path from `old_root` to `new_root`, exclusive of
-    /// `old_root` and inclusive of `new_root`.
+    /// Returns the ordered path of slots from `old_root` to `new_root`, exclusive of `old_root`
+    /// and inclusive of `new_root`.
     pub fn rootedPathForward(
         self: *SlotTracker,
         allocator: Allocator,
@@ -285,13 +285,14 @@ pub const SlotTracker = struct {
         defer rooted_path.deinit(allocator);
 
         try rooted_path.ensureTotalCapacity(allocator, new_root - old_root);
+        {
+            const root_info = self.get(new_root) orelse return error.NewRootNotFound;
+            defer root_info.release();
 
-        const root_info = self.get(new_root) orelse return error.NewRootNotFound;
-        defer root_info.release();
-
-        for (old_root + 1..new_root) |slot| {
-            if (root_info.constants().ancestors.containsSlot(slot)) {
-                rooted_path.appendAssumeCapacity(slot);
+            for (old_root + 1..new_root) |slot| {
+                if (root_info.constants().ancestors.containsSlot(slot)) {
+                    rooted_path.appendAssumeCapacity(slot);
+                }
             }
         }
         rooted_path.appendAssumeCapacity(new_root);
