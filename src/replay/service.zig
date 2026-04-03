@@ -305,9 +305,6 @@ pub const ReplayState = struct {
     prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
 
     pub fn deinit(self: *ReplayState) void {
-        self.thread_pool.shutdown();
-        self.thread_pool.deinit();
-
         self.slot_tracker.deinit(self.allocator);
         self.progress_map.deinit(self.allocator);
 
@@ -320,6 +317,9 @@ pub const ReplayState = struct {
         self.status_cache.deinit(self.allocator);
         if (self.commitments) |*tracker| tracker.deinit(self.allocator);
         self.hard_forks.deinit(self.allocator);
+
+        self.thread_pool.shutdown();
+        self.thread_pool.deinit();
     }
 
     pub fn init(
