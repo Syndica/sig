@@ -37,11 +37,11 @@ pub fn serviceMain(rw: ReadWrite) !noreturn {
 
     var map_tree: MerkleForest = try .init(allocator);
 
-    while (true) {
-        var read = rw.deshredded_in.getReadable() catch continue;
+    var deshredded_iter = rw.deshredded_in.get(.reader);
 
-        const deshredded_fec_set: *const lib.shred.DeshreddedFecSet = read.get(0);
-        defer read.markUsed(1);
+    while (true) {
+        const deshredded_fec_set: *const lib.shred.DeshreddedFecSet = deshredded_iter.next() orelse continue;
+        defer deshredded_iter.markUsed();
 
         const received_zone = tracy.Zone.init(@src(), .{ .name = "received fec set" });
         defer received_zone.deinit();

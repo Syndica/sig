@@ -84,12 +84,12 @@ fn mainInner(
             while (it.next()) |p| {
                 const bytes = try std.posix.sendto(
                     sock,
-                    p.data[0..p.size],
+                    p.data[0..p.len],
                     std.posix.MSG.NOSIGNAL,
                     &p.addr.any,
                     p.addr.getOsSockLen(),
                 );
-                std.debug.assert(bytes == p.size);
+                std.debug.assert(bytes == p.len);
                 metrics.send_packets.increment(1);
             }
         }
