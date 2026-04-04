@@ -20,17 +20,17 @@ pub fn LCRSTree(Node: type, IdInt: type) type {
     }
 
     return extern struct {
-        buf: []Node,
+        len: IdInt,
+        buf: [*]Node,
 
         const Self = @This();
 
         fn ptrToIdx(self: *const Self, node: *Node) NodeId {
-            const idx = @as([*]Node, node[0..1]) - self.buf.ptr;
+            const idx = @as([*]Node, node[0..1]) - self.buf;
             return @enumFromInt(idx);
         }
 
-        // NOTE: should be atomic
-        fn linkOrphaned(self: *const Self, parent: *Node, orphan: *Node) void {
+        pub fn linkOrphaned(self: *const Self, parent: *Node, orphan: *Node) void {
             std.debug.assert(orphan.parent == .null);
             std.debug.assert(orphan.sibling == .null);
 

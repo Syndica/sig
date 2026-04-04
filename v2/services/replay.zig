@@ -11,6 +11,9 @@ const Slot = lib.solana.Slot;
 const Shred = lib.shred.Shred;
 const FecSetId = lib.shred.FecSetId;
 
+const Tree = lib.collections.LCRSTree;
+const Pool = lib.collections.Pool;
+
 comptime {
     _ = start;
 }
@@ -48,6 +51,8 @@ pub fn serviceMain(rw: ReadWrite) !noreturn {
     }
 }
 
+const BlockId = BlockTree.NodePool.ItemId;
+
 const BlockTree = struct {
     node_pool: NodePool,
     node_tree: NodeTree,
@@ -67,18 +72,16 @@ const BlockTree = struct {
 
     const capacity = 1024;
 
-    const NodePool = Pool(Node, capacity);
-    const NodeTree = Tree(Node, capacity);
-
-    const BlockId = PoolIdx;
+    const NodePool = Pool(Node, u32);
+    const NodeTree = Tree(Node, u32);
 
     // TODO: large values (e.g. Hashes) should probably live elsewhere in memory to keep tree
     // traversal fast
     // This could maybe be 24 bytes (u32 idx * 3, slot u64, last merkle root hash u32)
     const Node = extern struct {
-        parent: PoolIdx = .null,
-        child: PoolIdx = .null,
-        sibling: PoolIdx = .null,
+        parent: BlockId = .null,
+        child: BlockId = .null,
+        sibling: BlockId = .null,
 
         slot: Slot,
 
@@ -101,7 +104,7 @@ const BlockTree = struct {
         root_slot: Slot,
         root_slot_last_fec_set_merkle_root: *const Hash,
     ) !BlockTree {
-        const pool_buf = (try allocator.alloc(Node, capacity))[0..capacity];
+        const pool_buf = try allocator.alloc(Node, capacity);
         errdefer allocator.free(pool_buf);
 
         var pool: NodePool = .init(@ptrCast(pool_buf));
@@ -116,13 +119,13 @@ const BlockTree = struct {
 
         return .{
             .node_pool = pool,
-            .node_tree = .{ .buf = pool_buf },
+            .node_tree = .{ .buf = @ptrCast(pool_buf.ptr), .len = @intCast(pool_buf.len) },
             .consensus_rooted_block = pool.ptrToIndex(root_node),
         };
     }
 
     fn deinit(self: *BlockTree, allocator: std.mem.Allocator) void {
-        allocator.free(self.node_pool.buf);
+        allocator.free(self.node_pool.buf[0..self.node_pool.len]);
     }
 
     fn findUnrootedParent(
@@ -266,9 +269,9 @@ test "Basic blocktree" {
 /// NOTE: When used inside the Pool, these may be items in a free list. However such nodes should
 /// not be in either map or the tree.
 const MerkleNode = extern struct {
-    parent: PoolIdx = .null,
-    child: PoolIdx = .null,
-    sibling: PoolIdx = .null,
+    parent: MerkleForest.NodePool.ItemId = .null,
+    child: MerkleForest.NodePool.ItemId = .null,
+    sibling: MerkleForest.NodePool.ItemId = .null,
 
     merkle_root: Hash,
     chained_merkle_root: Hash,
@@ -331,8 +334,8 @@ const MerkleForest = struct {
     // keyed by chained merkle root
     const MerkleMap = std.ArrayHashMapUnmanaged(void, *MerkleNode, MerkleContext, true);
 
-    const NodePool = Pool(MerkleNode, capacity);
-    const NodeTree = Tree(MerkleNode, capacity);
+    const NodePool = Pool(MerkleNode, u32);
+    const NodeTree = Tree(MerkleNode, u32);
 
     const MerkleContext = struct {
         map: *const MerkleMap,
@@ -361,7 +364,7 @@ const MerkleForest = struct {
     };
 
     fn init(allocator: std.mem.Allocator) !MerkleForest {
-        const pool_buf = try allocator.alloc(NodePool.Node, capacity);
+        const pool_buf = try allocator.alloc(MerkleNode, capacity);
         errdefer allocator.free(pool_buf);
 
         var map: MerkleMap = .empty;
@@ -375,7 +378,7 @@ const MerkleForest = struct {
         return .{
             // NOTE: the pool and the tree share the exact same buffer - this is intentional
             .pool = .init(pool_buf[0..capacity]),
-            .tree = .{ .buf = @ptrCast(pool_buf[0..capacity]) },
+            .tree = .{ .buf = @ptrCast(pool_buf.ptr), .len = @intCast(pool_buf.len) },
 
             .map = map,
             .orphan_map = orphan_map,
@@ -383,7 +386,7 @@ const MerkleForest = struct {
     }
 
     fn deinit(self: *MerkleForest, allocator: std.mem.Allocator) void {
-        allocator.free(self.pool.buf);
+        allocator.free(self.pool.buf[0..self.pool.len]);
         self.map.deinit(allocator);
         self.orphan_map.deinit(allocator);
     }
@@ -407,9 +410,14 @@ const MerkleForest = struct {
         }
     };
 
+    // TODO: eviction
+    // TODO: remove orphans from orphan_map once parented
     fn put(self: *MerkleForest, new_fec_set: *const lib.shred.DeshreddedFecSet) !InsertResult {
         const map_ctx: MerkleContext = .{ .map = &self.map };
         const orphan_map_ctx: OrphanContext = .{ .map = &self.orphan_map };
+
+        self.assertCounts();
+        defer self.assertCounts();
 
         const map_result = self.map.getOrPutAssumeCapacityAdapted(&new_fec_set.merkle_root, map_ctx);
         if (map_result.found_existing) return .node_already_known;
@@ -470,7 +478,7 @@ const MerkleForest = struct {
             // This slot might be finished? Let's traverse our node's parents and children to find
             // out.
             const start_finished: bool = node.id.fec_set_idx == 0 or found_idx_0: {
-                var maybe_backwards_idx: ?usize = node.parent.index();
+                var maybe_backwards_idx: ?u32 = node.parent.index();
 
                 break :found_idx_0 while (maybe_backwards_idx) |backwards_idx| {
                     const parent_node: *const MerkleNode = @ptrCast(&self.pool.buf[backwards_idx]);
@@ -482,7 +490,7 @@ const MerkleForest = struct {
             };
 
             const end_finished: bool = node.slot_complete or found_slot_complete: {
-                var maybe_forwards_idx: ?usize = node.child.index();
+                var maybe_forwards_idx: ?u32 = node.child.index();
 
                 break :found_slot_complete while (maybe_forwards_idx) |forwards_idx| {
                     const child_node: *const MerkleNode = @ptrCast(&self.pool.buf[forwards_idx]);
@@ -500,6 +508,12 @@ const MerkleForest = struct {
         if (must_wait_for_child) return .waiting_for_child;
         if (must_wait_for_parent) return .waiting_for_parent;
         unreachable;
+    }
+
+    fn assertCounts(self: *const MerkleForest) void {
+        std.debug.assert(self.orphan_map.count() <= self.map.count());
+        tracy.plot(u32, "Merkle forest fec sets", @intCast(self.map.count()));
+        tracy.plot(u32, "Merkle forest fec sets (orphaned)", @intCast(self.orphan_map.count()));
     }
 };
 
@@ -615,181 +629,4 @@ test "MerkleForest fec set completion out of order" {
     try std.testing.expectEqual(.waiting_for_parent_and_child, c_result);
     try std.testing.expectEqual(.chain_incomplete, b_result);
     try std.testing.expectEqual(.chain_complete, d_result);
-}
-
-fn Tree(Node: type, comptime capacity: usize) type {
-    const needed_fields: []const []const u8 = &.{ "parent", "child", "sibling" };
-
-    for (needed_fields) |field| {
-        if (!@hasField(Node, field)) {
-            @compileLog("missing field", Node, field);
-            continue;
-        }
-        if (@TypeOf(@field(@as(Node, undefined), field)) != PoolIdx) @compileLog("incorrect type", Node, field);
-    }
-
-    return extern struct {
-        buf: *[capacity]Node,
-
-        const Self = @This();
-
-        fn ptrToIdx(self: *const Self, node: *Node) PoolIdx {
-            const idx = @as([*]Node, node[0..1]) - self.buf.ptr;
-            return @enumFromInt(idx);
-        }
-
-        // NOTE: should be atomic
-        fn linkOrphaned(self: *const Self, parent: *Node, orphan: *Node) void {
-            std.debug.assert(orphan.parent == .null);
-            std.debug.assert(orphan.sibling == .null);
-
-            orphan.parent = self.ptrToIdx(parent);
-
-            if (parent.child == .null) {
-                parent.child = self.ptrToIdx(orphan);
-            } else {
-                orphan.sibling = parent.child;
-                parent.child = self.ptrToIdx(orphan);
-            }
-        }
-    };
-}
-
-// TODO: allow for generic PoolIdx, to support smaller tree nodes, e.g. u32
-const PoolIdx = enum(usize) {
-    null = std.math.maxInt(usize),
-    _,
-
-    fn index(self: PoolIdx) ?usize {
-        if (self == .null) return null;
-        return @intFromEnum(self);
-    }
-};
-
-fn Pool(Item: type, comptime capacity: usize) type {
-    std.debug.assert(capacity < std.math.maxInt(usize));
-
-    return extern struct {
-        free_list: Idx,
-        buf: *[capacity]Node,
-
-        // We know when next_free is active when we walk the free_list
-        const Node = extern union { next_free: Idx, item: Item };
-        const Idx = PoolIdx;
-
-        comptime {
-            if (@sizeOf(Item) < @sizeOf(Idx)) unreachable;
-            if (@alignOf(Item) < @alignOf(Idx)) unreachable;
-
-            if (@sizeOf(Node) != @sizeOf(Item)) unreachable;
-            if (@alignOf(Node) != @alignOf(Item)) unreachable;
-        }
-
-        // alignOf(Node) >= alignOf(Item)
-        const ItemPtr = *align(@alignOf(Node)) Item;
-
-        const Self = @This();
-
-        fn init(buf: *[capacity]Node) Self {
-            // place all nodes in the free list
-            // (0) -> (1) -> ... ->(buf.len - 1) -> (null)
-            for (buf[0 .. buf.len - 1], 0..) |*node, i| {
-                node.* = .{ .next_free = @enumFromInt(i + 1) };
-            }
-            buf[buf.len - 1] = .{ .next_free = .null };
-
-            return .{ .buf = buf, .free_list = @enumFromInt(0) };
-        }
-
-        // take head off free_list
-        fn create(self: *Self) !ItemPtr {
-            if (self.free_list == .null) return error.OutOfSpace;
-
-            const idx = self.free_list;
-            self.free_list = self.buf[@intFromEnum(self.free_list)].next_free;
-
-            return @ptrCast(&self.buf[@intFromEnum(idx)]);
-        }
-
-        // place item as head of free_list
-        fn destroy(self: *Self, item: ItemPtr) void {
-            item.* = undefined;
-
-            const node: *Node = @ptrCast(item);
-            node.* = .{ .next_free = self.free_list };
-            self.free_list = self.ptrToIndex(item);
-        }
-
-        fn ptrToIndex(self: *const Self, item: ItemPtr) Idx {
-            const node: [*]const Node = @ptrCast(item);
-            const base: [*]const Node = self.buf.ptr;
-            return @enumFromInt(node - base);
-        }
-    };
-}
-
-test "pool create + destroy" {
-    const capacity = 2048;
-    const allocator = std.testing.allocator;
-
-    const P = Pool(i64, capacity);
-
-    const pool_buf = try allocator.alloc(P.Node, capacity);
-    defer allocator.free(pool_buf);
-
-    var pool: P = .init(pool_buf[0..capacity]);
-
-    for (0..capacity + 1) |i| {
-        if (i == capacity) {
-            try std.testing.expectError(error.OutOfSpace, pool.create());
-            continue;
-        }
-
-        const x: *i64 = try pool.create();
-        x.* = -(@as(i64, @intCast(i)) * 2);
-    }
-
-    for (0..capacity) |i| {
-        const node = &pool.buf[i];
-        const x: *i64 = @ptrCast(node);
-        std.debug.assert(x.* == -(@as(i64, @intCast(i)) * 2));
-        pool.destroy(@ptrCast(&pool.buf[i]));
-    }
-
-    for (0..capacity + 1) |i| {
-        if (i == capacity) {
-            try std.testing.expectError(error.OutOfSpace, pool.create());
-            continue;
-        }
-
-        const x: *i64 = try pool.create();
-        x.* = -(@as(i64, @intCast(i)) * 2);
-    }
-}
-
-test "pool create + destroy out of order" {
-    const allocator = std.testing.allocator;
-    const P = Pool(i64, 3);
-
-    const pool_buf = try allocator.alloc(P.Node, 3);
-    defer allocator.free(pool_buf);
-
-    var pool: Pool(i64, 3) = .init(pool_buf[0..3]);
-
-    const a = try pool.create();
-    const b = try pool.create();
-    const c = try pool.create();
-
-    a.* = 0;
-    b.* = 10;
-    c.* = 30;
-
-    pool.destroy(b);
-    pool.destroy(a);
-
-    const x = try pool.create();
-    const y = try pool.create();
-
-    try std.testing.expectEqual(a, x);
-    try std.testing.expectEqual(b, y);
 }
