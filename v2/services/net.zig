@@ -2,7 +2,7 @@
 //! sending and receiving packets.
 
 const std = @import("std");
-const start = @import("start");
+const start = @import("start_service");
 const lib = @import("lib");
 const Pair = lib.net.Pair;
 
@@ -60,12 +60,12 @@ fn mainInner(pairs: []const *Pair) !noreturn {
             while (it.next()) |p| {
                 const bytes = try std.posix.sendto(
                     sock,
-                    p.data[0..p.size],
+                    p.data[0..p.len],
                     std.posix.MSG.NOSIGNAL,
                     &p.addr.any,
                     p.addr.getOsSockLen(),
                 );
-                std.debug.assert(bytes == p.size);
+                std.debug.assert(bytes == p.len);
             }
         }
 
@@ -77,7 +77,7 @@ fn mainInner(pairs: []const *Pair) !noreturn {
             // TODO: use std.os.linux.recvmmsg
             while (it.peek()) |ptr| {
                 var addr_len: std.posix.socklen_t = @sizeOf(std.net.Address);
-                ptr.size = @intCast(std.posix.recvfrom(
+                ptr.len = @intCast(std.posix.recvfrom(
                     sock,
                     &ptr.data,
                     0,

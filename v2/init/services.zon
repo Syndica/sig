@@ -5,6 +5,8 @@
 
         .net_to_gossip = .net_pair,
         .gossip_config = .gossip_config,
+
+        .deshredded_out = .deshredded_out,
     },
     .services = .{
         .{
@@ -26,6 +28,13 @@
             .regions = .{
                 .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .shred_recv_config, .access = .readonly },
+                .{ .name = .deshredded_out, .access = .rw },
+            },
+        },
+        .{
+            .name = .replay,
+            .regions = .{
+                .{ .name = .deshredded_out, .access = .rw },
             },
         },
     },

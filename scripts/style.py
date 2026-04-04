@@ -140,6 +140,7 @@ def unused_imports(args, files_to_check):
 
 
 files_excluded_from_line_length_check = [
+    # src
     "src/bincode/arraylist.zig",
     "src/bincode/bincode.zig",
     "src/bincode/int.zig",
@@ -176,6 +177,7 @@ files_excluded_from_line_length_check = [
     "src/transaction_sender/transaction_pool.zig",
     "v2/lib/shred/test_shreds.zig",
     "v2/lib/shred.zig",
+    "v2/lib/shred/reed_solomon_table.zig",
 
     # Generated files, will not conform to style guide.
     "src/crypto/bn254/bn254_64.zig",

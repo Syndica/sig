@@ -1,3 +1,15 @@
+//! This is the root process, in charge of initialising and spawning all services.
+//!
+//! Responsibilities:
+//!  - Parsing config
+//!  - Creation of shared memory regions
+//!  - Initialising shared data structures / passing through config
+//!  - Creating sandboxed processes (unsandboxed single-process also supported for e.g. profiling)
+//!  - Waiting for first service failure, and shutdown
+//!
+//! See `services` for how this works.
+//!
+
 const std = @import("std");
 
 comptime {
@@ -69,6 +81,7 @@ pub fn main() !void {
         .{ .service = .shred_receiver },
         .{ .service = .net },
         .{ .service = .gossip },
+        .{ .service = .replay },
     };
 
     const shared_regions = services.toSharedRegions(.{
@@ -89,6 +102,9 @@ pub fn main() !void {
             .keypair = .fromKeyPair(.generate()),
             .turbine_recv_port = config.shred_network.recv_port,
         },
+
+        // shred receiver -> replay
+        .deshredded_out = {},
     });
 
     switch (config.sandboxing_mode) {
