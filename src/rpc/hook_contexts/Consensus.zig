@@ -218,8 +218,10 @@ pub fn getLatestBlockhash(
         defer bq_lock.unlock();
 
         const last_hash = bq.last_hash orelse return error.SlotNotAvailable;
-        const lvbh = bq.getLastValidBlockHeight(resolved.ref.constants().block_height, last_hash) orelse
-            return error.SlotNotAvailable;
+        const lvbh = bq.getLastValidBlockHeight(
+            resolved.ref.constants().block_height,
+            last_hash,
+        ) orelse return error.SlotNotAvailable;
         break :blk .{ last_hash, lvbh };
     };
 

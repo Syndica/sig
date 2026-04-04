@@ -16,7 +16,10 @@ const Logger = sig.trace.Logger("rpc.server.basic");
 const cors_headers: []const std.http.Header = &.{
     .{ .name = "Access-Control-Allow-Origin", .value = "*" },
     .{ .name = "Access-Control-Allow-Methods", .value = "GET, POST, HEAD, OPTIONS" },
-    .{ .name = "Access-Control-Allow-Headers", .value = "Content-Type, Authorization, Accept, Solana-Client" },
+    .{
+        .name = "Access-Control-Allow-Headers",
+        .value = "Content-Type, Authorization, Accept, Solana-Client",
+    },
     .{ .name = "Access-Control-Max-Age", .value = "86400" },
 };
 
@@ -25,7 +28,10 @@ const json_headers: []const std.http.Header = &.{
     .{ .name = "Content-Type", .value = "application/json" },
     .{ .name = "Access-Control-Allow-Origin", .value = "*" },
     .{ .name = "Access-Control-Allow-Methods", .value = "GET, POST, HEAD, OPTIONS" },
-    .{ .name = "Access-Control-Allow-Headers", .value = "Content-Type, Authorization, Accept, Solana-Client" },
+    .{
+        .name = "Access-Control-Allow-Headers",
+        .value = "Content-Type, Authorization, Accept, Solana-Client",
+    },
     .{ .name = "Access-Control-Max-Age", .value = "86400" },
 };
 
