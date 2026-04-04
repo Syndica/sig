@@ -4,15 +4,11 @@ const lib = @import("../lib.zig");
 const reed_sol = @import("reed_solomon.zig");
 
 const solana = lib.solana;
-const ipc = lib.ipc;
 const net = lib.net;
 
 const Hash = solana.Hash;
 const Slot = solana.Slot;
-const LeaderSchedule = solana.LeaderSchedule;
 const Signature = solana.Signature;
-
-const Ring = ipc.Ring;
 
 const Packet = net.Packet;
 
@@ -711,9 +707,15 @@ test "DoneSets basic usage" {
     var done_sets: DoneSets = try .init(allocator, 2);
     defer done_sets.deinit(allocator);
 
-    const sig_1: Signature = .parse("3NyXqg7XjPBX5eW2zpExpAJTdXCHpVt4RR2uPPc6XUzTCVeAphwzpNBxHtYPpipE1gne2NW6ELW6HVdaB7oV9DEn");
-    const sig_2: Signature = .parse("2RUa9Sv3T2vwxeubSwJUS63W7N2wT9RaMcaoGJS6a28zGmSvpdArZMcDe7n3JTeBtuh1BkSgaJ8eN3WF7TBMjkG6");
-    const sig_3: Signature = .parse("pfj5CrTzHZ69ynRVXfzitUoSWSNqFJVkUzy17FWiC72FE1nw4nHLR2EWFipRnkp6NoeaPyn7uRt5HXZPngz6wsW");
+    const sig_1: Signature = .parse(
+        \\3NyXqg7XjPBX5eW2zpExpAJTdXCHpVt4RR2uPPc6XUzTCVeAphwzpNBxHtYPpipE1gne2NW6ELW6HVdaB7oV9DEn
+    );
+    const sig_2: Signature = .parse(
+        \\2RUa9Sv3T2vwxeubSwJUS63W7N2wT9RaMcaoGJS6a28zGmSvpdArZMcDe7n3JTeBtuh1BkSgaJ8eN3WF7TBMjkG6
+    );
+    const sig_3: Signature = .parse(
+        \\pfj5CrTzHZ69ynRVXfzitUoSWSNqFJVkUzy17FWiC72FE1nw4nHLR2EWFipRnkp6NoeaPyn7uRt5HXZPngz6wsW
+    );
 
     const id_1: FecSetId = .{ .slot = 1, .fec_set_idx = 0 };
     const id_2: FecSetId = .{ .slot = 2, .fec_set_idx = 0 };

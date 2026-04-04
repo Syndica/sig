@@ -122,7 +122,9 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var maybe_idle_zone: ?tracy.Zone = tracy.Zone.init(idle_src, .{ .name = "idle" });
     while (true) {
         const packet = packet_iter.next() orelse {
-            if (maybe_idle_zone == null) maybe_idle_zone = tracy.Zone.init(idle_src, .{ .name = "idle" });
+            if (maybe_idle_zone == null) {
+                maybe_idle_zone = tracy.Zone.init(idle_src, .{ .name = "idle" });
+            }
             continue;
         };
         defer packet_iter.markUsed();
