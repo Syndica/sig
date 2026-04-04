@@ -67,6 +67,7 @@ pub fn commitTransactions(
 
     var transaction_fees: u64 = 0;
     var priority_fees: u64 = 0;
+    var non_vote_count: usize = 0;
 
     for (transactions, tx_results, 0..) |transaction, *result, transaction_index| {
         const message_hash = &result.@"0";
@@ -83,6 +84,10 @@ pub fn commitTransactions(
         const is_simple_vote_tx = transaction.transaction.isSimpleVoteTransaction(
             transaction.instructions,
         );
+
+        if (!is_simple_vote_tx) {
+            non_vote_count += 1;
+        }
 
         // Update prioritization fee cache for non-vote transactions
         if (self.prioritization_fee_cache) |cache| if (!is_simple_vote_tx) try cache.update(
@@ -168,6 +173,7 @@ pub fn commitTransactions(
     _ = self.slot_state.collected_transaction_fees.fetchAdd(transaction_fees, .monotonic);
     _ = self.slot_state.collected_priority_fees.fetchAdd(priority_fees, .monotonic);
     _ = self.slot_state.transaction_count.fetchAdd(tx_results.len, .monotonic);
+    _ = self.slot_state.non_vote_transaction_count.fetchAdd(non_vote_count, .monotonic);
     _ = self.slot_state.signature_count.fetchAdd(signature_count, .monotonic);
     _ = self.slot_state.collected_rent.fetchAdd(rent_collected, .monotonic);
 
