@@ -4,7 +4,12 @@ const solana = @import("solana.zig");
 const ipc = @import("ipc.zig");
 const net = @import("net.zig");
 
+comptime {
+    _ = std.testing.refAllDecls(@This());
+}
+
 pub const reed_solomon_table = @import("shred/reed_solomon_table.zig");
+pub const Receiver = @import("shred/receiver.zig").Receiver;
 
 const Hash = solana.Hash;
 const Slot = solana.Slot;
