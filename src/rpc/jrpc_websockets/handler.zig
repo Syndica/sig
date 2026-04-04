@@ -253,6 +253,7 @@ pub const JRPCHandler = struct {
 
         switch (request.method) {
             inline .accountUnsubscribe,
+            .blockUnsubscribe,
             .logsUnsubscribe,
             .programUnsubscribe,
             .rootUnsubscribe,

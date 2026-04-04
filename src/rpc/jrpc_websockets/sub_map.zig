@@ -71,8 +71,8 @@ pub const RPCSubMap = struct {
     /// retained. On new entry, heap fields are deep-copied into the map's allocator.
     ///
     /// Queue commit path policy:
-    /// - `.slot`, `.root`, `.program`, `.account`, and `.logs` use `.reserved`
-    ///   to preserve event order
+    /// - `.slot`, `.root`, `.program`, `.account`, `.logs`, and `.block`
+    ///   use `.reserved` to preserve event order
     /// - all other methods use `.direct`
     pub fn getOrCreate(
         self: *RPCSubMap,
@@ -91,7 +91,7 @@ pub const RPCSubMap = struct {
 
         const queue = try self.allocator.create(NotifQueue);
         const commit_path: NotifQueue.CommitPath = switch (key.method) {
-            .slot, .root, .program, .account, .logs => .reserved,
+            .slot, .root, .program, .account, .logs, .block => .reserved,
             else => .direct,
         };
         queue.* = try NotifQueue.init(self.allocator, self.queue_capacity, commit_path);

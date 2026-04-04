@@ -706,22 +706,36 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
             defer slot_info.release();
             if (slot_info.state().tickHeight() == slot_info.constants().max_tick_height) {
                 state.logger.info().logf("finished replaying slot: {}", .{slot});
-                try replay.freeze.freezeSlot(state.allocator, .init(
-                    .from(state.logger),
-                    state.account_store,
-                    &state.thread_pool,
-                    slot_info.state(),
-                    slot_info.constants(),
-                    slot,
-                    last_entry_hash,
-                    state.ledger,
-                ));
+
+                // Capture previous blockhash before freeze
+                // inserts the current one into the queue.
+                const prev_blockhash = blk: {
+                    var q = slot_info.state().blockhash_queue.read();
+                    defer q.unlock();
+                    break :blk q.get().last_hash orelse sig.core.Hash.ZEROES;
+                };
+
+                var distributed = try replay.freeze.freezeSlot(
+                    state.allocator,
+                    .init(
+                        .from(state.logger),
+                        state.account_store,
+                        &state.thread_pool,
+                        slot_info.state(),
+                        slot_info.constants(),
+                        slot,
+                        last_entry_hash,
+                        state.ledger,
+                    ),
+                );
+                defer distributed.deinit();
                 if (state.prioritization_fee_cache) |cache| {
                     cache.finalizeSlot(state.allocator, slot);
                 }
                 processed_a_slot = true;
 
                 if (state.event_sink) |event_sink| {
+                    // send out frozen event with modified accounts for slot
                     var accounts = try event_sink.materializeSlotModifiedAccounts(
                         state.logger,
                         state.account_store.reader(),
@@ -729,12 +743,25 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     );
                     errdefer accounts.deinit();
 
-                    try event_sink.send(.{ .slot_frozen = .{
-                        .slot = slot,
-                        .parent = slot_info.constants().parent_slot,
-                        .root = slot_tracker.state_root.load(.monotonic),
-                        .accounts = accounts,
-                    } });
+                    try event_sink.send(.{
+                        .slot_frozen = .{
+                            .slot = slot,
+                            .parent = slot_info.constants().parent_slot,
+                            .root = slot_tracker.state_root.load(.monotonic),
+                            .accounts = accounts,
+                            .blockhash = last_entry_hash,
+                            .previous_blockhash = prev_blockhash,
+                            .block_height = slot_info.constants().block_height,
+                            .block_time = state.ledger.db.get(
+                                state.allocator,
+                                schema.blocktime,
+                                slot,
+                            ) catch null,
+                            .distributed_rewards = distributed,
+                        },
+                    });
+                    // Ownership transferred to event.
+                    distributed = .empty();
                 }
             } else {
                 state.logger.info().logf("partially replayed slot: {}", .{slot});
@@ -1854,6 +1881,12 @@ test "freezeCompletedSlots emits slot_frozen event with slot metadata" {
             try std.testing.expectEqual(1, slot_frozen.slot);
             try std.testing.expectEqual(0, slot_frozen.parent);
             try std.testing.expectEqual(0, slot_frozen.root);
+            // Block metadata enrichment (Step 5).
+            try std.testing.expectEqual(Hash.ZEROES, slot_frozen.blockhash);
+            try std.testing.expect(slot_frozen.block_height != null);
+            // block_time is read from ledger (clock.unix_timestamp);
+            // the test ledger has no blocktime entry, so it's null.
+            try std.testing.expectEqual(null, slot_frozen.block_time);
         },
         else => return error.TestUnexpectedResult,
     }

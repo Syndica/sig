@@ -46,13 +46,18 @@ pub const WsMethodAndParams = union(enum) {
     // more specific error codes or message along with the error code.
     pub fn validate(self: *const WsMethodAndParams) VerifyError!void {
         switch (self.*) {
-            .blockSubscribe,
-            .blockUnsubscribe,
             .slotsUpdatesSubscribe,
             .slotsUpdatesUnsubscribe,
             .voteSubscribe,
             .voteUnsubscribe,
             => return error.MethodNotImplemented,
+            .blockSubscribe => |block_sub| {
+                if (block_sub.config) |cfg| {
+                    if (cfg.commitment) |c| {
+                        if (c == .processed) return error.InvalidParams;
+                    }
+                }
+            },
             .programSubscribe => |program_sub| {
                 program_sub.validateParams() catch {
                     return error.InvalidParams;
@@ -686,7 +691,7 @@ test "WsRequest.Dynamic parse diagnostic captures request id" {
 test "validate rejects unstable methods" {
     const req: WsRequest = .{
         .id = .{ .int = 1 },
-        .method = .{ .blockSubscribe = .{ .filter = .all, .config = null } },
+        .method = .{ .voteSubscribe = .{} },
     };
 
     try std.testing.expectError(error.MethodNotImplemented, req.method.validate());
@@ -705,6 +710,18 @@ test "validate rejects programSubscribe with too many filters" {
                 .{ .dataSize = 4 },
                 .{ .dataSize = 5 },
             } },
+        } },
+    };
+
+    try std.testing.expectError(error.InvalidParams, req.method.validate());
+}
+
+test "validate rejects blockSubscribe with processed commitment" {
+    const req: WsRequest = .{
+        .id = .{ .int = 1 },
+        .method = .{ .blockSubscribe = .{
+            .filter = .all,
+            .config = .{ .commitment = .processed },
         } },
     };
 

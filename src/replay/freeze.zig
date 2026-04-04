@@ -100,7 +100,7 @@ pub const FreezeParams = struct {
 /// hash for the slot.
 ///
 /// Analogous to [Bank::freeze](https://github.com/anza-xyz/agave/blob/b948b97d2a08850f56146074c0be9727202ceeff/runtime/src/bank.rs#L2620)
-pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
+pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !DistributedRewards {
     var zone = tracy.Zone.init(@src(), .{ .name = "freezeSlot" });
     zone.value(params.finalize_state.slot);
     defer zone.deinit();
@@ -109,9 +109,9 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
     var slot_hash = params.slot_hash.write();
     defer slot_hash.unlock();
 
-    if (slot_hash.get().* != null) return; // already frozen
+    if (slot_hash.get().* != null) return .empty();
 
-    try finalizeState(allocator, params.finalize_state);
+    const distributed = try finalizeState(allocator, params.finalize_state);
 
     const maybe_lt_hash, slot_hash.mut().* = try hashSlot(
         allocator,
@@ -128,6 +128,7 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
     tracy.frameMarkNamed("slots frozen");
 
     // NOTE: agave updates hard_forks and hash_overrides here
+    return distributed;
 }
 
 const FinalizeStateParams = struct {
@@ -154,7 +155,7 @@ const FinalizeStateParams = struct {
 };
 
 /// Updates some accounts and other shared state to finish up the slot execution.
-fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
+fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !DistributedRewards {
     var zone = tracy.Zone.init(@src(), .{ .name = "finalizeState" });
     zone.value(params.slot);
     defer zone.deinit();
@@ -171,7 +172,7 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
         try updateRecentBlockhashes(allocator, q.get(), params.update_sysvar);
     }
 
-    try distributeTransactionFees(
+    const distributed = try distributeTransactionFees(
         allocator,
         params.account_store,
         params.account_reader,
@@ -202,12 +203,34 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
     }
 
     try updateSlotHistory(allocator, params.update_sysvar);
+    return distributed;
 }
+
+/// Rewards and partition info produced by fee distribution.
+/// Owns an arena that backs the `rewards` slice. The arena can be handed off
+/// to another thread (e.g. the websocket runtime) for deferred deallocation.
+pub const DistributedRewards = struct {
+    rewards: []const sig.ledger.meta.Reward = &.{},
+    num_partitions: ?u64 = null,
+    arena: std.heap.ArenaAllocator,
+
+    pub fn empty() DistributedRewards {
+        return .{ .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator) };
+    }
+
+    pub fn deinit(self: *DistributedRewards) void {
+        self.arena.deinit();
+    }
+};
 
 /// Burn and payout the appropriate portions of collected fees.
 /// Records all rewards (fee, vote, staking) and num_partitions to the blockstore.
 /// Matches Agave's fee distribution in `runtime/src/bank/fee_distribution.rs`
 /// and reward recording in `get_rewards_and_num_partitions`.
+///
+/// Returns the computed rewards and num_partitions so callers can forward them
+/// without re-reading the ledger. The returned `DistributedRewards` owns an
+/// arena that backs the rewards slice.
 fn distributeTransactionFees(
     allocator: Allocator,
     account_store: AccountStore,
@@ -221,7 +244,7 @@ fn distributeTransactionFees(
     ledger: *sig.ledger.Ledger,
     epoch_reward_status: *const rewards.EpochRewardStatus,
     block_height: u64,
-) !void {
+) !DistributedRewards {
     const zone = tracy.Zone.init(@src(), .{ .name = "distributeTransactionFees" });
     defer zone.deinit();
 
@@ -257,21 +280,31 @@ fn distributeTransactionFees(
             .commission = null,
         };
 
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        errdefer arena.deinit();
+
         const keyed_rewards, const num_partitions = try getRewardsAndNumPartitions(
-            allocator,
+            arena.allocator(),
             epoch_reward_status,
             block_height,
             fee_reward,
         );
-        defer allocator.free(keyed_rewards);
 
         try ledger.db.put(sig.ledger.schema.schema.rewards, slot, .{
             .rewards = keyed_rewards,
             .num_partitions = num_partitions,
         });
+
+        _ = capitalization.fetchSub(burn, .monotonic);
+        return .{
+            .rewards = keyed_rewards,
+            .num_partitions = num_partitions,
+            .arena = arena,
+        };
     }
 
     _ = capitalization.fetchSub(burn, .monotonic);
+    return .empty();
 }
 
 /// Collect all rewards for this slot and determine num_partitions.
@@ -652,7 +685,7 @@ test "freezeSlot: trivial e2e merkle hash test" {
         ledger_dir.cleanup();
     }
 
-    try freezeSlot(allocator, .init(
+    var distributed = try freezeSlot(allocator, .init(
         .FOR_TESTS,
         account_store,
         &tp,
@@ -662,6 +695,7 @@ test "freezeSlot: trivial e2e merkle hash test" {
         .ZEROES,
         &ledger,
     ));
+    distributed.deinit();
 
     try std.testing.expectEqual(
         Hash.parse("8C4gpDhMz9RfajteNCf9nFb5pyj3SkFcpTs6uXAzYKoF"),
@@ -716,7 +750,7 @@ test "freezeSlot: trivial e2e lattice hash test" {
         ledger_dir.cleanup();
     }
 
-    try freezeSlot(allocator, .init(
+    var distributed = try freezeSlot(allocator, .init(
         .FOR_TESTS,
         account_store,
         &tp,
@@ -726,6 +760,7 @@ test "freezeSlot: trivial e2e lattice hash test" {
         .ZEROES,
         &ledger,
     ));
+    distributed.deinit();
 
     try std.testing.expectEqual(
         Hash.parse("B513RgkSxeiHv4hJ3aaBfkoveWKeB6575S3CtG64AirS"),

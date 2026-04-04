@@ -65,8 +65,21 @@ pub const TestServer = struct {
     ctx: Runtime,
     server: WebSocketServer,
     port: u16,
+    ledger_state: ?sig.ledger.Ledger = null,
+    ledger_tmp_dir: ?std.testing.TmpDir = null,
 
     pub fn start(allocator: std.mem.Allocator) !*TestServer {
+        return startInternal(allocator, false);
+    }
+
+    pub fn startWithLedger(allocator: std.mem.Allocator) !*TestServer {
+        return startInternal(allocator, true);
+    }
+
+    fn startInternal(
+        allocator: std.mem.Allocator,
+        with_ledger: bool,
+    ) !*TestServer {
         const self = try allocator.create(TestServer);
         errdefer allocator.destroy(self);
 
@@ -97,6 +110,15 @@ pub const TestServer = struct {
 
         self.commitments = .init(allocator, 0);
         errdefer self.commitments.deinit(allocator);
+
+        if (with_ledger) {
+            const ledger_and_tmp = try sig.ledger.Ledger.initForTest(allocator);
+            self.ledger_state = ledger_and_tmp[0];
+            self.ledger_tmp_dir = ledger_and_tmp[1];
+        } else {
+            self.ledger_state = null;
+            self.ledger_tmp_dir = null;
+        }
 
         const slot_read_ctx: SlotReadContext = .{
             .slot_tracker = &self.slot_tracker,
@@ -203,6 +225,8 @@ pub const TestServer = struct {
         self.loop.deinit();
         self.commit_queue.deinit();
         self.event_sink.destroy();
+        if (self.ledger_state) |*l| l.deinit();
+        if (self.ledger_tmp_dir) |*tmp| tmp.cleanup();
         allocator.destroy(self);
     }
 };
