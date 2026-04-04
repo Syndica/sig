@@ -88,6 +88,45 @@ pub fn Pool(Item: type, IdInt: type) type {
     };
 }
 
+test "pool create + destroy" {
+    const capacity = 2048;
+    const allocator = std.testing.allocator;
+
+    const P = Pool(i64, u16);
+
+    const pool_buf = try allocator.alloc(i64, capacity);
+    defer allocator.free(pool_buf);
+
+    var pool: P = .init(pool_buf);
+
+    for (0..capacity + 1) |i| {
+        if (i == capacity) {
+            try std.testing.expectError(error.OutOfSpace, pool.create());
+            continue;
+        }
+
+        const x: *i64 = try pool.create();
+        x.* = -(@as(i64, @intCast(i)) * 2);
+    }
+
+    for (0..capacity) |i| {
+        const node = &pool.buf[i];
+        const x: *i64 = @ptrCast(node);
+        std.debug.assert(x.* == -(@as(i64, @intCast(i)) * 2));
+        pool.destroy(@ptrCast(&pool.buf[i]));
+    }
+
+    for (0..capacity + 1) |i| {
+        if (i == capacity) {
+            try std.testing.expectError(error.OutOfSpace, pool.create());
+            continue;
+        }
+
+        const x: *i64 = try pool.create();
+        x.* = -(@as(i64, @intCast(i)) * 2);
+    }
+}
+
 test "pool create + destroy out of order" {
     const allocator = std.testing.allocator;
 
