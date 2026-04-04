@@ -138,13 +138,18 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var state: State = try .init(allocator, max_in_progress, max_done);
     defer state.deinit(allocator);
 
+    var packet_iter = rw.tvu_socket.recv.get(.reader);
+    var deshred_out = rw.deshredded_out.get(.writer);
+
     const idle_src = @src();
     var maybe_idle_zone: ?tracy.Zone = tracy.Zone.init(idle_src, .{ .name = "idle" });
     while (true) {
-        var recv_slice = rw.tvu_socket.recv.getReadable() catch {
+        const packet = packet_iter.next() orelse {
             if (maybe_idle_zone == null) maybe_idle_zone = tracy.Zone.init(idle_src, .{ .name = "idle" });
             continue;
         };
+        defer packet_iter.markUsed();
+
         if (maybe_idle_zone) |idle_zone| {
             idle_zone.deinit();
             maybe_idle_zone = null;
@@ -153,30 +158,17 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         const recv_zone = tracy.Zone.init(@src(), .{ .name = "shred recv" });
         defer recv_zone.deinit();
 
-        const packet = recv_slice.get(0);
-        defer recv_slice.markUsed(1);
-
-        // Where we write our completed/deshredded fec sets to.
-        // If there's nowhere to write to, then this means that services downstream haven't been
-        // keeping up for a while.
-        // For now let's just exit if this happens, however this might leave us vulnerable to denial
-        // of service.
-        //
-        // TODO: consider handling this case by pausing writing to this ring.
-        var writer_slice = try rw.deshredded_out.getWritable();
-
         const result = processPacket(
             &state,
             &ro.config.leader_schedule,
             ro.config.shred_version,
             packet,
-            &writer_slice,
+            &deshred_out,
         ) catch |err| {
             std.log.warn("packet failed with {}", .{err});
             recv_zone.color(0xFF000000); // a nice red
             continue;
         };
-
         _ = result;
     }
 }
@@ -200,7 +192,7 @@ fn processPacket(
     leader_schedule: *const lib.solana.LeaderSchedule,
     network_shred_version: u16,
     packet: *const Packet,
-    deshred_ring: *DeshredRing.Slice(.writer),
+    deshred_writer: *DeshredRing.Iterator(.writer),
 ) !NonErrorStatus {
     const zone = tracy.Zone.init(@src(), .{ .name = "processPacket" });
     defer zone.deinit();
@@ -399,8 +391,15 @@ fn processPacket(
             break :blk .{ len, data_complete, slot_complete };
         };
 
-        const finished: *DeshreddedFecSet = deshred_ring.get(0);
-        defer deshred_ring.markUsed(1);
+        const finished: *DeshreddedFecSet = deshred_writer.next() orelse
+            // If there's nowhere to write to, then this means that services downstream haven't been
+            // keeping up for a while.
+            // For now let's just exit if this happens, however this might leave us vulnerable to denial
+            // of service.
+            //
+            // TODO: consider handling this case by pausing writing to this ring.
+            @panic("Can't send deshredded fec sets to replay, is it alive?");
+        defer deshred_writer.markUsed();
 
         finished.* = .{
             .merkle_root = fec_set_ctx.merkle_root,
