@@ -1,12 +1,15 @@
 //! Tracks slot lifecycle and per-slot modified accounts so websocket delivery can
 //! derive commitment-specific notifications from minimal producer events.
-const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const types = @import("types.zig");
 
 const Slot = sig.core.Slot;
+const SlotFrozenEvent = types.SlotFrozenEvent;
+const SlotTransactionLogs = types.SlotTransactionLogs;
+const TransactionLogsEntry = types.TransactionLogsEntry;
+const SlotModifiedAccounts = types.SlotModifiedAccounts;
 const SlotTrackerReference = sig.replay.trackers.SlotTracker.Reference;
 const Logger = sig.trace.Logger("rpc.jrpc_websockets.slot_state_cache");
 pub const SlotReadContext = types.SlotReadContext;
@@ -23,13 +26,22 @@ processed_tip: Slot = 0,
 processed_tip_info: ?SlotTrackerReference = null,
 cached_slots: std.AutoArrayHashMapUnmanaged(Slot, CachedSlot) = .empty,
 
+// TODO: we currently track everything just by slot number, this is brittle to replay over same
+// slot. E.g. hypothetical sequences that would lead to wrong confirmed notifications:
+// frozen(123'a) -> confirmed(123) -> frozen(123'b)
+// confirmed(123) -> frozen(123'a) -> frozen(123'b)
+//
+// Version a and b are different, same slot number (replayed over same slot), confirmation doesn't
+// tell us if it was a or b that was confirmed. This is a problem in Agave as well.
 pub const CachedSlot = struct {
     parent: ?Slot = null,
     root: ?Slot = null,
     state: StateFlags = .{},
     published: PublishedFlags = .{},
     /// Final account states for the accounts modified in this slot, captured at freeze time.
-    modified_accounts: types.SlotModifiedAccounts = types.SlotModifiedAccounts.empty(),
+    modified_accounts: SlotModifiedAccounts = SlotModifiedAccounts.empty(),
+    /// Transaction log batches received for this slot.
+    logs_batches: std.ArrayListUnmanaged(SlotTransactionLogs) = .empty,
 
     pub const StateFlags = packed struct {
         frozen: bool = false,
@@ -44,8 +56,37 @@ pub const CachedSlot = struct {
         finalized: bool = false,
     };
 
-    pub fn deinit(self: *CachedSlot) void {
+    pub const LogEntryIterator = struct {
+        batches: []const SlotTransactionLogs,
+        batch_index: usize = 0,
+        entry_index: usize = 0,
+
+        pub fn next(self: *LogEntryIterator) ?*const TransactionLogsEntry {
+            while (self.batch_index < self.batches.len) {
+                const batch = &self.batches[self.batch_index];
+                if (self.entry_index < batch.entries.len) {
+                    defer self.entry_index += 1;
+                    return &batch.entries[self.entry_index];
+                }
+                self.batch_index += 1;
+                self.entry_index = 0;
+            }
+            return null;
+        }
+    };
+
+    pub fn deinit(self: *CachedSlot, allocator: std.mem.Allocator) void {
         self.modified_accounts.deinit();
+        for (self.logs_batches.items) |*logs_batch| {
+            logs_batch.deinit();
+        }
+        self.logs_batches.deinit(allocator);
+    }
+
+    /// Iterates all cached log entries in all batches, preserving entry order within each batch
+    /// (matches Agave behavior).
+    pub fn logEntriesIterator(self: *const CachedSlot) LogEntryIterator {
+        return .{ .batches = self.logs_batches.items };
     }
 };
 
@@ -56,9 +97,10 @@ pub const NotificationCommitments = packed struct {
 };
 
 /// Returned from event methods to indicate what commitment-specific notifications should
-/// be emitted and if any cached slots should be evicted.
+/// be emitted, which slot payload can be published immediately, and if cached slots should
+/// be evicted.
 pub const Transition = struct {
-    cached_slot: ?*const CachedSlot = null,
+    publishable_slot: ?*const CachedSlot = null,
     notify_commitments: NotificationCommitments = .{},
     evict_through: ?Slot = null,
 };
@@ -100,7 +142,7 @@ pub fn deinit(self: *SlotStateCache, allocator: std.mem.Allocator) void {
         tip_info.release();
     }
     for (self.cached_slots.values()) |*slot_state| {
-        slot_state.deinit();
+        slot_state.deinit(allocator);
     }
     self.cached_slots.deinit(allocator);
 }
@@ -134,7 +176,21 @@ pub fn onTipChanged(
         );
     }
 
-    return .{ .notify_commitments = .{ .processed = true } };
+    // Check if slot is frozen and ready to publish as processed
+    const slot_state = self.cached_slots.getPtr(new_tip) orelse return .{};
+    if (!self.tryMarkProcessedPublished(new_tip, slot_state)) {
+        self.logger.err().logf(
+            "tip changed to slot {} but it is not frozen yet, this is unexpected ordering",
+            .{new_tip},
+        );
+        return .{};
+    }
+
+    // tip changed to slot that is frozen, it can be pub
+    return .{
+        .publishable_slot = slot_state,
+        .notify_commitments = .{ .processed = true },
+    };
 }
 
 /// Freeze is the first point where the slot's final modified accounts are stable,
@@ -142,28 +198,31 @@ pub fn onTipChanged(
 pub fn onSlotFrozen(
     self: *SlotStateCache,
     allocator: std.mem.Allocator,
-    slot_data: *types.SlotFrozenEvent,
+    slot_data: *SlotFrozenEvent,
 ) !Transition {
-    if (self.cached_slots.getPtr(slot_data.slot)) |slot_state| {
-        // TODO: what about repair? Could it have frozen twice for same slot number?
-        if (slot_state.state.frozen) {
-            if (!builtin.is_test) {
-                self.logger.err().logf(
-                    "received duplicate slot_frozen for slot {}",
-                    .{slot_data.slot},
-                );
-            }
-            slot_data.accounts.deinit();
-            return .{};
-        }
+    const slot_state = try self.getOrPutSlot(allocator, slot_data.slot);
+    const duplicate_frozen = slot_state.state.frozen;
+    if (duplicate_frozen) {
+        // TODO: what about repair/replay over same slot? Could be frozen twice for same
+        // slot number. For now just overwrite the cached data and log it.
+        self.logger.err().logf(
+            "received duplicate slot_frozen for slot {}",
+            .{slot_data.slot},
+        );
+        slot_state.modified_accounts.deinit();
     }
 
-    const slot_state = try self.getOrPutSlot(allocator, slot_data.slot);
     slot_state.parent = slot_data.parent;
     slot_state.root = slot_data.root;
     slot_state.state.frozen = true;
     slot_state.modified_accounts = slot_data.accounts;
-    slot_data.accounts = types.SlotModifiedAccounts.empty();
+    slot_data.accounts = SlotModifiedAccounts.empty();
+
+    if (duplicate_frozen) {
+        // TODO: for now just not emitting anything, this needs to be addressed by tracking more
+        // than just slot numbers as a larger refactor in Sig
+        return .{};
+    }
 
     // Maybe other commitments for slot were waiting for frozen, so try all of them.
     const notify_commitments: NotificationCommitments = .{
@@ -172,26 +231,45 @@ pub fn onSlotFrozen(
         .finalized = tryMarkFinalizedPublished(slot_state),
     };
     return .{
-        .cached_slot = slot_state,
+        .publishable_slot = slot_state,
         .notify_commitments = notify_commitments,
     };
+}
+
+pub fn onLogsEvent(
+    self: *SlotStateCache,
+    allocator: std.mem.Allocator,
+    log_event: *SlotTransactionLogs,
+) !void {
+    if (log_event.entries.len == 0) {
+        // Nothing to do
+        log_event.deinit();
+        return;
+    }
+
+    const slot_state = try self.getOrPutSlot(allocator, log_event.slot);
+    // TODO: what about repair/replay over same slot? We can receive multiple log batches for the
+    // same slot during normal execution and append them, but if the slot is replayed with
+    // different contents we still only key by slot number and do not handle that case.
+    try slot_state.logs_batches.append(allocator, log_event.*);
+    log_event.* = SlotTransactionLogs.empty();
 }
 
 pub fn onSlotConfirmed(
     self: *SlotStateCache,
     allocator: std.mem.Allocator,
     slot: Slot,
-) !Transition {
+) (std.mem.Allocator.Error || error{ IncomingSlotTooOld, DuplicateSlotConfirmed })!Transition {
     const slot_state = try self.getOrPutSlot(allocator, slot);
     if (slot_state.state.confirmed) {
-        return .{};
+        return error.DuplicateSlotConfirmed;
     }
 
     slot_state.state.confirmed = true;
 
     var transition: Transition = .{ .notify_commitments = .{ .confirmed = true } };
     if (slot_state.state.frozen) {
-        transition.cached_slot = slot_state;
+        transition.publishable_slot = slot_state;
     }
     return transition;
 }
@@ -200,10 +278,10 @@ pub fn onSlotRooted(
     self: *SlotStateCache,
     allocator: std.mem.Allocator,
     slot: Slot,
-) !Transition {
+) (std.mem.Allocator.Error || error{ IncomingSlotTooOld, DuplicateSlotRooted })!Transition {
     const slot_state = try self.getOrPutSlot(allocator, slot);
     if (slot_state.state.rooted) {
-        return .{};
+        return error.DuplicateSlotRooted;
     }
 
     slot_state.state.confirmed = true;
@@ -231,7 +309,7 @@ pub fn onSlotRooted(
         );
         return transition;
     }
-    transition.cached_slot = slot_state;
+    transition.publishable_slot = slot_state;
     return transition;
 }
 
@@ -239,13 +317,14 @@ pub fn onSlotRooted(
 /// account data is no longer needed for future commitment transitions.
 pub fn evictFinalizedThrough(
     self: *SlotStateCache,
+    allocator: std.mem.Allocator,
     rooted_slot: Slot,
 ) void {
     var index: usize = 0;
     while (index < self.cached_slots.count()) {
         if (self.cached_slots.keys()[index] <= rooted_slot) {
             // TODO(perf): Offload cached frozen-account teardown off the loop thread.
-            self.cached_slots.values()[index].deinit();
+            self.cached_slots.values()[index].deinit(allocator);
             _ = self.cached_slots.swapRemoveAt(index);
         } else {
             index += 1;
@@ -259,6 +338,8 @@ pub fn ancestorIterator(self: *SlotStateCache, start_slot: Slot) AncestorIterato
 
 /// Walk newest->oldest from `start_slot`, mark the walked chain confirmed, and
 /// return the unpublished frozen prefix for runtime to emit (returned in newest->oldest order).
+/// If we encounter a non-frozen slot it means we have to wait for the frozen event and an empty
+/// list is returned (cannot publish at confirmed commitment yet).
 pub fn collectPublishableConfirmedSlots(
     self: *SlotStateCache,
     allocator: std.mem.Allocator,
@@ -275,9 +356,9 @@ pub fn collectPublishableConfirmedSlots(
         ancestor.cached_slot.state.confirmed = true;
         if (!ancestor.cached_slot.state.frozen) {
             // Confirmed but not frozen, just yield no slots as we have to wait for the frozen
-            // event to have the modified accounts and be able to publish in slot order.
-            // We will try again on the next frozen event and eventually be able to flush the
-            // confirmed in slot order.
+            // event to ensure we have all the data required to be able to publish notifications
+            // in slot order. We will try again on the next frozen event and eventually be able
+            // to flush the confirmed slots in slot order.
             slots.clearRetainingCapacity();
             break;
         }
@@ -300,7 +381,7 @@ fn getOrPutSlot(
         return slot_state;
     }
     if (self.cached_slots.count() >= MAX_CACHED_SLOTS) {
-        try self.evictMinimumSlot(slot);
+        try self.evictMinimumSlot(allocator, slot);
     }
 
     const gop = try self.cached_slots.getOrPut(allocator, slot);
@@ -308,7 +389,11 @@ fn getOrPutSlot(
     return gop.value_ptr;
 }
 
-fn evictMinimumSlot(self: *SlotStateCache, incoming_slot: Slot) error{IncomingSlotTooOld}!void {
+fn evictMinimumSlot(
+    self: *SlotStateCache,
+    allocator: std.mem.Allocator,
+    incoming_slot: Slot,
+) error{IncomingSlotTooOld}!void {
     var min_index: usize = 0;
     var min_slot = self.cached_slots.keys()[0];
     for (self.cached_slots.keys()[1..], 1..) |cached_slot, index| {
@@ -332,7 +417,7 @@ fn evictMinimumSlot(self: *SlotStateCache, incoming_slot: Slot) error{IncomingSl
         .{ MAX_CACHED_SLOTS, min_slot, incoming_slot },
     );
     // TODO(perf): Offload cached frozen-account teardown off the loop thread.
-    self.cached_slots.values()[min_index].deinit();
+    self.cached_slots.values()[min_index].deinit(allocator);
     _ = self.cached_slots.swapRemoveAt(min_index);
 }
 
@@ -419,7 +504,7 @@ fn testSlotReadCtx(
     };
 }
 
-fn testSlotFrozenEvent(slot: Slot, parent: Slot, root: Slot) types.SlotFrozenEvent {
+fn testSlotFrozenEvent(slot: Slot, parent: Slot, root: Slot) SlotFrozenEvent {
     return .{ .slot = slot, .parent = parent, .root = root };
 }
 
@@ -434,7 +519,36 @@ fn testOnSlotFrozen(
     return try state.onSlotFrozen(allocator, &slot_data);
 }
 
-test "SlotStateCache: slot frozen returns transition and marks state" {
+fn testSlotLogsEvent(
+    allocator: std.mem.Allocator,
+    slot: Slot,
+    log_lines: []const []const u8,
+) !SlotTransactionLogs {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    const entries = try arena_allocator.alloc(TransactionLogsEntry, 1);
+    const owned_logs = try arena_allocator.alloc([]const u8, log_lines.len);
+    for (log_lines, 0..) |log_line, index| {
+        owned_logs[index] = try arena_allocator.dupe(u8, log_line);
+    }
+    entries[0] = .{
+        .signature = sig.core.Signature.ZEROES,
+        .err = null,
+        .is_vote = false,
+        .logs = owned_logs,
+        .mentioned_pubkeys = &.{},
+    };
+
+    return .{
+        .slot = slot,
+        .entries = entries,
+        .arena = arena,
+    };
+}
+
+test "slot frozen returns transition and marks state" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -450,20 +564,20 @@ test "SlotStateCache: slot frozen returns transition and marks state" {
     defer state.deinit(allocator);
 
     const transition = try testOnSlotFrozen(&state, allocator, 10, 9, 5);
-    try std.testing.expect(transition.cached_slot != null);
+    try std.testing.expect(transition.publishable_slot != null);
     try std.testing.expect(transition.notify_commitments.processed);
     try std.testing.expect(!transition.notify_commitments.confirmed);
     try std.testing.expect(!transition.notify_commitments.finalized);
     try std.testing.expect(transition.evict_through == null);
 
-    const cached = transition.cached_slot.?;
+    const cached = transition.publishable_slot.?;
     try std.testing.expect(cached.state.frozen);
-    try std.testing.expectEqual(@as(?Slot, 9), cached.parent);
-    try std.testing.expectEqual(@as(?Slot, 5), cached.root);
+    try std.testing.expectEqual(9, cached.parent);
+    try std.testing.expectEqual(5, cached.root);
     try std.testing.expect(cached.published.processed);
 }
 
-test "SlotStateCache: duplicate frozen is ignored" {
+test "duplicate frozen overwrites cached slot data" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -476,14 +590,113 @@ test "SlotStateCache: duplicate frozen is ignored" {
     defer state.deinit(allocator);
 
     const first = try testOnSlotFrozen(&state, allocator, 10, 9, 5);
-    try std.testing.expect(first.cached_slot != null);
+    try std.testing.expect(first.publishable_slot != null);
 
-    const second = try testOnSlotFrozen(&state, allocator, 10, 9, 5);
-    try std.testing.expect(second.cached_slot == null);
+    const second = try testOnSlotFrozen(&state, allocator, 10, 8, 4);
+    try std.testing.expect(second.publishable_slot == null);
     try std.testing.expectEqual(NotificationCommitments{}, second.notify_commitments);
+
+    const cached = state.cached_slots.getPtr(10).?;
+    try std.testing.expectEqual(8, cached.parent);
+    try std.testing.expectEqual(4, cached.root);
 }
 
-test "SlotStateCache: confirmed before frozen buffers state" {
+test "transaction logs batch ownership transfers into cache" {
+    const allocator = std.testing.allocator;
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
+    var state = SlotStateCache.init(ctx, .FOR_TESTS);
+    defer state.deinit(allocator);
+
+    var log_event = try testSlotLogsEvent(allocator, 10, &.{"Program log: cached"});
+    defer log_event.deinit();
+
+    try state.onLogsEvent(allocator, &log_event);
+    try std.testing.expectEqual(0, log_event.entries.len);
+
+    const cached = state.cached_slots.getPtr(10).?;
+    try std.testing.expectEqual(1, cached.logs_batches.items.len);
+    try std.testing.expectEqual(1, cached.logs_batches.items[0].entries.len);
+    try std.testing.expectEqualStrings(
+        "Program log: cached",
+        cached.logs_batches.items[0].entries[0].logs[0],
+    );
+}
+
+test "repeated transaction log batches append" {
+    const allocator = std.testing.allocator;
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
+    var state = SlotStateCache.init(ctx, .noop);
+    defer state.deinit(allocator);
+
+    var first_log_event = try testSlotLogsEvent(allocator, 10, &.{"Program log: first"});
+    defer first_log_event.deinit();
+    var second_log_event = try testSlotLogsEvent(allocator, 10, &.{"Program log: second"});
+    defer second_log_event.deinit();
+
+    try state.onLogsEvent(allocator, &first_log_event);
+    try std.testing.expectEqual(0, first_log_event.entries.len);
+
+    try state.onLogsEvent(allocator, &second_log_event);
+    try std.testing.expectEqual(0, second_log_event.entries.len);
+
+    const cached = state.cached_slots.getPtr(10).?;
+    try std.testing.expectEqual(2, cached.logs_batches.items.len);
+    try std.testing.expectEqualStrings(
+        "Program log: first",
+        cached.logs_batches.items[0].entries[0].logs[0],
+    );
+    try std.testing.expectEqualStrings(
+        "Program log: second",
+        cached.logs_batches.items[1].entries[0].logs[0],
+    );
+}
+
+test "log entry iterator spans all batches" {
+    const allocator = std.testing.allocator;
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
+    var state = SlotStateCache.init(ctx, .FOR_TESTS);
+    defer state.deinit(allocator);
+
+    var first_log_event = try testSlotLogsEvent(allocator, 10, &.{"Program log: first"});
+    defer first_log_event.deinit();
+    var second_log_event = try testSlotLogsEvent(allocator, 10, &.{"Program log: second"});
+    defer second_log_event.deinit();
+
+    try state.onLogsEvent(allocator, &first_log_event);
+    try state.onLogsEvent(allocator, &second_log_event);
+
+    const cached = state.cached_slots.getPtr(10).?;
+    var iterator = cached.logEntriesIterator();
+    try std.testing.expectEqualStrings(
+        "Program log: first",
+        iterator.next().?.logs[0],
+    );
+    try std.testing.expectEqualStrings(
+        "Program log: second",
+        iterator.next().?.logs[0],
+    );
+    try std.testing.expect(iterator.next() == null);
+}
+
+test "confirmed before frozen buffers state" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -499,7 +712,7 @@ test "SlotStateCache: confirmed before frozen buffers state" {
     defer state.deinit(allocator);
 
     const confirm_transition = try state.onSlotConfirmed(allocator, 10);
-    try std.testing.expect(confirm_transition.cached_slot == null);
+    try std.testing.expect(confirm_transition.publishable_slot == null);
     try std.testing.expect(confirm_transition.notify_commitments.confirmed);
 
     const cached_before = state.cached_slots.getPtr(10).?;
@@ -517,7 +730,7 @@ test "SlotStateCache: confirmed before frozen buffers state" {
     try std.testing.expect(!cached_after.published.confirmed);
 }
 
-test "SlotStateCache: onSlotConfirmed marks confirmed transition only when actionable" {
+test "onSlotConfirmed marks confirmed transition only when actionable" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -541,11 +754,13 @@ test "SlotStateCache: onSlotConfirmed marks confirmed transition only when actio
     try std.testing.expect(second.notify_commitments.confirmed);
     try std.testing.expect(!second.notify_commitments.finalized);
 
-    const duplicate = try state.onSlotConfirmed(allocator, 11);
-    try std.testing.expectEqual(NotificationCommitments{}, duplicate.notify_commitments);
+    try std.testing.expectError(
+        error.DuplicateSlotConfirmed,
+        state.onSlotConfirmed(allocator, 11),
+    );
 }
 
-test "SlotStateCache: onSlotRooted marks confirmed finalized and eviction" {
+test "onSlotRooted marks confirmed finalized and eviction" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -559,20 +774,20 @@ test "SlotStateCache: onSlotRooted marks confirmed finalized and eviction" {
 
     _ = try testOnSlotFrozen(&state, allocator, 10, 9, 0);
     const transition = try state.onSlotRooted(allocator, 10);
-    try std.testing.expect(transition.cached_slot != null);
+    try std.testing.expect(transition.publishable_slot != null);
     try std.testing.expect(!transition.notify_commitments.processed);
     try std.testing.expect(transition.notify_commitments.confirmed);
     try std.testing.expect(transition.notify_commitments.finalized);
-    try std.testing.expectEqual(@as(?Slot, 10), transition.evict_through);
+    try std.testing.expectEqual(10, transition.evict_through);
 
-    const cached = transition.cached_slot.?;
+    const cached = transition.publishable_slot.?;
     try std.testing.expect(cached.state.confirmed);
     try std.testing.expect(cached.state.rooted);
     try std.testing.expect(!cached.published.confirmed);
     try std.testing.expect(cached.published.finalized);
 }
 
-test "SlotStateCache: duplicate rooted returns empty transition" {
+test "duplicate rooted returns error" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -585,17 +800,17 @@ test "SlotStateCache: duplicate rooted returns empty transition" {
     defer state.deinit(allocator);
 
     const first = try state.onSlotRooted(allocator, 10);
-    try std.testing.expect(first.cached_slot == null);
+    try std.testing.expect(first.publishable_slot == null);
     try std.testing.expect(first.notify_commitments.confirmed);
     try std.testing.expect(first.notify_commitments.finalized);
 
-    const second = try state.onSlotRooted(allocator, 10);
-    try std.testing.expect(second.cached_slot == null);
-    try std.testing.expectEqual(NotificationCommitments{}, second.notify_commitments);
-    try std.testing.expect(second.evict_through == null);
+    try std.testing.expectError(
+        error.DuplicateSlotRooted,
+        state.onSlotRooted(allocator, 10),
+    );
 }
 
-test "SlotStateCache: eviction removes slots at or below rooted slot" {
+test "eviction removes slots at or below rooted slot" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -615,14 +830,14 @@ test "SlotStateCache: eviction removes slots at or below rooted slot" {
     try std.testing.expect(state.cached_slots.getPtr(10) != null);
     try std.testing.expect(state.cached_slots.getPtr(15) != null);
 
-    state.evictFinalizedThrough(10);
+    state.evictFinalizedThrough(allocator, 10);
 
     try std.testing.expect(state.cached_slots.getPtr(5) == null);
     try std.testing.expect(state.cached_slots.getPtr(10) == null);
     try std.testing.expect(state.cached_slots.getPtr(15) != null);
 }
 
-test "SlotStateCache: capacity eviction removes minimum slot" {
+test "capacity eviction removes minimum slot" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -650,7 +865,7 @@ test "SlotStateCache: capacity eviction removes minimum slot" {
     try std.testing.expect(state.cached_slots.getPtr(slot_limit + 1) != null);
 }
 
-test "SlotStateCache: capacity drop keeps minimum slot when incoming is lower" {
+test "capacity drop keeps minimum slot when incoming is lower" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -678,7 +893,7 @@ test "SlotStateCache: capacity drop keeps minimum slot when incoming is lower" {
     try std.testing.expect(state.cached_slots.getPtr(2) != null);
 }
 
-test "SlotStateCache: tip change updates processed_tip and fork membership" {
+test "tip change updates processed_tip and fork membership" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -702,6 +917,8 @@ test "SlotStateCache: tip change updates processed_tip and fork membership" {
     _ = try testOnSlotFrozen(&state, allocator, 5, 4, 0);
 
     const first = state.onTipChanged(ctx, 3);
+    try std.testing.expect(first.publishable_slot != null);
+    try std.testing.expectEqual(2, first.publishable_slot.?.parent.?);
     try std.testing.expect(first.notify_commitments.processed);
     try std.testing.expect(!first.notify_commitments.confirmed);
     try std.testing.expect(!first.notify_commitments.finalized);
@@ -709,18 +926,25 @@ test "SlotStateCache: tip change updates processed_tip and fork membership" {
     try std.testing.expect(state.isSlotOnCurrentFork(3));
     try std.testing.expect(!state.isSlotOnCurrentFork(4));
     try std.testing.expect(!state.isSlotOnCurrentFork(5));
+    try std.testing.expect(!state.cached_slots.getPtr(2).?.published.processed);
+    try std.testing.expect(state.cached_slots.getPtr(3).?.published.processed);
     try std.testing.expectEqual(3, state.processed_tip);
 
     const second = state.onTipChanged(ctx, 5);
+    try std.testing.expect(second.publishable_slot != null);
+    try std.testing.expectEqual(4, second.publishable_slot.?.parent.?);
+    try std.testing.expectEqual(5, state.processed_tip);
     try std.testing.expect(second.notify_commitments.processed);
     try std.testing.expect(!state.isSlotOnCurrentFork(2));
     try std.testing.expect(!state.isSlotOnCurrentFork(3));
     try std.testing.expect(state.isSlotOnCurrentFork(4));
     try std.testing.expect(state.isSlotOnCurrentFork(5));
+    try std.testing.expect(!state.cached_slots.getPtr(4).?.published.processed);
+    try std.testing.expect(state.cached_slots.getPtr(5).?.published.processed);
     try std.testing.expectEqual(5, state.processed_tip);
 }
 
-test "SlotStateCache: off-fork frozen slot is not on current fork" {
+test "off-fork frozen slot is not on current fork" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -748,7 +972,7 @@ test "SlotStateCache: off-fork frozen slot is not on current fork" {
     try std.testing.expect(!off_fork.notify_commitments.processed);
 }
 
-test "SlotStateCache: ancestor iterator walks cached parents" {
+test "ancestor iterator walks cached parents" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -767,20 +991,20 @@ test "SlotStateCache: ancestor iterator walks cached parents" {
     var ancestors = state.ancestorIterator(3);
     const first = ancestors.next().?;
     try std.testing.expectEqual(3, first.slot);
-    try std.testing.expectEqual(@as(?Slot, 2), first.cached_slot.parent);
+    try std.testing.expectEqual(2, first.cached_slot.parent);
 
     const second = ancestors.next().?;
     try std.testing.expectEqual(2, second.slot);
-    try std.testing.expectEqual(@as(?Slot, 1), second.cached_slot.parent);
+    try std.testing.expectEqual(1, second.cached_slot.parent);
 
     const third = ancestors.next().?;
     try std.testing.expectEqual(1, third.slot);
-    try std.testing.expectEqual(@as(?Slot, 0), third.cached_slot.parent);
+    try std.testing.expectEqual(0, third.cached_slot.parent);
 
     try std.testing.expect(ancestors.next() == null);
 }
 
-test "SlotStateCache: collectPublishableConfirmedSlots returns newest first and marks published" {
+test "collectPublishableConfirmedSlots returns newest first and marks published" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -809,7 +1033,7 @@ test "SlotStateCache: collectPublishableConfirmedSlots returns newest first and 
     try std.testing.expect(state.cached_slots.getPtr(3).?.published.confirmed);
 }
 
-test "SlotStateCache: root jump over multiple slots" {
+test "root jump over multiple slots" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -828,19 +1052,19 @@ test "SlotStateCache: root jump over multiple slots" {
 
     for ([_]Slot{ 5, 6, 7, 8 }) |slot| {
         const transition = try state.onSlotRooted(allocator, slot);
-        try std.testing.expect(transition.cached_slot != null);
+        try std.testing.expect(transition.publishable_slot != null);
         try std.testing.expect(transition.notify_commitments.finalized);
-        try std.testing.expectEqual(@as(?Slot, slot), transition.evict_through);
+        try std.testing.expectEqual(slot, transition.evict_through);
     }
 
-    state.evictFinalizedThrough(7);
+    state.evictFinalizedThrough(allocator, 7);
     try std.testing.expect(state.cached_slots.getPtr(5) == null);
     try std.testing.expect(state.cached_slots.getPtr(6) == null);
     try std.testing.expect(state.cached_slots.getPtr(7) == null);
     try std.testing.expect(state.cached_slots.getPtr(8) != null);
 }
 
-test "SlotStateCache: slot frozen stores producer-owned modified accounts" {
+test "slot frozen stores producer-owned modified accounts" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -873,7 +1097,7 @@ test "SlotStateCache: slot frozen stores producer-owned modified accounts" {
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
-    var slot_data: types.SlotFrozenEvent = .{
+    var slot_data: SlotFrozenEvent = .{
         .slot = 5,
         .parent = 4,
         .root = 0,
@@ -884,11 +1108,8 @@ test "SlotStateCache: slot frozen stores producer-owned modified accounts" {
     };
     const transition = try state.onSlotFrozen(allocator, &slot_data);
 
-    const cached = transition.cached_slot.?;
-    try std.testing.expectEqual(@as(usize, 1), cached.modified_accounts.accounts.len);
+    const cached = transition.publishable_slot.?;
+    try std.testing.expectEqual(1, cached.modified_accounts.accounts.len);
     try std.testing.expect(cached.modified_accounts.accounts[0].pubkey.equals(&pk));
-    try std.testing.expectEqual(
-        @as(u64, 42_000),
-        cached.modified_accounts.accounts[0].account.lamports,
-    );
+    try std.testing.expectEqual(42_000, cached.modified_accounts.accounts[0].account.lamports);
 }

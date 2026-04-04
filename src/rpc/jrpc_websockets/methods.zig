@@ -9,7 +9,7 @@ const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 
 pub const Commitment = enum { finalized, confirmed, processed };
-pub const AccountEncoding = enum { base58, base64, @"base64+zstd", jsonParsed };
+pub const AccountEncoding = sig.rpc.account_codec.AccountEncoding;
 pub const TransactionEncoding = enum { base58, base64, json, jsonParsed };
 pub const DataSlice = sig.rpc.account_codec.DataSlice;
 pub const TransactionDetails = enum { full, accounts, signatures, none };
@@ -20,7 +20,8 @@ const MAX_MEMCMP_BYTES = 128;
 pub const LogsFilter = union(enum) {
     all,
     allWithVotes,
-    mentions: struct { mentions: []const Pubkey },
+    // Array of length 1 since only 1 Pubkey is allowed in the mentions filter (Agave parity).
+    mentions: struct { mentions: [1]Pubkey },
 
     const Mentions = @FieldType(LogsFilter, "mentions");
 
@@ -229,6 +230,15 @@ pub const ProgramSubscribe = struct {
         dataSlice: ?DataSlice = null,
     };
 
+    pub fn validateParams(self: *const ProgramSubscribe) error{TooManyFilters}!void {
+        const config = self.config orelse return;
+        if (config.filters) |filters| {
+            if (filters.len > MAX_PROGRAM_FILTERS) {
+                return error.TooManyFilters;
+            }
+        }
+    }
+
     pub fn jsonStringify(self: ProgramSubscribe, jw: anytype) @TypeOf(jw.*).Error!void {
         return writeParamsArray(jw, self.program_id, self.config);
     }
@@ -279,12 +289,6 @@ pub const Unsubscribe = struct {
     }
 };
 
-pub fn verifyProgramFilters(filters: []const ProgramSubscribe.Filter) error{TooManyFilters}!void {
-    if (filters.len > MAX_PROGRAM_FILTERS) {
-        return error.TooManyFilters;
-    }
-}
-
 const testing = std.testing;
 
 test "Commitment parse" {
@@ -297,20 +301,6 @@ test "Commitment roundtrip" {
     try testRoundtripViaValue(Commitment, .finalized);
     try testRoundtripViaValue(Commitment, .confirmed);
     try testRoundtripViaValue(Commitment, .processed);
-}
-
-test "AccountEncoding parse" {
-    try expectParsesTo(AccountEncoding, "\"base58\"", .base58);
-    try expectParsesTo(AccountEncoding, "\"base64\"", .base64);
-    try expectParsesTo(AccountEncoding, "\"base64+zstd\"", .@"base64+zstd");
-    try expectParsesTo(AccountEncoding, "\"jsonParsed\"", .jsonParsed);
-}
-
-test "AccountEncoding roundtrip" {
-    try testRoundtripViaValue(AccountEncoding, .base58);
-    try testRoundtripViaValue(AccountEncoding, .base64);
-    try testRoundtripViaValue(AccountEncoding, .@"base64+zstd");
-    try testRoundtripViaValue(AccountEncoding, .jsonParsed);
 }
 
 test "TransactionEncoding parse" {
@@ -338,12 +328,17 @@ test "LogsFilter parse" {
     , .{});
     defer parsed.deinit();
     try testing.expect(parsed.value == .mentions);
-    try testing.expectEqual(@as(usize, 1), parsed.value.mentions.mentions.len);
     try testing.expectEqual(test_pubkey, parsed.value.mentions.mentions[0]);
 }
 
 test "LogsFilter parse error" {
     try expectParseError(LogsFilter, "\"invalid\"", error.InvalidEnumTag);
+    try expectParseError(LogsFilter,
+        \\{"mentions":[]}
+    , error.LengthMismatch);
+    try expectParseError(LogsFilter,
+        \\{"mentions":["vinesvinesvinesvinesvinesvinesvinesvinesvin","11111111111111111111111111111111"]}
+    , error.LengthMismatch);
 }
 
 test "LogsFilter roundtrip" {
@@ -352,7 +347,7 @@ test "LogsFilter roundtrip" {
     try testRoundtripViaValue(LogsFilter, .all);
     try testRoundtripViaValue(LogsFilter, .allWithVotes);
     try testRoundtripViaValue(LogsFilter, .{
-        .mentions = .{ .mentions = &.{test_pubkey} },
+        .mentions = .{ .mentions = .{test_pubkey} },
     });
 }
 

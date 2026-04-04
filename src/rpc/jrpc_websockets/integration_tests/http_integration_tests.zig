@@ -2,6 +2,9 @@ const std = @import("std");
 
 const helpers = @import("support/test_helpers.zig");
 const IntegratedTestServer = helpers.IntegratedTestServer;
+const JsonRpcResultString = helpers.JsonRpcResultString;
+const parseResultBool = helpers.parseResultBool;
+const RootNotification = helpers.RootNotification;
 const TestClient = helpers.TestClient;
 const TestClientEnv = helpers.TestClientEnv;
 const TestClientHandler = helpers.TestClientHandler;
@@ -40,7 +43,17 @@ test "websocket upgrade via HTTP server supports root subscription" {
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
-    try std.testing.expect(std.mem.indexOf(u8, handler.received.items[1], "\"result\":500") != null);
+    const parsed_notif = try std.json.parseFromSlice(
+        RootNotification,
+        allocator,
+        handler.received.items[1],
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
+
+    try std.testing.expectEqualStrings("rootNotification", notification.method);
+    try std.testing.expectEqual(500, notification.params.result);
 
     runBothLoops(server, &client_env, &handler, 100);
 }
@@ -76,7 +89,15 @@ test "HTTP JSON-RPC and WebSocket run on same port" {
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getHealth\",\"params\":[]}",
     );
     defer allocator.free(http_resp);
-    try std.testing.expect(std.mem.indexOf(u8, http_resp, "\"result\":\"ok\"") != null);
+    const parsed_http_resp = try std.json.parseFromSlice(
+        JsonRpcResultString,
+        allocator,
+        http_resp,
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed_http_resp.deinit();
+    const response = parsed_http_resp.value;
+    try std.testing.expectEqualStrings("ok", response.result);
 
     server.injectEvent(.{ .slot_rooted = 501 });
 
@@ -89,8 +110,9 @@ test "HTTP JSON-RPC and WebSocket run on same port" {
 
     waitForMessages(server, &client_env, &handler, 3, 5000);
     try std.testing.expect(handler.received.items.len >= 3);
-    try std.testing.expect(
-        std.mem.indexOf(u8, handler.received.items[2], "\"result\":true") != null,
+    try std.testing.expectEqual(
+        true,
+        parseResultBool(handler.received.items[2]) orelse return error.TestUnexpectedResult,
     );
 
     runBothLoops(server, &client_env, &handler, 100);
@@ -164,12 +186,28 @@ test "multiple websocket clients receive root notifications via HTTP upgrade" {
 
     try std.testing.expect(handler1.received.items.len >= 2);
     try std.testing.expect(handler2.received.items.len >= 2);
-    try std.testing.expect(
-        std.mem.indexOf(u8, handler1.received.items[1], "\"result\":502") != null,
+    const parsed_notif1 = try std.json.parseFromSlice(
+        RootNotification,
+        allocator,
+        handler1.received.items[1],
+        .{ .ignore_unknown_fields = true },
     );
-    try std.testing.expect(
-        std.mem.indexOf(u8, handler2.received.items[1], "\"result\":502") != null,
+    defer parsed_notif1.deinit();
+    const notif1 = parsed_notif1.value;
+
+    const parsed_notif2 = try std.json.parseFromSlice(
+        RootNotification,
+        allocator,
+        handler2.received.items[1],
+        .{ .ignore_unknown_fields = true },
     );
+    defer parsed_notif2.deinit();
+    const notif2 = parsed_notif2.value;
+
+    try std.testing.expectEqualStrings("rootNotification", notif1.method);
+    try std.testing.expectEqualStrings("rootNotification", notif2.method);
+    try std.testing.expectEqual(502, notif1.params.result);
+    try std.testing.expectEqual(502, notif2.params.result);
 
     for (0..200) |_| {
         if (handler1.close_called and handler2.close_called) {
