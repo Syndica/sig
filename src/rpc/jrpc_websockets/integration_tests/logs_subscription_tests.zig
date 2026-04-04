@@ -52,26 +52,6 @@ fn signatureWithFill(fill: u8) Signature {
     return sig_value;
 }
 
-fn cloneTransactionError(
-    tx_err: ?TransactionError,
-    allocator: std.mem.Allocator,
-) !?TransactionError {
-    const tx_err_value = tx_err orelse return null;
-    if (tx_err_value != .InstructionError) {
-        return tx_err_value;
-    }
-
-    const instruction_index, const err = tx_err_value.InstructionError;
-    if (err != .BorshIoError) {
-        return tx_err_value;
-    }
-
-    return .{ .InstructionError = .{
-        instruction_index,
-        .{ .BorshIoError = try allocator.dupe(u8, err.BorshIoError) },
-    } };
-}
-
 const LogsEventSpec = struct {
     signature_fill: u8,
     tx_err: ?TransactionError,
@@ -98,7 +78,7 @@ fn makeLogsEvent(
 
         entries[index] = .{
             .signature = signatureWithFill(spec.signature_fill),
-            .err = try cloneTransactionError(spec.tx_err, arena_allocator),
+            .err = if (spec.tx_err) |err| try err.clone(arena_allocator) else null,
             .is_vote = spec.is_vote,
             .logs = owned_logs,
             .mentioned_pubkeys = try arena_allocator.dupe(Pubkey, spec.mentioned_pubkeys),

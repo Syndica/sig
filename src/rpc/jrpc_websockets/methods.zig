@@ -8,7 +8,7 @@ const ParseOptions = std.json.ParseOptions;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 
-pub const Commitment = enum { finalized, confirmed, processed };
+pub const Commitment = sig.rpc.methods.common.Commitment;
 pub const AccountEncoding = sig.rpc.account_codec.AccountEncoding;
 pub const TransactionEncoding = enum { base58, base64, json, jsonParsed };
 pub const DataSlice = sig.rpc.account_codec.DataSlice;

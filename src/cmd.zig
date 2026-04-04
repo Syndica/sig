@@ -1806,6 +1806,7 @@ fn validator(
             .max_retransmit_slot = &max_retransmit_slot,
             .max_shred_insert_slot = &max_shred_insert_slot,
             .rpc_hooks = null,
+            .event_sink = event_sink,
             .duplicate = if (replay_service_state.consensus) |consensus| .{
                 .shred_receiver = &duplicate_shreds,
                 .slots_sender = consensus.receivers.duplicate_slots,
@@ -1879,6 +1880,7 @@ fn validator(
             &replay_service_state.replay_state.slot_tracker,
             &replay_service_state.replay_state.commitments.?,
             replay_service_state.replay_state.account_store.reader(),
+            &replay_service_state.replay_state.status_cache,
             event_sink.?,
         })
     else
@@ -1901,6 +1903,7 @@ fn runRPCServer(
     slot_tracker: *sig.replay.trackers.SlotTracker,
     commitments: *sig.replay.trackers.CommitmentTracker,
     account_reader: sig.accounts_db.AccountReader,
+    status_cache: *sig.core.StatusCache,
     event_sink: *jrpc_ws.types.EventSink,
 ) !void {
     var commit_queue = try sig.sync.Channel(jrpc_ws.types.CommitMsg).init(allocator);
@@ -1930,6 +1933,7 @@ fn runRPCServer(
         .slot_tracker = slot_tracker,
         .commitments = commitments,
         .account_reader = account_reader,
+        .status_cache = status_cache,
     };
 
     var ws_runtime_ctx = WSRPCRuntime.init(.{
@@ -2317,6 +2321,7 @@ fn replayOffline(
             &replay_service_state.replay_state.slot_tracker,
             &replay_service_state.replay_state.commitments.?,
             replay_service_state.replay_state.account_store.reader(),
+            &replay_service_state.replay_state.status_cache,
             event_sink.?,
         })
     else
@@ -2446,6 +2451,7 @@ fn shredNetwork(
         .max_retransmit_slot = &max_retransmit_slot_standalone,
         .max_shred_insert_slot = &max_shred_insert_slot_standalone,
         .rpc_hooks = null,
+        .event_sink = null,
         // No consensus in the standalone mode, so duplicate slots are not reported.
         .duplicate = null,
         .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
