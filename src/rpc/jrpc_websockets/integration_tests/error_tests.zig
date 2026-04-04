@@ -49,6 +49,39 @@ test "duplicate subscribe returns error" {
     runBothLoops(server, &client_env, &handler, 100);
 }
 
+test "accountSubscribe ignores unknown config fields" {
+    const allocator = std.testing.allocator;
+
+    var server = try TestServer.start(allocator);
+    defer {
+        server.stop();
+        server.deinit();
+    }
+
+    var handler = TestClientHandler.init(allocator);
+    defer handler.deinit();
+
+    // Agave accepts unknown websocket subscription config fields and ignores them.
+    handler.queueSend(
+        \\{"jsonrpc":"2.0","id":1,"method":"accountSubscribe","params":["CVDFLCAjXhVWiPXH9nTCTpCgVzmDVoiPzNJYuccr1dqB",{"encoding":"jsonParsed","commitment":"confirmed","dataSlice":null,"definitelyUnknownField":true}]}
+    );
+    handler.close_after = 1;
+
+    var client_env: TestClientEnv = undefined;
+    try client_env.start();
+    defer client_env.deinit();
+
+    var conn: TestClient.Conn = undefined;
+    var client = initTestClient(allocator, &client_env, &handler, &conn, server.port);
+    try client.connect();
+
+    waitForMessages(server, &client_env, &handler, 1, 5000);
+    try std.testing.expect(handler.received.items.len >= 1);
+    try std.testing.expect(std.mem.indexOf(u8, handler.received.items[0], "\"result\":") != null);
+
+    runBothLoops(server, &client_env, &handler, 100);
+}
+
 test "unsubscribe unknown sub_id returns error" {
     const allocator = std.testing.allocator;
 
