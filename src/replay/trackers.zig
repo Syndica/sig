@@ -284,9 +284,10 @@ pub const SlotTracker = struct {
         var rooted_path = std.ArrayListUnmanaged(Slot).empty;
         defer rooted_path.deinit(allocator);
 
+        // check we have slot before allocating
+        const root_info = self.get(new_root) orelse return error.NewRootNotFound;
         try rooted_path.ensureTotalCapacity(allocator, new_root - old_root);
         {
-            const root_info = self.get(new_root) orelse return error.NewRootNotFound;
             defer root_info.release();
 
             for (old_root + 1..new_root) |slot| {
