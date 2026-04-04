@@ -76,6 +76,12 @@ pub fn readPubkey(logger: Logger, source: []const u8) error{InvalidPubkeySource}
     return error.InvalidPubkeySource;
 }
 
+pub fn readKeypair(path: []const u8) !KeyPair {
+    const file = try std.fs.cwd().openFile(path, .{ .lock = .exclusive });
+    defer file.close();
+    return parseFromFile(file);
+}
+
 fn parseFromFile(file: std.fs.File) !KeyPair {
     // The json parsing only needs a bit of memory to perform state management.
     var fba_buffer: [0x100]u8 = undefined;
