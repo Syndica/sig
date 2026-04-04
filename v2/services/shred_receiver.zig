@@ -100,28 +100,51 @@ pub const ReadOnly = struct {
 const stub_root_slot = 0;
 const stub_max_slot = std.math.maxInt(Slot);
 
+var scratch_memory: [1024 * 1024 * 1024]u8 = undefined;
+const max_in_progress = 8192;
+const max_done = 65536;
+
+const State = struct {
+    in_progress: InProgressSets,
+    done: DoneSets,
+
+    // NOTE: this sets the capacity for both done *and* in_progress. We may want to configure these
+    // separately in future.
+    fn init(allocator: std.mem.Allocator, in_progress_capacity: u32, done_capacity: u32) !State {
+        var in_progress: InProgressSets = try .init(allocator, in_progress_capacity);
+        errdefer in_progress.deinit(allocator);
+
+        var done: DoneSets = try .init(allocator, done_capacity);
+        errdefer done.deinit(allocator);
+
+        return .{ .in_progress = in_progress, .done = done };
+    }
+
+    fn deinit(self: *State, allocator: std.mem.Allocator) void {
+        self.in_progress.deinit(allocator);
+        self.done.deinit(allocator);
+    }
+};
+
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
     defer zone.deinit();
 
+    var fba: std.heap.FixedBufferAllocator = .init(&scratch_memory);
+    const allocator = fba.allocator();
+
     std.log.info("Waiting for shreds on port {}", .{rw.tvu_socket.port});
 
-    const global = struct {
-        // NOTE: as of writing, @sizeOf(State) ~= 22MB. This is why it is defined in this way - it
-        // is too large for the stack.
-        var state: State = .empty;
-    };
+    var state: State = try .init(allocator, max_in_progress, max_done);
+    defer state.deinit(allocator);
 
     const idle_src = @src();
-
     var maybe_idle_zone: ?tracy.Zone = tracy.Zone.init(idle_src, .{ .name = "idle" });
-
     while (true) {
         var recv_slice = rw.tvu_socket.recv.getReadable() catch {
             if (maybe_idle_zone == null) maybe_idle_zone = tracy.Zone.init(idle_src, .{ .name = "idle" });
             continue;
         };
-
         if (maybe_idle_zone) |idle_zone| {
             idle_zone.deinit();
             maybe_idle_zone = null;
@@ -143,7 +166,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         var writer_slice = try rw.deshredded_out.getWritable();
 
         const result = processPacket(
-            &global.state,
+            &state,
             &ro.config.leader_schedule,
             ro.config.shred_version,
             packet,
@@ -158,16 +181,6 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     }
 }
 
-const State = struct {
-    in_progress: ProgressMap,
-    done: DoneMap,
-
-    const empty: State = .{ .in_progress = .empty, .done = .empty };
-
-    const DoneMap = FixedArrayMap(FecSetId, SignatureHash, void, null, FecSetId.eql, 256);
-    const SignatureHash = u32;
-};
-
 const NonErrorStatus = union(enum) {
     unfinished_fec_set: struct {
         // 0..=31 (if it had 32, it would be finished)
@@ -178,6 +191,8 @@ const NonErrorStatus = union(enum) {
     shred_already_seen,
 };
 
+// TODO: we should be notified when the root slot changes, which we will use to eagerly prune our
+// state.
 // TODO: report return values to observability
 // TODO: report back equivocating shreds, so that we can construct and send out duplicate proofs
 fn processPacket(
@@ -232,49 +247,9 @@ fn processPacket(
     const str = try std.fmt.bufPrint(&buf, "slot: {}, idx: {}", .{ fec_set_id.slot, fec_set_id.fec_set_idx });
     zone.text(str);
 
-    // is fec set already being built?
-    var maybe_in_progress_idx = state.in_progress.getFecSetCtxIdx(&shred.signature);
-    if (maybe_in_progress_idx == null) {
-        // fec set is not currently being built (likely finished already)
-
-        // ignore shreds from already finished fec sets
-        if (state.done.get(&fec_set_id)) |finished_set| {
-            const signature_hash = hashSignature(&shred.signature);
-            if (signature_hash == finished_set.*) {
-                return .fec_set_already_finished;
-            } else {
-                // We got a different hash, for the same FecSetId, this is equivocation
-
-                // NOTE: when we detect equivocation at the shred level, we just drop the incoming
-                // shred. i.e. the first shred in a fet set "wins", and until it is fully built,
-                // all other conflicting shreds are dropped until the in-progress fec set is built.
-                //
-                // This is intention as it stops the leader from producing many equivocating shreds
-                // that would a) fill up our in-progress map, and b) starve our CPU from shred
-                // verification.
-                //
-                // TODO: once repair is implemented, repaired shreds should skip these checks to
-                // allow conflicting fec sets to be inside the in-progress map. We will need to do
-                // this to reliably repair when equivocation is detected.
-                return error.EquivocationDifferentHashForSameFecSetId;
-            }
-        }
-
-        // if we have this FecSetId with a different signature, this means equivocation has occured
-        if (state.in_progress.containsFecSetId(&fec_set_id)) {
-            // NOTE: see above note.
-            return error.EquivocationMatchingFecSetWithDifferentSignatureAlreadyInProgress;
-        }
-    }
-
-    // TODO: only compute this for new fec sets
-    var shred_merkle_root: Hash = undefined;
-    try shred.merkleRoot(&shred_merkle_root);
-
-    const fec_set_ctx: *FecSetCtx = if (maybe_in_progress_idx) |fec_set_ctx_idx| blk: {
-        @branchHint(.likely); // fec set is being constructed, and this is not the first shred
-
-        const fec_set_ctx = &state.in_progress.contexts[fec_set_ctx_idx];
+    const fec_set_ctx = if (state.in_progress.getFecSetCtx(&shred.signature)) |fec_set_ctx| existing_set: {
+        // fec set is already being built
+        @branchHint(.likely); // ~31/32 expected
 
         // variant should match that of the first recorded shred in the fec set
         if ((shred.variant.isData() and !shred.variant.eql(fec_set_ctx.data_variant)) or
@@ -283,34 +258,56 @@ fn processPacket(
             return error.VariantMismatchFromFecSet;
         }
 
-        if (!fec_set_ctx.merkle_root.eql(&shred_merkle_root)) {
-            return error.MerkleRootMismatchFromFecSet;
+        // NOTE: we do not recalculate the merkle root here to check if it matches the in-progress
+        // set. This is because the merkle root is protected by the signature, which we are already
+        // matching here.
+        // NOTE: firedancer does additional checks on the merkle tree here, see
+        // fd_bmtree_commitp_insert_with_proof.
+
+        break :existing_set fec_set_ctx;
+    } else new_set: {
+        // fec set is not currently being built (likely finished already)
+
+        switch (state.done.doneSignatureHash(fec_set_id, &shred.signature)) {
+            // fec set isn't finished, this is a new set
+            .missing => {},
+            // fec set was finished already, let's ignore it
+            .matching_signature => return .fec_set_already_finished,
+
+            // NOTE: when we detect equivocation at the shred level, we just drop the incoming
+            // shred. i.e. the first shred in a fet set "wins", and until it is fully built,
+            // all other conflicting shreds are dropped until the in-progress fec set is built.
+            //
+            // This is intention as it stops the leader from producing many equivocating shreds
+            // that would a) fill up our in-progress map, and b) starve our CPU from shred
+            // verification.
+            //
+            // TODO: once repair is implemented, repaired shreds should skip these checks to
+            // allow conflicting fec sets to be inside the in-progress map. We will need to do
+            // this to reliably repair when equivocation is detected.
+            .mismatching_signature => return error.EquivocationDifferentHashForSameFecSetId,
         }
-        // TODO: check against prev and next shred if present
-        // TODO: update in_progress state
-        // TODO: check for duplicates?
 
-        break :blk fec_set_ctx;
-    } else blk: {
-        @branchHint(.unlikely); // this is the first shred of a new in-progress fec set
-
-        {
-            const verify_zone = tracy.Zone.init(@src(), .{ .name = "sig verify" });
-            defer verify_zone.deinit();
-
-            const slot_leader = leader_schedule.get(shred.slot) orelse return error.UnknownLeader;
-
-            try shred.signature.verify(
-                slot_leader,
-                &shred_merkle_root.data,
-            );
+        // if we have this FecSetId with a different signature, this means equivocation has occured
+        if (state.in_progress.containsId(fec_set_id)) {
+            // NOTE: see above note.
+            return error.EquivocationMatchingFecSetWithDifferentSignatureAlreadyInProgress;
         }
 
-        // shred looks good, let's add a new ctx to in_progress
+        // This is the first shred of a new in-progress fec set.
+        const slot_leader = leader_schedule.get(shred.slot) orelse return error.UnknownLeader;
 
-        const new_fec_set_idx = state.in_progress.allocFecSetCtx(fec_set_id);
+        var shred_merkle_root: Hash = undefined;
+        try shred.merkleRoot(&shred_merkle_root);
 
-        state.in_progress.contexts[new_fec_set_idx] = .{
+        try shred.signature.verify(
+            slot_leader,
+            &shred_merkle_root.data,
+        );
+
+        const fec_set_ctx = try state.in_progress.createFecSetCtx(fec_set_id, &shred.signature);
+
+        fec_set_ctx.* = .{
             // we will check against these for equality in later received shreds
             .data_variant = if (shred.variant.isData())
                 shred.variant
@@ -331,19 +328,11 @@ fn processPacket(
             .code_shreds_buf = undefined,
         };
 
-        state.in_progress.used[new_fec_set_idx] = true;
-        state.in_progress.ids[new_fec_set_idx] = fec_set_id;
-        state.in_progress.signatures[new_fec_set_idx] = shred.signature;
-        state.in_progress.sig_hashes[new_fec_set_idx] = hashSignature(&shred.signature);
-
-        std.debug.assert(state.in_progress.contexts[new_fec_set_idx].totalShredsReceived() == 0);
-
-        maybe_in_progress_idx = new_fec_set_idx;
-
-        break :blk &state.in_progress.contexts[new_fec_set_idx];
-
-        // TODO: handle resigned shreds?
+        break :new_set fec_set_ctx;
     };
+
+    // in the case that we just acquired a fec set, it is critical that we do not leak it
+    errdefer comptime unreachable;
 
     zone.value(fec_set_ctx.totalShredsReceived());
 
@@ -415,7 +404,7 @@ fn processPacket(
 
         finished.* = .{
             .merkle_root = fec_set_ctx.merkle_root,
-            .chained_merkle_root = shred.chainedMerkleRoot().*, // TODO!
+            .chained_merkle_root = shred.chainedMerkleRoot().*,
             .id = fec_set_id,
             .data_complete = data_complete,
             .slot_complete = slot_complete,
@@ -435,41 +424,8 @@ fn processPacket(
         std.debug.assert(bytes_written == total_payload_len);
     }
 
-    state.done.insertRemovingFirst(&fec_set_id, &hashSignature(&shred.signature));
-
-    // free our in_progress entry for the fec set
-    {
-        const free_zone = tracy.Zone.init(@src(), .{ .name = "free in_progress entry" });
-        defer free_zone.deinit();
-
-        const in_progress_idx = maybe_in_progress_idx.?;
-
-        {
-            var queue = state.in_progress.evictionQueue();
-
-            tracy.plot(u16, "eviction queue count", @intCast(queue.count()));
-
-            const update_index = blk: {
-                var idx: usize = 0;
-                while (idx < queue.items.len) : (idx += 1) {
-                    const item = queue.items[idx];
-                    if (queue.context.compare(item, in_progress_idx) == .eq) break :blk idx;
-                }
-                unreachable; // alive in_progress entry must be in the eviction queue
-            };
-
-            const removed = queue.removeIndex(update_index);
-            std.debug.assert(removed == in_progress_idx);
-        }
-
-        state.in_progress.used[in_progress_idx] = false;
-        state.in_progress.eviction_queue_len -= 1;
-
-        {
-            var queue = state.in_progress.evictionQueue();
-            tracy.plot(u16, "eviction queue count", @intCast(queue.count()));
-        }
-    }
+    state.done.setDone(&shred.signature, fec_set_id);
+    state.in_progress.removeFinishedSet(fec_set_ctx);
 
     tracy.frameMarkNamed("finished FEC sets");
 
@@ -477,13 +433,14 @@ fn processPacket(
 }
 
 /// Represents a FEC (Forward Error Correction) set which has yet to be reconstructed.
+// TODO: use a separate pool for the packet buffers! We're using at least 2x the memory for these,
+// and are ruining our cache locality.
 const FecSetCtx = extern struct {
     data_shreds_received: std.StaticBitSet(data_shreds_max),
     code_shreds_received: std.StaticBitSet(code_shreds_max),
 
     // all packets are pre-validated shreds, i.e. Shred.fromPacketUnchecked is safe
     // items are valid iff its index is set to 1 in its corresponding bitset
-    // TODO: these fields will likely cause a lot of memory use, consider using a pool of them in future
     data_shreds_buf: [data_shreds_max]Packet.Buffer,
     code_shreds_buf: [code_shreds_max]Packet.Buffer,
 
@@ -517,6 +474,156 @@ fn hashSignature(a: *const Signature) u32 {
     return @bitCast((a.r[0..2] ++ a.s[0..2]).*);
 }
 
+const DoneSets = struct {
+    done_pool: Pool,
+    done_map: DoneMap,
+    eviction: Eviction,
+
+    fn init(allocator: std.mem.Allocator, capacity: u32) !DoneSets {
+        std.debug.assert(capacity < std.math.maxInt(u32));
+
+        const buf = try allocator.alloc(DoneItem, capacity);
+        errdefer allocator.free(buf);
+
+        const done_pool: Pool = .init(buf);
+
+        var map: DoneMap = .empty;
+        errdefer map.deinit(allocator);
+        try map.ensureTotalCapacity(allocator, capacity);
+
+        var eviction: Eviction = .init(allocator, .{ .done_pool = done_pool });
+        errdefer eviction.deinit();
+        try eviction.ensureTotalCapacity(capacity);
+
+        eviction.allocator = std.testing.failing_allocator;
+        return .{
+            .done_pool = done_pool,
+            .done_map = map,
+            .eviction = eviction,
+        };
+    }
+
+    fn deinit(self: *DoneSets, allocator: std.mem.Allocator) void {
+        allocator.free(self.done_pool.buf[0..self.done_pool.len]);
+        self.done_map.deinit(allocator);
+        self.eviction.allocator = allocator;
+        self.eviction.deinit();
+    }
+
+    // This signature+id must not be inside DoneSet already - any shred inside DoneSets should be
+    // dropped early, so setDone should be unreachable in this case.
+    fn setDone(self: *DoneSets, signature: *const Signature, id: FecSetId) void {
+        const done_ctx: DoneContext = .{ .done_map = &self.done_map };
+
+        self.assertCounts();
+        defer self.assertCounts();
+
+        const new_pool_id: Pool.ItemId = self.done_pool.createId() catch id: {
+            @branchHint(.likely);
+
+            const evicted_pool_id = self.eviction.remove();
+            const evicted_node: *DoneItem = self.done_pool.indexToPtr(evicted_pool_id);
+
+            const removed = self.done_map.swapRemoveAdapted(&evicted_node.id, done_ctx);
+            std.debug.assert(removed);
+
+            evicted_node.* = undefined;
+
+            self.done_pool.destroyId(evicted_pool_id);
+
+            break :id self.done_pool.createId() catch unreachable;
+        };
+
+        const new_done: *DoneItem = self.done_pool.indexToPtr(new_pool_id);
+        new_done.* = .{ .id = id, .signature_hashed = hashSignature(signature) };
+        self.eviction.add(new_pool_id) catch unreachable;
+        const entry = self.done_map.getOrPutAssumeCapacityAdapted(&id, done_ctx);
+        std.debug.assert(!entry.found_existing);
+        entry.value_ptr.* = new_done;
+    }
+
+    fn doneSignatureHash(
+        self: *const DoneSets,
+        id: FecSetId,
+        signature: *const Signature,
+    ) enum { missing, matching_signature, mismatching_signature } {
+        const done_ctx: DoneContext = .{ .done_map = &self.done_map };
+        const entry = self.done_map.getAdapted(&id, done_ctx) orelse return .missing;
+        const hashed = hashSignature(signature);
+
+        return if (hashed == entry.signature_hashed)
+            .matching_signature
+        else
+            .mismatching_signature;
+    }
+
+    fn assertCounts(self: *const DoneSets) void {
+        std.debug.assert(self.eviction.items.len == self.done_map.count());
+        tracy.plot(u32, "done FEC sets", @intCast(self.eviction.items.len));
+    }
+
+    const DoneItem = extern struct { signature_hashed: u32, id: FecSetId };
+    const Eviction = std.PriorityQueue(Pool.ItemId, QueueContext, QueueContext.compare);
+    const Pool = lib.collections.Pool(DoneItem, u32);
+    const DoneMap = std.ArrayHashMapUnmanaged(void, *DoneItem, DoneContext, true);
+
+    const QueueContext = struct {
+        done_pool: Pool,
+        fn compare(self: QueueContext, a: Pool.ItemId, b: Pool.ItemId) std.math.Order {
+            const a_id: *const FecSetId = &self.done_pool.indexToPtr(a).id;
+            const b_id: *const FecSetId = &self.done_pool.indexToPtr(b).id;
+            return FecSetId.compare(a_id, b_id); // remove oldest (slot, fec id) first
+        }
+    };
+
+    const DoneContext = struct {
+        done_map: *const DoneMap,
+        pub fn hash(ctx: DoneContext, key: *const FecSetId) u32 {
+            _ = ctx;
+            const idx_trunc: u32 = @as(u16, @truncate(key.fec_set_idx / 32));
+            return (idx_trunc << 16) ^ @as(u32, @truncate(key.slot));
+        }
+        pub fn eql(ctx: DoneContext, a: *const FecSetId, _: void, key_idx: usize) bool {
+            const b: *const FecSetId = &ctx.done_map.values()[key_idx].id;
+            return a.eql(b);
+        }
+    };
+};
+
+test "DoneSets basic usage" {
+    const allocator = std.testing.allocator;
+
+    var done_sets: DoneSets = try .init(allocator, 2);
+    defer done_sets.deinit(allocator);
+
+    const sig_1: Signature = .parse("3NyXqg7XjPBX5eW2zpExpAJTdXCHpVt4RR2uPPc6XUzTCVeAphwzpNBxHtYPpipE1gne2NW6ELW6HVdaB7oV9DEn");
+    const sig_2: Signature = .parse("2RUa9Sv3T2vwxeubSwJUS63W7N2wT9RaMcaoGJS6a28zGmSvpdArZMcDe7n3JTeBtuh1BkSgaJ8eN3WF7TBMjkG6");
+    const sig_3: Signature = .parse("pfj5CrTzHZ69ynRVXfzitUoSWSNqFJVkUzy17FWiC72FE1nw4nHLR2EWFipRnkp6NoeaPyn7uRt5HXZPngz6wsW");
+
+    const id_1: FecSetId = .{ .slot = 1, .fec_set_idx = 0 };
+    const id_2: FecSetId = .{ .slot = 2, .fec_set_idx = 0 };
+    const id_3: FecSetId = .{ .slot = 3, .fec_set_idx = 0 };
+
+    done_sets.setDone(&sig_1, id_1);
+
+    try std.testing.expectEqual(.matching_signature, done_sets.doneSignatureHash(id_1, &sig_1));
+    try std.testing.expectEqual(.missing, done_sets.doneSignatureHash(id_2, &sig_2));
+    try std.testing.expectEqual(.missing, done_sets.doneSignatureHash(id_3, &sig_3));
+
+    done_sets.setDone(&sig_2, id_2);
+
+    try std.testing.expectEqual(.matching_signature, done_sets.doneSignatureHash(id_1, &sig_1));
+    try std.testing.expectEqual(.matching_signature, done_sets.doneSignatureHash(id_2, &sig_2));
+    try std.testing.expectEqual(.missing, done_sets.doneSignatureHash(id_3, &sig_3));
+
+    done_sets.setDone(&sig_3, id_3);
+
+    try std.testing.expectEqual(.missing, done_sets.doneSignatureHash(id_1, &sig_1)); // 1 was evicted
+    try std.testing.expectEqual(.matching_signature, done_sets.doneSignatureHash(id_2, &sig_2));
+    try std.testing.expectEqual(.matching_signature, done_sets.doneSignatureHash(id_3, &sig_3));
+}
+
+// Tracks fec sets, keyed by their signature
 const InProgressSets = struct {
     ctx_pool: Pool,
 
@@ -526,9 +633,9 @@ const InProgressSets = struct {
     signature_map: SignatureMap,
     eviction: Eviction,
 
-    const Eviction = std.PriorityQueue(u32, QueueContext, QueueContext.compare);
+    const Eviction = std.PriorityQueue(Pool.ItemId, QueueContext, QueueContext.compare);
     const Pool = lib.collections.Pool(FecSetCtx, u32);
-    const Idx = lib.collections.Id(u32);
+    const Queue = std.PriorityQueue(Pool.ItemId, QueueContext, QueueContext.compare);
 
     // Key from signature-hash, rather than merkle root, as it's equivalent for lookup and we don't
     // have to compute it.
@@ -575,10 +682,8 @@ const InProgressSets = struct {
     }
 
     fn getFecSetCtx(self: *const InProgressSets, signature: *const Signature) ?*FecSetCtx {
-        return self.signature_map.getAdapted(
-            signature,
-            SignatureContext{ .signatures = self.signatures },
-        );
+        const map_ctx = self.mapContext();
+        return self.signature_map.getAdapted(signature, map_ctx);
     }
 
     // returns undefined memory, which must be immediately set by the caller
@@ -587,33 +692,21 @@ const InProgressSets = struct {
         id: FecSetId,
         signature: *const Signature,
     ) !*FecSetCtx {
-        const map_ctx: SignatureContext = .{ .signatures = self.signatures };
+        const map_ctx = self.mapContext();
+
+        self.assertCounts();
+        defer self.assertCounts();
 
         const new_pool_id: Pool.ItemId = self.ctx_pool.createId() catch id: {
             @branchHint(.likely);
-
-            const evicted_idx = self.eviction.remove();
-
-            self.removeSet(evicted_idx);
-            // const evicted_sig: *Signature = &self.signatures[evicted_idx];
-            // const node: *FecSetCtx = @ptrCast(&self.ctx_pool.buf[evicted_idx]);
-
-            // // deinit evicted
-            // self.ids[evicted_idx] =
-            //     // an impossible FecSetID which can never be matched with
-            //     .{ .slot = std.math.maxInt(Slot), .fec_set_idx = std.math.maxInt(u32) - 1 };
-            // self.ctx_pool.destroy(node);
-            // self.signature_map.swapRemoveAdapted(evicted_sig, map_ctx); // TODO: could use swapRemoveAt
-
-            // evicted_sig.* = undefined;
-
+            self.removeEvicting();
             break :id self.ctx_pool.createId() catch unreachable;
         };
 
         const new_idx: u32 = new_pool_id.index().?;
 
         self.ids[new_idx] = id;
-        self.eviction.add(new_idx) catch unreachable; // eviction can't be full, we *just* evicted
+        self.eviction.add(new_pool_id) catch unreachable; // eviction can't be full, we *just* evicted
         self.signatures[new_idx] = signature.*;
         const result = self.signature_map.getOrPutAssumeCapacityAdapted(signature, map_ctx);
         if (result.found_existing) unreachable; // you can't create a fecsetctx that already exists
@@ -625,66 +718,107 @@ const InProgressSets = struct {
         return node;
     }
 
-    fn removeSet(self: *InProgressSets, evicted_idx: u32) void {
-        const map_ctx: SignatureContext = .{ .signatures = self.signatures };
+    fn removeFinishedSet(self: *InProgressSets, fec_set_ctx: *FecSetCtx) void {
+        const finished_pool_idx = self.ctx_pool.ptrToIndex(fec_set_ctx);
+
+        self.assertCounts();
+        defer self.assertCounts();
+
+        // remove from eviction queue
+        var iter = self.eviction.iterator();
+        while (iter.next()) |pool_idx| {
+            if (pool_idx == finished_pool_idx) {
+                const removal_pool_idx = self.eviction.removeIndex(iter.count -| 1);
+                std.debug.assert(removal_pool_idx == finished_pool_idx);
+                break;
+            }
+        } else unreachable;
+
+        self.removeEvictedSet(finished_pool_idx);
+    }
+
+    fn removeEvicting(self: *InProgressSets) void {
+        self.assertCounts();
+        defer self.assertCounts();
+
+        const evicted_idx = self.eviction.remove();
+        self.removeEvictedSet(evicted_idx);
+    }
+
+    fn removeEvictedSet(self: *InProgressSets, evicted_pool_idx: Pool.ItemId) void {
+        const map_ctx = self.mapContext();
+
+        const evicted_idx = evicted_pool_idx.index().?;
 
         const evicted_sig: *Signature = &self.signatures[evicted_idx];
-        const node: *FecSetCtx = @ptrCast(&self.ctx_pool.buf[evicted_idx]);
+        // const node: *FecSetCtx = @ptrCast(&self.ctx_pool.buf[evicted_idx]);
         self.ids[evicted_idx] =
             // an impossible FecSetID which can never be matched with
             .{ .slot = std.math.maxInt(Slot), .fec_set_idx = std.math.maxInt(u32) - 1 };
 
-        self.ctx_pool.destroyId(@enumFromInt(evicted_idx));
-        const removed = self.signature_map.swapRemoveContextAdapted(evicted_sig, map_ctx, map_ctx); // TODO: could use swapRemoveAt
+        self.ctx_pool.destroyId(evicted_pool_idx);
+        const removed = self.signature_map.swapRemoveContextAdapted(evicted_sig, map_ctx, map_ctx);
         std.debug.assert(removed);
 
         evicted_sig.* = undefined;
-        node.* = undefined;
+
+        // NOTE: it may be tempting to set the evicted Node to undefined, but this will destroy our
+        // pool's free list
     }
 
     fn containsId(self: *const InProgressSets, id: FecSetId) bool {
-        return for (self.ids) |fec_set_id| {
-            if (id.eql(&fec_set_id)) break true;
+        return for (self.signature_map.values()) |fec_set_ctx| {
+            const pool_id = self.ctx_pool.ptrToIndex(fec_set_ctx);
+            const idx = pool_id.index().?;
+
+            if (self.ids[idx].eql(&id)) break true;
         } else false;
     }
 
+    fn assertCounts(self: *const InProgressSets) void {
+        std.debug.assert(self.signature_map.count() == self.eviction.items.len);
+        tracy.plot(u32, "in-progress FEC sets", @intCast(self.eviction.items.len));
+    }
+
+    fn mapContext(self: *const InProgressSets) SignatureContext {
+        return .{
+            .ctx_pool = self.ctx_pool,
+            .map = self.signature_map,
+            .signatures = self.signatures,
+        };
+    }
+
     const SignatureContext = struct {
+        map: SignatureMap,
+        ctx_pool: Pool,
         signatures: []const Signature,
 
         pub fn hash(ctx: SignatureContext, key: *const Signature) u32 {
             _ = ctx;
-            return @bitCast(key.r[0..4].*);
+            return hashSignature(key);
         }
 
         // NOTE: we could optimise this by getting rid of the Signature and only storing the hash,
         // as collisions aren't important.
         pub fn eql(ctx: SignatureContext, a: *const Signature, _: void, key_idx: usize) bool {
-            const b: *const Signature = &ctx.signatures[key_idx];
+            const set: *FecSetCtx = ctx.map.values()[key_idx];
+            const pool_id = ctx.ctx_pool.ptrToIndex(set);
+            const idx = pool_id.index().?;
+
+            const b: *const Signature = &ctx.signatures[idx];
             return a.eql(b);
         }
     };
 
     const QueueContext = struct {
         ids: []const FecSetId,
-        fn compare(self: QueueContext, a: u32, b: u32) std.math.Order {
+        fn compare(self: QueueContext, a: Pool.ItemId, b: Pool.ItemId) std.math.Order {
+
             // remove greatest (slot, fec id) first
-            return std.math.Order.invert(FecSetId.compare(&self.ids[a], &self.ids[b]));
-        }
-    };
-
-    const Queue = std.PriorityQueue(Idx, QueueContext, QueueContext.compare);
-
-    const IdContext = struct {
-        ids: []const FecSetId,
-
-        pub fn hash(ctx: IdContext, key: FecSetId) u32 {
-            _ = ctx;
-            return std.hash.Murmur3_32.hashUint64WithSeed(key.slot, key.fec_set_idx);
-        }
-
-        pub fn eql(ctx: SignatureContext, a: FecSetId, _: void, key_idx: usize) bool {
-            const b = &ctx.ids[key_idx];
-            return a.eql(b);
+            return std.math.Order.invert(FecSetId.compare(
+                &self.ids[a.index().?],
+                &self.ids[b.index().?],
+            ));
         }
     };
 };
@@ -712,232 +846,12 @@ test "InProgressSets basic usage" {
     // context is evicted
     {
         const ctx_idx = in_progress.eviction.remove();
-        in_progress.removeSet(ctx_idx);
+        in_progress.removeEvictedSet(ctx_idx);
     }
 
     // can't find set
     try std.testing.expectEqual(null, in_progress.getFecSetCtx(&set_signature));
     try std.testing.expect(!in_progress.containsId(set_id));
-}
-
-// TODO: this datastructure is a bit silly, worth profiling to see how slow it is
-//
-// TODO: once we have root slot tracking, we should aggressively prune entries where slot < root.
-// this is essential for preventing a denial of service attack where the map is near-entirely
-// filled by old sets that will never complete.
-
-/// Tracks in-progress FEC sets
-/// Keyed by signature (cheaper than getting the merkle root)
-const ProgressMap = extern struct {
-    const n = 2048; // max number of in-progress fec sets. Number chosen arbitrarily.
-    const Idx = u16;
-
-    signatures: [n]Signature,
-    sig_hashes: [n]u32,
-    ids: [n]FecSetId,
-    contexts: [n]FecSetCtx,
-
-    used: [n]bool,
-
-    // for evicting highest-slot first
-    eviction_queue_len: Idx,
-    eviction_queue_buf: [n]Idx,
-
-    const empty: ProgressMap = .{
-        .signatures = undefined,
-        .sig_hashes = undefined,
-        .ids = undefined,
-        .contexts = undefined,
-
-        .used = @splat(false),
-
-        .eviction_queue_len = 0,
-        .eviction_queue_buf = undefined,
-    };
-
-    fn evictionQueue(self: *ProgressMap) Queue {
-        return .{
-            .items = self.eviction_queue_buf[0..self.eviction_queue_len],
-            .cap = n,
-            .context = .{ .ids = &self.ids, .used = &self.used },
-            .allocator = std.testing.failing_allocator,
-        };
-    }
-
-    fn getFecSetCtx(self: *ProgressMap, signature: *const Signature) ?*FecSetCtx {
-        const idx = self.getFecSetCtxIdx(signature) orelse return null;
-        return &self.contexts[idx];
-    }
-
-    fn getFecSetCtxIdx(self: *const ProgressMap, signature: *const Signature) ?Idx {
-        const hashed = hashSignature(signature);
-
-        for (
-            &self.signatures,
-            &self.sig_hashes,
-            &self.used,
-            0..,
-        ) |sig, hash, used, i| {
-            if (!used) continue;
-            if (hash != hashed) continue;
-            if (!sig.eql(signature)) continue;
-            return @intCast(i);
-        }
-
-        return null;
-    }
-
-    // NOTE: this function only sets the entry's id and sets used to true.
-    // caller must populate all other fields before calling any ProgressMap functions again.
-    fn allocFecSetCtx(self: *ProgressMap, fec_set_id: FecSetId) Idx {
-        const zone = tracy.Zone.init(@src(), .{ .name = "allocFecSetCtx" });
-        defer zone.deinit();
-
-        {
-            var eviction_queue = self.evictionQueue();
-
-            tracy.plot(u16, "eviction queue count", @intCast(eviction_queue.count()));
-        }
-
-        const unused_idx = for (&self.used, 0..) |used, i| {
-            if (!used) break i;
-        } else self.evict() orelse unreachable; // safe: we can always evict if there's entries
-
-        self.used[unused_idx] = true;
-        self.ids[unused_idx] = fec_set_id;
-
-        var eviction_queue = self.evictionQueue();
-
-        eviction_queue.add(@intCast(unused_idx)) catch unreachable;
-        self.eviction_queue_len += 1;
-
-        tracy.plot(u16, "eviction queue count", @intCast(eviction_queue.count()));
-
-        return @intCast(unused_idx);
-    }
-
-    fn containsFecSetId(self: *const ProgressMap, id: *const FecSetId) bool {
-        for (self.ids, self.used) |found_id, used| {
-            if (!used) continue;
-            if (found_id.eql(id)) return true;
-        }
-        return false;
-    }
-
-    fn evict(self: *ProgressMap) ?Idx {
-        const zone = tracy.Zone.init(@src(), .{ .name = "evict" });
-        defer zone.deinit();
-
-        var eviction_queue = self.evictionQueue();
-
-        tracy.plot(u16, "eviction queue count", @intCast(eviction_queue.count()));
-
-        const evict_idx = eviction_queue.removeOrNull() orelse return null;
-        self.eviction_queue_len -= 1;
-        tracy.plot(u16, "eviction queue count", @intCast(eviction_queue.count()));
-
-        self.used[evict_idx] = false;
-
-        self.signatures[evict_idx] = undefined;
-        self.sig_hashes[evict_idx] = undefined;
-        self.ids[evict_idx] = undefined;
-        self.contexts[evict_idx] = undefined;
-
-        return evict_idx;
-    }
-
-    const QueueContext = struct {
-        ids: *const [n]FecSetId,
-        used: *const [n]bool,
-
-        fn compare(self: QueueContext, a: Idx, b: Idx) std.math.Order {
-            std.debug.assert(self.used[a] and self.used[b]);
-
-            // remove greatest (slot, fec id) first
-            return std.math.Order.invert(FecSetId.compare(&self.ids[a], &self.ids[b]));
-        }
-    };
-
-    const Queue = std.PriorityQueue(Idx, QueueContext, QueueContext.compare);
-};
-
-// TODO: this data structure needs replacing
-fn FixedArrayMap(
-    Key: type,
-    Value: type,
-    HashedKey: type,
-    maybeHashFn: ?fn (*const Key) HashedKey,
-    eql: fn (*const Key, *const Key) bool,
-    n: usize,
-) type {
-    return extern struct {
-        keys: [n]Key,
-        vals: [n]Value,
-        hash: if (maybeHashFn != null) [n]HashedKey else [n]void,
-        used: [n]bool,
-
-        const Self = @This();
-
-        const empty: Self = .{
-            .keys = @splat(undefined),
-            .vals = @splat(undefined),
-            .hash = @splat(undefined),
-            .used = @splat(false),
-        };
-
-        fn get(self: *Self, key: *const Key) ?*Value {
-            const idx = self.getIdx(key) orelse return null;
-            return &self.vals[idx];
-        }
-
-        fn contains(self: *const Self, key: *const Key) bool {
-            return self.getIdx(key) != null;
-        }
-
-        fn getIdx(self: *const Self, key: *const Key) ?u32 {
-            const hashed = if (maybeHashFn) |hashFn| hashFn(key) else {};
-
-            for (&self.keys, &self.hash, &self.used, 0..) |*k, hash, used, i| {
-                if (!used) continue;
-                if (hashed != hash) continue;
-                if (!eql(key, k)) continue;
-                return @intCast(i);
-            }
-
-            return null;
-        }
-
-        fn getIdxUnused(self: *const Self) ?u32 {
-            for (&self.used, 0..) |used, i| {
-                if (used) continue;
-                return @intCast(i);
-            }
-            return null;
-        }
-
-        fn insertRemovingFirst(self: *Self, key: *const Key, insert: *const Value) void {
-            const hashed = if (maybeHashFn) |hashFn| hashFn(key) else {};
-
-            const target_idx = if (self.getIdxUnused()) |unused_idx| unused_idx else idx: {
-                @branchHint(.likely);
-                @memmove(self.keys[0 .. n - 2], self.keys[1 .. n - 1]);
-                @memmove(self.vals[0 .. n - 2], self.vals[1 .. n - 1]);
-                @memmove(self.hash[0 .. n - 2], self.hash[1 .. n - 1]);
-                @memmove(self.used[0 .. n - 2], self.used[1 .. n - 1]);
-                break :idx n - 1;
-            };
-
-            self.keys[target_idx] = key.*;
-            self.vals[target_idx] = insert.*;
-            self.hash[target_idx] = hashed;
-            self.used[target_idx] = true;
-        }
-
-        fn containsValue(self: *const Self, value: *const Value) bool {
-            for (&self.vals) |*val| if (val.eql(value)) return true;
-            return false;
-        }
-    };
 }
 
 const reedsol = struct {
