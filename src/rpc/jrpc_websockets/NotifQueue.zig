@@ -44,8 +44,6 @@ next_reserve: u64,
 /// Selected commit behavior mode for this queue (set at init).
 commit_path: CommitPath,
 allocator: std.mem.Allocator,
-/// Serialize jobs submitted but not yet committed.
-inflight_sers: usize,
 /// True when this queue has newly committed notifications that still need
 /// a subscriber wake pass in the current loop-drain cycle.
 wake_pending: bool,
@@ -106,7 +104,6 @@ pub fn init(allocator: std.mem.Allocator, capacity: u64, commit_path: CommitPath
         .next_reserve = 1,
         .commit_path = commit_path,
         .allocator = allocator,
-        .inflight_sers = 0,
         .wake_pending = false,
         .subscribers = .{},
     };

@@ -1,10 +1,9 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const ws = @import("webzockets");
-const base58 = @import("base58");
-const zstd = @import("zstd");
 const types = @import("types.zig");
 const methods = @import("methods.zig");
+const account_codec = sig.rpc.account_codec;
 const NotifPayload = sig.sync.RcSlice(u8);
 
 const Id = sig.rpc.request.Id;
@@ -131,69 +130,14 @@ pub fn serializeRootNotification(
     });
 }
 
-/// Helper struct to return encoded data and associated encoding name
-const EncodedAccountData = struct {
-    encoded: []const u8,
-    encoding_name: []const u8,
-};
-
-fn encodeAccountData(
-    allocator: std.mem.Allocator,
-    account: *const sig.core.Account,
-    encoding: methods.Encoding,
-) !EncodedAccountData {
-    // TODO: this is all likely placeholder, to be replaced by same code used for getAccountInfo
-    const raw = try account.data.readAllAllocate(allocator);
-    defer allocator.free(raw);
-
-    const b64 = std.base64.standard.Encoder;
-
-    const result: EncodedAccountData = switch (encoding) {
-        // TODO: integrate jsonParsed encoding
-        .base64, .jsonParsed => blk: {
-            const buf = try allocator.alloc(u8, b64.calcSize(raw.len));
-            const encoded = b64.encode(buf, raw);
-            std.debug.assert(encoded.len == buf.len);
-            break :blk .{ .encoded = encoded, .encoding_name = "base64" };
-        },
-        .@"base64+zstd" => blk: {
-            const compressor = zstd.Compressor.init(.{}) catch
-                return error.ZstdCompressFailed;
-            defer compressor.deinit();
-            const bound = raw.len + (raw.len >> 8) + 128;
-            const compressed = try allocator.alloc(u8, bound);
-            defer allocator.free(compressed);
-            const zstd_data = compressor.compress2(compressed, raw) catch
-                return error.ZstdCompressFailed;
-            const buf = try allocator.alloc(u8, b64.calcSize(zstd_data.len));
-            const encoded = b64.encode(buf, zstd_data);
-            break :blk .{ .encoded = encoded, .encoding_name = "base64+zstd" };
-        },
-        .base58 => if (raw.len <= 128) b58: {
-            const buf = try allocator.alloc(u8, base58.encodedMaxSize(raw.len));
-            const buf_len = base58.Table.BITCOIN.encode(buf, raw);
-            break :b58 .{
-                .encoded = buf[0..buf_len],
-                .encoding_name = "base58",
-            };
-        } else blk: {
-            const buf = try allocator.alloc(u8, b64.calcSize(raw.len));
-            const encoded = b64.encode(buf, raw);
-            break :blk .{ .encoded = encoded, .encoding_name = "base64" };
-        },
-    };
-
-    return result;
-}
-
-const AccountValue = struct {
+/// Helper type to seralize all the account fields for encoded RPC notification
+const WireAccountValue = struct {
     acc: *const sig.core.Account,
-    encoded: []const u8,
-    encoding_name: []const u8,
+    data: account_codec.AccountData,
 
-    pub fn jsonStringify(self: AccountValue, jw: anytype) !void {
+    pub fn jsonStringify(self: WireAccountValue, jw: anytype) !void {
         try jw.write(.{
-            .data = .{ self.encoded, self.encoding_name },
+            .data = self.data,
             .executable = self.acc.executable,
             .lamports = self.acc.lamports,
             .owner = self.acc.owner,
@@ -203,20 +147,67 @@ const AccountValue = struct {
     }
 };
 
+fn toAccountEncoding(encoding: methods.AccountEncoding) account_codec.AccountEncoding {
+    return switch (encoding) {
+        .base58 => .base58,
+        .base64 => .base64,
+        .@"base64+zstd" => .@"base64+zstd",
+        .jsonParsed => .jsonParsed,
+    };
+}
+
+fn encodeNotificationAccountData(
+    arena: std.mem.Allocator,
+    data: types.AccountEventData,
+    encoding: methods.AccountEncoding,
+    data_slice: ?methods.DataSlice,
+    read_ctx: ?types.SlotReadContext,
+) !account_codec.AccountData {
+    const awp = &data.account;
+    return if (encoding == .jsonParsed) blk: {
+        const ctx = read_ctx orelse return error.MissingReadContext;
+        const tracker = @constCast(ctx.slot_tracker);
+        const slot_ref = tracker.get(data.slot) orelse return error.SlotNotAvailable;
+        defer slot_ref.release();
+        const ancestors = &slot_ref.constants().ancestors;
+        const slot_reader = ctx.account_reader.forSlot(ancestors);
+        break :blk try account_codec.encodeJsonParsed(
+            arena,
+            awp.pubkey,
+            awp.account,
+            slot_reader,
+            data_slice,
+        );
+    } else try account_codec.encodeStandard(
+        arena,
+        awp.account,
+        toAccountEncoding(encoding),
+        data_slice,
+    );
+}
+
 pub fn serializeAccountNotification(
     allocator: std.mem.Allocator,
     sub_id: types.SubId,
     data: types.AccountEventData,
-    encoding: methods.Encoding,
+    encoding: methods.AccountEncoding,
+    data_slice: ?methods.DataSlice,
+    read_ctx: ?types.SlotReadContext,
 ) !NotifPayload {
-    const awp = data.rc.get();
-    const enc = try encodeAccountData(allocator, &awp.account, encoding);
-    defer allocator.free(enc.encoded);
+    const awp = &data.account;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
 
-    const av = AccountValue{
+    const av = WireAccountValue{
         .acc = &awp.account,
-        .encoded = enc.encoded,
-        .encoding_name = enc.encoding_name,
+        .data = try encodeNotificationAccountData(
+            arena,
+            data,
+            encoding,
+            data_slice,
+            read_ctx,
+        ),
     };
     return serializeToPayload(allocator, .{
         .jsonrpc = "2.0",
@@ -235,16 +226,24 @@ pub fn serializeProgramNotification(
     allocator: std.mem.Allocator,
     sub_id: types.SubId,
     data: types.AccountEventData,
-    encoding: methods.Encoding,
+    encoding: methods.AccountEncoding,
+    data_slice: ?methods.DataSlice,
+    read_ctx: ?types.SlotReadContext,
 ) !NotifPayload {
-    const awp = data.rc.get();
-    const enc = try encodeAccountData(allocator, &awp.account, encoding);
-    defer allocator.free(enc.encoded);
+    const awp = &data.account;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
 
-    const av = AccountValue{
+    const av = WireAccountValue{
         .acc = &awp.account,
-        .encoded = enc.encoded,
-        .encoding_name = enc.encoding_name,
+        .data = try encodeNotificationAccountData(
+            arena,
+            data,
+            encoding,
+            data_slice,
+            read_ctx,
+        ),
     };
     return serializeToPayload(allocator, .{
         .jsonrpc = "2.0",
@@ -303,19 +302,28 @@ pub fn serializeLogsNotification(
 pub fn serializeNotification(
     allocator: std.mem.Allocator,
     sub_id: types.SubId,
-    event_data: types.EventData,
-    encoding: methods.Encoding,
-    sub_method: types.SubMethod,
+    job_type: types.SerializeJob.JobType,
 ) !NotifPayload {
-    return switch (event_data) {
-        .slot => |d| serializeSlotNotification(allocator, sub_id, d),
-        .root => |d| serializeRootNotification(allocator, sub_id, d),
-        .logs => |d| serializeLogsNotification(allocator, sub_id, d),
-        .account => |d| switch (sub_method) {
-            .account => serializeAccountNotification(allocator, sub_id, d, encoding),
-            .program => serializeProgramNotification(allocator, sub_id, d, encoding),
-            else => unreachable,
-        },
+    return switch (job_type) {
+        .slot => |data| serializeSlotNotification(allocator, sub_id, data),
+        .root => |data| serializeRootNotification(allocator, sub_id, data),
+        .logs => |data| serializeLogsNotification(allocator, sub_id, data),
+        .account => |job| serializeAccountNotification(
+            allocator,
+            sub_id,
+            job.data,
+            job.encoding,
+            job.data_slice,
+            job.read_ctx,
+        ),
+        .program => |job| serializeProgramNotification(
+            allocator,
+            sub_id,
+            job.data,
+            job.encoding,
+            job.data_slice,
+            job.read_ctx,
+        ),
     };
 }
 
@@ -470,13 +478,12 @@ test "serializeAccountNotification base64 default" {
         .executable = false,
         .rent_epoch = 42,
     };
-    const rc = try types.RcAccountWithPubkey.init(allocator, pk, account);
-    defer rc.release(allocator);
+    defer account.deinit(allocator);
 
     const p = try serializeAccountNotification(allocator, 7, .{
-        .rc = rc,
+        .account = .{ .pubkey = pk, .account = account },
         .slot = 100,
-    }, .base64);
+    }, .base64, null, null);
     defer p.deinit(allocator);
 
     try std.testing.expectEqualStrings(
@@ -496,17 +503,39 @@ test "serializeAccountNotification explicit base64" {
         .executable = true,
         .rent_epoch = 0,
     };
-    const rc = try types.RcAccountWithPubkey.init(allocator, pk, account);
-    defer rc.release(allocator);
+    defer account.deinit(allocator);
 
     const p = try serializeAccountNotification(allocator, 1, .{
-        .rc = rc,
+        .account = .{ .pubkey = pk, .account = account },
         .slot = 50,
-    }, .base64);
+    }, .base64, null, null);
     defer p.deinit(allocator);
 
     try std.testing.expectEqualStrings(
         \\{"jsonrpc":"2.0","method":"accountNotification","params":{"result":{"context":{"slot":50},"value":{"data":["AQIDBA==","base64"],"executable":true,"lamports":500,"owner":"11111111111111111111111111111111","rentEpoch":0,"space":4}},"subscription":1}}
+    , extractJson(p.payload()));
+}
+
+test "serializeAccountNotification applies dataSlice" {
+    const allocator = std.testing.allocator;
+    const pk = sig.core.Pubkey.ZEROES;
+    const account: sig.core.Account = .{
+        .lamports = 500,
+        .data = .{ .unowned_allocation = &.{ 1, 2, 3, 4 } },
+        .owner = pk,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    defer account.deinit(allocator);
+
+    const p = try serializeAccountNotification(allocator, 2, .{
+        .account = .{ .pubkey = pk, .account = account },
+        .slot = 51,
+    }, .base64, .{ .offset = 1, .length = 2 }, null);
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"accountNotification","params":{"result":{"context":{"slot":51},"value":{"data":["AgM=","base64"],"executable":false,"lamports":500,"owner":"11111111111111111111111111111111","rentEpoch":0,"space":4}},"subscription":2}}
     , extractJson(p.payload()));
 }
 
@@ -523,13 +552,12 @@ test "serializeAccountNotification base58 encoding" {
         .executable = false,
         .rent_epoch = 42,
     };
-    const rc = try types.RcAccountWithPubkey.init(allocator, pk, account);
-    defer rc.release(allocator);
+    defer account.deinit(allocator);
 
     const p = try serializeAccountNotification(allocator, 7, .{
-        .rc = rc,
+        .account = .{ .pubkey = pk, .account = account },
         .slot = 100,
-    }, .base58);
+    }, .base58, null, null);
     defer p.deinit(allocator);
 
     // base58 of [0xDE, 0xAD] = "Hwr" (Bitcoin alphabet)
@@ -551,13 +579,12 @@ test "serializeAccountNotification base64+zstd encoding" {
         .executable = false,
         .rent_epoch = 42,
     };
-    const rc = try types.RcAccountWithPubkey.init(allocator, pk, account);
-    defer rc.release(allocator);
+    defer account.deinit(allocator);
 
     const p = try serializeAccountNotification(allocator, 7, .{
-        .rc = rc,
+        .account = .{ .pubkey = pk, .account = account },
         .slot = 100,
-    }, .@"base64+zstd");
+    }, .@"base64+zstd", null, null);
     defer p.deinit(allocator);
 
     const json = extractJson(p.payload());
@@ -585,13 +612,12 @@ test "serializeAccountNotification empty account data" {
         .executable = false,
         .rent_epoch = 0,
     };
-    const rc = try types.RcAccountWithPubkey.init(allocator, pk, account);
-    defer rc.release(allocator);
+    defer account.deinit(allocator);
 
     const p = try serializeAccountNotification(allocator, 1, .{
-        .rc = rc,
+        .account = .{ .pubkey = pk, .account = account },
         .slot = 1,
-    }, .base64);
+    }, .base64, null, null);
     defer p.deinit(allocator);
 
     try std.testing.expectEqualStrings(
@@ -613,19 +639,100 @@ test "serializeProgramNotification wraps value with pubkey and account" {
         .executable = false,
         .rent_epoch = 7,
     };
-    const rc = try types.RcAccountWithPubkey.init(allocator, account_pk, account);
-    defer rc.release(allocator);
+    defer account.deinit(allocator);
 
     const p = try serializeProgramNotification(allocator, 3, .{
-        .rc = rc,
+        .account = .{ .pubkey = account_pk, .account = account },
         .slot = 200,
-    }, .base64);
+    }, .base64, null, null);
     defer p.deinit(allocator);
 
     // base64 of [0xCA, 0xFE] = "yv4="
     try std.testing.expectEqualStrings(
         \\{"jsonrpc":"2.0","method":"programNotification","params":{"result":{"context":{"slot":200},"value":{"pubkey":"11111111111111111111111111111111","account":{"data":["yv4=","base64"],"executable":false,"lamports":999,"owner":"11111111111111111111111111111111","rentEpoch":7,"space":2}}},"subscription":3}}
     , extractJson(p.payload()));
+}
+
+test "serializeProgramNotification applies dataSlice" {
+    const allocator = std.testing.allocator;
+    const account_pk = sig.core.Pubkey.ZEROES;
+    const account: sig.core.Account = .{
+        .lamports = 999,
+        .data = .{ .unowned_allocation = &.{ 1, 2, 3, 4 } },
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 7,
+    };
+    defer account.deinit(allocator);
+
+    const p = try serializeProgramNotification(allocator, 3, .{
+        .account = .{ .pubkey = account_pk, .account = account },
+        .slot = 200,
+    }, .base64, .{ .offset = 1, .length = 2 }, null);
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"programNotification","params":{"result":{"context":{"slot":200},"value":{"pubkey":"11111111111111111111111111111111","account":{"data":["AgM=","base64"],"executable":false,"lamports":999,"owner":"11111111111111111111111111111111","rentEpoch":7,"space":4}}},"subscription":3}}
+    , extractJson(p.payload()));
+}
+
+test "serializeProgramNotification base58 encoding" {
+    const allocator = std.testing.allocator;
+    const data_buf = try allocator.alloc(u8, 2);
+    data_buf[0] = 0xDE;
+    data_buf[1] = 0xAD;
+    const account_pk = sig.core.Pubkey.ZEROES;
+    const account = sig.core.Account{
+        .lamports = 1000,
+        .data = sig.accounts_db.buffer_pool.AccountDataHandle.initAllocatedOwned(data_buf),
+        .owner = sig.core.Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 42,
+    };
+    defer account.deinit(allocator);
+
+    const p = try serializeProgramNotification(allocator, 7, .{
+        .account = .{ .pubkey = account_pk, .account = account },
+        .slot = 100,
+    }, .base58, null, null);
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"programNotification","params":{"result":{"context":{"slot":100},"value":{"pubkey":"11111111111111111111111111111111","account":{"data":["Hwr","base58"],"executable":false,"lamports":1000,"owner":"11111111111111111111111111111111","rentEpoch":42,"space":2}}},"subscription":7}}
+    , extractJson(p.payload()));
+}
+
+test "serializeProgramNotification base64+zstd encoding" {
+    const allocator = std.testing.allocator;
+    const data_buf = try allocator.alloc(u8, 2);
+    data_buf[0] = 0xDE;
+    data_buf[1] = 0xAD;
+    const account_pk = sig.core.Pubkey.ZEROES;
+    const account = sig.core.Account{
+        .lamports = 1000,
+        .data = sig.accounts_db.buffer_pool.AccountDataHandle.initAllocatedOwned(data_buf),
+        .owner = sig.core.Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 42,
+    };
+    defer account.deinit(allocator);
+
+    const p = try serializeProgramNotification(allocator, 7, .{
+        .account = .{ .pubkey = account_pk, .account = account },
+        .slot = 100,
+    }, .@"base64+zstd", null, null);
+    defer p.deinit(allocator);
+
+    const json = extractJson(p.payload());
+    try std.testing.expect(
+        std.mem.startsWith(u8, json, "{\"jsonrpc\":\"2.0\",\"method\":\"programNotification\""),
+    );
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"base64+zstd\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"lamports\":1000") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"rentEpoch\":42") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"space\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"slot\":100") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"pubkey\":") != null);
 }
 
 test "serializeLogsNotification format" {
@@ -657,7 +764,7 @@ test "serializeLogsNotification zero logs" {
     , extractJson(p.payload()));
 }
 
-test "serializeNotification dispatches account with encoding and sub_method" {
+test "serializeNotification dispatches program job type" {
     const allocator = std.testing.allocator;
     const data_buf = try allocator.alloc(u8, 2);
     data_buf[0] = 0xDE;
@@ -670,17 +777,13 @@ test "serializeNotification dispatches account with encoding and sub_method" {
         .executable = false,
         .rent_epoch = 0,
     };
-    const rc = try types.RcAccountWithPubkey.init(allocator, pk, account);
-    defer rc.release(allocator);
+    defer account.deinit(allocator);
 
-    // Dispatch as program notification via serializeNotification.
-    const p = try serializeNotification(
-        allocator,
-        10,
-        .{ .account = .{ .rc = rc, .slot = 42 } },
-        .base64,
-        .program,
-    );
+    const p = try serializeNotification(allocator, 10, .{ .program = .{
+        .data = .{ .account = .{ .pubkey = pk, .account = account }, .slot = 42 },
+        .encoding = .base64,
+        .read_ctx = undefined,
+    } });
     defer p.deinit(allocator);
 
     const json = extractJson(p.payload());
