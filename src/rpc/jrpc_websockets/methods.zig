@@ -419,10 +419,6 @@ test "AccountSubscribe.Config parse" {
     });
 
     try expectParsesTo(AccountSubscribe.Config, "{}", .{});
-
-    try expectParsesToOpts(AccountSubscribe.Config,
-        \\{"commitment":"finalized","unknownField":true}
-    , .{ .commitment = .finalized, .encoding = null }, .{ .ignore_unknown_fields = true });
 }
 
 test "AccountSubscribe.Config roundtrip" {
@@ -504,16 +500,7 @@ test "SignatureSubscribe.Config roundtrip" {
 }
 
 fn expectParsesTo(comptime T: type, json: []const u8, expected: T) !void {
-    try expectParsesToOpts(T, json, expected, .{});
-}
-
-fn expectParsesToOpts(
-    comptime T: type,
-    json: []const u8,
-    expected: T,
-    options: std.json.ParseOptions,
-) !void {
-    const parsed = try parseFromValue(T, json, options);
+    const parsed = try parseFromValue(T, json, .{});
     defer parsed.deinit();
     try testing.expectEqualDeep(expected, parsed.value);
 }

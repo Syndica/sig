@@ -93,8 +93,11 @@ pub const WsRequest = struct {
         source: anytype,
         options: std.json.ParseOptions,
     ) std.json.ParseError(@TypeOf(source.*))!WsRequest {
-        const dyn = try std.json.innerParse(Dynamic, allocator, source, options);
-        return dyn.parse(allocator, options, null) catch |err| switch (err) {
+        var parse_options = options;
+        parse_options.ignore_unknown_fields = true;
+
+        const dyn = try std.json.innerParse(Dynamic, allocator, source, parse_options);
+        return dyn.parse(allocator, parse_options, null) catch |err| switch (err) {
             error.OutOfMemory => |e| e,
 
             // JSON-RPC envelope errors
@@ -545,6 +548,26 @@ test "parse voteSubscribe (omitted params)" {
         .{
             .id = .{ .int = 11 },
             .method = .{ .voteSubscribe = .{} },
+        },
+    );
+}
+
+test "parse accountSubscribe ignores unknown fields" {
+    const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
+    try testParseRequest(
+        .{},
+        \\{"jsonrpc":"2.0","id":12,"method":"accountSubscribe","params":["vinesvinesvinesvinesvinesvinesvinesvinesvin",{"encoding":"jsonParsed","commitment":"confirmed","dataSlice":null,"definitelyUnknownField":true}],"ignored":true}
+    ,
+        .{
+            .id = .{ .int = 12 },
+            .method = .{ .accountSubscribe = .{
+                .pubkey = test_pubkey,
+                .config = .{
+                    .commitment = .confirmed,
+                    .encoding = .jsonParsed,
+                    .dataSlice = null,
+                },
+            } },
         },
     );
 }

@@ -204,12 +204,14 @@ pub const JRPCHandler = struct {
         _ = self.parse_arena_state.reset(.retain_capacity);
         const parse_arena = self.parse_arena_state.allocator();
 
+        const parse_options: std.json.ParseOptions = .{ .ignore_unknown_fields = true };
+
         // Parse request as jsonrpc
         const request_dyn = std.json.parseFromSliceLeaky(
             WsRequest.Dynamic,
             parse_arena,
             text,
-            .{},
+            parse_options,
         ) catch |err| {
             log.debug("failed to parse request as jrpc: {}", .{err});
             self.sendErrorResponse(.null, ErrorCode.parse_error, "parse error");
@@ -218,7 +220,7 @@ pub const JRPCHandler = struct {
 
         // Convert jsonrpc request into strongly-typed request struct
         var parse_diag = WsRequest.Dynamic.ParseDiagnostic.INIT;
-        const request = request_dyn.parse(parse_arena, .{}, &parse_diag) catch |err| {
+        const request = request_dyn.parse(parse_arena, parse_options, &parse_diag) catch |err| {
             log.debug("failed to parse request body: {}", .{err});
             self.handleRequestParseError(err, parse_diag.err.id orelse .null);
             return;
