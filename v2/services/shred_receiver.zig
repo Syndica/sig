@@ -52,19 +52,8 @@ const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
 
-const Packet = lib.net.Packet;
-
-const Hash = lib.solana.Hash;
-const Pubkey = lib.solana.Pubkey;
-const Signature = lib.solana.Signature;
-const Slot = lib.solana.Slot;
-
-const Atomic = std.atomic.Value;
-
-const DeshreddedFecSet = lib.shred.DeshreddedFecSet;
 const DeshredRing = lib.shred.DeshredRing;
 const FecSetId = lib.shred.FecSetId;
-const rs_table = lib.shred.reed_solomon_table;
 const Shred = lib.shred.Shred;
 
 const Receiver = lib.shred.Receiver;
@@ -118,7 +107,9 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var maybe_idle_zone: ?tracy.Zone = tracy.Zone.init(idle_src, .{ .name = "idle" });
     while (true) {
         const packet = packet_iter.next() orelse {
-            if (maybe_idle_zone == null) maybe_idle_zone = tracy.Zone.init(idle_src, .{ .name = "idle" });
+            if (maybe_idle_zone == null) {
+                maybe_idle_zone = tracy.Zone.init(idle_src, .{ .name = "idle" });
+            }
             continue;
         };
         defer packet_iter.markUsed();

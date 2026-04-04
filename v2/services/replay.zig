@@ -4,8 +4,6 @@ const lib = @import("lib");
 const tracy = @import("tracy");
 const bk = @import("binkode");
 
-const Packet = lib.net.Packet;
-
 const Pubkey = lib.solana.Pubkey;
 const Signature = lib.solana.Signature;
 const Hash = lib.solana.Hash;
@@ -740,7 +738,14 @@ const bincode = struct {
                     byte_count += len_counts.byte_count;
 
                     // Write elements
-                    const elem_counts = try element.encodeManyPartialRaw(writer, config, slice_val, null, .unlimited, ctx);
+                    const elem_counts = try element.encodeManyPartialRaw(
+                        writer,
+                        config,
+                        slice_val,
+                        null,
+                        .unlimited,
+                        ctx,
+                    );
                     byte_count += elem_counts.byte_count;
                 }
                 return .{ .value_count = max_count, .byte_count = byte_count };
