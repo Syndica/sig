@@ -1,5 +1,6 @@
 const sig = @import("../../../sig.zig");
 
+/// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/zk_elgamal_proof_program/proof_data/mod.rs#L48
 pub const ProofType = enum(u8) {
     /// Empty proof type used to distinguish if a proof context account is initialized
     uninitialized,
@@ -35,6 +36,7 @@ pub fn ProofContextState(C: type) type {
 
 pub const ID: sig.core.Pubkey = .parse("ZkE1Gama1Proof11111111111111111111111111111");
 
+// [agave] https://github.com/anza-xyz/agave/blob/master/programs/zk-elgamal-proof/src/lib.rs#L19-L31
 pub const CLOSE_CONTEXT_STATE_COMPUTE_UNITS: u64 = 3_300;
 pub const VERIFY_ZERO_CIPHERTEXT_COMPUTE_UNITS: u64 = 6_000;
 pub const VERIFY_CIPHERTEXT_CIPHERTEXT_EQUALITY_COMPUTE_UNITS: u64 = 8_000;
