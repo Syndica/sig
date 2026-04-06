@@ -17,6 +17,12 @@ const Db = @This();
 allocator: std.mem.Allocator,
 rooted: Rooted,
 unrooted: Unrooted,
+/// Separate read-only SQLite connection for RPC queries.
+/// When set (non-null), RPC read methods (`getOwned`, `ownerQueryOwned`,
+/// `splTokenOwnerQuery`) use this handle instead of the writer `rooted`,
+/// eliminating SQLite connection-mutex contention with the replay thread.
+/// Requires WAL mode on the writer (`rooted.enableWalMode()`).
+reader_rooted: ?Rooted = null,
 
 pub fn init(allocator: std.mem.Allocator, rooted: Rooted) !Db {
     var unrooted: Unrooted = try .init(allocator);
@@ -58,6 +64,7 @@ pub fn initTest(allocator: std.mem.Allocator) !TestContext {
 
 pub fn deinit(self: *Db) void {
     const allocator = self.allocator;
+    if (self.reader_rooted) |*rr| rr.deinit();
     self.rooted.deinit();
     self.unrooted.deinit(allocator);
 }
@@ -133,6 +140,7 @@ pub fn get(
 }
 
 /// Like `get`, but returns an account with caller-owned data (allocates and copies out the account from both Unrooted and Rooted lookups).
+/// Uses the reader_rooted connection when available to avoid contention with the writer.
 pub fn getOwned(
     self: *Db,
     allocator: std.mem.Allocator,
@@ -142,7 +150,8 @@ pub fn getOwned(
     if (try self.unrooted.getOwned(allocator, address, ancestors)) |data| {
         return data;
     }
-    if (try self.rooted.get(allocator, address)) |data| {
+    const rooted = if (self.reader_rooted) |*rr| rr else &self.rooted;
+    if (try rooted.get(allocator, address)) |data| {
         return data.toOwnedAccount();
     }
     return null;
@@ -270,7 +279,8 @@ pub fn ownerQueryOwned(self: *Db, owner: *const Pubkey, ancestors: *const Ancest
         unrooted_map.deinit(self.allocator);
     }
 
-    const rooted_iter = self.rooted.getByOwner(owner);
+    const rooted = if (self.reader_rooted) |*rr| rr else &self.rooted;
+    const rooted_iter = rooted.getByOwner(owner);
     return .{
         .rooted_iter = rooted_iter,
         .unrooted_map = unrooted_map,
@@ -293,7 +303,8 @@ pub fn splTokenOwnerQuery(
         unrooted_map.deinit(self.allocator);
     }
 
-    const rooted_iter = self.rooted.getBySplTokenOwner(token_owner);
+    const rooted = if (self.reader_rooted) |*rr| rr else &self.rooted;
+    const rooted_iter = rooted.getBySplTokenOwner(token_owner);
     return .{
         .rooted_iter = rooted_iter,
         .unrooted_map = unrooted_map,

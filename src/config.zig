@@ -160,6 +160,10 @@ pub const AccountsDB = struct {
     /// SPL Token account data (bytes 32..64), speeding up `getTokenAccountsByOwner` RPC calls.
     /// When disabled, falls back to a full table scan with `substr()`. Not enabled by default.
     rpc_enable_spl_token_owner_index: bool = false,
+    /// when true, skip enabling WAL mode on the accounts DB. WAL mode is normally enabled after
+    /// snapshot loading to allow concurrent reader connections (e.g. for RPC queries). Disabling
+    /// it can be useful for debugging or when running without RPC.
+    disable_wal_mode: bool = false,
 };
 
 pub const Gossip = struct {

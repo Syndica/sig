@@ -617,6 +617,7 @@ const Cmd = struct {
         dbg_db_init: bool,
         rpc_enable_owner_index: bool,
         rpc_enable_spl_token_owner_index: bool,
+        disable_wal_mode: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .n_threads_snapshot_load = .{
@@ -685,6 +686,16 @@ const Cmd = struct {
                     "at the cost of increased storage and slower writes. When disabled, " ++
                     "falls back to a full table scan - default: false",
             },
+            .disable_wal_mode = .{
+                .kind = .named,
+                .name_override = "disable-wal-mode",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "disable WAL mode on the accounts DB. WAL mode is normally enabled " ++
+                    "after snapshot loading to allow concurrent reader connections for RPC " ++
+                    "queries - default: false",
+            },
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
@@ -695,6 +706,7 @@ const Cmd = struct {
             cfg.accounts_db.dbg_db_init = args.dbg_db_init;
             cfg.accounts_db.rpc_enable_owner_index = args.rpc_enable_owner_index;
             cfg.accounts_db.rpc_enable_spl_token_owner_index = args.rpc_enable_spl_token_owner_index;
+            cfg.accounts_db.disable_wal_mode = args.disable_wal_mode;
         }
     };
     const AccountsDbArgumentsDownload = struct {
@@ -1496,6 +1508,8 @@ fn validator(
 
     app_base.logger.info().logf("starting validator with cfg: {}", .{cfg});
 
+    const rpc_enabled = cfg.rpc_port != null;
+
     const allocation_metrics = try app_base.metrics_registry.initStruct(AllocationMetrics);
 
     var gpa_metrics: sig.trace.GaugeAllocator = .{
@@ -1637,6 +1651,14 @@ fn validator(
     var new_db: sig.accounts_db.Db = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
     defer new_db.deinit();
 
+    // After snapshot loading, switch SQLite to WAL mode and open a dedicated
+    // reader connection so that RPC queries (e.g. getSupply scanning all stake
+    // accounts) do not contend with the replay thread on the writer handle.
+    if (rpc_enabled and !cfg.accounts_db.disable_wal_mode) {
+        new_db.rooted.enableWalMode();
+        new_db.reader_rooted = try sig.accounts_db.Db.Rooted.initReader(rooted_file);
+    }
+
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
 
     var ledger_tracy: tracy.TracingAllocator = .{
@@ -1719,8 +1741,6 @@ fn validator(
 
     var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
     defer prioritization_fee_cache.deinit(allocator);
-
-    const rpc_enabled = cfg.rpc_port != null;
 
     const event_sink: ?*jrpc_ws.types.EventSink = if (rpc_enabled)
         try jrpc_ws.types.EventSink.create(allocator)

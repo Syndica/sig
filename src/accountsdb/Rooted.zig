@@ -521,6 +521,59 @@ fn err(self: *const Rooted, code: c_int) void {
     );
 }
 
+/// Switch from exclusive locking + journal OFF (used during snapshot loading
+/// for maximum write throughput) to WAL mode, which allows concurrent readers
+/// on separate connections. Call once after snapshot loading and before
+/// starting the RPC server.
+pub fn enableWalMode(self: *Rooted) void {
+    // Release the exclusive lock so other connections can access the DB.
+    self.err(sql.sqlite3_exec(self.handle,
+        \\PRAGMA locking_mode = NORMAL;
+    , null, null, null));
+    // A read must occur to actually release the EXCLUSIVE lock.
+    _ = sql.sqlite3_exec(self.handle, "SELECT 1 FROM entries LIMIT 1;", null, null, null);
+    // Enable WAL journal mode for concurrent reader support, and use
+    // NORMAL synchronous which is safe with WAL and faster than FULL.
+    _ = sql.sqlite3_exec(self.handle,
+        \\PRAGMA journal_mode = WAL;
+    , null, null, null);
+    self.err(sql.sqlite3_exec(self.handle,
+        \\PRAGMA synchronous = NORMAL;
+    , null, null, null));
+}
+
+/// Open a separate read-only connection to the same database file.
+/// Requires WAL mode to be enabled on the writer connection first
+/// (via `enableWalMode`). The returned handle can be used concurrently
+/// with the writer without blocking it.
+pub fn initReader(file_path: [:0]const u8) !Rooted {
+    const db = blk: {
+        var maybe_db: ?*sql.sqlite3 = null;
+        if (sql.sqlite3_open(file_path.ptr, &maybe_db) != OK)
+            return error.FailedToOpenDb;
+        break :blk maybe_db orelse return error.SqliteDbNull;
+    };
+
+    // Reader pragmas: WAL mode (auto-detected from the DB file but set
+    // explicitly for clarity), smaller cache, and memory temp store.
+    const pragmas =
+        \\ PRAGMA journal_mode = WAL;
+        \\ PRAGMA cache_size = -2097152;
+        \\ PRAGMA temp_store = MEMORY;
+    ;
+
+    if (sql.sqlite3_exec(db, pragmas, null, null, null) != OK) {
+        _ = sql.sqlite3_close(db);
+        return error.FailedToSetPragmas;
+    }
+
+    return .{
+        .handle = db,
+        .largest_rooted_slot = null,
+        .enable_spl_token_owner_index = false,
+    };
+}
+
 pub fn beginTransaction(self: *Rooted) void {
     self.err(sql.sqlite3_exec(self.handle, "BEGIN TRANSACTION;", null, null, null));
 }
