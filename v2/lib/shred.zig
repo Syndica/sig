@@ -35,7 +35,7 @@ pub const FecSetId = extern struct {
         return (a.slot == b.slot and a.fec_set_idx == b.fec_set_idx);
     }
 
-    pub fn compare(a: *const FecSetId, b: *const FecSetId) std.math.Order {
+    pub fn order(a: *const FecSetId, b: *const FecSetId) std.math.Order {
         if (a.slot > b.slot) return .gt;
         if (a.slot < b.slot) return .lt;
         if (a.fec_set_idx > b.fec_set_idx) return .gt;

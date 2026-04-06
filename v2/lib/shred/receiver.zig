@@ -374,9 +374,9 @@ const InProgressSets = struct {
     signature_map: SignatureMap,
     eviction: Eviction,
 
-    const Eviction = std.PriorityQueue(Pool.ItemId, QueueContext, QueueContext.compare);
+    const Eviction = std.PriorityQueue(Pool.ItemId, QueueContext, QueueContext.order);
     const Pool = lib.collections.Pool(FecSetCtx, u32);
-    const Queue = std.PriorityQueue(Pool.ItemId, QueueContext, QueueContext.compare);
+    const Queue = std.PriorityQueue(Pool.ItemId, QueueContext, QueueContext.order);
 
     // Key from signature-hash, rather than merkle root, as it's equivalent for lookup and we don't
     // have to compute it.
@@ -553,10 +553,10 @@ const InProgressSets = struct {
 
     const QueueContext = struct {
         ids: []const FecSetId,
-        fn compare(self: QueueContext, a: Pool.ItemId, b: Pool.ItemId) std.math.Order {
+        fn order(self: QueueContext, a: Pool.ItemId, b: Pool.ItemId) std.math.Order {
 
             // remove greatest (slot, fec id) first
-            return std.math.Order.invert(FecSetId.compare(
+            return std.math.Order.invert(FecSetId.order(
                 &self.ids[a.index().?],
                 &self.ids[b.index().?],
             ));
@@ -684,16 +684,16 @@ const DoneSets = struct {
     }
 
     const DoneItem = extern struct { signature_hashed: u32, id: FecSetId };
-    const Eviction = std.PriorityQueue(Pool.ItemId, QueueContext, QueueContext.compare);
+    const Eviction = std.PriorityQueue(Pool.ItemId, QueueContext, QueueContext.order);
     const Pool = lib.collections.Pool(DoneItem, u32);
     const DoneMap = std.ArrayHashMapUnmanaged(void, *DoneItem, DoneContext, true);
 
     const QueueContext = struct {
         done_pool: Pool,
-        fn compare(self: QueueContext, a: Pool.ItemId, b: Pool.ItemId) std.math.Order {
+        fn order(self: QueueContext, a: Pool.ItemId, b: Pool.ItemId) std.math.Order {
             const a_id: *const FecSetId = &self.done_pool.indexToPtr(a).id;
             const b_id: *const FecSetId = &self.done_pool.indexToPtr(b).id;
-            return FecSetId.compare(a_id, b_id); // remove oldest (slot, fec id) first
+            return FecSetId.order(a_id, b_id); // remove oldest (slot, fec id) first
         }
     };
 
