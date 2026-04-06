@@ -118,35 +118,25 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var packet_iter = rw.tvu_socket.recv.get(.reader);
     var deshred_out = rw.deshredded_out.get(.writer);
 
-    const idle_src = @src();
-    var maybe_idle_zone: ?tracy.Zone = tracy.Zone.init(idle_src, .{ .name = "idle" });
     while (true) {
-        const packet = packet_iter.next() orelse {
-            if (maybe_idle_zone == null) {
-                maybe_idle_zone = tracy.Zone.init(idle_src, .{ .name = "idle" });
-            }
-            continue;
-        };
-        defer packet_iter.markUsed();
-
-        if (maybe_idle_zone) |idle_zone| {
-            idle_zone.deinit();
-            maybe_idle_zone = null;
+        {
+            const idle_zone = tracy.Zone.init(@src(), .{ .name = "idle" });
+            defer idle_zone.deinit();
+            while (packet_iter.peek() == null) continue;
         }
+        while (packet_iter.next()) |packet| {
+            defer packet_iter.markUsed();
 
-        const recv_zone = tracy.Zone.init(@src(), .{ .name = "shred recv" });
-        defer recv_zone.deinit();
-
-        const result = receiver.processPacket(
-            &ro.config.leader_schedule,
-            ro.config.shred_version,
-            packet,
-            &deshred_out,
-        ) catch |err| {
-            std.log.warn("packet failed with {}", .{err});
-            recv_zone.color(0xFF000000); // a nice red
-            continue;
-        };
-        _ = result;
+            const result = receiver.processPacket(
+                &ro.config.leader_schedule,
+                ro.config.shred_version,
+                packet,
+                &deshred_out,
+            ) catch |err| {
+                std.log.warn("packet failed with {}", .{err});
+                continue;
+            };
+            _ = result;
+        }
     }
 }

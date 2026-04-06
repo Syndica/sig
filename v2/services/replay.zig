@@ -70,11 +70,6 @@ const BlockTree = struct {
     /// Such subsystems may want to hold onto their own root?
     consensus_rooted_block: BlockId,
 
-    // // NOTE: It would probably better to traverse the tree from a given root instead of using a map,
-    // // as it would be easier to make lock-free. Currently if made multithreaded, value mutations
-    // // could race with map inclusion.
-    // last_merkle_map: LastMerkleMap,
-
     const capacity = 1024;
 
     const NodePool = Pool(Node, u32);
