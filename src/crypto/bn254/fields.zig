@@ -86,16 +86,25 @@ pub const Fp = struct {
 
     pub fn fromBytes(
         input: *const [32]u8,
+        endian: std.builtin.Endian,
         maybe_flags: ?*Flags,
     ) !Fp {
         if (maybe_flags) |flags| {
-            flags.* = @bitCast(input[0]);
+            const offset: u32 = switch (endian) {
+                .big => 0,
+                .little => 31,
+            };
+            flags.* = @bitCast(input[offset]);
             // If both flags are set, return an error.
             // https://github.com/arkworks-rs/algebra/blob/v0.4.2/ec/src/models/short_weierstrass/serialization_flags.rs#L75
             if (flags.is_inf and flags.is_neg) return error.BothFlags;
         }
 
-        var limbs: [32]u8 = byteSwap(input.*);
+        var limbs: [32]u8 = switch (endian) {
+            .big => byteSwap(input.*),
+            .little => input.*,
+        };
+        // NOTE: We perform the mask *after* the byteSwap, so we don't need to select the offset for the mask again.
         if (maybe_flags != null) limbs[31] &= Flags.MASK;
 
         // Check that we've decoded a valid field element.
@@ -105,11 +114,23 @@ pub const Fp = struct {
         return .{ .limbs = @bitCast(limbs) };
     }
 
-    pub fn toBytes(f: Fp, out: *[32]u8) void {
-        out.* = byteSwap(@bitCast(f.limbs));
+    pub fn toBytes(f: Fp, out: *[32]u8, endian: std.builtin.Endian) void {
+        out.* = switch (endian) {
+            .little => @bitCast(f.limbs),
+            .big => byteSwap(@bitCast(f.limbs)),
+        };
     }
 
     pub fn byteSwap(a: [32]u8) [32]u8 {
+        // NOTE: This compiles down into a single ymm vpshufb, which is nice
+        // however it has a high latency (10 cycles on tigerlake), so I'm not
+        // sure if this is better than just 4 mov + 4 movbe instructions, which
+        // could be trivially executed in parallel.
+        //
+        // Alternative:
+        // const x: u256 = @bitCast(a);
+        // return @bitCast(@byteSwap(x));
+
         const limbs: [4]u64 = @bitCast(a);
         const array: [4]u64 = .{
             @byteSwap(limbs[3]),
@@ -120,6 +141,7 @@ pub const Fp = struct {
         return @bitCast(array);
     }
 
+    /// Well-defined for both montgomery and normal form.
     pub fn isZero(f: Fp) bool {
         return f.eql(.zero);
     }
@@ -384,16 +406,24 @@ pub const Fp2 = struct {
         } };
     };
 
-    pub fn fromBytes(input: *const [64]u8, maybe_flags: ?*Flags) !Fp2 {
+    pub fn fromBytes(input: *const [64]u8, endian: std.builtin.Endian, maybe_flags: ?*Flags) !Fp2 {
+        const el0: u32, const el1: u32 = switch (endian) {
+            .little => .{ 0, 32 },
+            .big => .{ 32, 0 },
+        };
         return .{
-            .c0 = try .fromBytes(input[32..64], null),
-            .c1 = try .fromBytes(input[0..32], maybe_flags),
+            .c0 = try .fromBytes(input[el0..][0..32], endian, null),
+            .c1 = try .fromBytes(input[el1..][0..32], endian, maybe_flags),
         };
     }
 
-    pub fn toBytes(f: Fp2, out: *[64]u8) void {
-        f.c0.toBytes(out[32..64]);
-        f.c1.toBytes(out[0..32]);
+    pub fn toBytes(f: Fp2, out: *[64]u8, endian: std.builtin.Endian) void {
+        const el0: u32, const el1: u32 = switch (endian) {
+            .little => .{ 0, 32 },
+            .big => .{ 32, 0 },
+        };
+        f.c0.toBytes(out[el0..][0..32], endian);
+        f.c1.toBytes(out[el1..][0..32], endian);
     }
 
     pub fn isZero(f: Fp2) bool {
@@ -544,7 +574,7 @@ pub const Fp2 = struct {
     }
 
     /// https://eprint.iacr.org/2010/354.pdf, Alg. 8
-    fn inverse(a: Fp2) Fp2 {
+    pub fn inverse(a: Fp2) Fp2 {
         // t0 ← a0^2
         var t0 = a.c0.sq();
         // t1 ← a1^2
