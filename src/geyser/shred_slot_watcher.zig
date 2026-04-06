@@ -15,6 +15,7 @@ const Allocator = std.mem.Allocator;
 const Slot = sig.core.Slot;
 const GeyserWriter = sig.geyser.GeyserWriter;
 const pumpfun_parser = sig.geyser.pumpfun_parser;
+const pumpswap_parser = sig.geyser.pumpswap_parser;
 
 /// Poll interval when live (slot watcher has already processed at least one real slot).
 const LIVE_POLL_INTERVAL_NS: u64 = 100 * std.time.ns_per_ms;
@@ -104,11 +105,12 @@ fn runInner(
             allocator.free(entries);
         }
 
-        // Parse each transaction for PumpFun instructions
+        // Parse each transaction for PumpFun and PumpSwap instructions
         for (entries) |entry| {
             for (entry.transactions) |*tx| {
                 pumpfun_parser.parseTransaction(tx, next_slot, geyser_writer);
-                trade_events += 1; // approximate — parser only emits on match
+                pumpswap_parser.parseTransaction(tx, next_slot, geyser_writer);
+                trade_events += 1; // approximate — parsers only emit on match
             }
         }
 

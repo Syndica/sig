@@ -260,6 +260,9 @@ pub fn csvDump(allocator: std.mem.Allocator, config: Cmd.Csv) !void {
                 exit.store(true, .monotonic);
                 break;
             },
+            .TradeEventV1 => {},
+            .PumpSwapPoolCreatedV1 => {},
+            .PumpSwapTradeV1 => {},
         }
 
         // compute how much memory we need for the rows

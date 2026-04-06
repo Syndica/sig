@@ -42,6 +42,8 @@ pub const VersionedAccountPayload = union(enum(u8)) {
     AccountPayloadV1: AccountPayloadV1,
     EndOfSnapshotLoading: void,
     TradeEventV1: TradeEventV1,
+    PumpSwapPoolCreatedV1: PumpSwapPoolCreatedV1,
+    PumpSwapTradeV1: PumpSwapTradeV1,
 
     const Self = @This();
 
@@ -50,6 +52,8 @@ pub const VersionedAccountPayload = union(enum(u8)) {
             .AccountPayloadV1 => self.AccountPayloadV1.deinit(allocator),
             .EndOfSnapshotLoading => {},
             .TradeEventV1 => {},
+            .PumpSwapPoolCreatedV1 => {},
+            .PumpSwapTradeV1 => {},
         }
     }
 };
@@ -61,6 +65,26 @@ pub const TradeEventV1 = struct {
     /// Token amount from instruction data: buy(amount=tokens_out) / sell(amount=tokens_in).
     /// Caller derives SOL cost/received via constant-product AMM math.
     token_amount: u64,
+    direction: u8, // 0=buy, 1=sell
+};
+
+/// Emitted when a PumpSwap pool is created (graduated from PumpFun).
+/// base_amount = initial token reserves, quote_amount = initial SOL lamports.
+pub const PumpSwapPoolCreatedV1 = struct {
+    slot: u64,
+    pool: [32]u8,
+    base_amount: u64,  // tokens seeded into pool
+    quote_amount: u64, // SOL lamports seeded into pool
+};
+
+/// Emitted on every PumpSwap buy or sell.
+/// base_amount = tokens out (buy) or tokens in (sell).
+/// Rust side applies constant-product AMM to derive SOL and new reserves.
+pub const PumpSwapTradeV1 = struct {
+    slot: u64,
+    pool: [32]u8,
+    user: [32]u8,
+    base_amount: u64,
     direction: u8, // 0=buy, 1=sell
 };
 
