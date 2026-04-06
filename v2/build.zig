@@ -172,12 +172,12 @@ pub fn build(b: *Build) !void {
             }),
         );
 
-        inline for (&.{ doc_service_modules, doc_service_modules }) |module_list| {
+        inline for (&.{ doc_service_modules, doc_modules }) |module_list| {
             var services_str = std.io.Writer.Allocating.init(b.allocator);
             defer services_str.deinit();
 
             for (module_list.items, 0..) |svc_mod, i| {
-                const end: []const u8 = if (i == module_list.items.len - 1) "" else ", ";
+                const end: []const u8 = if (i == module_list.items.len - 1) "" else ",";
                 try services_str.writer.print("{s}{s}", .{ svc_mod.name, end });
             }
 

@@ -56,6 +56,8 @@ pub fn main() !void {
     {
         var module_names = std.mem.splitScalar(u8, module_names_str, ',');
         while (module_names.next()) |mod_name| {
+            std.debug.print("mod_name: {s}\n", .{mod_name});
+
             try writer.print(
                 "pub const {[mod]s} = @import(\"{[mod]s}\");\n",
                 .{ .mod = mod_name },
@@ -67,6 +69,7 @@ pub fn main() !void {
         var service_names = std.mem.splitScalar(u8, service_names_str, ',');
         try writer.print("pub const services = struct {{\n", .{});
         while (service_names.next()) |svc_name| {
+            std.debug.print("svc_name: {s}\n", .{svc_name});
             try writer.print(
                 "    pub const {[svc]s} = @import(\"{[svc]s}\");\n",
                 .{ .svc = svc_name },
