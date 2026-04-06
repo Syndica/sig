@@ -62,8 +62,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
 
     // Set a read timeout on the accepted connection so that a stale/half-open
     // TCP connection cannot block the single-threaded RPC server indefinitely.
-    setReadTimeout(conn.stream.handle, .{ .sec = 10, .usec = 0 }) catch
-        return error.SetSocketTimeoutError;
+    try setReadTimeout(conn.stream.handle, .{ .sec = 10, .usec = 0 });
 
     server_ctx.wait_group.start();
     defer server_ctx.wait_group.finish();
@@ -740,7 +739,10 @@ fn acceptHandled(
     return conn;
 }
 
-fn setReadTimeout(fd: std.posix.socket_t, timeout: std.posix.timeval) !void {
+fn setReadTimeout(
+    fd: std.posix.socket_t,
+    timeout: std.posix.timeval,
+) error{SetSocketTimeoutError}!void {
     std.posix.setsockopt(
         fd,
         std.posix.SOL.SOCKET,
