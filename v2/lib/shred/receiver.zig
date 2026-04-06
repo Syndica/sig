@@ -27,7 +27,11 @@ pub const Receiver = struct {
     in_progress: InProgressSets,
     done: DoneSets,
 
-    pub fn init(allocator: std.mem.Allocator, in_progress_capacity: u32, done_capacity: u32) !Receiver {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        in_progress_capacity: u32,
+        done_capacity: u32,
+    ) !Receiver {
         var in_progress: InProgressSets = try .init(allocator, in_progress_capacity);
         errdefer in_progress.deinit(allocator);
 
@@ -106,10 +110,16 @@ pub const Receiver = struct {
         const fec_set_id: FecSetId = .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot };
 
         var buf: [128]u8 = undefined;
-        const str = try std.fmt.bufPrint(&buf, "slot: {}, idx: {}", .{ fec_set_id.slot, fec_set_id.fec_set_idx });
+        const str = try std.fmt.bufPrint(
+            &buf,
+            "slot: {}, idx: {}",
+            .{ fec_set_id.slot, fec_set_id.fec_set_idx },
+        );
         zone.text(str);
 
-        const fec_set_ctx = if (state.in_progress.getFecSetCtx(&shred.signature)) |fec_set_ctx| existing_set: {
+        const fec_set_ctx = if (state.in_progress.getFecSetCtx(
+            &shred.signature,
+        )) |fec_set_ctx| existing_set: {
             // fec set is already being built
             @branchHint(.likely); // ~31/32 expected
 
