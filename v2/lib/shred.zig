@@ -286,14 +286,9 @@ pub const Shred = extern struct {
                 payload_size,
             };
         } else sizes: {
-            const zero_padding_size = 0;
-            if (header_size + zero_padding_size + trailer_size > max_size)
+            if (header_size + trailer_size > max_size)
                 return error.CodeShredOverMaxSize;
-
-            break :sizes .{
-                zero_padding_size,
-                max_size - header_size - zero_padding_size - trailer_size,
-            };
+            break :sizes .{ 0, max_size - header_size - trailer_size };
         };
 
         if (packet.len < header_size + payload_size + zero_padding_size + trailer_size)
