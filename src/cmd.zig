@@ -1836,6 +1836,14 @@ fn validator(
         },
     );
     defer transaction_sender_service.deinit();
+
+    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.SendTransactionHookContext{
+        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+        .commitments = &replay_service_state.replay_state.commitments.?,
+        .account_reader = replay_service_state.replay_state.account_store.reader(),
+        .tx_svc_channel = transaction_sender_service.receiver,
+    });
+
     const transaction_sender_handle = try std.Thread.spawn(
         .{},
         sig.TransactionSenderService.run,

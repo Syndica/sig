@@ -17,9 +17,6 @@ const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION =
 
 const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/program-runtime/src/compute_budget.rs#L139
-pub const MAX_INSTRUCTION_TRACE_LENGTH: usize = 100;
-
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/compute-budget/src/compute_budget.rs#L11-L12
 pub const MAX_INSTRUCTION_STACK_DEPTH: usize = 5;
 

@@ -873,7 +873,8 @@ pub fn handleSlotUpdate(
     // Record update in logs + metrics
     replay_state.logger.info().logf("slot state update from consensus: {any}", .{slot_update});
     if (slot_update.voted != null) metrics.voted_slot_update_count.inc();
-    if (slot_update.optimistically_confirmed != null) metrics.optimistically_confirmed_update_count.inc();
+    if (slot_update.optimistically_confirmed != null)
+        metrics.optimistically_confirmed_update_count.inc();
     if (slot_update.root != null) metrics.root_update_count.inc();
     if (maybe_new_state_root != null) metrics.state_root_update_count.inc();
 }
