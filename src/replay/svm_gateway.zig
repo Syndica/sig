@@ -35,15 +35,26 @@ pub fn executeTransaction(
 
     const environment = try svm_gateway.environment();
 
-    return try sig.runtime.transaction_execution.loadAndExecuteTransaction(
+    const result = try sig.runtime.transaction_execution.loadAndExecuteTransaction(
         programs_allocator,
         tmp_allocator,
         transaction,
-        svm_gateway.params.account_store,
+        svm_gateway.params.account_store.reader(),
         &environment,
         &.{ .log = true, .log_messages_byte_limit = null },
         &svm_gateway.state.programs,
     );
+
+    // Persist writes to the store for intra-slot visibility
+    // (subsequent transactions in the same batch must see these).
+    switch (result) {
+        .ok => |processed| for (processed.writes.constSlice()) |acct| {
+            try svm_gateway.params.account_store.put(acct.pubkey, acct.account);
+        },
+        .err => {},
+    }
+
+    return result;
 }
 
 /// State that needs to be initialized once per batch for the SVM

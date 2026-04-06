@@ -30,6 +30,7 @@ exit: ExitCondition,
 
 client: RpcClient,
 submit: SubmitMode,
+skip_preflight: bool = false,
 
 account_0: Account = ACCOUNT_0,
 account_1: Account = ACCOUNT_1,
@@ -196,7 +197,43 @@ pub fn run(self: *Service, allocator: Allocator) !void {
 fn submitTransaction(self: *Service, txn_info: TransactionInfo) !void {
     switch (self.submit) {
         .direct => |channel| try channel.send(txn_info),
-        .rpc => @panic("unimplemented: rpc submit mode"),
+        .rpc => |*rpc_client| {
+            const Encoder = std.base64.standard.Encoder;
+            const wire_bytes = txn_info.wire_transaction[0..txn_info.wire_transaction_size];
+            var encode_buf: [Encoder.calcSize(sig.net.Packet.DATA_SIZE)]u8 = undefined;
+            const encoded = Encoder.encode(&encode_buf, wire_bytes);
+
+            var response = try rpc_client.sendTransaction(.{
+                .transaction = encoded,
+                .config = .{
+                    .encoding = .base64,
+                    .skipPreflight = self.skip_preflight,
+                    // Match the commitment used to fetch the blockhash.
+                    .preflightCommitment = .confirmed,
+                },
+            });
+            defer response.deinit();
+
+            switch (response.payload) {
+                .result => |result| switch (result) {
+                    .signature => {},
+                    .preflight_failure => |failure| {
+                        self.logger.err().logf("Preflight failure: {any}", .{failure.err});
+                        return error.PreflightFailure;
+                    },
+                },
+                .err => |rpc_err| {
+                    self.logger.err().logf("RPC error: code={any} message={s}", .{
+                        rpc_err.code,
+                        rpc_err.message,
+                    });
+                    if (rpc_err.data) |data| {
+                        self.logger.err().logf("RPC error data: {any}", .{data});
+                    }
+                    return error.RpcRequestFailed;
+                },
+            }
+        },
     }
 }
 
@@ -266,7 +303,7 @@ fn buildTransfer(
     from_account: *Account,
     to_account: *Account,
 ) !TransactionInfo {
-    const blockhash = try self.getLatestBlockhash(.confirmed);
+    const blockhash = try self.getLatestBlockhash(.finalized);
 
     const transaction = try buildTransferTransaction(
         allocator,

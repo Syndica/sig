@@ -506,8 +506,9 @@ const Cmd = struct {
         .alias = .none,
         .default_value = null,
         .config = {},
-        .help = "Runs the mock transfer service." ++
-            " Sending `n` transfer transactions between two test accounts. ",
+        .help = "Runs the mock transfer service," ++
+            " sending `n` transfer transactions between two test accounts." ++
+            " Submits directly to the transaction sender.",
     };
 
     const voting_enabled_arg: cli.ArgumentInfo(bool) = .{
@@ -1840,8 +1841,10 @@ fn validator(
     try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.SendTransactionHookContext{
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
         .commitments = &replay_service_state.replay_state.commitments.?,
-        .account_reader = replay_service_state.replay_state.account_store.reader(),
+        .account_store = replay_service_state.replay_state.account_store,
         .tx_svc_channel = transaction_sender_service.receiver,
+        .epoch_tracker = &epoch_tracker,
+        .status_cache = &replay_service_state.replay_state.status_cache,
     });
 
     const transaction_sender_handle = try std.Thread.spawn(
