@@ -95,11 +95,13 @@ pub const PerfSampleTracker = struct {
         defer root_ref.release();
 
         const num_transactions = root_ref.state().transaction_count.load(.monotonic);
-        const num_non_vote_transactions = root_ref.state().non_vote_transaction_count.load(.monotonic);
+        const num_non_vote_transactions =
+            root_ref.state().non_vote_transaction_count.load(.monotonic);
 
         const sample = sig.ledger.meta.PerfSample{
             .num_transactions = num_transactions -| self.prev_num_transactions,
-            .num_non_vote_transactions = num_non_vote_transactions -| self.prev_num_non_vote_transactions,
+            .num_non_vote_transactions = num_non_vote_transactions -|
+                self.prev_num_non_vote_transactions,
             .num_slots = highest_slot -| self.prev_highest_slot,
             .sample_period_secs = @intCast(@min(elapsed.asSecs(), std.math.maxInt(u16))),
         };
@@ -430,9 +432,11 @@ pub const ReplayState = struct {
         const perf_sample_tracker: PerfSampleTracker = blk: {
             const root_ref = slot_tracker.getRoot();
             defer root_ref.release();
+            const root_state = root_ref.state();
+            const non_vote_tx_count = root_state.non_vote_transaction_count.load(.monotonic);
             break :blk .{
-                .prev_num_transactions = root_ref.state().transaction_count.load(.monotonic),
-                .prev_num_non_vote_transactions = root_ref.state().non_vote_transaction_count.load(.monotonic),
+                .prev_num_transactions = root_state.transaction_count.load(.monotonic),
+                .prev_num_non_vote_transactions = non_vote_tx_count,
                 .prev_highest_slot = deps.root.slot,
                 .last_sample_time = sig.time.Timer.start(),
             };
