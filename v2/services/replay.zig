@@ -41,14 +41,18 @@ pub fn serviceMain(rw: ReadWrite) !noreturn {
     var deshredded_iter = rw.deshredded_in.get(.reader);
 
     while (true) {
-        const deshredded_fec_set: *const lib.shred.DeshreddedFecSet = deshredded_iter.next() orelse continue;
+        const deshredded_fec_set: *const lib.shred.DeshreddedFecSet = deshredded_iter.next() orelse
+            continue;
         defer deshredded_iter.markUsed();
 
         const received_zone = tracy.Zone.init(@src(), .{ .name = "received fec set" });
         defer received_zone.deinit();
 
         const result = try map_tree.put(deshredded_fec_set);
-        std.log.info("{}: {f}, last? {}", .{ deshredded_fec_set.id, result, deshredded_fec_set.slot_complete });
+        std.log.info(
+            "{}: {f}, last? {}",
+            .{ deshredded_fec_set.id, result, deshredded_fec_set.slot_complete },
+        );
     }
 }
 
@@ -204,7 +208,10 @@ const BlockTree = struct {
     ) !?BlockId {
         std.debug.assert(new_slot > parent_slot);
 
-        const parent: *Node = self.findUnrootedParent(parent_slot, first_fecset_chained_merkle_root) orelse {
+        const parent: *Node = self.findUnrootedParent(
+            parent_slot,
+            first_fecset_chained_merkle_root,
+        ) orelse {
             std.log.warn(
                 \\ Failed to find parent block {}:{f}, is this block missing?
                 \\ NOTE: parent blocks cannot be found unless they have received all their fecsets.
@@ -502,7 +509,7 @@ const MerkleForest = struct {
                 } else false;
             };
 
-            return if (start_finished and end_finished) return .chain_complete else .chain_incomplete;
+            return if (start_finished and end_finished) .chain_complete else .chain_incomplete;
         }
 
         if (must_wait_for_child and must_wait_for_parent) return .waiting_for_parent_and_child;
@@ -733,8 +740,16 @@ const bincode = struct {
                 var byte_count: usize = 0;
                 for (values[0..max_count]) |slice_val| {
                     // Write compact-u16 length
-                    const len: u16 = std.math.cast(u16, slice_val.len) orelse return error.EncodeFailed;
-                    const len_counts = try compact_u16.encodeOnePartialRaw(writer, config, &len, null, .unlimited, {});
+                    const len: u16 = std.math.cast(u16, slice_val.len) orelse
+                        return error.EncodeFailed;
+                    const len_counts = try compact_u16.encodeOnePartialRaw(
+                        writer,
+                        config,
+                        &len,
+                        null,
+                        .unlimited,
+                        {},
+                    );
                     byte_count += len_counts.byte_count;
 
                     // Write elements
@@ -977,13 +992,23 @@ const bincode = struct {
 
                         // Decode the remaining fields of LegacyMessage (account_keys, recent_blockhash, instructions)
                         const account_keys_codec = shortVec(Pubkey, pubkey_codec);
-                        const account_keys = try account_keys_codec.decode(reader, gpa_opt, config, null);
+                        const account_keys = try account_keys_codec.decode(
+                            reader,
+                            gpa_opt,
+                            config,
+                            null,
+                        );
 
                         var recent_blockhash: Hash = undefined;
                         try hash_codec.decodeIntoOne(reader, null, config, &recent_blockhash, null);
 
-                        const instructions_codec = shortVec(CompiledInstruction, CompiledInstruction.bk_config);
-                        const instructions = try instructions_codec.decode(reader, gpa_opt, config, null);
+                        const instructions_codec = shortVec(CompiledInstruction, .bk_config);
+                        const instructions = try instructions_codec.decode(
+                            reader,
+                            gpa_opt,
+                            config,
+                            null,
+                        );
 
                         value.* = .{ .legacy = .{
                             .header = header,
