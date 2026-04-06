@@ -436,6 +436,7 @@ fn simulateRuntimeTransaction(
     const slot_constants = preflight_slot_ref.constants();
 
     const epoch_info = try self.epoch_tracker.getEpochInfo(preflight_slot);
+    defer epoch_info.release();
 
     var svm_gateway = try SvmGateway.init(arena, .{
         .slot = preflight_slot,
@@ -1017,4 +1018,285 @@ test simulateTransaction {
             }),
         );
     }
+}
+
+test "resolveAndConvertTokenBalances: empty balances returns empty" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const result = try resolveAndConvertTokenBalances(
+        arena,
+        .{}, // empty raw balances
+        .{}, // empty post-simulation accounts
+        .noop,
+    );
+
+    // Empty balances (len == 0) returns the empty struct
+    try std.testing.expect(result != null);
+    try std.testing.expectEqual(@as(usize, 0), result.?.inner.len);
+}
+
+test "resolveAndConvertTokenBalances: resolves mint decimals from post-simulation writes" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const spl_token = sig.runtime.spl_token;
+    const mint_pubkey = comptime Pubkey.parse("So11111111111111111111111111111111111111112");
+    const owner_pubkey = comptime Pubkey.parse("11111111111111111111111111111111");
+    const token_program = sig.runtime.ids.TOKEN_PROGRAM_ID;
+
+    // Create a valid mint account in post-simulation writes with 9 decimals.
+    var mint_data: [spl_token.MINT_ACCOUNT_SIZE]u8 = undefined;
+    @memset(&mint_data, 0);
+    mint_data[44] = 9; // MINT_DECIMALS_OFFSET
+    mint_data[45] = 1; // MINT_IS_INITIALIZED_OFFSET
+
+    var post_simulation_accounts: ProcessedTransaction.Writes = .{};
+    post_simulation_accounts.appendAssumeCapacity(.{
+        .pubkey = mint_pubkey,
+        .account = .{
+            .lamports = 1_000_000,
+            .data = &mint_data,
+            .owner = token_program,
+            .executable = false,
+            .rent_epoch = 0,
+        },
+    });
+
+    // Create a raw token balance entry referencing this mint.
+    var raw_balances: ProcessedTransaction.PreTokenBalances = .{};
+    raw_balances.appendAssumeCapacity(.{
+        .account_index = 0,
+        .mint = mint_pubkey,
+        .owner = owner_pubkey,
+        .amount = 1_000_000_000, // 1 token with 9 decimals
+        .program_id = token_program,
+    });
+
+    const result = try resolveAndConvertTokenBalances(
+        arena,
+        raw_balances,
+        post_simulation_accounts,
+        .noop,
+    );
+
+    try std.testing.expect(result != null);
+    try std.testing.expectEqual(@as(usize, 1), result.?.inner.len);
+    const balance = result.?.inner[0];
+    try std.testing.expectEqual(@as(u8, 0), balance.accountIndex);
+    try std.testing.expectEqual(@as(u8, 9), balance.uiTokenAmount.decimals);
+    try std.testing.expect(balance.mint.equals(&mint_pubkey));
+}
+
+test "resolveAndConvertTokenBalances: missing mint skips balance" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const mint_pubkey = comptime Pubkey.parse("So11111111111111111111111111111111111111112");
+    const owner_pubkey = comptime Pubkey.parse("11111111111111111111111111111111");
+    const token_program = sig.runtime.ids.TOKEN_PROGRAM_ID;
+
+    // Create a raw token balance with a mint that doesn't exist anywhere.
+    var raw_balances: ProcessedTransaction.PreTokenBalances = .{};
+    raw_balances.appendAssumeCapacity(.{
+        .account_index = 0,
+        .mint = mint_pubkey,
+        .owner = owner_pubkey,
+        .amount = 100,
+        .program_id = token_program,
+    });
+
+    const result = try resolveAndConvertTokenBalances(
+        arena,
+        raw_balances,
+        .{}, // no post-simulation accounts
+        .noop, // noop reader returns null for all lookups
+    );
+
+    // When mint decimals can't be resolved, the balance is skipped.
+    // Result is non-null but contains no entries.
+    try std.testing.expect(result != null);
+    try std.testing.expectEqual(@as(usize, 0), result.?.inner.len);
+}
+
+test "getSimulatedAccount: finds account in post-simulation writes" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const address = comptime Pubkey.parse("11111111111111111111111111111111");
+
+    var account_data = [_]u8{ 1, 2, 3, 4 };
+    var post_simulation_accounts: ProcessedTransaction.Writes = .{};
+    post_simulation_accounts.appendAssumeCapacity(.{
+        .pubkey = address,
+        .account = .{
+            .lamports = 42,
+            .data = &account_data,
+            .owner = Pubkey.ZEROES,
+            .executable = false,
+            .rent_epoch = 0,
+        },
+    });
+
+    const result = try getSimulatedAccount(
+        arena,
+        address,
+        .base64,
+        post_simulation_accounts,
+        .noop,
+    );
+
+    try std.testing.expect(result != null);
+    try std.testing.expectEqual(@as(u64, 42), result.?.lamports);
+    try std.testing.expect(!result.?.executable);
+}
+
+test "getSimulatedAccount: returns null when account not found" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const address = comptime Pubkey.parse("11111111111111111111111111111111");
+
+    const result = try getSimulatedAccount(
+        arena,
+        address,
+        .base64,
+        .{}, // no post-simulation accounts
+        .noop, // noop returns null
+    );
+
+    try std.testing.expect(result == null);
+}
+
+test "getSimulatedAccount: skips non-matching addresses in writes" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const target = comptime Pubkey.parse("11111111111111111111111111111111");
+    const other = comptime Pubkey.parse("So11111111111111111111111111111111111111112");
+
+    var account_data = [_]u8{0} ** 4;
+    var post_simulation_accounts: ProcessedTransaction.Writes = .{};
+    post_simulation_accounts.appendAssumeCapacity(.{
+        .pubkey = other,
+        .account = .{
+            .lamports = 100,
+            .data = &account_data,
+            .owner = Pubkey.ZEROES,
+            .executable = false,
+            .rent_epoch = 0,
+        },
+    });
+
+    // target is not in the writes, and noop reader returns null.
+    const result = try getSimulatedAccount(
+        arena,
+        target,
+        .base64,
+        post_simulation_accounts,
+        .noop,
+    );
+
+    try std.testing.expect(result == null);
+}
+
+test "simulateRuntimeTransaction: returns error for blockhash-not-found" {
+    const allocator = std.testing.allocator;
+
+    var slot_tracker: SlotTracker = try .init(allocator, 0, .{
+        .constants = .{
+            .parent_slot = 0,
+            .parent_hash = .ZEROES,
+            .parent_lt_hash = .IDENTITY,
+            .block_height = 0,
+            .collector_id = .ZEROES,
+            .max_tick_height = 0,
+            .fee_rate_governor = .DEFAULT,
+            .ancestors = .{ .ancestors = .empty },
+            .feature_set = .ALL_DISABLED,
+            .reserved_accounts = .empty,
+            .inflation = .DEFAULT,
+            .rent_collector = .DEFAULT,
+        },
+        .state = .GENESIS,
+        .allocator = allocator,
+    });
+    defer slot_tracker.deinit(allocator);
+
+    const channel = try Channel(TransactionInfo).create(allocator);
+    defer channel.destroy();
+
+    var commitments = CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    var epoch_tracker = try EpochTracker.initForTest(allocator, std.crypto.random, 0, .INIT);
+    defer epoch_tracker.deinit();
+
+    var status_cache = StatusCache.DEFAULT;
+    errdefer status_cache.deinit(allocator);
+
+    const ctx: SendTransactionHookContext = .{
+        .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
+        .account_store = .noop,
+        .epoch_tracker = &epoch_tracker,
+        .status_cache = &status_cache,
+        .tx_svc_channel = channel,
+    };
+
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const slot_ref = slot_tracker.get(0) orelse return error.SlotNotFound;
+    defer slot_ref.release();
+
+    // Register a blockhash so the SVM gateway can initialize its environment.
+    {
+        const bq, var bq_lg = slot_ref.state().blockhash_queue.writeWithLock();
+        defer bq_lg.unlock();
+        try bq.insertGenesisHash(allocator, Hash.ZEROES, 0);
+    }
+
+    // Build a RuntimeTransaction with a fee payer and a non-matching blockhash.
+    // This will cause checkAge to return BlockhashNotFound.
+    const InstructionAccount = sig.core.instruction.InstructionAccount;
+    var accounts: std.MultiArrayList(InstructionAccount) = .{};
+    try accounts.append(arena, .{
+        .pubkey = Pubkey.ZEROES,
+        .is_signer = true,
+        .is_writable = true,
+    });
+
+    // Use a blockhash that doesn't exist in the queue (all 0xFF bytes).
+    const nonexistent_blockhash: Hash = .{ .data = [_]u8{0xFF} ** 32 };
+    const transaction: RuntimeTransaction = .{
+        .signature_count = 1,
+        .fee_payer = Pubkey.ZEROES,
+        .msg_hash = Hash.ZEROES,
+        .recent_blockhash = nonexistent_blockhash,
+        .instructions = &.{},
+        .accounts = accounts,
+        .compute_budget_instruction_details = .{},
+        .num_lookup_tables = 0,
+        .is_simple_vote_transaction = false,
+    };
+
+    const result = try ctx.simulateRuntimeTransaction(
+        arena,
+        transaction,
+        0,
+        &slot_ref,
+    );
+
+    // Transaction should fail with BlockhashNotFound since the blockhash doesn't match.
+    try std.testing.expect(result.err != null);
+    try std.testing.expectEqual(@as(u64, 0), result.units_consumed);
+    try std.testing.expectEqual(@as(usize, 0), result.logs.len);
 }
