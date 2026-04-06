@@ -820,19 +820,17 @@ pub fn handleSlotUpdate(
         );
     }
 
-    // send events
+    // send events (only for commitments that have changed)
     if (replay_state.commitments) |*c| {
         if (replay_state.event_sink) |sink| {
-            if (slot_update.voted) |voted_slot| {
-                if (voted_slot != old_processed) {
-                    try sink.send(.{ .tip_changed = voted_slot });
-                }
+            const processed_slot = c.get(.processed);
+            if (processed_slot != old_processed) {
+                try sink.send(.{ .tip_changed = processed_slot });
             }
 
-            if (slot_update.optimistically_confirmed) |confirmed_slot| {
-                if (confirmed_slot > old_confirmed) {
-                    try sink.send(.{ .slot_confirmed = confirmed_slot });
-                }
+            const confirmed_slot = c.get(.confirmed);
+            if (confirmed_slot > old_confirmed) {
+                try sink.send(.{ .slot_confirmed = confirmed_slot });
             }
 
             // don't fetch from 0 to finalized, wait for initialization
