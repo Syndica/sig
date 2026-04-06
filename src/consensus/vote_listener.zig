@@ -796,6 +796,73 @@ fn trackNewVotesAndNotifyConfirmations(
     const last_vote_slot = vote.lastVotedSlot().?;
     const last_vote_hash = vote.getHash();
 
+    const is_new_vote: bool = if (last_vote_slot <= root) false else track_last_vote_slot: {
+        // Track the last vote slot for optimistic confirmation
+        const epoch = slot_data_provider.getSlotEpoch(last_vote_slot);
+
+        const total_stake = slot_data_provider.getEpochTotalStake(epoch) orelse {
+            // If we don't have stake information, ignore it
+            break :track_last_vote_slot false;
+        };
+        const stake = slot_data_provider.getDelegatedStake(last_vote_slot, vote_pubkey).?; // see above
+
+        // Fast track processing of the last slot in a vote transactions
+        // so that notifications for optimistic confirmation can be sent
+        // as soon as possible.
+        const reached_threshold_results, //
+        const is_new: bool //
+        = try trackOptimisticConfirmationVote(allocator, vote_tracker, .{
+            .slot = last_vote_slot,
+            .hash = last_vote_hash,
+            .pubkey = vote_pubkey,
+            .stake = stake,
+            .total_epoch_stake = total_stake,
+        });
+
+        if (is_gossip_vote and is_new and stake > 0) {
+            try senders.gossip_verified_vote_hashes.append(allocator, .{
+                vote_pubkey, last_vote_slot, last_vote_hash,
+            });
+        }
+
+        if (reached_threshold_results.isSet(0)) {
+            try senders.duplicate_confirmed_slots.append(allocator, .{
+                .slot = last_vote_slot,
+                .hash = last_vote_hash,
+            });
+        }
+
+        if (reached_threshold_results.isSet(1)) {
+            try new_optimistic_confirmed_slots.append(allocator, .{
+                .slot = last_vote_slot,
+                .hash = last_vote_hash,
+            });
+            // Notify subscribers about new optimistic confirmation
+            if (senders.bank_notification) |sender| {
+                sender.send(.{ .optimistically_confirmed = last_vote_slot }) catch |err| {
+                    logger.warn().logf("bank_notification_sender failed: {s}", .{
+                        @errorName(err),
+                    });
+                };
+            }
+        }
+
+        break :track_last_vote_slot is_new;
+    };
+
+    if (!is_new_vote and !is_gossip_vote) {
+        // By now:
+        // 1) The vote must have come from ReplayStage,
+        // 2) We've seen this vote from replay for this hash before
+        // (`track_optimistic_confirmation_vote()` will not set `is_new == true`
+        // for same slot different hash), so short circuit because this vote
+        // has no new information
+
+        // Note gossip votes will always be processed because those should be unique
+        // and we need to update the gossip-only stake in the `VoteTracker`.
+        return;
+    }
+
     const latest_vote_slot: *u64 = blk: {
         const gop = try latest_vote_slot_per_validator.getOrPut(allocator, vote_pubkey);
         latest_vote_slot_per_validator.lockPointers();
@@ -805,121 +872,14 @@ fn trackNewVotesAndNotifyConfirmations(
     };
     defer latest_vote_slot_per_validator.unlockPointers();
 
-    const vote_slots: []const Slot = blk: {
-        const vote_slots = try allocator.alloc(Slot, vote.slotCount());
-        errdefer allocator.free(vote_slots);
-        vote.copyAllSlotsTo(vote_slots);
-        break :blk vote_slots;
-    };
-    defer allocator.free(vote_slots);
-
-    const accumulate_intermediate_votes = blk: {
-        if (slot_data_provider.getSlotHash(last_vote_slot)) |hash| {
-            // Only accumulate intermediates if we have replayed the same version being voted on, as
-            // otherwise we cannot verify the ancestry or the hashes.
-            // NOTE: this can only be performed on full tower votes, until deprecate_legacy_vote_ixs feature
-            // is active we must check the transaction type.
-            break :blk hash.eql(last_vote_hash) and vote.isFullTowerVote();
-        } else {
-            // If we have not frozen the bank do not accumulate intermediate slots as we cannot verify
-            // the hashes.
-            break :blk false;
-        }
-    };
-
-    var is_new_vote = false;
-    // If slot is before the root, ignore it. Iterate from latest vote slot to earliest.
-    for (0 + 1..vote_slots.len + 1) |fwd_index| {
-        const rev_index = vote_slots.len - fwd_index;
-        const slot = vote_slots[rev_index];
-        if (slot <= root) continue;
+    const slot_count = vote.slotCount();
+    // Track all vote slots for propagated check (iterates from most recent to oldest)
+    for (0 + 1..slot_count + 1) |fwd_index| {
+        const rev_index = slot_count - fwd_index;
+        const slot = vote.getSlot(rev_index);
 
         // if we don't have stake information, ignore it
         // Pull stakes via slot_data_provider helpers
-
-        // We always track the last vote slot for optimistic confirmation. If we have replayed
-        // the same version of last vote slot that is being voted on, then we also track the
-        // other votes in the proposed tower.
-        if (slot == last_vote_slot or accumulate_intermediate_votes) {
-            const stake = slot_data_provider.getDelegatedStake(slot, vote_pubkey) orelse 0;
-            const total_stake = blk: {
-                const ep = slot_data_provider.getSlotEpoch(slot);
-                break :blk slot_data_provider.getEpochTotalStake(ep) orelse 0;
-            };
-
-            const maybe_hash: ?Hash = get_hash: {
-                if (slot == last_vote_slot) break :get_hash last_vote_hash;
-                break :get_hash slot_data_provider.getSlotHash(slot);
-            };
-            const hash: Hash = maybe_hash orelse {
-                // In this case the supposed ancestor of this vote is missing. This can happen
-                // if the ancestor has been pruned, or if this is a malformed vote. In either case
-                // we do not track this slot for optimistic confirmation.
-                continue;
-            };
-
-            // Fast track processing of the last slot in a vote transactions
-            // so that notifications for optimistic confirmation can be sent
-            // as soon as possible.
-            const reached_threshold_results, //
-            const is_new: bool //
-            = try trackOptimisticConfirmationVote(allocator, vote_tracker, .{
-                .slot = slot,
-                .hash = hash,
-                .pubkey = vote_pubkey,
-                .stake = stake,
-                .total_epoch_stake = total_stake,
-            });
-
-            if (is_gossip_vote and is_new and stake > 0) {
-                try senders.gossip_verified_vote_hashes.append(allocator, .{
-                    vote_pubkey, slot, hash,
-                });
-            }
-
-            if (reached_threshold_results.isSet(0)) {
-                try senders.duplicate_confirmed_slots.append(allocator, .{
-                    .slot = slot,
-                    .hash = hash,
-                });
-            }
-
-            if (reached_threshold_results.isSet(1)) {
-                try new_optimistic_confirmed_slots.append(allocator, .{
-                    .slot = slot,
-                    .hash = hash,
-                });
-                // Notify subscribers about new optimistic confirmation
-                if (senders.bank_notification) |sender| {
-                    sender.send(.{ .optimistically_confirmed = slot }) catch |err| {
-                        logger.warn().logf("bank_notification_sender failed: {s}", .{
-                            @errorName(err),
-                        });
-                    };
-                }
-            }
-
-            if (!is_new and !is_gossip_vote) {
-                // By now:
-                // 1) The vote must have come from ReplayStage,
-                // 2) We've seen this vote from replay for this hash before
-                // (`track_optimistic_confirmation_vote()` will not set `is_new == true`
-                // for same slot different hash), so short circuit because this vote
-                // has no new information
-
-                // Note gossip votes will always be processed because those should be unique
-                // and we need to update the gossip-only stake in the `VoteTracker`.
-                //
-                // We break here instead of returning to preserve is_new_vote from a prior
-                // iteration so that post-loop notification logic still fires.
-                //
-                // This matches agave's control flow:
-                // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L560-L571
-                break;
-            }
-
-            is_new_vote = is_new;
-        }
 
         if (slot < latest_vote_slot.*) {
             // Important that we filter after the `last_vote_slot` check, as even if this vote
@@ -929,10 +889,8 @@ fn trackNewVotesAndNotifyConfirmations(
             continue;
         }
 
-        const slot_diff_gop =
-            try diff.map.getOrPutValue(allocator, slot, SlotsDiff.PubkeysDiff.EMPTY);
-        const pubkey_diff_gop =
-            try slot_diff_gop.value_ptr.map.getOrPut(allocator, vote_pubkey);
+        const slot_diff_gop = try diff.map.getOrPutValue(allocator, slot, .EMPTY);
+        const pubkey_diff_gop = try slot_diff_gop.value_ptr.map.getOrPut(allocator, vote_pubkey);
         const seen_in_gossip_previously: *bool = pubkey_diff_gop.value_ptr;
         if (pubkey_diff_gop.found_existing) {
             seen_in_gossip_previously.* = seen_in_gossip_previously.* or is_gossip_vote;
@@ -962,20 +920,23 @@ fn trackNewVotesAndNotifyConfirmations(
         // The event sink takes ownership of the vote payload, and the runtime
         // later frees it via InboundEvent.deinit after dispatch.
         if (senders.event_sink) |event_sink| {
-            var vote_event = try VoteEventData.initOwned(
-                event_sink.allocator(),
-                vote_pubkey,
-                vote_slots,
-                last_vote_hash,
-                vote.timestamp(),
-                vote_transaction_signature,
-            );
-            errdefer vote_event.deinit(event_sink.allocator());
+            const vote_slots: []const Slot = blk: {
+                const vote_slots = try allocator.alloc(Slot, vote.slotCount());
+                errdefer allocator.free(vote_slots);
+                vote.copyAllSlotsTo(vote_slots);
+                break :blk vote_slots;
+            };
+            errdefer allocator.free(vote_slots);
 
-            try event_sink.send(.{ .vote = vote_event });
+            try event_sink.send(.{ .vote = .{
+                .vote_pubkey = vote_pubkey,
+                .slots = vote_slots,
+                .hash = last_vote_hash,
+                .timestamp = vote.timestamp(),
+                .signature = vote_transaction_signature,
+            } });
         }
 
-        errdefer allocator.free(vote_slots);
         // TODO: Uncomment when our RepairService implements vote-weighted repair heuristic.
         //
         // In Agave, verified votes are sent to RepairService (via verified_vote_receiver)
