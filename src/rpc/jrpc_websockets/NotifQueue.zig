@@ -86,8 +86,12 @@ pub const GetError = error{ IndexOverwritten, IndexSkipped };
 
 /// Allocate queue storage and start with an empty committed set.
 ///
+/// `capacity` must be non-zero or this returns `error.ZeroCapacity`.
 /// `capacity` is rounded up to the next power of two for mask-based indexing.
 pub fn init(allocator: std.mem.Allocator, capacity: u64, commit_path: CommitPath) !NotifQueue {
+    // Disallow zero capacity to avoid needing to deal with it in operations.
+    // The capacity is fixed so it's unusable if set to zero, and it's not a generic container
+    // so there isn't any utility gained as a generic "unused" fallback.
     if (capacity == 0) return error.ZeroCapacity;
     const pow2 = try std.math.ceilPowerOfTwo(u64, capacity);
     const entries = try allocator.alloc(Entry, @intCast(pow2));
