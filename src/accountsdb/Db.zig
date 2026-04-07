@@ -153,13 +153,15 @@ pub fn getWithModifiedSlotOwned(
     if (try self.unrooted.getWithModifiedSlotOwned(allocator, address, ancestors)) |data| {
         return .{ .account = data.account, .modified_slot = data.modified_slot };
     }
-    if (try self.rooted.getWithModifiedSlot(allocator, address)) |data| {
+    const rooted = &self.rooted;
+    if (try rooted.getWithModifiedSlot(allocator, address)) |data| {
         return .{ .account = data.account.toOwnedAccount(), .modified_slot = data.modified_slot };
     }
     return null;
 }
 
 /// Like `get`, but returns an account with caller-owned data (allocates and copies out the account from both Unrooted and Rooted lookups).
+/// Uses the reader_rooted connection when available to avoid contention with the writer.
 pub fn getOwned(
     self: *Db,
     allocator: std.mem.Allocator,
@@ -659,5 +661,130 @@ test "accounts_db: spl token owner query" {
         try std.testing.expectEqual(300, account.lamports);
         try std.testing.expect(pubkey.equals(&addr_c));
         try std.testing.expectEqual(null, try query.next());
+    }
+}
+
+test "getWithModifiedSlot returns slot from unrooted and rooted" {
+    const allocator = std.testing.allocator;
+
+    var test_state = try Db.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const addr: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    var ancestors: Ancestors = .EMPTY;
+    defer ancestors.deinit(allocator);
+
+    // Non-existent account returns null.
+    try ancestors.addSlot(allocator, 0);
+    ancestors.cleanup();
+    try std.testing.expectEqual(null, try db.getWithModifiedSlot(allocator, addr, &ancestors));
+
+    // Put into slot 5 (unrooted).
+    try ancestors.addSlot(allocator, 5);
+    ancestors.cleanup();
+    try db.put(5, addr, .{
+        .lamports = 100,
+        .data = &.{},
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    // Should find it in unrooted with modified_slot = 5.
+    {
+        const result = (try db.getWithModifiedSlot(allocator, addr, &ancestors)).?;
+        defer result.account.deinit(allocator);
+        try std.testing.expectEqual(5, result.modified_slot);
+        try std.testing.expectEqual(100, result.account.lamports);
+    }
+
+    // Root slot 5, then query again — should find it in rooted with modified_slot = 5.
+    db.updateRoot(5, &ancestors);
+    try ancestors.addSlot(allocator, 6);
+    ancestors.cleanup();
+    {
+        const result = (try db.getWithModifiedSlot(allocator, addr, &ancestors)).?;
+        defer result.account.deinit(allocator);
+        try std.testing.expectEqual(5, result.modified_slot);
+        try std.testing.expectEqual(100, result.account.lamports);
+    }
+
+    // Update in slot 7 (unrooted) — unrooted should shadow rooted.
+    try ancestors.addSlot(allocator, 7);
+    ancestors.cleanup();
+    try db.put(7, addr, .{
+        .lamports = 200,
+        .data = &.{},
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+    {
+        const result = (try db.getWithModifiedSlot(allocator, addr, &ancestors)).?;
+        defer result.account.deinit(allocator);
+        try std.testing.expectEqual(7, result.modified_slot);
+        try std.testing.expectEqual(200, result.account.lamports);
+    }
+}
+
+test "getWithModifiedSlotOwned returns owned data with correct slot" {
+    const allocator = std.testing.allocator;
+
+    var test_state = try Db.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const addr: Pubkey = .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk");
+    var ancestors: Ancestors = .EMPTY;
+    defer ancestors.deinit(allocator);
+
+    // Non-existent returns null.
+    try ancestors.addSlot(allocator, 0);
+    ancestors.cleanup();
+    try std.testing.expectEqual(null, try db.getWithModifiedSlotOwned(allocator, addr, &ancestors));
+
+    // Put into slot 3 (unrooted) with some data.
+    try ancestors.addSlot(allocator, 3);
+    ancestors.cleanup();
+    const data = try allocator.dupe(u8, &[_]u8{ 1, 2, 3 });
+    defer allocator.free(data);
+    try db.put(3, addr, .{
+        .lamports = 42,
+        .data = data,
+        .owner = .ZEROES,
+        .executable = true,
+        .rent_epoch = 7,
+    });
+
+    // Unrooted path: should return owned copy.
+    {
+        const result = (try db.getWithModifiedSlotOwned(allocator, addr, &ancestors)).?;
+        defer result.account.deinit(allocator);
+        try std.testing.expectEqual(3, result.modified_slot);
+        try std.testing.expectEqual(42, result.account.lamports);
+        try std.testing.expect(result.account.executable);
+        try std.testing.expectEqual(7, result.account.rent_epoch);
+        try std.testing.expectEqualSlices(
+            u8,
+            &[_]u8{ 1, 2, 3 },
+            result.account.data.owned_allocation,
+        );
+    }
+
+    // Root and re-query — rooted path should also return owned copy.
+    db.updateRoot(3, &ancestors);
+    try ancestors.addSlot(allocator, 4);
+    ancestors.cleanup();
+    {
+        const result = (try db.getWithModifiedSlotOwned(allocator, addr, &ancestors)).?;
+        defer result.account.deinit(allocator);
+        try std.testing.expectEqual(3, result.modified_slot);
+        try std.testing.expectEqual(42, result.account.lamports);
+        try std.testing.expectEqualSlices(
+            u8,
+            &[_]u8{ 1, 2, 3 },
+            result.account.data.owned_allocation,
+        );
     }
 }

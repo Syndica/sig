@@ -130,6 +130,7 @@ pub fn main() !void {
             current_config.shred_version = params.shred_version;
             current_config.leader_schedule_path = params.leader_schedule;
             current_config.vote_account = params.vote_account;
+            current_config.faucet_keypair = params.faucet_keypair;
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
@@ -537,6 +538,16 @@ const Cmd = struct {
         .config = .string,
         .help = "Base58 string of the vote account's address, or a path to vote account json" ++
             " keypair file. Defaults to sig/vote-account.json in your system's app config folder",
+    };
+
+    const faucet_keypair_arg: cli.ArgumentInfo(?[]const u8) = .{
+        .kind = .named,
+        .name_override = "faucet-keypair",
+        .alias = .none,
+        .default_value = null,
+        .config = .string,
+        .help = "Path to a faucet json keypair file used by requestAirdrop RPC. " ++
+            "When omitted, requestAirdrop is not registered.",
     };
 
     const GossipArgumentsCommon = struct {
@@ -959,6 +970,7 @@ const Cmd = struct {
         shred_version: ?u16,
         leader_schedule: ?[]const u8,
         vote_account: ?[]const u8,
+        faucet_keypair: ?[]const u8,
         gossip_base: GossipArgumentsCommon,
         gossip_node: GossipArgumentsNode,
         repair: RepairArgumentsBase,
@@ -984,6 +996,7 @@ const Cmd = struct {
                 .shred_version = shred_version_arg,
                 .leader_schedule = leader_schedule_arg,
                 .vote_account = vote_account_arg,
+                .faucet_keypair = faucet_keypair_arg,
                 .gossip_base = GossipArgumentsCommon.cmd_info,
                 .gossip_node = GossipArgumentsNode.cmd_info,
                 .repair = RepairArgumentsBase.cmd_info,
@@ -1497,6 +1510,8 @@ fn validator(
 
     app_base.logger.info().logf("starting validator with cfg: {}", .{cfg});
 
+    const rpc_enabled = cfg.rpc_port != null;
+
     const allocation_metrics = try app_base.metrics_registry.initStruct(AllocationMetrics);
 
     var gpa_metrics: sig.trace.GaugeAllocator = .{
@@ -1638,6 +1653,11 @@ fn validator(
     var new_db: sig.accounts_db.Db = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
     defer new_db.deinit();
 
+    // After snapshot loading, switch SQLite to WAL mode so that concurrent
+    // readers (RPC queries, replay thread pool) each get their own threadlocal
+    // connection and do not contend with the writer handle.
+    new_db.rooted.enableWalMode(rooted_file);
+
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
 
     var ledger_tracy: tracy.TracingAllocator = .{
@@ -1713,6 +1733,18 @@ fn validator(
     // If voting was enabled but no vote account is available, disable voting.
     const voting_enabled = cfg.voting_enabled and maybe_vote_pubkey != null;
 
+    var maybe_faucet_keypair: ?sig.identity.KeyPair = null;
+    if (cfg.faucet_keypair) |faucet_keypair_path| {
+        if (try cfg.getCluster() == .mainnet) @panic("Cannot use a faucet keypair on mainnet.");
+        maybe_faucet_keypair = sig.identity.readKeypair(faucet_keypair_path) catch |err| blk: {
+            app_base.logger.err().logf(
+                "faucet-keypair: failed to read {s}: {}; requestAirdrop will be disabled",
+                .{ faucet_keypair_path, err },
+            );
+            break :blk null;
+        };
+    }
+
     const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (voting_enabled)
         try replay.consensus.core.VoteSockets.init()
     else
@@ -1720,8 +1752,6 @@ fn validator(
 
     var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
     defer prioritization_fee_cache.deinit(allocator);
-
-    const rpc_enabled = cfg.rpc_port != null;
 
     const event_sink: ?*jrpc_ws.types.EventSink = if (rpc_enabled)
         try jrpc_ws.types.EventSink.create(allocator)
@@ -1846,6 +1876,16 @@ fn validator(
         .epoch_tracker = &epoch_tracker,
         .status_cache = &replay_service_state.replay_state.status_cache,
     });
+
+    if (maybe_faucet_keypair) |faucet_keypair| {
+        if (try cfg.getCluster() == .mainnet) @panic("Cannot use a faucet keypair on mainnet.");
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.RequestAirdropHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .commitments = &replay_service_state.replay_state.commitments.?,
+            .tx_svc_channel = transaction_sender_service.receiver,
+            .faucet_keypair = faucet_keypair,
+        });
+    }
 
     const transaction_sender_handle = try std.Thread.spawn(
         .{},
