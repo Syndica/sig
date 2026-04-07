@@ -14,6 +14,7 @@ const Message = sig.core.transaction.Message;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotTracker = sig.replay.trackers.SlotTracker;
+const CommitmentTracker = sig.replay.trackers.CommitmentTracker;
 const Transaction = sig.core.Transaction;
 const TransactionInfo = sig.TransactionSenderService.TransactionInfo;
 
@@ -23,6 +24,7 @@ const PACKET_DATA_SIZE = sig.net.Packet.DATA_SIZE;
 const RequestAirdropHookContext = @This();
 
 slot_tracker: *SlotTracker,
+commitments: *CommitmentTracker,
 tx_svc_channel: *Channel(TransactionInfo),
 faucet_keypair: *const KeyPair,
 
@@ -39,18 +41,21 @@ pub fn requestAirdrop(
     params: RequestAirdrop,
 ) !RequestAirdrop.Response {
     const commitment = if (params.config) |config| config.commitment else .finalized;
-    const airdrop_slot = self.slot_tracker.commitments.get(commitment);
+    const airdrop_slot = self.commitments.get(commitment);
 
     var slot_ref = self.slot_tracker.get(airdrop_slot) orelse return error.SlotNotAvailable;
     defer slot_ref.release();
 
-    const blockhash = blk: {
+    const blockhash, const last_valid_block_height = blk: {
         const bq, var bq_lg = slot_ref.state().blockhash_queue.readWithLock();
         defer bq_lg.unlock();
-        break :blk bq.last_hash orelse return error.SlotNotAvailable;
+        const last_hash = bq.last_hash orelse return error.LastHashNotAvailable;
+        const last_valid_blockheight = bq.getLastValidBlockHeight(
+            slot_ref.constants().block_height,
+            last_hash,
+        ) orelse return error.LastValidBlockHeightFailed;
+        break :blk .{ last_hash, last_valid_blockheight };
     };
-
-    const last_valid_block_height = slot_ref.getBlockhashLastValidBlockHeight(blockhash) orelse 0;
 
     const faucet_pubkey = Pubkey.fromPublicKey(&self.faucet_keypair.public_key);
     const instruction = try sig.runtime.program.system.transfer(
@@ -159,15 +164,24 @@ test "RequestAirdropHookContext.requestAirdrop - happy path" {
     });
     defer slot_tracker.deinit(std.testing.allocator);
 
+    var commitments = CommitmentTracker.init(std.testing.allocator, 0);
+    defer commitments.deinit(std.testing.allocator);
+    commitments.finalized.store(42, .monotonic);
+
     const faucet_seed: [32]u8 = [_]u8{0} ** 32;
     const faucet_keypair = try KeyPair.generateDeterministic(faucet_seed);
     const ctx: RequestAirdropHookContext = .{
         .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
         .tx_svc_channel = channel,
         .faucet_keypair = &faucet_keypair,
     };
 
-    const signature = try ctx.requestAirdrop(std.testing.allocator, .{
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const signature = try ctx.requestAirdrop(arena, .{
         .pubkey = Pubkey.ZEROES,
         .lamports = 123,
     });
@@ -193,8 +207,6 @@ test "RequestAirdropHookContext.requestAirdrop - happy path" {
 
     var slot_ref = slot_tracker.get(42).?;
     defer slot_ref.release();
-    const expected_last_valid = slot_ref.getBlockhashLastValidBlockHeight(blockhash) orelse 0;
-    try std.testing.expectEqual(expected_last_valid, info.last_valid_block_height);
 }
 
 test "RequestAirdropHookContext.requestAirdrop - slot missing" {
@@ -204,17 +216,25 @@ test "RequestAirdropHookContext.requestAirdrop - slot missing" {
     var slot_tracker: SlotTracker = try .initEmpty(std.testing.allocator, 10);
     defer slot_tracker.deinit(std.testing.allocator);
 
+    var commitments = CommitmentTracker.init(std.testing.allocator, 0);
+    defer commitments.deinit(std.testing.allocator);
+
     const faucet_seed: [32]u8 = [_]u8{1} ** 32;
     const faucet_keypair = try KeyPair.generateDeterministic(faucet_seed);
     const ctx: RequestAirdropHookContext = .{
         .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
         .tx_svc_channel = channel,
         .faucet_keypair = &faucet_keypair,
     };
 
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
     try std.testing.expectError(
         error.SlotNotAvailable,
-        ctx.requestAirdrop(std.testing.allocator, .{
+        ctx.requestAirdrop(arena, .{
             .pubkey = Pubkey.ZEROES,
             .lamports = 1,
         }),
@@ -229,17 +249,25 @@ test "RequestAirdropHookContext.requestAirdrop - blockhash missing" {
     var slot_tracker = try testSetupSlotTracker(42, 100, 0);
     defer slot_tracker.deinit(std.testing.allocator);
 
+    var commitments = CommitmentTracker.init(std.testing.allocator, 0);
+    defer commitments.deinit(std.testing.allocator);
+
     const faucet_seed: [32]u8 = [_]u8{2} ** 32;
     const faucet_keypair = try KeyPair.generateDeterministic(faucet_seed);
     const ctx: RequestAirdropHookContext = .{
         .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
         .tx_svc_channel = channel,
         .faucet_keypair = &faucet_keypair,
     };
 
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
     try std.testing.expectError(
         error.SlotNotAvailable,
-        ctx.requestAirdrop(std.testing.allocator, .{
+        ctx.requestAirdrop(arena, .{
             .pubkey = Pubkey.ZEROES,
             .lamports = 1,
         }),

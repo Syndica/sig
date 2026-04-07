@@ -1876,6 +1876,7 @@ fn validator(
         if (try cfg.getCluster() == .mainnet) @panic("Cannot use a faucet keypair on mainnet.");
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.RequestAirdropHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .commitments = &replay_service_state.replay_state.commitments.?,
             .tx_svc_channel = transaction_sender_service.receiver,
             .faucet_keypair = faucet_keypair,
         });
