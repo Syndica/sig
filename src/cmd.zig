@@ -1510,6 +1510,8 @@ fn validator(
 
     app_base.logger.info().logf("starting validator with cfg: {}", .{cfg});
 
+    const rpc_enabled = cfg.rpc_port != null;
+
     const allocation_metrics = try app_base.metrics_registry.initStruct(AllocationMetrics);
 
     var gpa_metrics: sig.trace.GaugeAllocator = .{
@@ -1651,6 +1653,11 @@ fn validator(
     var new_db: sig.accounts_db.Db = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
     defer new_db.deinit();
 
+    // After snapshot loading, switch SQLite to WAL mode so that concurrent
+    // readers (RPC queries, replay thread pool) each get their own threadlocal
+    // connection and do not contend with the writer handle.
+    new_db.rooted.enableWalMode(rooted_file);
+
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
 
     var ledger_tracy: tracy.TracingAllocator = .{
@@ -1745,8 +1752,6 @@ fn validator(
 
     var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
     defer prioritization_fee_cache.deinit(allocator);
-
-    const rpc_enabled = cfg.rpc_port != null;
 
     const event_sink: ?*jrpc_ws.types.EventSink = if (rpc_enabled)
         try jrpc_ws.types.EventSink.create(allocator)
