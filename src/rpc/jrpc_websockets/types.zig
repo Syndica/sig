@@ -896,7 +896,7 @@ test "TransactionLogsEntry toOwnedNotificationData deep copies into logs notific
     const arena_allocator = arena.allocator();
 
     const logs = try arena_allocator.alloc([]const u8, 1);
-    logs[0] = try arena_allocator.dupe(u8, "slot log line");
+    logs[0] = "slot log line";
 
     var mention: Pubkey = undefined;
     @memset(&mention.data, 0xEF);

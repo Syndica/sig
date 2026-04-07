@@ -65,6 +65,59 @@ pub const Metrics = struct {
     };
 };
 
+/// Periodically snapshots transaction/slot metrics from the root bank and writes
+/// performance samples to the ledger, matching Agave's `SamplePerformanceService`.
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/sample_performance_service.rs
+pub const PerfSampleTracker = struct {
+    prev_num_transactions: u64,
+    prev_num_non_vote_transactions: u64,
+    prev_highest_slot: Slot,
+    last_sample_time: sig.time.Timer,
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/sample_performance_service.rs#L14
+    const SAMPLE_INTERVAL_SECS: u64 = 60;
+
+    /// Check if the sample interval has elapsed and, if so, write a performance
+    /// sample to the ledger.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/sample_performance_service.rs#L44
+    pub fn maybeSample(
+        self: *PerfSampleTracker,
+        slot_tracker: *SlotTracker,
+        highest_slot: Slot,
+        ledger: *Ledger,
+        logger: Logger,
+    ) void {
+        const elapsed = self.last_sample_time.read();
+        if (elapsed.asSecs() < SAMPLE_INTERVAL_SECS) return;
+
+        self.last_sample_time.reset();
+
+        const root_ref = slot_tracker.getRoot();
+        defer root_ref.release();
+
+        const num_transactions = root_ref.state().transaction_count.load(.monotonic);
+        const num_non_vote_transactions =
+            root_ref.state().non_vote_transaction_count.load(.monotonic);
+
+        const sample = sig.ledger.meta.PerfSample{
+            .num_transactions = num_transactions -| self.prev_num_transactions,
+            .num_non_vote_transactions = num_non_vote_transactions -|
+                self.prev_num_non_vote_transactions,
+            .num_slots = highest_slot -| self.prev_highest_slot,
+            .sample_period_secs = @intCast(@min(elapsed.asSecs(), std.math.maxInt(u16))),
+        };
+
+        self.prev_num_transactions = num_transactions;
+        self.prev_num_non_vote_transactions = num_non_vote_transactions;
+        self.prev_highest_slot = highest_slot;
+
+        const result_writer = ledger.resultWriter();
+        result_writer.writePerfSample(highest_slot, sample) catch |err| {
+            logger.err().logf("writePerfSample failed: slot {} err {}", .{ highest_slot, err });
+        };
+    }
+};
+
 pub const AdvanceReplayConsensusParams = struct {
     tower: *TowerConsensus,
     gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
@@ -180,6 +233,17 @@ pub fn advanceReplay(
 
     try handleSlotUpdate(allocator, replay_state, slot_update, commitment_txn, metrics);
     recordSlotMetrics(replay_state, metrics);
+
+    // Record performance sample if interval has elapsed.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/sample_performance_service.rs
+    if (replay_state.perf_sample_tracker) |*tracker| {
+        tracker.maybeSample(
+            &replay_state.slot_tracker,
+            replay_state.slot_tree.tip(),
+            replay_state.ledger,
+            replay_state.logger,
+        );
+    }
 
     if (slot_results.len != 0) {
         const elapsed = start_time.read().asNanos();
@@ -303,6 +367,7 @@ pub const ReplayState = struct {
     event_sink: ?*jrpc_types.EventSink,
     stop_at_slot: ?sig.core.Slot,
     prioritization_fee_cache: ?*sig.rpc.hook_contexts.PrioritizationFeeCache = null,
+    perf_sample_tracker: ?PerfSampleTracker = null,
 
     pub fn deinit(self: *ReplayState) void {
         self.slot_tracker.deinit(self.allocator);
@@ -365,6 +430,19 @@ pub const ReplayState = struct {
         const slot_tree = try SlotTree.init(deps.allocator, deps.root.slot);
         errdefer slot_tree.deinit(deps.allocator);
 
+        const perf_sample_tracker: PerfSampleTracker = blk: {
+            const root_ref = slot_tracker.getRoot();
+            defer root_ref.release();
+            const root_state = root_ref.state();
+            const non_vote_tx_count = root_state.non_vote_transaction_count.load(.monotonic);
+            break :blk .{
+                .prev_num_transactions = root_state.transaction_count.load(.monotonic),
+                .prev_num_non_vote_transactions = non_vote_tx_count,
+                .prev_highest_slot = deps.root.slot,
+                .last_sample_time = sig.time.Timer.start(),
+            };
+        };
+
         return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
@@ -387,6 +465,7 @@ pub const ReplayState = struct {
             .event_sink = deps.event_sink,
             .stop_at_slot = deps.stop_at_slot,
             .prioritization_fee_cache = deps.prioritization_fee_cache,
+            .perf_sample_tracker = perf_sample_tracker,
         };
     }
 };
