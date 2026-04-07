@@ -618,7 +618,6 @@ const Cmd = struct {
         dbg_db_init: bool,
         rpc_enable_owner_index: bool,
         rpc_enable_spl_token_owner_index: bool,
-        disable_wal_mode: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .n_threads_snapshot_load = .{
@@ -687,16 +686,6 @@ const Cmd = struct {
                     "at the cost of increased storage and slower writes. When disabled, " ++
                     "falls back to a full table scan - default: false",
             },
-            .disable_wal_mode = .{
-                .kind = .named,
-                .name_override = "disable-wal-mode",
-                .alias = .none,
-                .default_value = false,
-                .config = {},
-                .help = "disable WAL mode on the accounts DB. WAL mode is normally enabled " ++
-                    "after snapshot loading to allow concurrent reader connections for RPC " ++
-                    "queries - default: false",
-            },
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
@@ -707,7 +696,6 @@ const Cmd = struct {
             cfg.accounts_db.dbg_db_init = args.dbg_db_init;
             cfg.accounts_db.rpc_enable_owner_index = args.rpc_enable_owner_index;
             cfg.accounts_db.rpc_enable_spl_token_owner_index = args.rpc_enable_spl_token_owner_index;
-            cfg.accounts_db.disable_wal_mode = args.disable_wal_mode;
         }
     };
     const AccountsDbArgumentsDownload = struct {
@@ -1655,9 +1643,7 @@ fn validator(
     // After snapshot loading, switch SQLite to WAL mode so that concurrent
     // readers (RPC queries, replay thread pool) each get their own threadlocal
     // connection and do not contend with the writer handle.
-    if (!cfg.accounts_db.disable_wal_mode) {
-        new_db.rooted.enableWalMode(rooted_file);
-    }
+    new_db.rooted.enableWalMode(rooted_file);
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
 
