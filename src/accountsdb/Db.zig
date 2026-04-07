@@ -765,7 +765,11 @@ test "getWithModifiedSlotOwned returns owned data with correct slot" {
         try std.testing.expectEqual(42, result.account.lamports);
         try std.testing.expect(result.account.executable);
         try std.testing.expectEqual(7, result.account.rent_epoch);
-        try std.testing.expectEqualSlices(u8, &[_]u8{ 1, 2, 3 }, result.account.data.owned_allocation);
+        try std.testing.expectEqualSlices(
+            u8,
+            &[_]u8{ 1, 2, 3 },
+            result.account.data.owned_allocation,
+        );
     }
 
     // Root and re-query — rooted path should also return owned copy.
@@ -777,6 +781,10 @@ test "getWithModifiedSlotOwned returns owned data with correct slot" {
         defer result.account.deinit(allocator);
         try std.testing.expectEqual(3, result.modified_slot);
         try std.testing.expectEqual(42, result.account.lamports);
-        try std.testing.expectEqualSlices(u8, &[_]u8{ 1, 2, 3 }, result.account.data.owned_allocation);
+        try std.testing.expectEqualSlices(
+            u8,
+            &[_]u8{ 1, 2, 3 },
+            result.account.data.owned_allocation,
+        );
     }
 }
