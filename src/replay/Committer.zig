@@ -86,18 +86,6 @@ pub fn commitTransactions(
         };
     }
 
-    var maybe_logs_batch_event: ?jrpc_types.SlotTransactionLogs = null;
-    defer if (maybe_logs_batch_event) |*logs_batch_event| {
-        logs_batch_event.deinit();
-    };
-    var batch_log_entries: ArrayListUnmanaged(jrpc_types.TransactionLogsEntry) = .{};
-    if (self.event_sink != null) {
-        maybe_logs_batch_event = .{
-            .slot = slot,
-            .arena = .init(persistent_allocator),
-        };
-    }
-
     for (transactions, tx_results, 0..) |transaction, *result, transaction_index| {
         const message_hash = &result.@"0";
         const tx_result = &result.@"1";
