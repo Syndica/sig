@@ -353,6 +353,26 @@ pub const TransactionInfo = struct {
             transaction,
             .{},
         )).len;
+        return initWithWire(
+            transaction,
+            wire_transaction,
+            wire_transaction_size,
+            message_hash,
+            last_valid_block_height,
+            durable_nonce_info,
+            max_retries,
+        );
+    }
+
+    pub fn initWithWire(
+        transaction: Transaction,
+        wire_transaction: [Packet.DATA_SIZE]u8,
+        wire_transaction_size: usize,
+        message_hash: Hash,
+        last_valid_block_height: u64,
+        durable_nonce_info: ?struct { Pubkey, Hash },
+        max_retries: ?usize,
+    ) TransactionInfo {
         return .{
             .signature = transaction.signatures[0],
             .message_hash = message_hash,
@@ -807,4 +827,64 @@ test "fillLeaderAddresses" {
         &leader_addresses_null,
         &leader_addresses,
     );
+}
+
+test "TransactionInfo.initWithWire:sets fields correctly" {
+    const tx = sig.core.transaction.transaction_legacy_example.as_struct;
+    var wire: [Packet.DATA_SIZE]u8 = @splat(0);
+    @memcpy(
+        wire[0..sig.core.transaction.transaction_legacy_example.as_bytes.len],
+        &sig.core.transaction.transaction_legacy_example.as_bytes,
+    );
+    const msg_hash = Hash.ZEROES;
+
+    const info = TransactionInfo.initWithWire(
+        tx,
+        wire,
+        sig.core.transaction.transaction_legacy_example.as_bytes.len,
+        msg_hash,
+        1000,
+        null,
+        null,
+    );
+
+    try std.testing.expectEqualSlices(u8, &tx.signatures[0].toBytes(), &info.signature.toBytes());
+    try std.testing.expectEqual(msg_hash, info.message_hash);
+    try std.testing.expectEqual(tx.msg.recent_blockhash, info.recent_blockhash);
+    try std.testing.expectEqual(@as(u64, 1000), info.last_valid_block_height);
+    try std.testing.expectEqual(@as(?struct { Pubkey, Hash }, null), info.durable_nonce_info);
+    try std.testing.expectEqual(@as(usize, 0), info.retries);
+    try std.testing.expectEqual(std.math.maxInt(usize), info.max_retries);
+    try std.testing.expectEqual(@as(?sig.time.Instant, null), info.last_sent_time);
+}
+
+test "TransactionInfo.initWithWire:with max_retries" {
+    const tx = sig.core.transaction.transaction_legacy_example.as_struct;
+    const wire: [Packet.DATA_SIZE]u8 = @splat(0);
+
+    const info = TransactionInfo.initWithWire(tx, wire, 0, Hash.ZEROES, 500, null, 10);
+
+    try std.testing.expectEqual(@as(usize, 10), info.max_retries);
+}
+
+test "TransactionInfo.initWithWire:with durable nonce info" {
+    const tx = sig.core.transaction.transaction_legacy_example.as_struct;
+    const wire: [Packet.DATA_SIZE]u8 = @splat(0);
+    const nonce_pubkey = Pubkey.ZEROES;
+    const nonce_hash = Hash.ZEROES;
+
+    const info = TransactionInfo.initWithWire(
+        tx,
+        wire,
+        0,
+        Hash.ZEROES,
+        500,
+        .{ nonce_pubkey, nonce_hash },
+        null,
+    );
+
+    try std.testing.expect(info.durable_nonce_info != null);
+    const nonce_info = info.durable_nonce_info.?;
+    try std.testing.expectEqual(nonce_pubkey, nonce_info[0]);
+    try std.testing.expectEqual(nonce_hash, nonce_info[1]);
 }

@@ -21,7 +21,7 @@ const StatusCache = sig.core.StatusCache;
 const Slot = sig.core.Slot;
 const RentState = sig.core.RentCollector.RentState;
 
-const SlotAccountStore = sig.accounts_db.SlotAccountStore;
+const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 
 const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const FeatureSet = sig.core.FeatureSet;
@@ -42,7 +42,6 @@ const ComputeBudgetInstructionDetails = compute_budget_program.ComputeBudgetInst
 const InstructionTrace = TransactionContext.InstructionTrace;
 
 const AccountLoadError = sig.runtime.account_loader.AccountLoadError;
-const wrapDB = sig.runtime.account_loader.wrapDB;
 
 // Transaction execution involves logic and validation which occurs in replay
 // and the svm. The location of key processes in Agave are outlined below:
@@ -177,7 +176,7 @@ pub fn loadAndExecuteTransaction(
     programs_allocator: std.mem.Allocator,
     tmp_allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
-    account_store: SlotAccountStore,
+    account_reader: SlotAccountReader,
     env: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
     program_map: *ProgramMap,
@@ -213,7 +212,7 @@ pub fn loadAndExecuteTransaction(
     const maybe_nonce_info = switch (try sig.runtime.check_transactions.checkAge(
         tmp_allocator,
         transaction,
-        account_store.reader(),
+        account_reader,
         env.blockhash_queue,
         env.max_age,
         &env.next_durable_nonce,
@@ -233,30 +232,33 @@ pub fn loadAndExecuteTransaction(
     )) |err| return .{ .err = err };
 
     nonce_account_is_owned = false;
-    const fees, var rollbacks = switch (try sig.runtime.check_transactions.checkFeePayer(
-        tmp_allocator,
-        transaction,
-        account_store,
-        &compute_budget_limits,
-        maybe_nonce_info,
-        env.rent_collector,
-        env.feature_set,
-        env.slot,
-        env.lamports_per_signature,
-    )) {
-        .ok => |x| x,
-        .err => |e| return .{ .err = e },
-    };
+    const fees, var rollbacks, const fee_payer =
+        switch (try sig.runtime.check_transactions.checkFeePayer(
+            tmp_allocator,
+            transaction,
+            account_reader,
+            &compute_budget_limits,
+            maybe_nonce_info,
+            env.rent_collector,
+            env.feature_set,
+            env.slot,
+            env.lamports_per_signature,
+        )) {
+            .ok => |x| x,
+            .err => |e| return .{ .err = e },
+        };
+    // Fee payer ownership is transferred to loadTransactionAccounts.
     errdefer for (rollbacks.slice()) |r| r.deinit(tmp_allocator);
 
     var loaded_accounts = switch (try account_loader.loadTransactionAccounts(
-        account_store.reader(),
+        account_reader,
         tmp_allocator,
         transaction,
         env.rent_collector,
         env.feature_set,
         env.slot,
         &compute_budget_limits,
+        fee_payer,
     )) {
         .ok => |x| x,
         .err => |err| {
@@ -266,7 +268,6 @@ pub fn loadAndExecuteTransaction(
             while (rollbacks.pop()) |rollback| {
                 const item = writes.addOne() catch unreachable;
                 item.* = rollback;
-                try wrapDB(account_store.put(item.pubkey, item.account));
                 loaded_accounts_data_size += @intCast(rollback.account.data.len);
             }
             // Calculate cost units even for failed transactions
@@ -316,7 +317,7 @@ pub fn loadAndExecuteTransaction(
         program_map,
         account.pubkey,
         &account.account,
-        account_store.reader(),
+        account_reader,
         env.vm_environment,
         env.slot,
     );
@@ -350,8 +351,6 @@ pub fn loadAndExecuteTransaction(
             f.* = loaded_accounts.accounts
         else for (loaded_accounts.accounts.slice()) |a| a.deinit(tmp_allocator);
     }
-
-    for (writes.slice()) |*acct| try wrapDB(account_store.put(acct.pubkey, acct.account));
 
     // Calculate cost units for executed transaction using actual consumed CUs.
     // Pass only the raw executed compute units (compute_limit - compute_meter remaining).
@@ -927,7 +926,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             allocator,
             allocator,
             &transaction,
-            .{ .account_shared_data_map = .{ allocator, &account_map } },
+            .{ .account_shared_data_map = &account_map },
             &environment,
             &config,
             &program_map,
@@ -935,6 +934,13 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
 
         var processed_transaction = result.ok;
         defer processed_transaction.deinit(allocator);
+
+        // Persist writes to account_map (simulating what callers do for intra-slot visibility)
+        for (processed_transaction.writes.constSlice()) |acct| {
+            const cloned = try acct.account.clone(allocator);
+            errdefer cloned.deinit(allocator);
+            try account_map.put(allocator, acct.pubkey, cloned);
+        }
 
         const executed_transaction = processed_transaction.outputs.?;
 
@@ -964,7 +970,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             allocator,
             allocator,
             &transaction,
-            .{ .account_shared_data_map = .{ allocator, &account_map } },
+            .{ .account_shared_data_map = &account_map },
             &environment,
             &config,
             &program_map,
@@ -972,6 +978,13 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
 
         var processed_transaction = result.ok;
         defer processed_transaction.deinit(allocator);
+
+        // Persist writes to account_map (simulating what callers do for intra-slot visibility)
+        for (processed_transaction.writes.constSlice()) |acct| {
+            const cloned = try acct.account.clone(allocator);
+            errdefer cloned.deinit(allocator);
+            try account_map.put(allocator, acct.pubkey, cloned);
+        }
 
         const executed_transaction = processed_transaction.outputs.?;
 

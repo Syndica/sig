@@ -298,7 +298,7 @@ pub const ReplayState = struct {
     ledger: *Ledger,
     status_cache: sig.core.StatusCache,
     commitments: ?replay.trackers.CommitmentTracker,
-    execution_log_helper: replay.execution.LogHelper,
+    log_deduper: LogDeduper = .{},
     replay_votes_channel: ?*Channel(ParsedVote),
     event_sink: ?*jrpc_types.EventSink,
     stop_at_slot: ?sig.core.Slot,
@@ -383,7 +383,6 @@ pub const ReplayState = struct {
                 .enabled => .init(deps.allocator, deps.root.slot),
                 .disabled => null,
             },
-            .execution_log_helper = .init(.from(deps.logger)),
             .replay_votes_channel = replay_votes_channel,
             .event_sink = deps.event_sink,
             .stop_at_slot = deps.stop_at_slot,
@@ -844,7 +843,7 @@ pub fn handleSlotUpdate(
                     ) catch |err| switch (err) {
                         error.NewRootNotFound => blk: {
                             replay_state.logger.warn().logf(
-                                "skipping slot_rooted for finalized {} -> {}: missing slot tracker entry",
+                                "skipping slot_rooted for finalized {} -> {}: missing slot entry",
                                 .{ old_finalized, finalized_slot },
                             );
                             break :blk null;
@@ -864,9 +863,13 @@ pub fn handleSlotUpdate(
     }
 
     // Record update in logs + metrics
-    replay_state.logger.info().logf("slot state update from consensus: {any}", .{slot_update});
+    if (replay_state.log_deduper.isNew(.{ .slot_update = slot_update }))
+        replay_state.logger
+            .info()
+            .logf("slot state update from consensus: {any}", .{slot_update});
     if (slot_update.voted != null) metrics.voted_slot_update_count.inc();
-    if (slot_update.optimistically_confirmed != null) metrics.optimistically_confirmed_update_count.inc();
+    if (slot_update.optimistically_confirmed != null)
+        metrics.optimistically_confirmed_update_count.inc();
     if (slot_update.root != null) metrics.root_update_count.inc();
     if (maybe_new_state_root != null) metrics.state_root_update_count.inc();
 }
@@ -959,7 +962,9 @@ pub fn recordSlotMetrics(replay_state: *ReplayState, metrics: Metrics) void {
         metrics.commitment_confirmed.set(confirmed);
         metrics.commitment_finalized.set(finalized);
 
-        replay_state.logger.info()
+        const log_data = .{ processed, confirmed, finalized };
+        if (replay_state.log_deduper.isNew(.{ .commitments = &log_data })) replay_state.logger
+            .info()
             .field("processed", processed)
             .field("confirmed", confirmed)
             .field("finalized", finalized)
@@ -967,6 +972,42 @@ pub fn recordSlotMetrics(replay_state: *ReplayState, metrics: Metrics) void {
             .log("Commitments");
     }
 }
+
+/// Helps prevent logging the same thing repeatedly.
+pub const LogDeduper = struct {
+    last_hashes: std.EnumMap(@typeInfo(MessageData).@"union".tag_type.?, u64) = .{},
+
+    const MessageData = union(enum) {
+        active_slots: []const Slot,
+        commitments: []const Slot,
+        slot_update: SlotUpdate,
+        entries_for_slot: []const Slot,
+
+        fn hash(self: *const MessageData) u64 {
+            var hasher: sig.crypto.FnvHasher = .init;
+            switch (self.*) {
+                .active_slots => |p| hasher.update(std.mem.sliceAsBytes(p)),
+                .commitments => |p| hasher.update(std.mem.sliceAsBytes(p)),
+                .slot_update => |*update| for ([_]?u64{
+                    update.root,
+                    update.voted,
+                    update.optimistically_confirmed,
+                }) |maybe| hasher.update(std.mem.asBytes(
+                    &(if (maybe) |n| n else @as(u64, std.math.maxInt(Slot))),
+                )),
+                .entries_for_slot => |p| hasher.update(std.mem.sliceAsBytes(p)),
+            }
+            return hasher.final();
+        }
+    };
+
+    pub fn isNew(self: *LogDeduper, key: MessageData) bool {
+        const hash = key.hash();
+        if (self.last_hashes.get(key)) |last| if (last == hash) return false;
+        self.last_hashes.put(key, hash);
+        return true;
+    }
+};
 
 test "pruneStaleData - missing root in tracker" {
     const allocator = std.testing.allocator;

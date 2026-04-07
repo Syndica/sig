@@ -53,6 +53,7 @@ const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 const GetMinimumBalanceForRentExemption = methods.GetMinimumBalanceForRentExemption;
 const IsBlockhashValid = methods.IsBlockhashValid;
+const SendTransaction = methods.SendTransaction;
 const MinimumLedgerSlot = methods.MinimumLedgerSlot;
 
 const Response = rpc.response.Response;
@@ -687,7 +688,7 @@ test GetLatestBlockhash {
     try testResponse(GetLatestBlockhash, .{ .result = .{
         .context = .{ .slot = 309275334, .apiVersion = "2.1.6" },
         .value = .{
-            .blockhash = "9hH9qYcmBSZqHa4MyCxEz7P3wPuoo1mDAqrmgmnYF2hZ",
+            .blockhash = .parse("9hH9qYcmBSZqHa4MyCxEz7P3wPuoo1mDAqrmgmnYF2hZ"),
             .lastValidBlockHeight = 268651708,
         },
     } },
@@ -2117,4 +2118,92 @@ test "GetBlock" {
             .data = "abcd",
         },
     });
+}
+
+test SendTransaction {
+    const common = methods.common;
+
+    // Request with default config (base58-encoded transaction)
+    try testRequest(
+        .sendTransaction,
+        .{ .transaction = "4hXTCkRzt9WyecNzV1XPgCDfGAZzQKNxLXgynz5QDuWWPSAZBZSHptvWRL3BjCvzUXRdKvHL2b7yGrRQcWyaqsaBCncVG7BFggS8w9snUts67BSh3EqKpXLUm5UMHfD7ZBe9GhARjbNQMLJ1QD3Spr6oMTBU6EhdB4RD8CP2xUxr2u3d6fos36PD98XS6oX8TQjLpsMwncs5DAMiD4nNnR8NBfyghGCWvCVifVwvA8B8TJxE1aiyiv9eL5RWEagJqVW2Z8dNSB3v42Pbc23ariMqdErtjbZoizbwBZz3YiS7HLsTq5RZSAMaBcf" },
+        \\{"jsonrpc":"2.0","id":1,"method":"sendTransaction","params":["4hXTCkRzt9WyecNzV1XPgCDfGAZzQKNxLXgynz5QDuWWPSAZBZSHptvWRL3BjCvzUXRdKvHL2b7yGrRQcWyaqsaBCncVG7BFggS8w9snUts67BSh3EqKpXLUm5UMHfD7ZBe9GhARjbNQMLJ1QD3Spr6oMTBU6EhdB4RD8CP2xUxr2u3d6fos36PD98XS6oX8TQjLpsMwncs5DAMiD4nNnR8NBfyghGCWvCVifVwvA8B8TJxE1aiyiv9eL5RWEagJqVW2Z8dNSB3v42Pbc23ariMqdErtjbZoizbwBZz3YiS7HLsTq5RZSAMaBcf"]}
+        ,
+    );
+
+    // Request with config
+    try testRequest(
+        .sendTransaction,
+        .{
+            .transaction = "SGVsbG8=",
+            .config = .{
+                .encoding = .base64,
+                .skipPreflight = true,
+            },
+        },
+        \\{"jsonrpc":"2.0","id":1,"method":"sendTransaction","params":["SGVsbG8=",{"skipPreflight":true,"preflightCommitment":null,"encoding":"base64","maxRetries":null,"minContextSlot":null}]}
+        ,
+    );
+
+    // Response with transaction signature
+    try testResponse(
+        SendTransaction,
+        .{ .result = .{ .signature = .parse("2id3YC2jK9G5Wo2phDx4gJVAew8DcY5NAojnVuao8rkxwPYPe8cSwE5GzhEgJA2y8fVjDEo6iR7FPjmm9Pmhk87") } },
+        \\{"jsonrpc":"2.0","result":"2id3YC2jK9G5Wo2phDx4gJVAew8DcY5NAojnVuao8rkxwPYPe8cSwE5GzhEgJA2y8fVjDEo6iR7FPjmm9Pmhk87","id":1}
+        ,
+    );
+
+    // resolveEncoding - defaults to base58
+    {
+        const config: SendTransaction.Config = .{};
+        try std.testing.expectEqual(
+            common.TransactionBinaryEncoding.base58,
+            config.resolveEncoding().?,
+        );
+    }
+
+    // resolveEncoding - base58 returns base58
+    {
+        const config: SendTransaction.Config = .{ .encoding = .base58 };
+        try std.testing.expectEqual(
+            common.TransactionBinaryEncoding.base58,
+            config.resolveEncoding().?,
+        );
+    }
+
+    // resolveEncoding - base64 returns base64
+    {
+        const config: SendTransaction.Config = .{ .encoding = .base64 };
+        try std.testing.expectEqual(
+            common.TransactionBinaryEncoding.base64,
+            config.resolveEncoding().?,
+        );
+    }
+
+    // resolveEncoding - json returns null
+    {
+        const config: SendTransaction.Config = .{ .encoding = .json };
+        try std.testing.expectEqual(
+            @as(?common.TransactionBinaryEncoding, null),
+            config.resolveEncoding(),
+        );
+    }
+
+    // resolveEncoding - jsonParsed returns null
+    {
+        const config: SendTransaction.Config = .{ .encoding = .jsonParsed };
+        try std.testing.expectEqual(
+            @as(?common.TransactionBinaryEncoding, null),
+            config.resolveEncoding(),
+        );
+    }
+
+    // resolveEncoding - binary returns null
+    {
+        const config: SendTransaction.Config = .{ .encoding = .binary };
+        try std.testing.expectEqual(
+            @as(?common.TransactionBinaryEncoding, null),
+            config.resolveEncoding(),
+        );
+    }
 }

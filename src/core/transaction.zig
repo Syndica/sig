@@ -1203,7 +1203,7 @@ pub const transaction_legacy_example = struct {
     var signatures: [1]Signature =
         .{.parse("Z2hT7E85gqWWVKEsZXxJ184u7rXdRnB6EKz2PHAUajx6jHrUZhN5WkE7tPw6PrUA3XzeZRjoE7xJDtQzshZm1Pk")};
 
-    const as_struct = Transaction{
+    pub const as_struct = Transaction{
         .signatures = &signatures,
         .version = .legacy,
         .msg = .{
@@ -1225,7 +1225,7 @@ pub const transaction_legacy_example = struct {
         },
     };
 
-    const as_bytes = [_]u8{
+    pub const as_bytes = [_]u8{
         1,   27,  158, 238, 65,  248, 46,  208, 15,  65,  178, 83,  163, 117, 224, 86,  163,
         91,  67,  228, 176, 117, 246, 111, 69,  133, 194, 78,  89,  205, 86,  166, 98,  22,
         27,  163, 250, 167, 208, 146, 201, 53,  24,  212, 97,  230, 100, 176, 26,  194, 121,

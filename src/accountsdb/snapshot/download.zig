@@ -330,13 +330,11 @@ fn downloadSnapshotWithRetry(
             };
 
             break :get_peers .{ peer.full_snapshot.slot, file };
-        } else {
-            if (peers.len == 0) {
-                // We don't have peers yet, wait for gossip table population
-                std.Thread.sleep(1 * std.time.ns_per_s);
-            }
-            continue :get_peers; // Failed to download from all peers, getting new peers
         }
+        // Failed to download from any peers, getting new peers
+        // We don't have a good peer yet, wait for gossip table population
+        logger.warn().logf("could not find an acceptable snapshot peer. retrying in 5 seconds", .{});
+        std.Thread.sleep(5 * std.time.ns_per_s);
     } else error.UnableToDownloadSnapshot;
 }
 
