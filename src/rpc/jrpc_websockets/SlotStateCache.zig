@@ -39,7 +39,7 @@ pub const CachedSlot = struct {
     state: StateFlags = .{},
     published: PublishedFlags = .{},
     /// Final account states for the accounts modified in this slot, captured at freeze time.
-    modified_accounts: SlotModifiedAccounts = SlotModifiedAccounts.empty(),
+    modified_accounts: SlotModifiedAccounts = .empty(),
     /// Transaction log batches received for this slot.
     logs_batches: std.ArrayListUnmanaged(SlotTransactionLogs) = .empty,
 
@@ -216,7 +216,7 @@ pub fn onSlotFrozen(
     slot_state.root = slot_data.root;
     slot_state.state.frozen = true;
     slot_state.modified_accounts = slot_data.accounts;
-    slot_data.accounts = SlotModifiedAccounts.empty();
+    slot_data.accounts = .empty();
 
     if (duplicate_frozen) {
         // TODO: for now just not emitting anything, this needs to be addressed by tracking more
@@ -252,7 +252,7 @@ pub fn onLogsEvent(
     // same slot during normal execution and append them, but if the slot is replayed with
     // different contents we still only key by slot number and do not handle that case.
     try slot_state.logs_batches.append(allocator, log_event.*);
-    log_event.* = SlotTransactionLogs.empty();
+    log_event.* = .empty();
 }
 
 pub fn onSlotConfirmed(

@@ -81,7 +81,7 @@ pub fn commitTransactions(
     if (self.event_sink != null) {
         maybe_logs_batch_event = .{
             .slot = slot,
-            .arena = std.heap.ArenaAllocator.init(persistent_allocator),
+            .arena = .init(persistent_allocator),
         };
     }
 
@@ -238,14 +238,14 @@ fn appendSlotTransactionLogsEntry(
 ) !void {
     const log_collector = maybe_log_collector orelse return;
     const log_messages = try cloneLogMessages(allocator, log_collector);
-    if (log_messages.len == 0) {
-        return;
-    }
     errdefer {
         for (log_messages) |log_message| {
             allocator.free(log_message);
         }
         allocator.free(log_messages);
+    }
+    if (log_messages.len == 0) {
+        return;
     }
 
     const mentioned_pubkeys = try allocator.dupe(Pubkey, transaction.accounts.items(.pubkey));
@@ -269,10 +269,6 @@ fn cloneLogMessages(
 ) ![]const []const u8 {
     var iterator = log_collector.iterator();
     const count = iterator.count();
-    if (count == 0) {
-        return &.{};
-    }
-
     const log_messages = try allocator.alloc([]const u8, count);
     var copied: usize = 0;
     errdefer {
@@ -287,6 +283,7 @@ fn cloneLogMessages(
         copied += 1;
     }
 
+    std.debug.assert(copied == log_messages.len);
     return log_messages;
 }
 
@@ -783,16 +780,14 @@ test "commitTransactions emits empty transaction logs batch when execution has n
     var committer = test_state.committer();
     committer.event_sink = event_sink;
 
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed + 1);
-    var resolved_transactions = [_]ResolvedTransaction{
-        try initResolvedTransaction(allocator, prng.random()),
-    };
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    var resolved_transaction = try initResolvedTransaction(allocator, prng.random());
     defer {
-        resolved_transactions[0].deinit(allocator);
-        resolved_transactions[0].transaction.deinit(allocator);
+        resolved_transaction.deinit(allocator);
+        resolved_transaction.transaction.deinit(allocator);
     }
 
-    var tx_results = [_]struct { Hash, ProcessedTransaction }{.{
+    var tx_result: struct { Hash, ProcessedTransaction } = .{
         Hash.ZEROES,
         .{
             .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
@@ -813,10 +808,9 @@ test "commitTransactions emits empty transaction logs batch when execution has n
             .pre_token_balances = .{},
             .cost_units = 0,
         },
-    }};
+    };
     defer {
-        const hash, const processed = tx_results[0];
-        _ = hash;
+        _, const processed = tx_result;
         processed.deinit(allocator);
     }
 
@@ -824,8 +818,8 @@ test "commitTransactions emits empty transaction logs batch when execution has n
         allocator,
         allocator,
         43,
-        resolved_transactions[0..],
-        tx_results[0..],
+        (&resolved_transaction)[0..1],
+        (&tx_result)[0..1],
     );
 
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
