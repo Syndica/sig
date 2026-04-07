@@ -26,7 +26,7 @@ const RequestAirdropHookContext = @This();
 slot_tracker: *SlotTracker,
 commitments: *CommitmentTracker,
 tx_svc_channel: *Channel(TransactionInfo),
-faucet_keypair: *const KeyPair,
+faucet_keypair: KeyPair,
 
 /// Requests an airdrop by creating and sending a system transfer transaction from the faucet account to the specified recipient.
 /// Returns the signature of the submitted transaction on success.
@@ -79,7 +79,7 @@ pub fn requestAirdrop(
         arena,
         .v0,
         message,
-        &.{self.faucet_keypair.*},
+        &.{self.faucet_keypair},
     );
 
     var wire_transaction: [PACKET_DATA_SIZE]u8 = @splat(0);
@@ -174,7 +174,7 @@ test "RequestAirdropHookContext.requestAirdrop - happy path" {
         .slot_tracker = &slot_tracker,
         .commitments = &commitments,
         .tx_svc_channel = channel,
-        .faucet_keypair = &faucet_keypair,
+        .faucet_keypair = faucet_keypair,
     };
 
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -225,7 +225,7 @@ test "RequestAirdropHookContext.requestAirdrop - slot missing" {
         .slot_tracker = &slot_tracker,
         .commitments = &commitments,
         .tx_svc_channel = channel,
-        .faucet_keypair = &faucet_keypair,
+        .faucet_keypair = faucet_keypair,
     };
 
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -258,7 +258,7 @@ test "RequestAirdropHookContext.requestAirdrop - blockhash missing" {
         .slot_tracker = &slot_tracker,
         .commitments = &commitments,
         .tx_svc_channel = channel,
-        .faucet_keypair = &faucet_keypair,
+        .faucet_keypair = faucet_keypair,
     };
 
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
