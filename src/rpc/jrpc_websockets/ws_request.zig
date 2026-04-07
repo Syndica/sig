@@ -36,6 +36,31 @@ pub const WsMethodAndParams = union(enum) {
     voteUnsubscribe: methods.Unsubscribe,
 
     pub const Tag = @typeInfo(WsMethodAndParams).@"union".tag_type.?;
+    pub const VerifyError = error{
+        MethodNotImplemented,
+        InvalidParams,
+    };
+
+    pub fn verify(self: *const WsMethodAndParams) VerifyError!void {
+        switch (self.*) {
+            .blockSubscribe,
+            .blockUnsubscribe,
+            .slotsUpdatesSubscribe,
+            .slotsUpdatesUnsubscribe,
+            .voteSubscribe,
+            .voteUnsubscribe,
+            => return error.MethodNotImplemented,
+            .programSubscribe => |program_sub| {
+                const config: methods.ProgramSubscribe.Config = program_sub.config orelse .{};
+                if (config.filters) |filters| {
+                    methods.verifyProgramFilters(filters) catch {
+                        return error.InvalidParams;
+                    };
+                }
+            },
+            else => {},
+        }
+    }
 
     /// Returns a wrapper over `self` which will be stringified as an array.
     pub fn jsonStringifyAsParamsArray(self: WsMethodAndParams) JsonStringifiedAsParamsArray {
@@ -68,8 +93,11 @@ pub const WsRequest = struct {
         source: anytype,
         options: std.json.ParseOptions,
     ) std.json.ParseError(@TypeOf(source.*))!WsRequest {
-        const dyn = try std.json.innerParse(Dynamic, allocator, source, options);
-        return dyn.parse(allocator, options, null) catch |err| switch (err) {
+        var parse_options = options;
+        parse_options.ignore_unknown_fields = true;
+
+        const dyn = try std.json.innerParse(Dynamic, allocator, source, parse_options);
+        return dyn.parse(allocator, parse_options, null) catch |err| switch (err) {
             error.OutOfMemory => |e| e,
 
             // JSON-RPC envelope errors
@@ -208,7 +236,7 @@ test "WsRequest parse accountSubscribe with config" {
     const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
     try testParseRequest(
         .{},
-        \\{"jsonrpc":"2.0","id":2,"method":"accountSubscribe","params":["vinesvinesvinesvinesvinesvinesvinesvinesvin",{"commitment":"confirmed","encoding":"base64"}]}
+        \\{"jsonrpc":"2.0","id":2,"method":"accountSubscribe","params":["vinesvinesvinesvinesvinesvinesvinesvinesvin",{"commitment":"confirmed","encoding":"base64","dataSlice":{"offset":1,"length":2}}]}
     ,
         .{
             .id = .{ .int = 2 },
@@ -217,6 +245,7 @@ test "WsRequest parse accountSubscribe with config" {
                 .config = .{
                     .commitment = .confirmed,
                     .encoding = .base64,
+                    .dataSlice = .{ .offset = 1, .length = 2 },
                 },
             } },
         },
@@ -388,19 +417,20 @@ test "WsRequest parse programSubscribe with filters" {
     const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
     try testParseRequest(
         .{},
-        \\{"jsonrpc":"2.0","id":8,"method":"programSubscribe","params":["vinesvinesvinesvinesvinesvinesvinesvinesvin",{"filters":[{"dataSize":100},{"memcmp":{"offset":0,"bytes":"abc"}}]}]}
+        \\{"jsonrpc":"2.0","id":8,"method":"programSubscribe","params":["vinesvinesvinesvinesvinesvinesvinesvinesvin",{"commitment":"processed","encoding":"base64","dataSlice":{"offset":3,"length":4},"filters":[{"dataSize":100},{"memcmp":{"offset":0,"bytes":"YWJj","encoding":"base64"}}]}]}
     ,
         .{
             .id = .{ .int = 8 },
             .method = .{ .programSubscribe = .{
                 .program_id = test_pubkey,
                 .config = .{
-                    .commitment = null,
-                    .encoding = null,
+                    .commitment = .processed,
+                    .encoding = .base64,
                     .filters = &.{
                         .{ .dataSize = 100 },
                         .{ .memcmp = .{ .offset = 0, .bytes = "abc" } },
                     },
+                    .dataSlice = .{ .offset = 3, .length = 4 },
                 },
             } },
         },
@@ -426,6 +456,15 @@ test "WsRequest parse programSubscribe with tokenAccountState filter" {
                 },
             } },
         },
+    );
+}
+
+test "WsRequest parse programSubscribe invalid memcmp encoding" {
+    try std.testing.expectError(
+        error.LengthMismatch,
+        std.json.parseFromSlice(WsRequest, std.testing.allocator,
+            \\{"jsonrpc":"2.0","id":8,"method":"programSubscribe","params":["vinesvinesvinesvinesvinesvinesvinesvinesvin",{"filters":[{"memcmp":{"offset":0,"bytes":"YWJj","encoding":"hex"}}]}]}
+        , .{}),
     );
 }
 
@@ -509,6 +548,26 @@ test "WsRequest parse voteSubscribe (omitted params)" {
         .{
             .id = .{ .int = 11 },
             .method = .{ .voteSubscribe = .{} },
+        },
+    );
+}
+
+test "WsRequest parse accountSubscribe ignores unknown fields" {
+    const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
+    try testParseRequest(
+        .{},
+        \\{"jsonrpc":"2.0","id":12,"method":"accountSubscribe","params":["vinesvinesvinesvinesvinesvinesvinesvinesvin",{"encoding":"jsonParsed","commitment":"confirmed","dataSlice":null,"definitelyUnknownField":true}],"ignored":true}
+    ,
+        .{
+            .id = .{ .int = 12 },
+            .method = .{ .accountSubscribe = .{
+                .pubkey = test_pubkey,
+                .config = .{
+                    .commitment = .confirmed,
+                    .encoding = .jsonParsed,
+                    .dataSlice = null,
+                },
+            } },
         },
     );
 }
@@ -624,11 +683,59 @@ test "WsRequest.Dynamic parse diagnostic captures request id" {
     }
 }
 
+test "WsRequest verify rejects unstable methods" {
+    const req: WsRequest = .{
+        .id = .{ .int = 1 },
+        .method = .{ .blockSubscribe = .{ .filter = .all, .config = null } },
+    };
+
+    try std.testing.expectError(error.MethodNotImplemented, req.method.verify());
+}
+
+test "WsRequest verify rejects programSubscribe with too many filters" {
+    const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
+    const req: WsRequest = .{
+        .id = .{ .int = 1 },
+        .method = .{ .programSubscribe = .{
+            .program_id = test_pubkey,
+            .config = .{ .filters = &.{
+                .{ .dataSize = 1 },
+                .{ .dataSize = 2 },
+                .{ .dataSize = 3 },
+                .{ .dataSize = 4 },
+                .{ .dataSize = 5 },
+            } },
+        } },
+    };
+
+    try std.testing.expectError(error.InvalidParams, req.method.verify());
+}
+
 test "WsRequest roundtrip accountSubscribe" {
     const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
     try testRoundtrip(.{ .accountSubscribe = .{
         .pubkey = test_pubkey,
-        .config = .{ .commitment = .finalized, .encoding = .base64 },
+        .config = .{
+            .commitment = .finalized,
+            .encoding = .base64,
+            .dataSlice = .{ .offset = 1, .length = 2 },
+        },
+    } });
+}
+
+test "WsRequest roundtrip programSubscribe" {
+    const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
+    try testRoundtrip(.{ .programSubscribe = .{
+        .program_id = test_pubkey,
+        .config = .{
+            .commitment = .processed,
+            .encoding = .base64,
+            .filters = &.{
+                .{ .dataSize = 64 },
+                .{ .memcmp = .{ .offset = 1, .bytes = "abc" } },
+            },
+            .dataSlice = .{ .offset = 3, .length = 4 },
+        },
     } });
 }
 
