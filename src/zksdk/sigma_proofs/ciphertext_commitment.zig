@@ -5,17 +5,18 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 
+const ed25519 = sig.crypto.ed25519;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const elgamal = sig.zksdk.elgamal;
-const pedersen = sig.zksdk.pedersen;
 const ElGamalCiphertext = sig.zksdk.ElGamalCiphertext;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
 const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
+const pedersen = sig.zksdk.pedersen;
+const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
-const ed25519 = sig.crypto.ed25519;
-const ProofType = sig.runtime.program.zk_elgamal.ProofType;
+const DomainSeperator = Transcript.DomainSeperator;
 
 pub const Proof = struct {
     Y_0: Ristretto255,
@@ -26,6 +27,11 @@ pub const Proof = struct {
     z_r: Scalar,
 
     const contract: Transcript.Contract = &.{
+        .{ .label = "pubkey", .type = .validate_pubkey },
+        .{ .label = "ciphertext", .type = .validate_ciphertext },
+        .{ .label = "commitment", .type = .validate_commitment },
+        .domain(.@"ciphertext-commitment-equality-proof"),
+
         .{ .label = "Y_0", .type = .validate_point },
         .{ .label = "Y_1", .type = .validate_point },
         .{ .label = "Y_2", .type = .validate_point },
@@ -37,14 +43,22 @@ pub const Proof = struct {
         .{ .label = "w", .type = .challenge }, // w used for batch verification
     };
 
+    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L71
     pub fn init(
         kp: *const ElGamalKeypair,
         ciphertext: *const ElGamalCiphertext,
+        commitment: *const pedersen.Commitment,
         opening: *const pedersen.Opening,
         amount: u64,
         transcript: *Transcript,
     ) Proof {
-        transcript.appendDomSep(.@"ciphertext-commitment-equality-proof");
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
+
+        transcript.appendNoValidate(&session, .pubkey, "pubkey", kp.public);
+        transcript.appendNoValidate(&session, .ciphertext, "ciphertext", ciphertext.*);
+        transcript.appendNoValidate(&session, .commitment, "commitment", commitment.*);
+        transcript.appendDomSep(&session, .@"ciphertext-commitment-equality-proof");
 
         const P = kp.public;
         const D = ciphertext.handle.point;
@@ -75,12 +89,9 @@ pub const Proof = struct {
             .{ y_x.toBytes(), y_r.toBytes() },
         );
 
-        comptime var session = Transcript.getSession(contract);
-        defer session.finish();
-
-        transcript.appendNoValidate(&session, "Y_0", Y_0);
-        transcript.appendNoValidate(&session, "Y_1", Y_1);
-        transcript.appendNoValidate(&session, "Y_2", Y_2);
+        transcript.appendNoValidate(&session, .point, "Y_0", Y_0);
+        transcript.appendNoValidate(&session, .point, "Y_1", Y_1);
+        transcript.appendNoValidate(&session, .point, "Y_2", Y_2);
 
         const c = transcript.challengeScalar(&session, "c");
 
@@ -105,6 +116,7 @@ pub const Proof = struct {
         };
     }
 
+    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L139
     pub fn verify(
         self: Proof,
         pubkey: *const ElGamalPubkey,
@@ -112,15 +124,18 @@ pub const Proof = struct {
         commitment: *const pedersen.Commitment,
         transcript: *Transcript,
     ) !void {
-        transcript.appendDomSep(.@"ciphertext-commitment-equality-proof");
+        comptime var session = Transcript.getSession(contract);
+        defer session.finish();
+
+        try transcript.append(&session, .validate_pubkey, "pubkey", pubkey.*);
+        try transcript.append(&session, .validate_ciphertext, "ciphertext", ciphertext.*);
+        try transcript.append(&session, .validate_commitment, "commitment", commitment.*);
+        transcript.appendDomSep(&session, .@"ciphertext-commitment-equality-proof");
 
         const P = pubkey.point;
         const C_ciphertext = ciphertext.commitment.point;
         const D = ciphertext.handle.point;
         const C_commitment = commitment.point;
-
-        comptime var session = Transcript.getSession(contract);
-        defer session.finish();
 
         try transcript.append(&session, .validate_point, "Y_0", self.Y_0);
         try transcript.append(&session, .validate_point, "Y_1", self.Y_1);
@@ -221,6 +236,7 @@ pub const Data = struct {
 
     pub const TYPE: ProofType = .ciphertext_commitment_equality;
     pub const BYTE_LEN = 320;
+    const DOMAIN: DomainSeperator = .@"ciphertext-commitment-equality-instruction";
 
     pub const Context = struct {
         pubkey: ElGamalPubkey,
@@ -242,14 +258,6 @@ pub const Data = struct {
                 self.ciphertext.toBytes() ++
                 self.commitment.point.toBytes();
         }
-
-        fn newTranscript(self: Context) Transcript {
-            return .init(.@"ciphertext-commitment-equality-instruction", &.{
-                .{ .label = "pubkey", .message = .{ .pubkey = self.pubkey } },
-                .{ .label = "ciphertext", .message = .{ .ciphertext = self.ciphertext } },
-                .{ .label = "commitment", .message = .{ .commitment = self.commitment } },
-            });
-        }
     };
 
     pub fn init(
@@ -264,10 +272,11 @@ pub const Data = struct {
             .ciphertext = ciphertext.*,
             .commitment = commitment.*,
         };
-        var transcript = context.newTranscript();
+        var transcript = Transcript.init(DOMAIN);
         const proof = Proof.init(
             kp,
             ciphertext,
+            commitment,
             opening,
             amount,
             &transcript,
@@ -288,7 +297,7 @@ pub const Data = struct {
     }
 
     pub fn verify(self: Data) !void {
-        var transcript = self.context.newTranscript();
+        var transcript = Transcript.init(DOMAIN);
         try self.proof.verify(
             &self.context.pubkey,
             &self.context.ciphertext,
@@ -310,11 +319,11 @@ pub const Data = struct {
             &opening,
             amount,
         );
-
         try proof_data.verify();
     }
 };
 
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L292-L318
 test "success case" {
     const kp = ElGamalKeypair.random();
     const message: u64 = 55;
@@ -328,6 +337,7 @@ test "success case" {
     const proof = Proof.init(
         &kp,
         &ciphertext,
+        &commitment,
         &opening,
         message,
         &prover_transcript,
@@ -340,6 +350,7 @@ test "success case" {
     );
 }
 
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L320-L352
 test "fail case" {
     const kp = ElGamalKeypair.random();
     const encrypted_message: u64 = 55;
@@ -354,6 +365,7 @@ test "fail case" {
     const proof = Proof.init(
         &kp,
         &ciphertext,
+        &commitment,
         &opening,
         encrypted_message,
         &prover_transcript,
@@ -370,6 +382,7 @@ test "fail case" {
     );
 }
 
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L357-L387
 test "public key zeroed" {
     // if ElGamal public key is zeroed (invalid), then the proof should always fail to verify.
     const zeroed_public = try ElGamalPubkey.fromBytes(.{0} ** 32);
@@ -386,6 +399,7 @@ test "public key zeroed" {
     const proof = Proof.init(
         &kp,
         &ciphertext,
+        &commitment,
         &opening,
         message,
         &prover_transcript,
@@ -402,9 +416,8 @@ test "public key zeroed" {
     );
 }
 
-test "all zoered" {
-    // if the ciphertext is all-zero (valid commitment of 0)
-    // and the commitment is all-zero, then the proof should still succeed.
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L389-L417
+test "all zeroed" {
     const kp = ElGamalKeypair.random();
 
     const message: u64 = 0;
@@ -418,22 +431,25 @@ test "all zoered" {
     const proof = Proof.init(
         &kp,
         &ciphertext,
+        &commitment,
         &opening,
         message,
         &prover_transcript,
     );
 
-    try proof.verify(
-        &kp.public,
-        &ciphertext,
-        &commitment,
-        &verifier_transcript,
+    try std.testing.expectError(
+        error.IdentityElement,
+        proof.verify(
+            &kp.public,
+            &ciphertext,
+            &commitment,
+            &verifier_transcript,
+        ),
     );
 }
 
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L419-L447
 test "commitment zeroed" {
-    // if the commitment is all-zero and the ciphertext is a correct
-    // encryption of 0, then the proof should still succeed.
     const kp = ElGamalKeypair.random();
 
     const message: u64 = 0;
@@ -447,22 +463,24 @@ test "commitment zeroed" {
     const proof = Proof.init(
         &kp,
         &ciphertext,
+        &commitment,
         &opening,
         message,
         &prover_transcript,
     );
 
-    try proof.verify(
-        &kp.public,
-        &ciphertext,
-        &commitment,
-        &verifier_transcript,
+    try std.testing.expectError(
+        error.IdentityElement,
+        proof.verify(
+            &kp.public,
+            &ciphertext,
+            &commitment,
+            &verifier_transcript,
+        ),
     );
 }
 
 test "ciphertext zeroed" {
-    // if the ciphertext is all-zero and the commitment correctly encodes 0
-    // then the proof should still succeed.
     const kp = ElGamalKeypair.random();
 
     const message: u64 = 0;
@@ -475,33 +493,38 @@ test "ciphertext zeroed" {
     const proof = Proof.init(
         &kp,
         &ciphertext,
+        &commitment,
         &opening,
         message,
         &prover_transcript,
     );
 
-    try proof.verify(
-        &kp.public,
-        &ciphertext,
-        &commitment,
-        &verifier_transcript,
+    try std.testing.expectError(
+        error.IdentityElement,
+        proof.verify(
+            &kp.public,
+            &ciphertext,
+            &commitment,
+            &verifier_transcript,
+        ),
     );
 }
 
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L451
 test "proof strings" {
-    const pubkey_string = "JNa7rRrDm35laU7f8HPds1PmHoZEPSHFK/M+aTtEhAk=";
+    const pubkey_string = "uO3j5FuK4OGJD8ain+4MXLU84ixomYnBI5s0pQ3X0Cs=";
     const pubkey = try ElGamalPubkey.fromBase64(pubkey_string);
 
-    const commitment_string = "ngPTYvbY9P5l6aOfr7bLQiI+0HZsw8GBgiumdW3tNzw=";
+    const commitment_string = "RNst9nTGL7PkluExuhmD1kJNM86ZZH6OE8R4P1pPFHQ=";
     const commitment = try pedersen.Commitment.fromBase64(commitment_string);
 
-    // zig fmt: off
-    const ciphertext_string = "RAXnbQ/DPRlYAWmD+iHRNqMDv7oQcPgQ7OejRzj4bxVy2qOJNziqqDOC7VP3iTW1+z/jckW4smA3EUF7i/r8Rw==";
+    // sig fmt: off
+    const ciphertext_string = "PsM4qA4ImFKGui57JZKzIFl1RO30GG+saCMmI9gAAENu82mvud6uhZ6YLJoLcq5hLSLPY48R8p//H24gNjxoBg==";
     const ciphertext = try ElGamalCiphertext.fromBase64(ciphertext_string);
 
-    const proof_string = "cCZySLxB2XJdGyDvckVBm2OWiXqf7Jf54IFoDuLJ4G+ySj+lh5DbaDMHDhuozQC9tDWtk2mFITuaXOc5Zw3nZ2oEvVYpqv5hN+k5dx9k8/nZKabUCkZwx310z7x4fE4Np5SY9PYia1hkrq9AWq0b3v97XvW1+XCSSxuflvBk5wsdaQQ+ZgcmPnKWKjHfRwmU2k5iVgYzs2VmvZa5E3OWBoM/M2yFNvukY+FCC2YMnspO0c4lNBr/vDFQuHdW0OgJ";
+    const proof_string = "ELyazp4KuO/vLn91GiiEBgwYlMvisVisVRf8DWRjE1KoFGV2mxRX370N/roHFXArVXGTzL1e0C8UAPHHVYI5M+rE7mXhpGJ1rpMuGduCavOb7WIvzYE0xO6gQmPMeow08x5O/e4SlyGfA2s1S/Z8J+t9yxqbfqTugn9TNjFBFAcM3WOOFGk0dQdi7V3YGpNQMz3P9oWE7d1SsVohUDYEAvyaqXYWc0+YSJEdC7BaRdTqXp4ft8ybAjNB6SmCeisO";
     const proof = try Proof.fromBase64(proof_string);
-    // zig fmt: on
+    // sig fmt: on
 
     var verifier_transcript = Transcript.initTest("Test");
     try proof.verify(

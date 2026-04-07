@@ -120,6 +120,12 @@ pub const BlockhashQueue = struct {
         return self.last_hash_index - hash_info.index;
     }
 
+    pub fn getLastValidBlockHeight(self: *const BlockhashQueue, block_height: u64, hash: Hash) ?u64 {
+        const age = self.getHashAge(hash) orelse return null;
+        if (age > MAX_PROCESSING_AGE) return null;
+        return block_height + MAX_PROCESSING_AGE - age;
+    }
+
     fn isHashIndexValid(last_hash_index: u64, max_age: usize, hash_index: u64) bool {
         return last_hash_index - hash_index <= @as(u64, max_age);
     }
@@ -384,4 +390,53 @@ test "initialise with genesis hash" {
     try std.testing.expectEqual(genesis_hash, queue.last_hash.?);
     try std.testing.expectEqual(1, queue.hash_infos.count());
     try std.testing.expect(queue.isHashValidForAge(genesis_hash, 0));
+}
+
+test "getLastValidBlockHeight: returns valid block height for known hash" {
+    const allocator = std.testing.allocator;
+    const block_height: u64 = 100;
+
+    var bq = BlockhashQueue.init(300);
+    defer bq.deinit(allocator);
+
+    const test_hash = Hash.ZEROES;
+    try bq.insertGenesisHash(allocator, test_hash, 5000);
+
+    // age = last_hash_index(0) - hash_info.index(0) = 0
+    // result = block_height(100) + MAX_PROCESSING_AGE(150) - age(0) = 250
+    try std.testing.expectEqual(250, bq.getLastValidBlockHeight(block_height, test_hash).?);
+}
+
+test "getLastValidBlockHeight: returns null for unknown hash" {
+    const allocator = std.testing.allocator;
+
+    var bq = BlockhashQueue.init(300);
+    defer bq.deinit(allocator);
+
+    try std.testing.expectEqual(null, bq.getLastValidBlockHeight(100, Hash.ZEROES));
+}
+
+test "getLastValidBlockHeight: accounts for hash age" {
+    const allocator = std.testing.allocator;
+    const block_height: u64 = 200;
+
+    var bq = BlockhashQueue.init(300);
+    defer bq.deinit(allocator);
+
+    const first_hash = Hash.ZEROES;
+    try bq.insertGenesisHash(allocator, first_hash, 5000);
+
+    // Insert more hashes to increase last_hash_index
+    const second_hash = Hash.parse("8RBsoeyoRwajj86MZfZE6gMDJQVYGYcdSfx1zxqxNHbr");
+    try bq.insertHash(allocator, second_hash, 5000);
+    const third_hash = Hash.parse("4zvwRjXUKGfvwnParsHAS3HuSVzV5cA4McphgmoCtajS");
+    try bq.insertHash(allocator, third_hash, 5000);
+
+    // first_hash: index=0, last_hash_index=2, age=2
+    // result = 200 + 150 - 2 = 348
+    try std.testing.expectEqual(348, bq.getLastValidBlockHeight(block_height, first_hash).?);
+
+    // third_hash: index=2, last_hash_index=2, age=0
+    // result = 200 + 150 - 0 = 350
+    try std.testing.expectEqual(350, bq.getLastValidBlockHeight(block_height, third_hash).?);
 }
