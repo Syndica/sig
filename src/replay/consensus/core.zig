@@ -365,6 +365,7 @@ pub const TowerConsensus = struct {
             gossip_verified_vote_hashes: *std.ArrayListUnmanaged(GossipVerifiedVoteHash),
             results: []const ReplayResult,
             vote_account_visitor: ?VoteAccountVisitor = null,
+            event_sink: ?*sig.rpc.jrpc_websockets.types.EventSink = null,
         },
     ) !replay.service.SlotUpdate {
         var zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.process" });
@@ -389,6 +390,7 @@ pub const TowerConsensus = struct {
                     .duplicate_confirmed_slots = params.duplicate_confirmed_slots,
                     .bank_notification = null,
                     .subscriptions = .{},
+                    .event_sink = params.event_sink,
                 },
                 .receivers = .{ .replay_votes = params.receivers.replay_votes },
                 .ledger = params.ledger,

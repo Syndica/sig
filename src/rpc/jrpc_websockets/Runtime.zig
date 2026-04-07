@@ -403,6 +403,9 @@ fn handleInboundEvent(
             const transition = self.slot_state_cache.onTipChanged(self.slot_read_ctx, new_tip);
             self.handleSlotTransition(.tip_changed, new_tip, transition, task_batch);
         },
+        .vote => |*vote_data| {
+            self.handleVoteEvent(vote_data, task_batch);
+        },
     }
 }
 
@@ -607,11 +610,37 @@ fn handleSlotTransition(
                 }
                 self.enqueueAccountReevaluation(entry, slot, task_batch);
             },
+            .vote => continue,
         }
     }
 
     if (transition.evict_through) |evict_through| {
         self.slot_state_cache.evictFinalizedThrough(self.allocator, evict_through);
+    }
+}
+
+/// Handle a vote event by fanning out to all vote subscriptions.
+/// Vote events are independent of the slot transition pipeline.
+fn handleVoteEvent(
+    self: *Runtime,
+    vote_data: *types.VoteEventData,
+    task_batch: *ThreadPool.Batch,
+) void {
+    for (self.sub_map.entries.items) |*entry| {
+        if (entry.key.method != .vote) continue;
+
+        // voteSubscribe has no params, so sub_map contains at most one
+        // multiplexed `.vote` entry. Transfer ownership of the slots
+        // slice directly into the serialize job.
+        const owned_vote = vote_data.*;
+        vote_data.* = types.VoteEventData.empty();
+        _ = self.enqueueJobForEntry(
+            entry.*,
+            .{ .vote = owned_vote },
+            false,
+            task_batch,
+        );
+        return;
     }
 }
 

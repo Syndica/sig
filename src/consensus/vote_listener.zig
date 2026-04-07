@@ -21,6 +21,8 @@ const OptimisticConfirmationVerifier =
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.core.EpochTracker;
 
+const VoteEventData = sig.rpc.jrpc_websockets.types.VoteEventData;
+
 const Logger = sig.trace.Logger("vote_listener");
 
 pub const SlotDataProvider = struct {
@@ -84,6 +86,8 @@ pub const Senders = struct {
     bank_notification: ?*sig.sync.Channel(BankNotification),
     /// TODO: same advisory as on `bank_notification` wrt hooking into RPC.
     subscriptions: RpcSubscriptionsStub,
+    // TODO: consolidate with the above stub.
+    event_sink: ?*sig.rpc.jrpc_websockets.types.EventSink = null,
 
     const test_setup_enabled = @import("builtin").is_test;
 
@@ -439,7 +443,7 @@ fn listenAndConfirmVotes(
     vote_processing_time: ?*VoteProcessingTiming,
     latest_vote_slot_per_validator: *sig.utils.collections.PubkeyMap(Slot),
     metrics: VoteListenerMetrics,
-) std.mem.Allocator.Error![]const ThresholdConfirmedSlot {
+) ![]const ThresholdConfirmedSlot {
     var replay_votes_buffer: std.ArrayListUnmanaged(vote_parser.ParsedVote) = .empty;
     defer replay_votes_buffer.deinit(allocator);
     try replay_votes_buffer.ensureTotalCapacityPrecise(allocator, 4096);
@@ -487,7 +491,7 @@ fn filterAndConfirmWithNewVotes(
     gossip_vote_txs: []const vote_parser.ParsedVote,
     replayed_votes: []const vote_parser.ParsedVote,
     metrics: VoteListenerMetrics,
-) std.mem.Allocator.Error![]const ThresholdConfirmedSlot {
+) ![]const ThresholdConfirmedSlot {
     const root_slot = slot_data_provider.rootSlot();
 
     var diff: SlotsDiff = .EMPTY;
@@ -785,7 +789,7 @@ fn trackNewVotesAndNotifyConfirmations(
     new_optimistic_confirmed_slots: *std.ArrayListUnmanaged(ThresholdConfirmedSlot),
     is_gossip_vote: bool,
     latest_vote_slot_per_validator: *sig.utils.collections.PubkeyMap(Slot),
-) std.mem.Allocator.Error!void {
+) !void {
     if (vote.isEmpty()) return;
     const root = slot_data_provider.rootSlot();
 
@@ -905,7 +909,13 @@ fn trackNewVotesAndNotifyConfirmations(
 
                 // Note gossip votes will always be processed because those should be unique
                 // and we need to update the gossip-only stake in the `VoteTracker`.
-                return;
+                //
+                // We break here instead of returning to preserve is_new_vote from a prior
+                // iteration so that post-loop notification logic still fires.
+                //
+                // This matches agave's control flow:
+                // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L560-L571
+                break;
             }
 
             is_new_vote = is_new;
@@ -934,7 +944,37 @@ fn trackNewVotesAndNotifyConfirmations(
     latest_vote_slot.* = @max(latest_vote_slot.*, last_vote_slot);
 
     if (is_new_vote) {
+        // TODO: clean-up/remove this.
         senders.subscriptions.notifyVote(vote_pubkey, vote, vote_transaction_signature);
+
+        // Notify RPC websocket voteSubscribe subscribers.
+        // [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L595
+        //
+        // Sig emits more vote notifications than Agave. This is expected and not a bug: Agave's gossip consumer polls CRDS
+        // with a cursor every 100ms, coalescing intermediate vote replacements for the same label (vote_index, pubkey).
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/gossip/src/crds.rs#L349-L360
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L252-L268
+        //
+        // Sig delivers votes via LocalMessageBroker.publish() on every successful CRDS insert (both new and replaced), so
+        // each intermediate tip-slot advance produces a notification. Every notification is accurate and unique, deduped by
+        // (slot, hash, pubkey) in trackOptimisticConfirmationVote. This leads to subscribers simply seeing finer-grained data.
+        //
+        // The event sink takes ownership of the vote payload, and the runtime
+        // later frees it via InboundEvent.deinit after dispatch.
+        if (senders.event_sink) |event_sink| {
+            var vote_event = VoteEventData.initOwned(
+                allocator,
+                vote_pubkey,
+                vote_slots,
+                last_vote_hash,
+                vote.timestamp(),
+                vote_transaction_signature,
+            ) catch return;
+            errdefer vote_event.deinit();
+
+            try event_sink.send(.{ .vote = vote_event });
+        }
+
         errdefer allocator.free(vote_slots);
         // TODO: Uncomment when our RepairService implements vote-weighted repair heuristic.
         //

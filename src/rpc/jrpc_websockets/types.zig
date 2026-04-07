@@ -10,6 +10,7 @@ const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Account = sig.core.Account;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
+const Hash = sig.core.Hash;
 
 pub const AccountWithPubkey = struct {
     pubkey: Pubkey,
@@ -31,6 +32,7 @@ pub const SubscriptionKind = enum {
     root,
     signature,
     slot,
+    vote,
 };
 
 /// Canonicalized subscription request key: subscription kind + kind-specific parameters.
@@ -50,6 +52,7 @@ pub const SubReqKey = struct {
         root: void,
         signature: SignatureParams,
         slot: void,
+        vote: void,
     };
 
     pub const AccountParams = struct {
@@ -104,7 +107,7 @@ pub const SubReqKey = struct {
                     dataSliceEql(pa.data_slice, pb.data_slice) and
                     programFiltersEql(pa.filters, pb.filters);
             },
-            .root, .slot => return true,
+            .root, .slot, .vote => return true,
             .signature => |pa| {
                 const pb = b.params.signature;
                 return std.mem.eql(u8, &pa.sig_value.r, &pb.sig_value.r) and
@@ -230,6 +233,10 @@ pub const SubReqKey = struct {
                 .method = .slot,
                 .params = .{ .slot = {} },
             },
+            .voteSubscribe => .{
+                .method = .vote,
+                .params = .{ .vote = {} },
+            },
             else => null,
         };
     }
@@ -237,6 +244,10 @@ pub const SubReqKey = struct {
     /// Convenience constructors for tests/benchmarks.
     pub fn slotKey() SubReqKey {
         return .{ .method = .slot, .params = .{ .slot = {} } };
+    }
+
+    pub fn voteKey() SubReqKey {
+        return .{ .method = .vote, .params = .{ .vote = {} } };
     }
 
     pub fn accountKey(pubkey: Pubkey) SubReqKey {
@@ -355,6 +366,7 @@ pub const InboundEvent = union(enum) {
     slot_confirmed: u64,
     slot_rooted: u64,
     tip_changed: u64,
+    vote: VoteEventData,
 
     pub fn deinit(self: InboundEvent, allocator: std.mem.Allocator) void {
         switch (self) {
@@ -363,6 +375,10 @@ pub const InboundEvent = union(enum) {
                 logs.deinit();
             },
             .received_signatures => |data| data.deinit(allocator),
+            .vote => |vote_data| {
+                var data = vote_data;
+                data.deinit();
+            },
             .slot_frozen => |slot_data| {
                 var accounts = slot_data.accounts;
                 accounts.deinit();
@@ -607,6 +623,54 @@ pub const SignatureNotificationData = struct {
     }
 };
 
+pub const VoteEventData = struct {
+    vote_pubkey: Pubkey,
+    slots: []const u64,
+    hash: Hash,
+    timestamp: ?i64,
+    signature: Signature,
+    arena: std.heap.ArenaAllocator,
+
+    pub fn empty() VoteEventData {
+        return .{
+            .vote_pubkey = Pubkey.ZEROES,
+            .slots = &.{},
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+            .signature = Signature.ZEROES,
+            .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+        };
+    }
+
+    pub fn initOwned(
+        allocator: std.mem.Allocator,
+        vote_pubkey: Pubkey,
+        /// The slots array is duped into the arena allocator. Caller can free slots safely.
+        slots: []const u64,
+        hash: Hash,
+        timestamp: ?i64,
+        signature: Signature,
+    ) !VoteEventData {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        errdefer arena.deinit();
+        const arena_allocator = arena.allocator();
+
+        return .{
+            .vote_pubkey = vote_pubkey,
+            .slots = try arena_allocator.dupe(u64, slots),
+            .hash = hash,
+            .timestamp = timestamp,
+            .signature = signature,
+            .arena = arena,
+        };
+    }
+
+    pub fn deinit(self: *VoteEventData) void {
+        self.arena.deinit();
+        self.* = empty();
+    }
+};
+
 /// Serialization job: loop thread -> worker thread.
 /// Serialization workers round-trip sub_id to match result back to associated subscription.
 pub const SerializeJob = struct {
@@ -633,6 +697,7 @@ pub const SerializeJob = struct {
         root: RootEventData,
         signature: SignatureNotificationData,
         slot: SlotEventData,
+        vote: VoteEventData,
 
         pub fn deinit(self: JobType, allocator: std.mem.Allocator) void {
             switch (self) {
@@ -640,6 +705,10 @@ pub const SerializeJob = struct {
                 .logs => |job| job.deinit(allocator),
                 .program => |job| job.data.deinit(allocator),
                 .signature => |job| job.deinit(allocator),
+                .vote => |job| {
+                    var owned = job;
+                    owned.deinit();
+                },
                 else => {},
             }
         }
