@@ -16,7 +16,10 @@ const Logger = sig.trace.Logger("rpc.server.basic");
 const cors_headers: []const std.http.Header = &.{
     .{ .name = "Access-Control-Allow-Origin", .value = "*" },
     .{ .name = "Access-Control-Allow-Methods", .value = "GET, POST, HEAD, OPTIONS" },
-    .{ .name = "Access-Control-Allow-Headers", .value = "Content-Type, Authorization, Accept, Solana-Client" },
+    .{
+        .name = "Access-Control-Allow-Headers",
+        .value = "Content-Type, Authorization, Accept, Solana-Client",
+    },
     .{ .name = "Access-Control-Max-Age", .value = "86400" },
 };
 
@@ -25,7 +28,10 @@ const json_headers: []const std.http.Header = &.{
     .{ .name = "Content-Type", .value = "application/json" },
     .{ .name = "Access-Control-Allow-Origin", .value = "*" },
     .{ .name = "Access-Control-Allow-Methods", .value = "GET, POST, HEAD, OPTIONS" },
-    .{ .name = "Access-Control-Allow-Headers", .value = "Content-Type, Authorization, Accept, Solana-Client" },
+    .{
+        .name = "Access-Control-Allow-Headers",
+        .value = "Content-Type, Authorization, Accept, Solana-Client",
+    },
     .{ .name = "Access-Control-Max-Age", .value = "86400" },
 };
 
@@ -356,6 +362,23 @@ const NodeUnhealthyError = struct {
     };
 };
 
+/// Agave's SendTransactionPreflightFailure JSON-RPC error response structure.
+/// Matches agave's error format:
+///   {"code": -32002, "message": "Transaction simulation failed: ...", "data": {...}}
+/// See: https://github.com/anza-xyz/agave/blob/master/rpc-client-api/src/custom_error.rs#L130-L136
+const SendTransactionPreflightError = struct {
+    code: i64 = rpc.methods.SendTransaction.preflight_failure_code,
+    message: []const u8,
+    data: SendTransactionPreflightErrorData,
+
+    const SendTransactionPreflightErrorData = struct {
+        err: sig.ledger.transaction_status.TransactionError,
+        logs: []const []const u8,
+        unitsConsumed: u64,
+        loadedAccountsDataSize: u32,
+    };
+};
+
 fn handlePost(
     server_ctx: *server.Context,
     request: *std.http.Server.Request,
@@ -552,6 +575,58 @@ fn handleRpcRequest(
                             .@"error" = NodeUnhealthyError{
                                 .message = message,
                                 .data = .{ .numSlotsBehind = num_slots },
+                            },
+                        });
+                    },
+                },
+                .err => |err| try writeFinalJsonResponse(request, .{}, .{
+                    .jsonrpc = "2.0",
+                    .id = rpc_request.id,
+                    .@"error" = err,
+                }),
+            };
+        },
+        // sendTransaction requires special handling: preflight simulation failures must be
+        // returned as JSON-RPC errors with code -32002, matching agave's behavior.
+        // See: https://github.com/anza-xyz/agave/blob/master/rpc-client-api/src/custom_error.rs#L130-L136
+        .sendTransaction => {
+            const allocator = json_arena;
+            const result = server_ctx.rpc_hooks.call(
+                allocator,
+                .sendTransaction,
+                rpc_request.method.sendTransaction,
+            ) catch |e| switch (e) {
+                error.MethodNotImplemented => {
+                    try sendFinalMethodNotFound(request, logger, .sendTransaction, rpc_request.id);
+                    return;
+                },
+            };
+
+            return switch (result) {
+                .ok => |response| switch (response) {
+                    .signature => |s| try writeFinalJsonResponse(request, .{}, .{
+                        .jsonrpc = "2.0",
+                        .id = rpc_request.id,
+                        .result = s,
+                    }),
+                    .preflight_failure => |failure| blk: {
+                        var msg_buf: [128]u8 = undefined;
+                        const message = std.fmt.bufPrint(
+                            &msg_buf,
+                            "Transaction simulation failed: {s}",
+                            .{@tagName(failure.err)},
+                        ) catch "Transaction simulation failed";
+                        break :blk try writeFinalJsonResponse(request, .{}, .{
+                            .jsonrpc = "2.0",
+                            .id = rpc_request.id,
+                            .@"error" = SendTransactionPreflightError{
+                                .message = message,
+                                .data = .{
+                                    .err = failure.err,
+                                    .logs = failure.logs,
+                                    .unitsConsumed = failure.units_consumed,
+                                    .loadedAccountsDataSize = failure.loaded_accounts_data_size,
+                                },
                             },
                         });
                     },

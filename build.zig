@@ -223,6 +223,7 @@ pub fn build(b: *Build) !void {
     const geyser_reader_step = b.step("geyser_reader", "Read data from geyser");
     const vm_step = b.step("vm", "Run the VM client");
     const test_send_transactions_step = b.step("test_send_transactions", "Attempt to land transactions on testnet using QUIC client");
+    const test_mock_transfers_step = b.step("test_mock_transfers", "Test MockTransferService in RPC submission mode");
     const docs_step = b.step("docs", "Generate and install documentation for the Sig Library");
 
     // Dependencies
@@ -505,6 +506,23 @@ pub fn build(b: *Build) !void {
     test_send_transactions_exe.root_module.addObject(memcpy);
     test_send_transactions_exe.root_module.addImport("sig", sig_mod);
     addInstallAndRun(b, test_send_transactions_step, test_send_transactions_exe, config);
+
+    const test_mock_transfers_exe = b.addExecutable(.{
+        .name = "test_mock_transfers",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/transaction_sender/test_mock_transfers.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+            .sanitize_thread = config.enable_tsan,
+            .error_tracing = config.error_tracing,
+            .link_libc = true,
+        }),
+        .use_llvm = config.use_llvm,
+    });
+    test_mock_transfers_exe.root_module.addObject(memcpy);
+    test_mock_transfers_exe.root_module.addImport("sig", sig_mod);
+    addInstallAndRun(b, test_mock_transfers_step, test_mock_transfers_exe, config);
 
     // docs for the Sig library
     const install_sig_docs = b.addInstallDirectory(.{
