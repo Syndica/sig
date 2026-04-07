@@ -6,7 +6,10 @@ const TestClientEnv = helpers.TestClientEnv;
 const TestClientHandler = helpers.TestClientHandler;
 const TestServer = helpers.TestServer;
 const initTestClient = helpers.initTestClient;
+const parseResultBool = helpers.parseResultBool;
 const parseResultU64 = helpers.parseResultU64;
+const RootNotification = helpers.RootNotification;
+const SlotNotification = helpers.SlotNotification;
 
 test "multiple clients receive independent notifications" {
     const allocator = std.testing.allocator;
@@ -85,11 +88,27 @@ test "multiple clients receive independent notifications" {
     try std.testing.expect(handler1.received.items.len >= 2);
     try std.testing.expect(handler2.received.items.len >= 2);
 
-    const notif1 = handler1.received.items[1];
-    try std.testing.expect(std.mem.indexOf(u8, notif1, "\"slot\":200") != null);
+    const parsed_notif1 = try std.json.parseFromSlice(
+        SlotNotification,
+        allocator,
+        handler1.received.items[1],
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed_notif1.deinit();
+    const notif1 = parsed_notif1.value;
+    try std.testing.expectEqualStrings("slotNotification", notif1.method);
+    try std.testing.expectEqual(200, notif1.params.result.slot);
 
-    const notif2 = handler2.received.items[1];
-    try std.testing.expect(std.mem.indexOf(u8, notif2, "\"result\":201") != null);
+    const parsed_notif2 = try std.json.parseFromSlice(
+        RootNotification,
+        allocator,
+        handler2.received.items[1],
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed_notif2.deinit();
+    const notif2 = parsed_notif2.value;
+    try std.testing.expectEqualStrings("rootNotification", notif2.method);
+    try std.testing.expectEqual(201, notif2.params.result);
 
     handler1.queueSendNow(switch (sub_id1) {
         1 =>
@@ -126,8 +145,14 @@ test "multiple clients receive independent notifications" {
 
     const unsub1 = handler1.received.items[2];
     const unsub2 = handler2.received.items[2];
-    try std.testing.expect(std.mem.indexOf(u8, unsub1, "\"result\":true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, unsub2, "\"result\":true") != null);
+    try std.testing.expectEqual(
+        true,
+        parseResultBool(unsub1) orelse return error.TestUnexpectedResult,
+    );
+    try std.testing.expectEqual(
+        true,
+        parseResultBool(unsub2) orelse return error.TestUnexpectedResult,
+    );
 
     for (0..200) |_| {
         if (handler1.close_called and handler2.close_called) {

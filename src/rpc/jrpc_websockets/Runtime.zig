@@ -102,6 +102,21 @@ pub fn init(deps: Dependencies) Runtime {
     };
 }
 
+/// Get or create a subscription entry for the given key.
+pub fn getOrCreateSubscription(
+    self: *Runtime,
+    key: *const types.SubReqKey,
+) !sub_map_mod.GetOrCreateResult {
+    const result = try self.sub_map.getOrCreate(key);
+    if (result.created) {
+        switch (result.entry.key.method) {
+            .account => self.initializeAccountSubscriptionEntry(result.entry),
+            else => {},
+        }
+    }
+    return result;
+}
+
 const SerializeTask = struct {
     runtime: *Runtime,
     task: ThreadPool.Task,
@@ -314,13 +329,21 @@ fn handleInboundEvent(
     task_batch: *ThreadPool.Batch,
 ) void {
     // TODO: review how ownership should flow in Zig for this situation,
-    // .slot_frozen case effectively takes ownership of the accounts data
+    // .slot_frozen and .logs cases take ownership of the inner data
     var e = event;
-    defer e.deinit(self.inbound_event_queue.allocator);
+    defer e.deinit();
 
     switch (e) {
-        .logs => {
-            // TODO: actual log events and logsSubscribe handling (this is placeholder)
+        .logs => |*log_data| {
+            // NOTE: logs events only populate the slot cache; publication happens on later
+            // slot transitions. Replay may send multiple log batches for the same slot before
+            // `.slot_frozen`, and the cache accumulates them until the slot is published.
+            self.slot_state_cache.onLogsEvent(self.allocator, log_data) catch |err| {
+                self.logger.err().logf(
+                    "failed to cache logs event for slot {}: {}",
+                    .{ log_data.slot, err },
+                );
+            };
         },
         .slot_frozen => |*slot_data| {
             const transition = self.slot_state_cache.onSlotFrozen(
@@ -386,6 +409,61 @@ const SlotEventKind = union(enum) {
     tip_changed,
 };
 
+/// Lazily collects the unpublished frozen ancestor chain for a confirmed slot and
+/// iterates it oldest-first so slot-derived notifications preserve slot order.
+const PublishableConfirmedSlots = struct {
+    runtime: *Runtime,
+    trigger_slot: Slot,
+    slots: ?std.ArrayList(SlotStateCache.AncestorItem) = null,
+    attempted: bool = false,
+
+    fn init(runtime: *Runtime, trigger_slot: Slot) PublishableConfirmedSlots {
+        return .{ .runtime = runtime, .trigger_slot = trigger_slot };
+    }
+
+    fn deinit(self: *PublishableConfirmedSlots) void {
+        if (self.slots) |*slots| {
+            slots.deinit(self.runtime.allocator);
+        }
+    }
+
+    fn iterator(self: *PublishableConfirmedSlots) ?Iterator {
+        const slots = self.ensure() orelse return null;
+        return .{ .slots = slots, .index = slots.len };
+    }
+
+    fn ensure(self: *PublishableConfirmedSlots) ?[]SlotStateCache.AncestorItem {
+        if (self.attempted) {
+            return if (self.slots) |*slots| slots.items else null;
+        }
+        self.attempted = true;
+        self.slots = self.runtime.slot_state_cache.collectPublishableConfirmedSlots(
+            self.runtime.allocator,
+            self.trigger_slot,
+        ) catch |err| {
+            self.runtime.logger.err().logf(
+                "failed to collect publishable confirmed slots from {}: {}",
+                .{ self.trigger_slot, err },
+            );
+            return null;
+        };
+        return self.slots.?.items;
+    }
+
+    const Iterator = struct {
+        slots: []SlotStateCache.AncestorItem,
+        index: usize,
+
+        fn next(self: *Iterator) ?SlotStateCache.AncestorItem {
+            if (self.index == 0) {
+                return null;
+            }
+            self.index -= 1;
+            return self.slots[self.index];
+        }
+    };
+};
+
 fn handleSlotTransition(
     self: *Runtime,
     event_kind: SlotEventKind,
@@ -393,22 +471,21 @@ fn handleSlotTransition(
     transition: SlotStateCache.Transition,
     task_batch: *ThreadPool.Batch,
 ) void {
-    // Track confirmed program slots for publishing confirmed commitment notifications
-    var publishable_confirmed_slots: ?std.ArrayList(SlotStateCache.AncestorItem) = null;
-    defer if (publishable_confirmed_slots) |*slots| {
-        slots.deinit(self.allocator);
-    };
+    var publishable_confirmed_slots = PublishableConfirmedSlots.init(self, slot);
+    defer publishable_confirmed_slots.deinit();
 
     // TODO(perf): this is basically just brute-force iteration to find matches, and it's
     // running on the IO loop thread, so this won't scale.
     for (self.sub_map.entries.items) |*entry| {
         switch (entry.key.method) {
             .slot => {
+                // TODO: slotSubscribe should be emitted at "bank created" rather than frozen.
                 const slot_event = switch (event_kind) {
                     .slot_frozen => |slot_event| slot_event,
                     else => continue,
                 };
-                if (transition.cached_slot == null) {
+                if (transition.publishable_slot == null) {
+                    // TODO: for now just avoid publishing duplicates if replay over same slot
                     continue;
                 }
                 _ = self.enqueueJobForEntry(entry.*, .{ .slot = slot_event }, task_batch);
@@ -418,39 +495,47 @@ fn handleSlotTransition(
                     .slot_rooted => |root_event| root_event,
                     else => continue,
                 };
-                if (transition.evict_through == null) {
-                    continue;
-                }
                 _ = self.enqueueJobForEntry(entry.*, .{ .root = root_event }, task_batch);
             },
-            .program => {
-                if (event_kind == .tip_changed) {
+            .logs => {
+                const commitment = entry.key.params.logs.commitment;
+                if (!transitionMatchesCommitment(transition.notify_commitments, commitment)) {
                     continue;
                 }
+                switch (commitment) {
+                    .confirmed => {
+                        var confirmed_slots =
+                            publishable_confirmed_slots.iterator() orelse continue;
+                        while (confirmed_slots.next()) |confirmed_slot| {
+                            self.publishLogsSubscriptionForEntry(
+                                entry,
+                                confirmed_slot.cached_slot,
+                                confirmed_slot.slot,
+                                task_batch,
+                            );
+                        }
+                    },
+                    .processed, .finalized => {
+                        const publishable_slot = transition.publishable_slot orelse continue;
+                        self.publishLogsSubscriptionForEntry(
+                            entry,
+                            publishable_slot,
+                            slot,
+                            task_batch,
+                        );
+                    },
+                }
+            },
+            .program => {
                 const commitment = entry.key.params.program.commitment;
                 if (!transitionMatchesCommitment(transition.notify_commitments, commitment)) {
                     continue;
                 }
                 switch (commitment) {
                     .confirmed => {
-                        if (publishable_confirmed_slots == null) {
-                            publishable_confirmed_slots = self.slot_state_cache
-                                .collectPublishableConfirmedSlots(
-                                self.allocator,
-                                slot,
-                            ) catch |err| {
-                                self.logger.err().logf(
-                                    "failed to collect confirmed program slots from {}: {}",
-                                    .{ slot, err },
-                                );
-                                continue;
-                            };
-                        }
-                        const slots = publishable_confirmed_slots.?.items;
-                        var index = slots.len;
-                        while (index > 0) {
-                            index -= 1;
-                            const confirmed_slot = slots[index];
+                        var confirmed_slots =
+                            publishable_confirmed_slots.iterator() orelse continue;
+                        while (confirmed_slots.next()) |confirmed_slot| {
                             self.publishProgramSubscriptionForEntry(
                                 entry,
                                 confirmed_slot.cached_slot,
@@ -460,10 +545,10 @@ fn handleSlotTransition(
                         }
                     },
                     .processed, .finalized => {
-                        const cached_slot = transition.cached_slot orelse continue;
+                        const publishable_slot = transition.publishable_slot orelse continue;
                         self.publishProgramSubscriptionForEntry(
                             entry,
-                            cached_slot,
+                            publishable_slot,
                             slot,
                             task_batch,
                         );
@@ -488,7 +573,7 @@ fn handleSlotTransition(
     }
 
     if (transition.evict_through) |evict_through| {
-        self.slot_state_cache.evictFinalizedThrough(evict_through);
+        self.slot_state_cache.evictFinalizedThrough(self.allocator, evict_through);
     }
 }
 
@@ -501,6 +586,43 @@ fn transitionMatchesCommitment(
         .confirmed => commitments.confirmed,
         .finalized => commitments.finalized,
     };
+}
+
+/// Initialize last notified modified slot for an account subscription entry, this matches
+/// Agave's approach such that last modified is set but no replay notification is emitted.
+fn initializeAccountSubscriptionEntry(
+    self: *Runtime,
+    entry: *sub_map_mod.MapEntry,
+) void {
+    const params = entry.key.params.account;
+    const slot = self.slot_read_ctx.commitments.get(switch (params.commitment) {
+        .processed => .processed,
+        .confirmed => .confirmed,
+        .finalized => .finalized,
+    });
+    const slot_ref = self.slot_read_ctx.slot_tracker.get(slot) orelse {
+        entry.last_notified_modified_slot = 0;
+        return;
+    };
+    defer slot_ref.release();
+
+    // TODO(perf): similar to reevaluation on slot transition, we don't want to do this on the
+    // IO loop thread, we'd want this to be done on another thread.
+    const slot_reader = self.slot_read_ctx.account_reader.forSlot(&slot_ref.constants().ancestors);
+    const latest = slot_reader.getWithModifiedSlot(self.allocator, params.pubkey) catch |err| {
+        self.logger.err().logf(
+            "failed to initialize account subscription baseline for slot {}: {}",
+            .{ slot, err },
+        );
+        entry.last_notified_modified_slot = 0;
+        return;
+    } orelse {
+        entry.last_notified_modified_slot = 0;
+        return;
+    };
+    defer latest.account.deinit(self.allocator);
+
+    entry.last_notified_modified_slot = latest.modified_slot;
 }
 
 /// accountSubscribe follows what is currently done in Agave:
@@ -537,11 +659,9 @@ fn enqueueAccountReevaluation(
 
     // Commitment may advance without this account changing; dedupe by the slot that last
     // modified the visible version instead of by the commitment slot we are evaluating.
-    if (entry.last_notified_modified_slot) |last_modified_slot| {
-        if (modified_slot == last_modified_slot) {
-            account.deinit(self.allocator);
-            return;
-        }
+    if (modified_slot == entry.last_notified_modified_slot) {
+        account.deinit(self.allocator);
+        return;
     }
     errdefer account.deinit(self.allocator);
 
@@ -584,6 +704,56 @@ fn deletedAccountPlaceholder() sig.core.Account {
         .owner = sig.core.Pubkey.ZEROES,
         .executable = false,
         .rent_epoch = 0,
+    };
+}
+
+fn publishLogsSubscriptionForEntry(
+    self: *Runtime,
+    entry: *sub_map_mod.MapEntry,
+    cached_slot: *const SlotStateCache.CachedSlot,
+    slot: Slot,
+    task_batch: *ThreadPool.Batch,
+) void {
+    const logs_filter = entry.key.params.logs.filter;
+    var log_entries = cached_slot.logEntriesIterator();
+    while (log_entries.next()) |log_event| {
+        if (!logsEventMatchesFilter(logs_filter, log_event)) {
+            continue;
+        }
+
+        // TODO(perf): clone has to allocate; ideally we would use the cached log event as is
+        // and keep the arena alive until outstanding events are returned from serialization.
+        const notification_data = log_event.toOwnedNotificationData(
+            self.allocator,
+            slot,
+        ) catch |err| {
+            self.logger.err().logf(
+                "failed to clone logs subscription payload for slot {}: {}",
+                .{ slot, err },
+            );
+            continue;
+        };
+
+        _ = self.enqueueJobForEntry(entry.*, .{ .logs = notification_data }, task_batch);
+    }
+}
+
+fn logsEventMatchesFilter(
+    filter: methods.LogsFilter,
+    log_event: *const types.TransactionLogsEntry,
+) bool {
+    return switch (filter) {
+        .all => !log_event.is_vote,
+        .allWithVotes => true,
+        .mentions => |mentions_filter| blk: {
+            const target_pubkey = mentions_filter.mentions[0];
+            for (log_event.mentioned_pubkeys) |pubkey| {
+                if (pubkey.equals(&target_pubkey)) {
+                    break :blk true;
+                }
+            }
+            break :blk false;
+        },
     };
 }
 

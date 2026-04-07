@@ -41,7 +41,10 @@ pub const WsMethodAndParams = union(enum) {
         InvalidParams,
     };
 
-    pub fn verify(self: *const WsMethodAndParams) VerifyError!void {
+    // TODO: currently just returns error.InvalidParams when parameter validation fails
+    // but that means error message without much information for clients. Ideally we'd return
+    // more specific error codes or message along with the error code.
+    pub fn validate(self: *const WsMethodAndParams) VerifyError!void {
         switch (self.*) {
             .blockSubscribe,
             .blockUnsubscribe,
@@ -51,12 +54,9 @@ pub const WsMethodAndParams = union(enum) {
             .voteUnsubscribe,
             => return error.MethodNotImplemented,
             .programSubscribe => |program_sub| {
-                const config: methods.ProgramSubscribe.Config = program_sub.config orelse .{};
-                if (config.filters) |filters| {
-                    methods.verifyProgramFilters(filters) catch {
-                        return error.InvalidParams;
-                    };
-                }
+                program_sub.validateParams() catch {
+                    return error.InvalidParams;
+                };
             },
             else => {},
         }
@@ -216,7 +216,7 @@ pub const WsRequest = struct {
     };
 };
 
-test "WsRequest parse accountSubscribe" {
+test "parse accountSubscribe" {
     const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
     try testParseRequest(
         .{},
@@ -232,7 +232,7 @@ test "WsRequest parse accountSubscribe" {
     );
 }
 
-test "WsRequest parse accountSubscribe with config" {
+test "parse accountSubscribe with config" {
     const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
     try testParseRequest(
         .{},
@@ -252,7 +252,7 @@ test "WsRequest parse accountSubscribe with config" {
     );
 }
 
-test "WsRequest parse slotSubscribe (no params)" {
+test "parse slotSubscribe (no params)" {
     try testParseRequest(
         .{},
         \\{"jsonrpc":"2.0","id":3,"method":"slotSubscribe","params":[]}
@@ -264,7 +264,7 @@ test "WsRequest parse slotSubscribe (no params)" {
     );
 }
 
-test "WsRequest parse accountUnsubscribe" {
+test "parse accountUnsubscribe" {
     try testParseRequest(
         .{},
         \\{"jsonrpc":"2.0","id":4,"method":"accountUnsubscribe","params":[42]}
@@ -276,7 +276,7 @@ test "WsRequest parse accountUnsubscribe" {
     );
 }
 
-test "WsRequest parse logsSubscribe all" {
+test "parse logsSubscribe all" {
     try testParseRequest(
         .{},
         \\{"jsonrpc":"2.0","id":5,"method":"logsSubscribe","params":["all"]}
@@ -291,7 +291,7 @@ test "WsRequest parse logsSubscribe all" {
     );
 }
 
-test "WsRequest parse logsSubscribe allWithVotes" {
+test "parse logsSubscribe allWithVotes" {
     try testParseRequest(
         .{},
         \\{"jsonrpc":"2.0","id":5,"method":"logsSubscribe","params":["allWithVotes"]}
@@ -306,7 +306,7 @@ test "WsRequest parse logsSubscribe allWithVotes" {
     );
 }
 
-test "WsRequest parse logsSubscribe mentions with config" {
+test "parse logsSubscribe mentions with config" {
     const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
     try testParseRequest(
         .{},
@@ -315,14 +315,14 @@ test "WsRequest parse logsSubscribe mentions with config" {
         .{
             .id = .{ .int = 5 },
             .method = .{ .logsSubscribe = .{
-                .filter = .{ .mentions = .{ .mentions = &.{test_pubkey} } },
+                .filter = .{ .mentions = .{ .mentions = .{test_pubkey} } },
                 .config = .{ .commitment = .processed },
             } },
         },
     );
 }
 
-test "WsRequest parse signatureSubscribe" {
+test "parse signatureSubscribe" {
     const test_sig: sig.core.Signature =
         .parse("1111111111111111111111111111111111111111111111111111111111111111");
     try testParseRequest(
@@ -339,7 +339,7 @@ test "WsRequest parse signatureSubscribe" {
     );
 }
 
-test "WsRequest parse signatureSubscribe with config" {
+test "parse signatureSubscribe with config" {
     const test_sig: sig.core.Signature =
         .parse("1111111111111111111111111111111111111111111111111111111111111111");
     try testParseRequest(
@@ -359,7 +359,7 @@ test "WsRequest parse signatureSubscribe with config" {
     );
 }
 
-test "WsRequest parse blockSubscribe all" {
+test "parse blockSubscribe all" {
     try testParseRequest(
         .{},
         \\{"jsonrpc":"2.0","id":7,"method":"blockSubscribe","params":["all"]}
@@ -374,7 +374,7 @@ test "WsRequest parse blockSubscribe all" {
     );
 }
 
-test "WsRequest parse blockSubscribe all with config" {
+test "parse blockSubscribe all with config" {
     try testParseRequest(
         .{},
         \\{"jsonrpc":"2.0","id":7,"method":"blockSubscribe","params":["all",{"commitment":"confirmed"}]}
@@ -395,7 +395,7 @@ test "WsRequest parse blockSubscribe all with config" {
     );
 }
 
-test "WsRequest parse blockSubscribe mentionsAccountOrProgram" {
+test "parse blockSubscribe mentionsAccountOrProgram" {
     const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
     try testParseRequest(
         .{},
@@ -413,7 +413,7 @@ test "WsRequest parse blockSubscribe mentionsAccountOrProgram" {
     );
 }
 
-test "WsRequest parse programSubscribe with filters" {
+test "parse programSubscribe with filters" {
     const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
     try testParseRequest(
         .{},
@@ -437,7 +437,7 @@ test "WsRequest parse programSubscribe with filters" {
     );
 }
 
-test "WsRequest parse programSubscribe with tokenAccountState filter" {
+test "parse programSubscribe with tokenAccountState filter" {
     const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
     try testParseRequest(
         .{},
@@ -459,7 +459,7 @@ test "WsRequest parse programSubscribe with tokenAccountState filter" {
     );
 }
 
-test "WsRequest parse programSubscribe invalid memcmp encoding" {
+test "parse programSubscribe invalid memcmp encoding" {
     try std.testing.expectError(
         error.LengthMismatch,
         std.json.parseFromSlice(WsRequest, std.testing.allocator,
@@ -468,7 +468,7 @@ test "WsRequest parse programSubscribe invalid memcmp encoding" {
     );
 }
 
-test "WsRequest parse rootSubscribe (no params)" {
+test "parse rootSubscribe (no params)" {
     try testParseRequest(
         .{},
         \\{"jsonrpc":"2.0","id":9,"method":"rootSubscribe","params":[]}
@@ -480,7 +480,7 @@ test "WsRequest parse rootSubscribe (no params)" {
     );
 }
 
-test "WsRequest parse slotsUpdatesSubscribe (no params)" {
+test "parse slotsUpdatesSubscribe (no params)" {
     try testParseRequest(
         .{},
         \\{"jsonrpc":"2.0","id":10,"method":"slotsUpdatesSubscribe","params":[]}
@@ -492,7 +492,7 @@ test "WsRequest parse slotsUpdatesSubscribe (no params)" {
     );
 }
 
-test "WsRequest parse voteSubscribe (no params)" {
+test "parse voteSubscribe (no params)" {
     try testParseRequest(
         .{},
         \\{"jsonrpc":"2.0","id":11,"method":"voteSubscribe","params":[]}
@@ -504,7 +504,7 @@ test "WsRequest parse voteSubscribe (no params)" {
     );
 }
 
-test "WsRequest parse rootSubscribe (omitted params)" {
+test "parse rootSubscribe (omitted params)" {
     try testParseRequest(
         .{},
         \\{"jsonrpc":"2.0","id":9,"method":"rootSubscribe"}
@@ -516,7 +516,7 @@ test "WsRequest parse rootSubscribe (omitted params)" {
     );
 }
 
-test "WsRequest parse slotSubscribe (omitted params)" {
+test "parse slotSubscribe (omitted params)" {
     try testParseRequest(
         .{},
         \\{"jsonrpc":"2.0","id":3,"method":"slotSubscribe"}
@@ -528,7 +528,7 @@ test "WsRequest parse slotSubscribe (omitted params)" {
     );
 }
 
-test "WsRequest parse slotsUpdatesSubscribe (omitted params)" {
+test "parse slotsUpdatesSubscribe (omitted params)" {
     try testParseRequest(
         .{},
         \\{"jsonrpc":"2.0","id":10,"method":"slotsUpdatesSubscribe"}
@@ -540,7 +540,7 @@ test "WsRequest parse slotsUpdatesSubscribe (omitted params)" {
     );
 }
 
-test "WsRequest parse voteSubscribe (omitted params)" {
+test "parse voteSubscribe (omitted params)" {
     try testParseRequest(
         .{},
         \\{"jsonrpc":"2.0","id":11,"method":"voteSubscribe"}
@@ -552,7 +552,7 @@ test "WsRequest parse voteSubscribe (omitted params)" {
     );
 }
 
-test "WsRequest parse accountSubscribe ignores unknown fields" {
+test "parse accountSubscribe ignores unknown fields" {
     const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
     try testParseRequest(
         .{},
@@ -572,7 +572,7 @@ test "WsRequest parse accountSubscribe ignores unknown fields" {
     );
 }
 
-test "WsRequest parse slotUnsubscribe" {
+test "parse slotUnsubscribe" {
     try testParseRequest(
         .{},
         \\{"jsonrpc":"2.0","id":12,"method":"slotUnsubscribe","params":[7]}
@@ -584,7 +584,7 @@ test "WsRequest parse slotUnsubscribe" {
     );
 }
 
-test "WsRequest parse errors" {
+test "parse errors" {
     // Missing jsonrpc version
     try std.testing.expectError(
         error.MissingField,
@@ -683,16 +683,16 @@ test "WsRequest.Dynamic parse diagnostic captures request id" {
     }
 }
 
-test "WsRequest verify rejects unstable methods" {
+test "validate rejects unstable methods" {
     const req: WsRequest = .{
         .id = .{ .int = 1 },
         .method = .{ .blockSubscribe = .{ .filter = .all, .config = null } },
     };
 
-    try std.testing.expectError(error.MethodNotImplemented, req.method.verify());
+    try std.testing.expectError(error.MethodNotImplemented, req.method.validate());
 }
 
-test "WsRequest verify rejects programSubscribe with too many filters" {
+test "validate rejects programSubscribe with too many filters" {
     const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
     const req: WsRequest = .{
         .id = .{ .int = 1 },
@@ -708,10 +708,28 @@ test "WsRequest verify rejects programSubscribe with too many filters" {
         } },
     };
 
-    try std.testing.expectError(error.InvalidParams, req.method.verify());
+    try std.testing.expectError(error.InvalidParams, req.method.validate());
 }
 
-test "WsRequest roundtrip accountSubscribe" {
+test "parse rejects logsSubscribe mentions with zero addresses" {
+    try std.testing.expectError(
+        error.LengthMismatch,
+        std.json.parseFromSlice(WsRequest, std.testing.allocator,
+            \\{"jsonrpc":"2.0","id":1,"method":"logsSubscribe","params":[{"mentions":[]}]}
+        , .{}),
+    );
+}
+
+test "parse rejects logsSubscribe mentions with multiple addresses" {
+    try std.testing.expectError(
+        error.LengthMismatch,
+        std.json.parseFromSlice(WsRequest, std.testing.allocator,
+            \\{"jsonrpc":"2.0","id":1,"method":"logsSubscribe","params":[{"mentions":["vinesvinesvinesvinesvinesvinesvinesvinesvin","11111111111111111111111111111111"]}]}
+        , .{}),
+    );
+}
+
+test "roundtrip accountSubscribe" {
     const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
     try testRoundtrip(.{ .accountSubscribe = .{
         .pubkey = test_pubkey,
@@ -723,7 +741,7 @@ test "WsRequest roundtrip accountSubscribe" {
     } });
 }
 
-test "WsRequest roundtrip programSubscribe" {
+test "roundtrip programSubscribe" {
     const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
     try testRoundtrip(.{ .programSubscribe = .{
         .program_id = test_pubkey,
@@ -739,7 +757,7 @@ test "WsRequest roundtrip programSubscribe" {
     } });
 }
 
-test "WsRequest roundtrip logsSubscribe" {
+test "roundtrip logsSubscribe" {
     try testRoundtrip(.{ .logsSubscribe = .{
         .filter = .all,
         .config = .{ .commitment = .processed },
@@ -750,7 +768,7 @@ test "WsRequest roundtrip logsSubscribe" {
     } });
 }
 
-test "WsRequest roundtrip blockSubscribe" {
+test "roundtrip blockSubscribe" {
     try testRoundtrip(.{ .blockSubscribe = .{
         .filter = .all,
         .config = .{
@@ -763,7 +781,7 @@ test "WsRequest roundtrip blockSubscribe" {
     } });
 }
 
-test "WsRequest roundtrip signatureSubscribe" {
+test "roundtrip signatureSubscribe" {
     const test_sig: sig.core.Signature =
         .parse("1111111111111111111111111111111111111111111111111111111111111111");
     try testRoundtrip(.{ .signatureSubscribe = .{
@@ -772,11 +790,11 @@ test "WsRequest roundtrip signatureSubscribe" {
     } });
 }
 
-test "WsRequest roundtrip slotSubscribe" {
+test "roundtrip slotSubscribe" {
     try testRoundtrip(.{ .slotSubscribe = .{} });
 }
 
-test "WsRequest roundtrip unsubscribe" {
+test "roundtrip unsubscribe" {
     try testRoundtrip(.{ .accountUnsubscribe = .{ .sub_id = 42 } });
     try testRoundtrip(.{ .slotUnsubscribe = .{ .sub_id = 7 } });
 }

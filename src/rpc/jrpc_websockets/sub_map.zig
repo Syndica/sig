@@ -14,7 +14,15 @@ pub const MapEntry = struct {
     queue: *NotifQueue,
     // TODO: maybe this goes somewhere else as it only applies to accountSubscribe method.
     /// For accountSubscribe for deduplication logic.
-    last_notified_modified_slot: ?u64 = null,
+    last_notified_modified_slot: u64 = 0,
+};
+
+pub const GetOrCreateResult = struct {
+    sub_id: SubId,
+    queue: *NotifQueue,
+    entry: *MapEntry,
+    /// True if a new entry was created, false if an existing entry was returned.
+    created: bool,
 };
 
 /// Subscription map managing active subscriptions and their notification queues.
@@ -58,27 +66,32 @@ pub const RPCSubMap = struct {
     }
 
     /// Get existing or create new entry for the given key.
-    /// Heap data in `key` (logs mentions, program filters) must point to
-    /// memory owned by the caller (e.g., the JSON parse tree). On match,
-    /// the caller's data is not retained. On new entry, heap fields are
-    /// deep-copied into the map's allocator.
+    /// Heap data in `key` (program filters) must point to memory owned by the
+    /// caller (e.g., the JSON parse tree). On match, the caller's data is not
+    /// retained. On new entry, heap fields are deep-copied into the map's allocator.
     ///
     /// Queue commit path policy:
-    /// - `.slot`, `.root`, `.program`, and `.account` use `.reserved` to preserve event order
+    /// - `.slot`, `.root`, `.program`, `.account`, and `.logs` use `.reserved`
+    ///   to preserve event order
     /// - all other methods use `.direct`
     pub fn getOrCreate(
         self: *RPCSubMap,
         key: *const SubReqKey,
-    ) !struct { sub_id: SubId, queue: *NotifQueue } {
+    ) !GetOrCreateResult {
         for (self.entries.items) |*entry| {
             if (key.eql(&entry.key)) {
-                return .{ .sub_id = entry.sub_id, .queue = entry.queue };
+                return .{
+                    .sub_id = entry.sub_id,
+                    .queue = entry.queue,
+                    .entry = entry,
+                    .created = false,
+                };
             }
         }
 
         const queue = try self.allocator.create(NotifQueue);
         const commit_path: NotifQueue.CommitPath = switch (key.method) {
-            .slot, .root, .program, .account => .reserved,
+            .slot, .root, .program, .account, .logs => .reserved,
             else => .direct,
         };
         queue.* = try NotifQueue.init(self.allocator, self.queue_capacity, commit_path);
@@ -99,8 +112,14 @@ pub const RPCSubMap = struct {
             .queue = queue,
         });
 
+        const entry = &self.entries.items[self.entries.items.len - 1];
         self.updateSizeMetrics();
-        return .{ .sub_id = sub_id, .queue = queue };
+        return .{
+            .sub_id = sub_id,
+            .queue = queue,
+            .entry = entry,
+            .created = true,
+        };
     }
 
     /// Look up entry by SubId (for commit resolution).
@@ -146,13 +165,17 @@ test "RPCSubMap getOrCreate returns same entry for same key" {
 
     const key = SubReqKey.slotKey();
     const e1 = try sm.getOrCreate(&key);
-    try std.testing.expectEqual(@as(SubId, 1), e1.sub_id);
+    try std.testing.expectEqual(1, e1.sub_id);
     try std.testing.expectEqual(NotifQueue.CommitPath.reserved, e1.queue.commit_path);
+    try std.testing.expect(e1.created);
+    try std.testing.expectEqual(@as(u64, 0), e1.entry.last_notified_modified_slot);
 
     // Same key returns same entry.
     const e2 = try sm.getOrCreate(&key);
     try std.testing.expectEqual(e1.sub_id, e2.sub_id);
     try std.testing.expectEqual(e1.queue, e2.queue);
+    try std.testing.expect(!e2.created);
+    try std.testing.expectEqual(e1.entry, e2.entry);
 }
 
 test "RPCSubMap different params get different entries" {
@@ -174,10 +197,13 @@ test "RPCSubMap different params get different entries" {
     try std.testing.expect(e1.sub_id != e2.sub_id);
     try std.testing.expectEqual(NotifQueue.CommitPath.reserved, e1.queue.commit_path);
     try std.testing.expectEqual(NotifQueue.CommitPath.reserved, e2.queue.commit_path);
+    try std.testing.expect(e1.created);
+    try std.testing.expect(e2.created);
 
     // Same pubkey returns same entry.
     const e3 = try sm.getOrCreate(&key1);
     try std.testing.expectEqual(e1.sub_id, e3.sub_id);
+    try std.testing.expect(!e3.created);
 }
 
 test "RPCSubMap logs all and mentions filters get different entries" {
@@ -189,22 +215,25 @@ test "RPCSubMap logs all and mentions filters get different entries" {
 
     const all_key = SubReqKey.logsKeyAll();
     const all = try sm.getOrCreate(&all_key);
+    try std.testing.expectEqual(NotifQueue.CommitPath.reserved, all.queue.commit_path);
 
     var pk: Pubkey = undefined;
     @memset(&pk.data, 0xCC);
     const mentions_key: SubReqKey = .{
         .method = .logs,
         .params = .{ .logs = .{
-            .filter = .{ .mentions = .{ .mentions = &.{pk} } },
+            .filter = .{ .mentions = .{ .mentions = .{pk} } },
         } },
     };
 
     const mentions = try sm.getOrCreate(&mentions_key);
+    try std.testing.expectEqual(NotifQueue.CommitPath.reserved, mentions.queue.commit_path);
     try std.testing.expect(all.sub_id != mentions.sub_id);
     try std.testing.expect(all.queue != mentions.queue);
 
     const mentions_again = try sm.getOrCreate(&mentions_key);
     try std.testing.expectEqual(mentions.sub_id, mentions_again.sub_id);
+    try std.testing.expect(!mentions_again.created);
 }
 
 test "RPCSubMap removeById and recreate gets new sub_id" {
@@ -215,13 +244,13 @@ test "RPCSubMap removeById and recreate gets new sub_id" {
 
     const key = SubReqKey.slotKey();
     const e1 = try sm.getOrCreate(&key);
-    try std.testing.expectEqual(@as(SubId, 1), e1.sub_id);
+    try std.testing.expectEqual(1, e1.sub_id);
 
     sm.removeById(e1.sub_id);
     try std.testing.expect(sm.getById(e1.sub_id) == null);
 
     const e2 = try sm.getOrCreate(&key);
-    try std.testing.expectEqual(@as(SubId, 2), e2.sub_id);
+    try std.testing.expectEqual(2, e2.sub_id);
 }
 
 test "RPCSubMap getById" {
@@ -266,5 +295,5 @@ test "RPCSubMap method fanout iteration" {
             account_count += 1;
         }
     }
-    try std.testing.expectEqual(@as(usize, 2), account_count);
+    try std.testing.expectEqual(2, account_count);
 }

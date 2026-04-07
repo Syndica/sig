@@ -13,6 +13,34 @@ const initTestClient = helpers.initTestClient;
 const runBothLoops = helpers.runBothLoops;
 const waitForMessages = helpers.waitForMessages;
 
+const ProgramNotification = struct {
+    method: []const u8,
+    params: struct {
+        result: struct {
+            context: struct {
+                slot: u64,
+            },
+            value: struct {
+                account: struct {
+                    lamports: u64,
+                },
+            },
+        },
+    },
+};
+
+fn parseProgramNotification(
+    allocator: std.mem.Allocator,
+    msg: []const u8,
+) !std.json.Parsed(ProgramNotification) {
+    return std.json.parseFromSlice(
+        ProgramNotification,
+        allocator,
+        msg,
+        .{ .ignore_unknown_fields = true },
+    );
+}
+
 test "programSubscribe confirmed publishes on rooted without confirmed event" {
     const allocator = std.testing.allocator;
 
@@ -67,10 +95,13 @@ test "programSubscribe confirmed publishes on rooted without confirmed event" {
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
-    const notif = handler.received.items[1];
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"programNotification\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"lamports\":12345") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"slot\":88") != null);
+    const parsed_notif = try parseProgramNotification(allocator, handler.received.items[1]);
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
+
+    try std.testing.expectEqualStrings("programNotification", notification.method);
+    try std.testing.expectEqual(12_345, notification.params.result.value.account.lamports);
+    try std.testing.expectEqual(88, notification.params.result.context.slot);
 
     handler.queueSendNow(
         \\{"jsonrpc":"2.0","id":2,"method":"programUnsubscribe","params":[1]}
@@ -165,26 +196,35 @@ test "programSubscribe confirmed flushes frozen ancestors in order" {
     server.injectEvent(.{ .slot_frozen = .{ .slot = 2, .parent = 1, .root = 0 } });
     server.injectEvent(.{ .slot_confirmed = 3 });
     runBothLoops(server, &client_env, &handler, 300);
-    try std.testing.expectEqual(@as(usize, 1), handler.received.items.len);
+    try std.testing.expectEqual(1, handler.received.items.len);
 
     server.injectEvent(.{ .slot_frozen = .{ .slot = 3, .parent = 2, .root = 0 } });
 
     waitForMessages(server, &client_env, &handler, 4, 5000);
     try std.testing.expect(handler.received.items.len >= 4);
 
-    const notif1 = handler.received.items[1];
-    const notif2 = handler.received.items[2];
-    const notif3 = handler.received.items[3];
-    try std.testing.expect(std.mem.indexOf(u8, notif1, "\"slot\":1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif2, "\"slot\":2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif3, "\"slot\":3") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif1, "\"lamports\":1111") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif2, "\"lamports\":2222") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif3, "\"lamports\":3333") != null);
+    const parsed_notif1 = try parseProgramNotification(allocator, handler.received.items[1]);
+    defer parsed_notif1.deinit();
+    const notif1 = parsed_notif1.value;
+
+    const parsed_notif2 = try parseProgramNotification(allocator, handler.received.items[2]);
+    defer parsed_notif2.deinit();
+    const notif2 = parsed_notif2.value;
+
+    const parsed_notif3 = try parseProgramNotification(allocator, handler.received.items[3]);
+    defer parsed_notif3.deinit();
+    const notif3 = parsed_notif3.value;
+
+    try std.testing.expectEqual(1, notif1.params.result.context.slot);
+    try std.testing.expectEqual(2, notif2.params.result.context.slot);
+    try std.testing.expectEqual(3, notif3.params.result.context.slot);
+    try std.testing.expectEqual(1_111, notif1.params.result.value.account.lamports);
+    try std.testing.expectEqual(2_222, notif2.params.result.value.account.lamports);
+    try std.testing.expectEqual(3_333, notif3.params.result.value.account.lamports);
 
     server.injectEvent(.{ .slot_rooted = 3 });
     runBothLoops(server, &client_env, &handler, 300);
-    try std.testing.expectEqual(@as(usize, 4), handler.received.items.len);
+    try std.testing.expectEqual(4, handler.received.items.len);
 
     if (handler.conn_ref) |c| {
         c.close(.normal, "");
@@ -192,7 +232,7 @@ test "programSubscribe confirmed flushes frozen ancestors in order" {
     runBothLoops(server, &client_env, &handler, 100);
 }
 
-test "programSubscribe processed only publishes frozen on-fork slots" {
+test "programSubscribe processed publishes current tip slot if frozen before tip change" {
     const allocator = std.testing.allocator;
 
     var server = try TestServer.start(allocator);
@@ -218,11 +258,78 @@ test "programSubscribe processed only publishes frozen on-fork slots" {
     const account_shared = try sig.runtime.AccountSharedData.fromAccount(allocator, &account);
     defer account_shared.deinit(allocator);
 
-    // Fork A: slot 10
     try addTrackedSlot(server, 10, 0, &.{10});
     try server.account_db.db.put(10, pk, account_shared);
 
-    // Fork B: slot 20 (side fork, not an ancestor of tip)
+    var handler = TestClientHandler.init(allocator);
+    defer handler.deinit();
+
+    handler.queueSend(
+        \\{"jsonrpc":"2.0","id":1,"method":"programSubscribe","params":["CVDFLCAjXhVWiPXH9nTCTpCgVzmDVoiPzNJYuccr1dqB",{"commitment":"processed"}]}
+    );
+    handler.close_after = 0;
+
+    var client_env: TestClientEnv = undefined;
+    try client_env.start();
+    defer client_env.deinit();
+
+    var conn: TestClient.Conn = undefined;
+    var client = initTestClient(allocator, &client_env, &handler, &conn, server.port);
+    try client.connect();
+
+    waitForMessages(server, &client_env, &handler, 1, 5000);
+    try std.testing.expectEqual(1, handler.received.items.len);
+
+    server.injectEvent(.{ .slot_frozen = .{ .slot = 10, .parent = 0, .root = 0 } });
+    runBothLoops(server, &client_env, &handler, 300);
+    try std.testing.expectEqual(1, handler.received.items.len);
+
+    server.commitments.update(.processed, 10);
+    server.injectEvent(.{ .tip_changed = 10 });
+
+    waitForMessages(server, &client_env, &handler, 2, 5000);
+    try std.testing.expectEqual(2, handler.received.items.len);
+    const parsed_notif = try parseProgramNotification(allocator, handler.received.items[1]);
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
+
+    try std.testing.expectEqualStrings("programNotification", notification.method);
+    try std.testing.expectEqual(11_111, notification.params.result.value.account.lamports);
+    try std.testing.expectEqual(10, notification.params.result.context.slot);
+
+    if (handler.conn_ref) |c| {
+        c.close(.normal, "");
+    }
+    runBothLoops(server, &client_env, &handler, 100);
+}
+
+test "programSubscribe processed does not publish frozen off-fork slot" {
+    const allocator = std.testing.allocator;
+
+    var server = try TestServer.start(allocator);
+    defer {
+        server.stop();
+        server.deinit();
+    }
+
+    const program_id = Pubkey.parse("CVDFLCAjXhVWiPXH9nTCTpCgVzmDVoiPzNJYuccr1dqB");
+    var pk: Pubkey = undefined;
+    @memset(&pk.data, 0xBB);
+    const data_buf = try allocator.alloc(u8, 2);
+    data_buf[0] = 0xCA;
+    data_buf[1] = 0xFE;
+    const account = Account{
+        .lamports = 22222,
+        .data = sig.accounts_db.buffer_pool.AccountDataHandle.initAllocatedOwned(data_buf),
+        .owner = program_id,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    defer account.deinit(allocator);
+    const account_shared = try sig.runtime.AccountSharedData.fromAccount(allocator, &account);
+    defer account_shared.deinit(allocator);
+
+    try addTrackedSlot(server, 10, 0, &.{10});
     try addTrackedSlot(server, 20, 0, &.{20});
     try server.account_db.db.put(20, pk, account_shared);
 
@@ -243,26 +350,17 @@ test "programSubscribe processed only publishes frozen on-fork slots" {
     try client.connect();
 
     waitForMessages(server, &client_env, &handler, 1, 5000);
-    try std.testing.expect(handler.received.items.len >= 1);
+    try std.testing.expectEqual(1, handler.received.items.len);
 
     // Set tip to slot 10.
     server.commitments.update(.processed, 10);
     server.injectEvent(.{ .tip_changed = 10 });
+    runBothLoops(server, &client_env, &handler, 300);
+    try std.testing.expectEqual(1, handler.received.items.len);
 
-    // Freeze slot 10 (on current fork) -> should publish.
-    server.injectEvent(.{ .slot_frozen = .{ .slot = 10, .parent = 0, .root = 0 } });
-
-    waitForMessages(server, &client_env, &handler, 2, 5000);
-    try std.testing.expect(handler.received.items.len >= 2);
-    const notif = handler.received.items[1];
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"programNotification\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"lamports\":11111") != null);
-
-    // Freeze slot 20 (off-fork) -> should NOT publish for processed.
     server.injectEvent(.{ .slot_frozen = .{ .slot = 20, .parent = 0, .root = 0 } });
     runBothLoops(server, &client_env, &handler, 300);
-    // Still only 2 messages (subscribe response + 1 notification from on-fork slot 10).
-    try std.testing.expectEqual(@as(usize, 2), handler.received.items.len);
+    try std.testing.expectEqual(1, handler.received.items.len);
 
     if (handler.conn_ref) |c| {
         c.close(.normal, "");
@@ -326,15 +424,19 @@ test "programSubscribe no backfill on pure tip change" {
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
-    try std.testing.expect(
-        std.mem.indexOf(u8, handler.received.items[1], "\"programNotification\"") != null,
-    );
+    const parsed_notif = try parseProgramNotification(allocator, handler.received.items[1]);
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
+
+    try std.testing.expectEqualStrings("programNotification", notification.method);
+    try std.testing.expectEqual(22_222, notification.params.result.value.account.lamports);
+    try std.testing.expectEqual(10, notification.params.result.context.slot);
 
     // Pure tip change to slot 11 (no freeze of slot 11) -> should NOT backfill.
     server.commitments.update(.processed, 11);
     server.injectEvent(.{ .tip_changed = 11 });
     runBothLoops(server, &client_env, &handler, 300);
-    try std.testing.expectEqual(@as(usize, 2), handler.received.items.len);
+    try std.testing.expectEqual(2, handler.received.items.len);
 
     if (handler.conn_ref) |c| {
         c.close(.normal, "");
@@ -416,17 +518,21 @@ test "programSubscribe finalized flushes all newly rooted slots" {
     waitForMessages(server, &client_env, &handler, 3, 5000);
     try std.testing.expect(handler.received.items.len >= 3);
 
-    // Both notifications are programNotification.
-    const notif1 = handler.received.items[1];
-    const notif2 = handler.received.items[2];
-    try std.testing.expect(std.mem.indexOf(u8, notif1, "\"programNotification\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif2, "\"programNotification\"") != null);
+    const parsed_notif1 = try parseProgramNotification(allocator, handler.received.items[1]);
+    defer parsed_notif1.deinit();
+    const notif1 = parsed_notif1.value;
 
-    // Verify both slot 10 and slot 11 produced notifications (check lamports to distinguish).
-    const has_10k = std.mem.indexOf(u8, notif1, "\"lamports\":10000") != null or
-        std.mem.indexOf(u8, notif2, "\"lamports\":10000") != null;
-    const has_11k = std.mem.indexOf(u8, notif1, "\"lamports\":11000") != null or
-        std.mem.indexOf(u8, notif2, "\"lamports\":11000") != null;
+    const parsed_notif2 = try parseProgramNotification(allocator, handler.received.items[2]);
+    defer parsed_notif2.deinit();
+    const notif2 = parsed_notif2.value;
+
+    try std.testing.expectEqualStrings("programNotification", notif1.method);
+    try std.testing.expectEqualStrings("programNotification", notif2.method);
+
+    const has_10k = notif1.params.result.value.account.lamports == 10_000 or
+        notif2.params.result.value.account.lamports == 10_000;
+    const has_11k = notif1.params.result.value.account.lamports == 11_000 or
+        notif2.params.result.value.account.lamports == 11_000;
     try std.testing.expect(has_10k);
     try std.testing.expect(has_11k);
 
@@ -508,15 +614,16 @@ test "programSubscribe filter dataSize applied" {
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
-    const notif = handler.received.items[1];
-    // Only the 4-byte account (lamports=100) should appear.
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"lamports\":100") != null);
+    const parsed_notif = try parseProgramNotification(allocator, handler.received.items[1]);
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
 
-    // Give time for any extra messages, then verify no lamports:200 was published.
+    try std.testing.expectEqualStrings("programNotification", notification.method);
+    try std.testing.expectEqual(100, notification.params.result.value.account.lamports);
+    try std.testing.expectEqual(50, notification.params.result.context.slot);
+
     runBothLoops(server, &client_env, &handler, 200);
-    for (handler.received.items[1..]) |msg| {
-        try std.testing.expect(std.mem.indexOf(u8, msg, "\"lamports\":200") == null);
-    }
+    try std.testing.expectEqual(2, handler.received.items.len);
 
     if (handler.conn_ref) |c| {
         c.close(.normal, "");
@@ -602,14 +709,16 @@ test "programSubscribe filter memcmp applied" {
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
-    const notif = handler.received.items[1];
-    // Only the matching account (lamports=300) should appear.
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"lamports\":300") != null);
+    const parsed_notif = try parseProgramNotification(allocator, handler.received.items[1]);
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
+
+    try std.testing.expectEqualStrings("programNotification", notification.method);
+    try std.testing.expectEqual(300, notification.params.result.value.account.lamports);
+    try std.testing.expectEqual(60, notification.params.result.context.slot);
 
     runBothLoops(server, &client_env, &handler, 200);
-    for (handler.received.items[1..]) |msg| {
-        try std.testing.expect(std.mem.indexOf(u8, msg, "\"lamports\":400") == null);
-    }
+    try std.testing.expectEqual(2, handler.received.items.len);
 
     if (handler.conn_ref) |c| {
         c.close(.normal, "");
@@ -671,8 +780,13 @@ test "programSubscribe tokenAccountState matches account data without token owne
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
-    const notif = handler.received.items[1];
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"lamports\":500") != null);
+    const parsed_notif = try parseProgramNotification(allocator, handler.received.items[1]);
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
+
+    try std.testing.expectEqualStrings("programNotification", notification.method);
+    try std.testing.expectEqual(500, notification.params.result.value.account.lamports);
+    try std.testing.expectEqual(65, notification.params.result.context.slot);
 
     if (handler.conn_ref) |c| {
         c.close(.normal, "");
@@ -729,10 +843,13 @@ test "programSubscribe zero-lamport account with matching owner publishes" {
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
-    const notif = handler.received.items[1];
-    // Zero-lamport account with matching owner should produce a concrete notification.
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"programNotification\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notif, "\"lamports\":0") != null);
+    const parsed_notif = try parseProgramNotification(allocator, handler.received.items[1]);
+    defer parsed_notif.deinit();
+    const notification = parsed_notif.value;
+
+    try std.testing.expectEqualStrings("programNotification", notification.method);
+    try std.testing.expectEqual(0, notification.params.result.value.account.lamports);
+    try std.testing.expectEqual(70, notification.params.result.context.slot);
 
     if (handler.conn_ref) |c| {
         c.close(.normal, "");
@@ -794,12 +911,8 @@ test "programSubscribe account with non-matching owner does not publish" {
     server.injectEvent(.{ .slot_frozen = .{ .slot = 80, .parent = 0, .root = 0 } });
     server.injectEvent(.{ .slot_rooted = 80 });
 
-    // Give time for processing.
     runBothLoops(server, &client_env, &handler, 300);
-    // Should have no program notification (only subscribe response).
-    for (handler.received.items[1..]) |msg| {
-        try std.testing.expect(std.mem.indexOf(u8, msg, "\"programNotification\"") == null);
-    }
+    try std.testing.expectEqual(1, handler.received.items.len);
 
     if (handler.conn_ref) |c| {
         c.close(.normal, "");

@@ -86,11 +86,14 @@ pub const GetError = error{ IndexOverwritten, IndexSkipped };
 
 /// Allocate queue storage and start with an empty committed set.
 ///
+/// `capacity` must be non-zero or this returns `error.ZeroCapacity`.
 /// `capacity` is rounded up to the next power of two for mask-based indexing.
 pub fn init(allocator: std.mem.Allocator, capacity: u64, commit_path: CommitPath) !NotifQueue {
-    const pow2 = std.math.ceilPowerOfTwo(u64, capacity) catch {
-        return error.Overflow;
-    };
+    // Disallow zero capacity to avoid needing to deal with it in operations.
+    // The capacity is fixed so it's unusable if set to zero, and it's not a generic container
+    // so there isn't any utility gained as a generic "unused" fallback.
+    if (capacity == 0) return error.ZeroCapacity;
+    const pow2 = try std.math.ceilPowerOfTwo(u64, capacity);
     const entries = try allocator.alloc(Entry, @intCast(pow2));
     for (entries) |*e| {
         e.* = .{};
@@ -632,6 +635,93 @@ test "commitSerialized direct path rejects index" {
     const p = try allocPayload(allocator, "x");
     try std.testing.expectError(error.UnexpectedIndexForDirectPath, q.commitSerialized(1, p));
     p.deinit(allocator);
+}
+
+test "init with zero capacity returns error" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(error.ZeroCapacity, NotifQueue.init(allocator, 0, .reserved));
+    try std.testing.expectError(error.ZeroCapacity, NotifQueue.init(allocator, 0, .direct));
+}
+
+test "capacity 1 reserved path: commit, get, wraparound" {
+    const allocator = std.testing.allocator;
+
+    var q = try NotifQueue.init(allocator, 1, .reserved);
+    defer q.deinit();
+
+    try std.testing.expectEqual(1, q.capacity);
+    try std.testing.expectEqual(0, q.mod_mask);
+
+    var sub: JRPCHandler = undefined;
+    try q.addSubscriber(&sub);
+
+    // Single slot: reserve, ready, commit, get.
+    const idx1 = try reserveReady(&q, allocator, "first");
+    try std.testing.expectEqual(1, q.commitReadyPrefix());
+    try std.testing.expectEqual(idx1, q.head);
+    try std.testing.expectEqual(idx1, q.tail);
+
+    const got1 = try mustGet(&q, idx1);
+    defer got1.deinit(allocator);
+    try std.testing.expectEqualStrings("first", got1.payload());
+    try std.testing.expectEqual(q.head + 1, q.tail); // empty after consumption
+
+    // Second entry wraps into the same slot, evicting nothing (already consumed).
+    const idx2 = try reserveReady(&q, allocator, "second");
+    try std.testing.expectEqual(1, q.commitReadyPrefix());
+
+    const got2 = try mustGet(&q, idx2);
+    defer got2.deinit(allocator);
+    try std.testing.expectEqualStrings("second", got2.payload());
+    try std.testing.expectError(NotifQueue.GetError.IndexOverwritten, q.get(idx1));
+
+    // Third entry wraps while previous is unconsumed (subscriber lag).
+    const idx3 = try reserveReady(&q, allocator, "third");
+    try std.testing.expectEqual(1, q.commitReadyPrefix());
+
+    // idx3 evicted idx2's committed entry via wrap.
+    try std.testing.expectError(NotifQueue.GetError.IndexOverwritten, q.get(idx2));
+
+    const got3 = try mustGet(&q, idx3);
+    defer got3.deinit(allocator);
+    try std.testing.expectEqualStrings("third", got3.payload());
+}
+
+test "capacity 1 direct path: commit, get, wraparound" {
+    const allocator = std.testing.allocator;
+
+    var q = try NotifQueue.init(allocator, 1, .direct);
+    defer q.deinit();
+
+    var sub: JRPCHandler = undefined;
+    try q.addSubscriber(&sub);
+
+    q.appendCommitted(try allocPayload(allocator, "a"));
+    try std.testing.expectEqual(1, q.head);
+
+    const got_a = try mustGet(&q, 1);
+    defer got_a.deinit(allocator);
+    try std.testing.expectEqualStrings("a", got_a.payload());
+    try std.testing.expectEqual(q.head + 1, q.tail);
+
+    // Wrap into same slot.
+    q.appendCommitted(try allocPayload(allocator, "b"));
+    try std.testing.expectEqual(2, q.head);
+    try std.testing.expectError(NotifQueue.GetError.IndexOverwritten, q.get(1));
+
+    const got_b = try mustGet(&q, 2);
+    defer got_b.deinit(allocator);
+    try std.testing.expectEqualStrings("b", got_b.payload());
+
+    // Wrap while unconsumed (lag eviction).
+    q.appendCommitted(try allocPayload(allocator, "c"));
+    q.appendCommitted(try allocPayload(allocator, "d"));
+    try std.testing.expectEqual(4, q.head);
+    try std.testing.expectError(NotifQueue.GetError.IndexOverwritten, q.get(3));
+
+    const got_d = try mustGet(&q, 4);
+    defer got_d.deinit(allocator);
+    try std.testing.expectEqualStrings("d", got_d.payload());
 }
 
 test "markReady rejects stale index after slot reuse" {
