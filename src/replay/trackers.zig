@@ -271,6 +271,36 @@ pub const SlotTracker = struct {
         return try parents_list.toOwnedSlice(allocator);
     }
 
+    /// Returns the ordered path of slots from `old_root` to `new_root`, exclusive of `old_root`
+    /// and inclusive of `new_root`.
+    pub fn rootedPathForward(
+        self: *SlotTracker,
+        allocator: Allocator,
+        old_root: Slot,
+        new_root: Slot,
+    ) ![]const Slot {
+        std.debug.assert(old_root <= new_root);
+
+        var rooted_path = std.ArrayListUnmanaged(Slot).empty;
+        defer rooted_path.deinit(allocator);
+
+        // check we have slot before allocating
+        const root_info = self.get(new_root) orelse return error.NewRootNotFound;
+        try rooted_path.ensureTotalCapacity(allocator, new_root - old_root);
+        {
+            defer root_info.release();
+
+            for (old_root + 1..new_root) |slot| {
+                if (root_info.constants().ancestors.containsSlot(slot)) {
+                    rooted_path.appendAssumeCapacity(slot);
+                }
+            }
+        }
+        rooted_path.appendAssumeCapacity(new_root);
+
+        return try rooted_path.toOwnedSlice(allocator);
+    }
+
     /// Removes all tracked slots other than state_root and its descendants.
     ///
     /// Analogous to [prune_non_rooted](https://github.com/anza-xyz/agave/blob/441258229dfed75e45be8f99c77865f18886d4ba/runtime/src/bank_forks.rs#L591)
@@ -939,6 +969,37 @@ fn testDummySlotConstants(allocator: Allocator, slot: Slot) Allocator.Error!Slot
         .inflation = .DEFAULT,
         .rent_collector = .DEFAULT,
     };
+}
+
+test "SlotTracker.rootedPathForward returns forward rooted chain" {
+    const allocator = std.testing.allocator;
+    const root_slot: Slot = 1;
+
+    var tracker: SlotTracker = try .init(allocator, root_slot, .{
+        .constants = try testDummySlotConstants(allocator, root_slot),
+        .state = .GENESIS,
+        .allocator = allocator,
+    });
+    defer tracker.deinit(allocator);
+
+    for (2..5) |slot| {
+        var constants = try testDummySlotConstants(allocator, slot);
+        for (root_slot..slot) |ancestor_slot| {
+            try constants.ancestors.addSlot(allocator, ancestor_slot);
+        }
+        const gop = try tracker.getOrPut(allocator, slot, .{
+            .constants = constants,
+            .state = .GENESIS,
+            .allocator = allocator,
+        });
+        gop.reference.release();
+        try std.testing.expect(!gop.found_existing);
+    }
+
+    const rooted_path = try tracker.rootedPathForward(allocator, root_slot, 4);
+    defer allocator.free(rooted_path);
+
+    try std.testing.expectEqualSlices(Slot, &.{ 2, 3, 4 }, rooted_path);
 }
 
 test "SlotTracker.prune removes slots that are not descendants of state root" {

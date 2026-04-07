@@ -42,7 +42,7 @@ pub const Client = struct {
 
         var w = std.io.Writer.Allocating.init(allocator);
         defer w.deinit();
-        try std.json.fmt(request, .{}).format(&w.writer);
+        try std.json.fmt(request, .{ .emit_null_optional_fields = false }).format(&w.writer);
         const request_json = w.written();
 
         const response_json = try self.fetcher.fetchWithRetries(allocator, request_json);

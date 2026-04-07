@@ -201,33 +201,18 @@ pub const TransactionStatusMetaBuilder = struct {
         post_token_balances: ?[]const TransactionTokenBalance,
     ) error{OutOfMemory}!TransactionStatusMeta {
         // Convert log messages from LogCollector
-        const log_messages: ?[]const []const u8 = if (processed_tx.outputs) |outputs| blk: {
-            if (outputs.log_collector) |log_collector| {
-                break :blk try extractLogMessages(allocator, log_collector);
-            }
-            break :blk null;
-        } else null;
+        const log_messages = try extractLogMessages(allocator, processed_tx);
         errdefer if (log_messages) |logs| allocator.free(logs);
 
         // Convert inner instructions from InstructionTrace
-        const inner_instructions = if (processed_tx.outputs) |outputs| blk: {
-            if (outputs.instruction_trace) |trace| {
-                break :blk try convertInstructionTrace(allocator, trace);
-            }
-            break :blk null;
-        } else null;
+        const inner_instructions = try convertInstructionTrace(allocator, processed_tx);
         errdefer if (inner_instructions) |inner| {
             for (inner) |item| item.deinit(allocator);
             allocator.free(inner);
         };
 
         // Convert return data
-        const return_data: ?TransactionReturnData = if (processed_tx.outputs) |outputs| blk: {
-            if (outputs.return_data) |rd| {
-                break :blk try convertReturnData(allocator, rd);
-            }
-            break :blk null;
-        } else null;
+        const return_data = try convertReturnData(allocator, processed_tx);
         errdefer if (return_data) |rd| rd.deinit(allocator);
 
         // Calculate compute units consumed
@@ -272,25 +257,22 @@ pub const TransactionStatusMetaBuilder = struct {
         };
     }
 
-    /// Extract log messages from a LogCollector. Returns a caller-owned slice
+    /// Extract log messages from LogCollector. Returns a caller-owned slice
     /// of string slices that point into the LogCollector's memory.
-    fn extractLogMessages(
-        allocator: Allocator,
-        log_collector: LogCollector,
-    ) error{OutOfMemory}![]const []const u8 {
-        // Count messages first
-        var count: usize = 0;
+    pub fn extractLogMessages(
+        allocator: std.mem.Allocator,
+        processed_tx: ProcessedTransaction,
+    ) error{OutOfMemory}!?[]const []const u8 {
+        const outputs = processed_tx.outputs orelse return null;
+        const log_collector = outputs.log_collector orelse return null;
+
         var iter = log_collector.iterator();
-        while (iter.next()) |_| {
-            count += 1;
-        }
+        const iter_len = iter.message_indices.len;
+        if (iter_len == 0) return &.{};
 
-        if (count == 0) return &.{};
-
-        const messages = try allocator.alloc([]const u8, count);
+        const messages = try allocator.alloc([]const u8, iter_len);
         errdefer allocator.free(messages);
 
-        iter = log_collector.iterator();
         var i: usize = 0;
         while (iter.next()) |msg| : (i += 1) {
             // The log collector returns sentinel-terminated strings, we just store the slice
@@ -302,10 +284,12 @@ pub const TransactionStatusMetaBuilder = struct {
 
     /// Convert InstructionTrace to InnerInstructions array.
     /// The trace contains all CPI calls; we need to group them by top-level instruction index.
-    fn convertInstructionTrace(
+    pub fn convertInstructionTrace(
         allocator: Allocator,
-        trace: InstructionTrace,
-    ) error{OutOfMemory}![]const InnerInstructions {
+        processed_tx: ProcessedTransaction,
+    ) error{OutOfMemory}!?[]const InnerInstructions {
+        const outputs = processed_tx.outputs orelse return null;
+        const trace = outputs.instruction_trace orelse return null;
         if (trace.len == 0) return &.{};
 
         // Group instructions by their top-level instruction index (depth == 1 starts a new group)
@@ -388,10 +372,12 @@ pub const TransactionStatusMetaBuilder = struct {
     }
 
     /// Convert runtime TransactionReturnData to ledger TransactionReturnData.
-    fn convertReturnData(
+    pub fn convertReturnData(
         allocator: Allocator,
-        rd: RuntimeTransactionReturnData,
-    ) error{OutOfMemory}!TransactionReturnData {
+        processed_tx: ProcessedTransaction,
+    ) error{OutOfMemory}!?TransactionReturnData {
+        const outputs = processed_tx.outputs orelse return null;
+        const rd = outputs.return_data orelse return null;
         return TransactionReturnData{
             .program_id = rd.program_id,
             .data = try allocator.dupe(u8, rd.data.slice()),
@@ -668,6 +654,8 @@ test "TransactionError jsonStringify" {
 test "TransactionStatusMetaBuilder.extractLogMessages" {
     const allocator = std.testing.allocator;
     const LogCollector = sig.runtime.LogCollector;
+    const ExecutedTransaction = sig.runtime.transaction_execution.ExecutedTransaction;
+    const PT = sig.runtime.transaction_execution.ProcessedTransaction;
 
     // Test with messages
     {
@@ -677,10 +665,30 @@ test "TransactionStatusMetaBuilder.extractLogMessages" {
         try log_collector.log(allocator, "Program log: Hello", .{});
         try log_collector.log(allocator, "Program consumed {d} CUs", .{@as(u64, 5000)});
 
-        const messages = try TransactionStatusMetaBuilder.extractLogMessages(
+        const processed = PT{
+            .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
+            .rent = 0,
+            .writes = .{},
+            .err = null,
+            .loaded_accounts_data_size = 0,
+            .outputs = ExecutedTransaction{
+                .err = null,
+                .log_collector = log_collector,
+                .instruction_trace = null,
+                .return_data = null,
+                .compute_limit = 0,
+                .compute_meter = 0,
+                .accounts_data_len_delta = 0,
+            },
+            .pre_balances = .{},
+            .pre_token_balances = .{},
+            .cost_units = 0,
+        };
+
+        const messages = (try TransactionStatusMetaBuilder.extractLogMessages(
             allocator,
-            log_collector,
-        );
+            processed,
+        )).?;
         defer allocator.free(messages);
 
         try std.testing.expectEqual(@as(usize, 2), messages.len);
@@ -693,18 +701,61 @@ test "TransactionStatusMetaBuilder.extractLogMessages" {
         var log_collector = try LogCollector.init(allocator, 10_000);
         defer log_collector.deinit(allocator);
 
-        const messages = try TransactionStatusMetaBuilder.extractLogMessages(
+        const processed = PT{
+            .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
+            .rent = 0,
+            .writes = .{},
+            .err = null,
+            .loaded_accounts_data_size = 0,
+            .outputs = ExecutedTransaction{
+                .err = null,
+                .log_collector = log_collector,
+                .instruction_trace = null,
+                .return_data = null,
+                .compute_limit = 0,
+                .compute_meter = 0,
+                .accounts_data_len_delta = 0,
+            },
+            .pre_balances = .{},
+            .pre_token_balances = .{},
+            .cost_units = 0,
+        };
+
+        const messages = (try TransactionStatusMetaBuilder.extractLogMessages(
             allocator,
-            log_collector,
-        );
+            processed,
+        )).?;
         // Empty returns a static empty slice, no need to free
         try std.testing.expectEqual(@as(usize, 0), messages.len);
+    }
+
+    // Test with no outputs (returns null)
+    {
+        const processed = PT{
+            .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
+            .rent = 0,
+            .writes = .{},
+            .err = null,
+            .loaded_accounts_data_size = 0,
+            .outputs = null,
+            .pre_balances = .{},
+            .pre_token_balances = .{},
+            .cost_units = 0,
+        };
+
+        const messages = try TransactionStatusMetaBuilder.extractLogMessages(
+            allocator,
+            processed,
+        );
+        try std.testing.expectEqual(@as(?[]const []const u8, null), messages);
     }
 }
 
 test "TransactionStatusMetaBuilder.convertReturnData" {
     const allocator = std.testing.allocator;
     const RuntimeReturnData = sig.runtime.transaction_context.TransactionReturnData;
+    const ExecutedTransaction = sig.runtime.transaction_execution.ExecutedTransaction;
+    const PT = sig.runtime.transaction_execution.ProcessedTransaction;
 
     const program_id = Pubkey{ .data = [_]u8{0xAB} ** 32 };
     var rt_return_data = RuntimeReturnData{
@@ -713,7 +764,27 @@ test "TransactionStatusMetaBuilder.convertReturnData" {
     // Add some data to the bounded array
     rt_return_data.data.appendSliceAssumeCapacity("hello world");
 
-    const result = try TransactionStatusMetaBuilder.convertReturnData(allocator, rt_return_data);
+    const processed = PT{
+        .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
+        .rent = 0,
+        .writes = .{},
+        .err = null,
+        .loaded_accounts_data_size = 0,
+        .outputs = ExecutedTransaction{
+            .err = null,
+            .log_collector = null,
+            .instruction_trace = null,
+            .return_data = rt_return_data,
+            .compute_limit = 0,
+            .compute_meter = 0,
+            .accounts_data_len_delta = 0,
+        },
+        .pre_balances = .{},
+        .pre_token_balances = .{},
+        .cost_units = 0,
+    };
+
+    const result = (try TransactionStatusMetaBuilder.convertReturnData(allocator, processed)).?;
     defer result.deinit(allocator);
 
     try std.testing.expect(result.program_id.equals(&program_id));
@@ -771,6 +842,8 @@ test "TransactionStatusMetaBuilder.convertInstructionTrace" {
     const InstructionInfo = sig.runtime.InstructionInfo;
     const TransactionContext = sig.runtime.transaction_context.TransactionContext;
     const InstructionTrace = TransactionContext.InstructionTrace;
+    const ExecutedTransaction = sig.runtime.transaction_execution.ExecutedTransaction;
+    const PT = sig.runtime.transaction_execution.ProcessedTransaction;
 
     // Create a trace with 2 top-level instructions, where the second has a CPI
     var trace = InstructionTrace{};
@@ -822,7 +895,30 @@ test "TransactionStatusMetaBuilder.convertInstructionTrace" {
         },
     });
 
-    const result = try TransactionStatusMetaBuilder.convertInstructionTrace(allocator, trace);
+    const processed = PT{
+        .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
+        .rent = 0,
+        .writes = .{},
+        .err = null,
+        .loaded_accounts_data_size = 0,
+        .outputs = ExecutedTransaction{
+            .err = null,
+            .log_collector = null,
+            .instruction_trace = trace,
+            .return_data = null,
+            .compute_limit = 0,
+            .compute_meter = 0,
+            .accounts_data_len_delta = 0,
+        },
+        .pre_balances = .{},
+        .pre_token_balances = .{},
+        .cost_units = 0,
+    };
+
+    const result = (try TransactionStatusMetaBuilder.convertInstructionTrace(
+        allocator,
+        processed,
+    )).?;
     defer {
         for (result) |item| item.deinit(allocator);
         allocator.free(result);
@@ -842,9 +938,34 @@ test "TransactionStatusMetaBuilder.convertInstructionTrace - empty trace" {
     const allocator = std.testing.allocator;
     const TransactionContext = sig.runtime.transaction_context.TransactionContext;
     const InstructionTrace = TransactionContext.InstructionTrace;
+    const ExecutedTransaction = sig.runtime.transaction_execution.ExecutedTransaction;
+    const PT = sig.runtime.transaction_execution.ProcessedTransaction;
 
     const trace = InstructionTrace{};
-    const result = try TransactionStatusMetaBuilder.convertInstructionTrace(allocator, trace);
+    const processed = PT{
+        .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
+        .rent = 0,
+        .writes = .{},
+        .err = null,
+        .loaded_accounts_data_size = 0,
+        .outputs = ExecutedTransaction{
+            .err = null,
+            .log_collector = null,
+            .instruction_trace = trace,
+            .return_data = null,
+            .compute_limit = 0,
+            .compute_meter = 0,
+            .accounts_data_len_delta = 0,
+        },
+        .pre_balances = .{},
+        .pre_token_balances = .{},
+        .cost_units = 0,
+    };
+
+    const result = (try TransactionStatusMetaBuilder.convertInstructionTrace(
+        allocator,
+        processed,
+    )).?;
     // Empty trace returns static empty slice
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }

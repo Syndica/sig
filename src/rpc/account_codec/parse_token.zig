@@ -162,7 +162,7 @@ pub fn getTokenAccountOwner(data: []const u8) ?Pubkey {
 /// Check if the account data represents a valid, initialized token account.
 /// Handles both standard SPL Token (165 bytes) and Token-2022 extended accounts.
 /// [spl] Account::valid_account_data in spl-token-2022 interface/src/state.rs
-fn isValidTokenAccountData(data: []const u8) bool {
+pub fn isValidTokenAccountData(data: []const u8) bool {
     if (data.len < TokenAccount.LEN) return false;
     const disc = if (data.len > TokenAccount.LEN) data[TokenAccount.LEN] else 0;
     return isValidTokenAccount(data.len, data[ACCOUNT_INITIALIZED_INDEX], disc);

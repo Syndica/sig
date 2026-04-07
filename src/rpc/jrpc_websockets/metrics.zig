@@ -41,6 +41,10 @@ pub const Metrics = struct {
     serialize_payload_bytes: u64 = 0,
     /// Total heap allocations of serialization tasks.
     serialize_tasks_allocated: u64 = 0,
+    /// Metric count of serialize jobs submitted but not yet committed.
+    /// Updated only by the loop thread and may remain stale if a worker cannot send
+    /// its commit message back to the loop.
+    inflight_jobs: u64 = 0,
     /// Serialization errors from worker threads.
     serialize_errors: u64 = 0,
 
@@ -68,7 +72,7 @@ pub const Metrics = struct {
     /// Total wall time spent freeing payload buffers (ns).
     payload_free_wall_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
-    pub fn log(self: *const Metrics, inflight_jobs: u64) void {
+    pub fn log(self: *const Metrics) void {
         const payloads_freed = self.payloads_freed.load(.acquire);
         const payload_free_wall_ns = self.payload_free_wall_ns.load(.acquire);
 
@@ -97,7 +101,7 @@ pub const Metrics = struct {
                 self.serialize_pipeline_ns,
                 self.serialize_payload_bytes,
                 self.serialize_tasks_allocated,
-                inflight_jobs,
+                self.inflight_jobs,
                 self.serialize_errors,
                 self.send_errors,
                 payloads_freed,

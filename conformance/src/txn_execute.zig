@@ -748,7 +748,7 @@ fn executeTxnContext(
         allocator,
         allocator,
         &runtime_transaction,
-        account_store.forSlot(slot, &ancestors),
+        account_store.forSlot(slot, &ancestors).reader(),
         &environment,
         &config,
         &program_map,

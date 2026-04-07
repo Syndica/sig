@@ -89,6 +89,14 @@ pub const LoadedAccount = struct {
     }
 };
 
+/// An account loaded and prepared for transaction execution, with its
+/// contribution to the loaded data size and any rent that was collected.
+pub const PreparedAccount = struct {
+    account: AccountSharedData,
+    loaded_size: usize,
+    rent_collected: u64,
+};
+
 pub const AccountLoadError = error{ OutOfMemory, AccountsDBError };
 
 /// Wraps calls to AccountsDB and convert all errors except OutOfMemory into AccountsDBError.
@@ -109,6 +117,7 @@ pub fn loadTransactionAccounts(
     feature_set: *const sig.core.FeatureSet,
     slot: sig.core.Slot,
     compute_budget_limits: *const ComputeBudgetLimits,
+    fee_payer: PreparedAccount,
 ) AccountLoadError!TransactionResult(LoadedTransactionAccounts) {
     var zone = tracy.Zone.init(@src(), .{ .name = "loadTransactionAccounts" });
     defer zone.deinit();
@@ -122,6 +131,7 @@ pub fn loadTransactionAccounts(
             feature_set,
             slot,
             compute_budget_limits,
+            fee_payer,
         )
     else
         loadTransactionAccountsOld(
@@ -132,6 +142,7 @@ pub fn loadTransactionAccounts(
             feature_set,
             slot,
             compute_budget_limits,
+            fee_payer,
         );
 
     return .{
@@ -161,7 +172,11 @@ fn loadTransactionAccountsSimd186(
     feature_set: *const sig.core.FeatureSet,
     slot: sig.core.Slot,
     compute_budget_limits: *const ComputeBudgetLimits,
+    fee_payer: PreparedAccount,
 ) InternalLoadError!LoadedTransactionAccounts {
+    var fee_payer_consumed = false;
+    errdefer if (!fee_payer_consumed) fee_payer.account.deinit(allocator);
+
     std.debug.assert(compute_budget_limits.loaded_accounts_bytes != 0);
 
     var loaded = LoadedTransactionAccounts.DEFAULT;
@@ -177,8 +192,8 @@ fn loadTransactionAccountsSimd186(
     try additional_loaded_accounts.ensureUnusedCapacity(allocator, MAX_TX_ACCOUNT_LOCKS);
 
     const accounts = transaction.accounts.slice();
-    for (accounts.items(.pubkey)) |account_key| {
-        const loaded_account = try loadTransactionAccount(
+    for (accounts.items(.pubkey), 0..) |account_key, i| {
+        const prepared = if (i == 0) fee_payer else try loadTransactionAccount(
             map,
             allocator,
             transaction,
@@ -187,27 +202,28 @@ fn loadTransactionAccountsSimd186(
             slot,
             &account_key,
         );
-        errdefer loaded_account.account.deinit(allocator);
+        fee_payer_consumed = true;
+        errdefer prepared.account.deinit(allocator);
 
         try loaded.increase(
-            loaded_account.loaded_size,
+            prepared.loaded_size,
             compute_budget_limits.loaded_accounts_bytes,
         );
-        loaded.rent_collected +|= loaded_account.rent_collected;
-        if (loaded_account.rent_collected != 0) {
+        loaded.rent_collected +|= prepared.rent_collected;
+        if (prepared.rent_collected != 0) {
             loaded.rent_debits.appendAssumeCapacity(.{
-                .rent_balance = loaded_account.account.lamports,
-                .rent_collected = loaded_account.rent_collected,
+                .rent_balance = prepared.account.lamports,
+                .rent_collected = prepared.rent_collected,
             });
         }
 
         // [agave] https://github.com/anza-xyz/agave/blob/7b0e13bc6fb4bfd84eb3cd0ace4bd86a451f1913/svm/src/account_loader.rs#L611-L635
 
-        const owner = &loaded_account.account.owner;
+        const owner = &prepared.account.owner;
         cont: {
             // If this is a LoaderV3 program...
             if (owner.equals(&runtime.program.bpf_loader.v3.ID)) {
-                const account_data = loaded_account.account.data;
+                const account_data = prepared.account.data;
                 const program_state = sig.bincode.readFromSlice(
                     allocator,
                     runtime.program.bpf_loader.v3.State,
@@ -237,7 +253,7 @@ fn loadTransactionAccountsSimd186(
         }
 
         loaded.accounts.appendAssumeCapacity(.{
-            .account = loaded_account.account,
+            .account = prepared.account,
             .pubkey = account_key,
         });
     }
@@ -279,15 +295,19 @@ fn loadTransactionAccountsOld(
     feature_set: *const sig.core.FeatureSet,
     slot: sig.core.Slot,
     compute_budget_limits: *const ComputeBudgetLimits,
+    fee_payer: PreparedAccount,
 ) InternalLoadError!LoadedTransactionAccounts {
+    var fee_payer_consumed = false;
+    errdefer if (!fee_payer_consumed) fee_payer.account.deinit(allocator);
+
     std.debug.assert(compute_budget_limits.loaded_accounts_bytes != 0);
 
     var loaded = LoadedTransactionAccounts.DEFAULT;
     errdefer for (loaded.accounts.slice()) |account| account.deinit(allocator);
 
     const accounts = transaction.accounts.slice();
-    for (accounts.items(.pubkey)) |account_key| {
-        const loaded_account = try loadTransactionAccount(
+    for (accounts.items(.pubkey), 0..) |account_key, i| {
+        const prepared = if (i == 0) fee_payer else try loadTransactionAccount(
             map,
             allocator,
             transaction,
@@ -296,10 +316,11 @@ fn loadTransactionAccountsOld(
             slot,
             &account_key,
         );
-        errdefer loaded_account.account.deinit(allocator);
+        fee_payer_consumed = true;
+        errdefer prepared.account.deinit(allocator);
 
         try loaded.increase(
-            loaded_account.loaded_size,
+            prepared.loaded_size,
             compute_budget_limits.loaded_accounts_bytes,
         );
 
@@ -307,18 +328,18 @@ fn loadTransactionAccountsOld(
         // because I can't figure out what previous check would allow us to make
         // this assumption.
 
-        loaded.rent_collected += loaded_account.rent_collected;
+        loaded.rent_collected += prepared.rent_collected;
 
         // ignore when rent_collected = 0
-        if (loaded_account.rent_collected != 0) {
+        if (prepared.rent_collected != 0) {
             loaded.rent_debits.appendAssumeCapacity(.{
-                .rent_balance = loaded_account.account.lamports,
-                .rent_collected = loaded_account.rent_collected,
+                .rent_balance = prepared.account.lamports,
+                .rent_collected = prepared.rent_collected,
             });
         }
 
         loaded.accounts.appendAssumeCapacity(.{
-            .account = loaded_account.account,
+            .account = prepared.account,
             .pubkey = account_key,
         });
     }
@@ -373,11 +394,7 @@ fn loadTransactionAccount(
     feature_set: *const sig.core.FeatureSet,
     slot: sig.core.Slot,
     key: *const Pubkey,
-) InternalLoadError!struct {
-    account: AccountSharedData,
-    loaded_size: usize,
-    rent_collected: u64,
-} {
+) InternalLoadError!PreparedAccount {
     if (key.equals(&runtime.sysvar.instruction.ID)) {
         @branchHint(.unlikely);
         const account = try constructInstructionsAccount(allocator, transaction);
@@ -625,6 +642,7 @@ test "loadTransactionAccounts empty transaction" {
         &env.feature_set,
         env.slot,
         &env.compute_budget_limits,
+        .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
     );
 
     try std.testing.expectEqual(0, tx_accounts.accounts.len);
@@ -635,16 +653,24 @@ test "loadTransactionAccounts sysvar instruction" {
     var accountsdb = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
     const env = newTestingEnv();
 
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const fee_payer_address = Pubkey.initRandom(prng.random());
+
     var accounts = std.MultiArrayList(AccountMeta).empty;
     defer accounts.deinit(allocator);
+    try accounts.append(allocator, sig.core.instruction.InstructionAccount{
+        .pubkey = fee_payer_address,
+        .is_signer = true,
+        .is_writable = true,
+    });
     try accounts.append(allocator, sig.core.instruction.InstructionAccount{
         .pubkey = runtime.sysvar.instruction.ID,
         .is_signer = false,
         .is_writable = false,
     });
 
-    const empty_tx = RuntimeTransaction{
-        .fee_payer = Pubkey.ZEROES,
+    const tx = RuntimeTransaction{
+        .fee_payer = fee_payer_address,
         .instructions = &.{},
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = Hash.ZEROES,
@@ -657,18 +683,19 @@ test "loadTransactionAccounts sysvar instruction" {
     const tx_accounts = try loadTransactionAccountsOld(
         .{ .account_map = &accountsdb },
         allocator,
-        &empty_tx,
+        &tx,
         &env.rent_collector,
         &env.feature_set,
         env.slot,
         &env.compute_budget_limits,
+        .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
     );
     defer tx_accounts.deinit(allocator);
 
-    try std.testing.expectEqual(1, tx_accounts.accounts.len);
-    const cached_account = tx_accounts.accounts.slice()[0];
+    try std.testing.expectEqual(2, tx_accounts.accounts.len);
+    const sysvar_account = tx_accounts.accounts.slice()[1];
 
-    try std.testing.expect(cached_account.account.data.len > 0);
+    try std.testing.expect(sysvar_account.account.data.len > 0);
     try std.testing.expectEqual(0, tx_accounts.rent_collected);
     try std.testing.expectEqual(0, tx_accounts.loaded_accounts_data_size);
     try std.testing.expectEqual(0, tx_accounts.rent_debits.len);
@@ -712,14 +739,27 @@ test "load accounts rent paid" {
     const instruction_data = "dummy instruction";
 
     const fee_payer_balance = 300;
-    var fee_payer_account = AccountSharedData.EMPTY;
-    fee_payer_account.lamports = fee_payer_balance;
 
-    var data: [1024]u8 = undefined;
-    prng.fill(&data);
+    const data = try allocator.alloc(u8, 1024);
+    prng.fill(data);
+
+    var fee_payer_account = AccountSharedData{
+        .data = data,
+        .lamports = fee_payer_balance,
+        .executable = false,
+        .owner = Pubkey.ZEROES,
+        .rent_epoch = 0,
+    };
+    _ = collectRentFromAccount(
+        &fee_payer_account,
+        &fee_payer_address,
+        &env.feature_set,
+        env.slot,
+        &env.rent_collector,
+    );
 
     try accountsdb.put(allocator, fee_payer_address, .{
-        .data = .{ .unowned_allocation = &data },
+        .data = .{ .unowned_allocation = data },
         .lamports = fee_payer_balance,
         .executable = false,
         .owner = Pubkey.ZEROES,
@@ -794,18 +834,18 @@ test "load accounts rent paid" {
         &env.feature_set,
         env.slot,
         &env.compute_budget_limits,
+        .{
+            .account = fee_payer_account,
+            .loaded_size = fee_payer_account.data.len,
+            .rent_collected = 0,
+        },
     );
     defer loaded_accounts.deinit(allocator);
 
-    // slots elapsed   slots per year    lamports per year
-    //  |               |                 |      data len
-    //  |               |                 |       |     overhead
-    //  v               v                 v       v      v
-    // ((64) / (7.8892314983999997e7)) * (3480 * (1024 + 128))
-    const expected_rent: u64 =
-        @intFromFloat(((64.0) / (7.8892314983999997e7)) * (3480 * (1024 + 128)));
     try std.testing.expectEqual(2, loaded_accounts.accounts.len);
-    try std.testing.expectEqual(expected_rent, loaded_accounts.rent_collected);
+    // The fee payer's rent was already collected before being passed to loadTransactionAccounts,
+    // so only the instruction account's rent is counted here (which is 0 because it's executable).
+    try std.testing.expectEqual(0, loaded_accounts.rent_collected);
 }
 
 test "load accounts with simd 186 and loaderv3 program" {
@@ -826,11 +866,17 @@ test "load accounts with simd 186 and loaderv3 program" {
     const instruction_data = "dummy instruction";
 
     const fee_payer_balance = 300;
-    var fee_payer_account = AccountSharedData.EMPTY;
-    fee_payer_account.lamports = fee_payer_balance;
 
-    var data: [1024]u8 = undefined;
-    prng.fill(&data);
+    const data = try allocator.alloc(u8, 1024);
+    prng.fill(data);
+
+    const fee_payer_account = AccountSharedData{
+        .data = data,
+        .lamports = fee_payer_balance,
+        .executable = false,
+        .owner = Pubkey.ZEROES,
+        .rent_epoch = 0,
+    };
 
     const program_state: runtime.program.bpf_loader.v3.State = .{
         .program = .{ .programdata_address = programdata_address },
@@ -843,7 +889,7 @@ test "load accounts with simd 186 and loaderv3 program" {
     );
 
     try accountsdb.put(allocator, fee_payer_address, .{
-        .data = .{ .unowned_allocation = &data },
+        .data = .{ .unowned_allocation = data },
         .lamports = fee_payer_balance,
         .executable = false,
         .owner = Pubkey.ZEROES,
@@ -857,7 +903,7 @@ test "load accounts with simd 186 and loaderv3 program" {
         .rent_epoch = 0,
     });
     try accountsdb.put(allocator, programdata_address, .{
-        .data = .{ .unowned_allocation = &data },
+        .data = .{ .unowned_allocation = data },
         .lamports = 1,
         .executable = true,
         .owner = Pubkey.ZEROES, // doesn't matter
@@ -942,9 +988,15 @@ test "load accounts with simd 186 and loaderv3 program" {
         &env.feature_set,
         env.slot,
         &env.compute_budget_limits,
+        .{
+            .account = fee_payer_account,
+            .loaded_size = fee_payer_account.data.len,
+            .rent_collected = 0,
+        },
     );
     defer loaded_accounts.deinit(allocator);
 
+    // fee payer: 64 + 1024, instruction: 64 + 17, program: 64 + bincode(State), programdata: 64 + 1024
     try std.testing.expectEqual(2165, loaded_accounts.loaded_accounts_data_size);
 }
 
@@ -1055,15 +1107,14 @@ test "load tx too large" {
 
     // large account
     const account_data = try allocator.alloc(u8, 10 * 1024 * 1024);
-    defer allocator.free(account_data);
 
-    try accountsdb.put(allocator, address, .{
-        .data = .{ .unowned_allocation = account_data },
+    const fee_payer_account = AccountSharedData{
+        .data = account_data,
         .lamports = 1_000_000,
         .executable = false,
         .owner = sig.runtime.program.system.ID,
         .rent_epoch = RENT_EXEMPT_RENT_EPOCH,
-    });
+    };
 
     var tx = try emptyTxWithKeys(allocator, &.{address});
     defer tx.accounts.deinit(allocator);
@@ -1076,6 +1127,11 @@ test "load tx too large" {
         &env.feature_set,
         env.slot,
         &env.compute_budget_limits,
+        .{
+            .account = fee_payer_account,
+            .loaded_size = fee_payer_account.data.len,
+            .rent_collected = 0,
+        },
     );
 
     try std.testing.expectError(error.MaxLoadedAccountsDataSizeExceeded, loaded_accounts_result);
@@ -1169,6 +1225,14 @@ test "dont double count program owner account data size" {
     };
     defer tx.accounts.deinit(allocator);
 
+    const fee_payer_account = AccountSharedData{
+        .data = try allocator.dupe(u8, data1),
+        .lamports = 1,
+        .executable = true,
+        .owner = pk_owner,
+        .rent_epoch = 0,
+    };
+
     const loaded_accounts = try loadTransactionAccountsOld(
         .{ .account_map = &accountsdb },
         allocator,
@@ -1177,6 +1241,11 @@ test "dont double count program owner account data size" {
         &env.feature_set,
         env.slot,
         &env.compute_budget_limits,
+        .{
+            .account = fee_payer_account,
+            .loaded_size = fee_payer_account.data.len,
+            .rent_collected = 0,
+        },
     );
     defer loaded_accounts.deinit(allocator);
 
@@ -1206,6 +1275,7 @@ test "load, create new account" {
         &env.feature_set,
         env.slot,
         &env.compute_budget_limits,
+        .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
     );
     defer loaded_accounts.deinit(allocator);
 
@@ -1262,6 +1332,7 @@ test "invalid program owner owner" {
         &env.feature_set,
         env.slot,
         &env.compute_budget_limits,
+        .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
     );
 
     try std.testing.expectError(error.InvalidProgramForExecution, loaded_accounts_result);
@@ -1307,6 +1378,7 @@ test "missing program owner account" {
         &env.feature_set,
         env.slot,
         &env.compute_budget_limits,
+        .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
     );
 
     try std.testing.expectError(error.ProgramAccountNotFound, loaded_accounts_result);
@@ -1349,6 +1421,7 @@ test "deallocate account" {
         &env.feature_set,
         env.slot,
         &env.compute_budget_limits,
+        .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
     );
     defer loaded_accounts.deinit(allocator);
 
@@ -1426,6 +1499,7 @@ test "load v3 program" {
         &env.feature_set,
         env.slot,
         &env.compute_budget_limits,
+        .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
     );
     defer loaded_accounts.deinit(allocator);
 
