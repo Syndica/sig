@@ -1,10 +1,7 @@
 const std = @import("std");
-const lib = @import("lib.zig");
+const snapshots = @import("accounts_db/snapshots.zig");
 
-const Signature = lib.solana.Signature;
-const Pubkey = lib.solana.Pubkey;
-const Hash = lib.solana.Hash;
-const Slot = lib.solana.Slot;
+pub const SnapshotQueue = snapshots.Queue;
 
 pub const Config = struct {
     folder_path: [std.fs.max_path_bytes]u8,

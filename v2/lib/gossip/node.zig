@@ -11,15 +11,14 @@ const Packet = lib.net.Packet;
 const Signature = lib.solana.Signature;
 const Pubkey = lib.solana.Pubkey;
 const Hash = lib.solana.Hash;
+const SlotAndHash = lib.solana.SlotAndHash;
 
-const bincode = lib.gossip.bincode;
-const GossipMessage = lib.gossip.GossipMessage;
-const GossipData = lib.gossip.GossipData;
-const GossipValue = lib.gossip.GossipValue;
-const ContactInfo = lib.gossip.ContactInfo;
-const BloomFilter = lib.gossip.BloomFilter;
-const SlotAndHash = lib.gossip.SlotAndHash;
-const Address = lib.gossip.Address;
+const bincode = lib.solana.bincode;
+const GossipMessage = lib.solana.gossip.GossipMessage;
+const GossipData = lib.solana.gossip.GossipData;
+const GossipValue = lib.solana.gossip.GossipValue;
+const ContactInfo = lib.solana.gossip.ContactInfo;
+const BloomFilter = lib.solana.gossip.BloomFilter;
 
 pub fn GossipNode(comptime Effects: type) type {
     lib.util.assertInterface(Effects, struct {
@@ -49,8 +48,8 @@ pub fn GossipNode(comptime Effects: type) type {
         }
 
         /// Notifies caller that a snapshot was discovered at an address
-        pub fn onSnapshot(self: Effects, slot_hash: SlotAndHash, rpc_address: Address) void {
-            _ = .{ self, slot_hash, rpc_address };
+        pub fn onSnapshot(self: Effects, slot_hash: SlotAndHash, rpc_addr: std.net.Address) void {
+            _ = .{ self, slot_hash, rpc_addr };
             return undefined;
         }
     });
@@ -216,8 +215,8 @@ pub fn GossipNode(comptime Effects: type) type {
         pub const Config = struct {
             effects: Effects,
             shred_version: u16,
-            socket_map: lib.gossip.SocketMap,
-            entrypoints: []const lib.gossip.Address,
+            socket_map: lib.solana.gossip.SocketMap,
+            entrypoints: []const std.net.Address,
         };
 
         pub fn init(fba: *std.heap.FixedBufferAllocator, now: u64, config: Config) !Self {
@@ -443,7 +442,7 @@ pub fn GossipNode(comptime Effects: type) type {
                     // Prune can be signed with or without prefix...
                     const sign_msg = sign_writer.buffered();
                     prune.data.signature.verify(&prune.from, sign_msg) catch {
-                        prune.data.signature.verify(&prune.from, sign_msg[8 + PRUNE_PREFIX.len..]) catch {
+                        prune.data.signature.verify(&prune.from, sign_msg[8 + PRUNE_PREFIX.len ..]) catch {
                             return error.InvalidPruneSignature;
                         };
                     };
@@ -579,7 +578,7 @@ pub fn GossipNode(comptime Effects: type) type {
             // No active_set peers. Try to send PushMessages to entrypoints to get us into the cluster.
             if (self.push_active_set.items.len == 0) {
                 for (self.config.entrypoints) |entry_addr| {
-                    try self.sendPushMessagesTo(entry_addr.toNetAddress(), pushed_keys, null);
+                    try self.sendPushMessagesTo(entry_addr, pushed_keys, null);
                 }
                 return;
             }
@@ -738,7 +737,7 @@ pub fn GossipNode(comptime Effects: type) type {
                         (@as(u65, 0) << (@as(u7, 64) - mask_bits)) | (~@as(u64, 0) >> mask_bits);
 
                     for (self.config.entrypoints) |entry_addr| {
-                        try self.sendMessage(entry_addr.toNetAddress(), .{ .pull_request = .{
+                        try self.sendMessage(entry_addr, .{ .pull_request = .{
                             .ignoring = bloom_filters.items[0],
                             .mask = @intCast(mask),
                             .mask_bits = mask_bits,
@@ -936,8 +935,8 @@ pub fn GossipNode(comptime Effects: type) type {
                             .{ .from = s.from, .tag = .contact_info, .index = 0 },
                             &alloc_buf,
                         )) |ci_value| {
-                            if (ci_value.data.contact_info.socket_map.get(.rpc)) |addr| {
-                                self.config.effects.onSnapshot(s.full, .fromNetAddress(addr));
+                            if (ci_value.data.contact_info.socket_map.get(.rpc)) |rpc_addr| {
+                                self.config.effects.onSnapshot(s.full, rpc_addr);
                             }
                         }
                     },
@@ -950,14 +949,14 @@ pub fn GossipNode(comptime Effects: type) type {
                         }
 
                         // ContactInfo arrived after SnapshotHashes
-                        if (ci.socket_map.get(.rpc)) |addr| {
+                        if (ci.socket_map.get(.rpc)) |rpc_addr| {
                             if (try self.getTableValue(
                                 .{ .from = ci.from, .tag = .snapshot_hashes, .index = 0 },
                                 &alloc_buf,
                             )) |snapshot_value| {
                                 self.config.effects.onSnapshot(
                                     snapshot_value.data.snapshot_hashes.full,
-                                    .fromNetAddress(addr),
+                                    rpc_addr,
                                 );
                             }
                         }

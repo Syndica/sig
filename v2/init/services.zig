@@ -192,7 +192,7 @@ pub const Region = union(enum) {
             .net_pair => @sizeOf(lib.net.Pair),
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
-            .snapshot_queue => @sizeOf(lib.gossip.SnapshotQueue),
+            .snapshot_queue => @sizeOf(lib.accounts_db.SnapshotQueue),
             .accounts_db_config => @sizeOf(lib.accounts_db.Config),
         };
     }
@@ -228,8 +228,8 @@ pub const Region = union(enum) {
                 data.shred_version = cfg.shred_version;
             },
             .snapshot_queue => {
-                std.debug.assert(buf.len == @sizeOf(lib.gossip.SnapshotQueue));
-                const data: *lib.gossip.SnapshotQueue = @ptrCast(buf);
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.SnapshotQueue));
+                const data: *lib.accounts_db.SnapshotQueue = @ptrCast(buf);
 
                 data.incoming.init();
                 data.outgoing.init();
@@ -325,7 +325,7 @@ fn serviceMap(
                         var exists = false;
                         if (map.getPtr(instance)) |entry| {
                             for (entry.items) |existing_result| {
-                                if (std.meta.eql(existing_result, result)) {
+                                if (lib.util.eql(existing_result, result)) {
                                     exists = true;
                                     break;
                                 }

@@ -17,7 +17,7 @@ pub const panic = start.panic;
 pub const std_options = start.options;
 
 pub const ReadWrite = struct {
-    snapshot_queue: *lib.gossip.SnapshotQueue,
+    snapshot_queue: *lib.accounts_db.SnapshotQueue,
 };
 
 pub const ReadOnly = struct {
@@ -44,7 +44,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
 fn findOrDownloadSnapshot(
     snapshot_dir: std.fs.Dir,
-    snapshot_addr_reader: *lib.gossip.SnapshotQueue.Incoming.Iterator(.reader),
+    snapshot_addr_reader: *lib.accounts_db.SnapshotQueue.Incoming.Iterator(.reader),
     dl_config: Downloader.Config,
 ) !std.fs.File {
     var it = snapshot_dir.iterate();
@@ -66,9 +66,12 @@ fn findOrDownloadSnapshot(
     std.log.debug("Waiting for snapshot from gossip...", .{});
     while (true) {
         const e = snapshot_addr_reader.next() orelse continue;
-        const addr = e.rpc_address.toNetAddress();
-        const path =
-            try std.fmt.bufPrint(&path_buf, "snapshot-{d}-{f}.tar.zst", .{ e.slot, e.hash });
+        const addr = e.rpc_address;
+        const path = try std.fmt.bufPrint(
+            &path_buf,
+            "snapshot-{d}-{f}.tar.zst",
+            .{ e.slot_hash.slot, e.slot_hash.hash },
+        );
         snapshot_addr_reader.markUsed();
 
         return downloadSnapshot(snapshot_dir, path, addr, dl_config) catch |err| {

@@ -12,7 +12,7 @@ const Pubkey = lib.solana.Pubkey;
 const Signature = lib.solana.Signature;
 
 const GossipNode = lib.gossip.GossipNode;
-const SnapshotQueue = lib.gossip.SnapshotQueue;
+const SnapshotQueue = lib.accounts_db.SnapshotQueue;
 
 comptime {
     _ = start;
@@ -70,10 +70,16 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             return self.keypair.sign(msg) catch |e| std.debug.panic("signing failed: {}", .{e});
         }
 
-        pub fn onSnapshot(self: Self, slot_hash: lib.gossip.SlotAndHash, rpc_address: lib.gossip.Address) void {
-            // if SnapshotQueue is full, drop snapshot notifications (receiver likely already busy with existing ones)
+        pub fn onSnapshot(
+            self: Self,
+            slot_hash: lib.solana.SlotAndHash,
+            rpc_addr: std.net.Address,
+        ) void {
+            // if SnapshotQueue is full, drop snapshot notifications
+            // (receiver likely already busy with existing ones)
             const ptr = self.snapshot_writer.next() orelse return;
-            ptr.* = .{ .slot = slot_hash.slot, .hash = slot_hash.hash, .rpc_address = rpc_address };
+            ptr.slot_hash = slot_hash;
+            ptr.rpc_address = rpc_addr;
             self.snapshot_writer.markUsed();
         }
     };
@@ -87,9 +93,18 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     };
 
     // TODO: add .rpc for serving snapshots
-    var sockets: lib.gossip.SocketMap.Builder = .{};
-    sockets.set(.gossip, ro.config.cluster_info.public_ip.withPort(rw.net_pair.port));
-    sockets.set(.tvu, ro.config.cluster_info.public_ip.withPort(ro.config.turbine_recv_port));
+    var sockets: lib.solana.gossip.SocketMap.Builder = .{};
+    {
+        var public_ip = ro.config.cluster_info.public_ip;
+        for ([_]struct { lib.solana.gossip.SocketMap.Key, u16 }{
+            .{ .gossip, rw.net_pair.port },
+            .{ .tvu, ro.config.turbine_recv_port },
+        }) |entry| {
+            const key, const port = entry;
+            public_ip.setPort(port);
+            sockets.set(key, public_ip);
+        }
+    }
 
     var now: u64 = @intCast(std.time.milliTimestamp());
     var fba = std.heap.FixedBufferAllocator.init(&scratch_memory);
