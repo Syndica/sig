@@ -44,12 +44,33 @@ fn parseLogsNotification(
 
 const types = lib.types;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
+const Transaction = sig.core.Transaction;
 
 fn signatureWithFill(fill: u8) Signature {
     var sig_value = Signature.ZEROES;
     @memset(&sig_value.r, fill);
     @memset(&sig_value.s, fill);
     return sig_value;
+}
+
+fn cloneTransactionError(
+    tx_err: ?TransactionError,
+    allocator: std.mem.Allocator,
+) !?TransactionError {
+    const tx_err_value = tx_err orelse return null;
+    if (tx_err_value != .InstructionError) {
+        return tx_err_value;
+    }
+
+    const instruction_index, const err = tx_err_value.InstructionError;
+    if (err != .BorshIoError) {
+        return tx_err_value;
+    }
+
+    return .{ .InstructionError = .{
+        instruction_index,
+        .{ .BorshIoError = try allocator.dupe(u8, err.BorshIoError) },
+    } };
 }
 
 const LogsEventSpec = struct {
@@ -67,25 +88,54 @@ fn makeLogsEvent(
 ) !types.InboundEvent {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
-    const arena_allocator = arena.allocator();
+    const a = arena.allocator();
 
-    const entries = try arena_allocator.alloc(types.TransactionLogsEntry, specs.len);
+    const entries = try a.alloc(
+        types.TransactionEntry,
+        specs.len,
+    );
     for (specs, 0..) |spec, index| {
-        const owned_logs = try arena_allocator.alloc([]const u8, spec.log_lines.len);
-        for (spec.log_lines, 0..) |line, log_index| {
-            owned_logs[log_index] = try arena_allocator.dupe(u8, line);
+        const owned_logs = try a.alloc(
+            []const u8,
+            spec.log_lines.len,
+        );
+        for (spec.log_lines, 0..) |line, li| {
+            owned_logs[li] = try a.dupe(u8, line);
         }
 
         entries[index] = .{
-            .signature = signatureWithFill(spec.signature_fill),
-            .err = if (spec.tx_err) |err| try err.clone(arena_allocator) else null,
+            .signature = signatureWithFill(
+                spec.signature_fill,
+            ),
+            .transaction = Transaction.EMPTY,
             .is_vote = spec.is_vote,
-            .logs = owned_logs,
-            .mentioned_pubkeys = try arena_allocator.dupe(Pubkey, spec.mentioned_pubkeys),
+            .transaction_index = index,
+            .err = try cloneTransactionError(
+                spec.tx_err,
+                a,
+            ),
+            .fee = 0,
+            .compute_units_consumed = null,
+            .cost_units = 0,
+            .pre_balances = &.{},
+            .post_balances = &.{},
+            .pre_token_balances = null,
+            .post_token_balances = null,
+            .inner_instructions = null,
+            .log_messages = owned_logs,
+            .return_data = null,
+            .loaded_addresses = .{
+                .writable = &.{},
+                .readonly = &.{},
+            },
+            .mentioned_pubkeys = try a.dupe(
+                Pubkey,
+                spec.mentioned_pubkeys,
+            ),
         };
     }
 
-    return .{ .logs = .{
+    return .{ .transaction_batch = .{
         .slot = slot,
         .entries = entries,
         .arena = arena,

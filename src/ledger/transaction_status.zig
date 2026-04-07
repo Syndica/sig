@@ -53,9 +53,13 @@ pub const TransactionStatusMeta = struct {
     };
 
     pub fn deinit(self: @This(), allocator: Allocator) void {
+        if (self.status) |status| status.deinit(allocator);
         allocator.free(self.pre_balances);
         allocator.free(self.post_balances);
-        if (self.log_messages) |log_messages| allocator.free(log_messages);
+        if (self.log_messages) |log_messages| {
+            for (log_messages) |m| allocator.free(m);
+            allocator.free(log_messages);
+        }
         if (self.inner_instructions) |inner| {
             for (inner) |item| item.deinit(allocator);
             allocator.free(inner);
@@ -202,7 +206,10 @@ pub const TransactionStatusMetaBuilder = struct {
     ) error{OutOfMemory}!TransactionStatusMeta {
         // Convert log messages from LogCollector
         const log_messages = try extractLogMessages(allocator, processed_tx);
-        errdefer if (log_messages) |logs| allocator.free(logs);
+        errdefer if (log_messages) |logs| {
+            for (logs) |m| allocator.free(m);
+            allocator.free(logs);
+        };
 
         // Convert inner instructions from InstructionTrace
         const inner_instructions = try convertInstructionTrace(allocator, processed_tx);
@@ -217,7 +224,7 @@ pub const TransactionStatusMetaBuilder = struct {
 
         // Calculate compute units consumed
         const compute_units_consumed: ?u64 = if (processed_tx.outputs) |outputs|
-            outputs.compute_limit - outputs.compute_meter
+            outputs.executed_units
         else
             null;
 
@@ -271,12 +278,14 @@ pub const TransactionStatusMetaBuilder = struct {
         if (iter_len == 0) return &.{};
 
         const messages = try allocator.alloc([]const u8, iter_len);
-        errdefer allocator.free(messages);
-
         var i: usize = 0;
+        errdefer {
+            for (messages[0..i]) |m| allocator.free(m);
+            allocator.free(messages);
+        }
+
         while (iter.next()) |msg| : (i += 1) {
-            // The log collector returns sentinel-terminated strings, we just store the slice
-            messages[i] = msg;
+            messages[i] = try allocator.dupe(u8, msg);
         }
 
         return messages;
@@ -676,6 +685,7 @@ test "TransactionStatusMetaBuilder.extractLogMessages" {
                 .log_collector = log_collector,
                 .instruction_trace = null,
                 .return_data = null,
+                .executed_units = 0,
                 .compute_limit = 0,
                 .compute_meter = 0,
                 .accounts_data_len_delta = 0,
@@ -689,7 +699,10 @@ test "TransactionStatusMetaBuilder.extractLogMessages" {
             allocator,
             processed,
         )).?;
-        defer allocator.free(messages);
+        defer {
+            for (messages) |m| allocator.free(m);
+            allocator.free(messages);
+        }
 
         try std.testing.expectEqual(@as(usize, 2), messages.len);
         try std.testing.expectEqualStrings("Program log: Hello", messages[0]);
@@ -712,6 +725,7 @@ test "TransactionStatusMetaBuilder.extractLogMessages" {
                 .log_collector = log_collector,
                 .instruction_trace = null,
                 .return_data = null,
+                .executed_units = 0,
                 .compute_limit = 0,
                 .compute_meter = 0,
                 .accounts_data_len_delta = 0,
@@ -775,6 +789,7 @@ test "TransactionStatusMetaBuilder.convertReturnData" {
             .log_collector = null,
             .instruction_trace = null,
             .return_data = rt_return_data,
+            .executed_units = 0,
             .compute_limit = 0,
             .compute_meter = 0,
             .accounts_data_len_delta = 0,
@@ -906,6 +921,7 @@ test "TransactionStatusMetaBuilder.convertInstructionTrace" {
             .log_collector = null,
             .instruction_trace = trace,
             .return_data = null,
+            .executed_units = 0,
             .compute_limit = 0,
             .compute_meter = 0,
             .accounts_data_len_delta = 0,
@@ -953,6 +969,7 @@ test "TransactionStatusMetaBuilder.convertInstructionTrace - empty trace" {
             .log_collector = null,
             .instruction_trace = trace,
             .return_data = null,
+            .executed_units = 0,
             .compute_limit = 0,
             .compute_meter = 0,
             .accounts_data_len_delta = 0,
@@ -999,6 +1016,7 @@ test "TransactionStatusMetaBuilder.build - successful transaction" {
             .log_collector = log_collector,
             .instruction_trace = TransactionContext.InstructionTrace{},
             .return_data = return_data,
+            .executed_units = 50_000,
             .compute_limit = 200_000,
             .compute_meter = 150_000,
             .accounts_data_len_delta = 0,
@@ -1104,6 +1122,7 @@ test "TransactionStatusMetaBuilder.build - outputs with null sub-fields" {
             .log_collector = null,
             .instruction_trace = null,
             .return_data = null,
+            .executed_units = 100_000,
             .compute_limit = 200_000,
             .compute_meter = 100_000,
             .accounts_data_len_delta = 0,
@@ -1151,6 +1170,7 @@ test "TransactionStatusMetaBuilder.build - with loaded addresses" {
             .log_collector = null,
             .instruction_trace = null,
             .return_data = null,
+            .executed_units = 0,
             .compute_limit = 200_000,
             .compute_meter = 200_000,
             .accounts_data_len_delta = 0,
