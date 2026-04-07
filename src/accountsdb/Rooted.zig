@@ -579,10 +579,6 @@ fn getReaderDb(self: *const Rooted) *sql.sqlite3 {
 
 /// Switch from exclusive locking + journal OFF (used during snapshot loading
 /// for maximum write throughput) to WAL mode, which allows concurrent readers
-/// on separate connections. Call once after snapshot loading and before
-/// starting the RPC server.
-/// Switch from exclusive locking + journal OFF (used during snapshot loading
-/// for maximum write throughput) to WAL mode, which allows concurrent readers
 /// via per-thread connections (see `getReaderDb`). Call once after snapshot
 /// loading. Stores `file_path` so that threadlocal reader connections can be
 /// lazily opened on first read.
