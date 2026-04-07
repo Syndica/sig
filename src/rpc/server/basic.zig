@@ -38,6 +38,7 @@ const json_headers: []const std.http.Header = &.{
 pub const AcceptAndServeConnectionError =
     error{AcceptError} ||
     error{SetSocketSyncError} ||
+    error{SetSocketTimeoutError} ||
     error{SystemIoError} ||
     error{NoSpaceLeft} ||
     std.mem.Allocator.Error ||
@@ -58,6 +59,10 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
     };
     var close_conn = true;
     defer if (close_conn) conn.stream.close();
+
+    // Set a read timeout on the accepted connection so that a stale/half-open
+    // TCP connection cannot block the single-threaded RPC server indefinitely.
+    try setReadTimeout(conn.stream.handle, .{ .sec = 10, .usec = 0 });
 
     server_ctx.wait_group.start();
     defer server_ctx.wait_group.finish();
@@ -801,6 +806,18 @@ fn acceptHandled(
     }
 
     return conn;
+}
+
+fn setReadTimeout(
+    fd: std.posix.socket_t,
+    timeout: std.posix.timeval,
+) error{SetSocketTimeoutError}!void {
+    std.posix.setsockopt(
+        fd,
+        std.posix.SOL.SOCKET,
+        std.posix.SO.RCVTIMEO,
+        std.mem.asBytes(&timeout),
+    ) catch return error.SetSocketTimeoutError;
 }
 
 const SetSocketSyncError = std.posix.FcntlError;
