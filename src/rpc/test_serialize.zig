@@ -53,6 +53,7 @@ const GetVersion = methods.GetVersion;
 const GetVoteAccounts = methods.GetVoteAccounts;
 const GetMinimumBalanceForRentExemption = methods.GetMinimumBalanceForRentExemption;
 const IsBlockhashValid = methods.IsBlockhashValid;
+const RequestAirdrop = methods.RequestAirdrop;
 const SendTransaction = methods.SendTransaction;
 const MinimumLedgerSlot = methods.MinimumLedgerSlot;
 
@@ -1401,7 +1402,39 @@ test MinimumLedgerSlot {
         \\{"jsonrpc":"2.0","result":1234,"id":1}
     );
 }
-// TODO: test requestAirdrop()
+
+test RequestAirdrop {
+    const recipient_pubkey: Pubkey = .parse("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
+
+    // Request without config
+    try testRequest(
+        .requestAirdrop,
+        .{ .pubkey = recipient_pubkey, .lamports = 1_000_000_000 },
+        \\{"jsonrpc":"2.0","id":1,"method":"requestAirdrop","params":["Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm",1000000000]}
+        ,
+    );
+
+    // Request with commitment config
+    try testRequest(
+        .requestAirdrop,
+        .{
+            .pubkey = recipient_pubkey,
+            .lamports = 5_000_000_000,
+            .config = .{ .commitment = .confirmed },
+        },
+        \\{"jsonrpc":"2.0","id":1,"method":"requestAirdrop","params":["Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm",5000000000,{"commitment":"confirmed"}]}
+        ,
+    );
+
+    // Response serialization - signature
+    const tx_sig: Signature = .parse(
+        "56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",
+    );
+    try testResponse(RequestAirdrop, .{ .result = tx_sig },
+        \\{"jsonrpc":"2.0","result":"56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp","id":1}
+    );
+}
+
 // TODO: test sendTransaction()
 // TODO: test simulateTransaction()
 

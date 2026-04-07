@@ -3,6 +3,7 @@ pub const LedgerHookContext = @import("Ledger.zig");
 pub const AccountHookContext = @import("Account.zig");
 pub const ConsensusHookContext = @import("Consensus.zig");
 pub const SendTransactionHookContext = @import("SendTransaction.zig");
+pub const RequestAirdropHookContext = @import("RequestAirdrop.zig");
 pub const StaticHookContext = @import("Static.zig");
 const prioritization_fee = @import("prioritization_fee.zig");
 
