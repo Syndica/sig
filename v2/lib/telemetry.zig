@@ -509,7 +509,12 @@ pub const Histogram = struct {
         // internal references
         upper_bounds: []const f64,
         cold_shard_buckets: []std.atomic.Value(u64),
+        /// NOTE: it may seem strange to have references to the hot shard & its buckets
+        /// inside the iterator for reading the cold state, however the results from each
+        /// cold bucket have to be read and then added back to the current hot shard & its
+        /// buckets in order to maintain consistency.
         hot_shard_buckets: []std.atomic.Value(u64),
+        /// NOTE: see NOTE on `hot_shard_buckets`.
         hot_shard: *const Shard,
 
         // mutable state
