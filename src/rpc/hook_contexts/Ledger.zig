@@ -35,6 +35,9 @@ const Slot = sig.core.Slot;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const TransactionDetails = methods.common.TransactionDetails;
 const TransactionEncoding = methods.common.TransactionEncoding;
+const UiInnerInstructions = GetBlock.Response.UiInnerInstructions;
+const UiTransactionReturnData = GetBlock.Response.UiTransactionReturnData;
+const UiTransactionTokenBalances = GetBlock.Response.UiTransactionTokenBalances;
 
 // Maximum allowed slot distance before node is considered unhealthy.
 // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L158
@@ -1077,21 +1080,21 @@ fn parseUiTransactionStatusMetaFromLedger(
         .{ .Ok = .{}, .Err = null };
 
     // Convert inner instructions
-    const inner_instructions = if (meta.inner_instructions) |iis|
-        try convertInnerInstructions(arena, iis)
+    const inner_instructions: UiInnerInstructions = if (meta.inner_instructions) |iis|
+        try .fromLedger(arena, iis)
     else
-        &.{};
+        .{};
 
     // Convert token balances
-    const pre_token_balances = if (meta.pre_token_balances) |balances|
-        try convertTokenBalances(arena, balances)
+    const pre_token_balances: UiTransactionTokenBalances = if (meta.pre_token_balances) |balances|
+        try .fromLedger(arena, balances)
     else
-        &.{};
+        .{};
 
-    const post_token_balances = if (meta.post_token_balances) |balances|
-        try convertTokenBalances(arena, balances)
+    const post_token_balances: UiTransactionTokenBalances = if (meta.post_token_balances) |balances|
+        try .fromLedger(arena, balances)
     else
-        &.{};
+        .{};
 
     // Convert loaded addresses
     const loaded_addresses = try LedgerHookContext.convertLoadedAddresses(
@@ -1100,20 +1103,15 @@ fn parseUiTransactionStatusMetaFromLedger(
     );
 
     // Convert return data
-    const return_data = if (meta.return_data) |rd|
-        try convertReturnData(arena, rd)
+    const return_data: ?UiTransactionReturnData = if (meta.return_data) |rd|
+        try .fromLedger(arena, rd)
     else
         null;
 
-    const rewards: ?[]GetBlock.Response.UiReward = if (show_rewards) rewards: {
-        if (meta.rewards) |rewards| {
-            const converted = try arena.alloc(GetBlock.Response.UiReward, rewards.len);
-            for (rewards, 0..) |reward, i| {
-                converted[i] = GetBlock.Response.UiReward.fromLedgerReward(reward);
-            }
-            break :rewards converted;
-        } else break :rewards &.{};
-    } else null;
+    const rewards = if (show_rewards) try convertRewards(
+        arena,
+        meta.rewards,
+    ) else null;
 
     return .{
         .err = meta.status,
@@ -1474,7 +1472,7 @@ fn parseUiTransactionStatusMeta(
         .{ .Ok = .{}, .Err = null };
 
     // Convert inner instructions
-    const inner_instructions: []const parse_instruction.UiInnerInstructions = blk: {
+    const inner_instructions: UiInnerInstructions = blk: {
         if (meta.inner_instructions) |iis| {
             var inner_instructions = try arena.alloc(
                 parse_instruction.UiInnerInstructions,
@@ -1487,24 +1485,24 @@ fn parseUiTransactionStatusMeta(
                     &account_keys,
                 );
             }
-            break :blk inner_instructions;
-        } else break :blk &.{};
+            break :blk .{ .inner = inner_instructions };
+        } else break :blk .{};
     };
 
     // Convert token balances
-    const pre_token_balances = if (meta.pre_token_balances) |balances|
-        try convertTokenBalances(arena, balances)
+    const pre_token_balances: UiTransactionTokenBalances = if (meta.pre_token_balances) |balances|
+        try .fromLedger(arena, balances)
     else
-        &.{};
+        .{};
 
-    const post_token_balances = if (meta.post_token_balances) |balances|
-        try convertTokenBalances(arena, balances)
+    const post_token_balances: UiTransactionTokenBalances = if (meta.post_token_balances) |balances|
+        try .fromLedger(arena, balances)
     else
-        &.{};
+        .{};
 
     // Convert return data
-    const return_data = if (meta.return_data) |rd|
-        try convertReturnData(arena, rd)
+    const return_data: ?UiTransactionReturnData = if (meta.return_data) |rd|
+        try .fromLedger(arena, rd)
     else
         null;
 
@@ -1651,100 +1649,22 @@ fn buildSimpleUiTransactionStatusMeta(
         .innerInstructions = .skip,
         .logMessages = .skip,
         .preTokenBalances = .{ .value = if (meta.pre_token_balances) |balances|
-            try LedgerHookContext.convertTokenBalances(arena, balances)
+            try .fromLedger(arena, balances)
         else
-            &.{} },
+            .{} },
         .postTokenBalances = .{ .value = if (meta.post_token_balances) |balances|
-            try LedgerHookContext.convertTokenBalances(arena, balances)
+            try .fromLedger(arena, balances)
         else
-            &.{} },
-        .rewards = if (show_rewards) rewards: {
-            if (meta.rewards) |rewards| {
-                const converted = try arena.alloc(GetBlock.Response.UiReward, rewards.len);
-                for (rewards, 0..) |reward, i| {
-                    converted[i] = GetBlock.Response.UiReward.fromLedgerReward(reward);
-                }
-                break :rewards .{ .value = converted };
-            } else break :rewards .{ .value = &.{} };
-        } else .skip,
+            .{} },
+        .rewards = if (show_rewards) .{ .value = try convertRewards(
+            arena,
+            meta.rewards,
+        ) } else .skip,
         .loadedAddresses = .skip,
         .returnData = .skip,
         .computeUnitsConsumed = .skip,
         .costUnits = .skip,
     };
-}
-
-/// Convert inner instructions to wire format.
-fn convertInnerInstructions(
-    arena: Allocator,
-    inner_instructions: []const sig.ledger.transaction_status.InnerInstructions,
-) ![]const parse_instruction.UiInnerInstructions {
-    const result = try arena.alloc(
-        parse_instruction.UiInnerInstructions,
-        inner_instructions.len,
-    );
-
-    for (inner_instructions, 0..) |ii, i| {
-        const instructions = try arena.alloc(
-            parse_instruction.UiInstruction,
-            ii.instructions.len,
-        );
-
-        for (ii.instructions, 0..) |inner_ix, j| {
-            const data_str = blk: {
-                var ret = try arena.alloc(
-                    u8,
-                    base58.encodedMaxSize(inner_ix.instruction.data.len),
-                );
-                break :blk ret[0..base58.Table.BITCOIN.encode(
-                    ret,
-                    inner_ix.instruction.data,
-                )];
-            };
-
-            instructions[j] = .{ .compiled = .{
-                .programIdIndex = inner_ix.instruction.program_id_index,
-                .accounts = try arena.dupe(u8, inner_ix.instruction.accounts),
-                .data = data_str,
-                .stackHeight = inner_ix.stack_height,
-            } };
-        }
-
-        result[i] = .{
-            .index = ii.index,
-            .instructions = instructions,
-        };
-    }
-
-    return result;
-}
-
-/// Convert token balances to wire format.
-fn convertTokenBalances(
-    arena: Allocator,
-    balances: []const sig.ledger.transaction_status.TransactionTokenBalance,
-) ![]const GetBlock.Response.UiTransactionTokenBalance {
-    const result = try arena.alloc(
-        GetBlock.Response.UiTransactionTokenBalance,
-        balances.len,
-    );
-
-    for (balances, 0..) |b, i| {
-        result[i] = .{
-            .accountIndex = b.account_index,
-            .mint = b.mint,
-            .owner = b.owner,
-            .programId = b.program_id,
-            .uiTokenAmount = .{
-                .amount = try arena.dupe(u8, b.ui_token_amount.amount),
-                .decimals = b.ui_token_amount.decimals,
-                .uiAmount = b.ui_token_amount.ui_amount,
-                .uiAmountString = try arena.dupe(u8, b.ui_token_amount.ui_amount_string),
-            },
-        };
-    }
-
-    return result;
 }
 
 /// Convert loaded addresses to wire format.

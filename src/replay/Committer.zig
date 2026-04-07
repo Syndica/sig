@@ -399,7 +399,7 @@ fn collectPostTokenBalances(
 /// account store. This ensures mint accounts can be found even when they weren't
 /// modified by the transaction (the common case for token transfers).
 /// [agave] Agave uses account_loader.load_account() which has full store access.
-const FallbackAccountReader = struct {
+pub const FallbackAccountReader = struct {
     writes: []const LoadedAccount,
     account_store_reader: ?sig.accounts_db.SlotAccountReader,
 
