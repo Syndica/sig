@@ -17,12 +17,6 @@ const Db = @This();
 allocator: std.mem.Allocator,
 rooted: Rooted,
 unrooted: Unrooted,
-/// Separate read-only SQLite connection for RPC queries.
-/// When set (non-null), RPC read methods (`getOwned`, `ownerQueryOwned`,
-/// `splTokenOwnerQuery`) use this handle instead of the writer `rooted`,
-/// eliminating SQLite connection-mutex contention with the replay thread.
-/// Requires WAL mode on the writer (`rooted.enableWalMode()`).
-reader_rooted: ?Rooted = null,
 
 pub fn init(allocator: std.mem.Allocator, rooted: Rooted) !Db {
     var unrooted: Unrooted = try .init(allocator);
@@ -64,7 +58,6 @@ pub fn initTest(allocator: std.mem.Allocator) !TestContext {
 
 pub fn deinit(self: *Db) void {
     const allocator = self.allocator;
-    if (self.reader_rooted) |*rr| rr.deinit();
     self.rooted.deinit();
     self.unrooted.deinit(allocator);
 }
@@ -160,7 +153,7 @@ pub fn getWithModifiedSlotOwned(
     if (try self.unrooted.getWithModifiedSlotOwned(allocator, address, ancestors)) |data| {
         return .{ .account = data.account, .modified_slot = data.modified_slot };
     }
-    const rooted = if (self.reader_rooted) |*rr| rr else &self.rooted;
+    const rooted = &self.rooted;
     if (try rooted.getWithModifiedSlot(allocator, address)) |data| {
         return .{ .account = data.account.toOwnedAccount(), .modified_slot = data.modified_slot };
     }
@@ -305,8 +298,7 @@ pub fn ownerQueryOwned(self: *Db, owner: *const Pubkey, ancestors: *const Ancest
         unrooted_map.deinit(self.allocator);
     }
 
-    const rooted = if (self.reader_rooted) |*rr| rr else &self.rooted;
-    const rooted_iter = rooted.getByOwner(owner);
+    const rooted_iter = self.rooted.getByOwner(owner);
     return .{
         .rooted_iter = rooted_iter,
         .unrooted_map = unrooted_map,
@@ -329,8 +321,7 @@ pub fn splTokenOwnerQuery(
         unrooted_map.deinit(self.allocator);
     }
 
-    const rooted = if (self.reader_rooted) |*rr| rr else &self.rooted;
-    const rooted_iter = rooted.getBySplTokenOwner(token_owner);
+    const rooted_iter = self.rooted.getBySplTokenOwner(token_owner);
     return .{
         .rooted_iter = rooted_iter,
         .unrooted_map = unrooted_map,

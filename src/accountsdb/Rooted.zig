@@ -29,6 +29,8 @@ sqlite_mem_used: ?*Gauge = null,
 enable_spl_token_owner_index: bool,
 /// In-memory top-N accounts by lamport balance, updated on every put().
 largest_tracker: LargestTracker = .{},
+/// Set after `enableWalMode` so threadlocal reader connections can be opened lazily.
+file_path: ?[:0]const u8 = null,
 
 /// These aren't thread safe, but we can have as many as we want. Clean up with deinitThreadLocals
 /// on any threads that use put or get.
@@ -37,6 +39,10 @@ threadlocal var put_with_token_owner_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_by_owner_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_by_spl_token_owner_stmt: ?*sql.sqlite3_stmt = null;
+/// Per-thread read-only SQLite connection, lazily opened on first read when
+/// WAL mode is enabled. Each thread gets its own connection to avoid
+/// contention with the writer handle.
+threadlocal var reader_db: ?*sql.sqlite3 = null;
 
 pub fn init(
     file_path: [:0]const u8,
@@ -175,6 +181,10 @@ pub fn deinitThreadLocals() void {
         _ = sql.sqlite3_finalize(stmt);
         get_by_spl_token_owner_stmt = null;
     }
+    if (reader_db) |db| {
+        _ = sql.sqlite3_close(db);
+        reader_db = null;
+    }
 }
 
 pub fn count(self: *const Rooted) u64 {
@@ -226,24 +236,26 @@ pub fn getWithModifiedSlot(
         if (self.sqlite_mem_used) |guage| guage.set(@intCast(mem_used));
     }
 
+    const db = self.getReaderDb();
+
     const stmt: *sql.sqlite3_stmt = if (get_stmt) |stmt| stmt else blk: {
         const query =
             \\SELECT lamports, data, owner, executable, rent_epoch, last_modified_slot
             \\FROM entries WHERE address = ?;
         ;
-        self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_stmt, null));
+        errDb(db, sql.sqlite3_prepare_v2(db, query, -1, &get_stmt, null));
         break :blk get_stmt.?;
     };
     defer std.debug.assert(sql.sqlite3_reset(stmt) == OK);
 
-    self.err(sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC));
+    errDb(db, sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC));
 
     const rc = sql.sqlite3_step(stmt);
 
     switch (rc) {
         ROW => {}, // ok
         DONE => return null, // not found
-        else => self.err(rc),
+        else => errDb(db, rc),
     }
 
     const fields = readAccountFields(stmt);
@@ -274,27 +286,28 @@ pub fn getWithModifiedSlot(
 /// - Applying `dataSize` / `memcmp` filters in SQL
 /// - Fetching only the data slice requested via `dataSlice`
 pub fn getByOwner(self: *Rooted, owner: *const Pubkey) OwnerIterator {
+    const db = self.getReaderDb();
     const stmt: *sql.sqlite3_stmt = if (get_by_owner_stmt) |stmt| stmt else blk: {
         const query =
             \\ SELECT lamports, data, owner, executable, rent_epoch, address
             \\ FROM entries WHERE owner = ? AND lamports > 0;
         ;
-        self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_by_owner_stmt, null));
+        errDb(db, sql.sqlite3_prepare_v2(db, query, -1, &get_by_owner_stmt, null));
         break :blk get_by_owner_stmt.?;
     };
 
-    self.err(sql.sqlite3_bind_blob(
+    errDb(db, sql.sqlite3_bind_blob(
         stmt,
         1,
         owner,
         Pubkey.SIZE,
         sql.SQLITE_STATIC,
     ));
-    return .{ .stmt = stmt, .rooted = self };
+    return .{ .db = db, .stmt = stmt };
 }
 
 pub const OwnerIterator = struct {
-    rooted: *Rooted,
+    db: *sql.sqlite3,
     stmt: *sql.sqlite3_stmt,
 
     pub fn next(self: *OwnerIterator) ?struct { Pubkey, Account } {
@@ -302,7 +315,7 @@ pub const OwnerIterator = struct {
         switch (rc) {
             ROW => {},
             DONE => return null,
-            else => self.rooted.err(rc),
+            else => errDb(self.db, rc),
         }
 
         const fields = readAccountFields(self.stmt);
@@ -335,6 +348,7 @@ pub const OwnerIterator = struct {
 ///
 /// The caller must ensure `token_owner` outlives the returned iterator.
 pub fn getBySplTokenOwner(self: *Rooted, token_owner: *const Pubkey) OwnerIterator {
+    const db = self.getReaderDb();
     const stmt: *sql.sqlite3_stmt = if (get_by_spl_token_owner_stmt) |stmt| stmt else blk: {
         const query = if (self.enable_spl_token_owner_index)
             // Indexed path: query the token_owner column directly.
@@ -348,18 +362,18 @@ pub fn getBySplTokenOwner(self: *Rooted, token_owner: *const Pubkey) OwnerIterat
                 " FROM entries WHERE substr(data, 33, 32) = ? AND lamports > 0" ++
                 " AND (owner = X'" ++ ids.TOKEN_PROGRAM_ID.hexBytesLower() ++ "'" ++
                 " OR owner = X'" ++ ids.TOKEN_2022_PROGRAM_ID.hexBytesLower() ++ "');";
-        self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_by_spl_token_owner_stmt, null));
+        errDb(db, sql.sqlite3_prepare_v2(db, query, -1, &get_by_spl_token_owner_stmt, null));
         break :blk get_by_spl_token_owner_stmt.?;
     };
 
-    self.err(sql.sqlite3_bind_blob(
+    errDb(db, sql.sqlite3_bind_blob(
         stmt,
         1,
         token_owner,
         Pubkey.SIZE,
         sql.SQLITE_STATIC,
     ));
-    return .{ .stmt = stmt, .rooted = self };
+    return .{ .db = db, .stmt = stmt };
 }
 
 /// Reads the common account fields (lamports, data, owner, executable, rent_epoch)
@@ -472,12 +486,14 @@ fn computeLtHashForAccountRange(
         \\FROM entries LIMIT ? OFFSET ?;
     ;
 
-    var stmt: ?*sql.sqlite3_stmt = undefined;
-    self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &stmt, null));
-    defer self.err(sql.sqlite3_finalize(stmt));
+    const db = self.getReaderDb();
 
-    self.err(sql.sqlite3_bind_int64(stmt, 1, @intCast(limit)));
-    self.err(sql.sqlite3_bind_int64(stmt, 2, @intCast(offset)));
+    var stmt: ?*sql.sqlite3_stmt = undefined;
+    errDb(db, sql.sqlite3_prepare_v2(db, query, -1, &stmt, null));
+    defer errDb(db, sql.sqlite3_finalize(stmt));
+
+    errDb(db, sql.sqlite3_bind_int64(stmt, 1, @intCast(limit)));
+    errDb(db, sql.sqlite3_bind_int64(stmt, 2, @intCast(offset)));
 
     var lt_hash: sig.core.LtHash = .IDENTITY;
     while (true) {
@@ -531,18 +547,46 @@ pub fn getLargestRootedSlot(self: *const Rooted) ?Slot {
 }
 
 fn err(self: *const Rooted, code: c_int) void {
+    errDb(self.handle, code);
+}
+
+fn errDb(db: *sql.sqlite3, code: c_int) void {
     if (code == OK) return;
     std.debug.panic(
         "internal accountsdb sqlite error ({}): {s}\n",
-        .{ code, sql.sqlite3_errmsg(self.handle) },
+        .{ code, sql.sqlite3_errmsg(db) },
     );
+}
+
+/// Returns a per-thread read-only SQLite connection. On the first call per
+/// thread (when WAL mode is enabled), lazily opens a new connection to the
+/// same database file. Falls back to the writer handle when WAL mode has
+/// not been enabled.
+fn getReaderDb(self: *const Rooted) *sql.sqlite3 {
+    if (reader_db) |db| return db;
+    const path = self.file_path orelse return self.handle;
+    var maybe_db: ?*sql.sqlite3 = null;
+    if (sql.sqlite3_open(path.ptr, &maybe_db) != OK) return self.handle;
+    const db = maybe_db orelse return self.handle;
+    _ = sql.sqlite3_exec(db,
+        \\ PRAGMA journal_mode = WAL;
+        \\ PRAGMA cache_size = -2097152;
+        \\ PRAGMA temp_store = MEMORY;
+    , null, null, null);
+    reader_db = db;
+    return db;
 }
 
 /// Switch from exclusive locking + journal OFF (used during snapshot loading
 /// for maximum write throughput) to WAL mode, which allows concurrent readers
 /// on separate connections. Call once after snapshot loading and before
 /// starting the RPC server.
-pub fn enableWalMode(self: *Rooted) void {
+/// Switch from exclusive locking + journal OFF (used during snapshot loading
+/// for maximum write throughput) to WAL mode, which allows concurrent readers
+/// via per-thread connections (see `getReaderDb`). Call once after snapshot
+/// loading. Stores `file_path` so that threadlocal reader connections can be
+/// lazily opened on first read.
+pub fn enableWalMode(self: *Rooted, file_path: [:0]const u8) void {
     // Release the exclusive lock so other connections can access the DB.
     self.err(sql.sqlite3_exec(self.handle,
         \\PRAGMA locking_mode = NORMAL;
@@ -557,38 +601,7 @@ pub fn enableWalMode(self: *Rooted) void {
     self.err(sql.sqlite3_exec(self.handle,
         \\PRAGMA synchronous = NORMAL;
     , null, null, null));
-}
-
-/// Open a separate read-only connection to the same database file.
-/// Requires WAL mode to be enabled on the writer connection first
-/// (via `enableWalMode`). The returned handle can be used concurrently
-/// with the writer without blocking it.
-pub fn initReader(file_path: [:0]const u8) !Rooted {
-    const db = blk: {
-        var maybe_db: ?*sql.sqlite3 = null;
-        if (sql.sqlite3_open(file_path.ptr, &maybe_db) != OK)
-            return error.FailedToOpenDb;
-        break :blk maybe_db orelse return error.SqliteDbNull;
-    };
-
-    // Reader pragmas: WAL mode (auto-detected from the DB file but set
-    // explicitly for clarity), smaller cache, and memory temp store.
-    const pragmas =
-        \\ PRAGMA journal_mode = WAL;
-        \\ PRAGMA cache_size = -2097152;
-        \\ PRAGMA temp_store = MEMORY;
-    ;
-
-    if (sql.sqlite3_exec(db, pragmas, null, null, null) != OK) {
-        _ = sql.sqlite3_close(db);
-        return error.FailedToSetPragmas;
-    }
-
-    return .{
-        .handle = db,
-        .largest_rooted_slot = null,
-        .enable_spl_token_owner_index = false,
-    };
+    self.file_path = file_path;
 }
 
 pub fn beginTransaction(self: *Rooted) void {

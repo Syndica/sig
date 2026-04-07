@@ -1652,12 +1652,11 @@ fn validator(
     var new_db: sig.accounts_db.Db = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
     defer new_db.deinit();
 
-    // After snapshot loading, switch SQLite to WAL mode and open a dedicated
-    // reader connection so that RPC queries (e.g. getSupply scanning all stake
-    // accounts) do not contend with the replay thread on the writer handle.
-    if (rpc_enabled and !cfg.accounts_db.disable_wal_mode) {
-        new_db.rooted.enableWalMode();
-        new_db.reader_rooted = try sig.accounts_db.Db.Rooted.initReader(rooted_file);
+    // After snapshot loading, switch SQLite to WAL mode so that concurrent
+    // readers (RPC queries, replay thread pool) each get their own threadlocal
+    // connection and do not contend with the writer handle.
+    if (!cfg.accounts_db.disable_wal_mode) {
+        new_db.rooted.enableWalMode(rooted_file);
     }
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
