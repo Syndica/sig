@@ -24,15 +24,7 @@ pub const ReadWrite = struct {
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     _ = ro;
 
-    var fba_state: std.heap.FixedBufferAllocator = .init(&struct {
-        var buffer: [4096 * 4096 * 16]u8 = @splat(0);
-    }.buffer);
-    const gpa = fba_state.allocator();
-
     const region = rw.region;
-
-    var metrics: api.metric.Map = .empty;
-    defer metrics.deinit(gpa);
 
     { // wait until all pending services have registered their metrics
         const pending_services: *const std.atomic.Value(u32) = &region.pending_services;
@@ -52,9 +44,13 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     }
     const log_streams = region.getSlices().log_streams[0..region.log_streams.load(.acquire)];
 
+    var metrics: api.metric.Map = .empty;
     {
+        var fba_state: std.heap.FixedBufferAllocator = .init(&struct {
+            var buffer: [4096 * 4096 * 16]u8 = undefined;
+        }.buffer);
         const slices = region.getSlices();
-        try api.metric.collect(gpa, &metrics, .{
+        try api.metric.collect(fba_state.allocator(), &metrics, .{
             .id_mem = slices.id_mem[0..region.id_mem_end.load(.acquire)],
             .gauges = slices.gauges[0..region.gauges_end.load(.acquire)],
             .histogram_data = slices.histogram_data[0..region.histogram_data_end.load(.acquire)],
