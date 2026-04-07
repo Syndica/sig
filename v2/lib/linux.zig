@@ -255,7 +255,7 @@ pub const bpf = struct {
     }
 
     /// Only allows writing to stderr, sleeping, and exiting.
-    pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [46]sock_filter {
+    pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [50]sock_filter {
         // load syscall number
         const preamble = .{stmt(LD + W + ABS, @offsetOf(SECCOMP.data, "nr"))};
 
@@ -276,22 +276,24 @@ pub const bpf = struct {
             allowSyscall(@intFromEnum(syscalls.exit)) ++
             allowSyscall(@intFromEnum(syscalls.exit_group)) ++
             // net tile
-            allowSyscall(@intFromEnum(syscalls.sendmsg)) ++
-            allowSyscall(@intFromEnum(syscalls.recvmsg)) ++
+            allowSyscall(@intFromEnum(syscalls.sendto)) ++
+            allowSyscall(@intFromEnum(syscalls.recvfrom)) ++
             allowSyscall(@intFromEnum(syscalls.close)) ++
             allowSyscall(@intFromEnum(syscalls.bind)) ++
             allowSyscall(@intFromEnum(syscalls.socket)) ++
             // accounts_db
             allowSyscall(@intFromEnum(syscalls.openat)) ++
             // snapshot download
-            allowSyscall(@intFromEnum(syscalls.lseek)) ++
-            allowSyscall(@intFromEnum(syscalls.getdents64)) ++
-            allowSyscall(@intFromEnum(syscalls.connect)) ++
-            allowSyscall(@intFromEnum(syscalls.unlinkat)) ++
-            allowSyscall(@intFromEnum(syscalls.sendfile)) ++
-            allowSyscall(@intFromEnum(syscalls.readv)) ++ // std.http usage
-            allowSyscall(@intFromEnum(syscalls.writev)) ++ // std.http usage
-            allowSyscall(@intFromEnum(syscalls.copy_file_range)) ++ // std.http usage
+            allowSyscall(@intFromEnum(syscalls.lseek)) ++ // snapshot find
+            allowSyscall(@intFromEnum(syscalls.getdents64)) ++ // snapshot find
+            allowSyscall(@intFromEnum(syscalls.connect)) ++ // snapshot dl
+            allowSyscall(@intFromEnum(syscalls.unlinkat)) ++ // deleteFile on snapshot when fail dl
+            allowSyscall(@intFromEnum(syscalls.pread64)) ++ // accounts_db
+            allowSyscall(@intFromEnum(syscalls.pwrite64)) ++ // accounts_db
+            allowSyscall(@intFromEnum(syscalls.fsync)) ++ // accounts_db + snapshot dl
+            allowSyscall(@intFromEnum(syscalls.setsockopt)) ++ // snapshot dl (timeout)
+            allowSyscall(@intFromEnum(syscalls.pipe2)) ++ // snapshot dl (fast transfer)
+            allowSyscall(@intFromEnum(syscalls.splice)) ++ // snapshot dl (fast transfer)
             //
             syscall_fd_filters ++
             fall_through;

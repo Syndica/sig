@@ -58,23 +58,17 @@ fn mainInner(pairs: []const *Pair) !noreturn {
 
             // TODO: buffer up std.os.linux.sendmmsg across multiple pairs
             while (packet_reader.peek()) |p| {
-                const bytes = std.posix.sendmsg(
+                const sent = std.posix.sendto(
                     sock,
-                    &.{
-                        .name = &p.addr.any,
-                        .namelen = p.addr.getOsSockLen(),
-                        .iov = &.{ .{ .base = &p.data, .len = p.size } },
-                        .iovlen = 1,
-                        .control = null,
-                        .controllen = 0,
-                        .flags = 0,
-                    },
-                    std.posix.MSG.NOSIGNAL,
+                    p.data[0..p.size],
+                    0,
+                    &p.addr.any,
+                    p.addr.getOsSockLen(),
                 ) catch |e| switch (e) {
                     error.WouldBlock => break,
                     else => |err| return err,
                 };
-                std.debug.assert(bytes == p.size);
+                std.debug.assert(sent == p.size);
                 _ = packet_reader.next();
             }
         }
@@ -86,36 +80,17 @@ fn mainInner(pairs: []const *Pair) !noreturn {
 
             // TODO: buffer std.os.linux.recvmmsg across multiple pairs.
             while (packet_writer.peek()) |p| {
-                var iovecs: [1]std.posix.iovec = .{ .{ .base = &p.data, .len = p.data.len } };
-                var msg_hdr: std.posix.system.msghdr = .{
-                    .name = &p.addr.any,
-                    .namelen = @sizeOf(std.net.Address),
-                    .iov = &iovecs,
-                    .iovlen = iovecs.len,
-                    .control = null,
-                    .controllen = 0,
-                    .flags = 0,
-                };
-                // stdlib doesn't seem to have a nice wrapper for this
-                const rc = std.posix.system.recvmsg(
+                var addr_len: std.posix.socklen_t = @sizeOf(std.net.Address);
+                p.size = @intCast(std.posix.recvfrom(
                     sock,
-                    &msg_hdr,
-                    std.posix.MSG.NOSIGNAL,
-                );
-                switch (std.posix.errno(rc)) {
-                    .SUCCESS => p.size = @intCast(rc),
-                    .INTR => continue, // try again
-                    .AGAIN => break,
-                    .BADF => unreachable, // invalid sock fd (never invalidated)
-                    .CONNREFUSED => unreachable, // invalid connection (a datagram socket)
-                    .FAULT => unreachable, // invalid packet/msghdr/iov ptr (valid buffers)
-                    .INVAL => unreachable, // invalid argument somewhere (?)
-                    .NOMEM => return error.OutOfMemory,
-                    else => |errno| {
-                        std.log.err("recvmsg() = {}", .{errno});
-                        return error.Unexpected;
-                    },
-                }
+                    &p.data,
+                    0,
+                    &p.addr.any,
+                    &addr_len,
+                ) catch |e| switch (e) {
+                    error.WouldBlock => break,
+                    else => |err| return err,
+                });
                 _ = packet_writer.next();
             }
         }

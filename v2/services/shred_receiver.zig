@@ -77,17 +77,18 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             continue;
         };
 
-        std.log.debug(
-            \\slot: {}
-            \\erasure_set_index: {}
-            \\index: {}
-            \\shred_type: {}
-        , .{
-            packet_shred.commonHeader().slot,
-            packet_shred.commonHeader().erasure_set_index,
-            packet_shred.commonHeader().index,
-            packet_shred.commonHeader().variant.shred_type,
-        });
+        _ = packet_shred;
+        // std.log.debug(
+        //     \\slot: {}
+        //     \\erasure_set_index: {}
+        //     \\index: {}
+        //     \\shred_type: {}
+        // , .{
+        //     packet_shred.commonHeader().slot,
+        //     packet_shred.commonHeader().erasure_set_index,
+        //     packet_shred.commonHeader().index,
+        //     packet_shred.commonHeader().variant.shred_type,
+        // });
     }
 }
 

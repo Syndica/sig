@@ -184,7 +184,7 @@ pub const Region = union(enum) {
     accounts_db_config: struct {
         folder: []const u8,
         min_snapshot_download_speed_mb: u64,
-        min_snapshot_download_warmup_ns: u64,
+        min_snapshot_download_warmup_ms: u64,
     },
 
     pub fn size(self: Region) usize {
@@ -243,7 +243,7 @@ pub const Region = union(enum) {
                 @memcpy(data.folder_path[0..cfg.folder.len], cfg.folder);
 
                 data.min_snapshot_download_speed_mb = cfg.min_snapshot_download_speed_mb;
-                data.min_snapshot_download_warmup_ns = cfg.min_snapshot_download_warmup_ns;
+                data.min_snapshot_download_warmup_ms = cfg.min_snapshot_download_warmup_ms;
             },
         };
     }

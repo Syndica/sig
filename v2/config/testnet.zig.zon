@@ -11,7 +11,7 @@
     },
     .accounts_db = .{
         .folder_path = "./validator",
-        .min_snapshot_download_speed_mb = 1,
-        .min_snapshot_download_warmup_ns = 1_000_000_000,
+        .min_snapshot_download_speed_mb = 5,
+        .min_snapshot_download_warmup_ms = 10_000,
     },
 }

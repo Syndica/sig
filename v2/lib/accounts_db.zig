@@ -11,5 +11,5 @@ pub const Config = struct {
     folder_path_len: u8,
 
     min_snapshot_download_speed_mb: u64,
-    min_snapshot_download_warmup_ns: u64,
+    min_snapshot_download_warmup_ms: u64,
 };

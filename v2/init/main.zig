@@ -32,7 +32,7 @@ const Config = struct {
     const AccountsDB = struct {
         folder_path: []const u8,
         min_snapshot_download_speed_mb: u64,
-        min_snapshot_download_warmup_ns: u64,
+        min_snapshot_download_warmup_ms: u64,
     };
 };
 
@@ -109,7 +109,7 @@ pub fn main() !void {
         .accounts_db_config = .{
             .folder = config.accounts_db.folder_path,
             .min_snapshot_download_speed_mb = config.accounts_db.min_snapshot_download_speed_mb,
-            .min_snapshot_download_warmup_ns = config.accounts_db.min_snapshot_download_warmup_ns,
+            .min_snapshot_download_warmup_ms = config.accounts_db.min_snapshot_download_warmup_ms,
         },
     });
 
