@@ -191,6 +191,11 @@ pub fn count(self: *const Rooted) u64 {
     return @intCast(sql.sqlite3_column_int64(stmt, 0));
 }
 
+pub const AccountWithModifiedSlot = struct {
+    account: AccountSharedData,
+    modified_slot: Slot,
+};
+
 /// Returns `null` if no such account exists.
 ///
 /// The `data` field in the returned `AccountSharedData` is owned by the caller and is allocated
@@ -203,6 +208,15 @@ pub fn get(
     allocator: std.mem.Allocator,
     address: Pubkey,
 ) error{OutOfMemory}!?AccountSharedData {
+    const result = try self.getWithModifiedSlot(allocator, address) orelse return null;
+    return result.account;
+}
+
+pub fn getWithModifiedSlot(
+    self: *Rooted,
+    allocator: std.mem.Allocator,
+    address: Pubkey,
+) error{OutOfMemory}!?AccountWithModifiedSlot {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.get" });
     defer zone.deinit();
 
@@ -214,7 +228,7 @@ pub fn get(
 
     const stmt: *sql.sqlite3_stmt = if (get_stmt) |stmt| stmt else blk: {
         const query =
-            \\SELECT lamports, data, owner, executable, rent_epoch
+            \\SELECT lamports, data, owner, executable, rent_epoch, last_modified_slot
             \\FROM entries WHERE address = ?;
         ;
         self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_stmt, null));
@@ -238,11 +252,14 @@ pub fn get(
     errdefer allocator.free(duped);
 
     return .{
-        .lamports = fields.lamports,
-        .data = duped,
-        .owner = fields.owner,
-        .executable = fields.executable,
-        .rent_epoch = fields.rent_epoch,
+        .account = .{
+            .lamports = fields.lamports,
+            .data = duped,
+            .owner = fields.owner,
+            .executable = fields.executable,
+            .rent_epoch = fields.rent_epoch,
+        },
+        .modified_slot = @bitCast(sql.sqlite3_column_int64(stmt, 5)),
     };
 }
 
