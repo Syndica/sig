@@ -227,7 +227,7 @@ pub fn commitTransactions(
 
             const event: jrpc_types.InboundEvent = .{ .logs = logs_batch_event.* };
             maybe_logs_batch_event = null;
-            errdefer event.deinit();
+            errdefer event.deinit(persistent_allocator);
 
             try event_sink.send(event);
         }
@@ -703,7 +703,7 @@ test "commitTransactions emits transaction logs batch with transaction metadata"
     );
 
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer event.deinit();
+    defer event.deinit(allocator);
 
     switch (event) {
         .logs => |logs_event| {
@@ -829,7 +829,7 @@ test "commitTransactions emits empty transaction logs batch when execution has n
     );
 
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer event.deinit();
+    defer event.deinit(allocator);
 
     switch (event) {
         .logs => |logs_event| {

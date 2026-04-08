@@ -1799,7 +1799,7 @@ test "handleSlotUpdate emits rooted events from finalized commitment, not consen
     }
 
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer event.deinit();
+    defer event.deinit(allocator);
     switch (event) {
         .slot_rooted => |rooted_slot| {
             try std.testing.expectEqual(2, rooted_slot);
@@ -1847,7 +1847,7 @@ test "handleSlotUpdate emits tip_changed when voted slot decreases" {
     );
 
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer event.deinit();
+    defer event.deinit(allocator);
     switch (event) {
         .tip_changed => |tip_slot| {
             try std.testing.expectEqual(4, tip_slot);
@@ -1966,7 +1966,7 @@ test "freezeCompletedSlots emits slot_frozen event with slot metadata" {
 
     try std.testing.expect(processed_a_slot);
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer event.deinit();
+    defer event.deinit(allocator);
     switch (event) {
         .slot_frozen => |slot_frozen| {
             try std.testing.expectEqual(1, slot_frozen.slot);

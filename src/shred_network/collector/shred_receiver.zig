@@ -3,6 +3,8 @@ const tracy = @import("tracy");
 const sig = @import("../../sig.zig");
 const shred_network = @import("../lib.zig");
 
+const jrpc_types = sig.rpc.jrpc_websockets.types;
+
 const bincode = sig.bincode;
 const layout = sig.ledger.shred.layout;
 const shred_verifier = shred_network.shred_verifier;
@@ -66,6 +68,7 @@ pub const ShredReceiver = struct {
         /// shared with repair
         tracker: *BasicShredTracker,
         inserter: ShredInserter,
+        event_sink: ?*jrpc_types.EventSink = null,
 
         /// Handler for duplicate slot detection and reporting
         duplicate_handler: DuplicateShredHandler,
@@ -209,10 +212,100 @@ pub const ShredReceiver = struct {
         }
 
         try self.params.duplicate_handler.handleDuplicateSlots(allocator, &result);
+        self.emitReceivedSignatureEvents(&result) catch |err| {
+            // just log, we do not want event failure to cause other problems
+            self.logger.err().logf("failed to emit received signature events: {}", .{err});
+        };
 
         result.deinit();
 
         self.metrics.batch_size.observe(self.shred_batch.len);
+    }
+
+    fn emitReceivedSignatureEvents(
+        self: *ShredReceiver,
+        result: *const ShredInserter.Result,
+    ) !void {
+        const event_sink = self.params.event_sink orelse return;
+        const allocator = event_sink.channel.allocator;
+
+        for (result.completed_data_set_infos.items) |info| {
+            // NOTE: this looks weird but it's because info is inclusive and getEntriesInDataBlock
+            // expects an exclusive end index
+            const end_index = info.end_index + 1;
+            const entries = self.params.duplicate_handler.ledger_reader.getEntriesInDataBlock(
+                allocator,
+                info.slot,
+                info.start_index,
+                end_index,
+                null,
+            ) catch |err| {
+                self.logger.err().logf(
+                    "failed to read completed data set entries for slot {} [{}..={}]: {}",
+                    .{ info.slot, info.start_index, info.end_index, err },
+                );
+                continue;
+            };
+            defer {
+                for (entries) |entry| {
+                    entry.deinit(allocator);
+                }
+                allocator.free(entries);
+            }
+
+            const signatures = collectFirstSignaturesFromEntries(allocator, entries) catch |err| {
+                self.logger.err().logf(
+                    "failed to extract received signatures for slot {} [{}..={}]: {}",
+                    .{ info.slot, info.start_index, info.end_index, err },
+                );
+                continue;
+            };
+            if (signatures.len == 0) {
+                continue;
+            }
+
+            event_sink.send(.{ .received_signatures = .{
+                .slot = info.slot,
+                .signatures = signatures,
+            } }) catch |err| {
+                self.logger.err().logf(
+                    "failed to send received signatures event for slot {}: {}",
+                    .{ info.slot, err },
+                );
+                allocator.free(signatures);
+            };
+        }
+    }
+
+    fn collectFirstSignaturesFromEntries(
+        allocator: Allocator,
+        entries: []const sig.core.Entry,
+    ) ![]const sig.core.Signature {
+        var count: usize = 0;
+        for (entries) |entry| {
+            for (entry.transactions) |tx| {
+                if (tx.signatures.len != 0) {
+                    count += 1;
+                }
+            }
+        }
+
+        if (count == 0) {
+            return &.{};
+        }
+
+        const signatures = try allocator.alloc(sig.core.Signature, count);
+        var index: usize = 0;
+        for (entries) |entry| {
+            for (entry.transactions) |tx| {
+                if (tx.signatures.len == 0) {
+                    continue;
+                }
+                signatures[index] = tx.signatures[0];
+                index += 1;
+            }
+        }
+        return signatures;
     }
 
     /// Handle a single packet and return a shred if it's a valid shred.
@@ -468,6 +561,55 @@ test "handleBatch updates max_shred_insert_slot" {
 
     // The shred should have been processed and max_shred_insert_slot updated.
     try std.testing.expect(max_shred_insert_slot.load(.monotonic) > 0);
+}
+
+test "collectFirstSignaturesFromEntries uses first transaction signatures only" {
+    const allocator = std.testing.allocator;
+
+    const makeTransaction = struct {
+        fn run(allocator_inner: Allocator, fills: []const u8) !sig.core.Transaction {
+            var tx = try sig.core.Transaction.EMPTY.clone(allocator_inner);
+            allocator_inner.free(tx.signatures);
+
+            const signatures = try allocator_inner.alloc(sig.core.Signature, fills.len);
+            for (fills, 0..) |fill, index| {
+                var signature = sig.core.Signature.ZEROES;
+                @memset(&signature.r, fill);
+                @memset(&signature.s, fill);
+                signatures[index] = signature;
+            }
+
+            tx.signatures = signatures;
+            tx.msg.signature_count = @intCast(fills.len);
+            return tx;
+        }
+    }.run;
+
+    const txs_one = try allocator.alloc(sig.core.Transaction, 2);
+    txs_one[0] = try makeTransaction(allocator, &.{ 0x11, 0x12 });
+    txs_one[1] = try makeTransaction(allocator, &.{});
+
+    const txs_two = try allocator.alloc(sig.core.Transaction, 1);
+    txs_two[0] = try makeTransaction(allocator, &.{0x21});
+
+    const entries = try allocator.alloc(sig.core.Entry, 2);
+    entries[0] = .{ .num_hashes = 0, .hash = .ZEROES, .transactions = txs_one };
+    entries[1] = .{ .num_hashes = 0, .hash = .ZEROES, .transactions = txs_two };
+    defer {
+        for (entries) |entry| {
+            entry.deinit(allocator);
+        }
+        allocator.free(entries);
+    }
+
+    const signatures = try ShredReceiver.collectFirstSignaturesFromEntries(allocator, entries);
+    defer if (signatures.len > 0) {
+        allocator.free(signatures);
+    };
+
+    try std.testing.expectEqual(@as(usize, 2), signatures.len);
+    try std.testing.expectEqual(@as(u8, 0x11), signatures[0].r[0]);
+    try std.testing.expectEqual(@as(u8, 0x21), signatures[1].r[0]);
 }
 
 test "handlePing" {

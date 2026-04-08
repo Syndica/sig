@@ -20,6 +20,7 @@ pub const SlotReadContext = struct {
     slot_tracker: *sig.replay.trackers.SlotTracker,
     commitments: *sig.replay.trackers.CommitmentTracker,
     account_reader: sig.accounts_db.AccountReader,
+    status_cache: *sig.core.StatusCache,
 };
 
 /// Subscription families used for subscription identity and fanout.
@@ -336,19 +337,32 @@ pub const SlotFrozenEvent = struct {
 };
 
 /// Internal runtime input event from producer threads to the websocket loop thread.
+pub const ReceivedSignaturesEvent = struct {
+    slot: u64,
+    signatures: []const Signature,
+
+    pub fn deinit(self: ReceivedSignaturesEvent, allocator: std.mem.Allocator) void {
+        if (self.signatures.len > 0) {
+            allocator.free(self.signatures);
+        }
+    }
+};
+
 pub const InboundEvent = union(enum) {
     logs: SlotTransactionLogs,
+    received_signatures: ReceivedSignaturesEvent,
     slot_frozen: SlotFrozenEvent,
     slot_confirmed: u64,
     slot_rooted: u64,
     tip_changed: u64,
 
-    pub fn deinit(self: InboundEvent) void {
+    pub fn deinit(self: InboundEvent, allocator: std.mem.Allocator) void {
         switch (self) {
             .logs => |slot_logs| {
                 var logs = slot_logs;
                 logs.deinit();
             },
+            .received_signatures => |data| data.deinit(allocator),
             .slot_frozen => |slot_data| {
                 var accounts = slot_data.accounts;
                 accounts.deinit();
@@ -384,7 +398,7 @@ pub const EventSink = struct {
 
     pub fn destroy(self: *EventSink) void {
         while (self.channel.tryReceive()) |msg| {
-            msg.deinit();
+            msg.deinit(self.channel.allocator);
         }
         self.channel.deinit();
         self.loop_async.deinit();
@@ -566,12 +580,40 @@ pub const RootEventData = struct {
     root: u64,
 };
 
+pub const SignatureNotificationData = struct {
+    slot: u64,
+    value: Value,
+
+    pub const Value = union(enum) {
+        received,
+        final: struct {
+            err: ?TransactionError,
+        },
+
+        pub fn deinit(self: Value, allocator: std.mem.Allocator) void {
+            switch (self) {
+                .received => {},
+                .final => |result| {
+                    if (result.err) |tx_err| {
+                        tx_err.deinit(allocator);
+                    }
+                },
+            }
+        }
+    };
+
+    pub fn deinit(self: SignatureNotificationData, allocator: std.mem.Allocator) void {
+        self.value.deinit(allocator);
+    }
+};
+
 /// Serialization job: loop thread -> worker thread.
 /// Serialization workers round-trip sub_id to match result back to associated subscription.
 pub const SerializeJob = struct {
     sub_id: SubId,
     index: ?u64,
     job_type: JobType,
+    is_final: bool = false,
     submitted_at: std.time.Instant,
 
     pub const JobType = union(enum) {
@@ -589,6 +631,7 @@ pub const SerializeJob = struct {
             read_ctx: SlotReadContext,
         },
         root: RootEventData,
+        signature: SignatureNotificationData,
         slot: SlotEventData,
 
         pub fn deinit(self: JobType, allocator: std.mem.Allocator) void {
@@ -596,6 +639,7 @@ pub const SerializeJob = struct {
                 .account => |job| job.data.deinit(allocator),
                 .logs => |job| job.deinit(allocator),
                 .program => |job| job.data.deinit(allocator),
+                .signature => |job| job.deinit(allocator),
                 else => {},
             }
         }
@@ -624,6 +668,7 @@ pub const CommitMsg = struct {
     sub_id: SubId,
     index: ?u64,
     result: CommitResult,
+    is_final: bool = false,
     serialize_ns: u64 = 0,
     pipeline_latency_ns: u64 = 0,
     payload_bytes: u64 = 0,
