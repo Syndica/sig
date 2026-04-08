@@ -1987,9 +1987,14 @@ test "freezeCompletedSlots emits slot_frozen event with slot metadata" {
     defer slot_ref.release();
     slot_ref.state().tick_height.store(slot_ref.constants().max_tick_height, .monotonic);
 
+    // Populate block_time so the frozen event carries a real value instead of null.
+    const expected_block_time: i64 = 1_723_456_789;
+    try dep_stubs.ledger.db.put(schema.blocktime, 1, expected_block_time);
+
+    const test_entry_hash = comptime Hash.parse("Be2U7Ed4QZSc9ZJ83ncdR4rjsrP9yfch94e5uUDXJWPy");
     const processed_a_slot = try freezeCompletedSlots(&replay_state, &.{.{
         .slot = 1,
-        .output = .{ .last_entry_hash = Hash.ZEROES },
+        .output = .{ .last_entry_hash = test_entry_hash },
     }});
 
     try std.testing.expect(processed_a_slot);
@@ -2001,11 +2006,11 @@ test "freezeCompletedSlots emits slot_frozen event with slot metadata" {
             try std.testing.expectEqual(0, slot_frozen.parent);
             try std.testing.expectEqual(0, slot_frozen.root);
             // Block metadata enrichment (Step 5).
-            try std.testing.expectEqual(Hash.ZEROES, slot_frozen.blockhash);
+            try std.testing.expectEqual(test_entry_hash, slot_frozen.blockhash);
             try std.testing.expect(slot_frozen.block_height != null);
             // block_time is read from ledger (clock.unix_timestamp);
-            // the test ledger has no blocktime entry, so it's null.
-            try std.testing.expectEqual(null, slot_frozen.block_time);
+            // populated above via db.put so we can assert the real value.
+            try std.testing.expectEqual(expected_block_time, slot_frozen.block_time.?);
         },
         else => return error.TestUnexpectedResult,
     }
