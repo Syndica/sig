@@ -9,9 +9,6 @@ comptime {
     _ = start;
 }
 
-const Slot = lib.solana.Slot;
-const Hash = lib.solana.Hash;
-
 pub const name = .accounts_db;
 pub const panic = start.panic;
 pub const std_options = start.options;

@@ -69,7 +69,7 @@ pub fn downloadSnapshot(
         const key: []u8, const val = .{ @constCast(header[0..sep]), header[sep + 2 ..] };
         for (key) |*c| c.* = std.ascii.toLower(c.*);
         if (std.mem.eql(u8, key, "content-length")) {
-            break std.fmt.parseInt(u64, val, 10) catch return error.InvalidHttpContentLength;
+            break std.fmt.parseInt(usize, val, 10) catch return error.InvalidHttpContentLength;
         }
     } else return error.MissingHttpContentLength;
 
@@ -78,9 +78,7 @@ pub fn downloadSnapshot(
     try std.posix.ftruncate(snapshot_file.handle, content_length);
 
     // write any body data read into io_buf
-    var offset: u64 = 0;
-    while (offset < extra_body.len)
-        offset += try std.posix.pwrite(snapshot_file.handle, extra_body[offset..], offset);
+    try snapshot_file.writeAll(extra_body);
 
     // Start transfering over from socket -> pipe -> file
     const pipe_buf_size = 64 * 1024; // TODO: get it directly from the pipe
@@ -108,12 +106,11 @@ pub fn downloadSnapshot(
     var past_warmup = false;
     var past_lockin = false;
 
-    var in: usize = 0;
+    var in: usize = extra_body.len;
     var out: usize = 0;
     while (in < content_length) {
         const now = try std.time.Instant.now();
         const since_per_sec = now.since(per_sec.timestamp);
-        // if (since_per_sec >= config.min_timeout_ns) return error.TimedOut;
 
         const may_partial_move = (content_length - in) > pipe_buf_size;
         n = try splice(socket, pipe[1], content_length - in, may_partial_move);
