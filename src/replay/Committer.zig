@@ -770,7 +770,7 @@ fn collectPostTokenBalances(
 
         // The account's owner must be a known token program.
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_balances.rs#L99
-        const owner_pubkey = owner orelse continue;
+        const owner_pubkey = owner orelse return error.MissingTokenAccountOwner;
         if (!spl_token.isTokenProgram(owner_pubkey)) continue;
 
         // Parse SPL Token account state.
