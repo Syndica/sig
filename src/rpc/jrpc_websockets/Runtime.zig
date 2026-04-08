@@ -336,17 +336,6 @@ fn handleInboundEvent(
     defer e.deinit(self.inbound_event_queue.allocator);
 
     switch (e) {
-        .logs => |*log_data| {
-            // NOTE: logs events only populate the slot cache; publication happens on later
-            // slot transitions. Replay may send multiple log batches for the same slot before
-            // `.slot_frozen`, and the cache accumulates them until the slot is published.
-            self.slot_state_cache.onLogsEvent(self.allocator, log_data) catch |err| {
-                self.logger.err().logf(
-                    "failed to cache logs event for slot {}: {}",
-                    .{ log_data.slot, err },
-                );
-            };
-        },
         .transaction_batch => |*batch_data| {
             // NOTE: transaction batch events only populate the slot cache; publication
             // happens on later slot transitions. Replay may send multiple batches for

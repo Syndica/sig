@@ -13,10 +13,8 @@ const InnerInstruction = sig.ledger.transaction_status.InnerInstruction;
 const TransactionTokenBalance = sig.ledger.transaction_status.TransactionTokenBalance;
 const TransactionReturnData = sig.ledger.transaction_status.TransactionReturnData;
 const SlotFrozenEvent = types.SlotFrozenEvent;
-const SlotTransactionLogs = types.SlotTransactionLogs;
 const SlotTransactionBatch = types.SlotTransactionBatch;
 const TransactionEntry = types.TransactionEntry;
-const TransactionLogsEntry = types.TransactionLogsEntry;
 const SlotModifiedAccounts = types.SlotModifiedAccounts;
 const DistributedRewards = sig.replay.freeze.DistributedRewards;
 const SlotTrackerReference = sig.replay.trackers.SlotTracker.Reference;
@@ -49,8 +47,6 @@ pub const CachedSlot = struct {
     published: PublishedFlags = .{},
     /// Final account states for the accounts modified in this slot, captured at freeze time.
     modified_accounts: SlotModifiedAccounts = .empty(),
-    /// Transaction log batches received for this slot.
-    logs_batches: std.ArrayListUnmanaged(SlotTransactionLogs) = .empty,
     /// Rich transaction batches for this slot.
     transaction_batches: std.ArrayListUnmanaged(SlotTransactionBatch) = .empty,
 
@@ -74,25 +70,6 @@ pub const CachedSlot = struct {
         processed: bool = false,
         confirmed: bool = false,
         finalized: bool = false,
-    };
-
-    pub const LogEntryIterator = struct {
-        batches: []const SlotTransactionLogs,
-        batch_index: usize = 0,
-        entry_index: usize = 0,
-
-        pub fn next(self: *LogEntryIterator) ?*const TransactionLogsEntry {
-            while (self.batch_index < self.batches.len) {
-                const batch = &self.batches[self.batch_index];
-                if (self.entry_index < batch.entries.len) {
-                    defer self.entry_index += 1;
-                    return &batch.entries[self.entry_index];
-                }
-                self.batch_index += 1;
-                self.entry_index = 0;
-            }
-            return null;
-        }
     };
 
     pub const TransactionBatchIterator = struct {
@@ -220,10 +197,6 @@ pub const CachedSlot = struct {
 
     pub fn deinit(self: *CachedSlot, allocator: std.mem.Allocator) void {
         self.modified_accounts.deinit();
-        for (self.logs_batches.items) |*logs_batch| {
-            logs_batch.deinit();
-        }
-        self.logs_batches.deinit(allocator);
         for (self.transaction_batches.items) |*batch| {
             batch.deinit();
         }
@@ -231,15 +204,6 @@ pub const CachedSlot = struct {
         self.distributed_rewards.deinit();
     }
 
-    /// Iterates all cached log entries in all batches, preserving entry order within each batch
-    /// (matches Agave behavior).
-    pub fn logEntriesIterator(self: *const CachedSlot) LogEntryIterator {
-        return .{ .batches = self.logs_batches.items };
-    }
-
-    /// Iterates all cached transaction entries from
-    /// `transaction_batches`, preserving entry order
-    /// within each batch (matches Agave behavior).
     pub fn transactionBatchIterator(self: *const CachedSlot) TransactionBatchIterator {
         return .{
             .tx_batches = self.transaction_batches.items,
@@ -501,25 +465,6 @@ pub fn onSlotFrozen(
         .publishable_slot = slot_state,
         .notify_commitments = notify_commitments,
     };
-}
-
-pub fn onLogsEvent(
-    self: *SlotStateCache,
-    allocator: std.mem.Allocator,
-    log_event: *SlotTransactionLogs,
-) !void {
-    if (log_event.entries.len == 0) {
-        // Nothing to do
-        log_event.deinit();
-        return;
-    }
-
-    const slot_state = try self.getOrPutSlot(allocator, log_event.slot);
-    // TODO: what about repair/replay over same slot? We can receive multiple log batches for the
-    // same slot during normal execution and append them, but if the slot is replayed with
-    // different contents we still only key by slot number and do not handle that case.
-    try slot_state.logs_batches.append(allocator, log_event.*);
-    log_event.* = .empty();
 }
 
 pub fn onTransactionBatchEvent(

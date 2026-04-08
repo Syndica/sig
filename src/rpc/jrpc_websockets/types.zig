@@ -433,7 +433,6 @@ pub const ReceivedSignaturesEvent = struct {
 /// Internal runtime input event from producer threads
 /// to the websocket loop thread.
 pub const InboundEvent = union(enum) {
-    logs: SlotTransactionLogs,
     transaction_batch: SlotTransactionBatch,
     received_signatures: ReceivedSignaturesEvent,
     slot_frozen: SlotFrozenEvent,
@@ -444,10 +443,6 @@ pub const InboundEvent = union(enum) {
 
     pub fn deinit(self: InboundEvent, allocator: std.mem.Allocator) void {
         switch (self) {
-            .logs => |logs_data| {
-                var data = logs_data;
-                data.deinit();
-            },
             .transaction_batch => |batch| {
                 var b = batch;
                 b.deinit();
@@ -564,27 +559,6 @@ pub const AccountEventData = struct {
 
     pub fn deinit(self: AccountEventData, allocator: std.mem.Allocator) void {
         self.account.account.deinit(allocator);
-    }
-};
-
-pub const SlotTransactionLogs = struct {
-    /// Slot whose transaction logs this batch belongs to.
-    slot: u64 = 0,
-    /// Batch of transaction log entries owned by `arena`.
-    entries: []const TransactionLogsEntry = &.{},
-    arena: std.heap.ArenaAllocator,
-
-    pub fn empty() SlotTransactionLogs {
-        return .{
-            .slot = 0,
-            .entries = &.{},
-            .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
-        };
-    }
-
-    pub fn deinit(self: *SlotTransactionLogs) void {
-        self.arena.deinit();
-        self.* = empty();
     }
 };
 
@@ -1147,11 +1121,6 @@ test "TransactionLogsEntry toOwnedNotificationData deep copies into logs notific
         "arena err",
         cloned.err.?.InstructionError.@"1".BorshIoError,
     );
-}
-
-test "SlotTransactionLogs deinit accepts empty static slices" {
-    var data = SlotTransactionLogs.empty();
-    data.deinit();
 }
 
 test "blockFilterEql - both all" {
