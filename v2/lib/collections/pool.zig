@@ -83,6 +83,14 @@ pub fn Pool(Item: type, IdInt: type) type {
         pub fn ptrToIndex(self: *const Self, item: *Item) ItemId {
             const node: [*]const Node = @ptrCast(item);
             const base: [*]const Node = self.buf;
+
+            {
+                // range check
+                const item_addr: usize = @intFromPtr(item);
+                std.debug.assert(item_addr >= @intFromPtr(self.buf));
+                std.debug.assert(item_addr < @intFromPtr(self.buf + self.len));
+            }
+
             return @enumFromInt(node - base);
         }
     };

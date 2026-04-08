@@ -15,7 +15,7 @@ pub fn LCRSTree(Node: type, IdInt: type) type {
             @compileLog("missing field", Node, field);
             continue;
         }
-        if (@TypeOf(@field(@as(Node, undefined), field)) != NodeId)
+        if (@FieldType(Node, field) != NodeId)
             @compileLog("incorrect type", Node, field);
     }
 
