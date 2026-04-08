@@ -649,7 +649,7 @@ pub const VoteEventData = struct {
         hash: Hash,
         timestamp: ?i64,
         signature: Signature,
-    ) !VoteEventData {
+    ) std.mem.Allocator.Error!VoteEventData {
         return .{
             .vote_pubkey = vote_pubkey,
             .slots = try allocator.dupe(u64, slots),
