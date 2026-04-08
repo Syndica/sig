@@ -185,6 +185,8 @@ pub const Region = union(enum) {
         folder: []const u8,
         min_snapshot_download_speed_mb: u64,
         min_snapshot_download_warmup_ms: u64,
+        min_snapshot_download_timeout_ms: u64,
+        min_snapshot_download_lockin_percent: f64,
     },
 
     pub fn size(self: Region) usize {
@@ -242,8 +244,18 @@ pub const Region = union(enum) {
                     return error.FolderPathTooLong;
                 @memcpy(data.folder_path[0..cfg.folder.len], cfg.folder);
 
-                data.min_snapshot_download_speed_mb = cfg.min_snapshot_download_speed_mb;
-                data.min_snapshot_download_warmup_ms = cfg.min_snapshot_download_warmup_ms;
+                if (cfg.min_snapshot_download_lockin_percent > 1.0) {
+                    std.debug.panic("min_snapshot_download_lockin_percent must be 0 to 1.0: {}", .{
+                        cfg.min_snapshot_download_lockin_percent,
+                    });
+                }
+
+                data.snapshot_download = .{
+                    .min_speed_bytes = cfg.min_snapshot_download_speed_mb * 1_000_000,
+                    .min_warmup_ns = cfg.min_snapshot_download_warmup_ms * 1_000_000,
+                    .min_timeout_ns = cfg.min_snapshot_download_timeout_ms * 1_000_000,
+                    .min_lockin_percent = cfg.min_snapshot_download_lockin_percent,
+                };
             },
         };
     }

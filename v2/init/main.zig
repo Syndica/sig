@@ -33,6 +33,8 @@ const Config = struct {
         folder_path: []const u8,
         min_snapshot_download_speed_mb: u64,
         min_snapshot_download_warmup_ms: u64,
+        min_snapshot_download_timeout_ms: u64,
+        min_snapshot_download_lockin_percent: f64,
     };
 };
 
@@ -110,6 +112,9 @@ pub fn main() !void {
             .folder = config.accounts_db.folder_path,
             .min_snapshot_download_speed_mb = config.accounts_db.min_snapshot_download_speed_mb,
             .min_snapshot_download_warmup_ms = config.accounts_db.min_snapshot_download_warmup_ms,
+            .min_snapshot_download_timeout_ms = config.accounts_db.min_snapshot_download_timeout_ms,
+            .min_snapshot_download_lockin_percent = //
+            config.accounts_db.min_snapshot_download_lockin_percent,
         },
     });
 
