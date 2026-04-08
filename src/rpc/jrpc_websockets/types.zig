@@ -416,6 +416,11 @@ pub const SlotFrozenEvent = struct {
     /// Rewards and partitions for this slot. Owns an arena
     /// that backs the rewards slice; freed in deinit.
     distributed_rewards: DistributedRewards = DistributedRewards.empty(),
+
+    pub fn deinit(self: *SlotFrozenEvent) void {
+        self.accounts.deinit();
+        self.distributed_rewards.deinit();
+    }
 };
 
 /// Internal runtime input event from producer threads to the websocket loop thread.
@@ -451,8 +456,7 @@ pub const InboundEvent = union(enum) {
             .vote => |vote_data| vote_data.deinit(allocator),
             .slot_frozen => |slot_data| {
                 var data = slot_data;
-                data.accounts.deinit();
-                data.distributed_rewards.deinit();
+                data.deinit();
             },
             .slot_confirmed, .slot_rooted, .tip_changed => {},
         }

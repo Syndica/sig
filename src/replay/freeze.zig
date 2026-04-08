@@ -248,63 +248,63 @@ fn distributeTransactionFees(
     const zone = tracy.Zone.init(@src(), .{ .name = "distributeTransactionFees" });
     defer zone.deinit();
 
-    var burn = collected_transaction_fees * rent.burn_percent / 100;
+    const burn = collected_transaction_fees * rent.burn_percent / 100;
     const total_fees = collected_priority_fees + collected_transaction_fees;
     const payout = total_fees -| burn;
 
-    if (payout > 0) blk: {
-        const payout_result = tryPayoutFees(
-            allocator,
-            account_store,
-            account_reader,
-            rent,
-            slot,
-            collector_id,
-            payout,
-        ) catch |err| switch (err) {
-            error.InvalidAccountOwner,
-            error.LamportOverflow,
-            error.InvalidRentPayingAccount,
-            => {
-                burn = total_fees;
-                break :blk;
-            },
-            else => return err,
-        };
-
-        const fee_reward: sig.ledger.meta.Reward = .{
-            .pubkey = collector_id,
-            .lamports = @intCast(payout_result.payout_amount),
-            .post_balance = payout_result.post_balance,
-            .reward_type = .fee,
-            .commission = null,
-        };
-
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        errdefer arena.deinit();
-
-        const keyed_rewards, const num_partitions = try getRewardsAndNumPartitions(
-            arena.allocator(),
-            epoch_reward_status,
-            block_height,
-            fee_reward,
-        );
-
-        try ledger.db.put(sig.ledger.schema.schema.rewards, slot, .{
-            .rewards = keyed_rewards,
-            .num_partitions = num_partitions,
-        });
-
+    if (payout == 0) {
         _ = capitalization.fetchSub(burn, .monotonic);
-        return .{
-            .rewards = keyed_rewards,
-            .num_partitions = num_partitions,
-            .arena = arena,
-        };
+        return .empty();
     }
 
+    const payout_result = tryPayoutFees(
+        allocator,
+        account_store,
+        account_reader,
+        rent,
+        slot,
+        collector_id,
+        payout,
+    ) catch |err| switch (err) {
+        error.InvalidAccountOwner,
+        error.LamportOverflow,
+        error.InvalidRentPayingAccount,
+        => {
+            _ = capitalization.fetchSub(total_fees, .monotonic);
+            return .empty();
+        },
+        else => return err,
+    };
+
+    const fee_reward: sig.ledger.meta.Reward = .{
+        .pubkey = collector_id,
+        .lamports = @intCast(payout_result.payout_amount),
+        .post_balance = payout_result.post_balance,
+        .reward_type = .fee,
+        .commission = null,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+
+    const keyed_rewards, const num_partitions = try getRewardsAndNumPartitions(
+        arena.allocator(),
+        epoch_reward_status,
+        block_height,
+        fee_reward,
+    );
+
+    try ledger.db.put(sig.ledger.schema.schema.rewards, slot, .{
+        .rewards = keyed_rewards,
+        .num_partitions = num_partitions,
+    });
+
     _ = capitalization.fetchSub(burn, .monotonic);
-    return .empty();
+    return .{
+        .rewards = keyed_rewards,
+        .num_partitions = num_partitions,
+        .arena = arena,
+    };
 }
 
 /// Collect all rewards for this slot and determine num_partitions.
