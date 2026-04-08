@@ -437,7 +437,7 @@ fn writeTransactionStatus(
 
     // Compute post-token balances by reading all transaction accounts.
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_processor.rs#L532-L533
-    const post_raw_token_balances = collectPostTokenBalances(
+    const post_raw_token_balances = try collectPostTokenBalances(
         allocator,
         transaction,
         tx_result.writes.constSlice(),
@@ -576,7 +576,7 @@ fn buildTransactionEntry(
     );
 
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_processor.rs#L532-L533
-    const post_raw = collectPostTokenBalances(
+    const post_raw = try collectPostTokenBalances(
         temp_allocator,
         transaction,
         tx_result.writes.constSlice(),
@@ -724,7 +724,7 @@ fn collectPostTokenBalances(
     transaction: ResolvedTransaction,
     writes: []const LoadedAccount,
     account_store_reader: ?sig.accounts_db.SlotAccountReader,
-) spl_token.RawTokenBalances {
+) !spl_token.RawTokenBalances {
     var result = spl_token.RawTokenBalances{};
 
     // Early exit when the transaction has no token program in its
@@ -746,7 +746,7 @@ fn collectPostTokenBalances(
         // first (updated/rolled-back accounts), then fall back to
         // the account store (unmodified accounts).
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/account_loader.rs#L237-L255
-        var owner: Pubkey = undefined;
+        var owner: ?Pubkey = null;
         var data_buf: [spl_token.TOKEN_ACCOUNT_SIZE]u8 = undefined;
         var have_data = false;
 
@@ -757,7 +757,7 @@ fn collectPostTokenBalances(
                 have_data = true;
             }
         } else if (account_store_reader) |reader| {
-            const account = reader.get(allocator, pubkey) catch continue orelse continue;
+            const account = try reader.get(allocator, pubkey) orelse continue;
             defer account.deinit(allocator);
             owner = account.owner;
             if (account.data.len() >= spl_token.TOKEN_ACCOUNT_SIZE) {
@@ -770,7 +770,8 @@ fn collectPostTokenBalances(
 
         // The account's owner must be a known token program.
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_balances.rs#L99
-        if (!spl_token.isTokenProgram(owner)) continue;
+        const owner_pubkey = owner orelse continue;
+        if (!spl_token.isTokenProgram(owner_pubkey)) continue;
 
         // Parse SPL Token account state.
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_balances.rs#L101-L105
@@ -783,7 +784,7 @@ fn collectPostTokenBalances(
             .mint = parsed.mint,
             .owner = parsed.owner,
             .amount = parsed.amount,
-            .program_id = owner,
+            .program_id = owner_pubkey,
         }) catch break; // BoundedArray full; should never happen.
     }
 
@@ -1231,7 +1232,7 @@ test "collectPostTokenBalances: failed tx reads token account from account store
         .account_shared_data_map = &account_map,
     };
 
-    const result = collectPostTokenBalances(
+    const result = try collectPostTokenBalances(
         allocator,
         transaction,
         writes,
@@ -1321,7 +1322,7 @@ test "collectPostTokenBalances: success tx reads token account from writes" {
         },
     }};
 
-    const result = collectPostTokenBalances(
+    const result = try collectPostTokenBalances(
         allocator,
         transaction,
         &writes_arr,

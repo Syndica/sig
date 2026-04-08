@@ -791,7 +791,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                 const prev_blockhash = blk: {
                     var q = slot_info.state().blockhash_queue.read();
                     defer q.unlock();
-                    break :blk q.get().last_hash orelse sig.core.Hash.ZEROES;
+                    break :blk q.get().last_hash orelse return error.MissingPreviousBlockhash;
                 };
 
                 var distributed = try replay.freeze.freezeSlot(
@@ -831,11 +831,11 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                             .blockhash = last_entry_hash,
                             .previous_blockhash = prev_blockhash,
                             .block_height = slot_info.constants().block_height,
-                            .block_time = state.ledger.db.get(
+                            .block_time = try state.ledger.db.get(
                                 state.allocator,
                                 schema.blocktime,
                                 slot,
-                            ) catch null,
+                            ),
                             .distributed_rewards = distributed,
                         },
                     });
