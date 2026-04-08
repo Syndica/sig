@@ -954,6 +954,7 @@ pub fn getLargestAccounts(
 ) !GetLargestAccounts.Response {
     const config = params.config orelse GetLargestAccounts.Config{};
     const commitment = config.commitment orelse .finalized;
+    const sort_results = config.sortResults orelse true;
 
     const slot = self.commitments.get(commitment);
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
@@ -1011,6 +1012,15 @@ pub fn getLargestAccounts(
         }
         break :blk vals;
     };
+
+    if (sort_results) {
+        std.mem.sortUnstable(GetLargestAccounts.AccountBalance, values, {}, struct {
+            pub fn lessThan(_: void, a: GetLargestAccounts.AccountBalance, b: GetLargestAccounts.AccountBalance) bool {
+                if (a.lamports != b.lamports) return a.lamports > b.lamports;
+                return b.address.order(a.address) == .lt;
+            }
+        }.lessThan);
+    }
 
     return .{
         .context = .{ .slot = slot },

@@ -889,19 +889,19 @@ pub fn getConfirmedSignaturesForAddress(
     }
 
     // Fetch the list of signatures that affect the given address
-    var address_signatures = ArrayList(struct { Slot, Signature }).init(allocator);
+    var address_signatures = ArrayList(struct { Slot, Signature, u32 }).init(allocator);
     defer address_signatures.deinit();
 
     // Get signatures in `slot`
     var get_initial_slot_timer = Timer.start();
     const signatures = try self.findAddressSignaturesForSlot(allocator, address, slot);
     for (1..signatures.items.len + 1) |i| {
-        const this_slot, const signature = signatures.items[signatures.items.len - i];
+        const this_slot, const signature, const tx_index = signatures.items[signatures.items.len - i];
         std.debug.assert(slot == this_slot);
         if (!before_excluded_signatures.contains(signature) and
             !until_excluded_signatures.contains(signature))
         {
-            try address_signatures.append(.{ this_slot, signature });
+            try address_signatures.append(.{ this_slot, signature, tx_index });
         }
     }
     if (self.metrics) |m| {
@@ -933,7 +933,7 @@ pub fn getConfirmedSignaturesForAddress(
                 unrooted_slots_to_include.contains(key.slot)) and
             !until_excluded_signatures.contains(key.signature))
         {
-            try address_signatures.append(.{ key.slot, key.signature });
+            try address_signatures.append(.{ key.slot, key.signature, key.transaction_index });
         }
     }
     if (self.metrics) |m| {
@@ -946,7 +946,7 @@ pub fn getConfirmedSignaturesForAddress(
     var get_status_info_timer = Timer.start();
     var infos = ArrayList(ConfirmedTransactionStatusWithSignature).init(allocator);
     for (address_signatures.items) |asig| {
-        const the_slot, const signature = asig;
+        const the_slot, const signature, const tx_index = asig;
         const maybe_status = try self.getTransactionStatus(
             allocator,
             signature,
@@ -968,6 +968,7 @@ pub fn getConfirmedSignaturesForAddress(
             .err = err,
             .memo = memo,
             .block_time = block_time,
+            .transaction_index = tx_index,
         });
     }
     if (self.metrics) |m| {
@@ -1025,7 +1026,7 @@ fn getBlockSignatures(
     return signatures;
 }
 
-const SlotSignature = struct { Slot, Signature };
+const SlotSignature = struct { Slot, Signature, u32 };
 
 /// Returns all signatures for an address in a particular slot, regardless of whether that slot
 /// has been rooted. The transactions will be ordered by their occurrence in the block
@@ -1054,7 +1055,7 @@ fn findAddressSignaturesForSlot(
         if (key.slot > slot or !key.address.equals(&pubkey)) {
             break;
         }
-        try signatures.append(.{ slot, key.signature });
+        try signatures.append(.{ slot, key.signature, key.transaction_index });
     }
     return signatures;
 }
@@ -1625,6 +1626,7 @@ const ConfirmedTransactionStatusWithSignature = struct {
     err: ?TransactionError,
     memo: ?ArrayList(u8),
     block_time: ?UnixTimestamp,
+    transaction_index: ?u32 = null,
 };
 
 pub const Metrics = struct {

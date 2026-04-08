@@ -285,7 +285,7 @@ pub const GetHealth = struct {
 pub const GetBlock = struct {
     /// The slot to get the block for (first positional argument)
     slot: Slot,
-    encoding_or_config: ?EncodingOrConfig = null,
+    encoding_or_config: ?common.EncodingOrConfig(common.TransactionEncoding, Config) = null,
 
     pub const Config = struct {
         /// Only `confirmed` and `finalized` are supported. `processed` is rejected.
@@ -307,46 +307,8 @@ pub const GetBlock = struct {
             return self.transactionDetails orelse common.TransactionDetails.full;
         }
 
-        pub fn getMaxSupportedTransactionVersion(self: Config) u8 {
-            return self.maxSupportedTransactionVersion orelse 0;
-        }
-
         pub fn getRewards(self: Config) bool {
             return self.rewards orelse true;
-        }
-    };
-
-    /// RPC spec allows either a config or just an encoding
-    /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/rpc-client-types/src/config.rs#L233
-    pub const EncodingOrConfig = union(enum) {
-        encoding: common.TransactionEncoding,
-        config: Config,
-
-        pub fn jsonParseFromValue(
-            allocator: std.mem.Allocator,
-            source: std.json.Value,
-            options: std.json.ParseOptions,
-        ) std.json.ParseFromValueError!EncodingOrConfig {
-            return switch (source) {
-                .string => |s| .{
-                    .encoding = std.meta.stringToEnum(common.TransactionEncoding, s) orelse
-                        return error.InvalidEnumTag,
-                },
-                .object => .{ .config = try std.json.innerParseFromValue(
-                    Config,
-                    allocator,
-                    source,
-                    options,
-                ) },
-                else => error.UnexpectedToken,
-            };
-        }
-
-        pub fn jsonStringify(self: EncodingOrConfig, jw: anytype) !void {
-            switch (self) {
-                .encoding => |enc| try jw.write(@tagName(enc)),
-                .config => |c| try jw.write(c),
-            }
         }
     };
 
@@ -1270,6 +1232,7 @@ pub const GetLargestAccounts = struct {
     pub const Config = struct {
         commitment: ?common.Commitment = null,
         filter: ?Filter = null,
+        sortResults: ?bool = null,
     };
 
     pub const Filter = enum { circulating, nonCirculating };
@@ -1472,6 +1435,7 @@ pub const GetSignaturesForAddress = struct {
         memo: ?[]const u8,
         blockTime: ?i64,
         confirmationStatus: ?common.Commitment,
+        transactionIndex: ?u32 = null,
     };
 };
 
@@ -1768,7 +1732,7 @@ pub const GetTokenSupply = struct {
 pub const GetTransaction = struct {
     /// Transaction signature, as base-58 encoded string
     signature: Signature,
-    config: ?Config = null,
+    encoding_or_config: ?common.EncodingOrConfig(common.TransactionEncoding, Config) = null,
 
     pub const Config = struct {
         /// processed is not supported.
@@ -1784,7 +1748,25 @@ pub const GetTransaction = struct {
         /// list. If jsonParsed is requested but a parser cannot be found, the instruction
         /// falls back to regular JSON encoding (accounts, data, and programIdIndex fields).
         encoding: ?common.TransactionEncoding = null,
+
+        pub fn getCommitment(self: Config) common.Commitment {
+            return self.commitment orelse common.Commitment.finalized;
+        }
+
+        pub fn getEncoding(self: Config) common.TransactionEncoding {
+            return self.encoding orelse common.TransactionEncoding.json;
+        }
     };
+
+    pub fn resolveConfig(self: GetTransaction) Config {
+        const eoc = self.encoding_or_config orelse return Config{};
+        return switch (eoc) {
+            .encoding => |enc| Config{
+                .encoding = enc,
+            },
+            .config => |c| c,
+        };
+    }
 
     pub const Response = union(enum) {
         none,
@@ -2116,6 +2098,42 @@ pub const common = struct {
         signatures,
         none,
     };
+
+    pub fn EncodingOrConfig(comptime Encoding: type, comptime Config: type) type {
+        return union(enum) {
+            encoding: Encoding,
+            config: Config,
+
+            const EncodingOrConfigSelf = EncodingOrConfig(Encoding, Config);
+
+            pub fn jsonParseFromValue(
+                allocator: std.mem.Allocator,
+                source: std.json.Value,
+                options: std.json.ParseOptions,
+            ) std.json.ParseFromValueError!EncodingOrConfigSelf {
+                return switch (source) {
+                    .string => |s| .{
+                        .encoding = std.meta.stringToEnum(Encoding, s) orelse
+                            return error.InvalidEnumTag,
+                    },
+                    .object => .{ .config = try std.json.innerParseFromValue(
+                        Config,
+                        allocator,
+                        source,
+                        options,
+                    ) },
+                    else => error.UnexpectedToken,
+                };
+            }
+
+            pub fn jsonStringify(self: EncodingOrConfigSelf, jw: anytype) !void {
+                switch (self) {
+                    .encoding => |enc| try jw.write(@tagName(enc)),
+                    .config => |c| try jw.write(c),
+                }
+            }
+        };
+    }
 };
 
 /// Health check status for the RPC node.

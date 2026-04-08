@@ -68,7 +68,7 @@ pub fn getBlock(
     const transaction_details = config.getTransactionDetails();
     const show_rewards = config.getRewards();
     const encoding = config.getEncoding();
-    const max_supported_version = config.getMaxSupportedTransactionVersion();
+    const max_supported_version = config.maxSupportedTransactionVersion;
 
     // Reject processed commitment (Agave behavior: only confirmed and finalized supported)
     if (commitment == .processed) {
@@ -730,6 +730,7 @@ pub fn getSignaturesForAddress(
                 .finalized
             else
                 .confirmed,
+            .transactionIndex = info.transaction_index,
         };
     }
     return response;
@@ -740,9 +741,9 @@ pub fn getTransaction(
     arena: std.mem.Allocator,
     params: GetTransaction,
 ) !GetTransaction.Response {
-    const config: GetTransaction.Config = params.config orelse .{};
-    const commitment = config.commitment orelse .finalized;
-    const encoding = config.encoding orelse .json;
+    const config = params.resolveConfig();
+    const commitment = config.getCommitment();
+    const encoding = config.getEncoding();
     const max_supported_version = config.maxSupportedTransactionVersion;
 
     const reader = self.ledger.reader();

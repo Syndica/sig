@@ -1677,6 +1677,45 @@ fn validator(
         app_base.metrics_registry,
     );
     defer ledger.deinit();
+
+    // Backfill historical roots from the snapshot's SlotHistory sysvar.
+    // Without this, getBlockProduction (and other RPC methods that depend on
+    // rooted_slots) would only see roots created after startup.
+    if (rpc_enabled) backfill: {
+        const SlotHistory = sig.runtime.sysvar.SlotHistory;
+        const slot_history: SlotHistory = blk: {
+            const account = (try new_db.rooted.get(allocator, SlotHistory.ID)) orelse {
+                app_base.logger.warn().log("SlotHistory sysvar not found, skipping historical root backfill");
+                break :backfill;
+            };
+            defer account.deinit(allocator);
+
+            var fbs = std.io.fixedBufferStream(account.data);
+            break :blk try sig.bincode.read(
+                allocator,
+                SlotHistory,
+                fbs.reader(),
+                .{},
+            );
+        };
+        defer slot_history.deinit(allocator);
+
+        const rw = ledger.resultWriter();
+        var root_setter = try rw.setRootsIncremental();
+        defer root_setter.deinit();
+        errdefer root_setter.cancel();
+
+        var count: usize = 0;
+        for (slot_history.oldest()..slot_history.newest() + 1) |slot| {
+            if (slot_history.check(slot) == .found) {
+                try root_setter.addRoot(slot);
+                count += 1;
+            }
+        }
+        try root_setter.commit();
+        app_base.logger.info().logf("backfilled {d} historical roots from SlotHistory", .{count});
+    }
+
     const ledger_cleanup_service = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
         sig.ledger.cleanup_service.Logger.from(app_base.logger),
         &ledger,
