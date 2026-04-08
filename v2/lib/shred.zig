@@ -336,7 +336,7 @@ pub const Shred = extern struct {
     // This is combined with fragments from other shreds in the erasure set to
     // reconstruct a collection of entries.
     pub fn erasureFragment(shred: *const Shred) ?[]const u8 {
-        const buffer: *const Packet.Buffer = @ptrCast(@alignCast(shred));
+        const buffer: *const Packet.Buffer = @ptrCast(shred);
         const header_size = shred.variant.headerSize();
         if (header_size == 0) unreachable; // we should have gotten rid of this shred earlier?
 
@@ -370,7 +370,7 @@ pub const Shred = extern struct {
     const MerkleProofNode = extern struct { data: [merkle_node_size]u8 };
 
     fn merkleProofNodes(shred: *const Shred) []const MerkleProofNode {
-        const buffer: *const Packet.Buffer = @ptrCast(@alignCast(shred));
+        const buffer: *const Packet.Buffer = @ptrCast(shred);
 
         // The offset of the merkle inclusion proof
         const merkle_offset = shred.size() -
@@ -378,7 +378,7 @@ pub const Shred = extern struct {
             if (shred.variant.isResigned()) Signature.SIZE else 0;
 
         const merkle_proof_ptr: [*]const MerkleProofNode =
-            @ptrCast(buffer[0..].ptr + merkle_offset);
+            @ptrCast(buffer.ptr + merkle_offset);
 
         return merkle_proof_ptr[0..shred.variant.merkleCount()];
     }
@@ -386,7 +386,7 @@ pub const Shred = extern struct {
     // The payload of a data shred. Asserts shred is a data shred.
     pub fn dataPayload(shred: *const Shred) []const u8 {
         std.debug.assert(shred.variant.isData());
-        const buffer: *const Packet.Buffer = @ptrCast(@alignCast(shred));
+        const buffer: *const Packet.Buffer = @ptrCast(shred);
 
         return buffer[@offsetOf(Shred, "code_or_data") + @sizeOf(DataHeader) .. shred.code_or_data.data.size];
     }
@@ -394,7 +394,7 @@ pub const Shred = extern struct {
     pub fn chainedMerkleRoot(shred: *const Shred) *const Hash {
         std.debug.assert(shred.variant.isMerkle());
         std.debug.assert(shred.variant.isChained());
-        const buffer: *const Packet.Buffer = @ptrCast(@alignCast(shred));
+        const buffer: *const Packet.Buffer = @ptrCast(shred);
 
         const resigned_size: u16 = if (shred.variant.isResigned()) Signature.SIZE else 0;
 
@@ -430,7 +430,7 @@ pub const Shred = extern struct {
         else
             code_merkle_protected_size;
 
-        return @as(*const Packet.Buffer, @ptrCast(@alignCast(shred)))[Signature.SIZE..][0..merkle_protected_size];
+        return @as(*const Packet.Buffer, @ptrCast(shred))[Signature.SIZE..][0..merkle_protected_size];
     }
 
     // Added by the node who retransmitted the shred to us over Turbine.

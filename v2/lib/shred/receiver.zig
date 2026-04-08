@@ -376,7 +376,6 @@ const InProgressSets = struct {
 
     const Eviction = std.PriorityQueue(Pool.ItemId, QueueContext, QueueContext.order);
     const Pool = lib.collections.Pool(FecSetCtx, u32);
-    const Queue = std.PriorityQueue(Pool.ItemId, QueueContext, QueueContext.order);
 
     // Key from signature-hash, rather than merkle root, as it's equivalent for lookup and we don't
     // have to compute it.
