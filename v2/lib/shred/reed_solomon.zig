@@ -70,7 +70,7 @@ pub fn reconstructFecSet(fec_set_ctx: *FecSetCtx) void {
     for (0..data_count) |r| {
         for (0..data_count) |c| {
             aug[r][c] = sub_matrix[r][c];
-            aug[r][data_count + c] = if (r == c) @as(u8, 1) else @as(u8, 0);
+            aug[r][data_count + c] = @intFromBool(r == c);
         }
     }
 
@@ -79,9 +79,7 @@ pub fn reconstructFecSet(fec_set_ctx: *FecSetCtx) void {
         if (aug[r][r] == 0) {
             for (r + 1..data_count) |r_below| {
                 if (aug[r_below][r] != 0) {
-                    const tmp = aug[r];
-                    aug[r] = aug[r_below];
-                    aug[r_below] = tmp;
+                    std.mem.swap([data_count * 2]u8, &aug[r], &aug[r_below]);
                     break;
                 }
             }
@@ -146,15 +144,15 @@ pub fn reconstructFecSet(fec_set_ctx: *FecSetCtx) void {
     }
 
     // Collect pointers to erasure shards for the 32 valid indices
-    var shard_ptrs: [data_count][*]const u8 = undefined;
+    var shard_ptrs: [data_count][]const u8 = undefined;
     for (0..data_count) |k| {
         const idx = valid_indices[k];
         if (idx < data_count) {
             const shred = Shred.fromBufferUnchecked(&fec_set_ctx.data_shreds_buf[idx]);
-            shard_ptrs[k] = (shred.erasureFragment() orelse return).ptr;
+            shard_ptrs[k] = (shred.erasureFragment() orelse return);
         } else {
             const shred = Shred.fromBufferUnchecked(&fec_set_ctx.code_shreds_buf[idx - data_count]);
-            shard_ptrs[k] = (shred.erasureFragment() orelse return).ptr;
+            shard_ptrs[k] = (shred.erasureFragment() orelse return);
         }
     }
 
@@ -166,7 +164,7 @@ pub fn reconstructFecSet(fec_set_ctx: *FecSetCtx) void {
         const inv_row = &inv[i];
 
         // Destination: write directly into the packet buffer
-        var dest_packet = &fec_set_ctx.data_shreds_buf[i];
+        const dest_packet = &fec_set_ctx.data_shreds_buf[i];
 
         // First, copy leader signature into bytes 0..64
         if (have_sig) {
@@ -180,7 +178,7 @@ pub fn reconstructFecSet(fec_set_ctx: *FecSetCtx) void {
         const dest_end = dest_start + shard_len;
         if (dest_end > Packet.capacity) return;
 
-        var dest = dest_packet[dest_start..dest_end];
+        const dest = dest_packet[dest_start..dest_end];
 
         // Multiply: dest[byte] = sum over k of (inv_row[k] * shard_ptrs[k][byte])
         // First pass: dest = inv_row[0] * shard_ptrs[0]
@@ -267,9 +265,7 @@ const encoding_matrix: [64][32]u8 = blk: {
         if (aug[r][r] == 0) {
             for (r + 1..data) |r_below| {
                 if (aug[r_below][r] != 0) {
-                    const tmp = aug[r];
-                    aug[r] = aug[r_below];
-                    aug[r_below] = tmp;
+                    std.mem.swap([data * 2]u8, &aug[r], &aug[r_below]);
                     break;
                 }
             }
