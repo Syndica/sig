@@ -963,14 +963,14 @@ fn trackNewVotesAndNotifyConfirmations(
         // later frees it via InboundEvent.deinit after dispatch.
         if (senders.event_sink) |event_sink| {
             var vote_event = VoteEventData.initOwned(
-                allocator,
+                event_sink.allocator(),
                 vote_pubkey,
                 vote_slots,
                 last_vote_hash,
                 vote.timestamp(),
                 vote_transaction_signature,
             ) catch return;
-            errdefer vote_event.deinit();
+            errdefer vote_event.deinit(event_sink.allocator());
 
             try event_sink.send(.{ .vote = vote_event });
         }

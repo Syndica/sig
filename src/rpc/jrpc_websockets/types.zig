@@ -375,10 +375,7 @@ pub const InboundEvent = union(enum) {
                 logs.deinit();
             },
             .received_signatures => |data| data.deinit(allocator),
-            .vote => |vote_data| {
-                var data = vote_data;
-                data.deinit();
-            },
+            .vote => |vote_data| vote_data.deinit(allocator),
             .slot_frozen => |slot_data| {
                 var accounts = slot_data.accounts;
                 accounts.deinit();
@@ -400,10 +397,10 @@ pub const EventSink = struct {
 
     const Channel = sig.sync.Channel;
 
-    pub fn create(allocator: std.mem.Allocator) !*EventSink {
-        const self = try allocator.create(EventSink);
-        errdefer allocator.destroy(self);
-        var channel = try Channel(InboundEvent).init(allocator);
+    pub fn create(sink_allocator: std.mem.Allocator) !*EventSink {
+        const self = try sink_allocator.create(EventSink);
+        errdefer sink_allocator.destroy(self);
+        var channel = try Channel(InboundEvent).init(sink_allocator);
         errdefer channel.deinit();
         self.* = .{
             .channel = channel,
@@ -412,13 +409,17 @@ pub const EventSink = struct {
         return self;
     }
 
+    pub fn allocator(self: *const EventSink) std.mem.Allocator {
+        return self.channel.allocator;
+    }
+
     pub fn destroy(self: *EventSink) void {
         while (self.channel.tryReceive()) |msg| {
-            msg.deinit(self.channel.allocator);
+            msg.deinit(self.allocator());
         }
         self.channel.deinit();
         self.loop_async.deinit();
-        self.channel.allocator.destroy(self);
+        self.allocator().destroy(self);
     }
 
     pub fn send(self: *EventSink, msg: InboundEvent) !void {
@@ -629,7 +630,6 @@ pub const VoteEventData = struct {
     hash: Hash,
     timestamp: ?i64,
     signature: Signature,
-    arena: std.heap.ArenaAllocator,
 
     pub fn empty() VoteEventData {
         return .{
@@ -638,36 +638,31 @@ pub const VoteEventData = struct {
             .hash = Hash.ZEROES,
             .timestamp = null,
             .signature = Signature.ZEROES,
-            .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
         };
     }
 
     pub fn initOwned(
         allocator: std.mem.Allocator,
         vote_pubkey: Pubkey,
-        /// The slots array is duped into the arena allocator. Caller can free slots safely.
+        /// The slots array is duped into the provided allocator. Caller can free slots safely.
         slots: []const u64,
         hash: Hash,
         timestamp: ?i64,
         signature: Signature,
     ) !VoteEventData {
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        errdefer arena.deinit();
-        const arena_allocator = arena.allocator();
-
         return .{
             .vote_pubkey = vote_pubkey,
-            .slots = try arena_allocator.dupe(u64, slots),
+            .slots = try allocator.dupe(u64, slots),
             .hash = hash,
             .timestamp = timestamp,
             .signature = signature,
-            .arena = arena,
         };
     }
 
-    pub fn deinit(self: *VoteEventData) void {
-        self.arena.deinit();
-        self.* = empty();
+    pub fn deinit(self: VoteEventData, allocator: std.mem.Allocator) void {
+        if (self.slots.len > 0) {
+            allocator.free(self.slots);
+        }
     }
 };
 
@@ -705,10 +700,7 @@ pub const SerializeJob = struct {
                 .logs => |job| job.deinit(allocator),
                 .program => |job| job.data.deinit(allocator),
                 .signature => |job| job.deinit(allocator),
-                .vote => |job| {
-                    var owned = job;
-                    owned.deinit();
-                },
+                .vote => |job| job.deinit(allocator),
                 else => {},
             }
         }
