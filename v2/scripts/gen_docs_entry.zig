@@ -49,7 +49,7 @@ pub fn main() !void {
     var buf: [4096]u8 = undefined;
     var writer_state = file.writer(&buf);
     const writer = &writer_state.interface;
-    defer writer.flush() catch @panic("failed to flush");
+    defer writer.flush() catch {};
 
     try writer.writeAll(preamble);
 
