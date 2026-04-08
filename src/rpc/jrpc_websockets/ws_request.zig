@@ -50,8 +50,6 @@ pub const WsMethodAndParams = union(enum) {
             .blockUnsubscribe,
             .slotsUpdatesSubscribe,
             .slotsUpdatesUnsubscribe,
-            .voteSubscribe,
-            .voteUnsubscribe,
             => return error.MethodNotImplemented,
             .programSubscribe => |program_sub| {
                 program_sub.validateParams() catch {

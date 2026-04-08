@@ -1,7 +1,10 @@
 const std = @import("std");
 
 const helpers = @import("support/test_helpers.zig");
+const sig = helpers.sig;
+
 const Pubkey = helpers.Pubkey;
+const Signature = helpers.Signature;
 const TestClient = helpers.TestClient;
 const TestClientEnv = helpers.TestClientEnv;
 const TestClientHandler = helpers.TestClientHandler;
@@ -363,6 +366,75 @@ test "client subscribes to root, receives notification, unsubscribes" {
     try std.testing.expectEqual(
         true,
         parseResultBool(handler.received.items[2]) orelse return error.TestUnexpectedResult,
+    );
+
+    runBothLoops(server, &client_env, &handler, 100);
+}
+
+test "client subscribes to vote, receives notification, unsubscribes" {
+    const allocator = std.testing.allocator;
+
+    var server = try TestServer.start(allocator);
+    defer {
+        server.stop();
+        server.deinit();
+    }
+
+    var handler = TestClientHandler.init(allocator);
+    defer handler.deinit();
+
+    handler.queueSend(
+        \\{"jsonrpc":"2.0","id":1,"method":"voteSubscribe"}
+    );
+    handler.close_after = 3;
+
+    var client_env: TestClientEnv = undefined;
+    try client_env.start();
+    defer client_env.deinit();
+
+    var conn: TestClient.Conn = undefined;
+    var client = initTestClient(
+        allocator,
+        &client_env,
+        &handler,
+        &conn,
+        server.port,
+    );
+    try client.connect();
+
+    // Wait for subscription confirmation.
+    waitForMessages(server, &client_env, &handler, 1, 5000);
+    try std.testing.expect(handler.received.items.len >= 1);
+    try std.testing.expect(std.mem.indexOf(u8, handler.received.items[0], "\"result\":") != null);
+
+    // Inject a vote event.
+    const vote_pubkey = filledPubkey(0xAA);
+    server.injectEvent(.{ .vote = try sig.rpc.jrpc_websockets.types.VoteEventData.initOwned(
+        allocator,
+        vote_pubkey,
+        &.{ 42, 43 },
+        sig.core.Hash.ZEROES,
+        1234567890,
+        Signature.ZEROES,
+    ) });
+
+    waitForMessages(server, &client_env, &handler, 2, 5000);
+    try std.testing.expect(handler.received.items.len >= 2);
+    const notif = handler.received.items[1];
+    try std.testing.expect(std.mem.indexOf(u8, notif, "\"voteNotification\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, notif, "\"votePubkey\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, notif, "\"slots\":[42,43]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, notif, "\"timestamp\":1234567890") != null);
+
+    // Unsubscribe.
+    handler.queueSendNow(
+        \\{"jsonrpc":"2.0","id":2,"method":"voteUnsubscribe","params":[1]}
+    );
+
+    waitForMessages(server, &client_env, &handler, 3, 5000);
+    try std.testing.expect(handler.received.items.len >= 3);
+    try std.testing.expect(
+        std.mem.indexOf(u8, handler.received.items[2], "\"result\":true") != null,
     );
 
     runBothLoops(server, &client_env, &handler, 100);

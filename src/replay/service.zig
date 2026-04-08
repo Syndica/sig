@@ -211,6 +211,7 @@ pub fn advanceReplay(
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
             .results = slot_results,
             .vote_account_visitor = if (commitment_txn) |t| t.voteAccountVisitor() else null,
+            .event_sink = replay_state.event_sink,
         });
     } else slot_update: {
         // NOTE: Processed slot semantics differ from Agave when Sig is in bypass-consensus mode.
