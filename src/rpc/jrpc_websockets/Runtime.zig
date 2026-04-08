@@ -20,6 +20,7 @@ const NotifPayload = sig.sync.RcSlice(u8);
 /// Type to track alignment of RcSlice bytes for allocator free
 pub const ReleasedPayloadBytes = @TypeOf((@as(NotifPayload, undefined)).release().?);
 pub const SlotReadContext = types.SlotReadContext;
+const TransactionBatchView = SlotStateCache.CachedSlot.TransactionBatchIterator.View;
 
 const Runtime = @This();
 
@@ -959,8 +960,6 @@ fn publishLogsSubscriptionForEntry(
         _ = self.enqueueJobForEntry(entry.*, .{ .logs = notification_data }, false, task_batch);
     }
 }
-
-const TransactionBatchView = SlotStateCache.CachedSlot.TransactionBatchIterator.View;
 
 fn logsBatchViewMatchesFilter(
     filter: methods.LogsFilter,

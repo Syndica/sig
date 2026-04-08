@@ -1159,7 +1159,7 @@ test "collectPostTokenBalances: failed tx reads token account from account store
     const allocator = std.testing.allocator;
     const ids = sig.runtime.ids;
 
-    var prng = std.Random.DefaultPrng.init(42);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const fee_payer = Pubkey.initRandom(random);
@@ -1257,7 +1257,7 @@ test "collectPostTokenBalances: success tx reads token account from writes" {
     const allocator = std.testing.allocator;
     const ids = sig.runtime.ids;
 
-    var prng = std.Random.DefaultPrng.init(43);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const fee_payer = Pubkey.initRandom(random);
