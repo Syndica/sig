@@ -207,19 +207,21 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !Distributed
 }
 
 /// Rewards and partition info produced by fee distribution.
-/// Owns an arena that backs the `rewards` slice. The arena can be handed off
+/// Owns an arena state that backs the `rewards` slice. The state can be handed off
 /// to another thread (e.g. the websocket runtime) for deferred deallocation.
 pub const DistributedRewards = struct {
     rewards: []const sig.ledger.meta.Reward = &.{},
     num_partitions: ?u64 = null,
-    arena: std.heap.ArenaAllocator,
+    arena_state: std.heap.ArenaAllocator.State = .{},
 
     pub fn empty() DistributedRewards {
-        return .{ .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator) };
+        return .{ .arena_state = .{} };
     }
 
-    pub fn deinit(self: *DistributedRewards) void {
-        self.arena.deinit();
+    /// Note: `allocator` must be the same backing allocator used when `arena_state`
+    /// was captured.
+    pub fn deinit(self: *DistributedRewards, allocator: Allocator) void {
+        self.arena_state.promote(allocator).deinit();
     }
 };
 
@@ -303,7 +305,7 @@ fn distributeTransactionFees(
     return .{
         .rewards = keyed_rewards,
         .num_partitions = num_partitions,
-        .arena = arena,
+        .arena_state = arena.state,
     };
 }
 
@@ -695,7 +697,7 @@ test "freezeSlot: trivial e2e merkle hash test" {
         .ZEROES,
         &ledger,
     ));
-    distributed.deinit();
+    distributed.deinit(allocator);
 
     try std.testing.expectEqual(
         Hash.parse("8C4gpDhMz9RfajteNCf9nFb5pyj3SkFcpTs6uXAzYKoF"),
@@ -760,7 +762,7 @@ test "freezeSlot: trivial e2e lattice hash test" {
         .ZEROES,
         &ledger,
     ));
-    distributed.deinit();
+    distributed.deinit(allocator);
 
     try std.testing.expectEqual(
         Hash.parse("B513RgkSxeiHv4hJ3aaBfkoveWKeB6575S3CtG64AirS"),

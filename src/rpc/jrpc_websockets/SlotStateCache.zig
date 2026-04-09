@@ -201,7 +201,7 @@ pub const CachedSlot = struct {
             batch.deinit();
         }
         self.transaction_batches.deinit(allocator);
-        self.distributed_rewards.deinit();
+        self.distributed_rewards.deinit(allocator);
     }
 
     pub fn transactionBatchIterator(self: *const CachedSlot) TransactionBatchIterator {
@@ -429,7 +429,7 @@ pub fn onSlotFrozen(
             .{slot_data.slot},
         );
         slot_state.modified_accounts.deinit();
-        slot_state.distributed_rewards.deinit();
+        slot_state.distributed_rewards.deinit(allocator);
     }
 
     // Transfer ownership of accounts.

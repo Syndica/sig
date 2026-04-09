@@ -417,9 +417,9 @@ pub const SlotFrozenEvent = struct {
     /// that backs the rewards slice; freed in deinit.
     distributed_rewards: DistributedRewards = DistributedRewards.empty(),
 
-    pub fn deinit(self: *SlotFrozenEvent) void {
+    pub fn deinit(self: *SlotFrozenEvent, allocator: std.mem.Allocator) void {
         self.accounts.deinit();
-        self.distributed_rewards.deinit();
+        self.distributed_rewards.deinit(allocator);
     }
 };
 
@@ -456,7 +456,7 @@ pub const InboundEvent = union(enum) {
             .vote => |vote_data| vote_data.deinit(allocator),
             .slot_frozen => |slot_data| {
                 var data = slot_data;
-                data.deinit();
+                data.deinit(allocator);
             },
             .slot_confirmed, .slot_rooted, .tip_changed => {},
         }

@@ -807,7 +807,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                         state.ledger,
                     ),
                 );
-                defer distributed.deinit();
+                defer distributed.deinit(state.allocator);
                 if (state.prioritization_fee_cache) |cache| {
                     cache.finalizeSlot(state.allocator, slot);
                 }
