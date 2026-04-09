@@ -76,10 +76,12 @@ pub fn commitTransactions(
     var non_vote_count: usize = 0;
 
     // When an event sink is present, build a rich transaction batch event.
-    // The arena owns all TransactionEntry data.
+    // The arena owns all TransactionEntry data; allocate from the event sink
+    // so the receive side can free with its own (channel) allocator.
     const maybe_event_sink = self.event_sink;
+    const batch_allocator = if (maybe_event_sink) |es| es.allocator() else persistent_allocator;
     var owns_batch_arena = maybe_event_sink != null;
-    var batch_arena = std.heap.ArenaAllocator.init(persistent_allocator);
+    var batch_arena = std.heap.ArenaAllocator.init(batch_allocator);
     defer if (owns_batch_arena) batch_arena.deinit();
     var batch_entries: ArrayListUnmanaged(jrpc_types.TransactionEntry) = .{};
 
@@ -236,7 +238,7 @@ pub fn commitTransactions(
             .arena_state = batch_arena.state,
         } };
         owns_batch_arena = false;
-        errdefer event.deinit(persistent_allocator);
+        errdefer event.deinit(event_sink.allocator());
 
         try event_sink.send(event);
     }

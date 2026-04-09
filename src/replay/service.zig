@@ -820,7 +820,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                         state.account_store.reader(),
                         slot,
                     );
-                    errdefer accounts.deinit(state.allocator);
+                    errdefer accounts.deinit(event_sink.allocator());
 
                     try event_sink.send(.{
                         .slot_frozen = .{
