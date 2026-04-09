@@ -1,10 +1,9 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const ws = @import("webzockets");
-const base58 = @import("base58");
-const zstd = @import("zstd");
 const types = @import("types.zig");
 const methods = @import("methods.zig");
+const account_codec = sig.rpc.account_codec;
 const NotifPayload = sig.sync.RcSlice(u8);
 
 const Id = sig.rpc.request.Id;
@@ -131,69 +130,14 @@ pub fn serializeRootNotification(
     });
 }
 
-/// Helper struct to return encoded data and associated encoding name
-const EncodedAccountData = struct {
-    encoded: []const u8,
-    encoding_name: []const u8,
-};
-
-fn encodeAccountData(
-    allocator: std.mem.Allocator,
-    account: *const sig.core.Account,
-    encoding: methods.Encoding,
-) !EncodedAccountData {
-    // TODO: this is all likely placeholder, to be replaced by same code used for getAccountInfo
-    const raw = try account.data.readAllAllocate(allocator);
-    defer allocator.free(raw);
-
-    const b64 = std.base64.standard.Encoder;
-
-    const result: EncodedAccountData = switch (encoding) {
-        // TODO: integrate jsonParsed encoding
-        .base64, .jsonParsed => blk: {
-            const buf = try allocator.alloc(u8, b64.calcSize(raw.len));
-            const encoded = b64.encode(buf, raw);
-            std.debug.assert(encoded.len == buf.len);
-            break :blk .{ .encoded = encoded, .encoding_name = "base64" };
-        },
-        .@"base64+zstd" => blk: {
-            const compressor = zstd.Compressor.init(.{}) catch
-                return error.ZstdCompressFailed;
-            defer compressor.deinit();
-            const bound = raw.len + (raw.len >> 8) + 128;
-            const compressed = try allocator.alloc(u8, bound);
-            defer allocator.free(compressed);
-            const zstd_data = compressor.compress2(compressed, raw) catch
-                return error.ZstdCompressFailed;
-            const buf = try allocator.alloc(u8, b64.calcSize(zstd_data.len));
-            const encoded = b64.encode(buf, zstd_data);
-            break :blk .{ .encoded = encoded, .encoding_name = "base64+zstd" };
-        },
-        .base58 => if (raw.len <= 128) b58: {
-            const buf = try allocator.alloc(u8, base58.encodedMaxSize(raw.len));
-            const buf_len = base58.Table.BITCOIN.encode(buf, raw);
-            break :b58 .{
-                .encoded = buf[0..buf_len],
-                .encoding_name = "base58",
-            };
-        } else blk: {
-            const buf = try allocator.alloc(u8, b64.calcSize(raw.len));
-            const encoded = b64.encode(buf, raw);
-            break :blk .{ .encoded = encoded, .encoding_name = "base64" };
-        },
-    };
-
-    return result;
-}
-
-const AccountValue = struct {
+/// Helper type to seralize all the account fields for encoded RPC notification
+const WireAccountValue = struct {
     acc: *const sig.core.Account,
-    encoded: []const u8,
-    encoding_name: []const u8,
+    data: account_codec.AccountData,
 
-    pub fn jsonStringify(self: AccountValue, jw: anytype) !void {
+    pub fn jsonStringify(self: WireAccountValue, jw: anytype) !void {
         try jw.write(.{
-            .data = .{ self.encoded, self.encoding_name },
+            .data = self.data,
             .executable = self.acc.executable,
             .lamports = self.acc.lamports,
             .owner = self.acc.owner,
@@ -203,20 +147,82 @@ const AccountValue = struct {
     }
 };
 
+const BASE58_TOO_LARGE_MESSAGE = "error: data too large for bs58 encoding";
+
+/// For Agave parity, websocket notifications must serialize oversize binary/base58
+/// account data as Agave's legacy overflow string instead of failing the notification.
+fn base58OverflowAccountData(
+    arena: std.mem.Allocator,
+    encoding: methods.AccountEncoding,
+) !account_codec.AccountData {
+    // Note: technically don't have to dupe here since the string is static and we don't attempt to
+    // free it directly since everything is arena allocated, but this is the rare/weird case and
+    // duping here prevents accidental bug later.
+    const msg = try arena.dupe(u8, BASE58_TOO_LARGE_MESSAGE);
+    return switch (encoding) {
+        .binary => .{ .legacy_binary = msg },
+        .base58 => .{ .encoded = .{ msg, .base58 } },
+        else => unreachable,
+    };
+}
+
+fn encodeNotificationAccountData(
+    arena: std.mem.Allocator,
+    data: types.AccountEventData,
+    encoding: methods.AccountEncoding,
+    data_slice: ?methods.DataSlice,
+    read_ctx: ?types.SlotReadContext,
+) !account_codec.AccountData {
+    const awp = &data.account;
+    return if (encoding == .jsonParsed) blk: {
+        const ctx = read_ctx orelse return error.MissingReadContext;
+        const slot_ref = ctx.slot_tracker.get(data.slot) orelse return error.SlotNotAvailable;
+        defer slot_ref.release();
+        const ancestors = &slot_ref.constants().ancestors;
+        const slot_reader = ctx.account_reader.forSlot(ancestors);
+        break :blk try account_codec.encodeJsonParsed(
+            arena,
+            awp.pubkey,
+            awp.account,
+            slot_reader,
+            data_slice,
+        );
+    } else account_codec.encodeStandard(
+        arena,
+        awp.account,
+        encoding,
+        data_slice,
+    ) catch |err| switch (err) {
+        error.Base58DataTooLarge => switch (encoding) {
+            .binary, .base58 => try base58OverflowAccountData(arena, encoding),
+            else => return err,
+        },
+        else => return err,
+    };
+}
+
 pub fn serializeAccountNotification(
     allocator: std.mem.Allocator,
     sub_id: types.SubId,
     data: types.AccountEventData,
-    encoding: methods.Encoding,
+    encoding: methods.AccountEncoding,
+    data_slice: ?methods.DataSlice,
+    read_ctx: ?types.SlotReadContext,
 ) !NotifPayload {
-    const awp = data.rc.get();
-    const enc = try encodeAccountData(allocator, &awp.account, encoding);
-    defer allocator.free(enc.encoded);
+    const awp = &data.account;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
 
-    const av = AccountValue{
+    const av = WireAccountValue{
         .acc = &awp.account,
-        .encoded = enc.encoded,
-        .encoding_name = enc.encoding_name,
+        .data = try encodeNotificationAccountData(
+            arena,
+            data,
+            encoding,
+            data_slice,
+            read_ctx,
+        ),
     };
     return serializeToPayload(allocator, .{
         .jsonrpc = "2.0",
@@ -235,16 +241,24 @@ pub fn serializeProgramNotification(
     allocator: std.mem.Allocator,
     sub_id: types.SubId,
     data: types.AccountEventData,
-    encoding: methods.Encoding,
+    encoding: methods.AccountEncoding,
+    data_slice: ?methods.DataSlice,
+    read_ctx: ?types.SlotReadContext,
 ) !NotifPayload {
-    const awp = data.rc.get();
-    const enc = try encodeAccountData(allocator, &awp.account, encoding);
-    defer allocator.free(enc.encoded);
+    const awp = &data.account;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
 
-    const av = AccountValue{
+    const av = WireAccountValue{
         .acc = &awp.account,
-        .encoded = enc.encoded,
-        .encoding_name = enc.encoding_name,
+        .data = try encodeNotificationAccountData(
+            arena,
+            data,
+            encoding,
+            data_slice,
+            read_ctx,
+        ),
     };
     return serializeToPayload(allocator, .{
         .jsonrpc = "2.0",
@@ -264,28 +278,14 @@ pub fn serializeProgramNotification(
 
 const LogsValue = struct {
     signature: sig.core.Signature,
-    num_logs: u32,
-
-    pub fn jsonStringify(self: LogsValue, jw: anytype) !void {
-        try jw.beginObject();
-        try jw.objectField("signature");
-        try jw.write(self.signature);
-        try jw.objectField("err");
-        try jw.write(null);
-        try jw.objectField("logs");
-        try jw.beginArray();
-        for (0..self.num_logs) |i| {
-            try jw.print("\"log line {d}\"", .{i});
-        }
-        try jw.endArray();
-        try jw.endObject();
-    }
+    err: ?sig.ledger.transaction_status.TransactionError,
+    logs: []const []const u8,
 };
 
 pub fn serializeLogsNotification(
     allocator: std.mem.Allocator,
     sub_id: types.SubId,
-    data: types.LogsEventData,
+    data: types.LogsNotificationData,
 ) !NotifPayload {
     return serializeToPayload(allocator, .{
         .jsonrpc = "2.0",
@@ -293,7 +293,40 @@ pub fn serializeLogsNotification(
         .params = .{
             .result = .{
                 .context = .{ .slot = data.slot },
-                .value = LogsValue{ .signature = data.signature, .num_logs = data.num_logs },
+                .value = LogsValue{
+                    .signature = data.signature,
+                    .err = data.err,
+                    .logs = data.logs,
+                },
+            },
+            .subscription = sub_id,
+        },
+    });
+}
+
+const SignatureNotificationValue = struct {
+    value: types.SignatureNotificationData.Value,
+
+    pub fn jsonStringify(self: SignatureNotificationValue, jw: anytype) !void {
+        switch (self.value) {
+            .received => try jw.write("receivedSignature"),
+            .final => |result| try jw.write(.{ .err = result.err }),
+        }
+    }
+};
+
+pub fn serializeSignatureNotification(
+    allocator: std.mem.Allocator,
+    sub_id: types.SubId,
+    data: types.SignatureNotificationData,
+) !NotifPayload {
+    return serializeToPayload(allocator, .{
+        .jsonrpc = "2.0",
+        .method = "signatureNotification",
+        .params = .{
+            .result = .{
+                .context = .{ .slot = data.slot },
+                .value = SignatureNotificationValue{ .value = data.value },
             },
             .subscription = sub_id,
         },
@@ -303,19 +336,29 @@ pub fn serializeLogsNotification(
 pub fn serializeNotification(
     allocator: std.mem.Allocator,
     sub_id: types.SubId,
-    event_data: types.EventData,
-    encoding: methods.Encoding,
-    sub_method: types.SubMethod,
+    job_type: types.SerializeJob.JobType,
 ) !NotifPayload {
-    return switch (event_data) {
-        .slot => |d| serializeSlotNotification(allocator, sub_id, d),
-        .root => |d| serializeRootNotification(allocator, sub_id, d),
-        .logs => |d| serializeLogsNotification(allocator, sub_id, d),
-        .account => |d| switch (sub_method) {
-            .account => serializeAccountNotification(allocator, sub_id, d, encoding),
-            .program => serializeProgramNotification(allocator, sub_id, d, encoding),
-            else => unreachable,
-        },
+    return switch (job_type) {
+        .slot => |data| serializeSlotNotification(allocator, sub_id, data),
+        .root => |data| serializeRootNotification(allocator, sub_id, data),
+        .logs => |data| serializeLogsNotification(allocator, sub_id, data),
+        .account => |job| serializeAccountNotification(
+            allocator,
+            sub_id,
+            job.data,
+            job.encoding,
+            job.data_slice,
+            job.read_ctx,
+        ),
+        .program => |job| serializeProgramNotification(
+            allocator,
+            sub_id,
+            job.data,
+            job.encoding,
+            job.data_slice,
+            job.read_ctx,
+        ),
+        .signature => |data| serializeSignatureNotification(allocator, sub_id, data),
     };
 }
 
@@ -338,6 +381,43 @@ pub fn extractJson(data: []const u8) []const u8 {
         return data[10..];
     }
 }
+
+const SerializedAccountNotification = struct {
+    method: []const u8,
+    params: struct {
+        result: struct {
+            context: struct {
+                slot: u64,
+            },
+            value: struct {
+                data: [2][]const u8,
+                lamports: u64,
+                rentEpoch: u64,
+                space: u64,
+            },
+        },
+    },
+};
+
+const SerializedProgramNotification = struct {
+    method: []const u8,
+    params: struct {
+        result: struct {
+            context: struct {
+                slot: u64,
+            },
+            value: struct {
+                pubkey: []const u8,
+                account: struct {
+                    data: [2][]const u8,
+                    lamports: u64,
+                    rentEpoch: u64,
+                    space: u64,
+                },
+            },
+        },
+    },
+};
 
 test "serializeSubscribeResponse with int id" {
     const allocator = std.testing.allocator;
@@ -457,7 +537,7 @@ test "serializeRootNotification" {
     , extractJson(p.payload()));
 }
 
-test "serializeAccountNotification base64 default" {
+test "serializeAccountNotification binary encoding" {
     const allocator = std.testing.allocator;
     const data_buf = try allocator.alloc(u8, 2);
     data_buf[0] = 0xDE;
@@ -470,17 +550,16 @@ test "serializeAccountNotification base64 default" {
         .executable = false,
         .rent_epoch = 42,
     };
-    const rc = try types.RcAccountWithPubkey.init(allocator, pk, account);
-    defer rc.release(allocator);
+    defer account.deinit(allocator);
 
     const p = try serializeAccountNotification(allocator, 7, .{
-        .rc = rc,
+        .account = .{ .pubkey = pk, .account = account },
         .slot = 100,
-    }, .base64);
+    }, .binary, null, null);
     defer p.deinit(allocator);
 
     try std.testing.expectEqualStrings(
-        \\{"jsonrpc":"2.0","method":"accountNotification","params":{"result":{"context":{"slot":100},"value":{"data":["3q0=","base64"],"executable":false,"lamports":1000,"owner":"11111111111111111111111111111111","rentEpoch":42,"space":2}},"subscription":7}}
+        \\{"jsonrpc":"2.0","method":"accountNotification","params":{"result":{"context":{"slot":100},"value":{"data":"Hwr","executable":false,"lamports":1000,"owner":"11111111111111111111111111111111","rentEpoch":42,"space":2}},"subscription":7}}
     , extractJson(p.payload()));
 }
 
@@ -496,17 +575,39 @@ test "serializeAccountNotification explicit base64" {
         .executable = true,
         .rent_epoch = 0,
     };
-    const rc = try types.RcAccountWithPubkey.init(allocator, pk, account);
-    defer rc.release(allocator);
+    defer account.deinit(allocator);
 
     const p = try serializeAccountNotification(allocator, 1, .{
-        .rc = rc,
+        .account = .{ .pubkey = pk, .account = account },
         .slot = 50,
-    }, .base64);
+    }, .base64, null, null);
     defer p.deinit(allocator);
 
     try std.testing.expectEqualStrings(
         \\{"jsonrpc":"2.0","method":"accountNotification","params":{"result":{"context":{"slot":50},"value":{"data":["AQIDBA==","base64"],"executable":true,"lamports":500,"owner":"11111111111111111111111111111111","rentEpoch":0,"space":4}},"subscription":1}}
+    , extractJson(p.payload()));
+}
+
+test "serializeAccountNotification applies dataSlice" {
+    const allocator = std.testing.allocator;
+    const pk = sig.core.Pubkey.ZEROES;
+    const account: sig.core.Account = .{
+        .lamports = 500,
+        .data = .{ .unowned_allocation = &.{ 1, 2, 3, 4 } },
+        .owner = pk,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    defer account.deinit(allocator);
+
+    const p = try serializeAccountNotification(allocator, 2, .{
+        .account = .{ .pubkey = pk, .account = account },
+        .slot = 51,
+    }, .base64, .{ .offset = 1, .length = 2 }, null);
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"accountNotification","params":{"result":{"context":{"slot":51},"value":{"data":["AgM=","base64"],"executable":false,"lamports":500,"owner":"11111111111111111111111111111111","rentEpoch":0,"space":4}},"subscription":2}}
     , extractJson(p.payload()));
 }
 
@@ -523,18 +624,67 @@ test "serializeAccountNotification base58 encoding" {
         .executable = false,
         .rent_epoch = 42,
     };
-    const rc = try types.RcAccountWithPubkey.init(allocator, pk, account);
-    defer rc.release(allocator);
+    defer account.deinit(allocator);
 
     const p = try serializeAccountNotification(allocator, 7, .{
-        .rc = rc,
+        .account = .{ .pubkey = pk, .account = account },
         .slot = 100,
-    }, .base58);
+    }, .base58, null, null);
     defer p.deinit(allocator);
 
     // base58 of [0xDE, 0xAD] = "Hwr" (Bitcoin alphabet)
     try std.testing.expectEqualStrings(
         \\{"jsonrpc":"2.0","method":"accountNotification","params":{"result":{"context":{"slot":100},"value":{"data":["Hwr","base58"],"executable":false,"lamports":1000,"owner":"11111111111111111111111111111111","rentEpoch":42,"space":2}},"subscription":7}}
+    , extractJson(p.payload()));
+}
+
+test "serializeAccountNotification binary encoding uses Agave overflow string" {
+    const allocator = std.testing.allocator;
+    const data_buf = try allocator.alloc(u8, 129);
+    @memset(data_buf, 0xAB);
+    const pk = sig.core.Pubkey.ZEROES;
+    const account = sig.core.Account{
+        .lamports = 1000,
+        .data = sig.accounts_db.buffer_pool.AccountDataHandle.initAllocatedOwned(data_buf),
+        .owner = pk,
+        .executable = false,
+        .rent_epoch = 42,
+    };
+    defer account.deinit(allocator);
+
+    const p = try serializeAccountNotification(allocator, 7, .{
+        .account = .{ .pubkey = pk, .account = account },
+        .slot = 100,
+    }, .binary, null, null);
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"accountNotification","params":{"result":{"context":{"slot":100},"value":{"data":"error: data too large for bs58 encoding","executable":false,"lamports":1000,"owner":"11111111111111111111111111111111","rentEpoch":42,"space":129}},"subscription":7}}
+    , extractJson(p.payload()));
+}
+
+test "serializeAccountNotification base58 encoding uses Agave overflow string" {
+    const allocator = std.testing.allocator;
+    const data_buf = try allocator.alloc(u8, 129);
+    @memset(data_buf, 0xAB);
+    const pk = sig.core.Pubkey.ZEROES;
+    const account = sig.core.Account{
+        .lamports = 1000,
+        .data = sig.accounts_db.buffer_pool.AccountDataHandle.initAllocatedOwned(data_buf),
+        .owner = pk,
+        .executable = false,
+        .rent_epoch = 42,
+    };
+    defer account.deinit(allocator);
+
+    const p = try serializeAccountNotification(allocator, 7, .{
+        .account = .{ .pubkey = pk, .account = account },
+        .slot = 100,
+    }, .base58, null, null);
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"accountNotification","params":{"result":{"context":{"slot":100},"value":{"data":["error: data too large for bs58 encoding","base58"],"executable":false,"lamports":1000,"owner":"11111111111111111111111111111111","rentEpoch":42,"space":129}},"subscription":7}}
     , extractJson(p.payload()));
 }
 
@@ -551,26 +701,29 @@ test "serializeAccountNotification base64+zstd encoding" {
         .executable = false,
         .rent_epoch = 42,
     };
-    const rc = try types.RcAccountWithPubkey.init(allocator, pk, account);
-    defer rc.release(allocator);
+    defer account.deinit(allocator);
 
     const p = try serializeAccountNotification(allocator, 7, .{
-        .rc = rc,
+        .account = .{ .pubkey = pk, .account = account },
         .slot = 100,
-    }, .@"base64+zstd");
+    }, .@"base64+zstd", null, null);
     defer p.deinit(allocator);
 
-    const json = extractJson(p.payload());
-    // Verify envelope structure and encoding name.
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"base64+zstd\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"lamports\":1000") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"rentEpoch\":42") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"space\":2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"slot\":100") != null);
-    // Verify it starts correctly and is valid JSON.
-    try std.testing.expect(
-        std.mem.startsWith(u8, json, "{\"jsonrpc\":\"2.0\",\"method\":\"accountNotification\""),
+    const parsed = try std.json.parseFromSlice(
+        SerializedAccountNotification,
+        allocator,
+        extractJson(p.payload()),
+        .{ .ignore_unknown_fields = true },
     );
+    defer parsed.deinit();
+    const notification = parsed.value;
+
+    try std.testing.expectEqualStrings("accountNotification", notification.method);
+    try std.testing.expectEqualStrings("base64+zstd", notification.params.result.value.data[1]);
+    try std.testing.expectEqual(1000, notification.params.result.value.lamports);
+    try std.testing.expectEqual(42, notification.params.result.value.rentEpoch);
+    try std.testing.expectEqual(2, notification.params.result.value.space);
+    try std.testing.expectEqual(100, notification.params.result.context.slot);
 }
 
 test "serializeAccountNotification empty account data" {
@@ -585,13 +738,12 @@ test "serializeAccountNotification empty account data" {
         .executable = false,
         .rent_epoch = 0,
     };
-    const rc = try types.RcAccountWithPubkey.init(allocator, pk, account);
-    defer rc.release(allocator);
+    defer account.deinit(allocator);
 
     const p = try serializeAccountNotification(allocator, 1, .{
-        .rc = rc,
+        .account = .{ .pubkey = pk, .account = account },
         .slot = 1,
-    }, .base64);
+    }, .base64, null, null);
     defer p.deinit(allocator);
 
     try std.testing.expectEqualStrings(
@@ -613,13 +765,12 @@ test "serializeProgramNotification wraps value with pubkey and account" {
         .executable = false,
         .rent_epoch = 7,
     };
-    const rc = try types.RcAccountWithPubkey.init(allocator, account_pk, account);
-    defer rc.release(allocator);
+    defer account.deinit(allocator);
 
     const p = try serializeProgramNotification(allocator, 3, .{
-        .rc = rc,
+        .account = .{ .pubkey = account_pk, .account = account },
         .slot = 200,
-    }, .base64);
+    }, .base64, null, null);
     defer p.deinit(allocator);
 
     // base64 of [0xCA, 0xFE] = "yv4="
@@ -628,27 +779,190 @@ test "serializeProgramNotification wraps value with pubkey and account" {
     , extractJson(p.payload()));
 }
 
-test "serializeLogsNotification format" {
+test "serializeProgramNotification applies dataSlice" {
+    const allocator = std.testing.allocator;
+    const account_pk = sig.core.Pubkey.ZEROES;
+    const account: sig.core.Account = .{
+        .lamports = 999,
+        .data = .{ .unowned_allocation = &.{ 1, 2, 3, 4 } },
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 7,
+    };
+    defer account.deinit(allocator);
+
+    const p = try serializeProgramNotification(allocator, 3, .{
+        .account = .{ .pubkey = account_pk, .account = account },
+        .slot = 200,
+    }, .base64, .{ .offset = 1, .length = 2 }, null);
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"programNotification","params":{"result":{"context":{"slot":200},"value":{"pubkey":"11111111111111111111111111111111","account":{"data":["AgM=","base64"],"executable":false,"lamports":999,"owner":"11111111111111111111111111111111","rentEpoch":7,"space":4}}},"subscription":3}}
+    , extractJson(p.payload()));
+}
+
+test "serializeProgramNotification base58 encoding" {
+    const allocator = std.testing.allocator;
+    const data_buf = try allocator.alloc(u8, 2);
+    data_buf[0] = 0xDE;
+    data_buf[1] = 0xAD;
+    const account_pk = sig.core.Pubkey.ZEROES;
+    const account = sig.core.Account{
+        .lamports = 1000,
+        .data = sig.accounts_db.buffer_pool.AccountDataHandle.initAllocatedOwned(data_buf),
+        .owner = sig.core.Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 42,
+    };
+    defer account.deinit(allocator);
+
+    const p = try serializeProgramNotification(allocator, 7, .{
+        .account = .{ .pubkey = account_pk, .account = account },
+        .slot = 100,
+    }, .base58, null, null);
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"programNotification","params":{"result":{"context":{"slot":100},"value":{"pubkey":"11111111111111111111111111111111","account":{"data":["Hwr","base58"],"executable":false,"lamports":1000,"owner":"11111111111111111111111111111111","rentEpoch":42,"space":2}}},"subscription":7}}
+    , extractJson(p.payload()));
+}
+
+test "serializeProgramNotification binary encoding uses Agave overflow string" {
+    const allocator = std.testing.allocator;
+    const data_buf = try allocator.alloc(u8, 129);
+    @memset(data_buf, 0xAB);
+    const account_pk = sig.core.Pubkey.ZEROES;
+    const account = sig.core.Account{
+        .lamports = 1000,
+        .data = sig.accounts_db.buffer_pool.AccountDataHandle.initAllocatedOwned(data_buf),
+        .owner = sig.core.Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 42,
+    };
+    defer account.deinit(allocator);
+
+    const p = try serializeProgramNotification(allocator, 7, .{
+        .account = .{ .pubkey = account_pk, .account = account },
+        .slot = 100,
+    }, .binary, null, null);
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"programNotification","params":{"result":{"context":{"slot":100},"value":{"pubkey":"11111111111111111111111111111111","account":{"data":"error: data too large for bs58 encoding","executable":false,"lamports":1000,"owner":"11111111111111111111111111111111","rentEpoch":42,"space":129}}},"subscription":7}}
+    , extractJson(p.payload()));
+}
+
+test "serializeProgramNotification base58 encoding uses Agave overflow string" {
+    const allocator = std.testing.allocator;
+    const data_buf = try allocator.alloc(u8, 129);
+    @memset(data_buf, 0xAB);
+    const account_pk = sig.core.Pubkey.ZEROES;
+    const account = sig.core.Account{
+        .lamports = 1000,
+        .data = sig.accounts_db.buffer_pool.AccountDataHandle.initAllocatedOwned(data_buf),
+        .owner = sig.core.Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 42,
+    };
+    defer account.deinit(allocator);
+
+    const p = try serializeProgramNotification(allocator, 7, .{
+        .account = .{ .pubkey = account_pk, .account = account },
+        .slot = 100,
+    }, .base58, null, null);
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"programNotification","params":{"result":{"context":{"slot":100},"value":{"pubkey":"11111111111111111111111111111111","account":{"data":["error: data too large for bs58 encoding","base58"],"executable":false,"lamports":1000,"owner":"11111111111111111111111111111111","rentEpoch":42,"space":129}}},"subscription":7}}
+    , extractJson(p.payload()));
+}
+
+test "serializeProgramNotification base64+zstd encoding" {
+    const allocator = std.testing.allocator;
+    const data_buf = try allocator.alloc(u8, 2);
+    data_buf[0] = 0xDE;
+    data_buf[1] = 0xAD;
+    const account_pk = sig.core.Pubkey.ZEROES;
+    const account = sig.core.Account{
+        .lamports = 1000,
+        .data = sig.accounts_db.buffer_pool.AccountDataHandle.initAllocatedOwned(data_buf),
+        .owner = sig.core.Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 42,
+    };
+    defer account.deinit(allocator);
+
+    const p = try serializeProgramNotification(allocator, 7, .{
+        .account = .{ .pubkey = account_pk, .account = account },
+        .slot = 100,
+    }, .@"base64+zstd", null, null);
+    defer p.deinit(allocator);
+
+    const parsed = try std.json.parseFromSlice(
+        SerializedProgramNotification,
+        allocator,
+        extractJson(p.payload()),
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+    const notification = parsed.value;
+
+    try std.testing.expectEqualStrings("programNotification", notification.method);
+    try std.testing.expectEqualStrings(
+        "base64+zstd",
+        notification.params.result.value.account.data[1],
+    );
+    try std.testing.expectEqual(1000, notification.params.result.value.account.lamports);
+    try std.testing.expectEqual(42, notification.params.result.value.account.rentEpoch);
+    try std.testing.expectEqual(2, notification.params.result.value.account.space);
+    try std.testing.expectEqual(100, notification.params.result.context.slot);
+    try std.testing.expect(notification.params.result.value.pubkey.len != 0);
+}
+
+test "serializeLogsNotification success payload" {
     const allocator = std.testing.allocator;
     const p = try serializeLogsNotification(allocator, 5, .{
-        .signature = sig.core.Signature.ZEROES,
-        .num_logs = 3,
         .slot = 77,
+        .signature = sig.core.Signature.ZEROES,
+        .err = null,
+        .is_vote = false,
+        .logs = &.{ "Program log: hello", "Program consumed 1111 of 200000 compute units" },
+        .mentioned_pubkeys = &.{},
     });
     defer p.deinit(allocator);
 
-    // Signature of all zeros → base58 = 64 '1' characters.
     try std.testing.expectEqualStrings(
-        \\{"jsonrpc":"2.0","method":"logsNotification","params":{"result":{"context":{"slot":77},"value":{"signature":"1111111111111111111111111111111111111111111111111111111111111111","err":null,"logs":["log line 0","log line 1","log line 2"]}},"subscription":5}}
+        \\{"jsonrpc":"2.0","method":"logsNotification","params":{"result":{"context":{"slot":77},"value":{"signature":"1111111111111111111111111111111111111111111111111111111111111111","err":null,"logs":["Program log: hello","Program consumed 1111 of 200000 compute units"]}},"subscription":5}}
+    , extractJson(p.payload()));
+}
+
+test "serializeLogsNotification failure payload" {
+    const allocator = std.testing.allocator;
+    const p = try serializeLogsNotification(allocator, 9, .{
+        .slot = 88,
+        .signature = sig.core.Signature.ZEROES,
+        .err = .AccountNotFound,
+        .is_vote = false,
+        .logs = &.{"Program log: failed"},
+        .mentioned_pubkeys = &.{},
+    });
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"logsNotification","params":{"result":{"context":{"slot":88},"value":{"signature":"1111111111111111111111111111111111111111111111111111111111111111","err":"AccountNotFound","logs":["Program log: failed"]}},"subscription":9}}
     , extractJson(p.payload()));
 }
 
 test "serializeLogsNotification zero logs" {
     const allocator = std.testing.allocator;
     const p = try serializeLogsNotification(allocator, 1, .{
-        .signature = sig.core.Signature.ZEROES,
-        .num_logs = 0,
         .slot = 1,
+        .signature = sig.core.Signature.ZEROES,
+        .err = null,
+        .is_vote = false,
+        .logs = &.{},
+        .mentioned_pubkeys = &.{},
     });
     defer p.deinit(allocator);
 
@@ -657,7 +971,46 @@ test "serializeLogsNotification zero logs" {
     , extractJson(p.payload()));
 }
 
-test "serializeNotification dispatches account with encoding and sub_method" {
+test "serializeSignatureNotification received payload" {
+    const allocator = std.testing.allocator;
+    const p = try serializeSignatureNotification(allocator, 3, .{
+        .slot = 123,
+        .value = .received,
+    });
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"signatureNotification","params":{"result":{"context":{"slot":123},"value":"receivedSignature"},"subscription":3}}
+    , extractJson(p.payload()));
+}
+
+test "serializeSignatureNotification final payload with null err" {
+    const allocator = std.testing.allocator;
+    const p = try serializeSignatureNotification(allocator, 4, .{
+        .slot = 124,
+        .value = .{ .final = .{ .err = null } },
+    });
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"signatureNotification","params":{"result":{"context":{"slot":124},"value":{"err":null}},"subscription":4}}
+    , extractJson(p.payload()));
+}
+
+test "serializeSignatureNotification final payload with concrete err" {
+    const allocator = std.testing.allocator;
+    const p = try serializeSignatureNotification(allocator, 5, .{
+        .slot = 125,
+        .value = .{ .final = .{ .err = .AccountInUse } },
+    });
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"signatureNotification","params":{"result":{"context":{"slot":125},"value":{"err":"AccountInUse"}},"subscription":5}}
+    , extractJson(p.payload()));
+}
+
+test "serializeNotification dispatches program job type" {
     const allocator = std.testing.allocator;
     const data_buf = try allocator.alloc(u8, 2);
     data_buf[0] = 0xDE;
@@ -670,23 +1023,26 @@ test "serializeNotification dispatches account with encoding and sub_method" {
         .executable = false,
         .rent_epoch = 0,
     };
-    const rc = try types.RcAccountWithPubkey.init(allocator, pk, account);
-    defer rc.release(allocator);
+    defer account.deinit(allocator);
 
-    // Dispatch as program notification via serializeNotification.
-    const p = try serializeNotification(
-        allocator,
-        10,
-        .{ .account = .{ .rc = rc, .slot = 42 } },
-        .base64,
-        .program,
-    );
+    const p = try serializeNotification(allocator, 10, .{ .program = .{
+        .data = .{ .account = .{ .pubkey = pk, .account = account }, .slot = 42 },
+        .encoding = .base64,
+        .read_ctx = undefined,
+    } });
     defer p.deinit(allocator);
 
-    const json = extractJson(p.payload());
-    try std.testing.expect(
-        std.mem.startsWith(u8, json, "{\"jsonrpc\":\"2.0\",\"method\":\"programNotification\""),
+    const parsed = try std.json.parseFromSlice(
+        SerializedProgramNotification,
+        allocator,
+        extractJson(p.payload()),
+        .{ .ignore_unknown_fields = true },
     );
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"pubkey\":") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"account\":") != null);
+    defer parsed.deinit();
+    const notification = parsed.value;
+
+    try std.testing.expectEqualStrings("programNotification", notification.method);
+    try std.testing.expect(notification.params.result.value.pubkey.len != 0);
+    try std.testing.expectEqual(1000, notification.params.result.value.account.lamports);
+    try std.testing.expectEqual(42, notification.params.result.context.slot);
 }

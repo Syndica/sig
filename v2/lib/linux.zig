@@ -38,6 +38,7 @@ pub const clone3 = struct {
     comptime {
         const expectEqual = std.testing.expectEqual;
 
+        // sig fmt: off
         expectEqual(0x00000080, @as(u64, @bitCast(Flags{ .newtime = true }))) catch unreachable;
         expectEqual(0x00000100, @as(u64, @bitCast(Flags{ .vm = true }))) catch unreachable;
         expectEqual(0x00000200, @as(u64, @bitCast(Flags{ .fs = true }))) catch unreachable;
@@ -65,6 +66,7 @@ pub const clone3 = struct {
         expectEqual(0x80000000, @as(u64, @bitCast(Flags{ .io = true }))) catch unreachable;
         expectEqual(0x100000000, @as(u64, @bitCast(Flags{ .clear_sighand = true }))) catch unreachable;
         expectEqual(0x200000000, @as(u64, @bitCast(Flags{ .into_cgroup = true }))) catch unreachable;
+        // sig fmt: on
     }
 
     /// original:
@@ -255,7 +257,7 @@ pub const bpf = struct {
     }
 
     /// Only allows writing to stderr, sleeping, and exiting.
-    pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [54]sock_filter {
+    pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [66]sock_filter {
         // load syscall number
         const preamble = .{stmt(LD + W + ABS, @offsetOf(SECCOMP.data, "nr"))};
 
@@ -275,7 +277,7 @@ pub const bpf = struct {
             allowSyscall(@intFromEnum(syscalls.clock_nanosleep)) ++
             allowSyscall(@intFromEnum(syscalls.exit)) ++
             allowSyscall(@intFromEnum(syscalls.exit_group)) ++
-            // net tile
+            // net
             allowSyscall(@intFromEnum(syscalls.sendto)) ++
             allowSyscall(@intFromEnum(syscalls.recvfrom)) ++
             allowSyscall(@intFromEnum(syscalls.close)) ++
@@ -296,6 +298,13 @@ pub const bpf = struct {
             allowSyscall(@intFromEnum(syscalls.pipe2)) ++ // snapshot dl (fast transfer)
             allowSyscall(@intFromEnum(syscalls.splice)) ++ // snapshot dl (fast transfer)
             allowSyscall(@intFromEnum(syscalls.write)) ++ // snapshot dl
+            // telemetry
+            allowSyscall(@intFromEnum(syscalls.getsockname)) ++
+            allowSyscall(@intFromEnum(syscalls.listen)) ++
+            allowSyscall(@intFromEnum(syscalls.accept4)) ++
+            allowSyscall(@intFromEnum(syscalls.pwritev)) ++
+            allowSyscall(@intFromEnum(syscalls.readv)) ++
+            allowSyscall(@intFromEnum(syscalls.sendmsg)) ++
             //
             syscall_fd_filters ++
             fall_through;

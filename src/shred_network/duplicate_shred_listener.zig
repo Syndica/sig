@@ -1004,7 +1004,7 @@ test "GossipDuplicateShredHandler: reconstructShredsFromData returns shreds on v
         try epoch_tracker.insertRootedEpochInfo(gpa, epoch, epoch_stakes, &.ALL_DISABLED);
     }
 
-    epoch_tracker.root_slot.store(slot, .monotonic);
+    epoch_tracker.state_root.store(slot, .monotonic);
     {
         var lock = epoch_tracker.rooted_epochs.write();
         defer lock.unlock();

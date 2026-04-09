@@ -8,6 +8,7 @@
 
         .snapshot_queue = .snapshot_queue,
         .accounts_db_config = .accounts_db_config,
+        .telemetry = .telemetry,
     },
     .services = .{
         .{
@@ -15,6 +16,7 @@
             .regions = .{
                 .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .net_to_gossip, .access = .rw },
+                .{ .name = .telemetry, .access = .rw },
             },
         },
         .{
@@ -23,6 +25,7 @@
                 .{ .name = .net_to_gossip, .access = .rw },
                 .{ .name = .gossip_config, .access = .readonly },
                 .{ .name = .snapshot_queue, .access = .rw },
+                .{ .name = .telemetry, .access = .rw },
             },
         },
         .{
@@ -30,6 +33,13 @@
             .regions = .{
                 .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .shred_recv_config, .access = .readonly },
+                .{ .name = .telemetry, .access = .rw },
+            },
+        },
+        .{
+            .name = .telemetry,
+            .regions = .{
+                .{ .name = .telemetry, .access = .rw },
             },
         },
         .{

@@ -5,7 +5,7 @@ const sig = @import("../../sig.zig");
 const types = @import("types.zig");
 const protocol = @import("protocol.zig");
 const NotifQueue = @import("NotifQueue.zig");
-const runtime_mod = @import("runtime.zig");
+const Runtime = @import("Runtime.zig");
 const ws_request = @import("ws_request.zig");
 
 const NotifPayload = sig.sync.RcSlice(u8);
@@ -15,6 +15,9 @@ const Id = sig.rpc.request.Id;
 const WsRequest = ws_request.WsRequest;
 
 const ErrorCode = protocol.ErrorCode;
+const SubscribeError = error{
+    Internal,
+};
 
 /// Per-subscription state: tracks next read position in a queue.
 pub const SubState = struct {
@@ -42,7 +45,7 @@ pub const JRPCHandler = struct {
     allocator: std.mem.Allocator,
     parse_arena_state: std.heap.ArenaAllocator,
 
-    pub const Context = runtime_mod.RuntimeContext;
+    pub const Context = Runtime;
 
     /// Send state machine, events are triggered by methods, false/null returned
     /// for invalid transitions (indicates bug). We log error and reset to safe
@@ -201,12 +204,14 @@ pub const JRPCHandler = struct {
         _ = self.parse_arena_state.reset(.retain_capacity);
         const parse_arena = self.parse_arena_state.allocator();
 
+        const parse_options: std.json.ParseOptions = .{ .ignore_unknown_fields = true };
+
         // Parse request as jsonrpc
         const request_dyn = std.json.parseFromSliceLeaky(
             WsRequest.Dynamic,
             parse_arena,
             text,
-            .{},
+            parse_options,
         ) catch |err| {
             log.debug("failed to parse request as jrpc: {}", .{err});
             self.sendErrorResponse(.null, ErrorCode.parse_error, "parse error");
@@ -215,22 +220,15 @@ pub const JRPCHandler = struct {
 
         // Convert jsonrpc request into strongly-typed request struct
         var parse_diag = WsRequest.Dynamic.ParseDiagnostic.INIT;
-        const request = request_dyn.parse(parse_arena, .{}, &parse_diag) catch |err| {
+        const request = request_dyn.parse(parse_arena, parse_options, &parse_diag) catch |err| {
             log.debug("failed to parse request body: {}", .{err});
             self.handleRequestParseError(err, parse_diag.err.id orelse .null);
             return;
         };
         const id = request.id;
 
-        // Reject unstable methods (currently not implemented).
-        switch (request.method) {
-            .blockSubscribe,
-            .blockUnsubscribe,
-            .slotsUpdatesSubscribe,
-            .slotsUpdatesUnsubscribe,
-            .voteSubscribe,
-            .voteUnsubscribe,
-            => {
+        request.method.validate() catch |err| switch (err) {
+            error.MethodNotImplemented => {
                 self.sendErrorResponse(
                     id,
                     ErrorCode.method_not_found,
@@ -238,11 +236,18 @@ pub const JRPCHandler = struct {
                 );
                 return;
             },
-            else => {},
-        }
+            error.InvalidParams => {
+                self.sendErrorResponse(id, ErrorCode.invalid_params, "invalid params");
+                return;
+            },
+        };
 
         if (SubReqKey.fromMethod(&request.method)) |key| {
-            self.handleSubscribe(id, &key);
+            self.handleSubscribe(id, &key) catch |err| switch (err) {
+                error.Internal => {
+                    self.sendInternalError(id);
+                },
+            };
             return;
         }
 
@@ -310,57 +315,65 @@ pub const JRPCHandler = struct {
         self: *JRPCHandler,
         request_id: Id,
         key: *const SubReqKey,
-    ) void {
+    ) SubscribeError!void {
         self.ctx.metrics.subscribe_requests += 1;
 
-        const result = self.ctx.sub_map.getOrCreate(key) catch |err| {
+        const result = self.ctx.getOrCreateSubscription(key) catch |err| {
             log.warn("subscribe getOrCreate failed: {}", .{err});
-            self.sendInternalError(request_id);
-            return;
+            return error.Internal;
         };
+        const q = result.queue;
+        var next_index = q.head + 1;
+        errdefer self.ctx.maybeRemoveIdleQueue(result.sub_id, q);
 
-        // Duplicate check: same sub_id means same SubReqKey
-        // already active.
+        // Duplicate check: same sub_id means same RPC method + params are already
+        // active on this connection. Match Agave's idempotent behavior by returning
+        // the existing subscription id without changing local subscription state.
         for (self.active_subs.items) |s| {
             if (s.sub_id == result.sub_id) {
                 log.debug("duplicate subscription request for sub_id={d}", .{result.sub_id});
-                self.sendErrorResponse(
+                protocol.serializeSubscribeResponse(
+                    &self.send_state.response_buf,
+                    self.allocator,
                     request_id,
-                    ErrorCode.invalid_params,
-                    "duplicate subscription",
-                );
+                    result.sub_id,
+                ) catch |err| {
+                    log.warn("failed to serialize duplicate subscribe response: {}", .{err});
+                    return error.Internal;
+                };
+                self.responseReadyAndSend();
                 return;
             }
         }
 
-        const q = result.queue;
-
         q.addSubscriber(self) catch |err| {
             log.warn("subscribe addSubscriber failed: {}", .{err});
-            self.sendInternalError(request_id);
-            return;
+            return error.Internal;
         };
 
-        // Future-only delivery: start at head + 1.
+        if (q.finalNotificationIndex()) |final_index| {
+            next_index = final_index;
+        }
+        errdefer q.removeSubscriber(self, next_index);
+
         self.active_subs.append(self.allocator, .{
             .sub_id = result.sub_id,
             .queue = q,
-            .next_index = q.head + 1,
+            .next_index = next_index,
         }) catch |err| {
             log.warn("subscribe active_subs append failed: {}", .{err});
-            q.removeSubscriber(self, q.head + 1);
-            self.sendInternalError(request_id);
-            return;
+            return error.Internal;
         };
+        errdefer _ = self.active_subs.pop();
 
         protocol.serializeSubscribeResponse(
             &self.send_state.response_buf,
             self.allocator,
             request_id,
             result.sub_id,
-        ) catch {
-            log.warn("failed to serialize subscribe response", .{});
-            return;
+        ) catch |err| {
+            log.warn("failed to serialize subscribe response: {}", .{err});
+            return error.Internal;
         };
         self.responseReadyAndSend();
     }
@@ -382,6 +395,8 @@ pub const JRPCHandler = struct {
             return;
         };
 
+        // Note: we remove the subscription regardless of serialization error later as we'd prefer
+        // to remove it in such an exceptional event anyways (client just wont get a response).
         const sub = self.active_subs.swapRemove(idx);
         const q = sub.queue;
         q.removeSubscriber(self, sub.next_index);
@@ -444,13 +459,24 @@ pub const JRPCHandler = struct {
             // 2. Preserve per-queue order.
             // 3. Keep batches full.
             self.send_state.notif_batch_buf.appendSlice(self.allocator, payload_slice) catch {
-                runtime_mod.releasePayload(self.ctx, pick.payload);
+                Runtime.releasePayload(self.ctx, pick.payload);
                 break;
             };
-            self.active_subs.items[pick.sub_idx].next_index += 1;
+
+            const sub = &self.active_subs.items[pick.sub_idx];
+            if (pick.is_final) {
+                sub.next_index += 1;
+                const removed = self.active_subs.swapRemove(pick.sub_idx);
+                const q = removed.queue;
+                q.removeSubscriber(self, removed.next_index);
+                self.ctx.maybeRemoveIdleQueue(removed.sub_id, q);
+            } else {
+                sub.next_index += 1;
+            }
+
             batch_count += 1;
             batch_bytes += @intCast(payload_slice.len);
-            runtime_mod.releasePayload(self.ctx, pick.payload);
+            Runtime.releasePayload(self.ctx, pick.payload);
 
             if (batch_bytes >= self.ctx.max_batch_bytes) {
                 break;
@@ -477,6 +503,7 @@ pub const JRPCHandler = struct {
     const NotifPick = struct {
         payload: NotifPayload,
         sub_idx: usize,
+        is_final: bool,
     };
 
     fn pickNextNotification(self: *JRPCHandler, start_idx: usize) ?NotifPick {
@@ -505,8 +532,8 @@ pub const JRPCHandler = struct {
                 };
             },
         };
-        const payload = maybe_payload orelse return null;
-        return .{ .payload = payload, .sub_idx = idx };
+        const notif = maybe_payload orelse return null;
+        return .{ .payload = notif.payload, .sub_idx = idx, .is_final = notif.is_final };
     }
 
     fn findActiveSubIndex(

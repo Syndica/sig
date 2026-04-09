@@ -65,6 +65,7 @@ pub const ShredNetworkDependencies = struct {
 
     /// RPC Observability
     rpc_hooks: ?*sig.rpc.Hooks = null,
+    event_sink: ?*sig.rpc.jrpc_websockets.types.EventSink = null,
     duplicate: ?struct {
         /// Data sent by gossip as it's observed.
         shred_receiver: *Channel(sig.gossip.data.DuplicateShred),
@@ -139,6 +140,7 @@ pub fn start(
         .epoch_tracker = deps.epoch_tracker,
         .tracker = shred_tracker,
         .inserter = deps.ledger.shredInserter(),
+        .event_sink = deps.event_sink,
         .duplicate_handler = duplicate_handler,
         .max_shred_insert_slot = deps.max_shred_insert_slot,
     });
@@ -289,8 +291,8 @@ test "start and stop gracefully" {
 
     const config: ShredNetworkConfig = .{
         .root_slot = 0,
-        .repair_port = 50304,
-        .turbine_recv_port = 50305,
+        .repair_port = 0,
+        .turbine_recv_port = 0,
         .retransmit = true,
         .dump_shred_tracker = false,
         .log_finished_slots = false,

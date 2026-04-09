@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const lib = @import("../lib.zig");
+const tel = lib.telemetry;
 
 const assert = std.debug.assert;
 
@@ -135,7 +136,8 @@ pub fn GossipNode(comptime Effects: type) type {
 
             fn getExpiryWallclock(self: *const Peer) u64 {
                 return self.last_pong orelse {
-                    const since = @as(u64, self.last_ping.count_since_pong) * ACTIVE_PONG_THRESHOLD_MS;
+                    const since = @as(u64, self.last_ping.count_since_pong) *
+                        ACTIVE_PONG_THRESHOLD_MS;
                     return self.last_ping.wallclock -| since;
                 };
             }
@@ -152,7 +154,11 @@ pub fn GossipNode(comptime Effects: type) type {
                 return .{ .keys = keys, .words = @splat(0) };
             }
 
-            fn asBloomFilter(self: *BlockBloomFilter, num_keys: ?usize, num_bits: ?usize) BloomFilter {
+            fn asBloomFilter(
+                self: *BlockBloomFilter,
+                num_keys: ?usize,
+                num_bits: ?usize,
+            ) BloomFilter {
                 const n_keys = num_keys orelse self.keys.len;
                 const n_bits = num_bits orelse self.words.len * 64;
                 const num_words = std.math.divCeil(usize, n_bits, 64) catch unreachable;
@@ -276,15 +282,15 @@ pub fn GossipNode(comptime Effects: type) type {
             };
         }
 
-        pub fn poll(self: *Self, now: u64) !void {
+        pub fn poll(self: *Self, logger: tel.Logger("poll"), now: u64) !void {
             if (self.pull_timeout <= now) {
                 self.pull_timeout = now + PULL_INTERVAL_MS;
-                try self.sendPullRequests(now);
+                try self.sendPullRequests(.from(logger), now);
             }
 
             if (self.push_timeout <= now) {
                 self.push_timeout = now + PUSH_INTERVAL_MS;
-                try self.updatePushSet(now);
+                try self.updatePushSet(.from(logger), now);
             }
 
             if (self.ping_timeout <= now) {
@@ -293,22 +299,39 @@ pub fn GossipNode(comptime Effects: type) type {
             }
         }
 
-        pub fn processPacket(self: *Self, now: u64, packet: *const Packet) void {
+        pub fn processPacket(
+            self: *Self,
+            logger: tel.Logger("processPacket"),
+            now: u64,
+            packet: *const Packet,
+        ) void {
             var msg_buf: [16 * 1024]u8 = undefined;
             var msg_fba = std.heap.FixedBufferAllocator.init(&msg_buf);
             var msg_reader: std.Io.Reader = .fixed(packet.data[0..packet.size]);
             const msg = bincode.read(&msg_fba, &msg_reader, GossipMessage) catch |e| {
-                std.log.err("invalid msg from ({f}, size={}): {}", .{ packet.addr, packet.size, e });
+                logger.err().logf(
+                    "invalid msg from ({f}, size={}): {}",
+                    .{ packet.addr, packet.size, e },
+                );
                 return;
             };
 
-            self.processMessage(now, packet.addr, msg) catch |e| {
-                std.log.err("failed to process msg ({f}, {s}) {}", .{ packet.addr, @tagName(msg), e });
+            self.processMessage(.from(logger), now, packet.addr, msg) catch |e| {
+                logger.err().logf(
+                    "failed to process msg ({f}, {s}) {}",
+                    .{ packet.addr, @tagName(msg), e },
+                );
                 return;
             };
         }
 
-        fn processMessage(self: *Self, now: u64, addr: std.net.Address, msg: GossipMessage) !void {
+        fn processMessage(
+            self: *Self,
+            logger: tel.Logger("processMessage"),
+            now: u64,
+            addr: std.net.Address,
+            msg: GossipMessage,
+        ) !void {
             switch (msg) {
                 .pull_request => |pr| {
                     const from, const shred_version = switch (pr.contact_info.data) {
@@ -321,7 +344,7 @@ pub fn GossipNode(comptime Effects: type) type {
                         return error.PullRequestFromUnverifiedPeer;
 
                     // Update the ContactInfo
-                    _ = try self.insertValue(now, .pull, pr.contact_info);
+                    _ = try self.insertValue(.from(logger), now, .pull, pr.contact_info);
 
                     const mask_bits = std.math.cast(u6, pr.mask_bits) orelse
                         return error.InvalidPullRequestMaskBits;
@@ -359,7 +382,7 @@ pub fn GossipNode(comptime Effects: type) type {
                         return error.PullResponseFromExpiredPeer;
 
                     for (pr.values.items) |value| {
-                        _ = try self.insertValue(now, .pull, value);
+                        _ = try self.insertValue(.from(logger), now, .pull, value);
                     }
                 },
                 .push_message => |push| {
@@ -369,7 +392,7 @@ pub fn GossipNode(comptime Effects: type) type {
 
                     for (push.values.items) |value| {
                         const key, const duplicates =
-                            (try self.insertValue(now, .push, value)) orelse continue;
+                            (try self.insertValue(.from(logger), now, .push, value)) orelse continue;
 
                         // Add to prunes if enough duplicates.
                         if (duplicates >= DUPLICATE_THRESHOLD_UNTIL_PRUNE) {
@@ -439,10 +462,16 @@ pub fn GossipNode(comptime Effects: type) type {
                         .wallclock = prune.data.wallclock,
                     });
 
-                    // Prune can be signed with or without prefix...
-                    const sign_msg = sign_writer.buffered();
-                    prune.data.signature.verify(&prune.from, sign_msg) catch {
-                        prune.data.signature.verify(&prune.from, sign_msg[8 + PRUNE_PREFIX.len ..]) catch {
+                    // PruneData can be signed with or without prefix...
+                    prune.data.signature.verify(&prune.from, sign_writer.buffered()) catch {
+                        sign_writer = .fixed(&sign_buf);
+                        try bincode.write(&sign_writer, .{
+                            .pubkey = prune.data.pubkey,
+                            .prunes = prune.data.prunes,
+                            .destination = prune.data.destination,
+                            .wallclock = prune.data.wallclock,
+                        });
+                        prune.data.signature.verify(&prune.from, sign_writer.buffered()) catch {
                             return error.InvalidPruneSignature;
                         };
                     };
@@ -454,7 +483,10 @@ pub fn GossipNode(comptime Effects: type) type {
                 },
                 .ping_message => |ping| {
                     ping.signature.verify(&ping.from, &ping.token) catch {
-                        std.log.err("invalid Ping signature from {f}:{f}", .{ ping.from, addr });
+                        logger.err().logf(
+                            "invalid Ping signature from {f}:{f}",
+                            .{ ping.from, addr },
+                        );
                         return;
                     };
 
@@ -477,17 +509,26 @@ pub fn GossipNode(comptime Effects: type) type {
                 .pong_message => |pong| {
                     // If not a hash in window (prev, current), not worth verifying the signature either
                     if (!self.ping_window.contains(&pong.hash)) {
-                        std.log.err("invalid Pong hash from {f}:{f}", .{ pong.from, addr });
+                        logger.err().logf(
+                            "invalid Pong hash from {f}:{f}",
+                            .{ pong.from, addr },
+                        );
                         return;
                     }
 
                     pong.signature.verify(&pong.from, &pong.hash.data) catch {
-                        std.log.err("invalid Pong signature from {f}:{f}", .{ pong.from, addr });
+                        logger.err().logf(
+                            "invalid Pong signature from {f}:{f}",
+                            .{ pong.from, addr },
+                        );
                         return;
                     };
 
                     const peer = self.peers.getPtr(pong.from) orelse {
-                        std.log.err("pong from untracked peer {f}:{f}", .{ pong.from, addr });
+                        logger.err().logf(
+                            "pong from untracked peer {f}:{f}",
+                            .{ pong.from, addr },
+                        );
                         return;
                     };
 
@@ -521,13 +562,13 @@ pub fn GossipNode(comptime Effects: type) type {
             }
         }
 
-        fn updatePushSet(self: *Self, now: u64) !void {
+        fn updatePushSet(self: *Self, logger: tel.Logger("updatePushSet"), now: u64) !void {
             // refresh what nodes we will be sending push messages to for the near future.
             self.refreshPushActiveSet(now);
 
             // Re-sign our contact info & update it to be pushed to active set.
             self.signed_contact = try signData(now, self.config.effects, self.signed_contact.data);
-            try self.insertSigned(now, self.signed_contact);
+            try self.insertSigned(.from(logger), now, self.signed_contact);
 
             // Send out any queued values as push messages to active set.
             try self.sendPushMessages();
@@ -640,7 +681,7 @@ pub fn GossipNode(comptime Effects: type) type {
             }
         }
 
-        fn sendPullRequests(self: *Self, now: u64) !void {
+        fn sendPullRequests(self: *Self, logger: tel.Logger("sendPullRequests"), now: u64) !void {
             const num_items: f64 = @floatFromInt(self.table.count() + self.expired.items.len);
             const mask_bits: u6 = blk: {
                 comptime assert(std.math.isPowerOfTwo(MAX_PULL_REQUESTS));
@@ -731,7 +772,7 @@ pub fn GossipNode(comptime Effects: type) type {
             if (i == 0) {
                 if (self.no_peers_timeout <= now -| NO_PEERS_THRESHOLD_MS) {
                     self.no_peers_timeout = now + NO_PEERS_THRESHOLD_MS;
-                    std.log.debug("No peers...", .{});
+                    logger.debug().logf("No peers...", .{});
 
                     const mask =
                         (@as(u65, 0) << (@as(u7, 64) - mask_bits)) | (~@as(u64, 0) >> mask_bits);
@@ -752,7 +793,12 @@ pub fn GossipNode(comptime Effects: type) type {
             var data = data_;
             switch (std.meta.activeTag(data)) {
                 .contact_info => data.contact_info.wallclock = .{ .value = now },
-                inline .vote, .lowest_slot, .epoch_slots, .duplicate_shred, .snapshot_hashes => |tag| {
+                inline .vote,
+                .lowest_slot,
+                .epoch_slots,
+                .duplicate_shred,
+                .snapshot_hashes,
+                => |tag| {
                     @field(data, @tagName(tag)).wallclock = now;
                 },
                 else => return error.SigningDeprecatedValue,
@@ -769,18 +815,29 @@ pub fn GossipNode(comptime Effects: type) type {
         }
 
         /// Sign and insert our own gossip data.
-        pub fn insert(self: *Self, now: u64, data: GossipData) !void {
+        pub fn insert(
+            self: *Self,
+            logger: tel.Logger("insert"),
+            now: u64,
+            data: GossipData,
+        ) !void {
             const signed_value = try signData(now, self.config.effects, data);
-            return try self.insertSigned(now, signed_value);
+            return try self.insertSigned(.from(logger), now, signed_value);
         }
 
-        fn insertSigned(self: *Self, now: u64, value: GossipValue) !void {
-            const key, _ = (try self.insertValue(now, .us, value)) orelse unreachable;
+        fn insertSigned(
+            self: *Self,
+            logger: tel.Logger("insertSigned"),
+            now: u64,
+            value: GossipValue,
+        ) !void {
+            const key, _ = (try self.insertValue(.from(logger), now, .us, value)) orelse unreachable;
             assert(key.from.equals(&self.identity()));
         }
 
         fn insertValue(
             self: *Self,
+            logger: tel.Logger("insertValue"),
             now: u64,
             caller: enum { us, pull, push },
             value: GossipValue,
@@ -794,7 +851,10 @@ pub fn GossipNode(comptime Effects: type) type {
                 .contact_info => |ci| blk: {
                     break :blk .{ ci.from, ci.wallclock.value, 0 };
                 },
-                inline .snapshot_hashes, .restart_heaviest_fork, .restart_last_voted_fork => |v| blk: {
+                inline .snapshot_hashes,
+                .restart_heaviest_fork,
+                .restart_last_voted_fork,
+                => |v| blk: {
                     deprecated = value.data != .snapshot_hashes;
                     break :blk .{ v.from, v.wallclock, 0 };
                 },
@@ -815,7 +875,11 @@ pub fn GossipNode(comptime Effects: type) type {
             const hash = Hash.init(value_bytes);
 
             // Check wallclock in general
-            const key: Key = .{ .from = from, .tag = std.meta.activeTag(value.data), .index = index };
+            const key: Key = .{
+                .from = from,
+                .tag = std.meta.activeTag(value.data),
+                .index = index,
+            };
             const update_contact = (switch (caller) {
                 .us => blk: {
                     assert(!deprecated); // we should not be inserting our own deprecated data
@@ -849,7 +913,7 @@ pub fn GossipNode(comptime Effects: type) type {
                 },
             }) orelse {
                 // Record that we've seen it, but don't insert it.
-                try self.onDiscoveredValue(now, key, value);
+                try self.onDiscoveredValue(.from(logger), now, key, value);
                 self.addExpired(now, hash);
                 return null;
             };
@@ -870,7 +934,7 @@ pub fn GossipNode(comptime Effects: type) type {
                 break :blk .{ gop.found_existing, gop.value_ptr };
             };
 
-            try self.onDiscoveredValue(now, key, value);
+            try self.onDiscoveredValue(.from(logger), now, key, value);
 
             if (exists) {
                 // duplicate
@@ -919,9 +983,15 @@ pub fn GossipNode(comptime Effects: type) type {
             return .{ key, 0 };
         }
 
-        fn onDiscoveredValue(self: *Self, now: u64, key: Key, value: GossipValue) !void {
+        fn onDiscoveredValue(
+            self: *Self,
+            logger: tel.Logger("onDiscoveredValue"),
+            now: u64,
+            key: Key,
+            value: GossipValue,
+        ) !void {
             if (!key.from.equals(&self.identity())) {
-                // std.log.debug("Discovered {f}", .{key});
+                logger.debug().logf("Discovered {f}", .{key});
 
                 var alloc_buf: [16 * 1024]u8 = undefined;
                 switch (value.data) {
@@ -942,7 +1012,12 @@ pub fn GossipNode(comptime Effects: type) type {
                     },
                     .contact_info => |ci| {
                         if (ci.socket_map.get(.gossip)) |addr| {
-                            if (try self.getOrTrackPeer(now, ci.shred_version, addr, key.from)) |peer| {
+                            if (try self.getOrTrackPeer(
+                                now,
+                                ci.shred_version,
+                                addr,
+                                key.from,
+                            )) |peer| {
                                 peer.addr = addr;
                                 peer.shred_version = ci.shred_version;
                             }
@@ -1009,7 +1084,9 @@ pub fn GossipNode(comptime Effects: type) type {
                     // findOldest (TODO: replace with accompanied min-heap)
                     var i: usize = 0;
                     for (self.peers.values()[1..], 1..) |*p, j| {
-                        if (p.getExpiryWallclock() < self.peers.values()[i].getExpiryWallclock()) i = j;
+                        if (p.getExpiryWallclock() < self.peers.values()[i].getExpiryWallclock()) {
+                            i = j;
+                        }
                     }
                     self.peers.swapRemoveAt(i);
                 }

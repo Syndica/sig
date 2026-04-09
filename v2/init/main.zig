@@ -6,6 +6,7 @@ comptime {
 
 const services = @import("services.zig");
 const lib = @import("lib");
+const tel = lib.telemetry;
 
 const Config = struct {
     sandboxing_mode: SandboxingMode,
@@ -18,6 +19,8 @@ const Config = struct {
     gossip: Gossip,
     shred_network: ShredNetwork,
     accounts_db: AccountsDB,
+
+    telemetry: Telemetry,
 
     const SandboxingMode = enum { sandboxed, threaded };
 
@@ -36,6 +39,10 @@ const Config = struct {
         min_snapshot_download_timeout_ms: u64,
         min_snapshot_download_lockin_percent: f64,
     };
+
+    const Telemetry = struct {
+        port: u16,
+    };
 };
 
 pub fn main() !void {
@@ -43,10 +50,19 @@ pub fn main() !void {
     defer _ = dba_state.deinit();
     const allocator = dba_state.allocator();
 
-    const config: Config = cfg: {
+    const config: Config, //
+    const log_level: tel.log.Level //
+    = cfg: {
         var args = std.process.args();
         _ = args.next();
         const cfg_path = args.next() orelse return error.ConfigPathMissing;
+        const log_level = level: {
+            const str = args.next() orelse "info";
+            break :level std.meta.stringToEnum(tel.log.Level, str) orelse {
+                std.log.err("Invalid log level '{s}'", .{str});
+                return error.InvalidLogLevel;
+            };
+        };
 
         const cfg_file = try std.fs.cwd().openFile(cfg_path, .{});
         defer cfg_file.close();
@@ -57,10 +73,11 @@ pub fn main() !void {
         var diag: std.zon.parse.Diagnostics = .{};
         defer diag.deinit(allocator);
 
-        break :cfg std.zon.parse.fromSlice(Config, allocator, cfg_str, &diag, .{}) catch |err| {
+        const config = std.zon.parse.fromSlice(Config, allocator, cfg_str, &diag, .{}) catch |err| {
             std.log.err("{f}", .{diag});
             return err;
         };
+        break :cfg .{ config, log_level };
     };
     defer std.zon.parse.free(allocator, config);
 
@@ -84,6 +101,7 @@ pub fn main() !void {
         .{ .service = .net },
         .{ .service = .gossip },
         .{ .service = .accounts_db },
+        .{ .service = .telemetry },
     };
 
     const shared_regions = services.toSharedRegions(.{
@@ -115,6 +133,17 @@ pub fn main() !void {
             .min_snapshot_download_timeout_ms = config.accounts_db.min_snapshot_download_timeout_ms,
             .min_snapshot_download_lockin_percent = //
             config.accounts_db.min_snapshot_download_lockin_percent,
+        },
+
+        .telemetry = .{
+            .port = config.telemetry.port,
+            .max_log_level = log_level,
+            .service_count = service_instances.len - 1,
+
+            .id_mem_len = 4096 * 16,
+            .gauges_len = 4096 * 2,
+
+            .histogram_data_len = 4096 * 3,
         },
     });
 

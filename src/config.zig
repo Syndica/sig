@@ -31,6 +31,7 @@ pub const Cmd = struct {
     disable_consensus: bool = false,
     voting_enabled: bool = false,
     rpc_port: ?u16 = null,
+    faucet_keypair: ?[]const u8 = null,
     vote_account: ?[]const u8 = null,
     stop_at_slot: ?sig.core.Slot = null,
     mock_transfer_transactions: ?u64 = null,

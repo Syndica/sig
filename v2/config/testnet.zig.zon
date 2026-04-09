@@ -16,4 +16,7 @@
         .min_snapshot_download_timeout_ms = 10_000,
         .min_snapshot_download_lockin_percent = 0.10,
     },
+    .telemetry = .{
+        .port = 12345,
+    },
 }

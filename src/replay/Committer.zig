@@ -3,6 +3,8 @@ const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 const tracy = @import("tracy");
 
+const jrpc_types = sig.rpc.jrpc_websockets.types;
+
 const Allocator = std.mem.Allocator;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 
@@ -18,8 +20,10 @@ const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 const Account = sig.core.Account;
 const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
+const LogCollector = sig.runtime.LogCollector;
 const TransactionStatusMeta = sig.ledger.transaction_status.TransactionStatusMeta;
 const TransactionStatusMetaBuilder = sig.ledger.transaction_status.TransactionStatusMetaBuilder;
+const TransactionError = sig.ledger.transaction_status.TransactionError;
 const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
 const Ledger = sig.ledger.Ledger;
 const SlotAccountStore = sig.accounts_db.SlotAccountStore;
@@ -37,6 +41,7 @@ status_cache: *sig.core.StatusCache,
 stakes_cache: *sig.core.StakesCache,
 new_rate_activation_epoch: ?sig.core.Epoch,
 replay_votes_sender: ?*Channel(ParsedVote),
+event_sink: ?*jrpc_types.EventSink = null,
 /// Ledger for persisting transaction status metadata (optional for backwards compatibility)
 ledger: ?*Ledger,
 /// Account store for looking up accounts (e.g. mint accounts for token balance resolution)
@@ -67,6 +72,19 @@ pub fn commitTransactions(
 
     var transaction_fees: u64 = 0;
     var priority_fees: u64 = 0;
+    var non_vote_count: usize = 0;
+
+    var maybe_logs_batch_event: ?jrpc_types.SlotTransactionLogs = null;
+    defer if (maybe_logs_batch_event) |*logs_batch_event| {
+        logs_batch_event.deinit();
+    };
+    var batch_log_entries: ArrayListUnmanaged(jrpc_types.TransactionLogsEntry) = .{};
+    if (self.event_sink != null) {
+        maybe_logs_batch_event = .{
+            .slot = slot,
+            .arena = .init(persistent_allocator),
+        };
+    }
 
     for (transactions, tx_results, 0..) |transaction, *result, transaction_index| {
         const message_hash = &result.@"0";
@@ -84,6 +102,10 @@ pub fn commitTransactions(
             transaction.instructions,
         );
 
+        if (!is_simple_vote_tx) {
+            non_vote_count += 1;
+        }
+
         // Update prioritization fee cache for non-vote transactions
         if (self.prioritization_fee_cache) |cache| if (!is_simple_vote_tx) try cache.update(
             persistent_allocator,
@@ -95,8 +117,24 @@ pub fn commitTransactions(
 
         // TODO: fix nesting, this sucks
 
-        if (tx_result.outputs != null) {
+        if (tx_result.outputs) |outputs| {
             rent_collected += tx_result.rent;
+
+            if (maybe_logs_batch_event) |*logs_batch_event| {
+                appendSlotTransactionLogsEntry(
+                    logs_batch_event.arena.allocator(),
+                    &batch_log_entries,
+                    transaction,
+                    tx_result.err,
+                    outputs.log_collector,
+                    is_simple_vote_tx,
+                ) catch |err| {
+                    self.logger.err().logf(
+                        "failed to build transaction logs batch for slot {} transaction {}: {}",
+                        .{ slot, transaction_index, err },
+                    );
+                };
+            }
 
             // Skip non successful or non vote transactions.
             // Only send votes if consensus is enabled (sender exists)
@@ -168,6 +206,7 @@ pub fn commitTransactions(
     _ = self.slot_state.collected_transaction_fees.fetchAdd(transaction_fees, .monotonic);
     _ = self.slot_state.collected_priority_fees.fetchAdd(priority_fees, .monotonic);
     _ = self.slot_state.transaction_count.fetchAdd(tx_results.len, .monotonic);
+    _ = self.slot_state.non_vote_transaction_count.fetchAdd(non_vote_count, .monotonic);
     _ = self.slot_state.signature_count.fetchAdd(signature_count, .monotonic);
     _ = self.slot_state.collected_rent.fetchAdd(rent_collected, .monotonic);
 
@@ -179,6 +218,79 @@ pub fn commitTransactions(
             self.new_rate_activation_epoch,
         );
     }
+
+    if (self.event_sink) |event_sink| {
+        if (maybe_logs_batch_event) |*logs_batch_event| {
+            // NOTE: it's fine to just assign the slice here since the arena allocator will free
+            // everything, so we don't need to track actual capacity of the ArrayList
+            logs_batch_event.entries = batch_log_entries.items;
+
+            const event: jrpc_types.InboundEvent = .{ .logs = logs_batch_event.* };
+            maybe_logs_batch_event = null;
+            errdefer event.deinit(persistent_allocator);
+
+            try event_sink.send(event);
+        }
+    }
+}
+
+fn appendSlotTransactionLogsEntry(
+    allocator: Allocator,
+    batch_log_entries: *ArrayListUnmanaged(jrpc_types.TransactionLogsEntry),
+    transaction: ResolvedTransaction,
+    tx_err: ?TransactionError,
+    maybe_log_collector: ?LogCollector,
+    is_vote: bool,
+) !void {
+    const log_collector = maybe_log_collector orelse return;
+    const log_messages = try cloneLogMessages(allocator, log_collector);
+    errdefer {
+        for (log_messages) |log_message| {
+            allocator.free(log_message);
+        }
+        allocator.free(log_messages);
+    }
+    if (log_messages.len == 0) {
+        return;
+    }
+
+    const mentioned_pubkeys = try allocator.dupe(Pubkey, transaction.accounts.items(.pubkey));
+    errdefer allocator.free(mentioned_pubkeys);
+
+    const cloned_err = if (tx_err) |err_value| try err_value.clone(allocator) else null;
+    errdefer if (cloned_err) |err_value| err_value.deinit(allocator);
+
+    try batch_log_entries.append(allocator, .{
+        .signature = transaction.transaction.signatures[0],
+        .err = cloned_err,
+        .is_vote = is_vote,
+        .logs = log_messages,
+        .mentioned_pubkeys = mentioned_pubkeys,
+    });
+}
+
+fn cloneLogMessages(
+    allocator: Allocator,
+    log_collector: LogCollector,
+) ![]const []const u8 {
+    var iterator = log_collector.iterator();
+    const count = iterator.count();
+    const log_messages = try allocator.alloc([]const u8, count);
+    var copied: usize = 0;
+    errdefer {
+        for (log_messages[0..copied]) |log_message| {
+            allocator.free(log_message);
+        }
+        allocator.free(log_messages);
+    }
+
+    while (iterator.next()) |message| {
+        log_messages[copied] = try allocator.dupe(u8, message);
+        copied += 1;
+    }
+
+    std.debug.assert(copied == log_messages.len);
+    return log_messages;
 }
 
 /// Build and write TransactionStatusMeta to the ledger for a single transaction.
@@ -393,7 +505,7 @@ fn collectPostTokenBalances(
 /// account store. This ensures mint accounts can be found even when they weren't
 /// modified by the transaction (the common case for token transfers).
 /// [agave] Agave uses account_loader.load_account() which has full store access.
-const FallbackAccountReader = struct {
+pub const FallbackAccountReader = struct {
     writes: []const LoadedAccount,
     account_store_reader: ?sig.accounts_db.SlotAccountReader,
 
@@ -441,3 +553,291 @@ const FallbackAccountReader = struct {
         return null;
     }
 };
+
+fn initResolvedTransaction(
+    allocator: Allocator,
+    random: std.Random,
+) !ResolvedTransaction {
+    var transaction = try sig.core.Transaction.initRandom(allocator, random, null);
+    errdefer transaction.deinit(allocator);
+
+    var resolved_accounts: std.MultiArrayList(sig.core.instruction.InstructionAccount) = .{};
+    try resolved_accounts.ensureTotalCapacity(allocator, transaction.msg.account_keys.len);
+    for (transaction.msg.account_keys, 0..) |pubkey, index| {
+        resolved_accounts.appendAssumeCapacity(.{
+            .pubkey = pubkey,
+            .is_signer = index < transaction.signatures.len,
+            .is_writable = index == 0,
+        });
+    }
+
+    const resolved_instructions = try allocator.alloc(sig.runtime.InstructionInfo, 0);
+
+    return .{
+        .transaction = transaction,
+        .accounts = resolved_accounts,
+        .instructions = resolved_instructions,
+    };
+}
+
+test "commitTransactions emits transaction logs batch with transaction metadata" {
+    const allocator = std.testing.allocator;
+
+    var test_state = try replay.execution.TestState.init(allocator);
+    defer test_state.deinit(allocator);
+
+    const event_sink = try jrpc_types.EventSink.create(allocator);
+    defer event_sink.destroy();
+
+    var committer = test_state.committer();
+    committer.event_sink = event_sink;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    var resolved_transactions = [_]ResolvedTransaction{
+        try initResolvedTransaction(allocator, prng.random()),
+        try initResolvedTransaction(allocator, prng.random()),
+        try initResolvedTransaction(allocator, prng.random()),
+    };
+    defer {
+        for (resolved_transactions) |resolved_transaction| {
+            resolved_transaction.deinit(allocator);
+            resolved_transaction.transaction.deinit(allocator);
+        }
+    }
+
+    var log_collector_1 = try LogCollector.init(allocator, 10_000);
+    try log_collector_1.log(allocator, "Program log: hello", .{});
+    try log_collector_1.log(allocator, "Program log: world", .{});
+
+    var log_collector_2 = try LogCollector.init(allocator, 10_000);
+    try log_collector_2.log(allocator, "Program log: account missing", .{});
+
+    var log_collector_3 = try LogCollector.init(allocator, 10_000);
+    try log_collector_3.log(allocator, "Program log: success", .{});
+
+    const borsh_io_error = try allocator.dupe(u8, "borsh io");
+    defer allocator.free(borsh_io_error);
+
+    var tx_results = [_]struct { Hash, ProcessedTransaction }{
+        .{
+            Hash.ZEROES,
+            .{
+                .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
+                .rent = 0,
+                .writes = .{},
+                .err = .{ .InstructionError = .{ 3, .{ .BorshIoError = borsh_io_error } } },
+                .loaded_accounts_data_size = 0,
+                .outputs = .{
+                    .err = .{ .InstructionError = .{ 3, .{ .BorshIoError = borsh_io_error } } },
+                    .log_collector = log_collector_1,
+                    .instruction_trace = null,
+                    .return_data = null,
+                    .compute_limit = 0,
+                    .compute_meter = 0,
+                    .accounts_data_len_delta = 0,
+                },
+                .pre_balances = .{},
+                .pre_token_balances = .{},
+                .cost_units = 0,
+            },
+        },
+        .{
+            Hash.ZEROES,
+            .{
+                .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
+                .rent = 0,
+                .writes = .{},
+                .err = .AccountNotFound,
+                .loaded_accounts_data_size = 0,
+                .outputs = .{
+                    .err = .AccountNotFound,
+                    .log_collector = log_collector_2,
+                    .instruction_trace = null,
+                    .return_data = null,
+                    .compute_limit = 0,
+                    .compute_meter = 0,
+                    .accounts_data_len_delta = 0,
+                },
+                .pre_balances = .{},
+                .pre_token_balances = .{},
+                .cost_units = 0,
+            },
+        },
+        .{
+            Hash.ZEROES,
+            .{
+                .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
+                .rent = 0,
+                .writes = .{},
+                .err = null,
+                .loaded_accounts_data_size = 0,
+                .outputs = .{
+                    .err = null,
+                    .log_collector = log_collector_3,
+                    .instruction_trace = null,
+                    .return_data = null,
+                    .compute_limit = 0,
+                    .compute_meter = 0,
+                    .accounts_data_len_delta = 0,
+                },
+                .pre_balances = .{},
+                .pre_token_balances = .{},
+                .cost_units = 0,
+            },
+        },
+    };
+    defer {
+        for (&tx_results) |*tx_result| {
+            const hash, const processed = tx_result.*;
+            _ = hash;
+            processed.deinit(allocator);
+        }
+    }
+
+    try committer.commitTransactions(
+        allocator,
+        allocator,
+        42,
+        resolved_transactions[0..],
+        tx_results[0..],
+    );
+
+    const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
+    defer event.deinit(allocator);
+
+    switch (event) {
+        .logs => |logs_event| {
+            try std.testing.expectEqual(42, logs_event.slot);
+            try std.testing.expectEqual(3, logs_event.entries.len);
+
+            const borsh_entry = logs_event.entries[0];
+            try std.testing.expect(borsh_entry.signature.eql(
+                &resolved_transactions[0].transaction.signatures[0],
+            ));
+            try std.testing.expect(borsh_entry.err != null);
+            try std.testing.expect(borsh_entry.err.? == .InstructionError);
+            const instruction_index, const err = borsh_entry.err.?.InstructionError;
+            try std.testing.expectEqual(3, instruction_index);
+            try std.testing.expect(err == .BorshIoError);
+            try std.testing.expect(err.BorshIoError.ptr != borsh_io_error.ptr);
+            try std.testing.expectEqualStrings("borsh io", err.BorshIoError);
+            try std.testing.expect(!borsh_entry.is_vote);
+            try std.testing.expectEqual(2, borsh_entry.logs.len);
+            try std.testing.expectEqualStrings("Program log: hello", borsh_entry.logs[0]);
+            try std.testing.expectEqualStrings("Program log: world", borsh_entry.logs[1]);
+            try std.testing.expectEqual(
+                resolved_transactions[0].accounts.items(.pubkey).len,
+                borsh_entry.mentioned_pubkeys.len,
+            );
+            try std.testing.expect(borsh_entry.mentioned_pubkeys[0].equals(
+                &resolved_transactions[0].accounts.items(.pubkey)[0],
+            ));
+
+            const account_not_found_entry = logs_event.entries[1];
+            try std.testing.expect(account_not_found_entry.signature.eql(
+                &resolved_transactions[1].transaction.signatures[0],
+            ));
+            try std.testing.expectEqual(.AccountNotFound, account_not_found_entry.err);
+            try std.testing.expect(!account_not_found_entry.is_vote);
+            try std.testing.expectEqual(1, account_not_found_entry.logs.len);
+            try std.testing.expectEqualStrings(
+                "Program log: account missing",
+                account_not_found_entry.logs[0],
+            );
+            try std.testing.expectEqual(
+                resolved_transactions[1].accounts.items(.pubkey).len,
+                account_not_found_entry.mentioned_pubkeys.len,
+            );
+            try std.testing.expect(account_not_found_entry.mentioned_pubkeys[0].equals(
+                &resolved_transactions[1].accounts.items(.pubkey)[0],
+            ));
+
+            const success_entry = logs_event.entries[2];
+            try std.testing.expect(success_entry.signature.eql(
+                &resolved_transactions[2].transaction.signatures[0],
+            ));
+            try std.testing.expectEqual(null, success_entry.err);
+            try std.testing.expect(!success_entry.is_vote);
+            try std.testing.expectEqual(1, success_entry.logs.len);
+            try std.testing.expectEqualStrings("Program log: success", success_entry.logs[0]);
+            try std.testing.expectEqual(
+                resolved_transactions[2].accounts.items(.pubkey).len,
+                success_entry.mentioned_pubkeys.len,
+            );
+            try std.testing.expect(success_entry.mentioned_pubkeys[0].equals(
+                &resolved_transactions[2].accounts.items(.pubkey)[0],
+            ));
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    try std.testing.expect(event_sink.channel.tryReceive() == null);
+}
+
+test "commitTransactions emits empty transaction logs batch when execution has no logs" {
+    const allocator = std.testing.allocator;
+
+    var test_state = try replay.execution.TestState.init(allocator);
+    defer test_state.deinit(allocator);
+
+    const event_sink = try jrpc_types.EventSink.create(allocator);
+    defer event_sink.destroy();
+
+    var committer = test_state.committer();
+    committer.event_sink = event_sink;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    var resolved_transaction = try initResolvedTransaction(allocator, prng.random());
+    defer {
+        resolved_transaction.deinit(allocator);
+        resolved_transaction.transaction.deinit(allocator);
+    }
+
+    var tx_result: struct { Hash, ProcessedTransaction } = .{
+        Hash.ZEROES,
+        .{
+            .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
+            .rent = 0,
+            .writes = .{},
+            .err = null,
+            .loaded_accounts_data_size = 0,
+            .outputs = .{
+                .err = null,
+                .log_collector = null,
+                .instruction_trace = null,
+                .return_data = null,
+                .compute_limit = 0,
+                .compute_meter = 0,
+                .accounts_data_len_delta = 0,
+            },
+            .pre_balances = .{},
+            .pre_token_balances = .{},
+            .cost_units = 0,
+        },
+    };
+    defer {
+        _, const processed = tx_result;
+        processed.deinit(allocator);
+    }
+
+    try committer.commitTransactions(
+        allocator,
+        allocator,
+        43,
+        (&resolved_transaction)[0..1],
+        (&tx_result)[0..1],
+    );
+
+    const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
+    defer event.deinit(allocator);
+
+    switch (event) {
+        .logs => |logs_event| {
+            try std.testing.expectEqual(43, logs_event.slot);
+            try std.testing.expectEqual(0, logs_event.entries.len);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    try std.testing.expect(event_sink.channel.tryReceive() == null);
+}

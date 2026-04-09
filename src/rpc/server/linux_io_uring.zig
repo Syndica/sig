@@ -469,7 +469,8 @@ fn handleRecvBody(
                     comptime EntryState.SendStaticString.statusLineStr(.no_content) ++
                         "Access-Control-Allow-Origin: *\r\n" ++
                         "Access-Control-Allow-Methods: GET, POST, HEAD, OPTIONS\r\n" ++
-                        "Access-Control-Allow-Headers: Content-Type, Authorization, Accept, Solana-Client\r\n" ++
+                        "Access-Control-Allow-Headers: Content-Type, " ++
+                        "Authorization, Accept, Solana-Client\r\n" ++
                         "Access-Control-Max-Age: 86400\r\n" ++
                         "\r\n",
                 ),

@@ -57,6 +57,7 @@ const NonCirculatingSet = blk: {
 const AccountHookContext = @This();
 
 slot_tracker: *sig.replay.trackers.SlotTracker,
+commitments: *sig.replay.trackers.CommitmentTracker,
 account_reader: sig.accounts_db.AccountReader,
 
 pub fn getAccountInfo(
@@ -74,6 +75,7 @@ pub fn getAccountInfo(
 
     const slot = try slot_resolution.resolveReadableCommitmentSlot(
         self.slot_tracker,
+        self.commitments,
         commitment,
         config.minContextSlot,
     );
@@ -119,6 +121,7 @@ pub fn getBalance(
 
     const slot = try slot_resolution.resolveReadableCommitmentSlot(
         self.slot_tracker,
+        self.commitments,
         commitment,
         config.minContextSlot,
     );
@@ -153,6 +156,7 @@ pub fn getTokenAccountBalance(
 
     const slot = try slot_resolution.resolveReadableCommitmentSlot(
         self.slot_tracker,
+        self.commitments,
         commitment,
         null,
     );
@@ -215,6 +219,7 @@ pub fn getTokenSupply(
 
     const slot = try slot_resolution.resolveReadableCommitmentSlot(
         self.slot_tracker,
+        self.commitments,
         commitment,
         null,
     );
@@ -285,6 +290,7 @@ pub fn getMultipleAccounts(
     const encoding = config.encoding orelse AccountEncoding.base64;
     const slot = try slot_resolution.resolveReadableCommitmentSlot(
         self.slot_tracker,
+        self.commitments,
         commitment,
         config.minContextSlot,
     );
@@ -343,6 +349,7 @@ pub fn getFeeForMessage(
 
     const slot = try slot_resolution.resolveReadableCommitmentSlot(
         self.slot_tracker,
+        self.commitments,
         commitment,
         config.minContextSlot,
     );
@@ -501,6 +508,7 @@ pub fn getProgramAccounts(
 
     const slot = try slot_resolution.resolveReadableCommitmentSlot(
         self.slot_tracker,
+        self.commitments,
         commitment,
         config.minContextSlot,
     );
@@ -569,7 +577,7 @@ pub fn getTokenAccountsByDelegate(
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2149
     const encoding = config.encoding orelse AccountEncoding.binary;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
     if (config.minContextSlot) |min_slot| {
         if (slot < min_slot) return error.RpcMinContextSlotNotMet;
     }
@@ -671,6 +679,7 @@ pub fn getTokenAccountsByOwner(
 
     const slot = try slot_resolution.resolveReadableCommitmentSlot(
         self.slot_tracker,
+        self.commitments,
         commitment,
         config.minContextSlot,
     );
@@ -760,7 +769,7 @@ pub fn getSupply(
     const commitment = config.commitment orelse .finalized;
     const exclude_accounts = config.excludeNonCirculatingAccountsList;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
@@ -827,7 +836,7 @@ pub fn getTokenLargestAccounts(
     const config: GetTokenLargestAccounts.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
@@ -946,7 +955,7 @@ pub fn getLargestAccounts(
     const config = params.config orelse GetLargestAccounts.Config{};
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.slot_tracker.commitments.get(commitment);
+    const slot = self.commitments.get(commitment);
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
@@ -1035,9 +1044,11 @@ fn testSlotState() sig.core.SlotState {
 fn testSetupContext(
     db: *sig.accounts_db.Db,
     slot_tracker: *sig.replay.trackers.SlotTracker,
+    commitments: *sig.replay.trackers.CommitmentTracker,
 ) AccountHookContext {
     return .{
         .slot_tracker = slot_tracker,
+        .commitments = commitments,
         .account_reader = .{ .accounts_db = db },
     };
 }
@@ -1051,12 +1062,12 @@ fn testInitSlotTracker(
     const ancestors: sig.core.Ancestors = try .initWithSlots(testing.allocator, ancestors_slots);
     // SlotTracker.init takes ownership of ancestors via SlotConstants.
     // Only slot_tracker.deinit should be called (not ancestors.deinit).
-    var slot_tracker: sig.replay.trackers.SlotTracker = try .init(testing.allocator, slot, .{
+    const slot_tracker: sig.replay.trackers.SlotTracker = try .init(testing.allocator, slot, .{
         .constants = testSlotConstants(slot, ancestors),
         .state = testSlotState(),
         .allocator = testing.allocator,
     });
-    slot_tracker.commitments.finalized.store(slot, .monotonic);
+
     return slot_tracker;
 }
 
@@ -1080,7 +1091,10 @@ test "getBalance - returns balance for existing account" {
     var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testSetupContext(db, &slot_tracker);
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
+    defer commitments.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
     const result = try ctx.getBalance(testing.allocator, .{ .pubkey = test_pubkey });
     try testing.expectEqual(test_lamports, result.value);
     try testing.expectEqual(test_slot, result.context.slot);
@@ -1095,7 +1109,10 @@ test "getBalance - returns zero for non-existent account" {
     var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testSetupContext(db, &slot_tracker);
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
+    defer commitments.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
     const result = try ctx.getBalance(testing.allocator, .{ .pubkey = sig.core.Pubkey.ZEROES });
     try testing.expectEqual(@as(u64, 0), result.value);
 }
@@ -1109,7 +1126,10 @@ test "getBalance - minContextSlot enforcement" {
     var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testSetupContext(db, &slot_tracker);
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
+    defer commitments.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
     const err = ctx.getBalance(testing.allocator, .{
         .pubkey = sig.core.Pubkey.ZEROES,
         .config = .{ .minContextSlot = 100 },
@@ -1137,7 +1157,10 @@ test "getAccountInfo - returns account data" {
     var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testSetupContext(db, &slot_tracker);
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
+    defer commitments.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
     const result = try ctx.getAccountInfo(testing.allocator, .{
         .pubkey = test_pubkey,
         .config = .{ .encoding = .base64 },
@@ -1156,7 +1179,10 @@ test "getAccountInfo - returns null for non-existent account" {
     var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testSetupContext(db, &slot_tracker);
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
+    defer commitments.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
     const result = try ctx.getAccountInfo(testing.allocator, .{
         .pubkey = sig.core.Pubkey.ZEROES,
         .config = .{ .encoding = .base64 },
@@ -1174,7 +1200,10 @@ test "getAccountInfo - minContextSlot enforcement" {
     var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testSetupContext(db, &slot_tracker);
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
+    defer commitments.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
     const err = ctx.getAccountInfo(testing.allocator, .{
         .pubkey = sig.core.Pubkey.ZEROES,
         .config = .{ .minContextSlot = 100 },
@@ -1208,7 +1237,10 @@ test "getMultipleAccounts - returns accounts" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const ctx = testSetupContext(db, &slot_tracker);
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
+    defer commitments.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
     const result = try ctx.getMultipleAccounts(arena, .{
         .pubkeys = &.{ pubkey1, pubkey2 },
     });
@@ -1228,7 +1260,10 @@ test "getMultipleAccounts - minContextSlot enforcement" {
     var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testSetupContext(db, &slot_tracker);
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
+    defer commitments.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
     const err = ctx.getMultipleAccounts(testing.allocator, .{
         .pubkeys = &.{sig.core.Pubkey.ZEROES},
         .config = .{ .minContextSlot = 100 },
@@ -1245,7 +1280,10 @@ test "getFeeForMessage - minContextSlot enforcement" {
     var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testSetupContext(db, &slot_tracker);
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
+    defer commitments.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
     const err = ctx.getFeeForMessage(testing.allocator, .{
         .message = "AQABA",
         .config = .{ .minContextSlot = 100 },
@@ -1262,7 +1300,10 @@ test "getProgramAccounts - minContextSlot enforcement" {
     var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testSetupContext(db, &slot_tracker);
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
+    defer commitments.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
     const err = ctx.getProgramAccounts(testing.allocator, .{
         .program_id = sig.core.Pubkey.ZEROES,
         .config = .{ .minContextSlot = 100 },
@@ -1279,7 +1320,10 @@ test "getTokenAccountsByOwner - minContextSlot enforcement" {
     var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testSetupContext(db, &slot_tracker);
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
+    defer commitments.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
     const err = ctx.getTokenAccountsByOwner(testing.allocator, .{
         .owner = sig.core.Pubkey.ZEROES,
         .filter = .{ .programId = sig.runtime.ids.TOKEN_PROGRAM_ID },
@@ -1297,7 +1341,10 @@ test "getTokenAccountBalance - resolves commitment slot" {
     var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testSetupContext(db, &slot_tracker);
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
+    defer commitments.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
     // Non-existent account should return RpcAccountNotFound
     const err = ctx.getTokenAccountBalance(testing.allocator, .{
         .pubkey = sig.core.Pubkey.ZEROES,
@@ -1314,7 +1361,10 @@ test "getTokenSupply - resolves commitment slot" {
     var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
     defer slot_tracker.deinit(testing.allocator);
 
-    const ctx = testSetupContext(db, &slot_tracker);
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
+    defer commitments.deinit(testing.allocator);
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
     // Non-existent mint should return RpcAccountNotFound
     const err = ctx.getTokenSupply(testing.allocator, .{
         .mint = sig.core.Pubkey.ZEROES,

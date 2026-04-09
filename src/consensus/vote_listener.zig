@@ -28,7 +28,7 @@ pub const SlotDataProvider = struct {
     epoch_tracker: *EpochTracker,
 
     pub fn rootSlot(self: *const SlotDataProvider) Slot {
-        return self.slot_tracker.root.load(.monotonic);
+        return self.slot_tracker.consensus_root.load(.monotonic);
     }
 
     fn getSlotHash(self: *const SlotDataProvider, slot: Slot) ?Hash {
@@ -347,6 +347,7 @@ pub const VoteCollector = struct {
         };
     }
 
+    /// returns the highest slot that was optimistically confirmed by this invocation
     pub fn collectAndProcessVotes(
         self: *VoteCollector,
         allocator: std.mem.Allocator,
@@ -358,7 +359,7 @@ pub const VoteCollector = struct {
             ledger: *Ledger,
             gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
         },
-    ) !void {
+    ) !?Slot {
         const slot_data_provider = params.slot_data_provider;
         const senders = params.senders;
         const receivers = params.receivers;
@@ -414,6 +415,16 @@ pub const VoteCollector = struct {
             ledger,
             .from(logger),
         );
+
+        var optimistically_confirmed_slot: ?Slot = null;
+        for (confirmed_slots) |confirmed| {
+            optimistically_confirmed_slot = if (optimistically_confirmed_slot) |current|
+                @max(current, confirmed.slot)
+            else
+                confirmed.slot;
+        }
+
+        return optimistically_confirmed_slot;
     }
 };
 
@@ -874,7 +885,6 @@ fn trackNewVotesAndNotifyConfirmations(
                     .slot = slot,
                     .hash = hash,
                 });
-                slot_data_provider.slot_tracker.commitments.update(.confirmed, slot);
                 // Notify subscribers about new optimistic confirmation
                 if (senders.bank_notification) |sender| {
                     sender.send(.{ .optimistically_confirmed = slot }) catch |err| {
@@ -1099,9 +1109,6 @@ test "trackNewVotesAndNotifyConfirmations filter" {
     }
     diff.sortAsc();
     try std.testing.expectEqualSlices(Slot, diff.map.keys(), &.{ 7, 8 });
-
-    // No stake delegated, so optimistic confirmation should not be reached.
-    try std.testing.expectEqual(0, slot_data_provider.slot_tracker.commitments.get(.confirmed));
 }
 
 const ThresholdReachedResults = std.bit_set.IntegerBitSet(THRESHOLDS_TO_CHECK.len);
@@ -1796,7 +1803,7 @@ test "simple usage" {
     );
     defer vote_collector.deinit(allocator);
 
-    try vote_collector.collectAndProcessVotes(allocator, .FOR_TESTS, .{
+    const confirmed = try vote_collector.collectAndProcessVotes(allocator, .FOR_TESTS, .{
         .slot_data_provider = slot_data_provider,
         .senders = senders,
         .receivers = .{ .replay_votes = replay_votes_channel },
@@ -1806,8 +1813,7 @@ test "simple usage" {
 
     // Since no votes were sent, slot trackers should remain at their initialized state.
     // NOTE: processed slot is not used here, but required to construct SlotTracker.
-    try std.testing.expectEqual(0, slot_tracker.commitments.get(.processed));
-    try std.testing.expectEqual(0, slot_tracker.commitments.get(.confirmed));
+    try std.testing.expectEqual(null, confirmed);
 }
 
 test "check trackers" {
@@ -1966,13 +1972,13 @@ test "check trackers" {
         });
     }
 
-    try std.testing.expectEqual({}, vote_collector.collectAndProcessVotes(allocator, .FOR_TESTS, .{
+    const confirmed = try vote_collector.collectAndProcessVotes(allocator, .FOR_TESTS, .{
         .slot_data_provider = slot_data_provider,
         .senders = senders,
         .receivers = .{ .replay_votes = replay_votes_channel },
         .ledger = &state,
         .gossip_votes = gossip_votes_channel,
-    }));
+    });
 
     var actual_trackers: std.ArrayListUnmanaged(struct { Slot, TestSlotVoteTracker }) = .empty;
     defer actual_trackers.deinit(allocator);
@@ -2019,8 +2025,7 @@ test "check trackers" {
 
     // Votes were processed but no stake was delegated to validators, so
     // optimisitic confirmation was not reached.
-    try std.testing.expectEqual(0, slot_data_provider.slot_tracker.commitments.get(.processed));
-    try std.testing.expectEqual(0, slot_data_provider.slot_tracker.commitments.get(.confirmed));
+    try std.testing.expectEqual(null, confirmed);
 }
 
 // tests for OptimisticConfirmationVerifier moved to optimistic_vote_verifier.zig

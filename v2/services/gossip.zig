@@ -4,6 +4,7 @@
 const std = @import("std");
 const start = @import("start");
 const lib = @import("lib");
+const tel = lib.telemetry;
 
 const Pair = lib.net.Pair;
 const Packet = lib.net.Packet;
@@ -25,6 +26,7 @@ pub const std_options = start.options;
 pub const ReadWrite = struct {
     net_pair: *Pair,
     snapshot_queue: *SnapshotQueue,
+    tel: *tel.Region,
 };
 
 pub const ReadOnly = struct {
@@ -34,7 +36,10 @@ pub const ReadOnly = struct {
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
-    std.log.info(
+    const logger = rw.tel.acquireLogger(@tagName(name), "main");
+    rw.tel.signalReady();
+
+    logger.info().logf(
         "Gossip started on :{} as {f}:\n\tshred_version:{}\n\tentrypoints:{f}",
         .{
             rw.net_pair.port,
@@ -119,11 +124,11 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var packet_recv = rw.net_pair.recv.get(.reader);
     while (true) {
         now = @intCast(std.time.milliTimestamp());
-        try gossip.poll(now);
+        try gossip.poll(.from(logger), now);
 
         // Send snapshots made available over to gossip
         if (snapshot_available.next()) |slot_hash| {
-            try gossip.insert(now, .{ .snapshot_hashes = .{
+            try gossip.insert(.from(logger), now, .{ .snapshot_hashes = .{
                 .from = effects.getIdentity(),
                 .full = slot_hash.*,
                 .incremental = .{ .items = &.{} },
@@ -132,7 +137,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         }
 
         const packet = packet_recv.next() orelse continue;
-        gossip.processPacket(now, packet);
+        gossip.processPacket(.from(logger), now, packet);
         packet_recv.markUsed();
     }
 }

@@ -16,6 +16,7 @@ comptime {
 const page_size_min = std.heap.page_size_min;
 
 const lib = @import("lib");
+const tel = lib.telemetry;
 const ServiceEntrypoint = lib.ipc.ServiceFn;
 
 const linux = std.os.linux;
@@ -94,15 +95,13 @@ const RequiredRegion = struct {
     rw: bool = false,
 };
 
-const service_region_fields = std.meta.fields(@TypeOf(services_zon.regions));
+const service_region_fields = @typeInfo(@TypeOf(services_zon.regions)).@"struct".fields;
 
 pub const SharedRegionInstances = blk: {
     var fields: []const std.builtin.Type.StructField = &.{};
     for (service_region_fields) |r| {
-        const RegionType = @TypeOf(@field(
-            @as(Region, undefined),
-            @tagName(@field(services_zon.regions, r.name)),
-        ));
+        const region_tag = @field(services_zon.regions, r.name);
+        const RegionType = @FieldType(Region, @tagName(region_tag));
         fields = fields ++ [_]std.builtin.Type.StructField{.{
             .name = r.name,
             .type = RegionType,
@@ -122,6 +121,11 @@ pub const SharedRegionInstances = blk: {
 pub fn toSharedRegions(
     instances: SharedRegionInstances,
 ) [service_region_fields.len]SharedRegion {
+    @setEvalBranchQuota(
+        service_region_fields.len * services_zon.services.len *
+            128 * // reasonable upper bound of 128 services
+            100, // reasonable upper bound of 100 bytes per service name
+    );
     var shared_regions: [service_region_fields.len]SharedRegion = undefined;
     inline for (service_region_fields, 0..) |r, i| {
         comptime var shares: []const Share = &.{};
@@ -189,6 +193,8 @@ pub const Region = union(enum) {
         min_snapshot_download_lockin_percent: f64,
     },
 
+    telemetry: tel.Region.Info,
+
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(lib.net.Pair),
@@ -196,6 +202,7 @@ pub const Region = union(enum) {
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
             .snapshot_queue => @sizeOf(lib.accounts_db.SnapshotQueue),
             .accounts_db_config => @sizeOf(lib.accounts_db.Config),
+            .telemetry => |cfg| cfg.regionSize(),
         };
     }
 
@@ -256,6 +263,12 @@ pub const Region = union(enum) {
                     .min_timeout_ns = cfg.min_snapshot_download_timeout_ms * 1_000_000,
                     .min_lockin_percent = cfg.min_snapshot_download_lockin_percent,
                 };
+            },
+            .telemetry => |info| {
+                std.debug.assert(buf.len == info.regionSize());
+                const data: *tel.Region = @ptrCast(buf);
+
+                data.init(info);
             },
         };
     }
@@ -378,7 +391,7 @@ pub fn spawnAndWait(
         for (region_memfds, regions) |*region_memfd, shared_region| {
             // Providing a name - this name should be visible from a debugger, but serves no other
             // purpose.
-            var fmt_buf: [100]u8 = undefined;
+            var fmt_buf: [4096]u8 = undefined;
             const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{shared_region});
 
             region_memfd.* = try .init(.{
@@ -694,7 +707,7 @@ pub fn spawnAndWaitNoSandbox(
         for (region_memfds, regions) |*region_memfd, shared_region| {
             // Providing a name - this name should be visible from a debugger, but serves no other
             // purpose.
-            var fmt_buf: [100]u8 = undefined;
+            var fmt_buf: [4096]u8 = undefined;
             const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{shared_region});
 
             region_memfd.* = try .init(.{

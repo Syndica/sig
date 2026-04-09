@@ -277,4 +277,6 @@
     // TODO(agave 4.1): This will be rekeyed before activation.
     // https://github.com/anza-xyz/agave/blob/v4.0.0-beta.0/feature-set/src/lib.rs#L1129-L1149
     .{ .name = "alpenglow", .pubkey = "mustRekeyVm2QHYB3JPefBiU4BY3Z6JkW2k3Scw5GWP" },
+    .{ .name = "upgrade_bpf_stake_program_to_v5", .pubkey = "STk5Xj8hdAx3sTzmtJ3QysKkq6X2A3yj73JtxttiRyk" },
+    .{ .name = "upgrade_bpf_stake_program_to_v5_buffer", .pubkey = "4EBQBjw1kqF1dqUBb6fc5Ji4tCEQgNf9ESGGX3smwXwh" },
 }

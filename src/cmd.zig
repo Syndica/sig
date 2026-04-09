@@ -13,7 +13,7 @@ const socket_opts = @import("webzockets").socket_opts;
 const replay = sig.replay;
 
 const WSRPCHandler = jrpc_ws.handler.JRPCHandler;
-const WSRPCRuntimeContext = jrpc_ws.runtime.RuntimeContext;
+const WSRPCRuntime = jrpc_ws.Runtime;
 const WSRPCServer = WSRPCHandler.WebSocketServer;
 
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
@@ -130,6 +130,7 @@ pub fn main() !void {
             current_config.shred_version = params.shred_version;
             current_config.leader_schedule_path = params.leader_schedule;
             current_config.vote_account = params.vote_account;
+            current_config.faucet_keypair = params.faucet_keypair;
             params.gossip_base.apply(&current_config);
             params.gossip_node.apply(&current_config);
             params.repair.apply(&current_config);
@@ -506,8 +507,9 @@ const Cmd = struct {
         .alias = .none,
         .default_value = null,
         .config = {},
-        .help = "Runs the mock transfer service." ++
-            " Sending `n` transfer transactions between two test accounts. ",
+        .help = "Runs the mock transfer service," ++
+            " sending `n` transfer transactions between two test accounts." ++
+            " Submits directly to the transaction sender.",
     };
 
     const voting_enabled_arg: cli.ArgumentInfo(bool) = .{
@@ -536,6 +538,16 @@ const Cmd = struct {
         .config = .string,
         .help = "Base58 string of the vote account's address, or a path to vote account json" ++
             " keypair file. Defaults to sig/vote-account.json in your system's app config folder",
+    };
+
+    const faucet_keypair_arg: cli.ArgumentInfo(?[]const u8) = .{
+        .kind = .named,
+        .name_override = "faucet-keypair",
+        .alias = .none,
+        .default_value = null,
+        .config = .string,
+        .help = "Path to a faucet json keypair file used by requestAirdrop RPC. " ++
+            "When omitted, requestAirdrop is not registered.",
     };
 
     const GossipArgumentsCommon = struct {
@@ -958,6 +970,7 @@ const Cmd = struct {
         shred_version: ?u16,
         leader_schedule: ?[]const u8,
         vote_account: ?[]const u8,
+        faucet_keypair: ?[]const u8,
         gossip_base: GossipArgumentsCommon,
         gossip_node: GossipArgumentsNode,
         repair: RepairArgumentsBase,
@@ -983,6 +996,7 @@ const Cmd = struct {
                 .shred_version = shred_version_arg,
                 .leader_schedule = leader_schedule_arg,
                 .vote_account = vote_account_arg,
+                .faucet_keypair = faucet_keypair_arg,
                 .gossip_base = GossipArgumentsCommon.cmd_info,
                 .gossip_node = GossipArgumentsNode.cmd_info,
                 .repair = RepairArgumentsBase.cmd_info,
@@ -1496,6 +1510,8 @@ fn validator(
 
     app_base.logger.info().logf("starting validator with cfg: {}", .{cfg});
 
+    const rpc_enabled = cfg.rpc_port != null;
+
     const allocation_metrics = try app_base.metrics_registry.initStruct(AllocationMetrics);
 
     var gpa_metrics: sig.trace.GaugeAllocator = .{
@@ -1637,6 +1653,11 @@ fn validator(
     var new_db: sig.accounts_db.Db = try .init(unrooted_tracy_metrics.allocator(), rooted_db);
     defer new_db.deinit();
 
+    // After snapshot loading, switch SQLite to WAL mode so that concurrent
+    // readers (RPC queries, replay thread pool) each get their own threadlocal
+    // connection and do not contend with the writer handle.
+    new_db.rooted.enableWalMode(rooted_file);
+
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
 
     var ledger_tracy: tracy.TracingAllocator = .{
@@ -1712,6 +1733,18 @@ fn validator(
     // If voting was enabled but no vote account is available, disable voting.
     const voting_enabled = cfg.voting_enabled and maybe_vote_pubkey != null;
 
+    var maybe_faucet_keypair: ?sig.identity.KeyPair = null;
+    if (cfg.faucet_keypair) |faucet_keypair_path| {
+        if (try cfg.getCluster() == .mainnet) @panic("Cannot use a faucet keypair on mainnet.");
+        maybe_faucet_keypair = sig.identity.readKeypair(faucet_keypair_path) catch |err| blk: {
+            app_base.logger.err().logf(
+                "faucet-keypair: failed to read {s}: {}; requestAirdrop will be disabled",
+                .{ faucet_keypair_path, err },
+            );
+            break :blk null;
+        };
+    }
+
     const maybe_vote_sockets: ?replay.consensus.core.VoteSockets = if (voting_enabled)
         try replay.consensus.core.VoteSockets.init()
     else
@@ -1720,13 +1753,11 @@ fn validator(
     var prioritization_fee_cache: sig.rpc.hook_contexts.PrioritizationFeeCache = .EMPTY;
     defer prioritization_fee_cache.deinit(allocator);
 
-    const rpc_enabled = cfg.rpc_port != null;
-
     const event_sink: ?*jrpc_ws.types.EventSink = if (rpc_enabled)
         try jrpc_ws.types.EventSink.create(allocator)
     else
         null;
-    defer if (event_sink) |sink| sink.destroy(allocator);
+    defer if (event_sink) |sink| sink.destroy();
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
@@ -1751,6 +1782,7 @@ fn validator(
     if (rpc_enabled) {
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .commitments = &replay_service_state.replay_state.commitments.?,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
             .epoch_tracker = &epoch_tracker,
@@ -1761,13 +1793,14 @@ fn validator(
             .epoch_tracker = &epoch_tracker,
             .status_cache = &replay_service_state.replay_state.status_cache,
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-            .block_commitment_cache = &replay_service_state.replay_state.block_commitment_cache.?,
+            .commitments = &replay_service_state.replay_state.commitments.?,
             .max_retransmit_slot = &max_retransmit_slot,
             .max_shred_insert_slot = &max_shred_insert_slot,
         });
 
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .commitments = &replay_service_state.replay_state.commitments.?,
             .account_reader = replay_service_state.replay_state.account_store.reader(),
         });
 
@@ -1804,6 +1837,7 @@ fn validator(
             .max_retransmit_slot = &max_retransmit_slot,
             .max_shred_insert_slot = &max_shred_insert_slot,
             .rpc_hooks = null,
+            .event_sink = event_sink,
             .duplicate = if (replay_service_state.consensus) |consensus| .{
                 .shred_receiver = &duplicate_shreds,
                 .slots_sender = consensus.receivers.duplicate_slots,
@@ -1828,11 +1862,32 @@ fn validator(
             .account_store = .{ .accounts_db = &new_db },
             .epoch_tracker = &epoch_tracker,
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .commitments = &replay_service_state.replay_state.commitments.?,
             .status_cache = &replay_service_state.replay_state.status_cache,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
         },
     );
     defer transaction_sender_service.deinit();
+
+    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.SendTransactionHookContext{
+        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+        .commitments = &replay_service_state.replay_state.commitments.?,
+        .account_store = replay_service_state.replay_state.account_store,
+        .tx_svc_channel = transaction_sender_service.receiver,
+        .epoch_tracker = &epoch_tracker,
+        .status_cache = &replay_service_state.replay_state.status_cache,
+    });
+
+    if (maybe_faucet_keypair) |faucet_keypair| {
+        if (try cfg.getCluster() == .mainnet) @panic("Cannot use a faucet keypair on mainnet.");
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.RequestAirdropHookContext{
+            .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .commitments = &replay_service_state.replay_state.commitments.?,
+            .tx_svc_channel = transaction_sender_service.receiver,
+            .faucet_keypair = faucet_keypair,
+        });
+    }
+
     const transaction_sender_handle = try std.Thread.spawn(
         .{},
         sig.TransactionSenderService.run,
@@ -1873,6 +1928,10 @@ fn validator(
             app_base.exit,
             std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
             &app_base.rpc_hooks,
+            &replay_service_state.replay_state.slot_tracker,
+            &replay_service_state.replay_state.commitments.?,
+            replay_service_state.replay_state.account_store.reader(),
+            &replay_service_state.replay_state.status_cache,
             event_sink.?,
         })
     else
@@ -1892,6 +1951,10 @@ fn runRPCServer(
     exit: *std.atomic.Value(bool),
     server_addr: std.net.Address,
     rpc_hooks: *sig.rpc.Hooks,
+    slot_tracker: *sig.replay.trackers.SlotTracker,
+    commitments: *sig.replay.trackers.CommitmentTracker,
+    account_reader: sig.accounts_db.AccountReader,
+    status_cache: *sig.core.StatusCache,
     event_sink: *jrpc_ws.types.EventSink,
 ) !void {
     var commit_queue = try sig.sync.Channel(jrpc_ws.types.CommitMsg).init(allocator);
@@ -1906,10 +1969,10 @@ fn runRPCServer(
     var loop = try xev.Loop.init(.{ .thread_pool = &xev_pool });
     defer loop.deinit();
 
-    var serialization_pool = sig.sync.ThreadPool.init(.{ .max_threads = 4 });
+    var threadpool = sig.sync.ThreadPool.init(.{ .max_threads = 4 });
     defer {
-        serialization_pool.shutdown();
-        serialization_pool.deinit();
+        threadpool.shutdown();
+        threadpool.deinit();
     }
 
     var metrics = jrpc_ws.metrics.Metrics{};
@@ -1917,18 +1980,25 @@ fn runRPCServer(
     var sub_map = jrpc_ws.sub_map.RPCSubMap.init(allocator, 1024);
     defer sub_map.deinit();
 
-    var ws_runtime_ctx = WSRPCRuntimeContext{
+    const slot_read_ctx: jrpc_ws.Runtime.SlotReadContext = .{
+        .slot_tracker = slot_tracker,
+        .commitments = commitments,
+        .account_reader = account_reader,
+        .status_cache = status_cache,
+    };
+
+    var ws_runtime_ctx = WSRPCRuntime.init(.{
         .allocator = allocator,
+        .logger = .from(logger),
         .sub_map = &sub_map,
-        .inbound_event_queue = &event_sink.channel,
+        .slot_read_ctx = slot_read_ctx,
+        .event_sink = event_sink,
         .commit_queue = &commit_queue,
-        .loop_async = &event_sink.loop_async,
-        .serialization_pool = &serialization_pool,
+        .threadpool = &threadpool,
         .metrics = &metrics,
         .max_batch_bytes = 64 * 1024,
         .loop = &loop,
-        .notify_pending = &event_sink.notify_pending,
-    };
+    });
     defer ws_runtime_ctx.deinit();
 
     var ws_server = try WSRPCServer.initNoListen(allocator, &loop, .{
@@ -1951,7 +2021,7 @@ fn runRPCServer(
 
     var ws_bridge = WebSocketBridge{
         .allocator = allocator,
-        .logger = logger.withScope("WebSocketBridge"),
+        .logger = logger.withScope("rpc.jrpc_websockets.bridge"),
         .runtime_ctx = &ws_runtime_ctx,
         .pending_connections = &pending_connections,
         .ws_server = &ws_server,
@@ -1982,7 +2052,7 @@ fn runRPCServer(
     const loop_thread = try std.Thread.spawn(
         .{},
         runXevLoopThread,
-        .{ &loop, logger.withScope("runXevLoopThread") },
+        .{ &loop, logger },
     );
     defer loop_thread.join();
 
@@ -1997,10 +2067,16 @@ fn runRPCServer(
 
     ws_bridge.shutdown_requested.store(true, .release);
     ws_runtime_ctx.running = false;
+    event_sink.channel.close();
+    pending_connections.close();
     ws_runtime_ctx.requestWakeup();
     logger.info().log("Shutdown requested, waiting for WebSocketBridge to complete shutdown...");
     ws_bridge.shutdown_complete.timedWait(15 * std.time.ns_per_s) catch {
         logger.err().log("Timed out waiting for WebSocketBridge shutdown to complete");
+    };
+
+    ws_runtime_ctx.shutdown(5 * std.time.ms_per_s) catch |err| {
+        logger.err().logf("websocket runtime shutdown failed: {}", .{err});
     };
 
     try serve_result;
@@ -2013,8 +2089,8 @@ const PendingConnection = struct {
 
 const WebSocketBridge = struct {
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger("WebSocketBridge"),
-    runtime_ctx: *WSRPCRuntimeContext,
+    logger: sig.trace.Logger("rpc.jrpc_websockets.bridge"),
+    runtime_ctx: *WSRPCRuntime,
     pending_connections: *sig.sync.Channel(PendingConnection),
     ws_server: *WSRPCServer,
     shutdown_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -2077,10 +2153,14 @@ const WebSocketBridge = struct {
     }
 };
 
-fn runXevLoopThread(loop: *xev.Loop, logger: sig.trace.Logger("runXevLoopThread")) void {
+fn runXevLoopThread(
+    loop: *xev.Loop,
+    logger: Logger,
+) void {
+    const log = logger.withScope("rpc.jrpc_websockets.xev_loop_thread");
     loop.run(.until_done) catch |err| {
         // This should never happen, but if it does log it.
-        logger.err().logf("jrpc websocket loop thread exited with error: {}", .{err});
+        log.err().logf("jrpc websocket loop thread exited with error: {}", .{err});
     };
 }
 
@@ -2227,7 +2307,7 @@ fn replayOffline(
         try jrpc_ws.types.EventSink.create(allocator)
     else
         null;
-    defer if (event_sink) |sink| sink.destroy(allocator);
+    defer if (event_sink) |sink| sink.destroy();
 
     var replay_service_state: ReplayAndConsensusServiceState = try .init(allocator, .{
         .app_base = &app_base,
@@ -2249,6 +2329,7 @@ fn replayOffline(
     if (rpc_enabled) {
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .commitments = &replay_service_state.replay_state.commitments.?,
             .gossip_table_rw = null,
             .my_shred_version = null,
             .epoch_tracker = &epoch_tracker,
@@ -2259,11 +2340,12 @@ fn replayOffline(
             .epoch_tracker = &epoch_tracker,
             .status_cache = &replay_service_state.replay_state.status_cache,
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-            .block_commitment_cache = &replay_service_state.replay_state.block_commitment_cache.?,
+            .commitments = &replay_service_state.replay_state.commitments.?,
         });
 
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.AccountHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
+            .commitments = &replay_service_state.replay_state.commitments.?,
             .account_reader = replay_service_state.replay_state.account_store.reader(),
         });
 
@@ -2287,6 +2369,10 @@ fn replayOffline(
             app_base.exit,
             std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
             &app_base.rpc_hooks,
+            &replay_service_state.replay_state.slot_tracker,
+            &replay_service_state.replay_state.commitments.?,
+            replay_service_state.replay_state.account_store.reader(),
+            &replay_service_state.replay_state.status_cache,
             event_sink.?,
         })
     else
@@ -2416,6 +2502,7 @@ fn shredNetwork(
         .max_retransmit_slot = &max_retransmit_slot_standalone,
         .max_shred_insert_slot = &max_shred_insert_slot_standalone,
         .rpc_hooks = null,
+        .event_sink = null,
         // No consensus in the standalone mode, so duplicate slots are not reported.
         .duplicate = null,
         .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
@@ -3135,6 +3222,7 @@ const ReplayAndConsensusServiceState = struct {
                     .hard_forks = hard_forks,
                     .replay_threads = params.replay_threads,
                     .stop_at_slot = params.stop_at_slot,
+                    .event_sink = params.event_sink,
                     .prioritization_fee_cache = params.prioritization_fee_cache,
                 },
                 if (params.disable_consensus) .disabled else .enabled,
@@ -3203,7 +3291,7 @@ const ReplayAndConsensusServiceState = struct {
             .{
                 &self.replay_state,
                 self.metrics,
-                if (self.consensus) |*c| replay.service.AvanceReplayConsensusParams{
+                if (self.consensus) |*c| replay.service.AdvanceReplayConsensusParams{
                     .tower = &c.tower,
                     .gossip_votes = gossip_votes,
                     .senders = c.senders,

@@ -35,6 +35,9 @@ const Slot = sig.core.Slot;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const TransactionDetails = methods.common.TransactionDetails;
 const TransactionEncoding = methods.common.TransactionEncoding;
+const UiInnerInstructions = GetBlock.Response.UiInnerInstructions;
+const UiTransactionReturnData = GetBlock.Response.UiTransactionReturnData;
+const UiTransactionTokenBalances = GetBlock.Response.UiTransactionTokenBalances;
 
 // Maximum allowed slot distance before node is considered unhealthy.
 // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L158
@@ -51,7 +54,7 @@ health_check_slot_distance: u64 = DELINQUENT_VALIDATOR_SLOT_DISTANCE,
 epoch_tracker: *sig.core.EpochTracker,
 status_cache: *sig.core.StatusCache,
 slot_tracker: *sig.replay.trackers.SlotTracker,
-block_commitment_cache: *sig.replay.trackers.BlockCommitmentCache,
+commitments: *sig.replay.trackers.CommitmentTracker,
 max_retransmit_slot: ?*const std.atomic.Value(Slot) = null,
 max_shred_insert_slot: ?*const std.atomic.Value(Slot) = null,
 
@@ -77,7 +80,7 @@ pub fn getBlock(
     // matching Agave's get_rooted_block).
     // Confirmed path uses getCompleteBlock (no cleanup check, slot may not be rooted yet).
     const reader = self.ledger.reader();
-    const latest_confirmed_slot = self.slot_tracker.commitments.get(.confirmed);
+    const latest_confirmed_slot = self.commitments.get(.confirmed);
     const block = if (params.slot <= latest_confirmed_slot) reader.getRootedBlock(
         arena,
         params.slot,
@@ -112,11 +115,11 @@ pub fn getBlocks(
     const commitment = params.commitment();
     if (commitment == .processed) return error.ProcessedNotSupported;
 
-    const highest_root = self.slot_tracker.commitments.get(.finalized);
+    const highest_root = self.commitments.get(.finalized);
     const upper_bound = if (commitment == .finalized)
         highest_root
     else
-        self.slot_tracker.commitments.get(.confirmed);
+        self.commitments.get(.confirmed);
 
     const end_slot = @min(
         params.endSlot() orelse params.start_slot +| GetBlocks.MAX_GET_CONFIRMED_BLOCKS_RANGE,
@@ -154,7 +157,7 @@ pub fn getBlocks(
             params.start_slot -| 1;
 
         if (last_rooted < end_slot) {
-            const latest_confirmed = self.slot_tracker.commitments.get(.confirmed);
+            const latest_confirmed = self.commitments.get(.confirmed);
             const confirmed = try self.getConfirmedUnrootedSlots(
                 arena,
                 latest_confirmed,
@@ -184,7 +187,7 @@ pub fn getBlocksWithLimit(
         return error.SlotRangeTooLarge;
     }
 
-    const highest_root = self.slot_tracker.commitments.get(.finalized);
+    const highest_root = self.commitments.get(.finalized);
 
     // Collect rooted (finalized) slots starting from start_slot, up to limit.
     var blocks = try std.ArrayList(Slot).initCapacity(arena, params.limit);
@@ -209,7 +212,7 @@ pub fn getBlocksWithLimit(
         else
             params.start_slot -| 1;
 
-        const latest_confirmed = self.slot_tracker.commitments.get(.confirmed);
+        const latest_confirmed = self.commitments.get(.confirmed);
         const confirmed = try self.getConfirmedUnrootedSlots(
             arena,
             latest_confirmed,
@@ -234,7 +237,7 @@ pub fn getBlockCommitment(
     arena: Allocator,
     params: GetBlockCommitment,
 ) !GetBlockCommitment.Response {
-    const result = self.block_commitment_cache.getBlockCommitment(params.slot);
+    const result = self.commitments.stakes.getBlockCommitment(params.slot);
     if (result.commitment) |commitment| {
         const slice = try arena.alloc(u64, commitment.len);
         @memcpy(slice, &commitment);
@@ -265,7 +268,7 @@ pub fn getBlockProduction(
         null;
 
     // Resolve current slot and epoch schedule.
-    const current_slot = self.slot_tracker.commitments.get(commitment);
+    const current_slot = self.commitments.get(commitment);
     const epoch_schedule = &self.epoch_tracker.epoch_schedule;
 
     // Determine slot range (default: current epoch start to current slot).
@@ -291,7 +294,7 @@ pub fn getBlockProduction(
     var slot_set: std.AutoHashMapUnmanaged(Slot, void) = .empty;
 
     // Collect rooted slots in range using forward iterator
-    const highest_root = self.slot_tracker.commitments.get(.finalized);
+    const highest_root = self.commitments.get(.finalized);
     {
         var rooted_iter = try self.ledger.db.iterator(
             sig.ledger.schema.schema.rooted_slots,
@@ -306,7 +309,7 @@ pub fn getBlockProduction(
     }
     // For confirmed commitment, also collect confirmed-but-unrooted slots.
     if (commitment == .confirmed) {
-        const latest_confirmed = self.slot_tracker.commitments.get(.confirmed);
+        const latest_confirmed = self.commitments.get(.confirmed);
         const confirmed_slots = try self.getConfirmedUnrootedSlots(
             arena,
             latest_confirmed,
@@ -355,7 +358,7 @@ pub fn getBlockTime(
     params: GetBlockTime,
 ) !GetBlockTime.Response {
     const reader = self.ledger.reader();
-    const highest_root = self.slot_tracker.commitments.get(.finalized);
+    const highest_root = self.commitments.get(.finalized);
 
     if (params.slot <= highest_root) {
         return reader.getRootedBlockTime(arena, params.slot) catch |err| switch (err) {
@@ -394,7 +397,7 @@ pub fn getHealth(
     _: GetHealth,
 ) !GetHealth.Response {
     // Get the node's latest optimistically confirmed slot from replay
-    const latest_optimistically_confirmed_slot = self.slot_tracker.commitments.get(.confirmed);
+    const latest_optimistically_confirmed_slot = self.commitments.get(.confirmed);
 
     // Get the cluster's latest optimistically confirmed slot from ledger
     var optimistic_slots = self.ledger.reader().getLatestOptimisticSlots(arena, 1) catch {
@@ -428,7 +431,7 @@ pub fn getInflationReward(
     const commitment = config.commitment orelse .finalized;
 
     // Determine the epoch to query. Default: current_epoch - 1.
-    const current_slot = self.slot_tracker.commitments.get(commitment);
+    const current_slot = self.commitments.get(commitment);
 
     try slot_resolution.validateMinContextSlot(current_slot, config.minContextSlot);
 
@@ -631,7 +634,7 @@ pub fn getSignatureStatuses(
         return error.InvalidParams;
     }
 
-    const processed_slot = self.slot_tracker.commitments.get(.processed);
+    const processed_slot = self.commitments.get(.processed);
     const processed_slot_ref = self.slot_tracker.get(
         processed_slot,
     ) orelse return error.InternalError;
@@ -664,7 +667,7 @@ pub fn getSignatureStatuses(
 
         if (try self.ledger.reader().getRootedTransactionStatus(arena, signature)) |status| {
             const slot, const status_meta = status;
-            if (slot <= self.slot_tracker.commitments.get(.finalized)) {
+            if (slot <= self.commitments.get(.finalized)) {
                 result.* = .{
                     .slot = slot,
                     .status = if (status_meta.status) |err| .{ .Err = err } else .{ .Ok = .{} },
@@ -693,9 +696,9 @@ pub fn getSignaturesForAddress(
     // processed is not supported
     if (commitment == .processed) return error.ProcessedNotSupported;
 
-    const highest_finalized_slot = self.slot_tracker.commitments.get(.finalized);
+    const highest_finalized_slot = self.commitments.get(.finalized);
     const highest_slot: Slot = switch (commitment) {
-        .confirmed => self.slot_tracker.commitments.get(.confirmed),
+        .confirmed => self.commitments.get(.confirmed),
         .finalized => highest_finalized_slot,
         .processed => unreachable,
     };
@@ -743,7 +746,7 @@ pub fn getTransaction(
     const max_supported_version = config.maxSupportedTransactionVersion;
 
     const reader = self.ledger.reader();
-    const highest_confirmed_slot = self.slot_tracker.commitments.get(.confirmed);
+    const highest_confirmed_slot = self.commitments.get(.confirmed);
 
     // Get transaction from ledger.
     const confirmed_tx_with_meta = switch (commitment) {
@@ -793,7 +796,7 @@ fn getTransactionStatus(
     const slot = fork.slot;
     const status = fork.maybe_err;
 
-    const confirmed_slot_ref = self.slot_tracker.get(self.slot_tracker.commitments.get(.confirmed));
+    const confirmed_slot_ref = self.slot_tracker.get(self.commitments.get(.confirmed));
     defer if (confirmed_slot_ref) |ref| ref.release();
     const confirmed_fork = if (confirmed_slot_ref) |ref| try self.status_cache.getForkAnyBlockhash(
         arena,
@@ -802,14 +805,15 @@ fn getTransactionStatus(
     ) else null;
 
     const is_finalized: bool =
-        slot <= self.slot_tracker.commitments.get(.finalized) and
+        slot <= self.commitments.get(.finalized) and
         (slot_ref.constants().ancestors.containsSlot(slot) or
             self.ledger.reader().isRoot(arena, slot) catch false);
 
-    const confirmations = if (self.slot_tracker.root.load(.monotonic) >= slot and is_finalized)
-        null
-    else
-        self.block_commitment_cache.getConfirmationCount(slot) orelse 0;
+    const confirmations =
+        if (self.slot_tracker.consensus_root.load(.monotonic) >= slot and is_finalized)
+            null
+        else
+            self.commitments.stakes.getConfirmationCount(slot) orelse 0;
 
     return .{
         .slot = slot,
@@ -1076,21 +1080,21 @@ fn parseUiTransactionStatusMetaFromLedger(
         .{ .Ok = .{}, .Err = null };
 
     // Convert inner instructions
-    const inner_instructions = if (meta.inner_instructions) |iis|
-        try convertInnerInstructions(arena, iis)
+    const inner_instructions: UiInnerInstructions = if (meta.inner_instructions) |iis|
+        try .fromLedger(arena, iis)
     else
-        &.{};
+        .{};
 
     // Convert token balances
-    const pre_token_balances = if (meta.pre_token_balances) |balances|
-        try convertTokenBalances(arena, balances)
+    const pre_token_balances: UiTransactionTokenBalances = if (meta.pre_token_balances) |balances|
+        try .fromLedger(arena, balances)
     else
-        &.{};
+        .{};
 
-    const post_token_balances = if (meta.post_token_balances) |balances|
-        try convertTokenBalances(arena, balances)
+    const post_token_balances: UiTransactionTokenBalances = if (meta.post_token_balances) |balances|
+        try .fromLedger(arena, balances)
     else
-        &.{};
+        .{};
 
     // Convert loaded addresses
     const loaded_addresses = try LedgerHookContext.convertLoadedAddresses(
@@ -1099,20 +1103,15 @@ fn parseUiTransactionStatusMetaFromLedger(
     );
 
     // Convert return data
-    const return_data = if (meta.return_data) |rd|
-        try convertReturnData(arena, rd)
+    const return_data: ?UiTransactionReturnData = if (meta.return_data) |rd|
+        try .fromLedger(arena, rd)
     else
         null;
 
-    const rewards: ?[]GetBlock.Response.UiReward = if (show_rewards) rewards: {
-        if (meta.rewards) |rewards| {
-            const converted = try arena.alloc(GetBlock.Response.UiReward, rewards.len);
-            for (rewards, 0..) |reward, i| {
-                converted[i] = GetBlock.Response.UiReward.fromLedgerReward(reward);
-            }
-            break :rewards converted;
-        } else break :rewards &.{};
-    } else null;
+    const rewards = if (show_rewards) try convertRewards(
+        arena,
+        meta.rewards,
+    ) else null;
 
     return .{
         .err = meta.status,
@@ -1473,7 +1472,7 @@ fn parseUiTransactionStatusMeta(
         .{ .Ok = .{}, .Err = null };
 
     // Convert inner instructions
-    const inner_instructions: []const parse_instruction.UiInnerInstructions = blk: {
+    const inner_instructions: UiInnerInstructions = blk: {
         if (meta.inner_instructions) |iis| {
             var inner_instructions = try arena.alloc(
                 parse_instruction.UiInnerInstructions,
@@ -1486,24 +1485,24 @@ fn parseUiTransactionStatusMeta(
                     &account_keys,
                 );
             }
-            break :blk inner_instructions;
-        } else break :blk &.{};
+            break :blk .{ .inner = inner_instructions };
+        } else break :blk .{};
     };
 
     // Convert token balances
-    const pre_token_balances = if (meta.pre_token_balances) |balances|
-        try convertTokenBalances(arena, balances)
+    const pre_token_balances: UiTransactionTokenBalances = if (meta.pre_token_balances) |balances|
+        try .fromLedger(arena, balances)
     else
-        &.{};
+        .{};
 
-    const post_token_balances = if (meta.post_token_balances) |balances|
-        try convertTokenBalances(arena, balances)
+    const post_token_balances: UiTransactionTokenBalances = if (meta.post_token_balances) |balances|
+        try .fromLedger(arena, balances)
     else
-        &.{};
+        .{};
 
     // Convert return data
-    const return_data = if (meta.return_data) |rd|
-        try convertReturnData(arena, rd)
+    const return_data: ?UiTransactionReturnData = if (meta.return_data) |rd|
+        try .fromLedger(arena, rd)
     else
         null;
 
@@ -1650,100 +1649,22 @@ fn buildSimpleUiTransactionStatusMeta(
         .innerInstructions = .skip,
         .logMessages = .skip,
         .preTokenBalances = .{ .value = if (meta.pre_token_balances) |balances|
-            try LedgerHookContext.convertTokenBalances(arena, balances)
+            try .fromLedger(arena, balances)
         else
-            &.{} },
+            .{} },
         .postTokenBalances = .{ .value = if (meta.post_token_balances) |balances|
-            try LedgerHookContext.convertTokenBalances(arena, balances)
+            try .fromLedger(arena, balances)
         else
-            &.{} },
-        .rewards = if (show_rewards) rewards: {
-            if (meta.rewards) |rewards| {
-                const converted = try arena.alloc(GetBlock.Response.UiReward, rewards.len);
-                for (rewards, 0..) |reward, i| {
-                    converted[i] = GetBlock.Response.UiReward.fromLedgerReward(reward);
-                }
-                break :rewards .{ .value = converted };
-            } else break :rewards .{ .value = &.{} };
-        } else .skip,
+            .{} },
+        .rewards = if (show_rewards) .{ .value = try convertRewards(
+            arena,
+            meta.rewards,
+        ) } else .skip,
         .loadedAddresses = .skip,
         .returnData = .skip,
         .computeUnitsConsumed = .skip,
         .costUnits = .skip,
     };
-}
-
-/// Convert inner instructions to wire format.
-fn convertInnerInstructions(
-    arena: Allocator,
-    inner_instructions: []const sig.ledger.transaction_status.InnerInstructions,
-) ![]const parse_instruction.UiInnerInstructions {
-    const result = try arena.alloc(
-        parse_instruction.UiInnerInstructions,
-        inner_instructions.len,
-    );
-
-    for (inner_instructions, 0..) |ii, i| {
-        const instructions = try arena.alloc(
-            parse_instruction.UiInstruction,
-            ii.instructions.len,
-        );
-
-        for (ii.instructions, 0..) |inner_ix, j| {
-            const data_str = blk: {
-                var ret = try arena.alloc(
-                    u8,
-                    base58.encodedMaxSize(inner_ix.instruction.data.len),
-                );
-                break :blk ret[0..base58.Table.BITCOIN.encode(
-                    ret,
-                    inner_ix.instruction.data,
-                )];
-            };
-
-            instructions[j] = .{ .compiled = .{
-                .programIdIndex = inner_ix.instruction.program_id_index,
-                .accounts = try arena.dupe(u8, inner_ix.instruction.accounts),
-                .data = data_str,
-                .stackHeight = inner_ix.stack_height,
-            } };
-        }
-
-        result[i] = .{
-            .index = ii.index,
-            .instructions = instructions,
-        };
-    }
-
-    return result;
-}
-
-/// Convert token balances to wire format.
-fn convertTokenBalances(
-    arena: Allocator,
-    balances: []const sig.ledger.transaction_status.TransactionTokenBalance,
-) ![]const GetBlock.Response.UiTransactionTokenBalance {
-    const result = try arena.alloc(
-        GetBlock.Response.UiTransactionTokenBalance,
-        balances.len,
-    );
-
-    for (balances, 0..) |b, i| {
-        result[i] = .{
-            .accountIndex = b.account_index,
-            .mint = b.mint,
-            .owner = b.owner,
-            .programId = b.program_id,
-            .uiTokenAmount = .{
-                .amount = try arena.dupe(u8, b.ui_token_amount.amount),
-                .decimals = b.ui_token_amount.decimals,
-                .uiAmount = b.ui_token_amount.ui_amount,
-                .uiAmountString = try arena.dupe(u8, b.ui_token_amount.ui_amount_string),
-            },
-        };
-    }
-
-    return result;
 }
 
 /// Convert loaded addresses to wire format.
@@ -2111,6 +2032,9 @@ test "getInflationReward enforces minContextSlot" {
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(std.testing.allocator, 5);
     defer slot_tracker.deinit(std.testing.allocator);
 
+    var commitments = sig.replay.trackers.CommitmentTracker.init(std.testing.allocator, 5);
+    defer commitments.deinit(std.testing.allocator);
+
     // CommitmentTracker.init(5) sets finalized=0, confirmed=0, processed=5.
     // Default commitment is .finalized, so current_slot will be 0.
     const ctx = LedgerHookContext{
@@ -2118,7 +2042,7 @@ test "getInflationReward enforces minContextSlot" {
         .epoch_tracker = undefined,
         .status_cache = undefined,
         .slot_tracker = &slot_tracker,
-        .block_commitment_cache = undefined,
+        .commitments = &commitments,
     };
 
     const result = ctx.getInflationReward(std.testing.allocator, .{
