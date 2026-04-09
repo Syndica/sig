@@ -435,6 +435,10 @@ fn writeTransactionStatus(
         allocator.free(balances);
     };
 
+    // Extract memos from transaction instructions
+    const memo = extractMemos(allocator, transaction, tx_result) catch null;
+    defer if (memo) |m| allocator.free(m);
+
     // Build TransactionStatusMeta
     const status = try TransactionStatusMetaBuilder.build(
         allocator,
@@ -456,7 +460,69 @@ fn writeTransactionStatus(
         readonly_keys.items,
         status,
         transaction_index,
+        memo,
     );
+}
+
+fn isMemoProgram(pubkey: *const Pubkey) bool {
+    return pubkey.equals(&spl_token.SPL_MEMO_V1_ID) or pubkey.equals(&spl_token.SPL_MEMO_V3_ID);
+}
+
+/// Extract and format memo instructions from a transaction, matching Agave's
+/// `extract_and_fmt_memos` format: "[{memo_byte_length}] {memo_text}".
+/// Multiple memos are joined with "; ".
+/// Only top-level message instructions are scanned (matching Agave behavior).
+fn extractMemos(
+    allocator: Allocator,
+    transaction: ResolvedTransaction,
+    _: ProcessedTransaction,
+) !?[]const u8 {
+    var parts = ArrayListUnmanaged([]const u8).empty;
+    defer {
+        for (parts.items) |part| allocator.free(part);
+        parts.deinit(allocator);
+    }
+
+    // Check top-level instructions only (matches Agave's extract_and_fmt_memos)
+    for (transaction.transaction.msg.instructions) |instr| {
+        const program_pubkey = transaction.transaction.msg.account_keys[instr.program_index];
+        if (isMemoProgram(&program_pubkey)) {
+            const memo_data = instr.data;
+            const memo_len = memo_data.len;
+            // Agave: parse_memo_data interprets as UTF-8, falling back to "(unparseable)"
+            if (std.unicode.utf8ValidateSlice(memo_data)) {
+                const formatted = try std.fmt.allocPrint(allocator, "[{d}] {s}", .{ memo_len, memo_data });
+                errdefer allocator.free(formatted);
+                try parts.append(allocator, formatted);
+            } else {
+                const formatted = try std.fmt.allocPrint(allocator, "[{d}] (unparseable)", .{memo_len});
+                errdefer allocator.free(formatted);
+                try parts.append(allocator, formatted);
+            }
+        }
+    }
+
+    if (parts.items.len == 0) return null;
+
+    // Join with "; "
+    var total_len: usize = 0;
+    for (parts.items, 0..) |part, i| {
+        total_len += part.len;
+        if (i > 0) total_len += 2; // "; "
+    }
+
+    const result = try allocator.alloc(u8, total_len);
+    var pos: usize = 0;
+    for (parts.items, 0..) |part, i| {
+        if (i > 0) {
+            @memcpy(result[pos..][0..2], "; ");
+            pos += 2;
+        }
+        @memcpy(result[pos..][0..part.len], part);
+        pos += part.len;
+    }
+
+    return result;
 }
 
 /// Collect post-execution token balances from transaction writes.

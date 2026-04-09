@@ -41,6 +41,7 @@ pub fn writeTransactionStatus(
     readonly_keys: []const Pubkey,
     status: TransactionStatusMeta,
     transaction_index: usize,
+    memo: ?[]const u8,
 ) !void {
     var write_batch = try self.ledger.db.initWriteBatch();
     defer write_batch.deinit();
@@ -59,6 +60,10 @@ pub fn writeTransactionStatus(
                 .{ .writeable = writeable },
             );
         }
+    }
+
+    if (memo) |m| {
+        try write_batch.put(schema.transaction_memos, .{ signature, slot }, m);
     }
 
     try self.ledger.db.commit(&write_batch);

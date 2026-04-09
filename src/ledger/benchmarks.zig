@@ -351,6 +351,7 @@ pub const BenchmarkLedger = struct {
                 r_keys.items,
                 status,
                 tx_idx,
+                null,
             );
         }
         return timer.read();
