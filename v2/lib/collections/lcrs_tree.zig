@@ -1,46 +1,46 @@
 const std = @import("std");
+const lib = @import("../lib.zig");
 const collections = @import("../collections.zig");
-
-const Id = collections.Id;
 
 /// An implementation of a left-child right-sibling tree.
 /// NOTE: this implementation is not atomic, but could be made atomic with minimal effort
-pub fn LCRSTree(Node: type, IdInt: type) type {
-    const needed_fields: []const []const u8 = &.{ "parent", "child", "sibling" };
-
-    const NodeId = Id(IdInt);
-
-    for (needed_fields) |field| {
-        if (!@hasField(Node, field)) {
-            @compileLog("missing field", Node, field);
-            continue;
+pub fn LCRSTree(Node: type, Context: type) type {
+    lib.util.assertInterface(Context, struct {
+        pub fn parentOf(ctx: Context, node: *const Node) *Node {
+            _ = .{ ctx, node };
+            return undefined;
         }
-        if (@FieldType(Node, field) != NodeId)
-            @compileLog("incorrect type", Node, field);
-    }
+        pub fn childOf(ctx: Context, node: *const Node) *Node {
+            _ = .{ ctx, node };
+            return undefined;
+        }
+        pub fn siblingOf(ctx: Context, node: *const Node) *Node {
+            _ = .{ ctx, node };
+            return undefined;
+        }
+        pub fn setParent(ctx: Context, node: *Node, parent: *Node) void {
+            _ = .{ ctx, node, parent };
+        }
+        pub fn setChild(ctx: Context, node: *Node, child: *Node) void {
+            _ = .{ ctx, node, child };
+        }
+        pub fn setSibling(ctx: Context, node: *Node, sibling: *Node) void {
+            _ = .{ ctx, node, sibling };
+        }
+    });
 
     return extern struct {
-        len: IdInt,
-        buf: [*]Node,
+        pub fn linkOrphaned(ctx: Context, parent: *Node, orphan: *Node) void {
+            std.debug.assert(ctx.parentOf(orphan) == null);
+            std.debug.assert(ctx.siblingOf(orphan) == null);
 
-        const Self = @This();
+            ctx.setParent(orphan, parent);
 
-        fn ptrToIdx(self: *const Self, node: *Node) NodeId {
-            const idx = @as([*]Node, node[0..1]) - self.buf;
-            return @enumFromInt(idx);
-        }
-
-        pub fn linkOrphaned(self: *const Self, parent: *Node, orphan: *Node) void {
-            std.debug.assert(orphan.parent == .null);
-            std.debug.assert(orphan.sibling == .null);
-
-            orphan.parent = self.ptrToIdx(parent);
-
-            if (parent.child == .null) {
-                parent.child = self.ptrToIdx(orphan);
+            if (ctx.childOf(parent)) |child| {
+                ctx.setSibling(orphan, child);
+                ctx.setChild(parent, orphan);
             } else {
-                orphan.sibling = parent.child;
-                parent.child = self.ptrToIdx(orphan);
+                ctx.setChild(parent, orphan);
             }
         }
     };
