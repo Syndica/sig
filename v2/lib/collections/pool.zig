@@ -1,7 +1,4 @@
 const std = @import("std");
-const collections = @import("../collections.zig");
-
-const Id = collections.Id;
 
 /// A mem pool of []Item
 /// Asserts Item to have an alignment and size >= IdInt
