@@ -636,7 +636,7 @@ test GetLargestAccounts {
     try testRequest(
         .getLargestAccounts,
         .{ .config = .{ .commitment = .finalized } },
-        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":"finalized","filter":null}]}
+        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":"finalized","filter":null,"sortResults":null}]}
         ,
     );
 
@@ -644,7 +644,7 @@ test GetLargestAccounts {
     try testRequest(
         .getLargestAccounts,
         .{ .config = .{ .filter = .circulating } },
-        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":null,"filter":"circulating"}]}
+        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":null,"filter":"circulating","sortResults":null}]}
         ,
     );
 
@@ -652,7 +652,7 @@ test GetLargestAccounts {
     try testRequest(
         .getLargestAccounts,
         .{ .config = .{ .commitment = .finalized, .filter = .nonCirculating } },
-        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":"finalized","filter":"nonCirculating"}]}
+        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":"finalized","filter":"nonCirculating","sortResults":null}]}
         ,
     );
 
@@ -1275,10 +1275,10 @@ test GetTransaction {
         .getTransaction,
         .{
             .signature = tx_sig,
-            .config = .{
+            .encoding_or_config = .{ .config = .{
                 .maxSupportedTransactionVersion = 0,
                 .encoding = .base64,
-            },
+            } },
         },
         \\{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",{"commitment":null,"maxSupportedTransactionVersion":0,"encoding":"base64"}]}
         ,
