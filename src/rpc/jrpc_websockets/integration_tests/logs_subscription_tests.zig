@@ -115,7 +115,7 @@ fn makeLogsEvent(
     return .{ .transaction_batch = .{
         .slot = slot,
         .entries = entries,
-        .arena = arena,
+        .arena_state = arena.state,
     } };
 }
 

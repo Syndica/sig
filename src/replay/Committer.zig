@@ -77,15 +77,11 @@ pub fn commitTransactions(
 
     // When an event sink is present, build a rich transaction batch event.
     // The arena owns all TransactionEntry data.
-    var maybe_batch_event: ?jrpc_types.SlotTransactionBatch = null;
-    defer if (maybe_batch_event) |*ev| ev.deinit();
+    const maybe_event_sink = self.event_sink;
+    var owns_batch_arena = maybe_event_sink != null;
+    var batch_arena = std.heap.ArenaAllocator.init(persistent_allocator);
+    defer if (owns_batch_arena) batch_arena.deinit();
     var batch_entries: ArrayListUnmanaged(jrpc_types.TransactionEntry) = .{};
-    if (self.event_sink != null) {
-        maybe_batch_event = .{
-            .slot = slot,
-            .arena = .init(persistent_allocator),
-        };
-    }
 
     for (transactions, tx_results, 0..) |transaction, *result, local_index| {
         // Expand per-batch starting index to per-transaction global index.
@@ -174,8 +170,8 @@ pub fn commitTransactions(
         // TransactionEntry in the arena, then also use
         // it for the ledger write (avoiding duplicate
         // metadata computation).
-        if (maybe_batch_event) |*batch_event| {
-            const arena_alloc = batch_event.arena.allocator();
+        if (maybe_event_sink != null) {
+            const arena_alloc = batch_arena.allocator();
             const entry = try buildTransactionEntry(
                 arena_alloc,
                 temp_allocator,
@@ -233,18 +229,16 @@ pub fn commitTransactions(
         );
     }
 
-    if (self.event_sink) |event_sink| {
-        if (maybe_batch_event) |*batch_event| {
-            // NOTE: it's fine to just assign the slice here since the arena allocator will free
-            // everything, so we don't need to track actual capacity of the ArrayList
-            batch_event.entries = batch_entries.items;
+    if (maybe_event_sink) |event_sink| {
+        const event: jrpc_types.InboundEvent = .{ .transaction_batch = .{
+            .slot = slot,
+            .entries = batch_entries.items,
+            .arena_state = batch_arena.state,
+        } };
+        owns_batch_arena = false;
+        errdefer event.deinit(persistent_allocator);
 
-            const event: jrpc_types.InboundEvent = .{ .transaction_batch = batch_event.* };
-            maybe_batch_event = null;
-            errdefer event.deinit(persistent_allocator);
-
-            try event_sink.send(event);
-        }
+        try event_sink.send(event);
     }
 }
 

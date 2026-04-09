@@ -196,9 +196,9 @@ pub const CachedSlot = struct {
     }
 
     pub fn deinit(self: *CachedSlot, allocator: std.mem.Allocator) void {
-        self.modified_accounts.deinit();
+        self.modified_accounts.deinit(allocator);
         for (self.transaction_batches.items) |*batch| {
-            batch.deinit();
+            batch.deinit(allocator);
         }
         self.transaction_batches.deinit(allocator);
         self.distributed_rewards.deinit(allocator);
@@ -428,7 +428,7 @@ pub fn onSlotFrozen(
             "received duplicate slot_frozen for slot {}",
             .{slot_data.slot},
         );
-        slot_state.modified_accounts.deinit();
+        slot_state.modified_accounts.deinit(allocator);
         slot_state.distributed_rewards.deinit(allocator);
     }
 
@@ -473,7 +473,7 @@ pub fn onTransactionBatchEvent(
     batch_event: *SlotTransactionBatch,
 ) !void {
     if (batch_event.entries.len == 0) {
-        batch_event.deinit();
+        batch_event.deinit(allocator);
         return;
     }
 
@@ -789,7 +789,7 @@ fn testSlotTransactionBatch(
     return .{
         .slot = slot,
         .entries = entries,
-        .arena = arena,
+        .arena_state = arena.state,
     };
 }
 
@@ -859,7 +859,7 @@ test "transaction batch ownership transfers into cache" {
     defer state.deinit(allocator);
 
     var batch = try testSlotTransactionBatch(allocator, 10, &.{"Program log: cached"});
-    defer batch.deinit();
+    defer batch.deinit(allocator);
 
     try state.onTransactionBatchEvent(allocator, &batch);
     try std.testing.expectEqual(0, batch.entries.len);
@@ -886,9 +886,9 @@ test "repeated transaction batches append" {
     defer state.deinit(allocator);
 
     var first_batch = try testSlotTransactionBatch(allocator, 10, &.{"Program log: first"});
-    defer first_batch.deinit();
+    defer first_batch.deinit(allocator);
     var second_batch = try testSlotTransactionBatch(allocator, 10, &.{"Program log: second"});
-    defer second_batch.deinit();
+    defer second_batch.deinit(allocator);
 
     try state.onTransactionBatchEvent(allocator, &first_batch);
     try std.testing.expectEqual(0, first_batch.entries.len);
@@ -921,9 +921,9 @@ test "transaction batch iterator spans all batches" {
     defer state.deinit(allocator);
 
     var first_batch = try testSlotTransactionBatch(allocator, 10, &.{"Program log: first"});
-    defer first_batch.deinit();
+    defer first_batch.deinit(allocator);
     var second_batch = try testSlotTransactionBatch(allocator, 10, &.{"Program log: second"});
-    defer second_batch.deinit();
+    defer second_batch.deinit(allocator);
 
     try state.onTransactionBatchEvent(allocator, &first_batch);
     try state.onTransactionBatchEvent(allocator, &second_batch);
@@ -1559,7 +1559,7 @@ test "slot frozen stores producer-owned modified accounts" {
         .root = 0,
         .accounts = .{
             .accounts = accounts,
-            .arena = arena,
+            .arena_state = arena.state,
         },
     };
     const transition = try state.onSlotFrozen(allocator, &slot_data);

@@ -388,17 +388,17 @@ pub const SubId = u64;
 pub const SlotModifiedAccounts = struct {
     /// All accounts modified in a frozen slot, owned by `arena`.
     accounts: []AccountWithPubkey = &.{},
-    arena: std.heap.ArenaAllocator,
+    arena_state: std.heap.ArenaAllocator.State,
 
     pub fn empty() SlotModifiedAccounts {
         return .{
             .accounts = &.{},
-            .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            .arena_state = .{},
         };
     }
 
-    pub fn deinit(self: *SlotModifiedAccounts) void {
-        self.arena.deinit();
+    pub fn deinit(self: *SlotModifiedAccounts, allocator: std.mem.Allocator) void {
+        self.arena_state.promote(allocator).deinit();
         self.* = empty();
     }
 };
@@ -418,7 +418,7 @@ pub const SlotFrozenEvent = struct {
     distributed_rewards: DistributedRewards = DistributedRewards.empty(),
 
     pub fn deinit(self: *SlotFrozenEvent, allocator: std.mem.Allocator) void {
-        self.accounts.deinit();
+        self.accounts.deinit(allocator);
         self.distributed_rewards.deinit(allocator);
     }
 };
@@ -450,7 +450,7 @@ pub const InboundEvent = union(enum) {
         switch (self) {
             .transaction_batch => |batch| {
                 var b = batch;
-                b.deinit();
+                b.deinit(allocator);
             },
             .received_signatures => |data| data.deinit(allocator),
             .vote => |vote_data| vote_data.deinit(allocator),
@@ -530,7 +530,7 @@ pub const EventSink = struct {
             );
             return .{
                 .accounts = &.{},
-                .arena = arena,
+                .arena_state = arena.state,
             };
         };
         defer iterator.unlock();
@@ -546,7 +546,7 @@ pub const EventSink = struct {
         }
         return .{
             .accounts = accounts,
-            .arena = arena,
+            .arena_state = arena.state,
         };
     }
 };
@@ -608,18 +608,18 @@ pub const SlotTransactionBatch = struct {
     slot: u64 = 0,
     /// Transaction entries, arena-owned.
     entries: []const TransactionEntry = &.{},
-    arena: std.heap.ArenaAllocator,
+    arena_state: std.heap.ArenaAllocator.State,
 
     pub fn empty() SlotTransactionBatch {
         return .{
             .slot = 0,
             .entries = &.{},
-            .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            .arena_state = .{},
         };
     }
 
-    pub fn deinit(self: *SlotTransactionBatch) void {
-        self.arena.deinit();
+    pub fn deinit(self: *SlotTransactionBatch, allocator: std.mem.Allocator) void {
+        self.arena_state.promote(allocator).deinit();
         self.* = empty();
     }
 };

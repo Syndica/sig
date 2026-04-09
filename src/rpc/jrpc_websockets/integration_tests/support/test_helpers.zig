@@ -187,7 +187,7 @@ pub const TestServer = struct {
         var event = inbound_event;
         switch (event) {
             .slot_frozen => |*slot_data| {
-                slot_data.accounts.deinit();
+                slot_data.accounts.deinit(self.event_sink.allocator());
                 slot_data.accounts = self.event_sink.materializeSlotModifiedAccounts(
                     sig.trace.Logger("jrpc_ws_integration_tests").noop,
                     .{ .accounts_db = &self.account_db.db },
@@ -437,7 +437,7 @@ pub const IntegratedTestServer = struct {
         var event = inbound_event;
         switch (event) {
             .slot_frozen => |*slot_data| {
-                slot_data.accounts.deinit();
+                slot_data.accounts.deinit(self.event_sink.allocator());
                 slot_data.accounts = self.event_sink.materializeSlotModifiedAccounts(
                     sig.trace.Logger("jrpc_ws_integration_tests").noop,
                     .{ .accounts_db = &self.account_db.db },
