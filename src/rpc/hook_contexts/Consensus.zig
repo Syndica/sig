@@ -431,12 +431,17 @@ pub fn getClusterNodes(
 
     var contact_info_iter = gossip_table.contactInfoIterator(0);
     var result_list: std.ArrayList(common.RpcContactInfo) = .empty;
+    // Deduplicate by pubkey: the iterator may yield both a ContactInfo and a
+    // converted LegacyContactInfo entry for the same node.
+    // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3637
+    var seen_pubkeys: std.AutoArrayHashMapUnmanaged(sig.core.Pubkey, void) = .empty;
 
     while (contact_info_iter.next()) |contact_info| {
+        const gop = try seen_pubkeys.getOrPut(arena, contact_info.pubkey);
+        if (gop.found_existing) continue;
         if (try contactInfoToRpc(
             arena,
             contact_info,
-            gossip_table,
             my_shred_version,
         )) |rpc_contact_info| {
             try result_list.append(arena, rpc_contact_info);
@@ -451,7 +456,6 @@ pub fn getClusterNodes(
 fn contactInfoToRpc(
     arena: std.mem.Allocator,
     contact_info: *const sig.gossip.ContactInfo,
-    gossip_table: *const sig.gossip.GossipTable,
     my_shred_version: u16,
 ) !?common.RpcContactInfo {
     // Filter by matching shred version (exclude spy nodes with shred_version 0)
@@ -463,68 +467,78 @@ fn contactInfoToRpc(
     const gossip_addr = contact_info.getSocket(.gossip);
     if (gossip_addr == null or gossip_addr.?.isUnspecified()) return null;
 
-    var rpc_contact_info = common.RpcContactInfo{
+    return .{
         .pubkey = try std.fmt.allocPrint(
             arena,
             "{s}",
             .{contact_info.pubkey.base58String().slice()},
         ),
-    };
-
-    // Get version info for this node from the gossip table
-    // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3649-3655
-    if (gossip_table.get(.{ .Version = contact_info.pubkey })) |version_data| {
-        const v = version_data.data.Version.version;
-        rpc_contact_info.version = try std.fmt.allocPrint(
+        .gossip = try formatSocketAddr(
+            arena,
+            gossip_addr,
+        ),
+        .tvu = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.turbine_recv),
+        ),
+        .tpu = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.tpu),
+        ),
+        .tpuQuic = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.tpu_quic),
+        ),
+        .tpuForwards = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.tpu_forwards),
+        ),
+        .tpuForwardsQuic = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.tpu_forwards_quic),
+        ),
+        .tpuVote = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.tpu_vote),
+        ),
+        .serveRepair = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.serve_repair),
+        ),
+        .rpc = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.rpc),
+        ),
+        .pubsub = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.rpc_pubsub),
+        ),
+        .version = try std.fmt.allocPrint(
             arena,
             "{d}.{d}.{d}",
-            .{ v.major, v.minor, v.patch },
-        );
-        rpc_contact_info.featureSet = v.feature_set;
-    }
-
-    rpc_contact_info.shredVersion = my_shred_version;
-    rpc_contact_info.gossip = try formatSocketAddr(arena, gossip_addr);
-    rpc_contact_info.tvu = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.turbine_recv),
-    );
-    rpc_contact_info.tpu = try formatSocketAddr(arena, contact_info.getSocket(.tpu));
-    rpc_contact_info.tpuQuic = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.tpu_quic),
-    );
-    rpc_contact_info.tpuForwards = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.tpu_forwards),
-    );
-    rpc_contact_info.tpuForwardsQuic = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.tpu_forwards_quic),
-    );
-    rpc_contact_info.tpuVote = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.tpu_vote),
-    );
-    rpc_contact_info.serveRepair = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.serve_repair),
-    );
-    rpc_contact_info.rpc = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.rpc),
-    );
-    rpc_contact_info.pubsub = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.rpc_pubsub),
-    );
-
-    return rpc_contact_info;
+            .{
+                contact_info.version.major,
+                contact_info.version.minor,
+                contact_info.version.patch,
+            },
+        ),
+        .featureSet = contact_info.version.feature_set,
+        .shredVersion = contact_info.shred_version,
+    };
 }
 
 fn formatSocketAddr(arena: std.mem.Allocator, addr: ?sig.net.SocketAddr) !?[]const u8 {
     const socket_addr = addr orelse return null;
     if (socket_addr.isUnspecified()) return null;
+    return try std.fmt.allocPrint(arena, "{f}", .{socket_addr.toAddress()});
+}
+
+/// Like formatSocketAddr but also returns null for non-globally-routable addresses
+/// (private, loopback, link-local). Matches Agave's SocketAddrSpace::Global filter.
+/// See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3659
+fn formatSocketAddrGlobal(arena: std.mem.Allocator, addr: ?sig.net.SocketAddr) !?[]const u8 {
+    const socket_addr = addr orelse return null;
+    if (!socket_addr.isGloballyRoutable()) return null;
     return try std.fmt.allocPrint(arena, "{f}", .{socket_addr.toAddress()});
 }
 
