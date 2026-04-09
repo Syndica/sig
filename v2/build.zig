@@ -37,7 +37,6 @@ pub fn build(b: *Build) !void {
     const test_step = b.step("test", "Run unit tests");
     const check_step = b.step("check", "Check step.");
     const ci_step = b.step("ci", "Run all checks used for CI");
-    const check_step = b.step("check", "Check step.");
     const docs_step = b.step("docs", "Emit docs");
 
     ci_step.dependOn(test_step);
@@ -122,6 +121,10 @@ pub fn build(b: *Build) !void {
         .use_llvm = true,
     });
 
+    const DocGenModule = struct { name: []const u8, module: *Build.Module };
+    var doc_service_modules: std.ArrayListUnmanaged(DocGenModule) = .empty;
+    defer doc_service_modules.deinit(b.allocator);
+
     // build + link services
     inline for (@import("init/services.zon").services) |s| {
         const service_name = @tagName(s.name);
@@ -133,14 +136,11 @@ pub fn build(b: *Build) !void {
             .omit_frame_pointer = false,
             .imports = &.{
                 .{ .name = "lib", .module = lib_mod },
-                .{ .name = "start", .module = start_service_mod },
+                .{ .name = "start_service", .module = start_service_mod },
                 .{ .name = "tracy", .module = tracy_mod },
+                .{ .name = "binkode", .module = binkode_mod },
             },
         });
-        service_mod.addImport("lib", lib);
-        service_mod.addImport("start_service", start_service);
-        service_mod.addImport("tracy", tracy);
-        service_mod.addImport("binkode", b.dependency("binkode", .{}).module("binkode"));
 
         const service_lib = b.addLibrary(.{
             .name = service_name,
@@ -155,6 +155,11 @@ pub fn build(b: *Build) !void {
             .filters = filters,
             .use_llvm = use_llvm,
         });
+
+        try doc_service_modules.append(
+            b.allocator,
+            .{ .name = service_name, .module = service_mod },
+        );
     }
 
     // generates unified docs for all modules
@@ -172,12 +177,18 @@ pub fn build(b: *Build) !void {
             }),
         );
 
-        inline for (&.{ doc_service_modules, doc_modules }) |module_list| {
+        const doc_modules: []const DocGenModule = &.{
+            .{ .name = "start_service", .module = start_service_mod },
+            .{ .name = "sig_init", .module = sig_init_mod },
+            .{ .name = "lib", .module = lib_mod },
+        };
+
+        inline for (&.{ doc_service_modules.items, doc_modules }) |module_list| {
             var services_str = std.io.Writer.Allocating.init(b.allocator);
             defer services_str.deinit();
 
-            for (module_list.items, 0..) |svc_mod, i| {
-                const end: []const u8 = if (i == module_list.items.len - 1) "" else ",";
+            for (module_list, 0..) |svc_mod, i| {
+                const end: []const u8 = if (i == module_list.len - 1) "" else ",";
                 try services_str.writer.print("{s}{s}", .{ svc_mod.name, end });
             }
 
@@ -189,7 +200,7 @@ pub fn build(b: *Build) !void {
             .optimize = .Debug,
             .root_source_file = gen_docs_run.addOutputFileArg("docs.zig"),
         });
-        for (doc_modules.items) |mod| docs_mod.addImport(mod.name, mod.module);
+        for (doc_modules) |mod| docs_mod.addImport(mod.name, mod.module);
         for (doc_service_modules.items) |mod| docs_mod.addImport(mod.name, mod.module);
 
         const docs_obj = b.addTest(.{ .name = "docs", .root_module = docs_mod });

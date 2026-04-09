@@ -23,13 +23,14 @@ pub const name = .replay;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
+pub const ReadOnly = struct {};
 pub const ReadWrite = struct {
     deshredded_in: *lib.shred.DeshredRing,
 };
 
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
-pub fn serviceMain(rw: ReadWrite) !noreturn {
+pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
     defer zone.deinit();
 
