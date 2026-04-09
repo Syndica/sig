@@ -491,11 +491,19 @@ fn extractMemos(
             const memo_len = memo_data.len;
             // Agave: parse_memo_data interprets as UTF-8, falling back to "(unparseable)"
             if (std.unicode.utf8ValidateSlice(memo_data)) {
-                const formatted = try std.fmt.allocPrint(allocator, "[{d}] {s}", .{ memo_len, memo_data });
+                const formatted = try std.fmt.allocPrint(
+                    allocator,
+                    "[{d}] {s}",
+                    .{ memo_len, memo_data },
+                );
                 errdefer allocator.free(formatted);
                 try parts.append(allocator, formatted);
             } else {
-                const formatted = try std.fmt.allocPrint(allocator, "[{d}] (unparseable)", .{memo_len});
+                const formatted = try std.fmt.allocPrint(
+                    allocator,
+                    "[{d}] (unparseable)",
+                    .{memo_len},
+                );
                 errdefer allocator.free(formatted);
                 try parts.append(allocator, formatted);
             }

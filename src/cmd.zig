@@ -1685,7 +1685,9 @@ fn validator(
         const SlotHistory = sig.runtime.sysvar.SlotHistory;
         const slot_history: SlotHistory = blk: {
             const account = (try new_db.rooted.get(allocator, SlotHistory.ID)) orelse {
-                app_base.logger.warn().log("SlotHistory sysvar not found, skipping historical root backfill");
+                app_base.logger.warn().log(
+                    "SlotHistory sysvar not found, skipping historical root backfill",
+                );
                 break :backfill;
             };
             defer account.deinit(allocator);

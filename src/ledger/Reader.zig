@@ -896,12 +896,12 @@ pub fn getConfirmedSignaturesForAddress(
     var get_initial_slot_timer = Timer.start();
     const signatures = try self.findAddressSignaturesForSlot(allocator, address, slot);
     for (1..signatures.items.len + 1) |i| {
-        const this_slot, const signature, const tx_index = signatures.items[signatures.items.len - i];
+        const this_slot, const signature, const tx_idx = signatures.items[signatures.items.len - i];
         std.debug.assert(slot == this_slot);
         if (!before_excluded_signatures.contains(signature) and
             !until_excluded_signatures.contains(signature))
         {
-            try address_signatures.append(.{ this_slot, signature, tx_index });
+            try address_signatures.append(.{ this_slot, signature, tx_idx });
         }
     }
     if (self.metrics) |m| {

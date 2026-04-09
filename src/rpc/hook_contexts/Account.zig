@@ -1015,7 +1015,11 @@ pub fn getLargestAccounts(
 
     if (sort_results) {
         std.mem.sortUnstable(GetLargestAccounts.AccountBalance, values, {}, struct {
-            pub fn lessThan(_: void, a: GetLargestAccounts.AccountBalance, b: GetLargestAccounts.AccountBalance) bool {
+            pub fn lessThan(
+                _: void,
+                a: GetLargestAccounts.AccountBalance,
+                b: GetLargestAccounts.AccountBalance,
+            ) bool {
                 if (a.lamports != b.lamports) return a.lamports > b.lamports;
                 return b.address.order(a.address) == .lt;
             }
