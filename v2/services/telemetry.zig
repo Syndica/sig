@@ -121,7 +121,6 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
                 else => |e| return e,
             },
         };
-        std.log.err("Handling prometheus", .{});
 
         if (!std.mem.eql(u8, http_request.head.target, "/metrics")) {
             try http_request.respond(
