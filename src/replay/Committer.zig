@@ -785,7 +785,7 @@ fn collectPostTokenBalances(
             .owner = parsed.owner,
             .amount = parsed.amount,
             .program_id = owner_pubkey,
-        }) catch break; // BoundedArray full; should never happen.
+        }) catch unreachable; // BoundedArray full; can never happen because capacity == MAX_TX_ACCOUNT_LOCKS.
     }
 
     return result;
