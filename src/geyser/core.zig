@@ -69,12 +69,15 @@ pub const TradeEventV1 = struct {
 };
 
 /// Emitted when a PumpSwap pool is created (graduated from PumpFun).
-/// base_amount = initial token reserves, quote_amount = initial SOL lamports.
+/// mint     = meme token mint (base_mint, non-WSOL side).
+/// base_amount  = meme tokens seeded into pool (vtokens).
+/// quote_amount = SOL lamports seeded into pool (vsol).
 pub const PumpSwapPoolCreatedV1 = struct {
     slot: u64,
     pool: [32]u8,
-    base_amount: u64,  // tokens seeded into pool
-    quote_amount: u64, // SOL lamports seeded into pool
+    mint: [32]u8,      // meme token mint
+    base_amount: u64,  // tokens seeded into pool (vtokens)
+    quote_amount: u64, // SOL lamports seeded into pool (vsol)
 };
 
 /// Emitted on every PumpSwap buy or sell.

@@ -8,6 +8,7 @@ const PumpSwapPoolCreatedV1 = sig.geyser.core.PumpSwapPoolCreatedV1;
 const PumpSwapTradeV1 = sig.geyser.core.PumpSwapTradeV1;
 
 const PUMPSWAP_PROGRAM = Pubkey.parseRuntime("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA") catch unreachable;
+const WSOL_MINT        = Pubkey.parseRuntime("So11111111111111111111111111111111111111112") catch unreachable;
 
 // Anchor discriminators (sha256("global:<name>")[0..8], little-endian)
 const CREATE_POOL_DISCRIMINATOR: [8]u8 = .{ 0xe9, 0x92, 0xd1, 0x8e, 0xcf, 0x68, 0x40, 0xbc };
@@ -36,20 +37,33 @@ pub fn parseTransaction(
             // CreatePool args after discriminator: index(u16) + base_amount_in(u64) + quote_amount_in(u64)
             // Total needed: 8 + 2 + 8 + 8 = 26 bytes
             if (data.len < 26) continue;
-            // accounts[0]=pool, accounts[9]=pool_base_token_account, accounts[10]=pool_quote_token_account
-            if (instr.account_indexes.len < 1) continue;
-            const pool_idx = instr.account_indexes[0];
+            // accounts[0]=pool, accounts[2]=base_mint (meme token), accounts[3]=quote_mint (WSOL)
+            if (instr.account_indexes.len < 4) continue;
+            const pool_idx      = instr.account_indexes[0];
+            const base_mint_idx = instr.account_indexes[2];
             if (pool_idx >= tx.msg.account_keys.len) continue;
+            if (base_mint_idx >= tx.msg.account_keys.len) continue;
 
-            const pool_pubkey = tx.msg.account_keys[pool_idx];
+            const pool_pubkey  = tx.msg.account_keys[pool_idx];
+            const base_mint_pk = tx.msg.account_keys[base_mint_idx];
+            // Ensure we have the meme token (non-WSOL) mint.
+            // base_mint is the meme token; if for some reason it is WSOL, fall back to quote_mint.
+            const meme_mint: [32]u8 = if (!base_mint_pk.equals(&WSOL_MINT))
+                base_mint_pk.data
+            else blk: {
+                const q_idx = instr.account_indexes[3];
+                break :blk if (q_idx < tx.msg.account_keys.len) tx.msg.account_keys[q_idx].data else base_mint_pk.data;
+            };
+
             // Skip index (u16) at data[8..10], read base at [10..18], quote at [18..26]
-            const base_amount = std.mem.readInt(u64, data[10..18], .little);
+            const base_amount  = std.mem.readInt(u64, data[10..18], .little);
             const quote_amount = std.mem.readInt(u64, data[18..26], .little);
 
             const event = PumpSwapPoolCreatedV1{
-                .slot = slot,
-                .pool = pool_pubkey.data,
-                .base_amount = base_amount,
+                .slot         = slot,
+                .pool         = pool_pubkey.data,
+                .mint         = meme_mint,
+                .base_amount  = base_amount,
                 .quote_amount = quote_amount,
             };
             gw.writePayloadToPipe(.{ .PumpSwapPoolCreatedV1 = event }) catch {};
