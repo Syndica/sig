@@ -57,11 +57,8 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     }
 }
 
-const BlockId = BlockTree.NodePool.ItemId;
-
 const BlockTree = struct {
     node_pool: NodePool,
-    node_tree: NodeTree,
 
     /// The latest block that has been rooted by consensus
     /// This node may have parents if other subsystems are still holding references to previous
@@ -74,7 +71,36 @@ const BlockTree = struct {
     const capacity = 1024;
 
     const NodePool = Pool(Node, u32);
-    const NodeTree = Tree(Node, u32);
+    const BlockId = NodePool.ItemId;
+    const NodeTree = Tree(Node, struct {
+        pool: NodePool,
+
+        const Ctx = @This();
+
+        fn buf(ctx: Ctx) []Node {
+            return @ptrCast(ctx.pool.buf[0..ctx.pool.len]);
+        }
+
+        pub fn parentOf(ctx: Ctx, node: *Node) ?*Node {
+            return &ctx.buf()[node.parent.index() orelse return null];
+        }
+        pub fn childOf(ctx: Ctx, node: *Node) ?*Node {
+            return &ctx.buf()[node.child.index() orelse return null];
+        }
+        pub fn siblingOf(ctx: Ctx, node: *Node) ?*Node {
+            return &ctx.buf()[node.sibling.index() orelse return null];
+        }
+
+        pub fn setParent(ctx: Ctx, node: *Node, parent: ?*Node) void {
+            node.parent = if (parent) |p| ctx.pool.ptrToIndex(p) else .null;
+        }
+        pub fn setChild(ctx: Ctx, node: *Node, child: ?*Node) void {
+            node.child = if (child) |c| ctx.pool.ptrToIndex(c) else .null;
+        }
+        pub fn setSibling(ctx: Ctx, node: *Node, sibling: ?*Node) void {
+            node.sibling = if (sibling) |s| ctx.pool.ptrToIndex(s) else .null;
+        }
+    });
 
     // TODO: large values (e.g. Hashes) should probably live elsewhere in memory to keep tree
     // traversal fast
@@ -120,7 +146,6 @@ const BlockTree = struct {
 
         return .{
             .node_pool = pool,
-            .node_tree = .{ .buf = @ptrCast(pool_buf.ptr), .len = @intCast(pool_buf.len) },
             .consensus_rooted_block = pool.ptrToIndex(root_node),
         };
     }
@@ -161,7 +186,7 @@ const BlockTree = struct {
         // if the node's slot is >= the parent's slot, we can skip the child traversal, as children
         // always have increasing slots
         if (parent_slot > node.slot and node.child != .null) {
-            const child_node: *Node = @ptrCast(&self.node_pool.buf[@intFromEnum(node.child)]);
+            const child_node: *Node = self.node_pool.indexToPtr(node.child);
             if (findUnrootedParentRecursive(
                 self,
                 child_node,
@@ -174,7 +199,7 @@ const BlockTree = struct {
         // siblings are nodes which have chained off the same parent node, which does not imply
         // ordering.
         if (node.sibling != .null) {
-            const sibling_node: *Node = @ptrCast(&self.node_pool.buf[@intFromEnum(node.child)]);
+            const sibling_node: *Node = self.node_pool.indexToPtr(node.sibling);
             if (findUnrootedParentRecursive(
                 self,
                 sibling_node,
@@ -227,7 +252,7 @@ const BlockTree = struct {
             .last_fecset_merkle_root = undefined, // only set once the last fecset is received
         };
 
-        self.node_tree.linkOrphaned(parent, new_child);
+        NodeTree.linkOrphaned(.{ .pool = self.node_pool }, parent, new_child);
 
         return self.node_pool.ptrToIndex(new_child);
     }
@@ -314,9 +339,8 @@ const MerkleNode = extern struct {
 // TODO: handle eviction
 /// A tree of FEC sets, which are also keyed by their merkle (and chained) merkle roots.
 const MerkleForest = struct {
-    // owns all of the memory of nodes used in the tree
+    // owns all of the memory of nodes used in the map/tree nodes
     pool: NodePool,
-    tree: NodeTree,
 
     // Nodes are inserted, keyed by their merkle root.
     // New nodes can look for their parent using this map.
@@ -339,7 +363,36 @@ const MerkleForest = struct {
     const MerkleMap = std.ArrayHashMapUnmanaged(void, *MerkleNode, MerkleContext, true);
 
     const NodePool = Pool(MerkleNode, u32);
-    const NodeTree = Tree(MerkleNode, u32);
+
+    const NodeTree = Tree(MerkleNode, struct {
+        pool: NodePool,
+
+        const Ctx = @This();
+
+        fn buf(ctx: Ctx) []MerkleNode {
+            return @ptrCast(ctx.pool.buf[0..ctx.pool.len]);
+        }
+
+        pub fn parentOf(ctx: Ctx, node: *MerkleNode) ?*MerkleNode {
+            return &ctx.buf()[node.parent.index() orelse return null];
+        }
+        pub fn childOf(ctx: Ctx, node: *MerkleNode) ?*MerkleNode {
+            return &ctx.buf()[node.child.index() orelse return null];
+        }
+        pub fn siblingOf(ctx: Ctx, node: *MerkleNode) ?*MerkleNode {
+            return &ctx.buf()[node.sibling.index() orelse return null];
+        }
+
+        pub fn setParent(ctx: Ctx, node: *MerkleNode, parent: ?*MerkleNode) void {
+            node.parent = if (parent) |p| ctx.pool.ptrToIndex(p) else .null;
+        }
+        pub fn setChild(ctx: Ctx, node: *MerkleNode, child: ?*MerkleNode) void {
+            node.child = if (child) |c| ctx.pool.ptrToIndex(c) else .null;
+        }
+        pub fn setSibling(ctx: Ctx, node: *MerkleNode, sibling: ?*MerkleNode) void {
+            node.sibling = if (sibling) |s| ctx.pool.ptrToIndex(s) else .null;
+        }
+    });
 
     const MerkleContext = struct {
         map: *const MerkleMap,
@@ -382,8 +435,6 @@ const MerkleForest = struct {
         return .{
             // NOTE: the pool and the tree share the exact same buffer - this is intentional
             .pool = .init(pool_buf[0..capacity]),
-            .tree = .{ .buf = @ptrCast(pool_buf.ptr), .len = @intCast(pool_buf.len) },
-
             .map = map,
             .orphan_map = orphan_map,
         };
@@ -443,7 +494,7 @@ const MerkleForest = struct {
 
         // TODO: stop checking cross-slot?
         if (self.map.getAdapted(&new_fec_set.chained_merkle_root, map_ctx)) |parent| {
-            self.tree.linkOrphaned(parent, node);
+            NodeTree.linkOrphaned(.{ .pool = self.pool }, parent, node);
             // return .{ .inserted_known_chain = parent };
         } else if (new_fec_set.id.fec_set_idx != 0) {
             // We don't have this fec set's parent yet, and it should have one.
@@ -468,7 +519,7 @@ const MerkleForest = struct {
         var must_wait_for_child: bool = false;
 
         if (self.orphan_map.getAdapted(&new_fec_set.merkle_root, orphan_map_ctx)) |child| {
-            self.tree.linkOrphaned(node, child);
+            NodeTree.linkOrphaned(.{ .pool = self.pool }, node, child);
         } else if (!new_fec_set.slot_complete) {
             // We don't have this fec set's child yet, and it should have one
             //

@@ -7,14 +7,17 @@ const Id = collections.Id;
 /// Asserts Item to have an alignment and size >= IdInt
 /// NOTE: this pool is not atomic, but is designed such that it could be made atomic easily
 pub fn Pool(Item: type, IdInt: type) type {
+    switch (IdInt) {
+        u8, u16, u32, u64 => {},
+        else => @compileError("Unexpected integer type"),
+    }
+
     return extern struct {
         free_list: ItemId,
         len: IdInt,
         buf: [*]Node,
 
-        const Self = @This();
-
-        pub const ItemId = Id(IdInt);
+        const PoolSelf = @This();
 
         // We know when next_free is active when we walk the free_list
         const Node = extern union { next_free: ItemId, item: Item };
@@ -26,7 +29,27 @@ pub fn Pool(Item: type, IdInt: type) type {
             if (@alignOf(Node) != @alignOf(Item)) unreachable;
         }
 
-        pub fn init(item_buf: []Item) Self {
+        pub const ItemId = enum(IdInt) {
+            null = std.math.maxInt(IdInt),
+            _,
+
+            const IdSelf = @This();
+
+            comptime {
+                _ = PoolSelf;
+            }
+
+            pub fn index(self: IdSelf) ?IdInt {
+                if (self == .null) return null;
+                return @intFromEnum(self);
+            }
+
+            pub fn fromInt(int: IdInt) IdSelf {
+                return @enumFromInt(int);
+            }
+        };
+
+        pub fn init(item_buf: []Item) PoolSelf {
             std.debug.assert(item_buf.len < std.math.maxInt(IdInt));
 
             const buf: []Node = @ptrCast(item_buf);
@@ -46,7 +69,7 @@ pub fn Pool(Item: type, IdInt: type) type {
         }
 
         // take head off free_list
-        pub fn create(self: *Self) !*Item {
+        pub fn create(self: *PoolSelf) !*Item {
             if (self.free_list == .null) return error.OutOfSpace;
 
             const new_node: *Node = &self.buf[self.free_list.index().?];
@@ -55,13 +78,13 @@ pub fn Pool(Item: type, IdInt: type) type {
             return @ptrCast(new_node);
         }
 
-        pub fn createId(self: *Self) !ItemId {
+        pub fn createId(self: *PoolSelf) !ItemId {
             const item = try self.create();
             return self.ptrToIndex(item);
         }
 
         // place item as head of free_list
-        pub fn destroy(self: *Self, item: *Item) void {
+        pub fn destroy(self: *PoolSelf, item: *Item) void {
             item.* = undefined;
 
             const node: *Node = @ptrCast(item);
@@ -69,18 +92,18 @@ pub fn Pool(Item: type, IdInt: type) type {
             self.free_list = self.ptrToIndex(item);
         }
 
-        pub fn destroyId(self: *Self, item_id: ItemId) void {
+        pub fn destroyId(self: *PoolSelf, item_id: ItemId) void {
             std.debug.assert(item_id != .null);
             const item: *Item = @ptrCast(&self.buf[item_id.index().?]);
             self.destroy(item);
         }
 
-        pub fn indexToPtr(self: *const Self, item_id: ItemId) *Item {
+        pub fn indexToPtr(self: *const PoolSelf, item_id: ItemId) *Item {
             std.debug.assert(item_id != .null);
             return @ptrCast(&self.buf[item_id.index().?]);
         }
 
-        pub fn ptrToIndex(self: *const Self, item: *Item) ItemId {
+        pub fn ptrToIndex(self: *const PoolSelf, item: *Item) ItemId {
             const node: [*]const Node = @ptrCast(item);
             const base: [*]const Node = self.buf;
 
