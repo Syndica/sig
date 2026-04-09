@@ -1,4 +1,5 @@
 const std = @import("std");
+const tel = @import("../../telemetry.zig");
 
 pub const Config = struct {
     min_timeout_ns: u64,
@@ -8,6 +9,7 @@ pub const Config = struct {
 };
 
 pub fn downloadSnapshot(
+    logger: tel.Logger("downloadSnapshot"),
     snapshot_dir: std.fs.Dir,
     path: []const u8,
     addr: std.net.Address,
@@ -73,8 +75,12 @@ pub fn downloadSnapshot(
         }
     } else return error.MissingHttpContentLength;
 
-    if (content_length > 512 * 1024 * 1024 * 1024) return error.SnapshotTooBig;
-    std.log.debug(" fetching {B:.2} snapshot file", .{content_length});
+    if (content_length > 512 * 1024 * 1024 * 1024) {
+        return error.SnapshotTooBig;
+    }
+
+    // TODO: should be trace() instead when per-service filtering is implemented.
+    logger.debug().logf(" fetching {B:.2} snapshot file", .{content_length});
     try std.posix.ftruncate(snapshot_file.handle, content_length);
 
     // write any body data read into io_buf
@@ -113,11 +119,21 @@ pub fn downloadSnapshot(
         const since_per_sec = now.since(per_sec.timestamp);
 
         const may_partial_move = (content_length - in) > pipe_buf_size;
-        n = try splice(socket, pipe[1], content_length - in, may_partial_move);
+        n = try splice(socket, pipe[1], content_length - in, .{
+            .MOVE = true,
+            .MORE = may_partial_move,
+        });
         in += if (n > 0) n else return error.EndOfStream;
 
         const will_move_more = in < content_length;
-        out += try splice(pipe[0], snapshot_file.handle, in - out, will_move_more);
+        out += splice(pipe[0], snapshot_file.handle, in - out, .{
+            .MOVE = true,
+            .MORE = will_move_more,
+            .NONBLOCK = true,
+        }) catch |e| switch (e) {
+            error.WouldBlock => 0,
+            else => |err| return err,
+        };
 
         total.transferred += n;
         per_sec.transferred += n;
@@ -140,7 +156,8 @@ pub fn downloadSnapshot(
             const crossed_lockin_percent = over_lockin_percent and !past_lockin;
             past_lockin = over_lockin_percent;
 
-            std.log.debug(" download speed: {B:.2}/s {d:.1}% ({B:.2}/{B:.2}) {s}", .{
+            // TODO: should be trace() instead when per-service filtering is implemented.
+            logger.info().logf(" download speed: {B:.2}/s {d:.1}% ({B:.2}/{B:.2}) {s}", .{
                 bytes_per_sec,
                 total_progress,
                 total.transferred,
@@ -159,23 +176,28 @@ pub fn downloadSnapshot(
     // finish up any bytes still left in the pipe
     while (out < in) {
         const may_partial_move = (in - out) > pipe_buf_size;
-        out += try splice(pipe[0], snapshot_file.handle, in - out, may_partial_move);
+        out += try splice(pipe[0], snapshot_file.handle, in - out, .{
+            .MOVE = true,
+            .MORE = may_partial_move,
+        });
     }
 
-    std.log.debug(" commiting snapshot file to disk..", .{});
+    // TODO: should be debug() instead when per-service filtering is implemented.
+    logger.info().logf(" commiting snapshot file to disk..", .{});
     try snapshot_file.sync();
     return snapshot_file;
 }
 
-fn splice(from: std.posix.fd_t, to: std.posix.fd_t, n: usize, hint_has_more: bool) !usize {
-    const SPLICE_F_MOVE: u32 = 1;
-    // const SPLICE_F_NONBLOCK: u32 = 2;
-    const SPLICE_F_MORE: u32 = 4;
+const SPLICE_F = packed struct(u8) {
+    MOVE: bool = false,
+    NONBLOCK: bool = false,
+    MORE: bool = false,
+    _: u5 = 0,
+};
 
-    const flags = SPLICE_F_MOVE |
-        (SPLICE_F_MORE * @intFromBool(hint_has_more));
-
-    const rc = std.os.linux.syscall6(.splice, @intCast(from), 0, @intCast(to), 0, n, flags);
+fn splice(from: std.posix.fd_t, to: std.posix.fd_t, n: usize, flags: SPLICE_F) !usize {
+    const raw_flags: u8 = @bitCast(flags);
+    const rc = std.os.linux.syscall6(.splice, @intCast(from), 0, @intCast(to), 0, n, raw_flags);
     switch (std.posix.errno(rc)) {
         .SUCCESS => return rc,
         .AGAIN => return error.WouldBlock,
