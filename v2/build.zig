@@ -8,10 +8,22 @@ const test_install_dir: Build.Step.InstallArtifact.Options.Dir = .{
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const use_llvm = b.option(bool, "use-llvm", "Force usage of LLVM (currently ignored for some artifacts).");
+    const use_llvm = b.option(
+        bool,
+        "use-llvm",
+        "Force usage of LLVM (currently ignored for some artifacts).",
+    );
     const artifact_opts: ExeOutput.InitOptions = .{
-        .no_bin = b.option(bool, "no-bin", "Don't install artifacts implied by specified steps.") orelse false,
-        .no_run = b.option(bool, "no-run", "Don't execute run steps implied by the specified steps.") orelse false,
+        .no_bin = b.option(
+            bool,
+            "no-bin",
+            "Don't install artifacts implied by specified steps.",
+        ) orelse false,
+        .no_run = b.option(
+            bool,
+            "no-run",
+            "Don't execute run steps implied by the specified steps.",
+        ) orelse false,
     };
 
     const tracy_enable = b.option(bool, "enable-tracy", "Enables tracy") orelse false;
