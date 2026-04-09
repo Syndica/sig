@@ -218,6 +218,22 @@ pub const DistributedRewards = struct {
         return .{ .arena_state = .{} };
     }
 
+    /// Clone into a new arena backed by `allocator`.
+    /// The caller owns the returned value and must call `deinit(allocator)` on it.
+    pub fn clone(self: DistributedRewards, allocator: Allocator) Allocator.Error!DistributedRewards {
+        if (self.rewards.len == 0) {
+            return .{ .num_partitions = self.num_partitions };
+        }
+        var arena: std.heap.ArenaAllocator = .init(allocator);
+        errdefer arena.deinit();
+        const rewards_copy = try arena.allocator().dupe(sig.ledger.meta.Reward, self.rewards);
+        return .{
+            .rewards = rewards_copy,
+            .num_partitions = self.num_partitions,
+            .arena_state = arena.state,
+        };
+    }
+
     /// Note: `allocator` must be the same backing allocator used when `arena_state`
     /// was captured.
     pub fn deinit(self: *DistributedRewards, allocator: Allocator) void {

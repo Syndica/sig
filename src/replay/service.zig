@@ -822,6 +822,11 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     );
                     errdefer accounts.deinit(event_sink.allocator());
 
+                    // Clone into event allocator so the event owns data
+                    // independently of `state.allocator`.
+                    var event_distributed = try distributed.clone(event_sink.allocator());
+                    errdefer event_distributed.deinit(event_sink.allocator());
+
                     try event_sink.send(.{
                         .slot_frozen = .{
                             .slot = slot,
@@ -836,11 +841,9 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                                 schema.blocktime,
                                 slot,
                             ),
-                            .distributed_rewards = distributed,
+                            .distributed_rewards = event_distributed,
                         },
                     });
-                    // Ownership transferred to event.
-                    distributed = .empty();
                 }
             } else {
                 state.logger.info().logf("partially replayed slot: {}", .{slot});
@@ -1982,10 +1985,26 @@ test "freezeCompletedSlots emits slot_frozen event with slot metadata" {
     defer event_sink.destroy();
     replay_state.event_sink = event_sink;
 
-    try addReplayStateSlotForTest(&replay_state, 1, 0, Pubkey.ZEROES, null);
+    // Use a real leader so that fee distribution produces a non-empty
+    // distributed_rewards (the collector account must exist and be
+    // system-owned for the payout to succeed).
+    const leader: Pubkey = .parse("49VSQjsQyFQ71MsFqoXkpEu3DToL98ChbLGx7UZEn69r");
+    try dep_stubs.accounts_db_state.db.put(0, leader, .{
+        .lamports = 1_000_000_000,
+        .data = &.{},
+        .owner = sig.runtime.program.system.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    try addReplayStateSlotForTest(&replay_state, 1, 0, leader, null);
     const slot_ref = replay_state.slot_tracker.get(1) orelse return error.MissingSlotInTracker;
     defer slot_ref.release();
     slot_ref.state().tick_height.store(slot_ref.constants().max_tick_height, .monotonic);
+
+    // Set non-zero fees so that distributeTransactionFees produces a fee
+    // reward entry in the DistributedRewards.
+    slot_ref.state().collected_transaction_fees.store(10_000, .monotonic);
 
     // Populate block_time so the frozen event carries a real value instead of null.
     const expected_block_time: i64 = 1_723_456_789;
@@ -2011,6 +2030,18 @@ test "freezeCompletedSlots emits slot_frozen event with slot metadata" {
             // block_time is read from ledger (clock.unix_timestamp);
             // populated above via db.put so we can assert the real value.
             try std.testing.expectEqual(expected_block_time, slot_frozen.block_time.?);
+            // Fee distribution should produce exactly one fee reward entry.
+            // This exercises the clone() path that copies distributed_rewards
+            // from state.allocator into event_sink.allocator().
+            try std.testing.expectEqual(1, slot_frozen.distributed_rewards.rewards.len);
+            try std.testing.expectEqual(
+                leader,
+                slot_frozen.distributed_rewards.rewards[0].pubkey,
+            );
+            try std.testing.expectEqual(
+                .fee,
+                slot_frozen.distributed_rewards.rewards[0].reward_type,
+            );
         },
         else => return error.TestUnexpectedResult,
     }
