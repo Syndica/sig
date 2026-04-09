@@ -377,9 +377,12 @@ pub fn GossipNode(comptime Effects: type) type {
                     const last_pong = peer.last_pong orelse
                         return error.PullResponseFromUnverifiedPeer;
 
+                    // TODO: figure out what the correct cutoff is here.
+                    //
                     // *1 for when selected during PullRequest. another *1 for recv window after that.
-                    if (last_pong <= now -| (ACTIVE_PONG_THRESHOLD_MS * 2))
-                        return error.PullResponseFromExpiredPeer;
+                    // if (last_pong <= now -| (ACTIVE_PONG_THRESHOLD_MS * 2))
+                    //     return error.PullResponseFromExpiredPeer;
+                    _ = last_pong;
 
                     for (pr.values.items) |value| {
                         _ = try self.insertValue(.from(logger), now, .pull, value);
