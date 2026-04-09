@@ -145,7 +145,10 @@ pub const ClientVersion = struct {
         };
     }
 
-    fn unpackMinorAndPatch(packed_minor: u16, packed_patch: u16) PackedMinorError!PackedMinorAndPatch {
+    fn unpackMinorAndPatch(
+        packed_minor: u16,
+        packed_patch: u16,
+    ) PackedMinorError!PackedMinorAndPatch {
         const shifted_prerelease_bits = packed_minor >> PRERELEASE_BITS_OFFSET;
         const reserved_bits = shifted_prerelease_bits & ~PRERELEASE_MASK;
         if (reserved_bits != 0) {
@@ -189,7 +192,12 @@ pub const ClientVersion = struct {
         const packed_minor = try std.leb.readUleb128(u16, reader);
         const packed_patch = try std.leb.readUleb128(u16, reader);
         const commit = try sig.bincode.readWithLimit(limit_allocator, u32, reader, params);
-        const feature_set_value = try sig.bincode.readWithLimit(limit_allocator, u32, reader, params);
+        const feature_set_value = try sig.bincode.readWithLimit(
+            limit_allocator,
+            u32,
+            reader,
+            params,
+        );
         const client = try ClientId.deserialize(limit_allocator, reader, params);
 
         const unpacked = try unpackMinorAndPatch(packed_minor, packed_patch);
@@ -211,7 +219,13 @@ pub const ClientVersion = struct {
 
     pub fn format(self: ClientVersion, writer: *std.Io.Writer) !void {
         const sep = if (self.prerelease == .stable) "" else "-";
-        try writer.print("{}.{}.{}{s}{f}", .{ self.major, self.minor, self.patch, sep, self.prerelease });
+        try writer.print("{}.{}.{}{s}{f}", .{
+            self.major,
+            self.minor,
+            self.patch,
+            sep,
+            self.prerelease,
+        });
     }
 };
 
@@ -265,12 +279,22 @@ test "ClientVersion bincode roundtrip for stable and prerelease" {
 
     var stable_buf: [64]u8 = undefined;
     const stable_written = try sig.bincode.writeToSlice(stable_buf[0..], stable, .{});
-    const decoded_stable = try sig.bincode.readFromSlice(std.testing.allocator, ClientVersion, stable_written, .{});
+    const decoded_stable = try sig.bincode.readFromSlice(
+        std.testing.allocator,
+        ClientVersion,
+        stable_written,
+        .{},
+    );
     try std.testing.expectEqualDeep(stable, decoded_stable);
 
     var rc_buf: [64]u8 = undefined;
     const rc_written = try sig.bincode.writeToSlice(rc_buf[0..], rc, .{});
-    const decoded_rc = try sig.bincode.readFromSlice(std.testing.allocator, ClientVersion, rc_written, .{});
+    const decoded_rc = try sig.bincode.readFromSlice(
+        std.testing.allocator,
+        ClientVersion,
+        rc_written,
+        .{},
+    );
     try std.testing.expectEqualDeep(rc, decoded_rc);
 }
 
