@@ -1,6 +1,5 @@
 const std = @import("std");
 const lib = @import("../lib.zig");
-const collections = @import("../collections.zig");
 
 /// An implementation of a left-child right-sibling tree.
 /// NOTE: this implementation is not atomic, but could be made atomic with minimal effort
