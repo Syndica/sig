@@ -515,12 +515,8 @@ fn contactInfoToRpc(
         ),
         .version = try std.fmt.allocPrint(
             arena,
-            "{d}.{d}.{d}",
-            .{
-                contact_info.version.major,
-                contact_info.version.minor,
-                contact_info.version.patch,
-            },
+            "{f}",
+            .{contact_info.version},
         ),
         .featureSet = contact_info.version.feature_set,
         .shredVersion = contact_info.shred_version,
