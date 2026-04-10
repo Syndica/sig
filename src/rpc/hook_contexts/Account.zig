@@ -1366,6 +1366,60 @@ test "getTokenAccountBalance - resolves commitment slot" {
     try testing.expectError(error.RpcAccountNotFound, err);
 }
 
+test "getLargestAccounts - sortResults default returns empty for no rooted accounts" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const test_slot: Slot = 42;
+
+    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
+    defer commitments.deinit(testing.allocator);
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
+
+    // sortResults defaults to true; with no rooted accounts, returns empty
+    const result = try ctx.getLargestAccounts(arena, .{
+        .config = .{ .commitment = .processed },
+    });
+    try testing.expectEqual(@as(usize, 0), result.value.len);
+    try testing.expectEqual(test_slot, result.context.slot);
+}
+
+test "getLargestAccounts - sortResults false returns empty for no rooted accounts" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const test_slot: Slot = 42;
+
+    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
+    defer commitments.deinit(testing.allocator);
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
+
+    // sortResults = false, still returns empty with no rooted accounts
+    const result = try ctx.getLargestAccounts(arena, .{
+        .config = .{ .commitment = .processed, .sortResults = false },
+    });
+    try testing.expectEqual(@as(usize, 0), result.value.len);
+    try testing.expectEqual(test_slot, result.context.slot);
+}
+
 test "getTokenSupply - resolves commitment slot" {
     var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
     defer test_state.deinit();

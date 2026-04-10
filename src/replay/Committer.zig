@@ -848,6 +848,288 @@ test "commitTransactions emits transaction logs batch with transaction metadata"
     try std.testing.expect(event_sink.channel.tryReceive() == null);
 }
 
+test "isMemoProgram identifies SPL memo program IDs" {
+    // V1 memo program
+    var v1_id = spl_token.SPL_MEMO_V1_ID;
+    try std.testing.expect(isMemoProgram(&v1_id));
+
+    // V3 memo program
+    var v3_id = spl_token.SPL_MEMO_V3_ID;
+    try std.testing.expect(isMemoProgram(&v3_id));
+
+    // Non-memo program
+    var other = Pubkey.ZEROES;
+    try std.testing.expect(!isMemoProgram(&other));
+}
+
+test "extractMemos returns null when no memo instructions" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    var resolved = try initResolvedTransaction(allocator, prng.random());
+    defer {
+        resolved.deinit(allocator);
+        resolved.transaction.deinit(allocator);
+    }
+
+    const dummy_result: ProcessedTransaction = .{
+        .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
+        .rent = 0,
+        .writes = .{},
+        .err = null,
+        .loaded_accounts_data_size = 0,
+        .outputs = .{
+            .err = null,
+            .log_collector = null,
+            .instruction_trace = null,
+            .return_data = null,
+            .compute_limit = 0,
+            .compute_meter = 0,
+            .accounts_data_len_delta = 0,
+        },
+        .pre_balances = .{},
+        .pre_token_balances = .{},
+        .cost_units = 0,
+    };
+
+    const result = try extractMemos(allocator, resolved, dummy_result);
+    try std.testing.expect(result == null);
+}
+
+test "extractMemos extracts single valid UTF-8 memo" {
+    const allocator = std.testing.allocator;
+
+    // Build a transaction with one memo instruction
+    const memo_data = "hello memo";
+    const account_keys = try allocator.alloc(Pubkey, 2);
+    defer allocator.free(account_keys);
+    account_keys[0] = Pubkey.ZEROES; // payer
+    account_keys[1] = spl_token.SPL_MEMO_V1_ID; // memo program
+
+    const instructions = try allocator.alloc(sig.core.transaction.Instruction, 1);
+    defer {
+        for (instructions) |instr| instr.deinit(allocator);
+        allocator.free(instructions);
+    }
+    instructions[0] = .{
+        .program_index = 1,
+        .account_indexes = try allocator.dupe(u8, &.{}),
+        .data = try allocator.dupe(u8, memo_data),
+    };
+
+    const signatures = try allocator.alloc(sig.core.Signature, 1);
+    defer allocator.free(signatures);
+    signatures[0] = sig.core.Signature.ZEROES;
+
+    const transaction: sig.core.Transaction = .{
+        .signatures = signatures,
+        .version = .legacy,
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 1,
+            .account_keys = account_keys,
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = instructions,
+        },
+    };
+
+    var resolved_accounts: std.MultiArrayList(sig.core.instruction.InstructionAccount) = .{};
+    defer resolved_accounts.deinit(allocator);
+    try resolved_accounts.ensureTotalCapacity(allocator, 2);
+    resolved_accounts.appendAssumeCapacity(.{
+        .pubkey = account_keys[0],
+        .is_signer = true,
+        .is_writable = true,
+    });
+    resolved_accounts.appendAssumeCapacity(.{
+        .pubkey = account_keys[1],
+        .is_signer = false,
+        .is_writable = false,
+    });
+
+    const resolved: ResolvedTransaction = .{
+        .transaction = transaction,
+        .accounts = resolved_accounts,
+        .instructions = &.{},
+    };
+
+    const dummy_result: ProcessedTransaction = .{
+        .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
+        .rent = 0,
+        .writes = .{},
+        .err = null,
+        .loaded_accounts_data_size = 0,
+        .outputs = .{
+            .err = null,
+            .log_collector = null,
+            .instruction_trace = null,
+            .return_data = null,
+            .compute_limit = 0,
+            .compute_meter = 0,
+            .accounts_data_len_delta = 0,
+        },
+        .pre_balances = .{},
+        .pre_token_balances = .{},
+        .cost_units = 0,
+    };
+
+    const result = try extractMemos(allocator, resolved, dummy_result);
+    defer if (result) |r| allocator.free(r);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("[10] hello memo", result.?);
+}
+
+test "extractMemos joins multiple memos with separator" {
+    const allocator = std.testing.allocator;
+
+    const account_keys = try allocator.alloc(Pubkey, 3);
+    defer allocator.free(account_keys);
+    account_keys[0] = Pubkey.ZEROES;
+    account_keys[1] = spl_token.SPL_MEMO_V1_ID;
+    account_keys[2] = spl_token.SPL_MEMO_V3_ID;
+
+    const instructions = try allocator.alloc(sig.core.transaction.Instruction, 2);
+    defer {
+        for (instructions) |instr| instr.deinit(allocator);
+        allocator.free(instructions);
+    }
+    instructions[0] = .{
+        .program_index = 1,
+        .account_indexes = try allocator.dupe(u8, &.{}),
+        .data = try allocator.dupe(u8, "first"),
+    };
+    instructions[1] = .{
+        .program_index = 2,
+        .account_indexes = try allocator.dupe(u8, &.{}),
+        .data = try allocator.dupe(u8, "second"),
+    };
+
+    const signatures = try allocator.alloc(sig.core.Signature, 1);
+    defer allocator.free(signatures);
+    signatures[0] = sig.core.Signature.ZEROES;
+
+    const transaction: sig.core.Transaction = .{
+        .signatures = signatures,
+        .version = .legacy,
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 2,
+            .account_keys = account_keys,
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = instructions,
+        },
+    };
+
+    var resolved_accounts: std.MultiArrayList(sig.core.instruction.InstructionAccount) = .{};
+    defer resolved_accounts.deinit(allocator);
+
+    const resolved: ResolvedTransaction = .{
+        .transaction = transaction,
+        .accounts = resolved_accounts,
+        .instructions = &.{},
+    };
+
+    const dummy_result: ProcessedTransaction = .{
+        .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
+        .rent = 0,
+        .writes = .{},
+        .err = null,
+        .loaded_accounts_data_size = 0,
+        .outputs = .{
+            .err = null,
+            .log_collector = null,
+            .instruction_trace = null,
+            .return_data = null,
+            .compute_limit = 0,
+            .compute_meter = 0,
+            .accounts_data_len_delta = 0,
+        },
+        .pre_balances = .{},
+        .pre_token_balances = .{},
+        .cost_units = 0,
+    };
+
+    const result = try extractMemos(allocator, resolved, dummy_result);
+    defer if (result) |r| allocator.free(r);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("[5] first; [6] second", result.?);
+}
+
+test "extractMemos handles invalid UTF-8 as unparseable" {
+    const allocator = std.testing.allocator;
+
+    const account_keys = try allocator.alloc(Pubkey, 2);
+    defer allocator.free(account_keys);
+    account_keys[0] = Pubkey.ZEROES;
+    account_keys[1] = spl_token.SPL_MEMO_V1_ID;
+
+    // Invalid UTF-8: 0xFF is not valid in any position
+    const invalid_utf8 = &[_]u8{ 0xFF, 0xFE };
+
+    const instructions = try allocator.alloc(sig.core.transaction.Instruction, 1);
+    defer {
+        for (instructions) |instr| instr.deinit(allocator);
+        allocator.free(instructions);
+    }
+    instructions[0] = .{
+        .program_index = 1,
+        .account_indexes = try allocator.dupe(u8, &.{}),
+        .data = try allocator.dupe(u8, invalid_utf8),
+    };
+
+    const signatures = try allocator.alloc(sig.core.Signature, 1);
+    defer allocator.free(signatures);
+    signatures[0] = sig.core.Signature.ZEROES;
+
+    const transaction: sig.core.Transaction = .{
+        .signatures = signatures,
+        .version = .legacy,
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 1,
+            .account_keys = account_keys,
+            .recent_blockhash = Hash.ZEROES,
+            .instructions = instructions,
+        },
+    };
+
+    var resolved_accounts: std.MultiArrayList(sig.core.instruction.InstructionAccount) = .{};
+    defer resolved_accounts.deinit(allocator);
+
+    const resolved: ResolvedTransaction = .{
+        .transaction = transaction,
+        .accounts = resolved_accounts,
+        .instructions = &.{},
+    };
+
+    const dummy_result: ProcessedTransaction = .{
+        .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
+        .rent = 0,
+        .writes = .{},
+        .err = null,
+        .loaded_accounts_data_size = 0,
+        .outputs = .{
+            .err = null,
+            .log_collector = null,
+            .instruction_trace = null,
+            .return_data = null,
+            .compute_limit = 0,
+            .compute_meter = 0,
+            .accounts_data_len_delta = 0,
+        },
+        .pre_balances = .{},
+        .pre_token_balances = .{},
+        .cost_units = 0,
+    };
+
+    const result = try extractMemos(allocator, resolved, dummy_result);
+    defer if (result) |r| allocator.free(r);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("[2] (unparseable)", result.?);
+}
+
 test "commitTransactions emits empty transaction logs batch when execution has no logs" {
     const allocator = std.testing.allocator;
 
