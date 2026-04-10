@@ -225,11 +225,9 @@ pub fn commitTransactions(
     _ = self.slot_state.collected_rent.fetchAdd(rent_collected, .monotonic);
 
     // Per-slot stats for slotsUpdatesSubscribe frozen notifications.
+    // Entry-level counters are updated from replay code that still has
+    // actual ledger entry boundaries.
     _ = self.slot_state.transaction_error_count.fetchAdd(error_count, .monotonic);
-    if (tx_results.len > 0) {
-        _ = self.slot_state.transaction_entries_count.fetchAdd(1, .monotonic);
-        _ = self.slot_state.transactions_per_entry_max.fetchMax(tx_results.len, .monotonic);
-    }
 
     for (accounts_to_store.values()) |account| {
         try self.stakes_cache.checkAndStore(

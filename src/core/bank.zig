@@ -215,10 +215,10 @@ pub const SlotState = struct {
     /// Number of transactions that failed during this slot.
     transaction_error_count: Atomic(u64),
 
-    /// Number of entry batches committed during this slot.
+    /// Number of ledger entries containing transactions during this slot.
     transaction_entries_count: Atomic(u64),
 
-    /// High-water mark of transactions in any single entry batch during this slot.
+    /// High-water mark of transactions in any single ledger entry during this slot.
     transactions_per_entry_max: Atomic(u64),
 
     /// The lattice hash of all accounts
