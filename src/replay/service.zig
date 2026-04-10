@@ -972,12 +972,12 @@ pub fn handleSlotUpdate(
         );
     }
 
+    // send events
     if (replay_state.event_sink) |sink| {
         if (slot_update.root) |new_root| {
             try sink.send(.{ .slot_local_rooted = new_root });
         }
 
-        // send events (only for commitments that have changed)
         if (replay_state.commitments) |*c| {
             const processed_slot = c.get(.processed);
             if (processed_slot != old_processed) {
