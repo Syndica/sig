@@ -198,6 +198,11 @@ pub const TestServer = struct {
                 slot_data.accounts.deinit(self.event_sink.allocator());
                 slot_data.accounts = new_accounts;
             },
+            .slot_dead => |*dead| {
+                dead.err = self.event_sink.allocator().dupe(u8, dead.err) catch {
+                    return;
+                };
+            },
             else => {},
         }
         self.event_sink.send(event) catch |err| {
@@ -449,6 +454,11 @@ pub const IntegratedTestServer = struct {
                 };
                 slot_data.accounts.deinit(self.event_sink.allocator());
                 slot_data.accounts = new_accounts;
+            },
+            .slot_dead => |*dead| {
+                dead.err = self.event_sink.allocator().dupe(u8, dead.err) catch {
+                    return;
+                };
             },
             else => {},
         }

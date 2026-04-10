@@ -72,7 +72,7 @@ test "multiple clients receive independent notifications" {
     };
 
     server.injectEvent(.{ .slot_frozen = .{ .slot = 200, .parent = 199, .root = 168 } });
-    server.injectEvent(.{ .slot_rooted = 201 });
+    server.injectEvent(.{ .slot_finalized_rooted = 201 });
 
     const deadline_notif = @as(u64, @intCast(std.time.milliTimestamp())) + 5000;
     while (@as(u64, @intCast(std.time.milliTimestamp())) < deadline_notif) {

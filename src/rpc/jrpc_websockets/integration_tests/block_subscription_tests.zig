@@ -86,7 +86,7 @@ test "blockSubscribe finalized: subscribe, notify, unsubscribe" {
         .parent = 0,
         .root = 0,
     } });
-    server.injectEvent(.{ .slot_rooted = 50 });
+    server.injectEvent(.{ .slot_finalized_rooted = 50 });
 
     // Wait for blockNotification.
     waitForMessages(server, &client_env, &handler, 2, 5000);
@@ -229,7 +229,7 @@ test "blockSubscribe without ledger: notification still sent from cache" {
         .parent = 0,
         .root = 0,
     } });
-    server.injectEvent(.{ .slot_rooted = 50 });
+    server.injectEvent(.{ .slot_finalized_rooted = 50 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expectEqual(2, handler.received.items.len);

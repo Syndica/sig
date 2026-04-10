@@ -156,7 +156,7 @@ test "logsSubscribe basic subscribe notify unsubscribe" {
         .mentioned_pubkeys = &.{},
     }}));
     server.injectEvent(.{ .slot_frozen = .{ .slot = 50, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 50 });
+    server.injectEvent(.{ .slot_finalized_rooted = 50 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     const parsed_notif = try parseLogsNotification(allocator, handler.received.items[1]);
@@ -228,7 +228,7 @@ test "logsSubscribe all excludes vote transactions" {
         },
     }));
     server.injectEvent(.{ .slot_frozen = .{ .slot = 60, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 60 });
+    server.injectEvent(.{ .slot_finalized_rooted = 60 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expectEqual(2, handler.received.items.len);
@@ -291,7 +291,7 @@ test "logsSubscribe allWithVotes includes vote transactions" {
         },
     }));
     server.injectEvent(.{ .slot_frozen = .{ .slot = 61, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 61 });
+    server.injectEvent(.{ .slot_finalized_rooted = 61 });
 
     waitForMessages(server, &client_env, &handler, 3, 5000);
     const parsed_notif1 = try parseLogsNotification(allocator, handler.received.items[1]);
@@ -362,7 +362,7 @@ test "logsSubscribe mentions matches relevant transactions including votes" {
         },
     }));
     server.injectEvent(.{ .slot_frozen = .{ .slot = 70, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 70 });
+    server.injectEvent(.{ .slot_finalized_rooted = 70 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expectEqual(2, handler.received.items.len);
@@ -583,7 +583,7 @@ test "logsSubscribe confirmed flushes ancestors in order and does not duplicate 
     try std.testing.expectEqualStrings("Program log: slot 2", notif2.params.result.value.logs[0]);
     try std.testing.expectEqualStrings("Program log: slot 3", notif3.params.result.value.logs[0]);
 
-    server.injectEvent(.{ .slot_rooted = 3 });
+    server.injectEvent(.{ .slot_finalized_rooted = 3 });
     runBothLoops(server, &client_env, &handler, 300);
     try std.testing.expectEqual(4, handler.received.items.len);
 }
@@ -645,9 +645,9 @@ test "logsSubscribe finalized publishes rooted slots in order" {
     server.injectEvent(.{ .slot_frozen = .{ .slot = 5, .parent = 4, .root = 0 } });
     server.injectEvent(.{ .slot_frozen = .{ .slot = 6, .parent = 5, .root = 0 } });
 
-    server.injectEvent(.{ .slot_rooted = 4 });
-    server.injectEvent(.{ .slot_rooted = 5 });
-    server.injectEvent(.{ .slot_rooted = 6 });
+    server.injectEvent(.{ .slot_finalized_rooted = 4 });
+    server.injectEvent(.{ .slot_finalized_rooted = 5 });
+    server.injectEvent(.{ .slot_finalized_rooted = 6 });
 
     waitForMessages(server, &client_env, &handler, 4, 5000);
     const parsed_notif1 = try parseLogsNotification(allocator, handler.received.items[1]);
@@ -721,7 +721,7 @@ test "logsSubscribe preserves transaction log order across batches within a slot
     }}));
 
     server.injectEvent(.{ .slot_frozen = .{ .slot = 80, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 80 });
+    server.injectEvent(.{ .slot_finalized_rooted = 80 });
 
     waitForMessages(server, &client_env, &handler, 4, 5000);
     const parsed_notif1 = try parseLogsNotification(allocator, handler.received.items[1]);
