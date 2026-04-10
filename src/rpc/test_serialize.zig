@@ -2239,6 +2239,40 @@ test "GetBlock" {
             .data = "abcd",
         },
     });
+
+    // resolveConfig: no config → all defaults
+    {
+        const cfg = (GetBlock{ .slot = 1 }).resolveConfig();
+        try std.testing.expectEqual(common.Commitment.finalized, cfg.getCommitment());
+        try std.testing.expectEqual(common.TransactionEncoding.json, cfg.getEncoding());
+        try std.testing.expectEqual(common.TransactionDetails.full, cfg.getTransactionDetails());
+        try std.testing.expectEqual(true, cfg.getRewards());
+        try std.testing.expectEqual(@as(?u8, null), cfg.maxSupportedTransactionVersion);
+    }
+
+    // resolveConfig: encoding only → sets encoding, rest defaults
+    {
+        const cfg = (GetBlock{ .slot = 1, .encoding_or_config = .{ .encoding = .base64 } }).resolveConfig();
+        try std.testing.expectEqual(common.TransactionEncoding.base64, cfg.getEncoding());
+        try std.testing.expectEqual(common.Commitment.finalized, cfg.getCommitment());
+        try std.testing.expectEqual(@as(?u8, null), cfg.maxSupportedTransactionVersion);
+    }
+
+    // resolveConfig: full config → uses provided values
+    {
+        const cfg = (GetBlock{ .slot = 1, .encoding_or_config = .{ .config = .{
+            .commitment = .confirmed,
+            .encoding = .jsonParsed,
+            .transactionDetails = .signatures,
+            .maxSupportedTransactionVersion = 0,
+            .rewards = false,
+        } } }).resolveConfig();
+        try std.testing.expectEqual(common.Commitment.confirmed, cfg.getCommitment());
+        try std.testing.expectEqual(common.TransactionEncoding.jsonParsed, cfg.getEncoding());
+        try std.testing.expectEqual(common.TransactionDetails.signatures, cfg.getTransactionDetails());
+        try std.testing.expectEqual(false, cfg.getRewards());
+        try std.testing.expectEqual(@as(?u8, 0), cfg.maxSupportedTransactionVersion);
+    }
 }
 
 test SendTransaction {

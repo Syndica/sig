@@ -855,3 +855,56 @@ test storeDuplicateSlot {
         try std.testing.expectEqualSlices(u8, shred_a, proof3.shred2);
     }
 }
+
+test "writeTransactionStatus persists memo" {
+    const allocator = std.testing.allocator;
+
+    var state = try sig.ledger.tests.initTestLedger(allocator, @src(), .FOR_TESTS);
+    defer state.deinit();
+
+    var result_writer = state.resultWriter();
+    const slot: Slot = 42;
+    const signature = sig.core.Signature.ZEROES;
+
+    const status = TransactionStatusMeta{
+        .status = null,
+        .fee = 0,
+        .pre_balances = &.{},
+        .post_balances = &.{},
+        .inner_instructions = &.{},
+        .log_messages = &.{},
+        .pre_token_balances = &.{},
+        .post_token_balances = &.{},
+        .rewards = &.{},
+        .loaded_addresses = .{},
+        .return_data = .{},
+        .compute_units_consumed = 0,
+        .cost_units = null,
+    };
+
+    // Write with memo
+    try result_writer.writeTransactionStatus(
+        slot,
+        signature,
+        &.{},
+        &.{},
+        status,
+        0,
+        "[11] hello world",
+    );
+
+    // Read memo back
+    const memo_ref = (try state.db.getBytes(schema.transaction_memos, .{ signature, slot })).?;
+    try std.testing.expectEqualStrings("[11] hello world", memo_ref.data);
+
+    // Write without memo — should not create a memo entry
+    const signature2 = comptime blk: {
+        var s = sig.core.Signature.ZEROES;
+        s.r[0] = 1;
+        break :blk s;
+    };
+    try result_writer.writeTransactionStatus(slot, signature2, &.{}, &.{}, status, 1, null);
+
+    const no_memo = try state.db.getBytes(schema.transaction_memos, .{ signature2, slot });
+    try std.testing.expect(no_memo == null);
+}

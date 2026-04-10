@@ -436,7 +436,7 @@ fn writeTransactionStatus(
     };
 
     // Extract memos from transaction instructions
-    const memo = extractMemos(allocator, transaction, tx_result) catch null;
+    const memo = extractMemos(allocator, transaction) catch null;
     defer if (memo) |m| allocator.free(m);
 
     // Build TransactionStatusMeta
@@ -475,7 +475,6 @@ fn isMemoProgram(pubkey: *const Pubkey) bool {
 fn extractMemos(
     allocator: Allocator,
     transaction: ResolvedTransaction,
-    _: ProcessedTransaction,
 ) !?[]const u8 {
     var parts = ArrayListUnmanaged([]const u8).empty;
     defer {
@@ -871,27 +870,7 @@ test "extractMemos returns null when no memo instructions" {
         resolved.transaction.deinit(allocator);
     }
 
-    const dummy_result: ProcessedTransaction = .{
-        .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
-        .rent = 0,
-        .writes = .{},
-        .err = null,
-        .loaded_accounts_data_size = 0,
-        .outputs = .{
-            .err = null,
-            .log_collector = null,
-            .instruction_trace = null,
-            .return_data = null,
-            .compute_limit = 0,
-            .compute_meter = 0,
-            .accounts_data_len_delta = 0,
-        },
-        .pre_balances = .{},
-        .pre_token_balances = .{},
-        .cost_units = 0,
-    };
-
-    const result = try extractMemos(allocator, resolved, dummy_result);
+    const result = try extractMemos(allocator, resolved);
     try std.testing.expect(result == null);
 }
 
@@ -953,27 +932,7 @@ test "extractMemos extracts single valid UTF-8 memo" {
         .instructions = &.{},
     };
 
-    const dummy_result: ProcessedTransaction = .{
-        .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
-        .rent = 0,
-        .writes = .{},
-        .err = null,
-        .loaded_accounts_data_size = 0,
-        .outputs = .{
-            .err = null,
-            .log_collector = null,
-            .instruction_trace = null,
-            .return_data = null,
-            .compute_limit = 0,
-            .compute_meter = 0,
-            .accounts_data_len_delta = 0,
-        },
-        .pre_balances = .{},
-        .pre_token_balances = .{},
-        .cost_units = 0,
-    };
-
-    const result = try extractMemos(allocator, resolved, dummy_result);
+    const result = try extractMemos(allocator, resolved);
     defer if (result) |r| allocator.free(r);
     try std.testing.expect(result != null);
     try std.testing.expectEqualStrings("[10] hello memo", result.?);
@@ -1030,27 +989,7 @@ test "extractMemos joins multiple memos with separator" {
         .instructions = &.{},
     };
 
-    const dummy_result: ProcessedTransaction = .{
-        .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
-        .rent = 0,
-        .writes = .{},
-        .err = null,
-        .loaded_accounts_data_size = 0,
-        .outputs = .{
-            .err = null,
-            .log_collector = null,
-            .instruction_trace = null,
-            .return_data = null,
-            .compute_limit = 0,
-            .compute_meter = 0,
-            .accounts_data_len_delta = 0,
-        },
-        .pre_balances = .{},
-        .pre_token_balances = .{},
-        .cost_units = 0,
-    };
-
-    const result = try extractMemos(allocator, resolved, dummy_result);
+    const result = try extractMemos(allocator, resolved);
     defer if (result) |r| allocator.free(r);
     try std.testing.expect(result != null);
     try std.testing.expectEqualStrings("[5] first; [6] second", result.?);
@@ -1104,27 +1043,7 @@ test "extractMemos handles invalid UTF-8 as unparseable" {
         .instructions = &.{},
     };
 
-    const dummy_result: ProcessedTransaction = .{
-        .fees = .{ .transaction_fee = 0, .prioritization_fee = 0, .compute_unit_price = 0 },
-        .rent = 0,
-        .writes = .{},
-        .err = null,
-        .loaded_accounts_data_size = 0,
-        .outputs = .{
-            .err = null,
-            .log_collector = null,
-            .instruction_trace = null,
-            .return_data = null,
-            .compute_limit = 0,
-            .compute_meter = 0,
-            .accounts_data_len_delta = 0,
-        },
-        .pre_balances = .{},
-        .pre_token_balances = .{},
-        .cost_units = 0,
-    };
-
-    const result = try extractMemos(allocator, resolved, dummy_result);
+    const result = try extractMemos(allocator, resolved);
     defer if (result) |r| allocator.free(r);
     try std.testing.expect(result != null);
     try std.testing.expectEqualStrings("[2] (unparseable)", result.?);

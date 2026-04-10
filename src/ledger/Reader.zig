@@ -2679,6 +2679,9 @@ test findAddressSignaturesForSlot {
     try std.testing.expectEqual(2, sigs.items.len);
     try std.testing.expect(sigs.items[0][1].eql(&sig1));
     try std.testing.expect(sigs.items[1][1].eql(&sig2));
+    // Verify transaction_index is propagated
+    try std.testing.expectEqual(0, sigs.items[0][2]);
+    try std.testing.expectEqual(1, sigs.items[1][2]);
 
     // test with different address
     var other_address_data: [32]u8 = undefined;
@@ -2746,6 +2749,9 @@ test getConfirmedSignaturesForAddress {
         .signature = sig1,
     }, .{ .writeable = false });
 
+    // add a memo for this transaction
+    try write_batch.put(schema.transaction_memos, .{ sig1, slot }, "[5] hello");
+
     try state.db.commit(&write_batch);
 
     const reader = state.reader();
@@ -2766,6 +2772,11 @@ test getConfirmedSignaturesForAddress {
 
     try std.testing.expect(sig_infos.infos.items.len > 0);
     try std.testing.expect(sig_infos.found_before);
+    // Verify transaction_index is propagated through the pipeline
+    try std.testing.expectEqual(0, sig_infos.infos.items[0].transaction_index);
+    // Verify memo is read back
+    try std.testing.expect(sig_infos.infos.items[0].memo != null);
+    try std.testing.expectEqualStrings("[5] hello", sig_infos.infos.items[0].memo.?.items);
 }
 
 test isDuplicateSlot {

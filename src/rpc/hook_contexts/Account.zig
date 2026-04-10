@@ -1366,12 +1366,41 @@ test "getTokenAccountBalance - resolves commitment slot" {
     try testing.expectError(error.RpcAccountNotFound, err);
 }
 
-test "getLargestAccounts - sortResults default returns empty for no rooted accounts" {
+test "getLargestAccounts - sortResults sorts by lamports descending" {
     var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
     defer test_state.deinit();
     const db = &test_state.db;
 
     const test_slot: Slot = 42;
+
+    // Insert accounts with different lamport amounts
+    var pubkey1: sig.core.Pubkey = .ZEROES;
+    pubkey1.data[0] = 1;
+    var pubkey2: sig.core.Pubkey = .ZEROES;
+    pubkey2.data[0] = 2;
+    var pubkey3: sig.core.Pubkey = .ZEROES;
+    pubkey3.data[0] = 3;
+
+    try db.put(
+        test_slot,
+        pubkey1,
+        .{ .lamports = 100, .data = &.{}, .owner = .ZEROES, .executable = false, .rent_epoch = 0 },
+    );
+    try db.put(
+        test_slot,
+        pubkey2,
+        .{ .lamports = 300, .data = &.{}, .owner = .ZEROES, .executable = false, .rent_epoch = 0 },
+    );
+    try db.put(
+        test_slot,
+        pubkey3,
+        .{ .lamports = 200, .data = &.{}, .owner = .ZEROES, .executable = false, .rent_epoch = 0 },
+    );
+
+    // Root the slot so accounts appear in rooted storage for getLargest
+    const ancestors: sig.core.Ancestors = try .initWithSlots(testing.allocator, &.{test_slot});
+    defer @constCast(&ancestors).deinit(testing.allocator);
+    db.updateRoot(test_slot, &ancestors);
 
     var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
     defer slot_tracker.deinit(testing.allocator);
@@ -1385,39 +1414,19 @@ test "getLargestAccounts - sortResults default returns empty for no rooted accou
 
     const ctx = testSetupContext(db, &slot_tracker, &commitments);
 
-    // sortResults defaults to true; with no rooted accounts, returns empty
-    const result = try ctx.getLargestAccounts(arena, .{
-        .config = .{ .commitment = .processed },
-    });
-    try testing.expectEqual(@as(usize, 0), result.value.len);
-    try testing.expectEqual(test_slot, result.context.slot);
-}
+    // sortResults = true (default): results sorted descending by lamports
+    const sorted = try ctx.getLargestAccounts(arena, .{ .config = .{ .commitment = .processed } });
+    try testing.expectEqual(@as(usize, 3), sorted.value.len);
+    try testing.expectEqual(@as(u64, 300), sorted.value[0].lamports);
+    try testing.expectEqual(@as(u64, 200), sorted.value[1].lamports);
+    try testing.expectEqual(@as(u64, 100), sorted.value[2].lamports);
 
-test "getLargestAccounts - sortResults false returns empty for no rooted accounts" {
-    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
-    defer test_state.deinit();
-    const db = &test_state.db;
-
-    const test_slot: Slot = 42;
-
-    var slot_tracker = try testInitSlotTracker(test_slot, &.{test_slot});
-    defer slot_tracker.deinit(testing.allocator);
-
-    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
-    defer commitments.deinit(testing.allocator);
-
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const ctx = testSetupContext(db, &slot_tracker, &commitments);
-
-    // sortResults = false, still returns empty with no rooted accounts
-    const result = try ctx.getLargestAccounts(arena, .{
-        .config = .{ .commitment = .processed, .sortResults = false },
-    });
-    try testing.expectEqual(@as(usize, 0), result.value.len);
-    try testing.expectEqual(test_slot, result.context.slot);
+    // sortResults = false: results returned without the sort pass
+    const unsorted = try ctx.getLargestAccounts(arena, .{ .config = .{
+        .commitment = .processed,
+        .sortResults = false,
+    } });
+    try testing.expectEqual(@as(usize, 3), unsorted.value.len);
 }
 
 test "getTokenSupply - resolves commitment slot" {
