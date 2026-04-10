@@ -42,6 +42,7 @@ const SlotMeta = meta.SlotMeta;
 const handleChaining = lib.slot_chaining.handleChaining;
 const recover = lib.recovery.recover;
 const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
+const jrpc_types = sig.rpc.jrpc_websockets.types;
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
@@ -50,6 +51,7 @@ const Logger = sig.trace.Logger("shred_inserter");
 ledger: *ledger_mod.Ledger,
 logger: Logger,
 metrics: ?Metrics,
+event_sink: ?*jrpc_types.EventSink = null,
 
 const ShredInserter = @This();
 
@@ -859,6 +861,7 @@ fn insertDataShred(
     try data_index.put(index);
 
     var newly_completed_data_sets = ArrayList(CompletedDataSetInfo).init(allocator);
+    const first_insert = slot_meta.received == 0;
     const shred_indices = try updateSlotMeta(
         allocator,
         shred.isLastInSlot(),
@@ -879,9 +882,22 @@ fn insertDataShred(
         });
     }
 
+    if (first_insert) {
+        if (self.event_sink) |sink| {
+            try sink.send(.{
+                .first_shred_received = slot,
+            });
+        }
+    }
+
     // TODO self.shred_inserter_metrics: record_shred
     if (slot_meta.isFull()) {
         self.sendSlotFullTiming(slot);
+        if (self.event_sink) |sink| {
+            try sink.send(.{
+                .slot_completed = slot,
+            });
+        }
     }
 
     return newly_completed_data_sets;
@@ -1273,20 +1289,58 @@ pub fn insertShredsForTest(
 
 test "insertShreds single shred" {
     const allocator = std.testing.allocator;
-    var state = try ShredInserterTestState.init(std.testing.allocator, @src());
+    var state = try ShredInserterTestState.init(
+        std.testing.allocator,
+        @src(),
+    );
     defer state.deinit();
-    const shred = try Shred.fromPayload(allocator, &ledger_mod.shred.test_data_shred);
+    const shred = try Shred.fromPayload(
+        allocator,
+        &ledger_mod.shred.test_data_shred,
+    );
     defer shred.deinit();
-    const shred_inserter = state.ledger.shredInserter();
-    const result = try insertShreds(&shred_inserter, allocator, &.{shred}, &.{false}, .{});
+
+    const event_sink = try jrpc_types.EventSink.create(allocator);
+    defer event_sink.destroy();
+
+    var shred_inserter = state.ledger.shredInserter();
+    shred_inserter.event_sink = event_sink;
+    const result = try insertShreds(
+        &shred_inserter,
+        allocator,
+        &.{shred},
+        &.{false},
+        .{},
+    );
     result.deinit();
     const stored_shred = try state.ledger.db.getBytes(
         schema.data_shred,
-        .{ shred.commonHeader().slot, shred.commonHeader().index },
+        .{
+            shred.commonHeader().slot,
+            shred.commonHeader().index,
+        },
     );
     defer if (stored_shred) |s| s.deinit();
     if (stored_shred == null) return error.Fail;
-    try std.testing.expectEqualSlices(u8, shred.payload(), stored_shred.?.data);
+    try std.testing.expectEqualSlices(
+        u8,
+        shred.payload(),
+        stored_shred.?.data,
+    );
+
+    // Validate first_shred_received event was emitted
+    const event = event_sink.channel.tryReceive() orelse
+        return error.TestUnexpectedResult;
+    defer event.deinit(event_sink.allocator());
+    switch (event) {
+        .first_shred_received => |slot| {
+            try std.testing.expectEqual(
+                shred.commonHeader().slot,
+                slot,
+            );
+        },
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "insertShreds 100 shreds from mainnet" {

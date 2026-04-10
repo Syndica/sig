@@ -366,6 +366,7 @@ fn handleInboundEvent(
                 .slot = slot_data.slot,
                 .parent = slot_data.parent,
                 .root = slot_data.root,
+                .stats = slot_data.stats,
             } };
             self.handleSlotTransition(slot_event_kind, slot_data.slot, transition, task_batch);
         },
@@ -404,6 +405,43 @@ fn handleInboundEvent(
         .tip_changed => |new_tip| {
             const transition = self.slot_state_cache.onTipChanged(self.slot_read_ctx, new_tip);
             self.handleSlotTransition(.tip_changed, new_tip, transition, task_batch);
+        },
+        // slotsUpdatesSubscribe-only lifecycle events.
+        // These bypass SlotStateCache; they don't affect commitment.
+        .slot_dead => |dead| {
+            self.notifySlotsUpdatesSubscribers(.{ .dead = .{
+                .slot = dead.slot,
+                .timestamp = @intCast(std.time.milliTimestamp()),
+                .err = dead.err,
+            } }, task_batch);
+        },
+        .first_shred_received => |shred_slot| {
+            self.notifySlotsUpdatesSubscribers(
+                .{ .first_shred_received = .{
+                    .slot = shred_slot,
+                    .timestamp = @intCast(std.time.milliTimestamp()),
+                } },
+                task_batch,
+            );
+        },
+        .slot_completed => |completed_slot| {
+            self.notifySlotsUpdatesSubscribers(
+                .{ .completed = .{
+                    .slot = completed_slot,
+                    .timestamp = @intCast(std.time.milliTimestamp()),
+                } },
+                task_batch,
+            );
+        },
+        .bank_created => |bank_event| {
+            self.notifySlotsUpdatesSubscribers(
+                .{ .created_bank = .{
+                    .slot = bank_event.slot,
+                    .parent = bank_event.parent,
+                    .timestamp = @intCast(std.time.milliTimestamp()),
+                } },
+                task_batch,
+            );
         },
         .vote => |*vote_data| {
             self.handleVoteEvent(vote_data, task_batch);
@@ -640,6 +678,19 @@ fn handleSlotTransition(
                     },
                 }
             },
+            .slots_updates => {
+                // slotsUpdatesSubscribe: fire lifecycle events.
+                // No commitment filtering; events are immediate.
+                const update = self.slotUpdateForEvent(event_kind, slot);
+                if (update) |data| {
+                    _ = self.enqueueJobForEntry(
+                        entry.*,
+                        .{ .slots_updates = data },
+                        false,
+                        task_batch,
+                    );
+                }
+            },
         }
     }
 
@@ -749,6 +800,68 @@ fn maybeEnqueueFinalSignatureNotification(
     };
     self.metrics.inflight_jobs += 1;
     self.metrics.serialize_tasks_allocated += 1;
+}
+
+/// Map a slot-transition event to a slotsUpdatesSubscribe notification.
+/// Returns null for transitions that don't correspond to a slot update
+/// event (e.g. tip_changed).
+fn slotUpdateForEvent(
+    _: *Runtime,
+    event_kind: SlotEventKind,
+    slot: Slot,
+) ?types.SlotUpdateData {
+    const ts: u64 = @intCast(std.time.milliTimestamp());
+    return switch (event_kind) {
+        .slot_frozen => |frozen| .{
+            .frozen = .{
+                .slot = slot,
+                .timestamp = ts,
+                .stats = frozen.stats,
+            },
+        },
+        .slot_confirmed => .{ .optimistic_confirmation = .{
+            .slot = slot,
+            .timestamp = ts,
+        } },
+        // Agave's slotsUpdatesSubscribe Root event fires on the
+        // *local Tower root* (oldest vote reaching max lockout),
+        // NOT the supermajority-confirmed root. Sig's slot_rooted
+        // is also the local Tower root, see
+        // consensus/core.zig:1681-1693 (with matching TODO).
+        // Agave ref: https://github.com/anza-xyz/agave/blob/v3.1.2/votor/src/root_utils.rs#L171
+        //   https://github.com/anza-xyz/agave/blob/v3.1.2/rpc/src/rpc_subscriptions.rs#L734-L743
+        .slot_rooted => .{ .root = .{
+            .slot = slot,
+            .timestamp = ts,
+        } },
+        .tip_changed => null,
+    };
+}
+
+/// Notify all slotsUpdatesSubscribe subscribers for a non-transition
+/// lifecycle event (dead, first_shred_received, completed, bank_created).
+/// These events bypass the SlotStateCache and fire immediately.
+fn notifySlotsUpdatesSubscribers(
+    self: *Runtime,
+    data: types.SlotUpdateData,
+    task_batch: *ThreadPool.Batch,
+) void {
+    for (self.sub_map.entries.items) |*entry| {
+        if (entry.key.method != .slots_updates) continue;
+        const data_copy = data.clone(self.allocator) catch |err| {
+            self.logger.err().logf(
+                "failed to clone slotsUpdates notification for sub_id {}: {}",
+                .{ entry.sub_id, err },
+            );
+            continue;
+        };
+        _ = self.enqueueJobForEntry(
+            entry.*,
+            .{ .slots_updates = data_copy },
+            false,
+            task_batch,
+        );
+    }
 }
 
 /// Initialize last notified modified slot for an account subscription entry, this matches

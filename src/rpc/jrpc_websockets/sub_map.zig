@@ -87,7 +87,7 @@ pub const RPCSubMap = struct {
         const queue = try self.allocator.create(NotifQueue);
         const commit_path: NotifQueue.CommitPath = switch (key.method) {
             // These methods require strict event-sink arrival-order preservation.
-            .slot, .root, .signature, .program, .account, .logs, .block => .reserved,
+            .slot, .root, .signature, .program, .account, .logs, .block, .slots_updates => .reserved,
             // These methods don't require strict ordering, so serialized
             // payloads can be committed directly.
             .vote => .direct,

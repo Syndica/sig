@@ -70,6 +70,7 @@ pub fn commitTransactions(
 
     var signature_count: usize = 0;
     var rent_collected: u64 = 0;
+    var error_count: u64 = 0;
 
     var transaction_fees: u64 = 0;
     var priority_fees: u64 = 0;
@@ -93,6 +94,7 @@ pub fn commitTransactions(
         const tx_result = &result.@"1";
 
         signature_count += transaction.transaction.signatures.len;
+        if (tx_result.err != null) error_count += 1;
 
         for (tx_result.writes.constSlice()) |*account| {
             try accounts_to_store.put(temp_allocator, account.pubkey, account.*);
@@ -221,6 +223,13 @@ pub fn commitTransactions(
     _ = self.slot_state.non_vote_transaction_count.fetchAdd(non_vote_count, .monotonic);
     _ = self.slot_state.signature_count.fetchAdd(signature_count, .monotonic);
     _ = self.slot_state.collected_rent.fetchAdd(rent_collected, .monotonic);
+
+    // Per-slot stats for slotsUpdatesSubscribe frozen notifications.
+    _ = self.slot_state.transaction_error_count.fetchAdd(error_count, .monotonic);
+    if (tx_results.len > 0) {
+        _ = self.slot_state.transaction_entries_count.fetchAdd(1, .monotonic);
+        _ = self.slot_state.transactions_per_entry_max.fetchMax(tx_results.len, .monotonic);
+    }
 
     for (accounts_to_store.values()) |account| {
         try self.stakes_cache.checkAndStore(
@@ -1004,7 +1013,7 @@ test "commitTransactions emits transaction logs batch with transaction metadata"
     );
 
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer event.deinit(allocator);
+    defer event.deinit(event_sink.allocator());
 
     switch (event) {
         .transaction_batch => |batch_event| {
@@ -1132,7 +1141,7 @@ test "commitTransactions emits empty transaction logs batch when execution has n
     );
 
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
-    defer event.deinit(allocator);
+    defer event.deinit(event_sink.allocator());
 
     switch (event) {
         .transaction_batch => |batch_event| {
