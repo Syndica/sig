@@ -757,7 +757,8 @@ fn collectPostTokenBalances(
             defer account.deinit(allocator);
             owner = account.owner;
             if (account.data.len() >= spl_token.TOKEN_ACCOUNT_SIZE) {
-                _ = account.data.read(0, &data_buf);
+                const bytes_read = account.data.read(0, &data_buf);
+                std.debug.assert(bytes_read == spl_token.TOKEN_ACCOUNT_SIZE);
                 have_data = true;
             }
         } else continue;
