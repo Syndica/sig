@@ -127,7 +127,7 @@ test "client subscribes to account, receives notification, unsubscribes" {
     try std.testing.expect(handler.received.items.len >= 1);
     try std.testing.expect(parseResultU64(handler.received.items[0]) != null);
 
-    server.injectEvent(.{ .slot_rooted = 2 });
+    server.injectEvent(.{ .slot_finalized_rooted = 2 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
@@ -160,7 +160,7 @@ test "client subscribes to account, receives notification, unsubscribes" {
     try std.testing.expectEqual(42_000, notification.params.result.value.lamports);
     try std.testing.expectEqualStrings("Hwr", notification.params.result.value.data);
 
-    server.injectEvent(.{ .slot_rooted = 3 });
+    server.injectEvent(.{ .slot_finalized_rooted = 3 });
     runBothLoops(server, &client_env, &handler, 200);
     try std.testing.expectEqual(2, handler.received.items.len);
 
@@ -263,7 +263,7 @@ test "client subscribes to program, receives notification, unsubscribes" {
     try std.testing.expect(parseResultU64(handler.received.items[0]) != null);
 
     server.injectEvent(.{ .slot_frozen = .{ .slot = 88, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 88 });
+    server.injectEvent(.{ .slot_finalized_rooted = 88 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
@@ -341,7 +341,7 @@ test "client subscribes to root, receives notification, unsubscribes" {
     try std.testing.expect(handler.received.items.len >= 1);
     try std.testing.expect(parseResultU64(handler.received.items[0]) != null);
 
-    server.injectEvent(.{ .slot_rooted = 256 });
+    server.injectEvent(.{ .slot_finalized_rooted = 256 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);

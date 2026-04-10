@@ -449,7 +449,10 @@ pub const InboundEvent = union(enum) {
     received_signatures: ReceivedSignaturesEvent,
     slot_frozen: SlotFrozenEvent,
     slot_confirmed: u64,
-    slot_rooted: u64,
+    /// Local replay/tower rooted.
+    slot_local_rooted: u64,
+    /// Finalized (super majority) rooted.
+    slot_finalized_rooted: u64,
     tip_changed: u64,
     slot_dead: SlotDeadEvent,
     first_shred_received: u64,
@@ -473,7 +476,8 @@ pub const InboundEvent = union(enum) {
                 allocator.free(dead.err);
             },
             .slot_confirmed,
-            .slot_rooted,
+            .slot_local_rooted,
+            .slot_finalized_rooted,
             .tip_changed,
             .first_shred_received,
             .slot_completed,

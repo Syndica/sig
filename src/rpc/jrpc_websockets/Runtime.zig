@@ -370,18 +370,29 @@ fn handleInboundEvent(
             } };
             self.handleSlotTransition(slot_event_kind, slot_data.slot, transition, task_batch);
         },
-        .slot_rooted => |rooted_slot| {
+        .slot_local_rooted => |rooted_slot| {
+            self.notifySlotsUpdatesSubscribers(
+                .{ .root = .{
+                    .slot = rooted_slot,
+                    .timestamp = @intCast(std.time.milliTimestamp()),
+                } },
+                task_batch,
+            );
+        },
+        .slot_finalized_rooted => |rooted_slot| {
             const transition = self.slot_state_cache.onSlotRooted(
                 self.allocator,
                 rooted_slot,
             ) catch |err| {
                 self.logger.err().logf(
-                    "failed to mark rooted slot {}: {}",
+                    "failed to mark finalized-rooted slot {}: {}",
                     .{ rooted_slot, err },
                 );
                 return;
             };
-            const slot_event_kind: SlotEventKind = .{ .slot_rooted = .{ .root = rooted_slot } };
+            const slot_event_kind: SlotEventKind = .{
+                .slot_finalized_rooted = .{ .root = rooted_slot },
+            };
             self.handleSlotTransition(
                 slot_event_kind,
                 rooted_slot,
@@ -406,7 +417,7 @@ fn handleInboundEvent(
             const transition = self.slot_state_cache.onTipChanged(self.slot_read_ctx, new_tip);
             self.handleSlotTransition(.tip_changed, new_tip, transition, task_batch);
         },
-        // slotsUpdatesSubscribe-only lifecycle events.
+        // slotsUpdatesSubscribe-only events.
         // These bypass SlotStateCache; they don't affect commitment.
         // NOTE: we just generate timestamp here rather than at event emit, Agave does a mix,
         // for some events it is at emit and others it is within RPC processing.
@@ -486,7 +497,7 @@ fn handleReceivedSignaturesEvent(
 const SlotEventKind = union(enum) {
     slot_frozen: types.SlotEventData,
     slot_confirmed,
-    slot_rooted: types.RootEventData,
+    slot_finalized_rooted: types.RootEventData,
     tip_changed,
 };
 
@@ -573,7 +584,7 @@ fn handleSlotTransition(
             },
             .root => {
                 const root_event = switch (event_kind) {
-                    .slot_rooted => |root_event| root_event,
+                    .slot_finalized_rooted => |root_event| root_event,
                     else => continue,
                 };
                 _ = self.enqueueJobForEntry(entry.*, .{ .root = root_event }, false, task_batch);
@@ -806,7 +817,8 @@ fn maybeEnqueueFinalSignatureNotification(
 
 /// Map a slot-transition event to a slotsUpdatesSubscribe notification.
 /// Returns null for transitions that don't correspond to a slot update
-/// event (e.g. tip_changed).
+/// event. Local-rooted notifications bypass SlotStateCache and are
+/// published directly from inbound event handling.
 fn slotUpdateForEvent(
     _: *Runtime,
     event_kind: SlotEventKind,
@@ -825,18 +837,7 @@ fn slotUpdateForEvent(
             .slot = slot,
             .timestamp = ts,
         } },
-        // Agave's slotsUpdatesSubscribe Root event fires on the
-        // *local Tower root* (oldest vote reaching max lockout),
-        // NOT the supermajority-confirmed root. Sig's slot_rooted
-        // is also the local Tower root, see
-        // consensus/core.zig:1681-1693 (with matching TODO).
-        // Agave ref: https://github.com/anza-xyz/agave/blob/v3.1.2/votor/src/root_utils.rs#L171
-        //   https://github.com/anza-xyz/agave/blob/v3.1.2/rpc/src/rpc_subscriptions.rs#L734-L743
-        .slot_rooted => .{ .root = .{
-            .slot = slot,
-            .timestamp = ts,
-        } },
-        .tip_changed => null,
+        .slot_finalized_rooted, .tip_changed => null,
     };
 }
 

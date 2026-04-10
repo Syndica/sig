@@ -972,9 +972,13 @@ pub fn handleSlotUpdate(
         );
     }
 
-    // send events (only for commitments that have changed)
-    if (replay_state.commitments) |*c| {
-        if (replay_state.event_sink) |sink| {
+    if (replay_state.event_sink) |sink| {
+        if (slot_update.root) |new_root| {
+            try sink.send(.{ .slot_local_rooted = new_root });
+        }
+
+        // send events (only for commitments that have changed)
+        if (replay_state.commitments) |*c| {
             const processed_slot = c.get(.processed);
             if (processed_slot != old_processed) {
                 try sink.send(.{ .tip_changed = processed_slot });
@@ -996,7 +1000,7 @@ pub fn handleSlotUpdate(
                     ) catch |err| switch (err) {
                         error.NewRootNotFound => blk: {
                             replay_state.logger.warn().logf(
-                                "skipping slot_rooted for finalized {} -> {}: missing slot entry",
+                                "skipping finalized root event for {} -> {}: missing slot entry",
                                 .{ old_finalized, finalized_slot },
                             );
                             break :blk null;
@@ -1007,7 +1011,7 @@ pub fn handleSlotUpdate(
 
                     if (rooted_slots) |slots| {
                         for (slots) |rooted_slot| {
-                            try sink.send(.{ .slot_rooted = rooted_slot });
+                            try sink.send(.{ .slot_finalized_rooted = rooted_slot });
                         }
                     }
                 }
@@ -1830,7 +1834,7 @@ fn addReplayStateSlotForTest(
     try replay_state.slot_tree.record(replay_state.allocator, slot, parent_slot);
 }
 
-test "handleSlotUpdate emits rooted events from finalized commitment, not consensus root" {
+test "handleSlotUpdate emits local root immediately and finalized root on advance" {
     const allocator = std.testing.allocator;
 
     var registry: sig.prometheus.Registry(.{}) = .init(allocator);
@@ -1873,6 +1877,16 @@ test "handleSlotUpdate emits rooted events from finalized commitment, not consen
         );
     }
 
+    {
+        const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
+        defer event.deinit(event_sink.allocator());
+        switch (event) {
+            .slot_local_rooted => |rooted_slot| {
+                try std.testing.expectEqual(2, rooted_slot);
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
     try std.testing.expect(event_sink.channel.tryReceive() == null);
 
     {
@@ -1897,7 +1911,7 @@ test "handleSlotUpdate emits rooted events from finalized commitment, not consen
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
     defer event.deinit(event_sink.allocator());
     switch (event) {
-        .slot_rooted => |rooted_slot| {
+        .slot_finalized_rooted => |rooted_slot| {
             try std.testing.expectEqual(2, rooted_slot);
         },
         else => return error.TestUnexpectedResult,

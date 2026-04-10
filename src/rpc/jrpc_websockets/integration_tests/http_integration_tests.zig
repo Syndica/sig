@@ -39,7 +39,7 @@ test "websocket upgrade via HTTP server supports root subscription" {
     waitForMessages(server, &client_env, &handler, 1, 5000);
     try std.testing.expect(handler.received.items.len >= 1);
 
-    server.injectEvent(.{ .slot_rooted = 500 });
+    server.injectEvent(.{ .slot_finalized_rooted = 500 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
@@ -99,7 +99,7 @@ test "HTTP JSON-RPC and WebSocket run on same port" {
     const response = parsed_http_resp.value;
     try std.testing.expectEqualStrings("ok", response.result);
 
-    server.injectEvent(.{ .slot_rooted = 501 });
+    server.injectEvent(.{ .slot_finalized_rooted = 501 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
@@ -171,7 +171,7 @@ test "multiple websocket clients receive root notifications via HTTP upgrade" {
     try std.testing.expect(handler1.received.items.len >= 1);
     try std.testing.expect(handler2.received.items.len >= 1);
 
-    server.injectEvent(.{ .slot_rooted = 502 });
+    server.injectEvent(.{ .slot_finalized_rooted = 502 });
 
     const notif_deadline = @as(u64, @intCast(std.time.milliTimestamp())) + 5000;
     while (@as(u64, @intCast(std.time.milliTimestamp())) < notif_deadline) {

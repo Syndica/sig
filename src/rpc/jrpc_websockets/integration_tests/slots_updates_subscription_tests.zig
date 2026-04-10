@@ -230,8 +230,8 @@ test "slotsUpdatesSubscribe: root event" {
     waitForMessages(server, &client_env, &handler, 1, 5000);
     try std.testing.expect(parseResultU64(handler.received.items[0]) != null);
 
-    // slot_rooted triggers root event.
-    server.injectEvent(.{ .slot_rooted = 200 });
+    // slot_local_rooted triggers root event.
+    server.injectEvent(.{ .slot_local_rooted = 200 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
@@ -251,6 +251,46 @@ test "slotsUpdatesSubscribe: root event" {
         "root",
         parsed.value.params.result.type,
     );
+}
+
+test "slotsUpdatesSubscribe: finalized rooted does not fire" {
+    const allocator = std.testing.allocator;
+
+    var server = try TestServer.start(allocator);
+    defer {
+        server.stop();
+        server.deinit();
+    }
+
+    var handler = TestClientHandler.init(allocator);
+    defer handler.deinit();
+
+    handler.queueSend(
+        \\{"jsonrpc":"2.0","id":1,"method":"slotsUpdatesSubscribe"}
+    );
+    handler.close_after = 0;
+
+    var client_env: TestClientEnv = undefined;
+    try client_env.start();
+    defer client_env.deinit();
+
+    var conn: TestClient.Conn = undefined;
+    var client = initTestClient(
+        allocator,
+        &client_env,
+        &handler,
+        &conn,
+        server.port,
+    );
+    try client.connect();
+
+    waitForMessages(server, &client_env, &handler, 1, 5000);
+    try std.testing.expect(parseResultU64(handler.received.items[0]) != null);
+
+    server.injectEvent(.{ .slot_finalized_rooted = 200 });
+
+    runBothLoops(server, &client_env, &handler, 200);
+    try std.testing.expectEqual(@as(usize, 1), handler.received.items.len);
 }
 
 test "slotsUpdatesSubscribe: dead slot event" {
@@ -539,7 +579,7 @@ test "slotsUpdatesSubscribe preserves enqueue order across mixed slot update eve
     server.injectEvent(.{ .slot_completed = 701 });
     server.injectEvent(.{ .slot_frozen = .{ .slot = 701, .parent = 700, .root = 0 } });
     server.injectEvent(.{ .slot_confirmed = 701 });
-    server.injectEvent(.{ .slot_rooted = 701 });
+    server.injectEvent(.{ .slot_local_rooted = 701 });
 
     waitForMessages(server, &client_env, &handler, 8, 15000);
     try std.testing.expectEqual(@as(usize, 8), handler.received.items.len);
@@ -625,7 +665,7 @@ test "slotsUpdatesSubscribe: no notifications after unsubscribe" {
         .parent = 299,
         .root = 0,
     } });
-    server.injectEvent(.{ .slot_rooted = 300 });
+    server.injectEvent(.{ .slot_local_rooted = 300 });
 
     runBothLoops(server, &client_env, &handler, 200);
     try std.testing.expectEqual(2, handler.received.items.len);
