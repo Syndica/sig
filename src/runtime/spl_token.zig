@@ -20,6 +20,9 @@ const ids = sig.runtime.ids;
 const TransactionTokenBalance = sig.ledger.transaction_status.TransactionTokenBalance;
 const UiTokenAmount = sig.ledger.transaction_status.UiTokenAmount;
 
+pub const SPL_MEMO_V1_ID: Pubkey = .parse("Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo");
+pub const SPL_MEMO_V3_ID: Pubkey = .parse("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+
 // SPL Token account layout constants
 pub const TOKEN_ACCOUNT_SIZE: usize = 165;
 pub const MINT_ACCOUNT_SIZE: usize = 82;
