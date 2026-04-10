@@ -1293,15 +1293,9 @@ pub fn insertShredsForTest(
 
 test "insertShreds single shred" {
     const allocator = std.testing.allocator;
-    var state = try ShredInserterTestState.init(
-        std.testing.allocator,
-        @src(),
-    );
+    var state = try ShredInserterTestState.init(std.testing.allocator, @src());
     defer state.deinit();
-    const shred = try Shred.fromPayload(
-        allocator,
-        &ledger_mod.shred.test_data_shred,
-    );
+    const shred = try Shred.fromPayload(allocator, &ledger_mod.shred.test_data_shred);
     defer shred.deinit();
 
     const event_sink = try jrpc_types.EventSink.create(allocator);
@@ -1309,42 +1303,25 @@ test "insertShreds single shred" {
 
     var shred_inserter = state.ledger.shredInserter();
     shred_inserter.event_sink = event_sink;
-    const result = try insertShreds(
-        &shred_inserter,
-        allocator,
-        &.{shred},
-        &.{false},
-        .{},
-    );
+    const result = try insertShreds(&shred_inserter, allocator, &.{shred}, &.{false}, .{});
     result.deinit();
     const stored_shred = try state.ledger.db.getBytes(
         schema.data_shred,
-        .{
-            shred.commonHeader().slot,
-            shred.commonHeader().index,
-        },
+        .{ shred.commonHeader().slot, shred.commonHeader().index },
     );
     defer if (stored_shred) |s| s.deinit();
     if (stored_shred == null) return error.Fail;
-    try std.testing.expectEqualSlices(
-        u8,
-        shred.payload(),
-        stored_shred.?.data,
-    );
+    try std.testing.expectEqualSlices(u8, shred.payload(), stored_shred.?.data);
 
     // Validate first_shred_received event was emitted
     const event = event_sink.channel.tryReceive() orelse
         return error.TestUnexpectedResult;
     defer event.deinit(event_sink.allocator());
-    switch (event) {
-        .first_shred_received => |slot| {
-            try std.testing.expectEqual(
-                shred.commonHeader().slot,
-                slot,
-            );
-        },
+    const event_slot = switch (event) {
+        .first_shred_received => |slot| slot,
         else => return error.TestUnexpectedResult,
-    }
+    };
+    try std.testing.expectEqual(shred.commonHeader().slot, event_slot);
 }
 
 test "insertShreds 100 shreds from mainnet" {
