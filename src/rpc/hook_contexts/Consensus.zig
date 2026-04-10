@@ -431,12 +431,17 @@ pub fn getClusterNodes(
 
     var contact_info_iter = gossip_table.contactInfoIterator(0);
     var result_list: std.ArrayList(common.RpcContactInfo) = .empty;
+    // Deduplicate by pubkey: the iterator may yield both a ContactInfo and a
+    // converted LegacyContactInfo entry for the same node.
+    // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3637
+    var seen_pubkeys: std.AutoArrayHashMapUnmanaged(sig.core.Pubkey, void) = .empty;
 
     while (contact_info_iter.next()) |contact_info| {
+        const gop = try seen_pubkeys.getOrPut(arena, contact_info.pubkey);
+        if (gop.found_existing) continue;
         if (try contactInfoToRpc(
             arena,
             contact_info,
-            gossip_table,
             my_shred_version,
         )) |rpc_contact_info| {
             try result_list.append(arena, rpc_contact_info);
@@ -451,7 +456,6 @@ pub fn getClusterNodes(
 fn contactInfoToRpc(
     arena: std.mem.Allocator,
     contact_info: *const sig.gossip.ContactInfo,
-    gossip_table: *const sig.gossip.GossipTable,
     my_shred_version: u16,
 ) !?common.RpcContactInfo {
     // Filter by matching shred version (exclude spy nodes with shred_version 0)
@@ -463,68 +467,74 @@ fn contactInfoToRpc(
     const gossip_addr = contact_info.getSocket(.gossip);
     if (gossip_addr == null or gossip_addr.?.isUnspecified()) return null;
 
-    var rpc_contact_info = common.RpcContactInfo{
+    return .{
         .pubkey = try std.fmt.allocPrint(
             arena,
             "{s}",
             .{contact_info.pubkey.base58String().slice()},
         ),
-    };
-
-    // Get version info for this node from the gossip table
-    // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3649-3655
-    if (gossip_table.get(.{ .Version = contact_info.pubkey })) |version_data| {
-        const v = version_data.data.Version.version;
-        rpc_contact_info.version = try std.fmt.allocPrint(
+        .gossip = try formatSocketAddr(
             arena,
-            "{d}.{d}.{d}",
-            .{ v.major, v.minor, v.patch },
-        );
-        rpc_contact_info.featureSet = v.feature_set;
-    }
-
-    rpc_contact_info.shredVersion = my_shred_version;
-    rpc_contact_info.gossip = try formatSocketAddr(arena, gossip_addr);
-    rpc_contact_info.tvu = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.turbine_recv),
-    );
-    rpc_contact_info.tpu = try formatSocketAddr(arena, contact_info.getSocket(.tpu));
-    rpc_contact_info.tpuQuic = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.tpu_quic),
-    );
-    rpc_contact_info.tpuForwards = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.tpu_forwards),
-    );
-    rpc_contact_info.tpuForwardsQuic = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.tpu_forwards_quic),
-    );
-    rpc_contact_info.tpuVote = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.tpu_vote),
-    );
-    rpc_contact_info.serveRepair = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.serve_repair),
-    );
-    rpc_contact_info.rpc = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.rpc),
-    );
-    rpc_contact_info.pubsub = try formatSocketAddr(
-        arena,
-        contact_info.getSocket(.rpc_pubsub),
-    );
-
-    return rpc_contact_info;
+            gossip_addr,
+        ),
+        .tvu = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.turbine_recv),
+        ),
+        .tpu = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.tpu),
+        ),
+        .tpuQuic = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.tpu_quic),
+        ),
+        .tpuForwards = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.tpu_forwards),
+        ),
+        .tpuForwardsQuic = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.tpu_forwards_quic),
+        ),
+        .tpuVote = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.tpu_vote),
+        ),
+        .serveRepair = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.serve_repair),
+        ),
+        .rpc = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.rpc),
+        ),
+        .pubsub = try formatSocketAddrGlobal(
+            arena,
+            contact_info.getSocket(.rpc_pubsub),
+        ),
+        .version = try std.fmt.allocPrint(
+            arena,
+            "{f}",
+            .{contact_info.version},
+        ),
+        .featureSet = contact_info.version.feature_set,
+        .shredVersion = contact_info.shred_version,
+    };
 }
 
 fn formatSocketAddr(arena: std.mem.Allocator, addr: ?sig.net.SocketAddr) !?[]const u8 {
     const socket_addr = addr orelse return null;
     if (socket_addr.isUnspecified()) return null;
+    return try std.fmt.allocPrint(arena, "{f}", .{socket_addr.toAddress()});
+}
+
+/// Like formatSocketAddr but also returns null for non-globally-routable addresses
+/// (private, loopback, link-local). Matches Agave's SocketAddrSpace::Global filter.
+/// See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3659
+fn formatSocketAddrGlobal(arena: std.mem.Allocator, addr: ?sig.net.SocketAddr) !?[]const u8 {
+    const socket_addr = addr orelse return null;
+    if (!socket_addr.isGloballyRoutable()) return null;
     return try std.fmt.allocPrint(arena, "{f}", .{socket_addr.toAddress()});
 }
 
@@ -1146,4 +1156,153 @@ test "ConsensusHookContext.getLatestBlockhash - slot not available" {
     const ctx = testConsensusHookContext(&slot_tracker, &commitments);
     const err = ctx.getLatestBlockhash(testing.allocator, .{});
     try testing.expectError(error.SlotNotAvailable, err);
+}
+
+test "formatSocketAddrGlobal filters non-global addresses" {
+    try testing.expectEqual(
+        null,
+        try formatSocketAddrGlobal(testing.allocator, null),
+    );
+    try testing.expectEqual(
+        null,
+        try formatSocketAddrGlobal(
+            testing.allocator,
+            .initIpv4(.{ 10, 1, 2, 3 }, 8000),
+        ),
+    );
+    const addr = (try formatSocketAddrGlobal(
+        testing.allocator,
+        .initIpv4(.{ 8, 8, 8, 8 }, 8000),
+    )).?;
+    defer testing.allocator.free(addr);
+    try testing.expectEqualStrings("8.8.8.8:8000", addr);
+}
+
+test "contactInfoToRpc filters and formats fields" {
+    var prng = std.Random.DefaultPrng.init(testing.random_seed);
+    const id = sig.core.Pubkey.initRandom(prng.random());
+
+    var contact_info = sig.gossip.ContactInfo.init(testing.allocator, id, 1, 42);
+    defer contact_info.deinit();
+
+    contact_info.version = .{
+        .major = 1,
+        .minor = 2,
+        .patch = 0,
+        .commit = 1234,
+        .feature_set = 5678,
+        .client = .sig,
+        .prerelease = .{ .release_candidate = 5 },
+    };
+
+    try contact_info.setSocket(.gossip, sig.net.SocketAddr.initIpv4(.{ 8, 8, 8, 8 }, 8000));
+    try contact_info.setSocket(.turbine_recv, sig.net.SocketAddr.initIpv4(.{ 10, 0, 0, 1 }, 8001));
+    try contact_info.setSocket(.tpu, sig.net.SocketAddr.initIpv4(.{ 1, 1, 1, 1 }, 8002));
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rpc_contact = (try contactInfoToRpc(arena, &contact_info, 42)).?;
+    try testing.expectEqualStrings("8.8.8.8:8000", rpc_contact.gossip.?);
+    try testing.expectEqual(null, rpc_contact.tvu);
+    try testing.expectEqualStrings("1.1.1.1:8002", rpc_contact.tpu.?);
+    try testing.expectEqualStrings("1.2.0-rc.5", rpc_contact.version.?);
+    try testing.expectEqual(5678, rpc_contact.featureSet);
+    try testing.expectEqual(42, rpc_contact.shredVersion);
+    try testing.expectEqual(
+        null,
+        try contactInfoToRpc(arena, &contact_info, 99),
+    );
+
+    var no_gossip = sig.gossip.ContactInfo.init(testing.allocator, id, 1, 42);
+    defer no_gossip.deinit();
+    try testing.expectEqual(
+        null,
+        try contactInfoToRpc(arena, &no_gossip, 42),
+    );
+}
+
+test "ConsensusHookContext.getClusterNodes returns deduplicated entries" {
+    var slot_tracker = try testSetupSlotTracker(1, 1, 0);
+    defer slot_tracker.deinit(testing.allocator);
+
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, 1);
+    defer commitments.deinit(testing.allocator);
+
+    const gossip_table = try sig.gossip.GossipTable.init(testing.allocator, testing.allocator);
+    var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
+    defer sig.sync.mux.deinitMux(&gossip_table_rw);
+
+    const kp = try sig.identity.KeyPair.generateDeterministic(@splat(12));
+    const id = sig.core.Pubkey.fromPublicKey(&kp.public_key);
+
+    var contact_info = sig.gossip.ContactInfo.init(
+        testing.allocator,
+        id,
+        sig.time.getWallclockMs(),
+        88,
+    );
+    try contact_info.setSocket(.gossip, sig.net.SocketAddr.initIpv4(.{ 8, 8, 4, 4 }, 8001));
+
+    var legacy = sig.gossip.data.LegacyContactInfo.default(id);
+    legacy.gossip = sig.net.SocketAddr.initIpv4(.{ 8, 8, 4, 4 }, 8001);
+    legacy.shred_version = 88;
+
+    {
+        const table, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try table.insert(
+            sig.gossip.SignedGossipData.initSigned(&kp, .{ .ContactInfo = contact_info }),
+            0,
+        );
+        _ = try table.insert(
+            sig.gossip.SignedGossipData.initSigned(&kp, .{ .LegacyContactInfo = legacy }),
+            0,
+        );
+    }
+
+    var my_shred_version = std.atomic.Value(u16).init(88);
+    const ctx: ConsensusHookContext = .{
+        .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
+        .gossip_table_rw = &gossip_table_rw,
+        .my_shred_version = &my_shred_version,
+        .epoch_tracker = undefined,
+    };
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const nodes = try ctx.getClusterNodes(arena_state.allocator(), .{});
+    try testing.expectEqual(1, nodes.len);
+}
+
+test "ConsensusHookContext.getClusterNodes returns setup errors" {
+    var slot_tracker = try testSetupSlotTracker(1, 1, 0);
+    defer slot_tracker.deinit(testing.allocator);
+
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, 1);
+    defer commitments.deinit(testing.allocator);
+
+    const missing_gossip_ctx = testConsensusHookContext(&slot_tracker, &commitments);
+    try testing.expectError(
+        error.GossipTableNotAvailable,
+        missing_gossip_ctx.getClusterNodes(testing.allocator, .{}),
+    );
+
+    const gossip_table = try sig.gossip.GossipTable.init(testing.allocator, testing.allocator);
+    var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
+    defer sig.sync.mux.deinitMux(&gossip_table_rw);
+
+    const missing_shred_ctx: ConsensusHookContext = .{
+        .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
+        .gossip_table_rw = &gossip_table_rw,
+        .my_shred_version = null,
+        .epoch_tracker = undefined,
+    };
+    try testing.expectError(
+        error.ShredVersionNotAvailable,
+        missing_shred_ctx.getClusterNodes(testing.allocator, .{}),
+    );
 }
