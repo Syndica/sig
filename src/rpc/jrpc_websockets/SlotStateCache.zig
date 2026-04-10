@@ -525,21 +525,9 @@ pub fn onSlotRooted(
         .notify_commitments = .{ .confirmed = !slot_state.published.confirmed, .finalized = true },
         .evict_through = slot,
     };
-    if (!tryMarkFinalizedPublished(slot_state)) {
-        self.logger.err().logf(
-            "received slot_rooted for slot {} in unexpected state: " ++
-                "frozen={} confirmed={} rooted={} published_finalized={}",
-            .{
-                slot,
-                slot_state.state.frozen,
-                slot_state.state.confirmed,
-                slot_state.state.rooted,
-                slot_state.published.finalized,
-            },
-        );
-        return transition;
+    if (tryMarkFinalizedPublished(slot_state)) {
+        transition.publishable_slot = slot_state;
     }
-    transition.publishable_slot = slot_state;
     return transition;
 }
 
@@ -1141,7 +1129,10 @@ test "capacity drop keeps minimum slot when incoming is lower" {
     try std.testing.expect(state.cached_slots.getPtr(2) != null);
 
     // Freezing slot 1 (lower than all cached) should fail.
-    try std.testing.expectError(error.IncomingSlotTooOld, testOnSlotFrozen(&state, allocator, 1, 0, 0));
+    try std.testing.expectError(
+        error.IncomingSlotTooOld,
+        testOnSlotFrozen(&state, allocator, 1, 0, 0),
+    );
 
     try std.testing.expectEqual(MAX_CACHED_SLOTS, state.cached_slots.count());
     try std.testing.expect(state.cached_slots.getPtr(1) == null);
