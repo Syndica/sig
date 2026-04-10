@@ -678,6 +678,48 @@ test "set port works" {
     try std.testing.expectEqual(@as(u16, 1001), sa1.getPort());
 }
 
+test "SocketAddr.isGloballyRoutable filters non-global IPv4 ranges" {
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 0, 0, 0, 0 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 10, 1, 2, 3 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 172, 16, 0, 1 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 172, 31, 255, 255 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 192, 168, 1, 10 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 169, 254, 10, 20 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 255, 255, 255, 255 }, 8000).isGloballyRoutable());
+    try std.testing.expect(SocketAddr.initIpv4(.{ 8, 8, 8, 8 }, 8000).isGloballyRoutable());
+}
+
+test "SocketAddr.isGloballyRoutable filters non-global IPv6 ranges" {
+    try std.testing.expect(!SocketAddr.initIpv6(.{
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+    }, 8000).isGloballyRoutable());
+
+    try std.testing.expect(!SocketAddr.initIpv6(.{
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 1,
+    }, 8000).isGloballyRoutable());
+
+    try std.testing.expect(!SocketAddr.initIpv6(.{
+        0xFE, 0x80, 0, 0,
+        0,    0,    0, 0,
+        0,    0,    0, 0,
+        0,    0,    0, 1,
+    }, 8000).isGloballyRoutable());
+
+    try std.testing.expect(SocketAddr.initIpv6(.{
+        0x20, 0x01, 0x0D, 0xB8,
+        0,    0,    0,    0,
+        0,    0,    0,    0,
+        0,    0,    0,    1,
+    }, 8000).isGloballyRoutable());
+}
+
 test "parse IPv6 if IPv4 fails" {
     try std.testing.expectError(
         error.InvalidIp,

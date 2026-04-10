@@ -1157,3 +1157,152 @@ test "ConsensusHookContext.getLatestBlockhash - slot not available" {
     const err = ctx.getLatestBlockhash(testing.allocator, .{});
     try testing.expectError(error.SlotNotAvailable, err);
 }
+
+test "formatSocketAddrGlobal filters non-global addresses" {
+    try testing.expectEqual(
+        null,
+        try formatSocketAddrGlobal(testing.allocator, null),
+    );
+    try testing.expectEqual(
+        null,
+        try formatSocketAddrGlobal(
+            testing.allocator,
+            .initIpv4(.{ 10, 1, 2, 3 }, 8000),
+        ),
+    );
+    const addr = (try formatSocketAddrGlobal(
+        testing.allocator,
+        .initIpv4(.{ 8, 8, 8, 8 }, 8000),
+    )).?;
+    defer testing.allocator.free(addr);
+    try testing.expectEqualStrings("8.8.8.8:8000", addr);
+}
+
+test "contactInfoToRpc filters and formats fields" {
+    var prng = std.Random.DefaultPrng.init(testing.random_seed);
+    const id = sig.core.Pubkey.initRandom(prng.random());
+
+    var contact_info = sig.gossip.ContactInfo.init(testing.allocator, id, 1, 42);
+    defer contact_info.deinit();
+
+    contact_info.version = .{
+        .major = 1,
+        .minor = 2,
+        .patch = 0,
+        .commit = 1234,
+        .feature_set = 5678,
+        .client = .sig,
+        .prerelease = .{ .release_candidate = 5 },
+    };
+
+    try contact_info.setSocket(.gossip, sig.net.SocketAddr.initIpv4(.{ 8, 8, 8, 8 }, 8000));
+    try contact_info.setSocket(.turbine_recv, sig.net.SocketAddr.initIpv4(.{ 10, 0, 0, 1 }, 8001));
+    try contact_info.setSocket(.tpu, sig.net.SocketAddr.initIpv4(.{ 1, 1, 1, 1 }, 8002));
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const rpc_contact = (try contactInfoToRpc(arena, &contact_info, 42)).?;
+    try testing.expectEqualStrings("8.8.8.8:8000", rpc_contact.gossip.?);
+    try testing.expectEqual(null, rpc_contact.tvu);
+    try testing.expectEqualStrings("1.1.1.1:8002", rpc_contact.tpu.?);
+    try testing.expectEqualStrings("1.2.0-rc.5", rpc_contact.version.?);
+    try testing.expectEqual(5678, rpc_contact.featureSet);
+    try testing.expectEqual(42, rpc_contact.shredVersion);
+    try testing.expectEqual(
+        null,
+        try contactInfoToRpc(arena, &contact_info, 99),
+    );
+
+    var no_gossip = sig.gossip.ContactInfo.init(testing.allocator, id, 1, 42);
+    defer no_gossip.deinit();
+    try testing.expectEqual(
+        null,
+        try contactInfoToRpc(arena, &no_gossip, 42),
+    );
+}
+
+test "ConsensusHookContext.getClusterNodes returns deduplicated entries" {
+    var slot_tracker = try testSetupSlotTracker(1, 1, 0);
+    defer slot_tracker.deinit(testing.allocator);
+
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, 1);
+    defer commitments.deinit(testing.allocator);
+
+    const gossip_table = try sig.gossip.GossipTable.init(testing.allocator, testing.allocator);
+    var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
+    defer sig.sync.mux.deinitMux(&gossip_table_rw);
+
+    const kp = try sig.identity.KeyPair.generateDeterministic(@splat(12));
+    const id = sig.core.Pubkey.fromPublicKey(&kp.public_key);
+
+    var contact_info = sig.gossip.ContactInfo.init(
+        testing.allocator,
+        id,
+        sig.time.getWallclockMs(),
+        88,
+    );
+    try contact_info.setSocket(.gossip, sig.net.SocketAddr.initIpv4(.{ 8, 8, 4, 4 }, 8001));
+
+    var legacy = sig.gossip.data.LegacyContactInfo.default(id);
+    legacy.gossip = sig.net.SocketAddr.initIpv4(.{ 8, 8, 4, 4 }, 8001);
+    legacy.shred_version = 88;
+
+    {
+        const table, var lock = gossip_table_rw.writeWithLock();
+        defer lock.unlock();
+        _ = try table.insert(
+            sig.gossip.SignedGossipData.initSigned(&kp, .{ .ContactInfo = contact_info }),
+            0,
+        );
+        _ = try table.insert(
+            sig.gossip.SignedGossipData.initSigned(&kp, .{ .LegacyContactInfo = legacy }),
+            0,
+        );
+    }
+
+    var my_shred_version = std.atomic.Value(u16).init(88);
+    const ctx: ConsensusHookContext = .{
+        .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
+        .gossip_table_rw = &gossip_table_rw,
+        .my_shred_version = &my_shred_version,
+        .epoch_tracker = undefined,
+    };
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const nodes = try ctx.getClusterNodes(arena_state.allocator(), .{});
+    try testing.expectEqual(1, nodes.len);
+}
+
+test "ConsensusHookContext.getClusterNodes returns setup errors" {
+    var slot_tracker = try testSetupSlotTracker(1, 1, 0);
+    defer slot_tracker.deinit(testing.allocator);
+
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, 1);
+    defer commitments.deinit(testing.allocator);
+
+    const missing_gossip_ctx = testConsensusHookContext(&slot_tracker, &commitments);
+    try testing.expectError(
+        error.GossipTableNotAvailable,
+        missing_gossip_ctx.getClusterNodes(testing.allocator, .{}),
+    );
+
+    const gossip_table = try sig.gossip.GossipTable.init(testing.allocator, testing.allocator);
+    var gossip_table_rw = sig.sync.RwMux(sig.gossip.GossipTable).init(gossip_table);
+    defer sig.sync.mux.deinitMux(&gossip_table_rw);
+
+    const missing_shred_ctx: ConsensusHookContext = .{
+        .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
+        .gossip_table_rw = &gossip_table_rw,
+        .my_shred_version = null,
+        .epoch_tracker = undefined,
+    };
+    try testing.expectError(
+        error.ShredVersionNotAvailable,
+        missing_shred_ctx.getClusterNodes(testing.allocator, .{}),
+    );
+}

@@ -254,6 +254,18 @@ test "ClientVersion.PreRelease parses semantic version pre-release" {
         ClientVersion.PreRelease.stable,
         comptime ClientVersion.PreRelease.fromSemanticVersionPre("dev.10"),
     );
+    try std.testing.expectEqual(
+        ClientVersion.PreRelease.stable,
+        comptime ClientVersion.PreRelease.fromSemanticVersionPre("rc"),
+    );
+    try std.testing.expectEqual(
+        ClientVersion.PreRelease.stable,
+        comptime ClientVersion.PreRelease.fromSemanticVersionPre("rc.1.extra"),
+    );
+    try std.testing.expectEqual(
+        ClientVersion.PreRelease.stable,
+        comptime ClientVersion.PreRelease.fromSemanticVersionPre("rc.not-a-number"),
+    );
 }
 
 test "ClientVersion bincode roundtrip for stable and prerelease" {
@@ -313,5 +325,52 @@ test "ClientVersion rejects invalid patch for prerelease" {
     try std.testing.expectError(
         error.InvalidPatchForPrerelease,
         sig.bincode.writeToSlice(buf[0..], invalid, .{}),
+    );
+}
+
+test "ClientVersion format includes prerelease when present" {
+    const stable: ClientVersion = .{
+        .major = 1,
+        .minor = 2,
+        .patch = 3,
+        .commit = 0,
+        .feature_set = 0,
+        .client = .sig,
+        .prerelease = .stable,
+    };
+    const beta: ClientVersion = .{
+        .major = 1,
+        .minor = 2,
+        .patch = 0,
+        .commit = 0,
+        .feature_set = 0,
+        .client = .sig,
+        .prerelease = .{ .beta = 9 },
+    };
+
+    const stable_fmt = try std.fmt.allocPrint(std.testing.allocator, "{f}", .{stable});
+    defer std.testing.allocator.free(stable_fmt);
+    try std.testing.expectEqualStrings("1.2.3", stable_fmt);
+
+    const beta_fmt = try std.fmt.allocPrint(std.testing.allocator, "{f}", .{beta});
+    defer std.testing.allocator.free(beta_fmt);
+    try std.testing.expectEqualStrings("1.2.0-beta.9", beta_fmt);
+}
+
+test "ClientVersion rejects minor overflow" {
+    const invalid_minor: ClientVersion = .{
+        .major = 1,
+        .minor = ClientVersion.PRERELEASE_MINOR_MAX + 1,
+        .patch = 0,
+        .commit = 0,
+        .feature_set = 0,
+        .client = .sig,
+        .prerelease = .stable,
+    };
+
+    var buf: [64]u8 = undefined;
+    try std.testing.expectError(
+        error.MinorTooLarge,
+        sig.bincode.writeToSlice(buf[0..], invalid_minor, .{}),
     );
 }
