@@ -223,10 +223,6 @@ pub fn commitTransactions(
     _ = self.slot_state.non_vote_transaction_count.fetchAdd(non_vote_count, .monotonic);
     _ = self.slot_state.signature_count.fetchAdd(signature_count, .monotonic);
     _ = self.slot_state.collected_rent.fetchAdd(rent_collected, .monotonic);
-
-    // Per-slot stats for slotsUpdatesSubscribe frozen notifications.
-    // Entry-level counters are updated from replay code that still has
-    // actual ledger entry boundaries.
     _ = self.slot_state.transaction_error_count.fetchAdd(error_count, .monotonic);
 
     for (accounts_to_store.values()) |account| {
