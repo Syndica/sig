@@ -44,6 +44,12 @@ pub const FreezeParams = struct {
     hash_slot: HashSlotParams,
     finalize_state: FinalizeStateParams,
 
+    /// Backing allocator for the `DistributedRewards` arena returned by
+    /// `freezeSlot`. When `null`, falls back to the main `allocator` passed
+    /// to `freezeSlot`. Set this to a different allocator (e.g. the event-sink
+    /// allocator) when the caller needs the rewards to outlive replay state.
+    rewards_allocator: ?Allocator = null,
+
     pub fn init(
         logger: Logger,
         account_store: AccountStore,
@@ -111,7 +117,8 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !DistributedReward
 
     if (slot_hash.get().* != null) return .empty();
 
-    const distributed = try finalizeState(allocator, params.finalize_state);
+    const rewards_allocator = params.rewards_allocator orelse allocator;
+    const distributed = try finalizeState(allocator, rewards_allocator, params.finalize_state);
 
     const maybe_lt_hash, slot_hash.mut().* = try hashSlot(
         allocator,
@@ -155,7 +162,11 @@ const FinalizeStateParams = struct {
 };
 
 /// Updates some accounts and other shared state to finish up the slot execution.
-fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !DistributedRewards {
+fn finalizeState(
+    allocator: Allocator,
+    rewards_allocator: Allocator,
+    params: FinalizeStateParams,
+) !DistributedRewards {
     var zone = tracy.Zone.init(@src(), .{ .name = "finalizeState" });
     zone.value(params.slot);
     defer zone.deinit();
@@ -174,6 +185,7 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !Distributed
 
     const distributed = try distributeTransactionFees(
         allocator,
+        rewards_allocator,
         params.account_store,
         params.account_reader,
         params.capitalization,
@@ -218,22 +230,6 @@ pub const DistributedRewards = struct {
         return .{ .arena_state = .{} };
     }
 
-    /// Clone into a new arena backed by `allocator`.
-    /// The caller owns the returned value and must call `deinit(allocator)` on it.
-    pub fn clone(self: DistributedRewards, allocator: Allocator) Allocator.Error!DistributedRewards {
-        if (self.rewards.len == 0) {
-            return .{ .num_partitions = self.num_partitions };
-        }
-        var arena: std.heap.ArenaAllocator = .init(allocator);
-        errdefer arena.deinit();
-        const rewards_copy = try arena.allocator().dupe(sig.ledger.meta.Reward, self.rewards);
-        return .{
-            .rewards = rewards_copy,
-            .num_partitions = self.num_partitions,
-            .arena_state = arena.state,
-        };
-    }
-
     /// Note: `allocator` must be the same backing allocator used when `arena_state`
     /// was captured.
     pub fn deinit(self: *DistributedRewards, allocator: Allocator) void {
@@ -251,6 +247,7 @@ pub const DistributedRewards = struct {
 /// arena that backs the rewards slice.
 fn distributeTransactionFees(
     allocator: Allocator,
+    rewards_allocator: Allocator,
     account_store: AccountStore,
     account_reader: SlotAccountReader,
     capitalization: *std.atomic.Value(u64),
@@ -302,7 +299,7 @@ fn distributeTransactionFees(
         .commission = null,
     };
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = std.heap.ArenaAllocator.init(rewards_allocator);
     errdefer arena.deinit();
 
     const keyed_rewards, const num_partitions = try getRewardsAndNumPartitions(

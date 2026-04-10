@@ -794,20 +794,27 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     break :blk q.get().last_hash orelse return error.MissingPreviousBlockhash;
                 };
 
+                // When an event sink is present, allocate rewards on its
+                // allocator so the event owns the data directly.
+                const rewards_alloc = if (state.event_sink) |es| es.allocator() else state.allocator;
+
+                var params = replay.freeze.FreezeParams.init(
+                    .from(state.logger),
+                    state.account_store,
+                    &state.thread_pool,
+                    slot_info.state(),
+                    slot_info.constants(),
+                    slot,
+                    last_entry_hash,
+                    state.ledger,
+                );
+                params.rewards_allocator = rewards_alloc;
+
                 var distributed = try replay.freeze.freezeSlot(
                     state.allocator,
-                    .init(
-                        .from(state.logger),
-                        state.account_store,
-                        &state.thread_pool,
-                        slot_info.state(),
-                        slot_info.constants(),
-                        slot,
-                        last_entry_hash,
-                        state.ledger,
-                    ),
+                    params,
                 );
-                defer distributed.deinit(state.allocator);
+                defer distributed.deinit(rewards_alloc);
                 if (state.prioritization_fee_cache) |cache| {
                     cache.finalizeSlot(state.allocator, slot);
                 }
@@ -822,10 +829,11 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     );
                     errdefer accounts.deinit(event_sink.allocator());
 
-                    // Clone into event allocator so the event owns data
-                    // independently of `state.allocator`.
-                    var event_distributed = try distributed.clone(event_sink.allocator());
-                    errdefer event_distributed.deinit(event_sink.allocator());
+                    // Transfer ownership: rewards were already allocated on
+                    // event_sink.allocator() via rewards_allocator, so we
+                    // can hand them off directly.
+                    const event_distributed = distributed;
+                    distributed = .empty();
 
                     try event_sink.send(.{
                         .slot_frozen = .{
@@ -2031,8 +2039,8 @@ test "freezeCompletedSlots emits slot_frozen event with slot metadata" {
             // populated above via db.put so we can assert the real value.
             try std.testing.expectEqual(expected_block_time, slot_frozen.block_time.?);
             // Fee distribution should produce exactly one fee reward entry.
-            // This exercises the clone() path that copies distributed_rewards
-            // from state.allocator into event_sink.allocator().
+            // This exercises the rewards_allocator path that allocates
+            // distributed_rewards directly on event_sink.allocator().
             try std.testing.expectEqual(1, slot_frozen.distributed_rewards.rewards.len);
             try std.testing.expectEqual(
                 leader,
