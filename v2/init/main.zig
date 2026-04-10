@@ -18,6 +18,7 @@ const Config = struct {
 
     gossip: Gossip,
     shred_network: ShredNetwork,
+    accounts_db: AccountsDB,
 
     telemetry: Telemetry,
 
@@ -29,6 +30,14 @@ const Config = struct {
 
     const ShredNetwork = struct {
         recv_port: u16,
+    };
+
+    const AccountsDB = struct {
+        folder_path: []const u8,
+        min_snapshot_download_speed_mb: u64,
+        min_snapshot_download_warmup_ms: u64,
+        min_snapshot_download_timeout_ms: u64,
+        min_snapshot_download_lockin_percent: f64,
     };
 
     const Telemetry = struct {
@@ -82,10 +91,16 @@ pub fn main() !void {
     var reader_buf: [4096]u8 = undefined;
     var reader = schedule_file.reader(&reader_buf);
 
+    std.fs.cwd().makeDir(config.accounts_db.folder_path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => |e| return e,
+    };
+
     const service_instances: []const services.ServiceInstance = &.{
         .{ .service = .shred_receiver },
         .{ .service = .net },
         .{ .service = .gossip },
+        .{ .service = .accounts_db },
         .{ .service = .telemetry },
     };
 
@@ -106,6 +121,18 @@ pub fn main() !void {
             // TODO: read this from identity file in signer service
             .keypair = .fromKeyPair(.generate()),
             .turbine_recv_port = config.shred_network.recv_port,
+        },
+
+        // gossip -> accounts_db
+        .snapshot_queue = {},
+        // accounts_db constants
+        .accounts_db_config = .{
+            .folder = config.accounts_db.folder_path,
+            .min_snapshot_download_speed_mb = config.accounts_db.min_snapshot_download_speed_mb,
+            .min_snapshot_download_warmup_ms = config.accounts_db.min_snapshot_download_warmup_ms,
+            .min_snapshot_download_timeout_ms = config.accounts_db.min_snapshot_download_timeout_ms,
+            .min_snapshot_download_lockin_percent = //
+            config.accounts_db.min_snapshot_download_lockin_percent,
         },
 
         .telemetry = .{

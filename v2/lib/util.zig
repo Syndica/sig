@@ -1,6 +1,51 @@
 ///! Dumping ground for random useful zig functions.
 const std = @import("std");
 
+/// Like std.meta.eql, but properly handles overloads
+pub fn eql(a: anytype, b: @TypeOf(a)) bool {
+    const T = @TypeOf(a);
+    switch (@typeInfo(T)) {
+        .array => {
+            if (a.len != b.len) return false;
+            for (a, b) |x, y| if (!eql(x, y)) return false;
+        },
+        .optional => {
+            if (a == null and b == null) return true;
+            if (a != null and b != null) return eql(a.?, b.?);
+            return false;
+        },
+        .pointer => |info| {
+            if (info.size == .slice) {
+                if (a.len != b.len) return false;
+                for (a, b) |x, y| if (!eql(x, y)) return false;
+            } else return a == b;
+        },
+        .@"enum" => {
+            if (@hasDecl(T, "eql")) return a.eql(b);
+            return a == b;
+        },
+        .@"struct" => |info| {
+            if (@hasDecl(T, "eql")) return a.eql(b);
+            inline for (info.fields) |f| {
+                if (!eql(@field(a, f.name), @field(b, f.name))) return false;
+            }
+        },
+        .@"union" => |info| {
+            if (@hasDecl(T, "eql")) return a.eql(b);
+            if (info.tag_type) |Tag| {
+                if (@as(Tag, a) != @as(Tag, b)) return false;
+                switch (@as(Tag, a)) {
+                    inline else => |tag| {
+                        if (!eql(@field(a, @tagName(tag)), @field(b, @tagName(tag)))) return false;
+                    },
+                }
+            } else @compileError("cant compare untagged union: " ++ @typeName(T));
+        },
+        else => return std.meta.eql(a, b),
+    }
+    return true;
+}
+
 /// A type that wraps a slice so that it can print the items formatted.
 /// `{f}` on a such a slice in `writer.print()` doesn't work for some reason...
 pub fn FmtSlice(comptime T: type) type {

@@ -22,8 +22,9 @@ pub fn read(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader, comptim
         },
         .@"union" => |info| switch (try read(fba, reader, info.tag_type.?)) {
             inline else => |tag| {
-                const Variant = @TypeOf(@field(@as(T, undefined), @tagName(tag)));
-                return @unionInit(T, @tagName(tag), try read(fba, reader, Variant));
+                const Variant = @FieldType(T, @tagName(tag));
+                const value = if (Variant == void) {} else try read(fba, reader, Variant);
+                return @unionInit(T, @tagName(tag), value);
             },
         },
         .@"struct" => |info| {
@@ -55,7 +56,8 @@ pub fn write(writer: *std.Io.Writer, value: anytype) !void {
         .@"union" => switch (std.meta.activeTag(value)) {
             inline else => |tag| {
                 try write(writer, tag);
-                try write(writer, @field(value, @tagName(tag)));
+                if (@FieldType(T, @tagName(tag)) != void)
+                    try write(writer, @field(value, @tagName(tag)));
             },
         },
         .@"struct" => |info| {
