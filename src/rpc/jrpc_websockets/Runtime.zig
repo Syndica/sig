@@ -408,6 +408,8 @@ fn handleInboundEvent(
         },
         // slotsUpdatesSubscribe-only lifecycle events.
         // These bypass SlotStateCache; they don't affect commitment.
+        // NOTE: we just generate timestamp here rather than at event emit time, Agave does a mix,
+        // for some events it is at emit and others it is within RPC processing.
         .slot_dead => |dead| {
             self.notifySlotsUpdatesSubscribers(.{ .dead = .{
                 .slot = dead.slot,

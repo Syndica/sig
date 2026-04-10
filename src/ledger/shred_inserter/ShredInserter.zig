@@ -884,6 +884,8 @@ fn insertDataShred(
 
     if (first_insert) {
         if (self.event_sink) |sink| {
+            // NOTE: this is not identical to where Agave emits the event but is mostly equivalent,
+            // Agave emits this event form retransmit stage.
             try sink.send(.{
                 .first_shred_received = slot,
             });
@@ -893,6 +895,8 @@ fn insertDataShred(
     // TODO self.shred_inserter_metrics: record_shred
     if (slot_meta.isFull()) {
         self.sendSlotFullTiming(slot);
+        // NOTE: this is not identical to where Agave emits the completed event but is mostly
+        // equivalent, Agave emits after commit to ledger DB.
         if (self.event_sink) |sink| {
             try sink.send(.{
                 .slot_completed = slot,
