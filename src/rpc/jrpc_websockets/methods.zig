@@ -10,9 +10,9 @@ const Signature = sig.core.Signature;
 
 pub const Commitment = sig.rpc.methods.common.Commitment;
 pub const AccountEncoding = sig.rpc.account_codec.AccountEncoding;
-pub const TransactionEncoding = enum { base58, base64, json, jsonParsed };
+pub const TransactionEncoding = sig.rpc.methods.common.TransactionEncoding;
 pub const DataSlice = sig.rpc.account_codec.DataSlice;
-pub const TransactionDetails = enum { full, accounts, signatures, none };
+pub const TransactionDetails = sig.rpc.methods.common.TransactionDetails;
 
 pub const MAX_PROGRAM_FILTERS: usize = 4;
 const MAX_MEMCMP_BYTES = 128;

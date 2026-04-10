@@ -20,6 +20,7 @@ const NotifPayload = sig.sync.RcSlice(u8);
 /// Type to track alignment of RcSlice bytes for allocator free
 pub const ReleasedPayloadBytes = @TypeOf((@as(NotifPayload, undefined)).release().?);
 pub const SlotReadContext = types.SlotReadContext;
+const TransactionBatchView = SlotStateCache.CachedSlot.TransactionBatchIterator.View;
 
 const Runtime = @This();
 
@@ -330,19 +331,20 @@ fn handleInboundEvent(
     task_batch: *ThreadPool.Batch,
 ) void {
     // TODO: review how ownership should flow in Zig for this situation,
-    // .slot_frozen and .logs cases take ownership of the inner data
+    // .slot_frozen and .transaction_batch cases take ownership of the inner data
     var e = event;
-    defer e.deinit(self.allocator);
+    defer e.deinit(self.inbound_event_queue.allocator);
 
     switch (e) {
-        .logs => |*log_data| {
-            // NOTE: logs events only populate the slot cache; publication happens on later
-            // slot transitions. Replay may send multiple log batches for the same slot before
-            // `.slot_frozen`, and the cache accumulates them until the slot is published.
-            self.slot_state_cache.onLogsEvent(self.allocator, log_data) catch |err| {
+        .transaction_batch => |*batch_data| {
+            // NOTE: transaction batch events only populate the slot cache; publication
+            // happens on later slot transitions. Replay may send multiple batches for
+            // the same slot before `.slot_frozen`, and the cache accumulates them until
+            // the slot is published.
+            self.slot_state_cache.onTransactionBatchEvent(self.allocator, batch_data) catch |err| {
                 self.logger.err().logf(
-                    "failed to cache logs event for slot {}: {}",
-                    .{ log_data.slot, err },
+                    "failed to cache tx batch event for slot {}: {}",
+                    .{ batch_data.slot, err },
                 );
             };
         },
@@ -402,6 +404,9 @@ fn handleInboundEvent(
         .tip_changed => |new_tip| {
             const transition = self.slot_state_cache.onTipChanged(self.slot_read_ctx, new_tip);
             self.handleSlotTransition(.tip_changed, new_tip, transition, task_batch);
+        },
+        .vote => |*vote_data| {
+            self.handleVoteEvent(vote_data, task_batch);
         },
     }
 }
@@ -607,11 +612,64 @@ fn handleSlotTransition(
                 }
                 self.enqueueAccountReevaluation(entry, slot, task_batch);
             },
+            .vote => continue,
+            .block => {
+                const commitment = entry.key.params.block.commitment;
+                if (!transitionMatchesCommitment(transition.notify_commitments, commitment)) {
+                    continue;
+                }
+                switch (commitment) {
+                    .confirmed => {
+                        var confirmed_slots =
+                            publishable_confirmed_slots.iterator() orelse continue;
+                        while (confirmed_slots.next()) |confirmed_slot| {
+                            self.enqueueBlockJob(
+                                entry,
+                                confirmed_slot.slot,
+                                confirmed_slot.cached_slot,
+                                task_batch,
+                            );
+                        }
+                    },
+                    .processed => unreachable,
+                    .finalized => {
+                        if (transition.publishable_slot == null) continue;
+                        const cached = self.slot_state_cache
+                            .cached_slots.getPtr(slot) orelse continue;
+                        self.enqueueBlockJob(entry, slot, cached, task_batch);
+                    },
+                }
+            },
         }
     }
 
     if (transition.evict_through) |evict_through| {
         self.slot_state_cache.evictFinalizedThrough(self.allocator, evict_through);
+    }
+}
+
+/// Handle a vote event by fanning out to all vote subscriptions.
+/// Vote events are independent of the slot transition pipeline.
+fn handleVoteEvent(
+    self: *Runtime,
+    vote_data: *types.VoteEventData,
+    task_batch: *ThreadPool.Batch,
+) void {
+    for (self.sub_map.entries.items) |*entry| {
+        if (entry.key.method != .vote) continue;
+
+        // voteSubscribe has no params, so sub_map contains at most one
+        // multiplexed `.vote` entry. Transfer ownership of the slots
+        // slice directly into the serialize job.
+        const owned_vote = vote_data.*;
+        vote_data.* = types.VoteEventData.empty();
+        _ = self.enqueueJobForEntry(
+            entry.*,
+            .{ .vote = owned_vote },
+            false,
+            task_batch,
+        );
+        return;
     }
 }
 
@@ -812,6 +870,51 @@ fn deletedAccountPlaceholder() sig.core.Account {
     };
 }
 
+fn enqueueBlockJob(
+    self: *Runtime,
+    entry: *sub_map_mod.MapEntry,
+    slot: Slot,
+    cached: *const SlotStateCache.CachedSlot,
+    task_batch: *ThreadPool.Batch,
+) void {
+    const bp = entry.key.params.block;
+    const parent_slot = cached.parent orelse blk: {
+        self.logger.err().logf("parent is null for slot {}, using fallback", .{slot});
+        break :blk slot -| 1;
+    };
+
+    // TODO(perf): avoid arena allocation on the IO loop; use a ref-counted handle on the cached slot structure instead.
+    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    const block = cached.buildConfirmedBlock(arena.allocator(), parent_slot) catch |err| {
+        arena.deinit();
+        self.logger.err().logf(
+            "failed to build block for slot {}: {}",
+            .{ slot, err },
+        );
+        return;
+    } orelse {
+        arena.deinit();
+        self.logger.warn().logf(
+            "block metadata incomplete for slot {}, skipping blockSubscribe",
+            .{slot},
+        );
+        return;
+    };
+
+    _ = self.enqueueJobForEntry(entry.*, .{
+        .block = .{
+            .slot = slot,
+            .filter = bp.filter,
+            .encoding = bp.encoding,
+            .transaction_details = bp.transaction_details,
+            .max_supported_transaction_version = bp.max_supported_transaction_version,
+            .show_rewards = bp.show_rewards,
+            .block = block,
+            .arena = arena,
+        },
+    }, false, task_batch);
+}
+
 fn publishLogsSubscriptionForEntry(
     self: *Runtime,
     entry: *sub_map_mod.MapEntry,
@@ -820,15 +923,19 @@ fn publishLogsSubscriptionForEntry(
     task_batch: *ThreadPool.Batch,
 ) void {
     const logs_filter = entry.key.params.logs.filter;
-    var log_entries = cached_slot.logEntriesIterator();
-    while (log_entries.next()) |log_event| {
-        if (!logsEventMatchesFilter(logs_filter, log_event)) {
+    var batch_iter = cached_slot.transactionBatchIterator();
+    while (batch_iter.next()) |tx_view| {
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L3419
+        // Agave skips transactions with no log output for logsSubscribe.
+        if (tx_view.logs.len == 0) continue;
+
+        if (!logsBatchViewMatchesFilter(logs_filter, &tx_view)) {
             continue;
         }
 
         // TODO(perf): clone has to allocate; ideally we would use the cached log event as is
         // and keep the arena alive until outstanding events are returned from serialization.
-        const notification_data = log_event.toOwnedNotificationData(
+        const notification_data = tx_view.toOwnedLogsNotification(
             self.allocator,
             slot,
         ) catch |err| {
@@ -843,16 +950,16 @@ fn publishLogsSubscriptionForEntry(
     }
 }
 
-fn logsEventMatchesFilter(
+fn logsBatchViewMatchesFilter(
     filter: methods.LogsFilter,
-    log_event: *const types.TransactionLogsEntry,
+    tx_view: *const TransactionBatchView,
 ) bool {
     return switch (filter) {
-        .all => !log_event.is_vote,
+        .all => !tx_view.is_vote,
         .allWithVotes => true,
         .mentions => |mentions_filter| blk: {
             const target_pubkey = mentions_filter.mentions[0];
-            for (log_event.mentioned_pubkeys) |pubkey| {
+            for (tx_view.mentioned_pubkeys) |pubkey| {
                 if (pubkey.equals(&target_pubkey)) {
                     break :blk true;
                 }
@@ -1070,8 +1177,10 @@ fn handleCommitMsg(self: *Runtime, msg: types.CommitMsg) void {
     switch (msg.result) {
         .serialize_error => {
             self.metrics.serialize_errors += 1;
-            if (msg.is_final and msg.index != null) {
-                q.cancelReservation(msg.index.?);
+            // Cancel the reserved slot so later entries can
+            // still commit (avoids blocking the prefix).
+            if (msg.index) |idx| {
+                q.cancelReservation(idx);
             }
         },
         .payload => |p| {

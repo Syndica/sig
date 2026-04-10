@@ -305,6 +305,7 @@ pub const ShredReceiver = struct {
                 index += 1;
             }
         }
+        std.debug.assert(index == count);
         return signatures;
     }
 

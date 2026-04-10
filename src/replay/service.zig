@@ -211,6 +211,7 @@ pub fn advanceReplay(
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
             .results = slot_results,
             .vote_account_visitor = if (commitment_txn) |t| t.voteAccountVisitor() else null,
+            .event_sink = replay_state.event_sink,
         });
     } else slot_update: {
         // NOTE: Processed slot semantics differ from Agave when Sig is in bypass-consensus mode.
@@ -784,7 +785,20 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
             defer slot_info.release();
             if (slot_info.state().tickHeight() == slot_info.constants().max_tick_height) {
                 state.logger.info().logf("finished replaying slot: {}", .{slot});
-                try replay.freeze.freezeSlot(state.allocator, .init(
+
+                // Capture previous blockhash before freeze
+                // inserts the current one into the queue.
+                const prev_blockhash = blk: {
+                    var q = slot_info.state().blockhash_queue.read();
+                    defer q.unlock();
+                    break :blk q.get().last_hash orelse return error.MissingPreviousBlockhash;
+                };
+
+                // When an event sink is present, allocate rewards on its
+                // allocator so the event owns the data directly.
+                const rewards_alloc = if (state.event_sink) |es| es.allocator() else state.allocator;
+
+                var params = replay.freeze.FreezeParams.init(
                     .from(state.logger),
                     state.account_store,
                     &state.thread_pool,
@@ -793,26 +807,52 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     slot,
                     last_entry_hash,
                     state.ledger,
-                ));
+                );
+                params.rewards_allocator = rewards_alloc;
+
+                var distributed = try replay.freeze.freezeSlot(
+                    state.allocator,
+                    params,
+                );
+                defer distributed.deinit(rewards_alloc);
                 if (state.prioritization_fee_cache) |cache| {
                     cache.finalizeSlot(state.allocator, slot);
                 }
                 processed_a_slot = true;
 
                 if (state.event_sink) |event_sink| {
+                    // send out frozen event with modified accounts for slot
                     var accounts = try event_sink.materializeSlotModifiedAccounts(
                         state.logger,
                         state.account_store.reader(),
                         slot,
                     );
-                    errdefer accounts.deinit();
+                    errdefer accounts.deinit(event_sink.allocator());
 
-                    try event_sink.send(.{ .slot_frozen = .{
-                        .slot = slot,
-                        .parent = slot_info.constants().parent_slot,
-                        .root = slot_tracker.state_root.load(.monotonic),
-                        .accounts = accounts,
-                    } });
+                    // Transfer ownership: rewards were already allocated on
+                    // event_sink.allocator() via rewards_allocator, so we
+                    // can hand them off directly.
+                    var event_distributed = distributed;
+                    distributed = .empty();
+                    errdefer event_distributed.deinit(event_sink.allocator());
+
+                    try event_sink.send(.{
+                        .slot_frozen = .{
+                            .slot = slot,
+                            .parent = slot_info.constants().parent_slot,
+                            .root = slot_tracker.state_root.load(.monotonic),
+                            .accounts = accounts,
+                            .blockhash = last_entry_hash,
+                            .previous_blockhash = prev_blockhash,
+                            .block_height = slot_info.constants().block_height,
+                            .block_time = try state.ledger.db.get(
+                                state.allocator,
+                                schema.blocktime,
+                                slot,
+                            ),
+                            .distributed_rewards = event_distributed,
+                        },
+                    });
                 }
             } else {
                 state.logger.info().logf("partially replayed slot: {}", .{slot});
@@ -1954,14 +1994,35 @@ test "freezeCompletedSlots emits slot_frozen event with slot metadata" {
     defer event_sink.destroy();
     replay_state.event_sink = event_sink;
 
-    try addReplayStateSlotForTest(&replay_state, 1, 0, Pubkey.ZEROES, null);
+    // Use a real leader so that fee distribution produces a non-empty
+    // distributed_rewards (the collector account must exist and be
+    // system-owned for the payout to succeed).
+    const leader: Pubkey = .parse("49VSQjsQyFQ71MsFqoXkpEu3DToL98ChbLGx7UZEn69r");
+    try dep_stubs.accounts_db_state.db.put(0, leader, .{
+        .lamports = 1_000_000_000,
+        .data = &.{},
+        .owner = sig.runtime.program.system.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    try addReplayStateSlotForTest(&replay_state, 1, 0, leader, null);
     const slot_ref = replay_state.slot_tracker.get(1) orelse return error.MissingSlotInTracker;
     defer slot_ref.release();
     slot_ref.state().tick_height.store(slot_ref.constants().max_tick_height, .monotonic);
 
+    // Set non-zero fees so that distributeTransactionFees produces a fee
+    // reward entry in the DistributedRewards.
+    slot_ref.state().collected_transaction_fees.store(10_000, .monotonic);
+
+    // Populate block_time so the frozen event carries a real value instead of null.
+    const expected_block_time: i64 = 1_723_456_789;
+    try dep_stubs.ledger.db.put(schema.blocktime, 1, expected_block_time);
+
+    const test_entry_hash = comptime Hash.parse("Be2U7Ed4QZSc9ZJ83ncdR4rjsrP9yfch94e5uUDXJWPy");
     const processed_a_slot = try freezeCompletedSlots(&replay_state, &.{.{
         .slot = 1,
-        .output = .{ .last_entry_hash = Hash.ZEROES },
+        .output = .{ .last_entry_hash = test_entry_hash },
     }});
 
     try std.testing.expect(processed_a_slot);
@@ -1972,6 +2033,24 @@ test "freezeCompletedSlots emits slot_frozen event with slot metadata" {
             try std.testing.expectEqual(1, slot_frozen.slot);
             try std.testing.expectEqual(0, slot_frozen.parent);
             try std.testing.expectEqual(0, slot_frozen.root);
+            // Block metadata enrichment (Step 5).
+            try std.testing.expectEqual(test_entry_hash, slot_frozen.blockhash);
+            try std.testing.expect(slot_frozen.block_height != null);
+            // block_time is read from ledger (clock.unix_timestamp);
+            // populated above via db.put so we can assert the real value.
+            try std.testing.expectEqual(expected_block_time, slot_frozen.block_time.?);
+            // Fee distribution should produce exactly one fee reward entry.
+            // This exercises the rewards_allocator path that allocates
+            // distributed_rewards directly on event_sink.allocator().
+            try std.testing.expectEqual(1, slot_frozen.distributed_rewards.rewards.len);
+            try std.testing.expectEqual(
+                leader,
+                slot_frozen.distributed_rewards.rewards[0].pubkey,
+            );
+            try std.testing.expectEqual(
+                .fee,
+                slot_frozen.distributed_rewards.rewards[0].reward_type,
+            );
         },
         else => return error.TestUnexpectedResult,
     }

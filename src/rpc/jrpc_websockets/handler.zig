@@ -253,11 +253,13 @@ pub const JRPCHandler = struct {
 
         switch (request.method) {
             inline .accountUnsubscribe,
+            .blockUnsubscribe,
             .logsUnsubscribe,
             .programUnsubscribe,
             .rootUnsubscribe,
             .signatureUnsubscribe,
             .slotUnsubscribe,
+            .voteUnsubscribe,
             => |unsub| {
                 self.handleUnsubscribe(id, unsub.sub_id);
             },
