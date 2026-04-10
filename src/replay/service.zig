@@ -832,8 +832,9 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     // Transfer ownership: rewards were already allocated on
                     // event_sink.allocator() via rewards_allocator, so we
                     // can hand them off directly.
-                    const event_distributed = distributed;
+                    var event_distributed = distributed;
                     distributed = .empty();
+                    errdefer event_distributed.deinit(event_sink.allocator());
 
                     try event_sink.send(.{
                         .slot_frozen = .{
