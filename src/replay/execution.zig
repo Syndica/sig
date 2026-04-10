@@ -178,6 +178,11 @@ pub const ReplaySlotParams = struct {
     verify_ticks_params: VerifyTicksParams,
     account_store: AccountStore,
 
+    /// Global transaction index offset for this batch of entries within the slot.
+    /// Mirrors Agave's `progress.num_txs` at the start of each `confirm_slot_entries` invocation.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L1726
+    base_transaction_index: usize,
+
     pub fn deinit(self: ReplaySlotParams, allocator: Allocator) void {
         for (self.entries) |entry| entry.deinit(allocator);
         allocator.free(self.entries);
@@ -258,7 +263,9 @@ pub fn replaySlotSync(
         }
     }
 
-    for (params.transactions) |transaction| {
+    // Running transaction counter mirrors Agave's `progress.num_txs`.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L1726
+    for (params.transactions, 0..) |transaction, tx_index| {
         var exit = Atomic(bool).init(false);
 
         switch (try replayBatch(
@@ -266,6 +273,7 @@ pub fn replaySlotSync(
             &svm_gateway,
             params.committer,
             &.{transaction},
+            params.base_transaction_index + tx_index,
             &exit,
         )) {
             .success => {},
@@ -294,6 +302,10 @@ pub fn replayBatch(
     svm_gateway: *SvmGateway,
     committer: Committer,
     transactions: []const ResolvedTransaction,
+    /// Mirrors Agave's `ReplayEntry.starting_index`: the global transaction
+    /// index at which this batch starts within the slot.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L92
+    base_transaction_index: usize,
     exit: *Atomic(bool),
 ) !BatchResult {
     var zone = tracy.Zone.init(@src(), .{ .name = "replayBatch" });
@@ -366,6 +378,7 @@ pub fn replayBatch(
         svm_gateway.params.slot,
         transactions,
         results,
+        base_transaction_index,
     );
 
     return .success;
@@ -463,7 +476,7 @@ fn prepareSlot(
     const confirmation_progress = &fork_progress.replay_progress.arc_ed.rwlock_ed;
 
     const previous_last_entry = confirmation_progress.last_entry;
-    const entries, const slot_is_full = blk: {
+    const entries, const slot_is_full, const base_transaction_index = blk: {
         const entries, const num_shreds, const slot_is_full =
             state.ledger.reader().getSlotEntriesWithShredInfo(
                 state.allocator,
@@ -495,9 +508,10 @@ fn prepareSlot(
         confirmation_progress.last_entry = entries[entries.len - 1].hash;
         confirmation_progress.num_shreds += num_shreds;
         confirmation_progress.num_entries += entries.len;
+        const base_tx_index = confirmation_progress.num_txs;
         for (entries) |e| confirmation_progress.num_txs += e.transactions.len;
 
-        break :blk .{ entries, slot_is_full };
+        break :blk .{ entries, slot_is_full, base_tx_index };
     };
 
     const tick_height =
@@ -577,6 +591,7 @@ fn prepareSlot(
         .committer = committer,
         .verify_ticks_params = verify_ticks_params,
         .account_store = state.account_store,
+        .base_transaction_index = base_transaction_index,
     } };
 }
 
@@ -1150,6 +1165,7 @@ pub const TestState = struct {
             .committer = self.committer(),
             .verify_ticks_params = verify_ticks_params,
             .account_store = self.accountStore(),
+            .base_transaction_index = 0,
         };
     }
 

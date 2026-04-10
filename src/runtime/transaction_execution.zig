@@ -113,6 +113,7 @@ pub const ExecutedTransaction = struct {
     log_collector: ?LogCollector,
     instruction_trace: ?InstructionTrace,
     return_data: ?TransactionReturnData,
+    executed_units: u64,
     compute_limit: u64,
     compute_meter: u64,
     accounts_data_len_delta: i64,
@@ -129,7 +130,7 @@ pub const ExecutedTransaction = struct {
     }
 
     pub fn total_cost(self: *const ExecutedTransaction) u64 {
-        return self.compute_limit - self.compute_meter;
+        return self.executed_units;
     }
 };
 
@@ -542,6 +543,7 @@ pub fn executeTransaction(
         .log_collector = tc.takeLogCollector(),
         .instruction_trace = tc.instruction_trace,
         .return_data = tc.takeReturnData(),
+        .executed_units = tc.consumed_units,
         .compute_limit = compute_budget.compute_unit_limit,
         .compute_meter = tc.compute_meter,
         .accounts_data_len_delta = tc.accounts_resize_delta,
@@ -959,6 +961,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         try std.testing.expectEqual(null, executed_transaction.log_collector);
         try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
         try std.testing.expectEqual(null, executed_transaction.return_data);
+        try std.testing.expectEqual(150, executed_transaction.executed_units);
         try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
         try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
     }
@@ -1007,6 +1010,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         try std.testing.expectEqual(null, executed_transaction.log_collector);
         try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
         try std.testing.expectEqual(null, executed_transaction.return_data);
+        try std.testing.expectEqual(150, executed_transaction.executed_units);
         try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
         try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
     }

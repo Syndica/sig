@@ -56,6 +56,7 @@ pub fn commitTransactions(
     slot: Slot,
     transactions: []const ResolvedTransaction,
     tx_results: []const struct { Hash, ProcessedTransaction },
+    base_transaction_index: usize,
 ) !void {
     var zone = tracy.Zone.init(@src(), .{ .name = "commitTransactions" });
     zone.value(transactions.len);
@@ -74,19 +75,20 @@ pub fn commitTransactions(
     var priority_fees: u64 = 0;
     var non_vote_count: usize = 0;
 
-    var maybe_logs_batch_event: ?jrpc_types.SlotTransactionLogs = null;
-    defer if (maybe_logs_batch_event) |*logs_batch_event| {
-        logs_batch_event.deinit();
-    };
-    var batch_log_entries: ArrayListUnmanaged(jrpc_types.TransactionLogsEntry) = .{};
-    if (self.event_sink != null) {
-        maybe_logs_batch_event = .{
-            .slot = slot,
-            .arena = .init(persistent_allocator),
-        };
-    }
+    // When an event sink is present, build a rich transaction batch event.
+    // The arena owns all TransactionEntry data; allocate from the event sink
+    // so the receive side can free with its own (channel) allocator.
+    const maybe_event_sink = self.event_sink;
+    const batch_allocator = if (maybe_event_sink) |es| es.allocator() else persistent_allocator;
+    var owns_batch_arena = maybe_event_sink != null;
+    var batch_arena = std.heap.ArenaAllocator.init(batch_allocator);
+    defer if (owns_batch_arena) batch_arena.deinit();
+    var batch_entries: ArrayListUnmanaged(jrpc_types.TransactionEntry) = .{};
 
-    for (transactions, tx_results, 0..) |transaction, *result, transaction_index| {
+    for (transactions, tx_results, 0..) |transaction, *result, local_index| {
+        // Expand per-batch starting index to per-transaction global index.
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L559
+        const global_index = base_transaction_index + local_index;
         const message_hash = &result.@"0";
         const tx_result = &result.@"1";
 
@@ -115,29 +117,10 @@ pub fn commitTransactions(
             transaction.accounts.items(.is_writable),
         );
 
-        // TODO: fix nesting, this sucks
-
-        if (tx_result.outputs) |outputs| {
+        if (tx_result.outputs != null) {
             rent_collected += tx_result.rent;
 
-            if (maybe_logs_batch_event) |*logs_batch_event| {
-                appendSlotTransactionLogsEntry(
-                    logs_batch_event.arena.allocator(),
-                    &batch_log_entries,
-                    transaction,
-                    tx_result.err,
-                    outputs.log_collector,
-                    is_simple_vote_tx,
-                ) catch |err| {
-                    self.logger.err().logf(
-                        "failed to build transaction logs batch for slot {} transaction {}: {}",
-                        .{ slot, transaction_index, err },
-                    );
-                };
-            }
-
-            // Skip non successful or non vote transactions.
-            // Only send votes if consensus is enabled (sender exists)
+            // Parse and forward vote transactions
             if (self.replay_votes_sender) |sender| {
                 if (tx_result.err == null and is_simple_vote_tx) {
                     if (try parseSanitizedVoteTransaction(
@@ -157,12 +140,10 @@ pub fn commitTransactions(
         const recent_blockhash = &transaction.transaction.msg.recent_blockhash;
         const signature = transaction.transaction.signatures[0];
         {
-            const status_cache_zone = tracy.Zone.init(
-                @src(),
-                .{ .name = "status_cache.insert: message_hash.data" },
-            );
-            defer status_cache_zone.deinit();
-
+            const z = tracy.Zone.init(@src(), .{
+                .name = "status_cache.insert: message_hash.data",
+            });
+            defer z.deinit();
             try self.status_cache.insert(
                 persistent_allocator,
                 rng.random(),
@@ -173,12 +154,10 @@ pub fn commitTransactions(
             );
         }
         {
-            const status_cache_zone = tracy.Zone.init(
-                @src(),
-                .{ .name = "status_cache.insert: signature.toBytes()" },
-            );
-            defer status_cache_zone.deinit();
-
+            const z = tracy.Zone.init(@src(), .{
+                .name = "status_cache.insert: signature.toBytes()",
+            });
+            defer z.deinit();
             try self.status_cache.insert(
                 persistent_allocator,
                 rng.random(),
@@ -189,17 +168,50 @@ pub fn commitTransactions(
             );
         }
 
-        // Write transaction status to ledger for RPC (getBlock, getTransaction)
-        if (self.ledger) |ledger| {
-            try writeTransactionStatus(
+        // When subscribers are present, build a rich
+        // TransactionEntry in the arena, then also use
+        // it for the ledger write (avoiding duplicate
+        // metadata computation).
+        if (maybe_event_sink != null) {
+            const arena_alloc = batch_arena.allocator();
+            const entry = try buildTransactionEntry(
+                arena_alloc,
                 temp_allocator,
-                ledger,
-                slot,
                 transaction,
                 tx_result.*,
-                transaction_index,
+                is_simple_vote_tx,
+                global_index,
                 self.account_store,
             );
+
+            try batch_entries.append(arena_alloc, entry);
+
+            // Write to ledger from the entry (borrows
+            // arena data, no extra allocations).
+            if (self.ledger) |ledger| {
+                try writeTransactionStatusFromEntry(
+                    temp_allocator,
+                    ledger,
+                    slot,
+                    transaction,
+                    &entry,
+                    global_index,
+                );
+            }
+        } else {
+            // No subscribers, use the original
+            // ledger-only path (no entry allocation).
+            if (self.ledger) |ledger| {
+                try writeTransactionStatus(
+                    temp_allocator,
+                    ledger,
+                    slot,
+                    transaction,
+                    tx_result.*,
+                    global_index,
+                    self.account_store,
+                );
+            }
         }
     }
 
@@ -219,18 +231,16 @@ pub fn commitTransactions(
         );
     }
 
-    if (self.event_sink) |event_sink| {
-        if (maybe_logs_batch_event) |*logs_batch_event| {
-            // NOTE: it's fine to just assign the slice here since the arena allocator will free
-            // everything, so we don't need to track actual capacity of the ArrayList
-            logs_batch_event.entries = batch_log_entries.items;
+    if (maybe_event_sink) |event_sink| {
+        const event: jrpc_types.InboundEvent = .{ .transaction_batch = .{
+            .slot = slot,
+            .entries = batch_entries.items,
+            .arena_state = batch_arena.state,
+        } };
+        owns_batch_arena = false;
+        errdefer event.deinit(event_sink.allocator());
 
-            const event: jrpc_types.InboundEvent = .{ .logs = logs_batch_event.* };
-            maybe_logs_batch_event = null;
-            errdefer event.deinit(persistent_allocator);
-
-            try event_sink.send(event);
-        }
+        try event_sink.send(event);
     }
 }
 
@@ -421,8 +431,14 @@ fn writeTransactionStatus(
         allocator.free(balances);
     };
 
-    // Compute post-token balances from writes
-    const post_raw_token_balances = collectPostTokenBalances(transaction, tx_result);
+    // Compute post-token balances by reading all transaction accounts.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_processor.rs#L532-L533
+    const post_raw_token_balances = try collectPostTokenBalances(
+        allocator,
+        transaction,
+        tx_result.writes.constSlice(),
+        if (account_store) |store| store.reader() else null,
+    );
     const post_token_balances = spl_token.resolveTokenBalances(
         allocator,
         post_raw_token_balances,
@@ -459,46 +475,327 @@ fn writeTransactionStatus(
     );
 }
 
-/// Collect post-execution token balances from transaction writes.
-fn collectPostTokenBalances(
+/// Build a rich TransactionEntry in the given arena allocator.
+///
+/// Computes all the same metadata that `writeTransactionStatus`
+/// does (balances, token balances, loaded addresses, inner
+/// instructions, logs, return data) but stores them into a
+/// `TransactionEntry` that can be cached and reused for both
+/// ledger writes and notification construction.
+fn buildTransactionEntry(
+    arena: Allocator,
+    temp_allocator: Allocator,
     transaction: ResolvedTransaction,
     tx_result: ProcessedTransaction,
-) spl_token.RawTokenBalances {
-    var result = spl_token.RawTokenBalances{};
+    is_vote: bool,
+    transaction_index: usize,
+    account_store: ?SlotAccountStore,
+) !jrpc_types.TransactionEntry {
+    const zone = tracy.Zone.init(@src(), .{ .name = "buildTransactionEntry" });
+    defer zone.deinit();
 
-    for (tx_result.writes.constSlice()) |*written_account| {
-        // Skip non-token accounts
-        if (!spl_token.isTokenProgram(written_account.account.owner)) continue;
+    const num_accounts = transaction.accounts.len;
 
-        // Skip if data is too short for a token account
-        if (written_account.account.data.len < spl_token.TOKEN_ACCOUNT_SIZE) continue;
+    // Pre-balances
+    const pre_balances = try arena.alloc(u64, num_accounts);
+    if (tx_result.pre_balances.len == num_accounts) {
+        @memcpy(pre_balances, tx_result.pre_balances.constSlice());
+    } else {
+        @memset(pre_balances, 0);
+    }
 
-        // Try to parse as token account
-        const parsed = spl_token.ParsedTokenAccount.parse(
-            written_account.account.data[0..spl_token.TOKEN_ACCOUNT_SIZE],
-        ) orelse continue;
-
-        // Find the account index in the transaction
-        var account_index: ?u8 = null;
+    // Post-balances
+    const post_balances = try arena.alloc(u64, num_accounts);
+    @memcpy(post_balances, pre_balances);
+    for (tx_result.writes.constSlice()) |*written| {
         for (transaction.accounts.items(.pubkey), 0..) |pubkey, idx| {
-            if (pubkey.equals(&written_account.pubkey)) {
-                account_index = @intCast(idx);
+            if (pubkey.equals(&written.pubkey)) {
+                post_balances[idx] = written.account.lamports;
                 break;
             }
         }
+    }
 
-        if (account_index) |idx| {
-            result.append(.{
-                .account_index = idx,
-                .mint = parsed.mint,
-                .owner = parsed.owner,
-                .amount = parsed.amount,
-                .program_id = written_account.account.owner,
-            }) catch {}; // this is ok since tx_result.writes and result.len are the same
+    // Loaded addresses
+    const num_static = transaction.transaction.msg.account_keys.len;
+    var num_loaded_w: usize = 0;
+    var num_loaded_r: usize = 0;
+    for (transaction.transaction.msg.address_lookups) |l| {
+        num_loaded_w += l.writable_indexes.len;
+        num_loaded_r += l.readonly_indexes.len;
+    }
+    var loaded_w = try ArrayListUnmanaged(Pubkey).initCapacity(arena, num_loaded_w);
+    var loaded_r = try ArrayListUnmanaged(Pubkey).initCapacity(arena, num_loaded_r);
+    for (
+        transaction.accounts.items(.pubkey),
+        transaction.accounts.items(.is_writable),
+        0..,
+    ) |pubkey, is_writable, index| {
+        if (index >= num_static) {
+            if (is_writable) {
+                loaded_w.appendAssumeCapacity(pubkey);
+            } else {
+                loaded_r.appendAssumeCapacity(pubkey);
+            }
+        }
+    }
+    const loaded_addresses = LoadedAddresses{
+        .writable = loaded_w.items,
+        .readonly = loaded_r.items,
+    };
+
+    // Token balances
+    var mint_cache = spl_token.MintDecimalsCache.init(temp_allocator);
+    defer mint_cache.deinit();
+    for (tx_result.writes.constSlice()) |*written| {
+        if (written.account.data.len >= spl_token.MINT_ACCOUNT_SIZE) {
+            if (spl_token.ParsedMint.parse(
+                written.account.data[0..spl_token.MINT_ACCOUNT_SIZE],
+            )) |mint| {
+                try mint_cache.put(
+                    written.pubkey,
+                    mint.decimals,
+                );
+            }
+        }
+    }
+    const mint_reader = FallbackAccountReader{
+        .writes = tx_result.writes.constSlice(),
+        .account_store_reader = if (account_store) |s| s.reader() else null,
+    };
+    const pre_token_balances = try spl_token.resolveTokenBalances(
+        arena,
+        tx_result.pre_token_balances,
+        &mint_cache,
+        FallbackAccountReader,
+        mint_reader,
+    );
+
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_processor.rs#L532-L533
+    const post_raw = try collectPostTokenBalances(
+        temp_allocator,
+        transaction,
+        tx_result.writes.constSlice(),
+        if (account_store) |s| s.reader() else null,
+    );
+    const post_token_balances = try spl_token.resolveTokenBalances(
+        arena,
+        post_raw,
+        &mint_cache,
+        FallbackAccountReader,
+        mint_reader,
+    );
+
+    // Build TransactionStatusMeta for inner
+    // instructions, logs, return data, compute
+    // We use the arena allocator so that all the
+    // converted data lives in the batch arena.
+    const meta = try TransactionStatusMetaBuilder.build(
+        arena,
+        tx_result,
+        pre_balances,
+        post_balances,
+        loaded_addresses,
+        pre_token_balances,
+        post_token_balances,
+    );
+    // Do NOT deinit `meta` the arena owns the data.
+
+    // Clone transaction into arena
+    const cloned_tx = try transaction.transaction.clone(arena);
+
+    // Mentioned pubkeys
+    const mentioned = try arena.dupe(Pubkey, transaction.accounts.items(.pubkey));
+
+    // Error: clone into arena if it has heap data
+    const cloned_err: ?TransactionError = if (tx_result.err) |err| try err.clone(arena) else null;
+
+    return .{
+        .signature = transaction.transaction.signatures[0],
+        .transaction = cloned_tx,
+        .is_vote = is_vote,
+        .transaction_index = transaction_index,
+        .err = cloned_err,
+        .fee = meta.fee,
+        .compute_units_consumed = meta.compute_units_consumed,
+        .cost_units = tx_result.cost_units,
+        .pre_balances = meta.pre_balances,
+        .post_balances = meta.post_balances,
+        .pre_token_balances = meta.pre_token_balances,
+        .post_token_balances = meta.post_token_balances,
+        .inner_instructions = meta.inner_instructions,
+        .log_messages = meta.log_messages,
+        .return_data = meta.return_data,
+        .loaded_addresses = meta.loaded_addresses,
+        .mentioned_pubkeys = mentioned,
+    };
+}
+
+/// Write transaction status to the ledger using data from a previously built `TransactionEntry`. Constructs a
+/// borrowing `TransactionStatusMeta` from the entry's arena-owned fields, no extra allocations needed for
+/// the metadata itself.
+fn writeTransactionStatusFromEntry(
+    temp_allocator: Allocator,
+    ledger: *Ledger,
+    slot: Slot,
+    transaction: ResolvedTransaction,
+    entry: *const jrpc_types.TransactionEntry,
+    transaction_index: usize,
+) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "writeTransactionStatusFromEntry" });
+    defer zone.deinit();
+
+    // Classify keys into writable/readonly for the address-signatures index.
+    var writable_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
+        temp_allocator,
+        transaction.accounts.len,
+    );
+    defer writable_keys.deinit(temp_allocator);
+    var readonly_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
+        temp_allocator,
+        transaction.accounts.len,
+    );
+    defer readonly_keys.deinit(temp_allocator);
+
+    for (
+        transaction.accounts.items(.pubkey),
+        transaction.accounts.items(.is_writable),
+    ) |pubkey, is_writable| {
+        if (is_writable) {
+            writable_keys.appendAssumeCapacity(pubkey);
+        } else {
+            readonly_keys.appendAssumeCapacity(pubkey);
         }
     }
 
+    // Build a borrowing TransactionStatusMeta that
+    // points into the arena-owned entry data.
+    const status = TransactionStatusMeta{
+        .status = entry.err,
+        .fee = entry.fee,
+        .pre_balances = entry.pre_balances,
+        .post_balances = entry.post_balances,
+        .inner_instructions = entry.inner_instructions,
+        .log_messages = entry.log_messages,
+        .pre_token_balances = entry.pre_token_balances,
+        .post_token_balances = entry.post_token_balances,
+        // Per-transaction rewards are always empty in Agave.
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/rpc/src/transaction_status_service.rs#L190
+        .rewards = &.{},
+        .loaded_addresses = entry.loaded_addresses,
+        .return_data = entry.return_data,
+        .compute_units_consumed = entry.compute_units_consumed,
+        .cost_units = entry.cost_units,
+    };
+    // Do NOT defer status.deinit(), it borrows from the arena.
+
+    const result_writer = ledger.resultWriter();
+    try result_writer.writeTransactionStatus(
+        slot,
+        entry.signature,
+        writable_keys.items,
+        readonly_keys.items,
+        status,
+        transaction_index,
+    );
+}
+
+/// Collects post-execution token balances for all transaction accounts.
+///
+/// Iterates every account key in the transaction (not just writes) and
+/// reads each account's final state from the transaction writes first,
+/// falling back to the account store for unmodified accounts. This
+/// matches Agave's `collect_balances`, which reads through the
+/// `AccountLoader` after it has been updated with execution results.
+///
+/// For failed transactions the writes only contain rollback accounts
+/// (fee-payer and nonce), so token accounts that were not modified
+/// still need to be read from the account store to populate
+/// `postTokenBalances`.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_processor.rs#L532-L533
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_balances.rs#L78-L110
+fn collectPostTokenBalances(
+    allocator: Allocator,
+    transaction: ResolvedTransaction,
+    writes: []const LoadedAccount,
+    account_store_reader: ?sig.accounts_db.SlotAccountReader,
+) !spl_token.RawTokenBalances {
+    var result = spl_token.RawTokenBalances{};
+
+    // Early exit when the transaction has no token program in its
+    // account keys, no account can be a token account.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_balances.rs#L86
+    const has_token_program = for (transaction.accounts.items(.pubkey)) |pubkey| {
+        if (spl_token.isTokenProgram(pubkey)) break true;
+    } else false;
+    if (!has_token_program) return result;
+
+    // Iterate ALL account keys in transaction order.
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_balances.rs#L88
+    for (transaction.accounts.items(.pubkey), 0..) |pubkey, idx| {
+        // Skip token program IDs themselves since they are programs and not token accounts.
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_balances.rs#L98
+        if (spl_token.isTokenProgram(pubkey)) continue;
+
+        // Read the account's final state. Check transaction writes
+        // first (updated/rolled-back accounts), then fall back to
+        // the account store (unmodified accounts).
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/account_loader.rs#L237-L255
+        var owner: ?Pubkey = null;
+        var data_buf: [spl_token.TOKEN_ACCOUNT_SIZE]u8 = undefined;
+        var have_data = false;
+
+        if (findInWrites(writes, pubkey)) |written| {
+            owner = written.account.owner;
+            if (written.account.data.len >= spl_token.TOKEN_ACCOUNT_SIZE) {
+                @memcpy(&data_buf, written.account.data[0..spl_token.TOKEN_ACCOUNT_SIZE]);
+                have_data = true;
+            }
+        } else if (account_store_reader) |reader| {
+            const account = try reader.get(allocator, pubkey) orelse continue;
+            defer account.deinit(allocator);
+            owner = account.owner;
+            if (account.data.len() >= spl_token.TOKEN_ACCOUNT_SIZE) {
+                const bytes_read = account.data.read(0, &data_buf);
+                std.debug.assert(bytes_read == spl_token.TOKEN_ACCOUNT_SIZE);
+                have_data = true;
+            }
+        } else continue;
+
+        if (!have_data) continue;
+
+        // The account's owner must be a known token program.
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_balances.rs#L99
+        const owner_pubkey = owner orelse return error.MissingTokenAccountOwner;
+        if (!spl_token.isTokenProgram(owner_pubkey)) continue;
+
+        // Parse SPL Token account state.
+        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_balances.rs#L101-L105
+        const parsed = spl_token.ParsedTokenAccount.parse(
+            &data_buf,
+        ) orelse continue;
+
+        result.append(.{
+            .account_index = @intCast(idx),
+            .mint = parsed.mint,
+            .owner = parsed.owner,
+            .amount = parsed.amount,
+            .program_id = owner_pubkey,
+        }) catch unreachable; // BoundedArray full; can never happen because capacity == MAX_TX_ACCOUNT_LOCKS.
+    }
+
     return result;
+}
+
+fn findInWrites(
+    writes: []const LoadedAccount,
+    pubkey: Pubkey,
+) ?*const LoadedAccount {
+    for (writes) |*written| {
+        if (written.pubkey.equals(&pubkey)) return written;
+    }
+    return null;
 }
 
 /// Account reader that checks transaction writes first, then falls back to the
@@ -635,6 +932,7 @@ test "commitTransactions emits transaction logs batch with transaction metadata"
                     .compute_limit = 0,
                     .compute_meter = 0,
                     .accounts_data_len_delta = 0,
+                    .executed_units = 0,
                 },
                 .pre_balances = .{},
                 .pre_token_balances = .{},
@@ -657,6 +955,7 @@ test "commitTransactions emits transaction logs batch with transaction metadata"
                     .compute_limit = 0,
                     .compute_meter = 0,
                     .accounts_data_len_delta = 0,
+                    .executed_units = 0,
                 },
                 .pre_balances = .{},
                 .pre_token_balances = .{},
@@ -679,6 +978,7 @@ test "commitTransactions emits transaction logs batch with transaction metadata"
                     .compute_limit = 0,
                     .compute_meter = 0,
                     .accounts_data_len_delta = 0,
+                    .executed_units = 0,
                 },
                 .pre_balances = .{},
                 .pre_token_balances = .{},
@@ -700,17 +1000,18 @@ test "commitTransactions emits transaction logs batch with transaction metadata"
         42,
         resolved_transactions[0..],
         tx_results[0..],
+        0,
     );
 
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
     defer event.deinit(allocator);
 
     switch (event) {
-        .logs => |logs_event| {
-            try std.testing.expectEqual(42, logs_event.slot);
-            try std.testing.expectEqual(3, logs_event.entries.len);
+        .transaction_batch => |batch_event| {
+            try std.testing.expectEqual(42, batch_event.slot);
+            try std.testing.expectEqual(3, batch_event.entries.len);
 
-            const borsh_entry = logs_event.entries[0];
+            const borsh_entry = batch_event.entries[0];
             try std.testing.expect(borsh_entry.signature.eql(
                 &resolved_transactions[0].transaction.signatures[0],
             ));
@@ -722,9 +1023,10 @@ test "commitTransactions emits transaction logs batch with transaction metadata"
             try std.testing.expect(err.BorshIoError.ptr != borsh_io_error.ptr);
             try std.testing.expectEqualStrings("borsh io", err.BorshIoError);
             try std.testing.expect(!borsh_entry.is_vote);
-            try std.testing.expectEqual(2, borsh_entry.logs.len);
-            try std.testing.expectEqualStrings("Program log: hello", borsh_entry.logs[0]);
-            try std.testing.expectEqualStrings("Program log: world", borsh_entry.logs[1]);
+            const logs_0 = borsh_entry.log_messages orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(2, logs_0.len);
+            try std.testing.expectEqualStrings("Program log: hello", logs_0[0]);
+            try std.testing.expectEqualStrings("Program log: world", logs_0[1]);
             try std.testing.expectEqual(
                 resolved_transactions[0].accounts.items(.pubkey).len,
                 borsh_entry.mentioned_pubkeys.len,
@@ -733,38 +1035,37 @@ test "commitTransactions emits transaction logs batch with transaction metadata"
                 &resolved_transactions[0].accounts.items(.pubkey)[0],
             ));
 
-            const account_not_found_entry = logs_event.entries[1];
-            try std.testing.expect(account_not_found_entry.signature.eql(
+            const anf_entry = batch_event.entries[1];
+            try std.testing.expect(anf_entry.signature.eql(
                 &resolved_transactions[1].transaction.signatures[0],
             ));
-            try std.testing.expectEqual(.AccountNotFound, account_not_found_entry.err);
-            try std.testing.expect(!account_not_found_entry.is_vote);
-            try std.testing.expectEqual(1, account_not_found_entry.logs.len);
-            try std.testing.expectEqualStrings(
-                "Program log: account missing",
-                account_not_found_entry.logs[0],
-            );
+            try std.testing.expectEqual(.AccountNotFound, anf_entry.err);
+            try std.testing.expect(!anf_entry.is_vote);
+            const logs_1 = anf_entry.log_messages orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(1, logs_1.len);
+            try std.testing.expectEqualStrings("Program log: account missing", logs_1[0]);
             try std.testing.expectEqual(
                 resolved_transactions[1].accounts.items(.pubkey).len,
-                account_not_found_entry.mentioned_pubkeys.len,
+                anf_entry.mentioned_pubkeys.len,
             );
-            try std.testing.expect(account_not_found_entry.mentioned_pubkeys[0].equals(
+            try std.testing.expect(anf_entry.mentioned_pubkeys[0].equals(
                 &resolved_transactions[1].accounts.items(.pubkey)[0],
             ));
 
-            const success_entry = logs_event.entries[2];
-            try std.testing.expect(success_entry.signature.eql(
+            const ok_entry = batch_event.entries[2];
+            try std.testing.expect(ok_entry.signature.eql(
                 &resolved_transactions[2].transaction.signatures[0],
             ));
-            try std.testing.expectEqual(null, success_entry.err);
-            try std.testing.expect(!success_entry.is_vote);
-            try std.testing.expectEqual(1, success_entry.logs.len);
-            try std.testing.expectEqualStrings("Program log: success", success_entry.logs[0]);
+            try std.testing.expectEqual(null, ok_entry.err);
+            try std.testing.expect(!ok_entry.is_vote);
+            const logs_2 = ok_entry.log_messages orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(1, logs_2.len);
+            try std.testing.expectEqualStrings("Program log: success", logs_2[0]);
             try std.testing.expectEqual(
                 resolved_transactions[2].accounts.items(.pubkey).len,
-                success_entry.mentioned_pubkeys.len,
+                ok_entry.mentioned_pubkeys.len,
             );
-            try std.testing.expect(success_entry.mentioned_pubkeys[0].equals(
+            try std.testing.expect(ok_entry.mentioned_pubkeys[0].equals(
                 &resolved_transactions[2].accounts.items(.pubkey)[0],
             ));
         },
@@ -809,6 +1110,7 @@ test "commitTransactions emits empty transaction logs batch when execution has n
                 .compute_limit = 0,
                 .compute_meter = 0,
                 .accounts_data_len_delta = 0,
+                .executed_units = 0,
             },
             .pre_balances = .{},
             .pre_token_balances = .{},
@@ -826,18 +1128,211 @@ test "commitTransactions emits empty transaction logs batch when execution has n
         43,
         (&resolved_transaction)[0..1],
         (&tx_result)[0..1],
+        0,
     );
 
     const event = event_sink.channel.tryReceive() orelse return error.TestUnexpectedResult;
     defer event.deinit(allocator);
 
     switch (event) {
-        .logs => |logs_event| {
-            try std.testing.expectEqual(43, logs_event.slot);
-            try std.testing.expectEqual(0, logs_event.entries.len);
+        .transaction_batch => |batch_event| {
+            try std.testing.expectEqual(43, batch_event.slot);
+            // One transaction was submitted, so we should get one entry
+            // (even without logs, the entry carries balances etc.).
+            try std.testing.expectEqual(1, batch_event.entries.len);
         },
         else => return error.TestUnexpectedResult,
     }
 
     try std.testing.expect(event_sink.channel.tryReceive() == null);
+}
+
+test "collectPostTokenBalances: failed tx reads token account from account store" {
+    // Regression test: for failed transactions, writes contain only
+    // rollback accounts (fee payer / nonce). Token accounts that
+    // were loaded but not modified must still appear in
+    // postTokenBalances, read from the account store.
+    //
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_balances.rs#L88
+    const allocator = std.testing.allocator;
+    const ids = sig.runtime.ids;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const fee_payer = Pubkey.initRandom(random);
+    const token_program = ids.TOKEN_PROGRAM_ID;
+    const mint_pubkey = Pubkey.initRandom(random);
+    const token_owner = Pubkey.initRandom(random);
+    const token_account_key = Pubkey.initRandom(random);
+
+    // Resolved accounts: [fee_payer, token_program, token_account]
+    var resolved_accounts: std.MultiArrayList(
+        sig.core.instruction.InstructionAccount,
+    ) = .{};
+    try resolved_accounts.ensureTotalCapacity(allocator, 3);
+    defer resolved_accounts.deinit(allocator);
+
+    resolved_accounts.appendAssumeCapacity(.{
+        .pubkey = fee_payer,
+        .is_signer = true,
+        .is_writable = true,
+    });
+    resolved_accounts.appendAssumeCapacity(.{
+        .pubkey = token_program,
+        .is_signer = false,
+        .is_writable = false,
+    });
+    resolved_accounts.appendAssumeCapacity(.{
+        .pubkey = token_account_key,
+        .is_signer = false,
+        .is_writable = true,
+    });
+
+    const transaction = ResolvedTransaction{
+        .transaction = sig.core.Transaction.EMPTY,
+        .accounts = resolved_accounts,
+        .instructions = &.{},
+    };
+
+    // Build valid SPL token account data (165 bytes).
+    var token_data = std.mem.zeroes(
+        [spl_token.TOKEN_ACCOUNT_SIZE]u8,
+    );
+    @memcpy(token_data[0..32], &mint_pubkey.data);
+    @memcpy(token_data[32..64], &token_owner.data);
+    std.mem.writeInt(
+        u64,
+        token_data[64..72],
+        1_000_000,
+        .little,
+    );
+    token_data[108] = 1; // TokenAccountState.initialized
+
+    // Failed tx: writes are empty (token account not modified).
+    const writes: []const LoadedAccount = &.{};
+
+    // Account store holds the token account.
+    var account_map = sig.utils.collections.PubkeyMap(
+        sig.runtime.AccountSharedData,
+    ){};
+    defer account_map.deinit(allocator);
+    try account_map.put(allocator, token_account_key, .{
+        .lamports = 1_000_000,
+        .data = &token_data,
+        .owner = token_program,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    const reader: sig.accounts_db.SlotAccountReader = .{
+        .account_shared_data_map = &account_map,
+    };
+
+    const result = try collectPostTokenBalances(
+        allocator,
+        transaction,
+        writes,
+        reader,
+    );
+
+    // Token account at index 2 must be present.
+    try std.testing.expectEqual(1, result.len);
+    const entry = result.constSlice()[0];
+    try std.testing.expectEqual(@as(u8, 2), entry.account_index);
+    try std.testing.expect(entry.mint.equals(&mint_pubkey));
+    try std.testing.expect(entry.owner.equals(&token_owner));
+    try std.testing.expectEqual(
+        @as(u64, 1_000_000),
+        entry.amount,
+    );
+    try std.testing.expect(
+        entry.program_id.equals(&token_program),
+    );
+}
+
+test "collectPostTokenBalances: success tx reads token account from writes" {
+    const allocator = std.testing.allocator;
+    const ids = sig.runtime.ids;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const fee_payer = Pubkey.initRandom(random);
+    const token_program = ids.TOKEN_PROGRAM_ID;
+    const mint_pubkey = Pubkey.initRandom(random);
+    const token_owner = Pubkey.initRandom(random);
+    const token_account_key = Pubkey.initRandom(random);
+
+    // Resolved accounts: [fee_payer, token_program, token_account]
+    var resolved_accounts: std.MultiArrayList(
+        sig.core.instruction.InstructionAccount,
+    ) = .{};
+    try resolved_accounts.ensureTotalCapacity(allocator, 3);
+    defer resolved_accounts.deinit(allocator);
+
+    resolved_accounts.appendAssumeCapacity(.{
+        .pubkey = fee_payer,
+        .is_signer = true,
+        .is_writable = true,
+    });
+    resolved_accounts.appendAssumeCapacity(.{
+        .pubkey = token_program,
+        .is_signer = false,
+        .is_writable = false,
+    });
+    resolved_accounts.appendAssumeCapacity(.{
+        .pubkey = token_account_key,
+        .is_signer = false,
+        .is_writable = true,
+    });
+
+    const transaction = ResolvedTransaction{
+        .transaction = sig.core.Transaction.EMPTY,
+        .accounts = resolved_accounts,
+        .instructions = &.{},
+    };
+
+    // Build valid SPL token account data.
+    var token_data = std.mem.zeroes(
+        [spl_token.TOKEN_ACCOUNT_SIZE]u8,
+    );
+    @memcpy(token_data[0..32], &mint_pubkey.data);
+    @memcpy(token_data[32..64], &token_owner.data);
+    std.mem.writeInt(
+        u64,
+        token_data[64..72],
+        500_000,
+        .little,
+    );
+    token_data[108] = 1; // TokenAccountState.initialized
+
+    // Success tx: writes contain the token account.
+    var writes_arr = [_]LoadedAccount{.{
+        .pubkey = token_account_key,
+        .account = .{
+            .lamports = 1_000_000,
+            .data = &token_data,
+            .owner = token_program,
+            .executable = false,
+            .rent_epoch = 0,
+        },
+    }};
+
+    const result = try collectPostTokenBalances(
+        allocator,
+        transaction,
+        &writes_arr,
+        null, // no account store needed
+    );
+
+    try std.testing.expectEqual(1, result.len);
+    const entry = result.constSlice()[0];
+    try std.testing.expectEqual(@as(u8, 2), entry.account_index);
+    try std.testing.expect(entry.mint.equals(&mint_pubkey));
+    try std.testing.expect(entry.owner.equals(&token_owner));
+    try std.testing.expectEqual(@as(u64, 500_000), entry.amount);
+    try std.testing.expect(
+        entry.program_id.equals(&token_program),
+    );
 }
