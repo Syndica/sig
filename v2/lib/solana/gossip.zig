@@ -228,6 +228,12 @@ pub const ContactInfo = struct {
     commit: u32,
     feature_set: u32,
     client_id: bincode.VarInt(u16),
+    prerelease: union(enum(u32)) {
+        stable,
+        release_candidate: u16,
+        beta: u16,
+        alpha: u16,
+    },
     socket_map: SocketMap,
     extensions: bincode.ShortVec(struct {
         type: u8,

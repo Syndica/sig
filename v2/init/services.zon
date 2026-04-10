@@ -47,6 +47,7 @@
             .regions = .{
                 .{ .name = .snapshot_queue, .access = .rw },
                 .{ .name = .accounts_db_config, .access = .readonly },
+                .{ .name = .telemetry, .access = .rw },
             },
         },
     },
