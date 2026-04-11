@@ -14,8 +14,8 @@
             .hash = "base58-0.2.0-wW0iYMIiAABft2x6NlD5mMmFx7-VWfHJq5EAgVQw068t",
         },
         .binkode = .{
-            .url = "git+https://github.com/InKryption/binkode#3d22012ae244edcb6de51c10cdf059b2f84d1886",
-            .hash = "binkode-0.0.0-e5-DyDFxAwAw9fGEmGBG3SfdHJLWY_HEG4HUFupuRkNS",
+            .url = "git+https://github.com/InKryption/binkode#c3321598d40e60b830cffb3aa1b98129f3a4abb8",
+            .hash = "binkode-0.0.0-e5-DyL6OAwBTkWPFR2aEvhdxNrSXBOp_wtIB4rVb5CpX",
         },
         .tracy = .{
             .url = "git+https://github.com/Syndica/tracy-zig#a767a15d1b4d6d813e929cf352c2265ff97a16da",

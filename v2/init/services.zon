@@ -7,6 +7,8 @@
         .gossip_config = .gossip_config,
 
         .telemetry = .telemetry,
+
+        .deshredded_out = .deshredded_out,
     },
     .services = .{
         .{
@@ -30,6 +32,7 @@
             .regions = .{
                 .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .shred_recv_config, .access = .readonly },
+                .{ .name = .deshredded_out, .access = .rw },
                 .{ .name = .telemetry, .access = .rw },
             },
         },
@@ -37,6 +40,12 @@
             .name = .telemetry,
             .regions = .{
                 .{ .name = .telemetry, .access = .rw },
+            },
+        },
+        .{
+            .name = .replay,
+            .regions = .{
+                .{ .name = .deshredded_out, .access = .rw },
             },
         },
     },
