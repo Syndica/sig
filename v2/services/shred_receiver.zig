@@ -52,23 +52,6 @@ const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
 
-const tel = lib.telemetry;
-
-const Packet = lib.net.Packet;
-
-const Hash = lib.solana.Hash;
-const Pubkey = lib.solana.Pubkey;
-const Signature = lib.solana.Signature;
-const Slot = lib.solana.Slot;
-
-const Atomic = std.atomic.Value;
-
-const DeshreddedFecSet = lib.shred.DeshreddedFecSet;
-const DeshredRing = lib.shred.DeshredRing;
-const FecSetId = lib.shred.FecSetId;
-const rs_table = lib.shred.reed_solomon_table;
-const Shred = lib.shred.Shred;
-
 const Receiver = lib.shred.Receiver;
 
 comptime {
@@ -90,9 +73,9 @@ pub const ReadWrite = struct {
     ///
     /// NOTE: it will be more performant in future to only send headers down the ring buffer, and
     /// write to a shared fec-set pool.
-    deshredded_out: *DeshredRing,
+    deshredded_out: *lib.shred.DeshredRing,
 
-    tel: *tel.Region,
+    tel: *lib.telemetry.Region,
 };
 
 pub const ReadOnly = struct {
@@ -110,7 +93,9 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var fba: std.heap.FixedBufferAllocator = .init(&scratch_memory);
     const allocator = fba.allocator();
 
-    std.log.info("Waiting for shreds on port {}", .{rw.tvu_socket.port});
+    const logger = rw.tel.acquireLogger(@tagName(name), "main");
+    rw.tel.signalReady();
+    logger.info().logf("Waiting for shreds on port {}", .{rw.tvu_socket.port});
 
     var receiver: Receiver = try .init(allocator, max_in_progress, max_done);
     defer receiver.deinit(allocator);

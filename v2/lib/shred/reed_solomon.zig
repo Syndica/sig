@@ -13,8 +13,8 @@ pub fn reconstructFecSet(fec_set_ctx: *FecSetCtx) void {
     const zone = tracy.Zone.init(@src(), .{ .name = "reconstructFecSet" });
     defer zone.deinit();
 
-    const data_count = FecSetCtx.fec_shred_cnt;
-    const code_count = FecSetCtx.fec_shred_cnt;
+    const data_count = FecSetCtx.fec_shred_count;
+    const code_count = FecSetCtx.fec_shred_count;
     const total_count = data_count + code_count;
 
     // Build present[] mask and collect erasure shard length from first present shred

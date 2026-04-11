@@ -90,16 +90,16 @@ pub const Receiver = struct {
 
             // ignore any with bad counts or indices (SIMD 0317 enforces this)
             if (shred.variant.isCode()) {
-                if (shred.code_or_data.code.data_count != FecSetCtx.fec_shred_cnt)
+                if (shred.code_or_data.code.data_count != FecSetCtx.fec_shred_count)
                     return error.BadDataShredCount;
-                if (shred.code_or_data.code.code_count != FecSetCtx.fec_shred_cnt)
+                if (shred.code_or_data.code.code_count != FecSetCtx.fec_shred_count)
                     return error.BadCodeShredCount;
-                if (shred.code_or_data.code.code_shred_idx >= FecSetCtx.fec_shred_cnt)
+                if (shred.code_or_data.code.code_shred_idx >= FecSetCtx.fec_shred_count)
                     return error.BadCodeShredIdx;
             }
 
-            if (shred.fec_set_idx % FecSetCtx.fec_shred_cnt != 0) return error.InvalidFecSetIdx;
-            if (in_type_idx >= FecSetCtx.fec_shred_cnt) return error.ShredIdxTooLarge;
+            if (shred.fec_set_idx % FecSetCtx.fec_shred_count != 0) return error.InvalidFecSetIdx;
+            if (in_type_idx >= FecSetCtx.fec_shred_count) return error.ShredIdxTooLarge;
 
             const merkle_layer_count = 7;
             if (shred.variant.merkleCount() > merkle_layer_count - 1) {
@@ -208,7 +208,7 @@ pub const Receiver = struct {
 
         zone.value(fec_set_ctx.totalShredsReceived());
 
-        // if (fec_set_ctx.totalShredsReceived() > FecSetCtx.fec_shred_cnt) return .shred_already_seen; // TODO: <-- REMOVE THIS ( should be handled be early if in finished check )
+        // if (fec_set_ctx.totalShredsReceived() > FecSetCtx.fec_shred_count) return .shred_already_seen; // TODO: <-- REMOVE THIS ( should be handled be early if in finished check )
 
         tracy.plot(u8, "totalShredsReceived", fec_set_ctx.totalShredsReceived());
 
@@ -232,9 +232,9 @@ pub const Receiver = struct {
         // we just received one
         std.debug.assert(fec_set_ctx.totalShredsReceived() >= 1);
         // this fec set should have completed last iteration
-        std.debug.assert(fec_set_ctx.totalShredsReceived() <= FecSetCtx.fec_shred_cnt);
+        std.debug.assert(fec_set_ctx.totalShredsReceived() <= FecSetCtx.fec_shred_count);
 
-        if (fec_set_ctx.totalShredsReceived() < FecSetCtx.fec_shred_cnt) {
+        if (fec_set_ctx.totalShredsReceived() < FecSetCtx.fec_shred_count) {
             // we're all good, but we haven't received enough to reconstruct the fec set yet
             @branchHint(.likely);
             return .{
@@ -314,7 +314,7 @@ pub const Receiver = struct {
     pub const NonErrorStatus = union(enum) {
         unfinished_fec_set: struct {
             // 0..=31 (if it had 32, it would be finished)
-            total_shreds_received: std.math.IntFittingRange(0, FecSetCtx.fec_shred_cnt - 1),
+            total_shreds_received: std.math.IntFittingRange(0, FecSetCtx.fec_shred_count - 1),
         },
         fec_set_finished,
         fec_set_already_finished,
@@ -348,7 +348,7 @@ pub const FecSetCtx = extern struct {
     // https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0317-enforce-32-data-shreds.md
     const data_shreds_max = 32;
     const code_shreds_max = 32;
-    pub const fec_shred_cnt = 32;
+    pub const fec_shred_count = 32;
 
     fn totalShredsReceived(self: *const FecSetCtx) u8 {
         const data_recv: u8 = @intCast(self.data_shreds_received.count());

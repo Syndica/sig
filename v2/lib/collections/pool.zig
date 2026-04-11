@@ -30,18 +30,16 @@ pub fn Pool(Item: type, IdInt: type) type {
             null = std.math.maxInt(IdInt),
             _,
 
-            const IdSelf = @This();
-
             comptime {
                 _ = PoolSelf;
             }
 
-            pub fn index(self: IdSelf) ?IdInt {
+            pub fn index(self: ItemId) ?IdInt {
                 if (self == .null) return null;
                 return @intFromEnum(self);
             }
 
-            pub fn fromInt(int: IdInt) IdSelf {
+            pub fn fromInt(int: IdInt) ItemId {
                 return @enumFromInt(int);
             }
         };
