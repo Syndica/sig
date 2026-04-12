@@ -48,11 +48,11 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         const pragmas =
             \\ PRAGMA journal_mode = OFF;
             \\ PRAGMA synchronous = 0;
-            \\ PRAGMA cache_size = -8290304;
+            \\ PRAGMA cache_size = -524288;
             \\ PRAGMA locking_mode = EXCLUSIVE;
-            \\ PRAGMA temp_store = MEMORY;
+            \\ PRAGMA temp_store = FILE;
             \\ PRAGMA page_size = 65536;
-            \\ PRAGMA cache_spill = OFF;
+            \\ PRAGMA cache_spill = ON;
         ;
 
         if (sql.sqlite3_exec(db, pragmas, null, null, null) != OK) {

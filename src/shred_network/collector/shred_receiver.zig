@@ -166,7 +166,12 @@ pub const ShredReceiver = struct {
             self.shred_batch.clearRetainingCapacity();
         }
 
-        const leader_schedules_with_infos = try self.params.epoch_tracker.getLeaderSchedules();
+        const leader_schedules_with_infos = self.params.epoch_tracker.getLeaderSchedules() catch {
+            // Leader schedule not yet populated (RpcLeaderScheduleService hasn't run yet).
+            // Drain the channel to prevent backpressure and retry on the next call.
+            while (self.incoming_shreds.tryReceive()) |_| {}
+            return;
+        };
         defer leader_schedules_with_infos.release();
         const leader_schedules = leader_schedules_with_infos.leader_schedules;
 

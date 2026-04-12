@@ -313,7 +313,7 @@ pub const DataShred = struct {
 
     pub const constants: ShredConstants = .{
         .max_per_slot = 32_768,
-        .payload_size = 1203, // TODO this can be calculated like solana
+        .payload_size = 1203, // NOTE: actual received size may differ (e.g. 1199 for chained); use payload.len in proof offset calculations
         .headers_size = 88,
     };
 
@@ -456,27 +456,29 @@ fn GenericShred(shred_type: ShredType) type {
 
     return struct {
         fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
-            // NOTE(x19): is it ok if payload.len > constants.payload_size? the test_data_shred is 1207 bytes
-            if (payload.len < constants.payload_size) {
+            // NOTE(x19): accept variable-size payloads — live mainnet shreds may differ from
+            // constants.payload_size (e.g. 1199 chained vs 1203 unchained). Proof offsets are
+            // computed from payload.len so both formats parse correctly.
+            if (payload.len < constants.headers_size) {
                 return error.InvalidPayloadSize;
             }
-            const owned_payload = try allocator.alloc(u8, constants.payload_size);
+            const owned_payload = try allocator.alloc(u8, payload.len);
             errdefer allocator.free(owned_payload);
 
             // TODO: It would be nice to find a way to get the payload in here without coping the entire thing.
             // The challenge is that the input payload is owned by the original packet list which was read
             // from the socket, and that list may be cluttered with a lot of garbage data.
             // So a copy like this may be needed somewhere. but it's worth some more thought.
-            @memcpy(owned_payload, payload[0..constants.payload_size]);
+            @memcpy(owned_payload, payload);
 
             return fromPayloadOwned(allocator, owned_payload);
         }
 
         /// these conditions must be met to call this function:
         /// - `payload` was allocated with `allocator`
-        /// - payload.len >= constants.payload_size
+        /// - payload.len >= constants.headers_size
         fn fromPayloadOwned(allocator: Allocator, payload: []u8) !Self {
-            var buf = std.io.fixedBufferStream(payload[0..constants.payload_size]);
+            var buf = std.io.fixedBufferStream(payload[0..@min(payload.len, constants.payload_size)]);
             const self = Self{
                 .allocator = allocator,
                 .common = try bincode.read(allocator, CommonHeader, buf.reader(), .{}),
@@ -505,7 +507,8 @@ fn GenericShred(shred_type: ShredType) type {
             if (self.common.index >= constants.max_per_slot) {
                 return error.InvalidShredIndex;
             }
-            if (constants.payload_size != self.payload.len) {
+            // NOTE: allow variable payload sizes (e.g. 1199 chained vs 1203 unchained)
+            if (self.payload.len < constants.headers_size) {
                 return error.InvalidPayloadSize;
             }
         }
@@ -525,16 +528,21 @@ fn GenericShred(shred_type: ShredType) type {
         }
 
         fn merkleNode(self: Self) !Hash {
-            const offset = try proofOffset(constants, self.common.variant);
+            // use actual payload length so proof offset is correct for variable-size shreds
+            var c = constants;
+            c.payload_size = self.payload.len;
+            const offset = try proofOffset(c, self.common.variant);
             return getMerkleNodeAt(self.payload, Signature.SIZE, offset);
         }
 
         fn erasureShardAsSlice(self: *const Self) ![]const u8 {
-            if (self.payload.len != constants.payload_size) {
+            if (self.payload.len < constants.headers_size) {
                 return error.InvalidPayloadSize;
             }
+            var c = constants;
+            c.payload_size = self.payload.len;
             const end = constants.headers_size +
-                try capacity(constants, self.common.variant);
+                try capacity(c, self.common.variant);
             if (self.payload.len < end) {
                 return error.InsufficientPayloadSize;
             }
@@ -606,8 +614,11 @@ fn getMerkleRoot(
         .code => codeIndex(shred) orelse return error.InvalidErasureShardIndex,
         .data => dataIndex(shred) orelse return error.InvalidErasureShardIndex,
     };
-    const proof = try getMerkleProofFor(shred, constants, variant);
-    const offset = try proofOffset(constants, variant);
+    // use actual shred length so proof offset is correct for variable-size shreds
+    var c = constants;
+    c.payload_size = shred.len;
+    const proof = try getMerkleProofFor(shred, c, variant);
+    const offset = try proofOffset(c, variant);
     const node = try getMerkleNodeAt(shred, Signature.SIZE, offset);
     return calculateMerkleRoot(index, node, proof);
 }
@@ -624,7 +635,9 @@ fn setChainedMerkleRoot(shred: []u8, variant: ShredVariant, chained_merkle_root:
 
 pub fn getMerkleProof(shred: []const u8) !MerkleProofEntryList {
     const variant = layout.getShredVariant(shred) orelse return error.UnknownShredVariant;
-    return getMerkleProofFor(shred, variant.constants(), variant);
+    var c = variant.constants();
+    c.payload_size = shred.len;
+    return getMerkleProofFor(shred, c, variant);
 }
 
 fn getMerkleProofFor(
@@ -633,6 +646,7 @@ fn getMerkleProofFor(
     variant: ShredVariant,
 ) !MerkleProofEntryList {
     const size = variant.proof_size * merkle_proof_entry_size;
+    // NOTE: constants.payload_size should already be set to shred.len by caller for correct offset
     const offset = try proofOffset(constants, variant);
     const end = offset + size;
     if (shred.len < end) {
@@ -652,7 +666,9 @@ pub fn setMerkleProof(shred: []u8, proof: MerkleProofEntryList) !void {
     if (proof.len != proof_size) {
         return error.InvalidMerkleProof;
     }
-    const offset = try proofOffset(variant.constants(), variant);
+    var c = variant.constants();
+    c.payload_size = shred.len;
+    const offset = try proofOffset(c, variant);
     if (shred.len < offset + proof.len * merkle_proof_entry_size) {
         return error.InvalidProofSize;
     }
@@ -668,7 +684,9 @@ pub fn setMerkleProof(shred: []u8, proof: MerkleProofEntryList) !void {
 
 pub fn getMerkleNode(shred: []const u8) !Hash {
     const variant = layout.getShredVariant(shred) orelse return error.UnknownShredVariant;
-    const offset = try proofOffset(variant.constants(), variant);
+    var c = variant.constants();
+    c.payload_size = shred.len;
+    const offset = try proofOffset(c, variant);
     return getMerkleNodeAt(shred, Signature.SIZE, offset);
 }
 

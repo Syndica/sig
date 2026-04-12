@@ -96,22 +96,29 @@ pub fn resolveBlock(
     for (entries) |entry| {
         if (!entry.isTick()) transaction_count += entry.transactions.len;
     }
-    const resolved_transactions =
-        try allocator.alloc(replay.resolve_lookup.ResolvedTransaction, transaction_count);
-    errdefer allocator.free(resolved_transactions);
+    var resolved_transactions =
+        try std.ArrayListUnmanaged(replay.resolve_lookup.ResolvedTransaction)
+            .initCapacity(allocator, transaction_count);
+    errdefer {
+        for (resolved_transactions.items) |transaction| transaction.deinit(allocator);
+        resolved_transactions.deinit(allocator);
+    }
 
-    var i: usize = 0;
-    errdefer for (resolved_transactions[0..i]) |transaction| transaction.deinit(allocator);
     for (entries) |*entry| {
         if (!entry.isTick()) {
             for (entry.transactions) |txn| {
-                resolved_transactions[i] = try resolveTransaction(allocator, txn, resolver);
-                i += 1;
+                const resolved = resolveTransaction(allocator, txn, resolver) catch |err| switch (err) {
+                    // Skip transactions whose ALTs are not in our filtered AccountsDB.
+                    // Safe for spy/non-consensus nodes.
+                    error.AddressLookupTableNotFound => continue,
+                    else => return err,
+                };
+                resolved_transactions.appendAssumeCapacity(resolved);
             }
         }
     }
 
-    return resolved_transactions;
+    return try resolved_transactions.toOwnedSlice(allocator);
 }
 
 pub fn resolveBatch(

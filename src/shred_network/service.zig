@@ -106,8 +106,8 @@ pub fn start(
     const hole_punch_probe = [_]u8{ 0, 0, 0, 0 };
     for (deps.entrypoints) |ep| {
         const ep_addr = ep.toAddress();
-        turbine_socket.sendTo(ep_addr, &hole_punch_probe) catch {};
-        repair_socket.sendTo(ep_addr, &hole_punch_probe) catch {};
+        _ = turbine_socket.sendTo(ep_addr, &hole_punch_probe) catch {};
+        _ = repair_socket.sendTo(ep_addr, &hole_punch_probe) catch {};
     }
 
     // tracker (shared state, internal to Shred Network)

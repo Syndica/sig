@@ -66,6 +66,9 @@ pub fn loadSnapshot(
     options: struct {
         // Where the genesis path lives.
         genesis_file_path: []const u8,
+        // Optional newline-delimited file of extra pubkeys to load from snapshot
+        // in addition to the built-in owner filter.
+        tracked_pubkeys_file_path: ?[]const u8 = null,
         // How and what to load from the snapshot files
         extract: union(enum) {
             /// Extract only the snapshot metadata (not the accounts)
@@ -83,6 +86,12 @@ pub fn loadSnapshot(
 
     // Read genesis before trying to load the snapshot
     logger.info().log("reading genesis...");
+
+    const tracked_pubkeys = if (options.tracked_pubkeys_file_path) |path|
+        try loadTrackedPubkeysFile(allocator, path)
+    else
+        &.{};
+    defer if (options.tracked_pubkeys_file_path != null) allocator.free(tracked_pubkeys);
 
     const genesis_file_path = options.genesis_file_path;
     const genesis_config = GenesisConfig.init(allocator, genesis_file_path) catch |err| {
@@ -139,6 +148,7 @@ pub fn loadSnapshot(
             path.constSlice(),
             if (db_has_entries) null else maybe_rooted_db,
             .{ .slot = snapshot_files.full.slot, .hash = snapshot_files.full.hash },
+            tracked_pubkeys,
         );
     };
     errdefer full_manifest.deinit(allocator);
@@ -188,6 +198,7 @@ pub fn loadSnapshot(
             incremental_path.constSlice(),
             maybe_rooted_db, // incremental doesnt have too many accounts to overwrite
             info.slotAndHash(),
+            tracked_pubkeys,
         );
     };
     errdefer if (maybe_incremental_manifest) |manifest| manifest.deinit(allocator);
@@ -284,6 +295,7 @@ fn insertFromSnapshotArchive(
     snapshot_path: []const u8,
     maybe_rooted_db: ?*Rooted,
     slot_and_hash: sig.core.hash.SlotAndHash,
+    tracked_pubkeys: []const Pubkey,
 ) !struct { Manifest, StatusCache } {
     const zone = tracy.Zone.init(@src(), .{ .name = "insertFromSnapshotArchive" });
     defer zone.deinit();
@@ -484,6 +496,32 @@ fn insertFromSnapshotArchive(
                 const header_padding = std.mem.alignForward(usize, header_size, 8) - header_size;
                 r.skipBytes(header_padding, .{}) catch return error.InvalidAccountFile;
 
+                // Owner filter: only load accounts Chimera needs.
+                // Skips ~395M accounts, reducing SQLite DB from ~30GB to ~6GB.
+                const chimera_owners = [_]Pubkey{
+                    Pubkey.parse("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"), // PumpFun
+                    Pubkey.parse("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"), // PumpSwap
+                    Pubkey.parse("Sysvar1111111111111111111111111111111111111"), // Sysvars (SlotHistory required at startup)
+                    // SPL Token removed — 300M+ accounts overflow 135GB disk
+                };
+                const owner_ok = for (chimera_owners) |allowed| {
+                    if (header.owner.equals(&allowed)) break true;
+                } else false;
+                const should_load = if (owner_ok) true else blk: {
+                    for (tracked_pubkeys) |tracked| {
+                        if (header.pubkey.equals(&tracked)) break :blk true;
+                    }
+                    break :blk false;
+                };
+                if (!should_load) {
+                    const skip = @min(
+                        account_file_stream.bytes_left,
+                        std.mem.alignForward(usize, header.data_len, 8),
+                    );
+                    r.skipBytes(skip, .{}) catch return error.InvalidAccountFile;
+                    continue;
+                }
+
                 if (header.data_len > sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH)
                     return error.InvalidAccount;
                 try account_data_buf.resize(allocator, header.data_len);
@@ -529,6 +567,62 @@ fn insertFromSnapshotArchive(
         maybe_manifest orelse return error.MissingManifest,
         maybe_status_cache orelse return error.MissingStatusCache,
     };
+}
+
+fn loadTrackedPubkeysFile(
+    allocator: Allocator,
+    path: []const u8,
+) ![]Pubkey {
+    const file_data = try std.fs.cwd().readFileAlloc(allocator, path, 16 * 1024 * 1024);
+    defer allocator.free(file_data);
+
+    var out: std.ArrayListUnmanaged(Pubkey) = .{};
+    errdefer out.deinit(allocator);
+
+    var seen = std.AutoHashMap(Pubkey, void).init(allocator);
+    defer seen.deinit();
+
+    var it = std.mem.splitScalar(u8, file_data, '\n');
+    while (it.next()) |raw_line| {
+        const trimmed = std.mem.trim(u8, raw_line, " \t\r");
+        if (trimmed.len == 0 or trimmed[0] == '#') continue;
+        const pubkey = try Pubkey.parseRuntime(trimmed);
+        if (seen.contains(pubkey)) continue;
+        try seen.put(pubkey, {});
+        try out.append(allocator, pubkey);
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+test "loadTrackedPubkeysFile ignores blanks comments and duplicates" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "tracked-pubkeys.txt",
+        .data =
+            \\# pool + vaults
+            \\Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm
+            \\
+            \\  Vote111111111111111111111111111111111111111
+            \\Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm
+            \\   # trailing comment line
+            \\
+        ,
+    });
+
+    const path = try tmp.dir.realpathAlloc(allocator, "tracked-pubkeys.txt");
+    defer allocator.free(path);
+
+    const pubkeys = try loadTrackedPubkeysFile(allocator, path);
+    defer allocator.free(pubkeys);
+
+    try std.testing.expectEqual(@as(usize, 2), pubkeys.len);
+    try std.testing.expect(pubkeys[0].equals(&Pubkey.parse("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm")));
+    try std.testing.expect(pubkeys[1].equals(&Pubkey.parse("Vote111111111111111111111111111111111111111")));
 }
 
 test loadSnapshot {

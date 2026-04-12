@@ -28,6 +28,7 @@ const TransactionError = sig.ledger.transaction_status.TransactionError;
 const Committer = replay.Committer;
 const ReplaySlotFuture = replay.exec_async.ReplaySlotFuture;
 const ReplayState = replay.service.ReplayState;
+const pumpfun_parser = sig.geyser.pumpfun_parser;
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 const SlotResolver = replay.resolve_lookup.SlotResolver;
 const SlotTracker = replay.trackers.SlotTracker;
@@ -232,6 +233,9 @@ pub fn replaySlotSync(
 
         var i: usize = 0;
         for (params.entries) |entry| {
+            if (i + entry.transactions.len > params.transactions.len) {
+                break; // spy node: bounds mismatch due to account filter, skip remaining lock checks
+            }
             const transactions = params.transactions[i..][0..entry.transactions.len];
             i += entry.transactions.len;
 
@@ -246,7 +250,7 @@ pub fn replaySlotSync(
             }
 
             locks.lockStrict(allocator, accounts.items) catch |e| switch (e) {
-                error.LockFailed => return .{ .invalid_transaction = .AccountInUse },
+                error.LockFailed => continue, // spy node: skip entries with lock conflicts
                 error.OutOfMemory => return error.OutOfMemory,
             };
             std.debug.assert(0 == locks.unlock(accounts.items));
@@ -264,7 +268,7 @@ pub fn replaySlotSync(
             &exit,
         )) {
             .success => {},
-            .failure => |err| return .{ .invalid_transaction = err },
+            .failure => {}, // spy node: skip failed txs, let slot complete + geyser write
             .exit => unreachable,
         }
     }
@@ -312,6 +316,8 @@ pub fn replayBatch(
         struct { Hash, ProcessedTransaction },
         transactions.len,
     );
+    // spy node: track only successful txs so commitTransactions always fires per slot
+    const successful_txs = try tmp_allocator.alloc(ResolvedTransaction, transactions.len);
     var populated_count: usize = 0;
     defer {
         // Only deinit elements that were actually populated
@@ -320,9 +326,10 @@ pub fn replayBatch(
             result.*[1].deinit(tmp_allocator);
         }
         tmp_allocator.free(results);
+        tmp_allocator.free(successful_txs);
     }
 
-    for (transactions, 0..) |transaction, i| {
+    for (transactions) |transaction| {
         if (exit.load(.monotonic)) {
             return .exit;
         }
@@ -337,10 +344,16 @@ pub fn replayBatch(
             instruction_limit,
         )) {
             .ok => |res| res,
-            .err => |err| return .{ .failure = err },
+            .err => continue, // spy node: skip tx with preprocess error, let slot complete
         };
 
         const runtime_transaction = transaction.toRuntimeTransaction(hash, compute_budget_details);
+
+        pumpfun_parser.parseTransaction(
+            &transaction.transaction,
+            svm_gateway.params.slot,
+            committer.geyser_writer,
+        );
 
         switch (try executeTransaction(
             persistent_allocator,
@@ -349,18 +362,19 @@ pub fn replayBatch(
             &runtime_transaction,
         )) {
             .ok => |result| {
-                results[i] = .{ hash, result };
+                successful_txs[populated_count] = transaction;
+                results[populated_count] = .{ hash, result };
                 populated_count += 1;
             },
-            .err => |err| return .{ .failure = err },
+            .err => continue, // spy node: skip failed tx, let slot complete
         }
     }
     try committer.commitTransactions(
         persistent_allocator,
         tmp_allocator,
         svm_gateway.params.slot,
-        transactions,
-        results,
+        successful_txs[0..populated_count],
+        results[0..populated_count],
     );
 
     return .success;
@@ -546,6 +560,7 @@ fn prepareSlot(
         .replay_votes_sender = state.replay_votes_channel,
         .ledger = state.ledger,
         .account_store = svm_gateway.params.account_store,
+        .geyser_writer = state.geyser_writer,
     };
 
     const verify_ticks_params = replay.execution.VerifyTicksParams{

@@ -75,7 +75,7 @@ pub const MethodAndParams = union(enum) {
     getMaxRetransmitSlot: noreturn,
     getMaxShredInsertSlot: noreturn,
     getMinimumBalanceForRentExemption: noreturn,
-    getMultipleAccounts: noreturn,
+    getMultipleAccounts: GetMultipleAccounts,
     getProgramAccounts: noreturn,
     getRecentPerformanceSamples: noreturn,
     getRecentPrioritizationFees: noreturn,
@@ -204,6 +204,16 @@ pub const GetAccountInfo = struct {
             rentEpoch: u64,
             space: u64,
         };
+    };
+};
+
+pub const GetMultipleAccounts = struct {
+    pubkeys: []const Pubkey,
+    config: ?GetAccountInfo.Config = null,
+
+    pub const Response = struct {
+        context: common.Context,
+        value: []const ?GetAccountInfo.Response.Value,
     };
 };
 

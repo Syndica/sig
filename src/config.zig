@@ -128,6 +128,12 @@ pub const ShredNetwork = struct {
 pub const AccountsDB = struct {
     /// where to load/save snapshots from - also where disk indexes and account files are stored
     snapshot_dir: []const u8 = sig.VALIDATOR_DIR ++ "accounts_db",
+    /// Optional reduced checkpoint metadata file used to bootstrap a selective
+    /// local-state oracle without requiring standard snapshot files on restart.
+    reduced_checkpoint_path: ?[]const u8 = null,
+    /// Optional newline-delimited list of explicit pubkeys to load from snapshot
+    /// in addition to the built-in owner filter.
+    tracked_pubkeys_file: ?[]const u8 = null,
     /// number of threads to load snapshot
     num_threads_snapshot_load: u32 = 0,
     /// number of threads to unpack snapshot from .tar.zstd

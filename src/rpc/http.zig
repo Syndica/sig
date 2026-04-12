@@ -88,27 +88,35 @@ pub const HttpPostFetcher = struct {
         self: *HttpPostFetcher,
         request_payload: []const u8,
         response_payload: *std.array_list.Managed(u8),
-    ) ErrorReturn(std.http.Client.fetch)!std.http.Client.FetchResult {
-        var buf: [1024]u8 = undefined;
-        var writer = response_payload.writer().adaptToNewApi(&buf);
+    ) HttpPostFetcher.Error!std.http.Client.FetchResult {
+        const allocator = response_payload.allocator;
 
-        const result = try self.http_client.fetch(.{
-            .location = .{ .url = self.base_url },
-            .method = .POST,
-            .headers = .{
-                .content_type = .{
-                    .override = "application/json",
-                },
-                .user_agent = .{
-                    .override = "sig/0.1",
-                },
+        // Use curl instead of std.http.Client.fetch to avoid a Zig 0.15.2 bug:
+        // std.compress.flate.Decompress panics when decompressing large gzip-encoded
+        // responses from Solana RPC (api.mainnet-beta.solana.com always returns gzip).
+        // Curl handles gzip decompression correctly and is always available on macOS/Linux.
+        const run_result = std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = &.{
+                "curl",
+                "--silent",
+                "--show-error",
+                "--request", "POST",
+                "--header", "Content-Type: application/json",
+                "--data", request_payload,
+                self.base_url,
             },
-            .payload = request_payload,
-            .response_writer = &writer.new_interface,
-        });
+            .max_output_bytes = 32 * 1024 * 1024, // 32 MB — leader schedule is ~4 MB JSON
+        }) catch return error.HttpRequestFailed;
+        defer allocator.free(run_result.stdout);
+        defer allocator.free(run_result.stderr);
 
-        try writer.new_interface.flush();
-        return result;
+        if (run_result.term != .Exited or run_result.term.Exited != 0) {
+            return error.HttpRequestFailed;
+        }
+
+        try response_payload.appendSlice(run_result.stdout);
+        return .{ .status = .ok };
     }
 
     fn restartHttpClient(self: *HttpPostFetcher) void {

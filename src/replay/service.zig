@@ -170,6 +170,7 @@ pub const Dependencies = struct {
     hard_forks: sig.core.HardForks,
     replay_threads: u32,
     stop_at_slot: ?Slot,
+    geyser_writer: ?*sig.geyser.GeyserWriter = null,
 };
 
 pub const ConsensusStatus = enum {
@@ -194,6 +195,7 @@ pub const ReplayState = struct {
     execution_log_helper: replay.execution.LogHelper,
     replay_votes_channel: ?*Channel(ParsedVote),
     stop_at_slot: ?sig.core.Slot,
+    geyser_writer: ?*sig.geyser.GeyserWriter,
 
     pub fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
@@ -268,6 +270,7 @@ pub const ReplayState = struct {
             .execution_log_helper = .init(.from(deps.logger)),
             .replay_votes_channel = replay_votes_channel,
             .stop_at_slot = deps.stop_at_slot,
+            .geyser_writer = deps.geyser_writer,
         };
     }
 };

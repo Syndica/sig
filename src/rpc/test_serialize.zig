@@ -22,6 +22,7 @@ const GetGenesisHash = methods.GetGenesisHash;
 const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
 const GetLatestBlockhash = methods.GetLatestBlockhash;
 const GetLeaderSchedule = methods.GetLeaderSchedule;
+const GetMultipleAccounts = methods.GetMultipleAccounts;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
 const GetSignaturesForAddress = methods.GetSignaturesForAddress;
 const GetSlot = methods.GetSlot;
@@ -372,7 +373,40 @@ test GetLeaderSchedule {
 // TODO: test getMaxRetransmitSlot()
 // TODO: test getMaxShredInsertSlot()
 // TODO: test getMinimumBalanceForRentExemption()
-// TODO: test getMultipleAccounts()
+
+test GetMultipleAccounts {
+    const pubkeys = [_]Pubkey{
+        .parse("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm"),
+        .parse("Vote111111111111111111111111111111111111111"),
+    };
+
+    try testRequest(.getMultipleAccounts, .{
+        .pubkeys = &pubkeys,
+        .config = .{
+            .encoding = .base64,
+        },
+    },
+        \\{"jsonrpc":"2.0","id":1,"method":"getMultipleAccounts","params":[["Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm","Vote111111111111111111111111111111111111111"],{"commitment":null,"minContextSlot":null,"encoding":"base64","dataSlice":null}]}
+    );
+
+    try testResponse(GetMultipleAccounts, .{ .result = .{
+        .context = .{ .apiVersion = "2.1.6", .slot = 309275280 },
+        .value = &.{
+            .{
+                .data = .{ .json_parsed_base64_fallback = "" },
+                .executable = false,
+                .lamports = 963849100,
+                .owner = .parse("11111111111111111111111111111111"),
+                .rentEpoch = 18446744073709551615,
+                .space = 0,
+            },
+            null,
+        },
+    } },
+        \\{"jsonrpc":"2.0","result":{"context":{"apiVersion":"2.1.6","slot":309275280},"value":[{"data":"","executable":false,"lamports":963849100,"owner":"11111111111111111111111111111111","rentEpoch":18446744073709551615,"space":0},null]},"id":1}
+    );
+}
+
 // TODO: test getProgramAccounts()
 // TODO: test getRecentPerformanceSamples()
 // TODO: test getRecentPrioritizationFees()

@@ -603,6 +603,8 @@ const Cmd = struct {
     };
 
     const AccountsDbArgumentsBase = struct {
+        tracked_pubkeys_file: ?[]const u8,
+        reduced_checkpoint_path: ?[]const u8,
         n_threads_snapshot_load: u32,
         n_threads_snapshot_unpack: u16,
         force_unpack_snapshot: bool,
@@ -610,6 +612,22 @@ const Cmd = struct {
         dbg_db_init: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
+            .tracked_pubkeys_file = .{
+                .kind = .named,
+                .name_override = "tracked-pubkeys-file",
+                .alias = .none,
+                .default_value = null,
+                .config = .string,
+                .help = "newline-delimited file of explicit pubkeys to load from snapshot in addition to the built-in owner filter",
+            },
+            .reduced_checkpoint_path = .{
+                .kind = .named,
+                .name_override = "reduced-checkpoint-path",
+                .alias = .none,
+                .default_value = null,
+                .config = .string,
+                .help = "path to a reduced checkpoint metadata file used to bootstrap a selective local-state oracle without standard snapshot files",
+            },
             .n_threads_snapshot_load = .{
                 .kind = .named,
                 .name_override = null,
@@ -657,6 +675,8 @@ const Cmd = struct {
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
+            cfg.accounts_db.tracked_pubkeys_file = args.tracked_pubkeys_file;
+            cfg.accounts_db.reduced_checkpoint_path = args.reduced_checkpoint_path;
             cfg.accounts_db.num_threads_snapshot_load = args.n_threads_snapshot_load;
             cfg.accounts_db.num_threads_snapshot_unpack = args.n_threads_snapshot_unpack;
             cfg.accounts_db.force_unpack_snapshot = args.force_unpack_snapshot;
@@ -1545,19 +1565,6 @@ fn validator(
         .parent = snapshot_tracy.allocator(),
     };
 
-    const snapshot_files = try sig.accounts_db.snapshot.download.getOrDownloadSnapshotFiles(
-        snapshot_tracy_metrics.allocator(),
-        .from(app_base.logger),
-        snapshot_dir,
-        .{
-            .gossip_service = gossip_service,
-            .force_new_snapshot_download = cfg.accounts_db.force_new_snapshot_download,
-            .min_snapshot_download_speed_mbs = cfg.accounts_db.min_snapshot_download_speed_mbs,
-            .max_number_of_download_attempts = //
-            cfg.accounts_db.max_number_of_snapshot_download_attempts,
-        },
-    );
-
     const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
     defer allocator.free(rooted_file);
 
@@ -1570,25 +1577,50 @@ fn validator(
     defer rooted_db.deinit();
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
 
-    // snapshot
-    var loaded_snapshot = try loadSnapshot(
-        allocator,
-        .from(app_base.logger),
-        snapshot_dir,
-        snapshot_files,
-        .{
-            .genesis_file_path = genesis_file_path,
-            .extract = if (init_db_exists)
-                .metadata_only
-            else if (cfg.accounts_db.skip_snapshot_validation)
-                .{ .entire_snapshot = &rooted_db }
-            else
-                .{ .entire_snapshot_and_validate = &rooted_db },
-        },
-    );
+    const use_reduced_checkpoint = cfg.accounts_db.reduced_checkpoint_path != null and
+        (init_db_exists or rooted_db.count() > 0);
+
+    var loaded_snapshot = if (use_reduced_checkpoint)
+        try sig.accounts_db.snapshot.loadReducedCheckpointAsSnapshot(
+            allocator,
+            .from(app_base.logger),
+            cfg.accounts_db.reduced_checkpoint_path.?,
+            genesis_file_path,
+        )
+    else blk: {
+        const snapshot_files = try sig.accounts_db.snapshot.download.getOrDownloadSnapshotFiles(
+            snapshot_tracy_metrics.allocator(),
+            .from(app_base.logger),
+            snapshot_dir,
+            .{
+                .gossip_service = gossip_service,
+                .force_new_snapshot_download = cfg.accounts_db.force_new_snapshot_download,
+                .min_snapshot_download_speed_mbs = cfg.accounts_db.min_snapshot_download_speed_mbs,
+                .max_number_of_download_attempts = //
+                cfg.accounts_db.max_number_of_snapshot_download_attempts,
+            },
+        );
+
+        break :blk try loadSnapshot(
+            allocator,
+            .from(app_base.logger),
+            snapshot_dir,
+            snapshot_files,
+            .{
+                .genesis_file_path = genesis_file_path,
+                .tracked_pubkeys_file_path = cfg.accounts_db.tracked_pubkeys_file,
+                .extract = if (init_db_exists)
+                    .metadata_only
+                else if (cfg.accounts_db.skip_snapshot_validation)
+                    .{ .entire_snapshot = &rooted_db }
+                else
+                    .{ .entire_snapshot_and_validate = &rooted_db },
+            },
+        );
+    };
     defer loaded_snapshot.deinit();
 
-    if (cfg.accounts_db.dbg_db_init and !init_db_exists)
+    if (!use_reduced_checkpoint and cfg.accounts_db.dbg_db_init and !init_db_exists)
         try saveDbInit(snapshot_dir, .from(app_base.logger));
 
     const static_rpc_ctx: sig.rpc.methods.StaticHookContext = .{
@@ -1872,6 +1904,7 @@ fn replayOffline(
         snapshot_files,
         .{
             .genesis_file_path = genesis_file_path,
+            .tracked_pubkeys_file_path = cfg.accounts_db.tracked_pubkeys_file,
             .extract = if (init_db_exists)
                 .metadata_only
             else if (cfg.accounts_db.skip_snapshot_validation)
@@ -2010,10 +2043,31 @@ fn shredNetwork(
     );
     defer epoch_tracker.deinit();
 
-    // NOTE: RpcLeaderScheduleService skipped — std.http.Client.fetch panics in Zig 0.15.2
-    // for certain network responses (dev build bug). Sig handles "no leader schedule" gracefully
-    // (continues after 30s wait). For a spy node parsing PumpFun instructions, turbine routing
-    // accuracy is not required — shreds arrive via repair regardless.
+    // Fetch the current epoch's leader schedule from RPC and populate epoch_tracker.
+    // This is REQUIRED: ShredReceiver.handleBatch() calls getLeaderSchedules() on every
+    // batch, and verifyShred() checks each shred's signature against the slot leader.
+    // Without a populated epoch_tracker, all shreds are discarded (LeaderUnknown) and
+    // ledger_insertion_num_inserted stays 0 forever.
+    //
+    // NOTE: std.http.Client.fetch may panic in Zig 0.15.2 for large responses.
+    // If a panic occurs here, use the pre-fetch workaround:
+    //   curl -s -X POST <rpc_url> -H "Content-Type: application/json" \
+    //     -d '{"jsonrpc":"2.0","id":1,"method":"getLeaderSchedule","params":[null]}' \
+    //     > /tmp/leader-schedule.json
+    //   sig shred-network --leader-schedule-path /tmp/leader-schedule.json ...
+    {
+        var rls = RpcLeaderScheduleService.init(
+            allocator,
+            .from(app_base.logger),
+            &epoch_tracker,
+            rpc_client,
+        );
+        rls.refresh() catch |e| {
+            app_base.logger.warn()
+                .field("err", @errorName(e))
+                .log("failed to fetch initial leader schedule via RPC — shreds will be discarded until schedule loads");
+        };
+    }
 
     var start = sig.time.Timer.start();
     while (start.read().asSecs() < 30) {
@@ -2236,6 +2290,7 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         snapshot_files,
         .{
             .genesis_file_path = genesis_file_path,
+            .tracked_pubkeys_file_path = cfg.accounts_db.tracked_pubkeys_file,
             .extract = .{ .entire_snapshot_and_validate = &rooted_db },
         },
     );

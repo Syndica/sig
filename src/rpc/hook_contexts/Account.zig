@@ -8,6 +8,7 @@ const parse_token = account_codec.parse_token;
 
 const GetAccountInfo = sig.rpc.methods.GetAccountInfo;
 const GetBalance = sig.rpc.methods.GetBalance;
+const GetMultipleAccounts = sig.rpc.methods.GetMultipleAccounts;
 const GetTokenAccountBalance = sig.rpc.methods.GetTokenAccountBalance;
 const GetTokenSupply = sig.rpc.methods.GetTokenSupply;
 
@@ -43,33 +44,70 @@ pub fn getAccountInfo(
         .value = null,
     };
 
-    const data: account_codec.AccountData = if (encoding == .jsonParsed)
-        try account_codec.encodeJsonParsed(
-            arena,
-            params.pubkey,
-            account,
-            slot_reader,
-            config.dataSlice,
-        )
-    else
-        // TODO: [agave conformance] When base58 encoding is requested and account data exceeds
-        // 128 bytes, Agave returns JSON-RPC error code -32600 (InvalidRequest) with the message:
-        // "Encoded binary (base 58) data should be less than 128 bytes, please use Base64 encoding."
-        // Currently, `error.Base58DataTooLarge` propagates to hooks.zig's generic error mapper,
-        // which produces a non-deterministic positive error code via `@intFromError` and the raw
-        // error name as the message.
-        try account_codec.encodeStandard(arena, account, encoding, config.dataSlice);
+    return .{
+        .context = .{ .slot = slot },
+        .value = try encodeAccountValue(arena, params.pubkey, account, slot_reader, encoding, config.dataSlice),
+    };
+}
+
+pub fn getMultipleAccounts(
+    self: @This(),
+    arena: std.mem.Allocator,
+    params: GetMultipleAccounts,
+) !GetMultipleAccounts.Response {
+    const config = params.config orelse GetAccountInfo.Config{};
+    const commitment = config.commitment orelse .finalized;
+    const encoding = config.encoding orelse AccountEncoding.binary;
+
+    const slot = self.slot_tracker.getSlotForCommitment(commitment);
+    if (config.minContextSlot) |min_slot| {
+        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
+    }
+
+    const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
+    const slot_reader = self.account_reader.forSlot(&ref.constants().ancestors);
+
+    var values = try arena.alloc(?GetAccountInfo.Response.Value, params.pubkeys.len);
+    for (params.pubkeys, 0..) |pubkey, i| {
+        const maybe_account = try slot_reader.get(arena, pubkey);
+        values[i] = if (maybe_account) |account|
+            try encodeAccountValue(arena, pubkey, account, slot_reader, encoding, config.dataSlice)
+        else
+            null;
+    }
 
     return .{
         .context = .{ .slot = slot },
-        .value = .{
-            .data = data,
-            .executable = account.executable,
-            .lamports = account.lamports,
-            .owner = account.owner,
-            .rentEpoch = account.rent_epoch,
-            .space = account.data.len(),
-        },
+        .value = values,
+    };
+}
+
+fn encodeAccountValue(
+    arena: std.mem.Allocator,
+    pubkey: sig.core.Pubkey,
+    account: sig.core.Account,
+    slot_reader: sig.accounts_db.SlotAccountReader,
+    encoding: AccountEncoding,
+    data_slice: ?sig.rpc.methods.common.DataSlice,
+) !GetAccountInfo.Response.Value {
+    const data: account_codec.AccountData = if (encoding == .jsonParsed)
+        try account_codec.encodeJsonParsed(
+            arena,
+            pubkey,
+            account,
+            slot_reader,
+            data_slice,
+        )
+    else
+        try account_codec.encodeStandard(arena, account, encoding, data_slice);
+
+    return .{
+        .data = data,
+        .executable = account.executable,
+        .lamports = account.lamports,
+        .owner = account.owner,
+        .rentEpoch = account.rent_epoch,
+        .space = account.data.len(),
     };
 }
 

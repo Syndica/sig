@@ -60,6 +60,7 @@ pub const VersionedAccountPayload = union(enum(u8)) {
 
 pub const TradeEventV1 = struct {
     slot: u64,
+    mint: [32]u8,
     curve: [32]u8,
     wallet: [32]u8,
     /// Token amount from instruction data: buy(amount=tokens_out) / sell(amount=tokens_in).

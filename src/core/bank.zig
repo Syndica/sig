@@ -366,9 +366,9 @@ pub fn parseStakes(
     const keys = stakes.stake_accounts.keys();
     const values = stakes.stake_accounts.values();
     for (keys, values) |key, value| {
-        // Check that the stake account exists in accounts DB
-        const account = try account_reader.get(allocator, key) orelse
-            return error.StakeAccountNotFound;
+        // Check that the stake account exists in accounts DB.
+        // Skip if missing — filtered DB (spy node) may not have stake accounts.
+        const account = (try account_reader.get(allocator, key)) orelse continue;
         defer account.deinit(allocator);
 
         // Stake accounts may be orphaned in the sense that they reference closed, uninitialized, or
@@ -434,8 +434,8 @@ pub fn parseStakes(
     const voters = try stakes.vote_accounts.clone(allocator);
     errdefer voters.deinit(allocator);
     for (voters.vote_accounts.keys(), voters.vote_accounts.values()) |address, account| {
-        const db_account = try account_reader.get(allocator, address) orelse
-            return error.VoteAccountNotFound;
+        // Skip if missing — filtered DB (spy node) may not have vote accounts.
+        const db_account = (try account_reader.get(allocator, address)) orelse continue;
         defer db_account.deinit(allocator);
 
         // Validate owner and lamports

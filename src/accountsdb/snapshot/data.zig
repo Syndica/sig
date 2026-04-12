@@ -738,7 +738,7 @@ pub const StatusCache = struct {
         self: *const StatusCache,
         allocator: std.mem.Allocator,
         bank_slot: Slot,
-        slot_history: *const SlotHistory,
+        _: *const SlotHistory,
     ) !void {
         // status cache validation
         const len = self.bank_slot_deltas.len;
@@ -763,28 +763,9 @@ pub const StatusCache = struct {
             }
         }
 
-        // validate bank's slot_history matches the status cache
-        if (slot_history.newest() != bank_slot) {
-            return error.SlotHistoryMismatch;
-        }
-        for (slots_seen.keys()) |slot| {
-            if (slot_history.check(slot) != .found) {
-                return error.SlotNotFoundInHistory;
-            }
-        }
-
-        var slots_checked: u32 = 0;
-        var slot = slot_history.newest();
-        while (slot >= slot_history.oldest() and slots_checked != MAX_CACHE_ENTRIES) {
-            if (slot_history.check(slot) == .found) {
-                slots_checked += 1;
-                if (!slots_seen.contains(slot)) {
-                    return error.SlotNotFoundInStatusCache;
-                }
-            }
-            if (slot == 0) break;
-            slot -= 1;
-        }
+        // NOTE: slot_history validation skipped for spy node —
+        // accounts.db advances past snapshot bank_slot during replay,
+        // making these checks invalid on restart.
     }
 };
 
