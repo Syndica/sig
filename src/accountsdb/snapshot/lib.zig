@@ -15,6 +15,7 @@ pub const ReducedCheckpoint = reduced_checkpoint.ReducedCheckpoint;
 pub const downloadSnapshotsFromGossip = download.downloadSnapshotsFromGossip;
 pub const loadSnapshot = load.loadSnapshot;
 pub const loadReducedCheckpointAsSnapshot = reduced_checkpoint.loadAsLoadedSnapshot;
+pub const writeReducedCheckpointFromManifest = reduced_checkpoint.writeManifestToFilePath;
 pub const parallelUnpackZstdTarBall = data.parallelUnpackZstdTarBall;
 pub const findAndUnpackSnapshotFilePair = data.findAndUnpackSnapshotFilePair;
 pub const findAndUnpackTestSnapshots = data.findAndUnpackTestSnapshots;

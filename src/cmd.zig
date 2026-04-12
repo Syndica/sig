@@ -1620,6 +1620,17 @@ fn validator(
     };
     defer loaded_snapshot.deinit();
 
+    if (!use_reduced_checkpoint) {
+        if (cfg.accounts_db.reduced_checkpoint_path) |checkpoint_path| {
+            try sig.accounts_db.snapshot.writeReducedCheckpointFromManifest(
+                allocator,
+                .from(app_base.logger),
+                &loaded_snapshot.collapsed_manifest,
+                checkpoint_path,
+            );
+        }
+    }
+
     if (!use_reduced_checkpoint and cfg.accounts_db.dbg_db_init and !init_db_exists)
         try saveDbInit(snapshot_dir, .from(app_base.logger));
 
