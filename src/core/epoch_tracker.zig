@@ -146,18 +146,40 @@ pub const EpochTracker = struct {
         errdefer epoch_tracker.deinit();
 
         const epoch_stakes_map = manifest.bank_extra.versioned_epoch_stakes;
-        const min_epoch = std.mem.min(Epoch, manifest.bank_extra.versioned_epoch_stakes.keys());
-        const max_epoch = std.mem.max(Epoch, manifest.bank_extra.versioned_epoch_stakes.keys());
-        for (min_epoch..max_epoch + 1) |epoch| {
-            const stakes = (epoch_stakes_map.get(epoch) orelse continue).current;
+        const available_epochs = manifest.bank_extra.versioned_epoch_stakes.keys();
+        if (available_epochs.len == 0) return epoch_tracker;
+
+        const start_index = available_epochs.len -| RootedEpochBuffer.BUF_LEN;
+        for (available_epochs[start_index..]) |epoch| {
+            const stakes = epoch_stakes_map.get(epoch).?.current;
             const epoch_stakes = try stakes.convert(allocator, .delegation);
             errdefer epoch_stakes.deinit(allocator);
-            try epoch_tracker.insertRootedEpochInfo(
+
+            const leader_schedule_epoch = epoch_tracker.epoch_schedule.getLeaderScheduleEpoch(
+                epoch_tracker.epoch_schedule.getFirstSlotInEpoch(epoch_stakes.stakes.epoch),
+            );
+            const leaders: LeaderSchedule = try .init(
                 allocator,
-                epoch_stakes.stakes.epoch,
-                epoch_stakes,
+                leader_schedule_epoch,
+                epoch_stakes.stakes.vote_accounts,
+                &epoch_tracker.epoch_schedule,
                 feature_set,
             );
+            errdefer leaders.deinit(allocator);
+
+            const epoch_info_ptr = try allocator.create(EpochInfo);
+            errdefer allocator.destroy(epoch_info_ptr);
+
+            epoch_info_ptr.* = .{
+                .allocator = allocator,
+                .leaders = leaders,
+                .stakes = epoch_stakes,
+                .feature_set = feature_set.*,
+            };
+
+            var lock = epoch_tracker.rooted_epochs.write();
+            defer lock.unlock();
+            try lock.mut().seed(epoch_stakes.stakes.epoch, epoch_info_ptr);
         }
 
         return epoch_tracker;
@@ -502,7 +524,9 @@ pub const EpochInfo = struct {
 /// No process should ever need to access E-3 or older EpochInfos and it is thus safe to
 /// deinitialize the corresponding data when overwriting entries with new epoch data.
 const RootedEpochBuffer = struct {
-    buf: [4]?*const EpochInfo = @splat(null),
+    const BUF_LEN = 4;
+
+    buf: [BUF_LEN]?*const EpochInfo = @splat(null),
     root: Epoch = 0,
 
     fn deinit(self: *RootedEpochBuffer) void {
@@ -528,6 +552,20 @@ const RootedEpochBuffer = struct {
 
         self.buf[index] = value;
         self.root = epoch;
+    }
+
+    fn seed(
+        self: *RootedEpochBuffer,
+        epoch: Epoch,
+        value: *const EpochInfo,
+    ) !void {
+        const index = epoch % self.buf.len;
+        if (self.buf[index]) |old_value| {
+            old_value.release();
+        }
+
+        self.buf[index] = value;
+        self.root = @max(self.root, epoch);
     }
 
     /// Returns a ref-counted reference to the EpochInfo for the given epoch.
@@ -793,6 +831,34 @@ test RootedEpochBuffer {
             expected_info.stakes.stakes.epoch,
             info.stakes.stakes.epoch,
         );
+    }
+}
+
+test "RootedEpochBuffer seed tolerates sparse bootstrap epochs" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(11);
+    const random = prng.random();
+    const epoch_schedule = EpochSchedule.INIT;
+
+    var buffer = RootedEpochBuffer{};
+    defer buffer.deinit();
+
+    const sparse_epochs = [_]Epoch{ 4, 5, 7 };
+    for (sparse_epochs) |epoch| {
+        const info = try allocator.create(EpochInfo);
+        info.* = try EpochInfo.initRandom(
+            allocator,
+            random,
+            .{ .epoch = epoch, .schedule = epoch_schedule },
+        );
+        try buffer.seed(epoch, info);
+    }
+
+    try std.testing.expectEqual(@as(Epoch, 7), buffer.root);
+    for (sparse_epochs) |epoch| {
+        const info = try buffer.getEpochInfoRef(epoch);
+        defer info.release();
+        try std.testing.expectEqual(epoch, info.stakes.stakes.epoch);
     }
 }
 

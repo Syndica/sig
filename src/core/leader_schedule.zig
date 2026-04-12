@@ -254,6 +254,12 @@ pub fn computeFromStakedNodes(
 ) ![]Pubkey {
     const Entry = sig.utils.collections.PubkeyMap(u64).Entry;
 
+    if (staked_nodes.count() == 0) {
+        const slot_leaders = try allocator.alloc(Pubkey, slots_in_epoch);
+        @memset(slot_leaders, Pubkey.ZEROES);
+        return slot_leaders;
+    }
+
     const nodes = try allocator.alloc(Entry, staked_nodes.count());
     defer allocator.free(nodes);
 
@@ -345,6 +351,17 @@ test "leaderSchedule calculation matches agave" {
             slot_leader,
             try Pubkey.parseRuntime(generated_leader_schedule[i]),
         );
+    }
+}
+
+test "computeFromStakedNodes tolerates empty stake map" {
+    var staked_nodes = sig.utils.collections.PubkeyMap(u64){};
+    const slot_leaders = try computeFromStakedNodes(std.testing.allocator, 7, 8, &staked_nodes);
+    defer std.testing.allocator.free(slot_leaders);
+
+    try std.testing.expectEqual(@as(usize, 8), slot_leaders.len);
+    for (slot_leaders) |slot_leader| {
+        try std.testing.expect(slot_leader.equals(&Pubkey.ZEROES));
     }
 }
 

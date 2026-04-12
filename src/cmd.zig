@@ -1693,11 +1693,6 @@ fn validator(
     );
     defer epoch_tracker.deinit();
 
-    const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
-    const rpc_url = rpc_cluster_type.getRpcUrl() orelse @panic("No RPC Url for cluster type!");
-    var rpc_client = try sig.rpc.Client.init(allocator, rpc_url, .{});
-    defer rpc_client.deinit();
-
     const turbine_config = cfg.turbine;
 
     // Vote account. if not provided, disable voting
