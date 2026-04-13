@@ -1058,6 +1058,7 @@ fn testReplaySlotStats(
     expected_entry_count: u64,
     expected_transactions_per_entry_max: u64,
 ) !void {
+    // replay slot sync
     {
         var state = try TestState.init(allocator);
         defer state.deinit(allocator);
@@ -1077,6 +1078,7 @@ fn testReplaySlotStats(
 
     verify_ticks_params.tick_hash_count.* = 0;
 
+    // replay slot async
     {
         var state = try TestState.init(allocator);
         defer state.deinit(allocator);

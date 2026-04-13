@@ -145,10 +145,7 @@ pub fn start(
             .repair_socket = repair_socket,
             .turbine_socket = turbine_socket,
             .shred_version = deps.my_shred_version,
-            .maybe_retransmit_shred_sender = if (conf.retransmit)
-                retransmit_channel
-            else
-                null,
+            .maybe_retransmit_shred_sender = if (conf.retransmit) retransmit_channel else null,
             .epoch_tracker = deps.epoch_tracker,
             .tracker = shred_tracker,
             .inserter = inserter,

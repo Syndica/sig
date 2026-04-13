@@ -370,15 +370,6 @@ fn handleInboundEvent(
             } };
             self.handleSlotTransition(slot_event_kind, slot_data.slot, transition, task_batch);
         },
-        .slot_local_rooted => |rooted_slot| {
-            self.notifySlotsUpdatesSubscribers(
-                .{ .root = .{
-                    .slot = rooted_slot,
-                    .timestamp = @intCast(std.time.milliTimestamp()),
-                } },
-                task_batch,
-            );
-        },
         .slot_finalized_rooted => |rooted_slot| {
             const transition = self.slot_state_cache.onSlotRooted(
                 self.allocator,
@@ -419,8 +410,19 @@ fn handleInboundEvent(
         },
         // slotsUpdatesSubscribe-only events.
         // These bypass SlotStateCache; they don't affect commitment.
-        // NOTE: we just generate timestamp here rather than at event emit, Agave does a mix,
-        // for some events it is at emit and others it is within RPC processing.
+        // NOTE: we just generate timestamp here (receive side) rather than at event emit/send.
+        // Agave does a mix:
+        // - Dead and FirstShredReceived: timestamp generated on send/emit event side
+        // - All other event types have timestamp generated on event receive side
+        .slot_local_rooted => |rooted_slot| {
+            self.notifySlotsUpdatesSubscribers(
+                .{ .root = .{
+                    .slot = rooted_slot,
+                    .timestamp = @intCast(std.time.milliTimestamp()),
+                } },
+                task_batch,
+            );
+        },
         .slot_dead => |dead| {
             self.notifySlotsUpdatesSubscribers(.{ .dead = .{
                 .slot = dead.slot,
@@ -824,6 +826,8 @@ fn slotUpdateForEvent(
     event_kind: SlotEventKind,
     slot: Slot,
 ) ?types.SlotUpdateData {
+    // NOTE: generated timestamp here rather than at event emit, Agave does the same for these
+    // events (generates timestmap on receive side).
     const ts: u64 = @intCast(std.time.milliTimestamp());
     return switch (event_kind) {
         .slot_frozen => |frozen| .{
