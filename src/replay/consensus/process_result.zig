@@ -38,6 +38,8 @@ const Logger = sig.trace.Logger("replay.process_result");
 
 const check_slot_agrees_with_cluster = replay.consensus.cluster_sync.check_slot_agrees_with_cluster;
 
+const jrpc_types = sig.rpc.jrpc_websockets.types;
+
 pub const ProcessResultParams = struct {
     allocator: Allocator,
     logger: Logger,
@@ -60,14 +62,22 @@ pub const ProcessResultParams = struct {
     unfrozen_gossip_verified_vote_hashes: *UnfrozenGossipVerifiedVoteHashes,
     epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
     purge_repair_slot_counter: *PurgeRepairSlotCounters,
+
+    // rpc event sink
+    event_sink: ?*jrpc_types.EventSink = null,
 };
 
 pub fn processResult(params: ProcessResultParams, result: sig.replay.execution.ReplayResult) !void {
     const slot = result.slot;
 
     switch (result.output) {
-        .err => {
-            try markDeadSlot(params, slot, params.ancestor_hashes_replay_update_sender);
+        .err => |err| {
+            try markDeadSlot(
+                params,
+                slot,
+                err,
+                params.ancestor_hashes_replay_update_sender,
+            );
             return;
         },
         .last_entry_hash => |_| {},
@@ -93,6 +103,7 @@ pub fn processResult(params: ProcessResultParams, result: sig.replay.execution.R
 fn markDeadSlot(
     params: ProcessResultParams,
     dead_slot: Slot,
+    dead_err: sig.replay.execution.ReplaySlotError,
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 ) !void {
     // TODO add getForkProgress
@@ -105,6 +116,27 @@ fn markDeadSlot(
     // - blockstore.slots_stats.mark_dead(slot);
     // - slot_status_notifier
     // - rpc_subscriptions
+    if (params.event_sink) |sink| {
+        // TODO: currently just formatting string for error message here instead of sending
+        // the error structure, because ReplaySlotError would have to be cloned to be sent
+        // through channel to another thread (because BorshIoError owns a string).
+        // This is a good simple and direct approach for now.
+        const dead_err_msg = switch (dead_err) {
+            .failed_to_load_entries => |load_err| try std.fmt.allocPrint(
+                sink.allocator(),
+                ".{{ .failed_to_load_entries = \"{f}\" }}",
+                .{std.zig.fmtString(load_err)},
+            ),
+            else => try std.fmt.allocPrint(sink.allocator(), "{}", .{dead_err}),
+        };
+        errdefer sink.allocator().free(dead_err_msg);
+
+        const event: jrpc_types.InboundEvent = .{ .slot_dead = .{
+            .slot = dead_slot,
+            .err = dead_err_msg,
+        } };
+        try sink.send(event);
+    }
 
     const dead_state: replay.consensus.cluster_sync.DeadState = .fromState(
         .from(params.logger),
@@ -406,6 +438,10 @@ test "processResult: confirm status with err poll result marks slot dead" {
     };
     defer test_resources.deinit(allocator);
 
+    const event_sink = try jrpc_types.EventSink.create(allocator);
+    defer event_sink.destroy();
+    test_resources.params.event_sink = event_sink;
+
     const slot: Slot = 100;
 
     // Add slot to progress map first
@@ -436,6 +472,20 @@ test "processResult: confirm status with err poll result marks slot dead" {
     const progress_after = test_resources.progress.map.get(slot);
     try testing.expect(progress_after != null);
     try testing.expect(progress_after.?.is_dead);
+
+    const event = event_sink.channel.tryReceive() orelse
+        return error.TestUnexpectedResult;
+    defer event.deinit(event_sink.allocator());
+    switch (event) {
+        .slot_dead => |dead| {
+            try testing.expectEqual(slot, dead.slot);
+            try testing.expectEqualStrings(
+                ".{ .failed_to_load_entries = \"test error\" }",
+                dead.err,
+            );
+        },
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "processResult: confirm status with done poll but missing slot in tracker" {
@@ -569,6 +619,10 @@ test "markDeadSlot: marks progress dead and writes to ledger" {
     };
     defer test_resources.deinit(allocator);
 
+    const event_sink = try jrpc_types.EventSink.create(allocator);
+    defer event_sink.destroy();
+    test_resources.params.event_sink = event_sink;
+
     const slot: Slot = 200;
 
     // Ensure progress map has an entry for the slot
@@ -592,6 +646,7 @@ test "markDeadSlot: marks progress dead and writes to ledger" {
     try markDeadSlot(
         test_resources.params,
         slot,
+        .{ .invalid_block = .TooFewTicks },
         &ancestor_hashes_replay_update_channel,
     );
 
@@ -599,7 +654,24 @@ test "markDeadSlot: marks progress dead and writes to ledger" {
     try testing.expect(test_resources.progress.isDead(slot) orelse false);
 
     // Validate ledger records the dead slot
-    try testing.expect(try test_resources.ledger.reader().isDead(allocator, slot));
+    try testing.expect(
+        try test_resources.ledger.reader().isDead(allocator, slot),
+    );
+
+    // Validate slot_dead event was emitted
+    const event = event_sink.channel.tryReceive() orelse
+        return error.TestUnexpectedResult;
+    defer event.deinit(event_sink.allocator());
+    switch (event) {
+        .slot_dead => |dead| {
+            try testing.expectEqual(slot, dead.slot);
+            try testing.expectEqualStrings(
+                ".{ .invalid_block = .TooFewTicks }",
+                dead.err,
+            );
+        },
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot" {
@@ -669,6 +741,7 @@ test "markDeadSlot: when duplicate proof exists, duplicate tracker records slot"
     try markDeadSlot(
         test_resources.params,
         slot,
+        .failed_to_load_meta,
         &ancestor_hashes_replay_update_channel,
     );
 

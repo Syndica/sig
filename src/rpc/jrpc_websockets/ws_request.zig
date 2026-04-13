@@ -46,9 +46,6 @@ pub const WsMethodAndParams = union(enum) {
     // more specific error codes or message along with the error code.
     pub fn validate(self: *const WsMethodAndParams) VerifyError!void {
         switch (self.*) {
-            .slotsUpdatesSubscribe,
-            .slotsUpdatesUnsubscribe,
-            => return error.MethodNotImplemented,
             .blockSubscribe => |block_sub| {
                 if (block_sub.config) |cfg| {
                     if (cfg.commitment) |c| {
@@ -684,15 +681,6 @@ test "WsRequest.Dynamic parse diagnostic captures request id" {
         );
         try std.testing.expectEqual(@as(Id, .{ .int = 12 }), diag.err.id.?);
     }
-}
-
-test "validate rejects unstable methods" {
-    const req: WsRequest = .{
-        .id = .{ .int = 1 },
-        .method = .{ .slotsUpdatesSubscribe = .{} },
-    };
-
-    try std.testing.expectError(error.MethodNotImplemented, req.method.validate());
 }
 
 test "validate rejects programSubscribe with too many filters" {
