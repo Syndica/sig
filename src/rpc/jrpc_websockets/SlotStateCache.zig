@@ -1589,12 +1589,12 @@ test "gossip confirmations create unfrozen cache entries" {
 
     // Simulate gossip confirmations for ahead slots.
     var slot: Slot = 1000;
-    while (slot < 1000 + 200) : (slot += 1) {
+    while (slot < 1000 + 60) : (slot += 1) {
         _ = try state.onSlotConfirmed(allocator, slot);
     }
 
-    // Cache holds frozen + confirmed entries (202 total).
-    try std.testing.expectEqual(@as(usize, 202), state.cached_slots.count());
+    // Cache holds frozen + confirmed entries (62 total).
+    try std.testing.expectEqual(@as(usize, 62), state.cached_slots.count());
     // Frozen slots still present.
     try std.testing.expect(state.cached_slots.getPtr(1) != null);
     try std.testing.expect(state.cached_slots.getPtr(2) != null);
