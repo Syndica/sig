@@ -23,7 +23,7 @@ pub const SlotReadContext = types.SlotReadContext;
 
 /// Max tracked slots retained, used to avoid unbounded memory growth if we receive unexpected
 /// event patterns. Under normal operation eviction should occur when slots are rooted.
-const MAX_CACHED_SLOTS: usize = 512;
+const MAX_CACHED_SLOTS: usize = 64;
 
 const SlotStateCache = @This();
 
