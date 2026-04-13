@@ -11,6 +11,8 @@ const sig = @import("../../sig.zig");
 const base58 = @import("base58");
 pub const AccountKeys = @import("AccountKeys.zig");
 
+const spl_token = sig.runtime.spl_token;
+
 const Allocator = std.mem.Allocator;
 const JsonValue = std.json.Value;
 const ObjectMap = std.json.ObjectMap;
@@ -28,9 +30,9 @@ const SystemInstruction = sig.runtime.program.system.Instruction;
 const SPL_ASSOCIATED_TOKEN_ACC_ID: Pubkey = .parse("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
 /// SPL Memo v1 program ID
-const SPL_MEMO_V1_ID: Pubkey = .parse("Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo");
+const SPL_MEMO_V1_ID = spl_token.SPL_MEMO_V1_ID;
 /// SPL Memo v3 program ID
-const SPL_MEMO_V3_ID: Pubkey = .parse("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+const SPL_MEMO_V3_ID = spl_token.SPL_MEMO_V3_ID;
 
 /// BPF Loader v2 instruction enum (bincode serialized u32)
 const BpfLoaderInstruction = union(enum(u32)) {
