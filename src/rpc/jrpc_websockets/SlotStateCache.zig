@@ -619,6 +619,8 @@ fn getOrPutSlot(
         return slot_state;
     }
     if (self.cached_slots.count() >= MAX_CACHED_SLOTS) {
+        // NOTE: This is just a safeguard to avoid unbounded memory growth. It can occur while
+        // catching up to head of chain on startup.
         try self.evictMinimumSlot(allocator, slot);
     }
 
@@ -642,16 +644,12 @@ fn evictMinimumSlot(
     }
 
     if (incoming_slot < min_slot) {
+        // reject too old instead of evicting newer
         return error.IncomingSlotTooOld;
     }
 
-    // NOTE: this shouldn't happen, even on startup older slot events will be received and
-    // treated as too old before reaching this point. This is just a safeguard to avoid unbounded
-    // memory growth.
-    self.logger.warn().logf(
-        "slot state cache reached capacity of {}; evicting minimum slot {} to insert slot {}",
-        .{ MAX_CACHED_SLOTS, min_slot, incoming_slot },
-    );
+    // TODO: observability/metrics for this eviction case
+
     // TODO(perf): Offload cached frozen-account teardown off the loop thread.
     self.cached_slots.values()[min_index].deinit(allocator);
     _ = self.cached_slots.swapRemoveAt(min_index);
