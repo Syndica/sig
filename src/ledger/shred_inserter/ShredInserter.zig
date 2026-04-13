@@ -884,8 +884,9 @@ fn insertDataShred(
 
     if (first_insert) {
         if (self.event_sink) |sink| {
-            // NOTE: this is not identical to where Agave emits the event but is mostly equivalent,
-            // Agave emits this event form retransmit stage.
+            // NOTE: this is not identical to where Agave emits the event, Agave emits this event
+            // from retransmit stage. The main difference is this will be the first data shred but
+            // code shred may have been received earlier.
             try sink.send(.{
                 .first_shred_received = slot,
             });
