@@ -401,13 +401,10 @@ pub fn getHealth(
         return .unknown;
     }
 
-    if (latest_processed_slot >=
-        latest_confirmed_slot -| self.health_check_slot_distance)
-    {
+    if (latest_processed_slot >= latest_confirmed_slot -| self.health_check_slot_distance) {
         return .ok;
     } else {
-        const num_slots_behind = latest_confirmed_slot -|
-            latest_processed_slot;
+        const num_slots_behind = latest_confirmed_slot -| latest_processed_slot;
         return .{ .behind = num_slots_behind };
     }
 }
