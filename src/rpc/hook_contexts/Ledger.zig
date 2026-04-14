@@ -384,31 +384,27 @@ pub fn getFirstAvailableBlock(
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2806-L2818
 pub fn getHealth(
     self: LedgerHookContext,
-    arena: std.mem.Allocator,
+    _: Allocator,
     _: GetHealth,
 ) !GetHealth.Response {
-    // Get the node's latest optimistically confirmed slot from replay
-    const latest_optimistically_confirmed_slot = self.commitments.get(.confirmed);
-
-    // Get the cluster's latest optimistically confirmed slot from ledger
-    var optimistic_slots = self.ledger.reader().getLatestOptimisticSlots(arena, 1) catch {
-        return .unknown;
-    };
-    defer optimistic_slots.deinit();
-
-    if (optimistic_slots.items.len == 0) {
+    // Get the node's processed slot (replay tip according to vote tracking)
+    const latest_processed_slot = self.commitments.get(.processed);
+    if (latest_processed_slot == 0) {
         return .unknown;
     }
 
-    const cluster_latest_optimistically_confirmed_slot, _, _ = optimistic_slots.items[0];
+    // Get the cluster's latest optimistically confirmed slot
+    // NOTE: this commitment confirmed value is from both replay and vote tracker gossip votes,
+    // gossip has latest from the network which is what we need for comparison
+    const latest_confirmed_slot = self.commitments.get(.confirmed);
+    if (latest_confirmed_slot == 0) {
+        return .unknown;
+    }
 
-    if (latest_optimistically_confirmed_slot >=
-        cluster_latest_optimistically_confirmed_slot -| self.health_check_slot_distance)
-    {
+    if (latest_processed_slot >= latest_confirmed_slot -| self.health_check_slot_distance) {
         return .ok;
     } else {
-        const num_slots_behind = cluster_latest_optimistically_confirmed_slot -|
-            latest_optimistically_confirmed_slot;
+        const num_slots_behind = latest_confirmed_slot -| latest_processed_slot;
         return .{ .behind = num_slots_behind };
     }
 }
