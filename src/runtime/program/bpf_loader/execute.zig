@@ -81,7 +81,20 @@ pub fn execute(
             );
             return InstructionError.ProgramFailedToComplete;
         } else {
-            return sig.vm.instructionErrorFromExecutionError(err);
+            const instruction_err = sig.vm.instructionErrorFromExecutionError(err);
+            // When a CPI callee fails, ProgramFailedToComplete propagates back as an
+            // InstructionError through the caller's VM. The executor skips logging for
+            // ProgramFailedToComplete (to avoid double-logging for direct VM crashes),
+            // so we must log the caller's failure here.
+            // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L576-L579
+            if (instruction_err == InstructionError.ProgramFailedToComplete) {
+                try stable_log.programFailure(
+                    ic.tc,
+                    ic.ixn_info.program_meta.pubkey,
+                    err,
+                );
+            }
+            return instruction_err;
         }
     };
 }
@@ -1332,7 +1345,7 @@ pub fn executeV3Upgrade(
         V3State.sizeOfBuffer(0),
     );
 
-    try ic.tc.log("Upgraded program {any}", .{new_program_id});
+    try ic.tc.log("Upgraded program {f}", .{new_program_id});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L946-L1010
