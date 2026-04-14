@@ -24,6 +24,7 @@ pub const SlotReadContext = types.SlotReadContext;
 /// Max tracked slots retained, used to avoid unbounded memory growth if we receive unexpected
 /// event patterns. Under normal operation eviction should occur when slots are rooted.
 const MAX_CACHED_SLOTS: usize = 64;
+
 const SlotStateCache = @This();
 
 logger: Logger,
@@ -419,7 +420,13 @@ pub fn onSlotFrozen(
     allocator: std.mem.Allocator,
     slot_data: *SlotFrozenEvent,
 ) !Transition {
-    const slot_state = try self.getOrPutSlot(allocator, slot_data.slot);
+    const slot_state = self.getOrPutSlot(allocator, slot_data.slot) catch |err| switch (err) {
+        error.IncomingSlotTooOld => {
+            // TODO: add metric/observability
+            return .{};
+        },
+        error.OutOfMemory => return error.OutOfMemory,
+    };
     const duplicate_frozen = slot_state.state.frozen;
     if (duplicate_frozen) {
         // TODO: what about repair/replay over same slot? Could be frozen twice for same
@@ -477,7 +484,13 @@ pub fn onTransactionBatchEvent(
         return;
     }
 
-    const slot_state = try self.getOrPutSlot(allocator, batch_event.slot);
+    const slot_state = self.getOrPutSlot(allocator, batch_event.slot) catch |err| switch (err) {
+        error.IncomingSlotTooOld => {
+            // TODO: add metric/observability
+            return;
+        },
+        error.OutOfMemory => return error.OutOfMemory,
+    };
     // TODO: what about repair/replay over same slot? We can receive multiple tx batches for the
     // same slot during normal execution and append them, but if the slot is replayed with
     // different contents we still only key by slot number and do not handle that case.
@@ -489,14 +502,18 @@ pub fn onSlotConfirmed(
     self: *SlotStateCache,
     allocator: std.mem.Allocator,
     slot: Slot,
-) (std.mem.Allocator.Error || error{ IncomingSlotTooOld, DuplicateSlotConfirmed })!Transition {
-    const slot_state = try self.getOrPutSlot(allocator, slot);
+) (std.mem.Allocator.Error || error{DuplicateSlotConfirmed})!Transition {
+    const slot_state = self.getOrPutSlot(allocator, slot) catch |err| switch (err) {
+        error.IncomingSlotTooOld => {
+            // TODO: add metric/observability
+            return .{};
+        },
+        error.OutOfMemory => return error.OutOfMemory,
+    };
     if (slot_state.state.confirmed) {
         return error.DuplicateSlotConfirmed;
     }
-
     slot_state.state.confirmed = true;
-
     var transition: Transition = .{ .notify_commitments = .{ .confirmed = true } };
     if (slot_state.state.frozen) {
         transition.publishable_slot = slot_state;
@@ -508,43 +525,34 @@ pub fn onSlotRooted(
     self: *SlotStateCache,
     allocator: std.mem.Allocator,
     slot: Slot,
-) (std.mem.Allocator.Error || error{ IncomingSlotTooOld, DuplicateSlotRooted })!Transition {
-    const slot_state = try self.getOrPutSlot(allocator, slot);
+) (std.mem.Allocator.Error || error{DuplicateSlotRooted})!Transition {
+    const slot_state = self.getOrPutSlot(allocator, slot) catch |err| switch (err) {
+        error.IncomingSlotTooOld => {
+            // TODO: add metric/observability
+            return .{};
+        },
+        error.OutOfMemory => return error.OutOfMemory,
+    };
     if (slot_state.state.rooted) {
         return error.DuplicateSlotRooted;
     }
-
     slot_state.state.confirmed = true;
     slot_state.state.rooted = true;
 
     var transition: Transition = .{
-        .notify_commitments = .{
-            .confirmed = !slot_state.published.confirmed,
-            .finalized = true,
-        },
+        .notify_commitments = .{ .confirmed = !slot_state.published.confirmed, .finalized = true },
         .evict_through = slot,
     };
-    if (!tryMarkFinalizedPublished(slot_state)) {
-        // should never happen, log it
-        self.logger.err().logf(
-            "received slot_rooted for slot {} in unexpected state: " ++
-                "frozen={} confirmed={} rooted={} published_finalized={}",
-            .{
-                slot,
-                slot_state.state.frozen,
-                slot_state.state.confirmed,
-                slot_state.state.rooted,
-                slot_state.published.finalized,
-            },
-        );
-        return transition;
+    if (tryMarkFinalizedPublished(slot_state)) {
+        transition.publishable_slot = slot_state;
     }
-    transition.publishable_slot = slot_state;
     return transition;
 }
 
 /// Once a slot has rooted and we have delivered anything derived from it, older cached
 /// account data is no longer needed for future commitment transitions.
+/// Uses strict < so that the rooted slot itself survives until `onSlotFrozen` can
+/// populate it (for the case where root arrives before freeze).
 pub fn evictFinalizedThrough(
     self: *SlotStateCache,
     allocator: std.mem.Allocator,
@@ -552,7 +560,7 @@ pub fn evictFinalizedThrough(
 ) void {
     var index: usize = 0;
     while (index < self.cached_slots.count()) {
-        if (self.cached_slots.keys()[index] <= rooted_slot) {
+        if (self.cached_slots.keys()[index] < rooted_slot) {
             // TODO(perf): Offload cached frozen-account teardown off the loop thread.
             self.cached_slots.values()[index].deinit(allocator);
             _ = self.cached_slots.swapRemoveAt(index);
@@ -611,6 +619,8 @@ fn getOrPutSlot(
         return slot_state;
     }
     if (self.cached_slots.count() >= MAX_CACHED_SLOTS) {
+        // NOTE: This is just a safeguard to avoid unbounded memory growth. It can occur while
+        // catching up to head of chain on startup.
         try self.evictMinimumSlot(allocator, slot);
     }
 
@@ -634,18 +644,12 @@ fn evictMinimumSlot(
     }
 
     if (incoming_slot < min_slot) {
-        self.logger.warn().logf(
-            "slot state cache reached capacity of {}; dropping incoming slot {} " ++
-                "because minimum cached slot is {}",
-            .{ MAX_CACHED_SLOTS, incoming_slot, min_slot },
-        );
+        // reject too old instead of evicting newer
         return error.IncomingSlotTooOld;
     }
 
-    self.logger.warn().logf(
-        "slot state cache reached capacity of {}; evicting minimum slot {} to insert slot {}",
-        .{ MAX_CACHED_SLOTS, min_slot, incoming_slot },
-    );
+    // TODO: observability/metrics for this eviction case
+
     // TODO(perf): Offload cached frozen-account teardown off the loop thread.
     self.cached_slots.values()[min_index].deinit(allocator);
     _ = self.cached_slots.swapRemoveAt(min_index);
@@ -941,7 +945,7 @@ test "transaction batch iterator spans all batches" {
     try std.testing.expect(iterator.next() == null);
 }
 
-test "confirmed before frozen buffers state" {
+test "confirmed before frozen caches then freeze populates" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -956,23 +960,26 @@ test "confirmed before frozen buffers state" {
     var state = SlotStateCache.init(ctx, .FOR_TESTS);
     defer state.deinit(allocator);
 
-    const confirm_transition = try state.onSlotConfirmed(allocator, 10);
-    try std.testing.expect(confirm_transition.publishable_slot == null);
-    try std.testing.expect(confirm_transition.notify_commitments.confirmed);
+    // Confirm arrives before freeze: creates an empty CachedSlot with confirmed=true.
+    const confirm_t = try state.onSlotConfirmed(allocator, 10);
+    try std.testing.expect(confirm_t.publishable_slot == null);
+    try std.testing.expect(confirm_t.notify_commitments.confirmed);
 
-    const cached_before = state.cached_slots.getPtr(10).?;
-    try std.testing.expect(cached_before.state.confirmed);
-    try std.testing.expect(!cached_before.state.frozen);
+    // Slot IS in cached_slots now (unfrozen).
+    const entry = state.cached_slots.getPtr(10).?;
+    try std.testing.expect(entry.state.confirmed);
+    try std.testing.expect(!entry.state.frozen);
 
-    const frozen_transition = try testOnSlotFrozen(&state, allocator, 10, 9, 5);
-    try std.testing.expect(frozen_transition.notify_commitments.processed);
-    try std.testing.expect(frozen_transition.notify_commitments.confirmed);
-    try std.testing.expect(!frozen_transition.notify_commitments.finalized);
+    // Freeze populates the existing entry.
+    const frozen_t = try testOnSlotFrozen(&state, allocator, 10, 9, 5);
+    try std.testing.expect(frozen_t.notify_commitments.processed);
+    try std.testing.expect(frozen_t.notify_commitments.confirmed);
+    try std.testing.expect(!frozen_t.notify_commitments.finalized);
 
-    const cached_after = state.cached_slots.getPtr(10).?;
-    try std.testing.expect(cached_after.state.confirmed);
-    try std.testing.expect(cached_after.state.frozen);
-    try std.testing.expect(!cached_after.published.confirmed);
+    const cached = state.cached_slots.getPtr(10).?;
+    try std.testing.expect(cached.state.confirmed);
+    try std.testing.expect(cached.state.frozen);
+    try std.testing.expect(!cached.published.confirmed);
 }
 
 test "onSlotConfirmed marks confirmed transition only when actionable" {
@@ -1055,7 +1062,7 @@ test "duplicate rooted returns error" {
     );
 }
 
-test "eviction removes slots at or below rooted slot" {
+test "eviction removes slots below rooted slot" {
     const allocator = std.testing.allocator;
     var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
     defer slot_tracker.deinit(allocator);
@@ -1075,10 +1082,11 @@ test "eviction removes slots at or below rooted slot" {
     try std.testing.expect(state.cached_slots.getPtr(10) != null);
     try std.testing.expect(state.cached_slots.getPtr(15) != null);
 
+    // Uses strict <, so slot 10 survives.
     state.evictFinalizedThrough(allocator, 10);
 
     try std.testing.expect(state.cached_slots.getPtr(5) == null);
-    try std.testing.expect(state.cached_slots.getPtr(10) == null);
+    try std.testing.expect(state.cached_slots.getPtr(10) != null);
     try std.testing.expect(state.cached_slots.getPtr(15) != null);
 }
 
@@ -1094,16 +1102,18 @@ test "capacity eviction removes minimum slot" {
     var state = SlotStateCache.init(ctx, .noop);
     defer state.deinit(allocator);
 
+    // Fill main cache to capacity via frozen events.
     const slot_limit: Slot = MAX_CACHED_SLOTS;
     var slot: Slot = 1;
     while (slot <= slot_limit) : (slot += 1) {
-        _ = try state.onSlotConfirmed(allocator, slot);
+        _ = try testOnSlotFrozen(&state, allocator, slot, slot - 1, 0);
     }
 
     try std.testing.expectEqual(MAX_CACHED_SLOTS, state.cached_slots.count());
     try std.testing.expect(state.cached_slots.getPtr(1) != null);
 
-    _ = try state.onSlotConfirmed(allocator, slot_limit + 1);
+    // One more frozen event should evict the minimum slot (1).
+    _ = try testOnSlotFrozen(&state, allocator, slot_limit + 1, slot_limit, 0);
 
     try std.testing.expectEqual(MAX_CACHED_SLOTS, state.cached_slots.count());
     try std.testing.expect(state.cached_slots.getPtr(1) == null);
@@ -1122,17 +1132,51 @@ test "capacity drop keeps minimum slot when incoming is lower" {
     var state = SlotStateCache.init(ctx, .noop);
     defer state.deinit(allocator);
 
+    // Fill main cache to capacity starting from slot 2.
     const slot_limit: Slot = MAX_CACHED_SLOTS + 1;
     var slot: Slot = 2;
     while (slot <= slot_limit) : (slot += 1) {
-        _ = try state.onSlotConfirmed(allocator, slot);
+        _ = try testOnSlotFrozen(&state, allocator, slot, slot - 1, 0);
     }
 
     try std.testing.expectEqual(MAX_CACHED_SLOTS, state.cached_slots.count());
     try std.testing.expect(state.cached_slots.getPtr(2) != null);
 
-    try std.testing.expectError(error.IncomingSlotTooOld, state.onSlotConfirmed(allocator, 1));
+    // Freezing slot 1 (lower than all cached) should no-op.
+    const transition = try testOnSlotFrozen(&state, allocator, 1, 0, 0);
+    try std.testing.expect(transition.publishable_slot == null);
+    try std.testing.expectEqual(NotificationCommitments{}, transition.notify_commitments);
+    try std.testing.expect(transition.evict_through == null);
 
+    try std.testing.expectEqual(MAX_CACHED_SLOTS, state.cached_slots.count());
+    try std.testing.expect(state.cached_slots.getPtr(1) == null);
+    try std.testing.expect(state.cached_slots.getPtr(2) != null);
+}
+
+test "too old transaction batch no-ops" {
+    const allocator = std.testing.allocator;
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
+    var state = SlotStateCache.init(ctx, .noop);
+    defer state.deinit(allocator);
+
+    const slot_limit: Slot = MAX_CACHED_SLOTS + 1;
+    var slot: Slot = 2;
+    while (slot <= slot_limit) : (slot += 1) {
+        _ = try testOnSlotFrozen(&state, allocator, slot, slot - 1, 0);
+    }
+
+    var batch = try testSlotTransactionBatch(allocator, 1, &.{"Program log: too old"});
+    defer batch.deinit(allocator);
+
+    try state.onTransactionBatchEvent(allocator, &batch);
+
+    try std.testing.expectEqual(1, batch.entries.len);
     try std.testing.expectEqual(MAX_CACHED_SLOTS, state.cached_slots.count());
     try std.testing.expect(state.cached_slots.getPtr(1) == null);
     try std.testing.expect(state.cached_slots.getPtr(2) != null);
@@ -1305,7 +1349,7 @@ test "root jump over multiple slots" {
     state.evictFinalizedThrough(allocator, 7);
     try std.testing.expect(state.cached_slots.getPtr(5) == null);
     try std.testing.expect(state.cached_slots.getPtr(6) == null);
-    try std.testing.expect(state.cached_slots.getPtr(7) == null);
+    try std.testing.expect(state.cached_slots.getPtr(7) != null);
     try std.testing.expect(state.cached_slots.getPtr(8) != null);
 }
 
@@ -1568,4 +1612,77 @@ test "slot frozen stores producer-owned modified accounts" {
     try std.testing.expectEqual(1, cached.modified_accounts.accounts.len);
     try std.testing.expect(cached.modified_accounts.accounts[0].pubkey.equals(&pk));
     try std.testing.expectEqual(42_000, cached.modified_accounts.accounts[0].account.lamports);
+}
+
+test "gossip confirmations create unfrozen cache entries" {
+    const allocator = std.testing.allocator;
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
+    var state = SlotStateCache.init(ctx, .FOR_TESTS);
+    defer state.deinit(allocator);
+
+    // Freeze a few replay slots into the main cache.
+    _ = try testOnSlotFrozen(&state, allocator, 1, 0, 0);
+    _ = try testOnSlotFrozen(&state, allocator, 2, 1, 0);
+
+    // Simulate gossip confirmations for ahead slots.
+    var slot: Slot = 1000;
+    while (slot < 1000 + 60) : (slot += 1) {
+        _ = try state.onSlotConfirmed(allocator, slot);
+    }
+
+    // Cache holds frozen + confirmed entries (62 total).
+    try std.testing.expectEqual(@as(usize, 62), state.cached_slots.count());
+    // Frozen slots still present.
+    try std.testing.expect(state.cached_slots.getPtr(1) != null);
+    try std.testing.expect(state.cached_slots.getPtr(2) != null);
+    // Confirmed-only slot is present but not frozen.
+    const entry = state.cached_slots.getPtr(1000).?;
+    try std.testing.expect(entry.state.confirmed);
+    try std.testing.expect(!entry.state.frozen);
+}
+
+test "rooted before frozen caches then freeze populates" {
+    const allocator = std.testing.allocator;
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    try testAddTrackedSlot(allocator, &slot_tracker, 20, 19, &.{20});
+    commitments.update(.processed, 20);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
+    var state = SlotStateCache.init(ctx, .FOR_TESTS);
+    defer state.deinit(allocator);
+
+    // Root arrives before freeze: creates an empty CachedSlot with confirmed+rooted flags.
+    const root_t = try state.onSlotRooted(allocator, 20);
+    try std.testing.expect(root_t.publishable_slot == null);
+    try std.testing.expect(root_t.notify_commitments.confirmed);
+    try std.testing.expect(root_t.notify_commitments.finalized);
+    try std.testing.expectEqual(@as(?Slot, 20), root_t.evict_through);
+
+    // Slot IS in cached_slots (unfrozen, with flags set).
+    const entry = state.cached_slots.getPtr(20).?;
+    try std.testing.expect(entry.state.confirmed);
+    try std.testing.expect(entry.state.rooted);
+    try std.testing.expect(!entry.state.frozen);
+
+    // Freeze populates the existing entry.
+    const frozen_t = try testOnSlotFrozen(&state, allocator, 20, 19, 5);
+    try std.testing.expect(frozen_t.notify_commitments.processed);
+    try std.testing.expect(frozen_t.notify_commitments.confirmed);
+    try std.testing.expect(frozen_t.notify_commitments.finalized);
+
+    const cached = state.cached_slots.getPtr(20).?;
+    try std.testing.expect(cached.state.confirmed);
+    try std.testing.expect(cached.state.rooted);
+    try std.testing.expect(cached.state.frozen);
 }

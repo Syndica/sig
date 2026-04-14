@@ -25,6 +25,7 @@ const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 const assert = std.debug.assert;
 
+const accumulateSlotEntryStats = replay.execution.accumulateSlotEntryStats;
 const verifyTicks = replay.execution.verifyTicks;
 const verifyPoh = core.entry.verifyPoh;
 const replayBatch = replay.execution.replayBatch;
@@ -159,6 +160,7 @@ pub const ReplaySlotFuture = struct {
             defer wg.finish();
 
             if (self.result_ptr.load(.acquire)) |result_ptr| {
+                accumulateSlotEntryStats(self.txn_scheduler.committer.slot_state, self.entries);
                 result_ptr.* = .{
                     .slot = self.txn_scheduler.svm_gateway.params.slot,
                     .output = .{ .last_entry_hash = self.entries[self.entries.len - 1].hash },

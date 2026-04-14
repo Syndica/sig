@@ -282,7 +282,34 @@ pub fn replaySlotSync(
         }
     }
 
+    accumulateSlotEntryStats(params.committer.slot_state, params.entries);
+
     return null;
+}
+
+pub fn accumulateSlotEntryStats(slot_state: *core.SlotState, entries: []const Entry) void {
+    var transaction_entries_count: u64 = 0;
+    var transactions_per_entry_max: u64 = 0;
+
+    for (entries) |entry| {
+        if (entry.transactions.len == 0) {
+            continue;
+        }
+
+        const transaction_count: u64 = @intCast(entry.transactions.len);
+        transaction_entries_count += 1;
+        transactions_per_entry_max = @max(
+            transactions_per_entry_max,
+            transaction_count,
+        );
+    }
+
+    if (transaction_entries_count == 0) {
+        return;
+    }
+
+    _ = slot_state.transaction_entries_count.fetchAdd(transaction_entries_count, .monotonic);
+    _ = slot_state.transactions_per_entry_max.fetchMax(transactions_per_entry_max, .monotonic);
 }
 
 /// The result of processing a transaction batch (entry).
@@ -791,6 +818,26 @@ test "replaySlot - happy path: full slot" {
     try testReplaySlot(allocator, null, entries, params, .ALL_DISABLED);
 }
 
+test "replaySlot tracks transaction entry stats from ledger entries" {
+    const allocator = std.testing.allocator;
+
+    var tick_hash_count: u64 = 0;
+
+    const poh, const entry_array = try sig.core.poh.testPoh(true, false);
+    defer for (entry_array.slice()) |e| e.deinit(allocator);
+    const entries: []const sig.core.Entry = entry_array.slice();
+
+    const params = VerifyTicksParams{
+        .hashes_per_tick = poh.hashes_per_tick,
+        .slot = 0,
+        .max_tick_height = poh.tick_count,
+        .tick_height = 0,
+        .slot_is_full = true,
+        .tick_hash_count = &tick_hash_count,
+    };
+    try testReplaySlotStats(allocator, entries, params, .ALL_DISABLED, 3, 3);
+}
+
 test "replaySlot - fail: full slot not marked full -> .InvalidLastTick" {
     const allocator = std.testing.allocator;
 
@@ -1001,6 +1048,75 @@ fn testReplaySlot(
 
     try std.testing.expectEqual(expected, async_result);
     try std.testing.expectEqual(expected, sync_result);
+}
+
+fn testReplaySlotStats(
+    allocator: Allocator,
+    entries: []const Entry,
+    verify_ticks_params: VerifyTicksParams,
+    feature_set: sig.core.FeatureSet,
+    expected_entry_count: u64,
+    expected_transactions_per_entry_max: u64,
+) !void {
+    // replay slot sync
+    {
+        var state = try TestState.init(allocator);
+        defer state.deinit(allocator);
+        state.feature_set = feature_set;
+
+        const params = try state.prepareSlotParams(allocator, entries, verify_ticks_params);
+        try std.testing.expectEqual(null, try replaySlotSync(allocator, .FOR_TESTS, params));
+        try std.testing.expectEqual(
+            expected_entry_count,
+            state.slot_state.transaction_entries_count.load(.monotonic),
+        );
+        try std.testing.expectEqual(
+            expected_transactions_per_entry_max,
+            state.slot_state.transactions_per_entry_max.load(.monotonic),
+        );
+    }
+
+    verify_ticks_params.tick_hash_count.* = 0;
+
+    // replay slot async
+    {
+        var state = try TestState.init(allocator);
+        defer state.deinit(allocator);
+        state.feature_set = feature_set;
+
+        const params = try state.prepareSlotParams(allocator, entries, verify_ticks_params);
+
+        var thread_pool = ThreadPool.init(.{});
+        defer {
+            thread_pool.shutdown();
+            thread_pool.deinit();
+        }
+
+        var result: ReplaySlotFuture.Result = undefined;
+        {
+            var wg = std.Thread.WaitGroup{};
+            defer wg.wait();
+
+            ReplaySlotFuture.startAsync(
+                allocator,
+                .FOR_TESTS,
+                &thread_pool,
+                &wg,
+                params,
+                &result,
+            );
+        }
+
+        _ = try result;
+        try std.testing.expectEqual(
+            expected_entry_count,
+            state.slot_state.transaction_entries_count.load(.monotonic),
+        );
+        try std.testing.expectEqual(
+            expected_transactions_per_entry_max,
+            state.slot_state.transactions_per_entry_max.load(.monotonic),
+        );
+    }
 }
 
 pub const TestState = struct {

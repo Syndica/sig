@@ -19,6 +19,7 @@ const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Slot = sig.core.Slot;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 
+const EventSink = sig.rpc.jrpc_websockets.types.EventSink;
 const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
 const DuplicateShredHandler = shred_network.duplicate_shred_handler.DuplicateShredHandler;
 const RepairPeerProvider = shred_network.repair_service.RepairPeerProvider;
@@ -65,7 +66,8 @@ pub const ShredNetworkDependencies = struct {
 
     /// RPC Observability
     rpc_hooks: ?*sig.rpc.Hooks = null,
-    event_sink: ?*sig.rpc.jrpc_websockets.types.EventSink = null,
+    /// Optional event sink for slotsUpdatesSubscribe.
+    event_sink: ?*EventSink = null,
     duplicate: ?struct {
         /// Data sent by gossip as it's observed.
         shred_receiver: *Channel(sig.gossip.data.DuplicateShred),
@@ -129,21 +131,29 @@ pub fn start(
         .keypair = deps.my_keypair,
         .logger = .from(deps.logger),
     };
+    var inserter = deps.ledger.shredInserter();
+    inserter.event_sink = deps.event_sink;
+
     const shred_receiver = try arena.create(ShredReceiver);
-    shred_receiver.* = try .init(deps.allocator, .from(deps.logger), deps.registry, .{
-        .keypair = deps.my_keypair,
-        .exit = deps.exit,
-        .repair_socket = repair_socket,
-        .turbine_socket = turbine_socket,
-        .shred_version = deps.my_shred_version,
-        .maybe_retransmit_shred_sender = if (conf.retransmit) retransmit_channel else null,
-        .epoch_tracker = deps.epoch_tracker,
-        .tracker = shred_tracker,
-        .inserter = deps.ledger.shredInserter(),
-        .event_sink = deps.event_sink,
-        .duplicate_handler = duplicate_handler,
-        .max_shred_insert_slot = deps.max_shred_insert_slot,
-    });
+    shred_receiver.* = try .init(
+        deps.allocator,
+        .from(deps.logger),
+        deps.registry,
+        .{
+            .keypair = deps.my_keypair,
+            .exit = deps.exit,
+            .repair_socket = repair_socket,
+            .turbine_socket = turbine_socket,
+            .shred_version = deps.my_shred_version,
+            .maybe_retransmit_shred_sender = if (conf.retransmit) retransmit_channel else null,
+            .epoch_tracker = deps.epoch_tracker,
+            .tracker = shred_tracker,
+            .inserter = inserter,
+            .event_sink = deps.event_sink,
+            .duplicate_handler = duplicate_handler,
+            .max_shred_insert_slot = deps.max_shred_insert_slot,
+        },
+    );
     try defers.deferCall(ShredReceiver.deinit, .{ shred_receiver, deps.allocator });
     try service_manager.spawn(
         "Shred Receiver",

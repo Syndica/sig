@@ -233,7 +233,7 @@ test "signatureSubscribe received notification ignores commitment and does not a
     try insertSignatureStatus(server, 55, Hash.ZEROES, signature, null);
     server.commitments.update(.finalized, 56);
     server.injectEvent(.{ .slot_frozen = .{ .slot = 56, .parent = 55, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 56 });
+    server.injectEvent(.{ .slot_finalized_rooted = 56 });
 
     waitForMessages(server, &client_env, &handler, 3, 5000);
     const parsed_final = try parseSignatureNotification(allocator, handler.received.items[2]);
@@ -423,7 +423,7 @@ test "signatureSubscribe final notifications honor processed confirmed and final
     try std.testing.expectEqual(5, handler.received.items.len);
     server.commitments.update(.finalized, 82);
     server.injectEvent(.{ .slot_frozen = .{ .slot = 82, .parent = 81, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 82 });
+    server.injectEvent(.{ .slot_finalized_rooted = 82 });
 
     waitForMessages(server, &client_env, &handler, 6, 5000);
     const finalized_notif = try parseSignatureNotification(allocator, handler.received.items[5]);
