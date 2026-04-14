@@ -1818,6 +1818,7 @@ fn validator(
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.StaticHookContext{
             .genesis_hash = loaded_snapshot.genesis_config.hash,
             .identity = my_contact_info.pubkey,
+            .epoch_schedule = &epoch_tracker.epoch_schedule,
         });
 
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{

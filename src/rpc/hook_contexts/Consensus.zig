@@ -585,25 +585,6 @@ pub fn getStakeMinimumDelegation(
     };
 }
 
-/// Returns the epoch schedule information from this cluster's genesis config.
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L911-L916
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L3023-L3026
-pub fn getEpochSchedule(
-    self: ConsensusHookContext,
-    _: std.mem.Allocator,
-    _: GetEpochSchedule,
-) !GetEpochSchedule.Response {
-    const epoch_schedule = &self.epoch_tracker.epoch_schedule;
-
-    return .{
-        .slotsPerEpoch = epoch_schedule.slots_per_epoch,
-        .leaderScheduleSlotOffset = epoch_schedule.leader_schedule_slot_offset,
-        .warmup = epoch_schedule.warmup,
-        .firstNormalEpoch = epoch_schedule.first_normal_epoch,
-        .firstNormalSlot = epoch_schedule.first_normal_slot,
-    };
-}
-
 const testing = std.testing;
 
 fn testDummySlotConstants(slot: Slot, block_height: u64) sig.core.SlotConstants {
