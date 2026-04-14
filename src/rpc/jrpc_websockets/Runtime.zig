@@ -164,12 +164,7 @@ const SerializeTask = struct {
             return;
         };
 
-        const already_pending = runtime.notify_pending.swap(true, .release);
-        if (!already_pending) {
-            runtime.loop_async.notify() catch {
-                _ = runtime.notify_pending.swap(false, .release);
-            };
-        }
+        runtime.requestWakeup();
     }
 
     fn deinit(self: *SerializeTask) void {
@@ -449,6 +444,11 @@ fn handleInboundEvent(
             );
         },
         .bank_created => |bank_event| {
+            self.notifySlotSubscribers(.{
+                .slot = bank_event.slot,
+                .parent = bank_event.parent,
+                .root = bank_event.root,
+            }, task_batch);
             self.notifySlotsUpdatesSubscribers(
                 .{ .created_bank = .{
                     .slot = bank_event.slot,
@@ -572,18 +572,7 @@ fn handleSlotTransition(
     // running on the IO loop thread, so this won't scale.
     for (self.sub_map.entries.items) |*entry| {
         switch (entry.key.method) {
-            .slot => {
-                // TODO: slotSubscribe should be emitted at "bank created" rather than frozen.
-                const slot_event = switch (event_kind) {
-                    .slot_frozen => |slot_event| slot_event,
-                    else => continue,
-                };
-                if (transition.publishable_slot == null) {
-                    // TODO: for now just avoid publishing duplicates if replay over same slot
-                    continue;
-                }
-                _ = self.enqueueJobForEntry(entry.*, .{ .slot = slot_event }, false, task_batch);
-            },
+            .slot => continue,
             .root => {
                 const root_event = switch (event_kind) {
                     .slot_finalized_rooted => |root_event| root_event,
@@ -843,6 +832,19 @@ fn slotUpdateForEvent(
         } },
         .slot_finalized_rooted, .tip_changed => null,
     };
+}
+
+fn notifySlotSubscribers(
+    self: *Runtime,
+    data: types.SlotEventData,
+    task_batch: *ThreadPool.Batch,
+) void {
+    // TODO(perf): since slotSubscribe has no parameters it could just be tracked directly rather
+    // than needing to loop over entries
+    for (self.sub_map.entries.items) |*entry| {
+        if (entry.key.method != .slot) continue;
+        _ = self.enqueueJobForEntry(entry.*, .{ .slot = data }, false, task_batch);
+    }
 }
 
 /// Notify all slotsUpdatesSubscribe subscribers for a non-transition

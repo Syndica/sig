@@ -506,6 +506,7 @@ test "slotsUpdatesSubscribe: created bank event" {
     server.injectEvent(.{ .bank_created = .{
         .slot = 101,
         .parent = 100,
+        .root = 99,
     } });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
@@ -570,7 +571,7 @@ test "slotsUpdatesSubscribe preserves enqueue order across mixed slot update eve
     defer allocator.free(delayed_err);
     @memset(delayed_err, 'x');
 
-    server.injectEvent(.{ .bank_created = .{ .slot = 700, .parent = 699 } });
+    server.injectEvent(.{ .bank_created = .{ .slot = 700, .parent = 699, .root = 698 } });
     server.injectEvent(.{ .slot_dead = .{
         .slot = 700,
         .err = delayed_err,

@@ -643,10 +643,14 @@ pub fn trackNewSlots(
             try slot_tree.record(allocator, slot, constants.parent_slot);
 
             if (event_sink) |sink| {
-                try sink.send(.{ .bank_created = .{
-                    .slot = slot,
-                    .parent = constants.parent_slot,
-                } });
+                try sink.send(.{
+                    .bank_created = .{
+                        .slot = slot,
+                        .parent = constants.parent_slot,
+                        // NOTE: using local consensus root to match Agave behavior.
+                        .root = slot_tracker.consensus_root.load(.monotonic),
+                    },
+                });
             }
             // TODO: update_fork_propagated_threshold_from_votes
         }
@@ -1592,6 +1596,7 @@ test trackNewSlots {
     );
 
     // Validate bank_created event for newly tracked slot 6
+    const expected_root = slot_tracker.consensus_root.load(.monotonic);
     const event = event_sink.channel.tryReceive() orelse
         return error.TestUnexpectedResult;
     defer event.deinit(event_sink.allocator());
@@ -1599,6 +1604,7 @@ test trackNewSlots {
         .bank_created => |bc| {
             try std.testing.expectEqual(@as(Slot, 6), bc.slot);
             try std.testing.expectEqual(@as(Slot, 4), bc.parent);
+            try std.testing.expectEqual(expected_root, bc.root);
         },
         else => return error.TestUnexpectedResult,
     }

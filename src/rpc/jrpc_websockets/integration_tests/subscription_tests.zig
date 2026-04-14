@@ -49,7 +49,7 @@ test "client subscribes to slot, receives notification, unsubscribes" {
     try std.testing.expect(handler.received.items.len >= 1);
     try std.testing.expect(parseResultU64(handler.received.items[0]) != null);
 
-    server.injectEvent(.{ .slot_frozen = .{ .slot = 100, .parent = 99, .root = 68 } });
+    server.injectEvent(.{ .bank_created = .{ .slot = 100, .parent = 99, .root = 68 } });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
@@ -214,7 +214,7 @@ test "no notifications after unsubscribe" {
         parseResultBool(unsub_resp) orelse return error.TestUnexpectedResult,
     );
 
-    server.injectEvent(.{ .slot_frozen = .{ .slot = 300, .parent = 299, .root = 268 } });
+    server.injectEvent(.{ .bank_created = .{ .slot = 300, .parent = 299, .root = 268 } });
 
     runBothLoops(server, &client_env, &handler, 200);
     try std.testing.expectEqual(2, handler.received.items.len);
