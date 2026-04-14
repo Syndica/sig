@@ -50,14 +50,14 @@ pub const Serializer = struct {
     region_start: usize,
     aligned: bool,
     account_data_direct_mapping: bool,
-    stricter_abi_and_runtime_constraints: bool,
+    virtual_address_space_adjustments: bool,
 
     pub fn init(
         allocator: std.mem.Allocator,
         size: usize,
         region_start: usize,
         aligned: bool,
-        stricter_abi_and_runtime_constraints: bool,
+        virtual_address_space_adjustments: bool,
         account_data_direct_mapping: bool,
     ) error{OutOfMemory}!Serializer {
         return .{
@@ -68,7 +68,7 @@ pub const Serializer = struct {
             .region_start = 0,
             .aligned = aligned,
             .account_data_direct_mapping = account_data_direct_mapping,
-            .stricter_abi_and_runtime_constraints = stricter_abi_and_runtime_constraints,
+            .virtual_address_space_adjustments = virtual_address_space_adjustments,
         };
     }
 
@@ -94,7 +94,7 @@ pub const Serializer = struct {
         self: *Serializer,
         account: *const BorrowedAccount,
     ) (error{OutOfMemory} || InstructionError)!u64 {
-        if (!self.stricter_abi_and_runtime_constraints) {
+        if (!self.virtual_address_space_adjustments) {
             const addr = self.vaddr +| self.buffer.items.len;
             _ = self.writeBytes(account.constAccountData()); // intentionally ignored
             if (self.aligned) {
@@ -222,7 +222,7 @@ pub fn serializeParameters(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     direct_mapping: bool,
-    stricter_abi_and_runtime_constraints: bool,
+    virtual_address_space_adjustments: bool,
     mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
     if (ic.ixn_info.account_metas.items.len > InstructionInfo.MAX_ACCOUNT_METAS - 1) {
@@ -265,7 +265,7 @@ pub fn serializeParameters(
             ic.ixn_info.instruction_data,
             ic.ixn_info.program_meta.pubkey,
             direct_mapping,
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             mask_out_rent_epoch_in_vm_serialization,
         )
     else
@@ -275,7 +275,7 @@ pub fn serializeParameters(
             ic.ixn_info.instruction_data,
             ic.ixn_info.program_meta.pubkey,
             direct_mapping,
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             mask_out_rent_epoch_in_vm_serialization,
         );
 }
@@ -287,7 +287,7 @@ fn serializeParametersUnaligned(
     instruction_data: []const u8,
     program_id: Pubkey,
     account_data_direct_mapping: bool,
-    stricter_abi_and_runtime_constraints: bool,
+    virtual_address_space_adjustments: bool,
     mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
     var size: usize = @sizeOf(u64);
@@ -304,7 +304,7 @@ fn serializeParametersUnaligned(
                     + @sizeOf(Pubkey) // owner
                     + @sizeOf(u8) // executable
                     + @sizeOf(u64); // rent_epoch
-                if (!(stricter_abi_and_runtime_constraints and account_data_direct_mapping)) {
+                if (!(virtual_address_space_adjustments and account_data_direct_mapping)) {
                     size += borrowed_account.constAccountData().len;
                 }
             },
@@ -320,7 +320,7 @@ fn serializeParametersUnaligned(
         size,
         INPUT_START,
         false,
-        stricter_abi_and_runtime_constraints,
+        virtual_address_space_adjustments,
         account_data_direct_mapping,
     );
 
@@ -402,7 +402,7 @@ fn serializeParametersAligned(
     instruction_data: []const u8,
     program_id: Pubkey,
     account_data_direct_mapping: bool,
-    stricter_abi_and_runtime_constraints: bool,
+    virtual_address_space_adjustments: bool,
     mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
     var size: u64 = @sizeOf(u64);
@@ -421,7 +421,7 @@ fn serializeParametersAligned(
                     + @sizeOf(u64) // data len
                     + @sizeOf(u64); // rent_epoch
 
-                if (!(stricter_abi_and_runtime_constraints and account_data_direct_mapping)) {
+                if (!(virtual_address_space_adjustments and account_data_direct_mapping)) {
                     const data_len = borrowed_account.constAccountData().len;
                     const align_offset = std.mem.alignForward(
                         usize,
@@ -447,7 +447,7 @@ fn serializeParametersAligned(
         size,
         INPUT_START,
         true,
-        stricter_abi_and_runtime_constraints,
+        virtual_address_space_adjustments,
         account_data_direct_mapping,
     );
     errdefer serializer.deinit();
@@ -528,7 +528,7 @@ fn serializeParametersAligned(
 pub fn deserializeParameters(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-    stricter_abi_and_runtime_constraints: bool,
+    virtual_address_space_adjustments: bool,
     direct_mapping: bool,
     memory: []u8,
     account_metas: []const SerializedAccountMeta,
@@ -551,7 +551,7 @@ pub fn deserializeParameters(
         try deserializeParametersUnaligned(
             allocator,
             ic,
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             direct_mapping,
             memory,
             account_lengths.items,
@@ -560,7 +560,7 @@ pub fn deserializeParameters(
         try deserializeParametersAligned(
             allocator,
             ic,
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             direct_mapping,
             memory,
             account_lengths.items,
@@ -571,7 +571,7 @@ pub fn deserializeParameters(
 fn deserializeParametersUnaligned(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-    stricter_abi_and_runtime_constraints: bool,
+    virtual_address_space_adjustments: bool,
     direct_mapping: bool,
     memory: []u8,
     account_lengths: []const usize,
@@ -609,7 +609,7 @@ fn deserializeParametersUnaligned(
 
             // add lamports & data length
             start += @sizeOf(u64);
-            if (!stricter_abi_and_runtime_constraints) {
+            if (!virtual_address_space_adjustments) {
                 if (start + pre_len > memory.len) return InstructionError.InvalidArgument;
                 const data = memory[start .. start + pre_len];
                 const can_data_be_resized =
@@ -641,7 +641,7 @@ fn deserializeParametersUnaligned(
                     pre_len,
                 );
             }
-            if (!(stricter_abi_and_runtime_constraints and direct_mapping))
+            if (!(virtual_address_space_adjustments and direct_mapping))
                 start += pre_len; // data
             start += @sizeOf(Pubkey) // owner
                 + @sizeOf(u8) // executable
@@ -654,7 +654,7 @@ fn deserializeParametersUnaligned(
 fn deserializeParametersAligned(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-    stricter_abi_and_runtime_constraints: bool,
+    virtual_address_space_adjustments: bool,
     direct_mapping: bool,
     memory: []u8,
     account_lengths: []const usize,
@@ -714,7 +714,7 @@ fn deserializeParametersAligned(
                 return InstructionError.InvalidRealloc;
             }
 
-            if (!stricter_abi_and_runtime_constraints) {
+            if (!virtual_address_space_adjustments) {
                 if (start + post_len > memory.len) return InstructionError.InvalidArgument;
                 const data = memory[start .. start + post_len];
                 const can_data_be_resized =
@@ -752,7 +752,7 @@ fn deserializeParametersAligned(
                 pre_len,
                 BPF_ALIGN_OF_U128,
             ) - pre_len;
-            start += if (!(stricter_abi_and_runtime_constraints and direct_mapping))
+            start += if (!(virtual_address_space_adjustments and direct_mapping))
                 pre_len +| MAX_PERMITTED_DATA_INCREASE +| alignment_offset // data + realloc pad
             else
                 BPF_ALIGN_OF_U128;
@@ -787,7 +787,7 @@ test serializeParameters {
     };
 
     for (cases) |case| {
-        const loader_id, const stricter_abi_and_runtime_constraints = case;
+        const loader_id, const virtual_address_space_adjustments = case;
         const program_id = Pubkey.initRandom(prng.random());
 
         const cache, var tc = try createTransactionContext(
@@ -972,14 +972,14 @@ test serializeParameters {
             allocator,
             ic,
             false, // account_data_direct_mapping,
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             false,
         );
         defer serialized.deinit(allocator);
 
         const serialized_regions = try concatRegions(allocator, serialized.regions.items);
         defer allocator.free(serialized_regions);
-        if (!stricter_abi_and_runtime_constraints) {
+        if (!virtual_address_space_adjustments) {
             try std.testing.expectEqualSlices(u8, serialized.memory.items, serialized_regions);
         }
 
@@ -990,7 +990,7 @@ test serializeParameters {
         try deserializeParameters(
             allocator,
             ic,
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             false, // account_data_direct_mapping,
             serialized.memory.items,
             serialized.account_metas.constSlice(),

@@ -39,7 +39,7 @@ fn getSyscall(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMa
             // (bytecode/rodata regions below 0x200000000 are always readonly
             // so mutable translation to addresses below that will result in an AccessViolation anyways).
             if (value_addr >= memory.INPUT_START and
-                tc.feature_set.active(.stricter_abi_and_runtime_constraints, tc.slot))
+                tc.feature_set.active(.virtual_address_space_adjustments, tc.slot))
             {
                 return SyscallError.InvalidPointer;
             }
@@ -91,7 +91,7 @@ pub fn getSysvar(
     // (bytecode/rodata regions below 0x200000000 are always readonly
     // so mutable translation to addresses below that will result in an AccessViolation anyways).
     if (value_addr >= memory.INPUT_START and
-        tc.feature_set.active(.stricter_abi_and_runtime_constraints, tc.slot))
+        tc.feature_set.active(.virtual_address_space_adjustments, tc.slot))
     {
         return SyscallError.InvalidPointer;
     }
@@ -493,7 +493,7 @@ test getSysvar {
         );
     }
 
-    // SIMD-0219: value_addr >= INPUT_START with stricter_abi_and_runtime_constraints returns InvalidPointer
+    // SIMD-0219: value_addr >= INPUT_START with virtual_address_space_adjustments returns InvalidPointer
     {
         var cache_strict, var tc_strict = try testing.createTransactionContext(
             allocator,
@@ -501,7 +501,7 @@ test getSysvar {
             .{
                 .accounts = &.{},
                 .compute_meter = std.math.maxInt(u64),
-                .feature_set = &.{.{ .feature = .stricter_abi_and_runtime_constraints, .slot = 0 }},
+                .feature_set = &.{.{ .feature = .virtual_address_space_adjustments, .slot = 0 }},
                 .slot = 0,
                 .sysvar_cache = .{
                     .clock = src.clock,
