@@ -19,7 +19,6 @@ const GetBlockHeight = sig.rpc.methods.GetBlockHeight;
 const GetTransactionCount = sig.rpc.methods.GetTransactionCount;
 const GetHighestSnapshotSlot = sig.rpc.methods.GetHighestSnapshotSlot;
 const GetEpochInfo = sig.rpc.methods.GetEpochInfo;
-const GetEpochSchedule = sig.rpc.methods.GetEpochSchedule;
 const GetLatestBlockhash = sig.rpc.methods.GetLatestBlockhash;
 const GetMinimumBalanceForRentExemption = sig.rpc.methods.GetMinimumBalanceForRentExemption;
 const GetStakeMinimumDelegation = sig.rpc.methods.GetStakeMinimumDelegation;
