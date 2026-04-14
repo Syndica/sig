@@ -231,10 +231,10 @@ const CallerAccount = struct {
         memory_map: *const MemoryMap,
         vm_addr: u64,
         len: u64,
-        stricter_abi_and_runtime_constraints: bool,
+        virtual_address_space_adjustments: bool,
         direct_mapping: bool,
     ) ![]u8 {
-        if (stricter_abi_and_runtime_constraints and direct_mapping) {
+        if (virtual_address_space_adjustments and direct_mapping) {
             // when direct mapping is enabled, the permissions on the
             // realloc region can change during CPI so we must delay
             // translating until when we know whether we're going to mutate
@@ -248,7 +248,7 @@ const CallerAccount = struct {
             // memory access violation since we can't write to the account
             // _yet_, but we will be able to once the caller returns.
             return &.{};
-        } else if (stricter_abi_and_runtime_constraints) {
+        } else if (virtual_address_space_adjustments) {
             // Workaround the memory permissions (as these are from the PoV of being inside the VM)
             const slice = try memory_map.translateSlice(u8, .mutable, MM_INPUT_START, 1, false);
             return (slice.ptr + (vm_addr -| MM_INPUT_START))[0..len];
@@ -269,12 +269,12 @@ const CallerAccount = struct {
             .account_data_direct_mapping,
             ic.tc.slot,
         );
-        const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
-            .stricter_abi_and_runtime_constraints,
+        const virtual_address_space_adjustments = ic.tc.feature_set.active(
+            .virtual_address_space_adjustments,
             ic.tc.slot,
         );
 
-        if (stricter_abi_and_runtime_constraints) {
+        if (virtual_address_space_adjustments) {
             try checkAccountInfoPtr(
                 ic,
                 account_info.key_addr,
@@ -303,7 +303,7 @@ const CallerAccount = struct {
                 lamports_addr,
                 ic.getCheckAligned(),
             );
-            if (stricter_abi_and_runtime_constraints) {
+            if (virtual_address_space_adjustments) {
                 if (lamports_addr >= MM_INPUT_START) {
                     return SyscallError.InvalidPointer;
                 }
@@ -332,7 +332,7 @@ const CallerAccount = struct {
         const serialized, const vm_data_addr, const ref_to_len_addr = blk: {
             // See above on lamports regarding Rc(RefCell) pointer accessing.
             const data_ptr: u64 = @intFromPtr(account_info.data.deref().asPtr());
-            if (stricter_abi_and_runtime_constraints and data_ptr >= MM_INPUT_START) {
+            if (virtual_address_space_adjustments and data_ptr >= MM_INPUT_START) {
                 return SyscallError.InvalidPointer;
             }
 
@@ -343,7 +343,7 @@ const CallerAccount = struct {
                 data_ptr,
                 ic.getCheckAligned(),
             )).*;
-            if (stricter_abi_and_runtime_constraints) {
+            if (virtual_address_space_adjustments) {
                 try checkAccountInfoPtr(
                     ic,
                     data.ptr,
@@ -355,7 +355,7 @@ const CallerAccount = struct {
             try ic.tc.consumeCompute(data.len / ic.tc.compute_budget.cpi_bytes_per_unit);
 
             const vm_len_addr = data_ptr +| @sizeOf(u64);
-            if (stricter_abi_and_runtime_constraints) {
+            if (virtual_address_space_adjustments) {
                 // In the same vein as the other check_account_info_pointer() checks, we don't lock
                 // this pointer to a specific address but we don't want it to be inside accounts, or
                 // callees might be able to write to the pointed memory.
@@ -370,7 +370,7 @@ const CallerAccount = struct {
                 memory_map,
                 vm_data_addr,
                 data.len,
-                stricter_abi_and_runtime_constraints,
+                virtual_address_space_adjustments,
                 account_data_direct_mapping,
             );
 
@@ -399,12 +399,12 @@ const CallerAccount = struct {
             .account_data_direct_mapping,
             ic.tc.slot,
         );
-        const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
-            .stricter_abi_and_runtime_constraints,
+        const virtual_address_space_adjustments = ic.tc.feature_set.active(
+            .virtual_address_space_adjustments,
             ic.tc.slot,
         );
 
-        if (stricter_abi_and_runtime_constraints) {
+        if (virtual_address_space_adjustments) {
             try checkAccountInfoPtr(
                 ic,
                 account_info.key_addr,
@@ -452,7 +452,7 @@ const CallerAccount = struct {
             memory_map,
             account_info.data_addr,
             account_info.data_len,
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             account_data_direct_mapping,
         );
 
@@ -494,7 +494,7 @@ fn updateCalleeAccount(
     ic: *const InstructionContext,
     callee_account: *BorrowedAccount,
     caller_account: *const CallerAccount,
-    stricter_abi_and_runtime_constraints: bool,
+    virtual_address_space_adjustments: bool,
     account_data_direct_mapping: bool,
 ) !bool {
     var must_update_caller = false;
@@ -503,7 +503,7 @@ fn updateCalleeAccount(
         try callee_account.setLamports(caller_account.lamports.*);
     }
 
-    if (stricter_abi_and_runtime_constraints) {
+    if (virtual_address_space_adjustments) {
         const prev_len = callee_account.constAccountData().len;
         const post_len = (try caller_account.ref_to_len_in_vm.get(.constant)).*;
         if (prev_len != post_len) {
@@ -582,8 +582,8 @@ fn translateAccounts(
         .account_data_direct_mapping,
         tc.slot,
     );
-    const stricter_abi_and_runtime_constraints = tc.feature_set.active(
-        .stricter_abi_and_runtime_constraints,
+    const virtual_address_space_adjustments = tc.feature_set.active(
+        .virtual_address_space_adjustments,
         tc.slot,
     );
     const increase_info_limit = tc.feature_set.active(.increase_cpi_account_info_limit, tc.slot);
@@ -591,7 +591,7 @@ fn translateAccounts(
     // In the same vein as the other checkAccountInfoPtr() checks, we don't lock
     // this pointer to a specific address but we don't want it to be inside accounts, or
     // callees might be able to write to the pointed memory.
-    if (stricter_abi_and_runtime_constraints and
+    if (virtual_address_space_adjustments and
         (account_infos_addr +| (account_infos_len *| @sizeOf(AccountType))) >= MM_INPUT_START)
     {
         return SyscallError.InvalidPointer;
@@ -712,7 +712,7 @@ fn translateAccounts(
             ic,
             &callee_account,
             &caller_account,
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             account_data_direct_mapping,
         );
 
@@ -951,7 +951,7 @@ fn updateCallerAccount(
     memory_map: *const MemoryMap,
     caller_account: *CallerAccount,
     callee_account: *BorrowedAccount,
-    stricter_abi_and_runtime_constraints: bool,
+    virtual_address_space_adjustments: bool,
     account_data_direct_mapping: bool,
 ) !void {
     caller_account.lamports.* = callee_account.account.lamports;
@@ -961,12 +961,12 @@ fn updateCallerAccount(
     const post_len = callee_account.constAccountData().len;
     const is_caller_loader_deprecated = !ic.getCheckAligned();
 
-    const reserve = stricter_abi_and_runtime_constraints and is_caller_loader_deprecated;
+    const reserve = virtual_address_space_adjustments and is_caller_loader_deprecated;
     const address_space = caller_account.original_data_len +|
         (MAX_PERMITTED_DATA_INCREASE * @intFromBool(!reserve));
 
     if (post_len > address_space and
-        (stricter_abi_and_runtime_constraints or prev_len != post_len))
+        (virtual_address_space_adjustments or prev_len != post_len))
     {
         try ic.tc.log(
             "Account data size realloc limited to {} in inner instructions",
@@ -976,9 +976,9 @@ fn updateCallerAccount(
     }
 
     if (prev_len != post_len) {
-        // when stricter_abi_and_runtime_constraints is enabled we don't cache the serialized data
+        // when virtual_address_space_adjustments is enabled we don't cache the serialized data
         // in caller_account.serialized_data. See CallerAccount.fromAccountInfoRust.
-        if (!(stricter_abi_and_runtime_constraints and account_data_direct_mapping)) {
+        if (!(virtual_address_space_adjustments and account_data_direct_mapping)) {
             // If the account has been shrunk, we're going to zero the unused memory
             // *that was previously used*.
             if (post_len < prev_len) {
@@ -991,7 +991,7 @@ fn updateCallerAccount(
                 memory_map,
                 caller_account.vm_data_addr,
                 post_len,
-                stricter_abi_and_runtime_constraints,
+                virtual_address_space_adjustments,
                 account_data_direct_mapping,
             );
         }
@@ -1008,7 +1008,7 @@ fn updateCallerAccount(
         serialized_len.* = post_len;
     }
 
-    if (!(stricter_abi_and_runtime_constraints and account_data_direct_mapping)) {
+    if (!(virtual_address_space_adjustments and account_data_direct_mapping)) {
         // Propagate changes in the callee up to the caller.
         const to = caller_account.serialized_data;
         const from = callee_account.constAccountData();
@@ -1035,8 +1035,8 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
             const allocator = tc.allocator;
             const ic = try tc.getCurrentInstructionContext();
 
-            const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
-                .stricter_abi_and_runtime_constraints,
+            const virtual_address_space_adjustments = ic.tc.feature_set.active(
+                .virtual_address_space_adjustments,
                 ic.tc.slot,
             );
             const account_data_direct_mapping = ic.tc.feature_set.active(
@@ -1118,13 +1118,13 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                         memory_map,
                         &translated.caller_account,
                         &callee_account,
-                        stricter_abi_and_runtime_constraints,
+                        virtual_address_space_adjustments,
                         account_data_direct_mapping,
                     );
                 }
             }
 
-            if (!stricter_abi_and_runtime_constraints) {
+            if (!virtual_address_space_adjustments) {
                 // nothing left for us to do
                 return;
             }
@@ -1897,7 +1897,7 @@ test "updateCalleeAccount: lamports owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
+    for ([_]bool{ false, true }) |virtual_address_space_adjustments| {
         var ctx = try TestContext.init(allocator, prng.random(), &.{});
         defer ctx.deinit(allocator);
         const account = ctx.getAccount();
@@ -1923,7 +1923,7 @@ test "updateCalleeAccount: lamports owner" {
             &ctx.ic,
             &callee_account,
             &caller_account,
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             false, // account_data_direct_mapping
         );
 
@@ -1936,7 +1936,7 @@ test "updateCalleeAccount: data writable" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
+    for ([_]bool{ false, true }) |virtual_address_space_adjustments| {
         var ctx = try TestContext.init(allocator, prng.random(), "foobar");
         defer ctx.deinit(allocator);
         const account = ctx.getAccount();
@@ -1954,14 +1954,14 @@ test "updateCalleeAccount: data writable" {
         var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
         defer callee_account.release();
 
-        // stricter_abi_and_runtime_constraints does not copy data in updateCalleeAccount()
+        // virtual_address_space_adjustments does not copy data in updateCalleeAccount()
         caller_account.serialized_data[0] = 'b';
         _ = try updateCalleeAccount(
             allocator,
             &ctx.ic,
             &callee_account,
             &caller_account,
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             false, // account_data_direct_mapping
         );
         try std.testing.expectEqualSlices(u8, callee_account.constAccountData(), "boobar");
@@ -1971,13 +1971,13 @@ test "updateCalleeAccount: data writable" {
         (try caller_account.ref_to_len_in_vm.get(.mutable)).* = resize_data.len;
         caller_account.serialized_data = &resize_data;
         try std.testing.expectEqual(
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             try updateCalleeAccount(
                 allocator,
                 &ctx.ic,
                 &callee_account,
                 &caller_account,
-                stricter_abi_and_runtime_constraints,
+                virtual_address_space_adjustments,
                 true, // account_data_direct_mapping
             ),
         );
@@ -1987,13 +1987,13 @@ test "updateCalleeAccount: data writable" {
         (try caller_account.ref_to_len_in_vm.get(.mutable)).* = truncate_data.len;
         caller_account.serialized_data = &truncate_data;
         try std.testing.expectEqual(
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             try updateCalleeAccount(
                 allocator,
                 &ctx.ic,
                 &callee_account,
                 &caller_account,
-                stricter_abi_and_runtime_constraints,
+                virtual_address_space_adjustments,
                 true, // account_data_direct_mapping
             ),
         );
@@ -2008,7 +2008,7 @@ test "updateCalleeAccount: data writable" {
             &ctx.ic,
             &callee_account,
             &caller_account,
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             true, // account_data_direct_mapping
         );
         try std.testing.expectEqualSlices(u8, callee_account.constAccountData(), "");
@@ -2020,10 +2020,10 @@ test "updateCalleeAccount: data writable" {
             &ctx.ic,
             &callee_account,
             &caller_account,
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             true, // account_data_direct_mapping
         );
-        if (stricter_abi_and_runtime_constraints) {
+        if (virtual_address_space_adjustments) {
             try std.testing.expectError(InstructionError.InvalidRealloc, result);
         } else {
             _ = try result;
@@ -2035,7 +2035,7 @@ test "updateCalleeAccount: data readonly" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
+    for ([_]bool{ false, true }) |virtual_address_space_adjustments| {
         // Custom TestContext to set readonly account.
         var ctx = try TestContext.init(allocator, prng.random(), "foobar");
         defer ctx.deinit(allocator);
@@ -2059,7 +2059,7 @@ test "updateCalleeAccount: data readonly" {
         var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
         defer callee_account.release();
 
-        // stricter_abi_and_runtime_constraints does not copy data in updateCalleeAccount()
+        // virtual_address_space_adjustments does not copy data in updateCalleeAccount()
         caller_account.serialized_data[0] = 'b';
         try std.testing.expectError(
             InstructionError.ExternalAccountDataModified,
@@ -2068,7 +2068,7 @@ test "updateCalleeAccount: data readonly" {
                 &ctx.ic,
                 &callee_account,
                 &caller_account,
-                false, // stricter_abi_and_runtime_constraints
+                false, // virtual_address_space_adjustments
                 false, // account_data_direct_mapping
             ),
         );
@@ -2084,7 +2084,7 @@ test "updateCalleeAccount: data readonly" {
                 &ctx.ic,
                 &callee_account,
                 &caller_account,
-                stricter_abi_and_runtime_constraints,
+                virtual_address_space_adjustments,
                 true, // account_data_direct_mapping
             ),
         );
@@ -2100,7 +2100,7 @@ test "updateCalleeAccount: data readonly" {
                 &ctx.ic,
                 &callee_account,
                 &caller_account,
-                stricter_abi_and_runtime_constraints,
+                virtual_address_space_adjustments,
                 true, // account_data_direct_mapping
             ),
         );
@@ -2113,7 +2113,7 @@ test "updateCallerAccount: lamports owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
+    for ([_]bool{ false, true }) |virtual_address_space_adjustments| {
         var ctx = try TestContext.init(allocator, prng.random(), &.{});
         defer ctx.deinit(allocator);
         const account = ctx.getAccount();
@@ -2139,8 +2139,8 @@ test "updateCallerAccount: lamports owner" {
             &ca.memory_map,
             &caller_account,
             &callee_account,
-            stricter_abi_and_runtime_constraints,
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
+            virtual_address_space_adjustments,
         );
 
         try std.testing.expectEqual(caller_account.lamports.*, 42);
@@ -2192,7 +2192,7 @@ test "updateCallerAccount: data" {
             &ca.memory_map,
             &caller_account,
             &callee_account,
-            false, // stricter_abi_and_runtime_constraints
+            false, // virtual_address_space_adjustments
             false, // account_data_direct_mapping
         );
 
@@ -2222,7 +2222,7 @@ test "updateCallerAccount: data" {
         &ca.memory_map,
         &caller_account,
         &callee_account,
-        false, // stricter_abi_and_runtime_constraints
+        false, // virtual_address_space_adjustments
         false, // account_data_direct_mapping
     );
 
@@ -2241,7 +2241,7 @@ test "updateCallerAccount: data" {
         &ca.memory_map,
         &caller_account,
         &callee_account,
-        false, // stricter_abi_and_runtime_constraints
+        false, // virtual_address_space_adjustments
         false, // account_data_direct_mapping
     ));
 
@@ -2252,7 +2252,7 @@ test "updateCallerAccount: data" {
         &ca.memory_map,
         &caller_account,
         &callee_account,
-        false, // stricter_abi_and_runtime_constraints
+        false, // virtual_address_space_adjustments
         false, // account_data_direct_mapping
     );
     try std.testing.expectEqual(callee_account.account.data.len, 0);
@@ -2270,14 +2270,14 @@ fn testCpiCommon(comptime AccountType: type) !void {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
-    for ([_]bool{ false, true }) |stricter_abi_and_runtime_constraints| {
+    for ([_]bool{ false, true }) |virtual_address_space_adjustments| {
         var ctx = try TestContext.init(allocator, prng.random(), "hello world");
         defer ctx.deinit(allocator);
         const account = ctx.getAccount();
 
-        if (stricter_abi_and_runtime_constraints) {
+        if (virtual_address_space_adjustments) {
             const feature_set: *sig.core.FeatureSet = @constCast(ctx.tc.feature_set);
-            feature_set.setSlot(.stricter_abi_and_runtime_constraints, ctx.tc.slot);
+            feature_set.setSlot(.virtual_address_space_adjustments, ctx.tc.slot);
             feature_set.setSlot(.account_data_direct_mapping, ctx.tc.slot);
         }
 
@@ -2308,7 +2308,7 @@ fn testCpiCommon(comptime AccountType: type) !void {
         defer allocator.free(instruction_buffer);
 
         // Update the account data to be:
-        // - its own region for stricter_abi_and_runtime_constraints.
+        // - its own region for virtual_address_space_adjustments.
         // - start at INPUT_START for getSerializedData().
         const account_data_addr = memory.INPUT_START;
         const account_data_buffer = try allocator.dupe(u8, account.data);
