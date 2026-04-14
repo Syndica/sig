@@ -546,8 +546,14 @@ test "batched sends multiple messages to different addresses" {
     try recv2_sock.bindToPort(0);
     defer recv2_sock.close();
 
-    const recv1_addr: sig.net.SocketAddr = .initAddress(try recv1_sock.getLocalEndPoint());
-    const recv2_addr: sig.net.SocketAddr = .initAddress(try recv2_sock.getLocalEndPoint());
+    const recv1_addr: sig.net.SocketAddr = .initAddress(.initIp4(
+        .{ 127, 0, 0, 1 },
+        (try recv1_sock.getLocalEndPoint()).getPort(),
+    ));
+    const recv2_addr: sig.net.SocketAddr = .initAddress(.initIp4(
+        .{ 127, 0, 0, 1 },
+        (try recv2_sock.getLocalEndPoint()).getPort(),
+    ));
 
     var chan = try Channel(Packet).init(std.testing.allocator);
     defer chan.deinit();
