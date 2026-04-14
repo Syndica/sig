@@ -420,7 +420,13 @@ pub fn onSlotFrozen(
     allocator: std.mem.Allocator,
     slot_data: *SlotFrozenEvent,
 ) !Transition {
-    const slot_state = try self.getOrPutSlot(allocator, slot_data.slot);
+    const slot_state = self.getOrPutSlot(allocator, slot_data.slot) catch |err| switch (err) {
+        error.IncomingSlotTooOld => {
+            // TODO: add metric/observability
+            return .{};
+        },
+        error.OutOfMemory => return error.OutOfMemory,
+    };
     const duplicate_frozen = slot_state.state.frozen;
     if (duplicate_frozen) {
         // TODO: what about repair/replay over same slot? Could be frozen twice for same
@@ -478,7 +484,13 @@ pub fn onTransactionBatchEvent(
         return;
     }
 
-    const slot_state = try self.getOrPutSlot(allocator, batch_event.slot);
+    const slot_state = self.getOrPutSlot(allocator, batch_event.slot) catch |err| switch (err) {
+        error.IncomingSlotTooOld => {
+            // TODO: add metric/observability
+            return;
+        },
+        error.OutOfMemory => return error.OutOfMemory,
+    };
     // TODO: what about repair/replay over same slot? We can receive multiple tx batches for the
     // same slot during normal execution and append them, but if the slot is replayed with
     // different contents we still only key by slot number and do not handle that case.
@@ -492,7 +504,10 @@ pub fn onSlotConfirmed(
     slot: Slot,
 ) (std.mem.Allocator.Error || error{DuplicateSlotConfirmed})!Transition {
     const slot_state = self.getOrPutSlot(allocator, slot) catch |err| switch (err) {
-        error.IncomingSlotTooOld => return .{},
+        error.IncomingSlotTooOld => {
+            // TODO: add metric/observability
+            return .{};
+        },
         error.OutOfMemory => return error.OutOfMemory,
     };
     if (slot_state.state.confirmed) {
@@ -512,7 +527,10 @@ pub fn onSlotRooted(
     slot: Slot,
 ) (std.mem.Allocator.Error || error{DuplicateSlotRooted})!Transition {
     const slot_state = self.getOrPutSlot(allocator, slot) catch |err| switch (err) {
-        error.IncomingSlotTooOld => return .{},
+        error.IncomingSlotTooOld => {
+            // TODO: add metric/observability
+            return .{};
+        },
         error.OutOfMemory => return error.OutOfMemory,
     };
     if (slot_state.state.rooted) {
@@ -601,6 +619,8 @@ fn getOrPutSlot(
         return slot_state;
     }
     if (self.cached_slots.count() >= MAX_CACHED_SLOTS) {
+        // NOTE: This is just a safeguard to avoid unbounded memory growth. It can occur while
+        // catching up to head of chain on startup.
         try self.evictMinimumSlot(allocator, slot);
     }
 
@@ -624,18 +644,12 @@ fn evictMinimumSlot(
     }
 
     if (incoming_slot < min_slot) {
-        self.logger.warn().logf(
-            "slot state cache reached capacity of {}; dropping incoming slot {} " ++
-                "because minimum cached slot is {}",
-            .{ MAX_CACHED_SLOTS, incoming_slot, min_slot },
-        );
+        // reject too old instead of evicting newer
         return error.IncomingSlotTooOld;
     }
 
-    self.logger.warn().logf(
-        "slot state cache reached capacity of {}; evicting minimum slot {} to insert slot {}",
-        .{ MAX_CACHED_SLOTS, min_slot, incoming_slot },
-    );
+    // TODO: observability/metrics for this eviction case
+
     // TODO(perf): Offload cached frozen-account teardown off the loop thread.
     self.cached_slots.values()[min_index].deinit(allocator);
     _ = self.cached_slots.swapRemoveAt(min_index);
@@ -1128,12 +1142,41 @@ test "capacity drop keeps minimum slot when incoming is lower" {
     try std.testing.expectEqual(MAX_CACHED_SLOTS, state.cached_slots.count());
     try std.testing.expect(state.cached_slots.getPtr(2) != null);
 
-    // Freezing slot 1 (lower than all cached) should fail.
-    try std.testing.expectError(
-        error.IncomingSlotTooOld,
-        testOnSlotFrozen(&state, allocator, 1, 0, 0),
-    );
+    // Freezing slot 1 (lower than all cached) should no-op.
+    const transition = try testOnSlotFrozen(&state, allocator, 1, 0, 0);
+    try std.testing.expect(transition.publishable_slot == null);
+    try std.testing.expectEqual(NotificationCommitments{}, transition.notify_commitments);
+    try std.testing.expect(transition.evict_through == null);
 
+    try std.testing.expectEqual(MAX_CACHED_SLOTS, state.cached_slots.count());
+    try std.testing.expect(state.cached_slots.getPtr(1) == null);
+    try std.testing.expect(state.cached_slots.getPtr(2) != null);
+}
+
+test "too old transaction batch no-ops" {
+    const allocator = std.testing.allocator;
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = testSlotReadCtx(&slot_tracker, &commitments);
+    var state = SlotStateCache.init(ctx, .noop);
+    defer state.deinit(allocator);
+
+    const slot_limit: Slot = MAX_CACHED_SLOTS + 1;
+    var slot: Slot = 2;
+    while (slot <= slot_limit) : (slot += 1) {
+        _ = try testOnSlotFrozen(&state, allocator, slot, slot - 1, 0);
+    }
+
+    var batch = try testSlotTransactionBatch(allocator, 1, &.{"Program log: too old"});
+    defer batch.deinit(allocator);
+
+    try state.onTransactionBatchEvent(allocator, &batch);
+
+    try std.testing.expectEqual(1, batch.entries.len);
     try std.testing.expectEqual(MAX_CACHED_SLOTS, state.cached_slots.count());
     try std.testing.expect(state.cached_slots.getPtr(1) == null);
     try std.testing.expect(state.cached_slots.getPtr(2) != null);
