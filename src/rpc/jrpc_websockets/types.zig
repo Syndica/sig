@@ -495,6 +495,7 @@ pub const SlotDeadEvent = struct {
 pub const BankCreatedEvent = struct {
     slot: u64,
     parent: u64,
+    root: u64,
 };
 
 /// Sink to push events for jrpc ws runtime broadcasting.

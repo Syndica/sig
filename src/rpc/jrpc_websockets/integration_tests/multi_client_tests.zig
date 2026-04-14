@@ -71,7 +71,7 @@ test "multiple clients receive independent notifications" {
         return error.TestUnexpectedResult;
     };
 
-    server.injectEvent(.{ .slot_frozen = .{ .slot = 200, .parent = 199, .root = 168 } });
+    server.injectEvent(.{ .bank_created = .{ .slot = 200, .parent = 199, .root = 168 } });
     server.injectEvent(.{ .slot_finalized_rooted = 201 });
 
     const deadline_notif = @as(u64, @intCast(std.time.milliTimestamp())) + 5000;
@@ -98,6 +98,8 @@ test "multiple clients receive independent notifications" {
     const notif1 = parsed_notif1.value;
     try std.testing.expectEqualStrings("slotNotification", notif1.method);
     try std.testing.expectEqual(200, notif1.params.result.slot);
+    try std.testing.expectEqual(199, notif1.params.result.parent);
+    try std.testing.expectEqual(168, notif1.params.result.root);
 
     const parsed_notif2 = try std.json.parseFromSlice(
         RootNotification,
