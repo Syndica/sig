@@ -17,6 +17,7 @@ comptime {
 }
 
 const lib = @import("lib");
+const tracy = @import("tracy");
 const tel = lib.telemetry;
 
 const Config = struct {
@@ -85,6 +86,9 @@ const Config = struct {
 };
 
 pub fn main() !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "main" });
+    defer zone.deinit();
+
     var dba_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = dba_state.deinit();
     const allocator = dba_state.allocator();
@@ -193,6 +197,8 @@ pub fn main() !void {
         .sandboxed => try topology.spawnAndWait(&service_map),
         .threaded => try topology.spawnAndWaitNoSandbox(&service_map),
     }
+
+    tracy.message("exiting");
 }
 
 const topology_schema: lib.topology.Schema = .{
