@@ -298,8 +298,7 @@ fn resolveLookupTableAccounts(
         else
             table.meta.last_extended_slot_start_index;
 
-        // NOTE:- not sure about this, but keeping the old debug assert crashes in the conformance fixture
-        if (table.meta.last_extended_slot_start_index > table.addresses.len)
+        if (active_addresses_len > table.addresses.len)
             return error.InvalidAddressLookupTableData;
 
         // resolve writable addresses
