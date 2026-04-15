@@ -176,6 +176,7 @@ fn handleSegfault(
     if (panic_state.faulted) abort();
     panic_state.faulted = true;
 
+    // tracy.print("hello we have segfaulted\n", .{});
     const address = switch (native_os) {
         .linux => @intFromPtr(info.fields.sigfault.addr),
         .freebsd, .macos => @intFromPtr(info.addr),
@@ -239,6 +240,13 @@ fn handleSegfault(
 
         else => unreachable,
     }
+
+    // tracy.print("{s}", .{&exit.fault_msg});
+    // tracy.print("{s}", .{&exit.fault_msg});
+    // tracy.print("{s}", .{&exit.fault_msg});
+    // tracy.print("{s}", .{&exit.fault_msg});
+    // tracy.print("{s}", .{&exit.fault_msg});
+    // tracy.print("{s}", .{&exit.fault_msg});
 
     const pc = pc: {
         // Some kernels don't align `ctx_ptr` properly. Handle this defensively.
