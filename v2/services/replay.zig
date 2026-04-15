@@ -3,6 +3,8 @@ const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
 
+const bincode = lib.solana.bincode;
+
 const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;
 
@@ -31,7 +33,7 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
     defer zone.deinit();
 
-    var fba = std.heap.FixedBufferAllocator.init(&scratch_memory);
+    var fba: std.heap.FixedBufferAllocator = .init(&scratch_memory);
     const allocator = fba.allocator();
 
     var map_tree: MerkleForest = try .init(allocator);
@@ -46,11 +48,74 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
         const received_zone = tracy.Zone.init(@src(), .{ .name = "received fec set" });
         defer received_zone.deinit();
 
-        const result = try map_tree.put(deshredded_fec_set);
-        std.log.info(
-            "{}: {f}, last? {}",
-            .{ deshredded_fec_set.id, result, deshredded_fec_set.slot_complete },
-        );
+        const inserted_node = try map_tree.put(deshredded_fec_set) orelse
+            continue; // null => node already known, nothing to do here
+
+        _ = inserted_node;
+
+        // if (inserted_node.dataStart(map_tree.pool) == true and inserted_node.data_complete) {
+        //     // we can deserialise all at once
+
+        //     var reader = std.io.Reader.fixed(inserted_node.payload());
+
+        //     var deserialised_buf: [64 * 1024]u8 = undefined;
+        //     var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
+
+        //     const entries: []bincode.Entry = try bincode.entry_batch_codec.decode(
+        //         &reader,
+        //         deserial_fba.allocator(),
+        //         .default,
+        //         null,
+        //     );
+
+        //     for (entries) |entry| {
+        //         for (entry.transactions) |transaction| {
+        //             std.log.info("transaction: ", .{});
+
+        //             switch (transaction.message) {
+        //                 inline else => |msg| {
+        //                     for (msg.account_keys) |account_key| {
+        //                         std.log.info("account_key: {f}", .{account_key});
+        //                     }
+        //                 },
+        //             }
+        //         }
+        //     }
+        // }
+
+        // std.log.info(
+        //     "{}: {f}, last? {}",
+        //     .{ deshredded_fec_set.id, result, deshredded_fec_set.slot_complete },
+        // );
+
+        // if
+
+        // // if (deshredded_fec_set.id.)
+
+        // if (result == .chain_complete) {
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        //     std.log.info("woo!!!!", .{});
+        // }
     }
 }
 
@@ -63,12 +128,16 @@ const BlockTree = struct {
     /// For example, accountsdb may want to hold onto data for blocks for a while longer before it
     /// flushes to disk.
     /// Such subsystems may want to hold onto their own root?
-    consensus_rooted_block: BlockId,
+    consensus_rooted_block: BlockRef,
 
     const capacity = 1024;
 
     const NodePool = Pool(Node, u32);
-    const BlockId = NodePool.ItemId;
+
+    /// NOTE: this is what we use for referencing blocks. This is equivalent to the block's index
+    /// our block mem pool. If you want what Agave calls the "Block ID", this is the merkle root of
+    ///  the last fec set.
+    const BlockRef = NodePool.ItemId;
     const NodeTree = Tree(Node, struct {
         pool: NodePool,
 
@@ -103,9 +172,9 @@ const BlockTree = struct {
     // traversal fast
     // This could maybe be 24 bytes (u32 idx * 3, slot u64, last merkle root hash u32)
     const Node = extern struct {
-        parent: BlockId = .null,
-        child: BlockId = .null,
-        sibling: BlockId = .null,
+        parent: BlockRef = .null,
+        child: BlockRef = .null,
+        sibling: BlockRef = .null,
 
         slot: Slot,
 
@@ -223,7 +292,7 @@ const BlockTree = struct {
         new_slot: Slot,
         // i.e. the last merke root of its parent
         first_fecset_chained_merkle_root: *const Hash,
-    ) !?BlockId {
+    ) !?BlockRef {
         std.debug.assert(new_slot > parent_slot);
 
         const parent: *Node = self.findUnrootedParent(
@@ -258,7 +327,7 @@ const BlockTree = struct {
     /// Assumes node is that of a block which has received all fec sets
     fn markBlockFullyReceived(
         self: *const BlockTree,
-        block: BlockId,
+        block: BlockRef,
         last_fecset_merkle_root: *const Hash,
     ) void {
         std.debug.assert(block != .null);
@@ -287,8 +356,9 @@ test "Basic blocktree" {
     const slot_2_hash: Hash = .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd");
     blocks.markBlockFullyReceived(slot_2_block, &slot_2_hash);
 }
-
-/// A hashmap value, and a tree node.
+/// Represents a deshredded FEC set.
+///
+/// Used as a hashmap value, and a tree node (these are the same memory)
 /// This node is also used for the keys of hashmaps. When doing so, be careful of which adapted
 /// context you use.
 ///
@@ -310,6 +380,21 @@ const MerkleNode = extern struct {
     // NOTE: it is an advantage for MerkleNode to be small! (cache locality for map lookup and tree
     // traversal).
     payload_buf: [32 * Shred.data_payload_max]u8,
+
+    fn payload(node: *const MerkleNode) []const u8 {
+        return node.payload_buf[0..node.payload_len];
+    }
+
+    /// Returns null if we can't yet know
+    fn dataStart(node: *MerkleNode, pool: MerkleForest.NodePool) ?bool {
+        if (node.id.fec_set_idx == 0) return true;
+
+        const parent: *MerkleNode = MerkleForest.NodeTree.parentOf(.{ .pool = pool }, node) orelse
+            return null;
+
+        // the parent's data is completed => the current node's data is starting
+        return parent.data_complete;
+    }
 
     pub fn format(node: *const MerkleNode, writer: *std.io.Writer) !void {
         try writer.print(
@@ -443,28 +528,29 @@ const MerkleForest = struct {
         self.orphan_map.deinit(allocator);
     }
 
-    const InsertResult = union(enum) {
-        node_already_known, // merkle root in map early return
+    // const InsertResult = union(enum) {
+    //     node_already_known, // merkle root in map early return
 
-        waiting_for_child,
-        waiting_for_parent,
-        waiting_for_parent_and_child,
+    //     waiting_for_child,
+    //     waiting_for_parent,
+    //     waiting_for_parent_and_child,
 
-        // The new node's parent and child nodes are both found (or not needed), but we still don't
-        // have a complete slot.
-        chain_incomplete,
-        chain_complete,
+    //     // The new node's parent and child nodes are both found (or not needed), but we still don't
+    //     // have a complete slot.
+    //     chain_incomplete,
+    //     chain_complete,
 
-        pub fn format(self: InsertResult, writer: *std.io.Writer) !void {
-            switch (self) {
-                inline else => try writer.print("{s}", .{@tagName(self)}),
-            }
-        }
-    };
+    //     pub fn format(self: InsertResult, writer: *std.io.Writer) !void {
+    //         switch (self) {
+    //             inline else => try writer.print("{s}", .{@tagName(self)}),
+    //         }
+    //     }
+    // };
 
     // TODO: eviction
     // TODO: remove orphans from orphan_map once parented
-    fn put(self: *MerkleForest, new_fec_set: *const lib.shred.DeshreddedFecSet) !InsertResult {
+    /// Returns the newly inserted node, null => node already known (this is not an error).
+    fn put(self: *MerkleForest, new_fec_set: *const lib.shred.DeshreddedFecSet) !?*MerkleNode {
         const map_ctx: MerkleContext = .{ .map = &self.map };
         const orphan_map_ctx: OrphanContext = .{ .map = &self.orphan_map };
 
@@ -472,7 +558,7 @@ const MerkleForest = struct {
         defer self.assertCounts();
 
         const map_result = self.map.getOrPutAssumeCapacityAdapted(&new_fec_set.merkle_root, map_ctx);
-        if (map_result.found_existing) return .node_already_known;
+        if (map_result.found_existing) return null; // node already known
 
         const node = try self.pool.create();
         map_result.value_ptr.* = node;
@@ -526,40 +612,42 @@ const MerkleForest = struct {
             must_wait_for_child = true;
         }
 
-        if (!must_wait_for_child and !must_wait_for_parent) {
-            // This slot might be finished? Let's traverse our node's parents and children to find
-            // out.
-            const start_finished: bool = node.id.fec_set_idx == 0 or found_idx_0: {
-                var maybe_backwards_idx: ?u32 = node.parent.index();
+        // if (!must_wait_for_child and !must_wait_for_parent) {
+        //     // This slot might be finished? Let's traverse our node's parents and children to find
+        //     // out.
+        //     const start_finished: bool = node.id.fec_set_idx == 0 or found_idx_0: {
+        //         var maybe_backwards_idx: ?u32 = node.parent.index();
 
-                break :found_idx_0 while (maybe_backwards_idx) |backwards_idx| {
-                    const parent_node: *const MerkleNode = @ptrCast(&self.pool.buf[backwards_idx]);
+        //         break :found_idx_0 while (maybe_backwards_idx) |backwards_idx| {
+        //             const parent_node: *const MerkleNode = @ptrCast(&self.pool.buf[backwards_idx]);
 
-                    if (parent_node.id.fec_set_idx == 0) break true;
+        //             if (parent_node.id.fec_set_idx == 0) break true;
 
-                    maybe_backwards_idx = parent_node.parent.index();
-                } else false;
-            };
+        //             maybe_backwards_idx = parent_node.parent.index();
+        //         } else false;
+        //     };
 
-            const end_finished: bool = node.slot_complete or found_slot_complete: {
-                var maybe_forwards_idx: ?u32 = node.child.index();
+        //     const end_finished: bool = node.slot_complete or found_slot_complete: {
+        //         var maybe_forwards_idx: ?u32 = node.child.index();
 
-                break :found_slot_complete while (maybe_forwards_idx) |forwards_idx| {
-                    const child_node: *const MerkleNode = @ptrCast(&self.pool.buf[forwards_idx]);
+        //         break :found_slot_complete while (maybe_forwards_idx) |forwards_idx| {
+        //             const child_node: *const MerkleNode = @ptrCast(&self.pool.buf[forwards_idx]);
 
-                    if (child_node.slot_complete) break true;
+        //             if (child_node.slot_complete) break true;
 
-                    maybe_forwards_idx = child_node.child.index();
-                } else false;
-            };
+        //             maybe_forwards_idx = child_node.child.index();
+        //         } else false;
+        //     };
 
-            return if (start_finished and end_finished) .chain_complete else .chain_incomplete;
-        }
+        //     return if (start_finished and end_finished) .chain_complete else .chain_incomplete;
+        // }
 
-        if (must_wait_for_child and must_wait_for_parent) return .waiting_for_parent_and_child;
-        if (must_wait_for_child) return .waiting_for_child;
-        if (must_wait_for_parent) return .waiting_for_parent;
-        unreachable;
+        return node;
+
+        // if (must_wait_for_child and must_wait_for_parent) return .waiting_for_parent_and_child;
+        // if (must_wait_for_child) return .waiting_for_child;
+        // if (must_wait_for_parent) return .waiting_for_parent;
+        // unreachable;
     }
 
     fn assertCounts(self: *const MerkleForest) void {

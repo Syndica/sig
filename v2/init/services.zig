@@ -734,13 +734,18 @@ pub fn spawnAndWaitNoSandbox(
             &finished_service_idx,
             &reset_event,
         );
+        std.debug.print("spawned {f}\n", .{service_instance});
     }
+
+    std.debug.print("waiting for exit\n", .{});
 
     // Wait for first service to exit
     reset_event.wait();
 
     const exited_idx = finished_service_idx.load(.seq_cst);
     std.debug.assert(exited_idx != std.math.maxInt(u16));
+
+    std.debug.print("exited_idx: {}\n", .{exited_idx});
 
     dumpOnExit(@ptrCast(try exit_memfds[exited_idx].mmap(null)), services[exited_idx], 0, 0);
 }

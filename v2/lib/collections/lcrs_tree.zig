@@ -29,6 +29,13 @@ pub fn LCRSTree(Node: type, Context: type) type {
     });
 
     return extern struct {
+        pub const parentOf = Context.parentOf;
+        pub const childOf = Context.childOf;
+        pub const siblingOf = Context.siblingOf;
+        pub const setParent = Context.setParent;
+        pub const setChild = Context.setChild;
+        pub const setSibling = Context.setSibling;
+
         pub fn linkOrphaned(ctx: Context, parent: *Node, orphan: *Node) void {
             std.debug.assert(ctx.parentOf(orphan) == null);
             std.debug.assert(ctx.siblingOf(orphan) == null);

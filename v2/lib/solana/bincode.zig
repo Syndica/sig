@@ -8,6 +8,8 @@ const Pubkey = lib.solana.Pubkey;
 const Signature = lib.solana.Signature;
 const Hash = lib.solana.Hash;
 
+pub const entry_batch_codec = shortVec(Entry, Entry.bk_config);
+
 pub const Entry = struct {
     num_hashes: u64,
     hash: Hash,
@@ -224,7 +226,7 @@ const VersionedMessage = union(enum) {
                     var recent_blockhash: Hash = undefined;
                     try hash_codec.decodeIntoOne(reader, null, config, &recent_blockhash, null);
 
-                    const instructions_codec = shortVec(CompiledInstruction, .bk_config);
+                    const instructions_codec = shortVec(CompiledInstruction, CompiledInstruction.bk_config);
                     const instructions = try instructions_codec.decode(
                         reader,
                         gpa_opt,
@@ -288,10 +290,10 @@ const VersionedMessage = union(enum) {
             values: []const VersionedMessage,
             _: void,
         ) void {
-            for (values) |value| {
-                switch (value) {
-                    .legacy => |msg| LegacyMessage.bk_config.free(gpa_opt, &msg, null),
-                    .v0 => |msg| V0Message.bk_config.free(gpa_opt, &msg, null),
+            for (values) |*value| {
+                switch (value.*) {
+                    .legacy => |*msg| LegacyMessage.bk_config.free(gpa_opt, msg, null),
+                    .v0 => |*msg| V0Message.bk_config.free(gpa_opt, msg, null),
                 }
             }
         }

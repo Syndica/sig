@@ -39,7 +39,7 @@ pub const Exit = extern struct {
     const empty_entry = std.math.maxInt(usize);
 
     // chosen arbitrarily
-    const max_depth = 31;
+    const max_depth = 63;
     const max_error_name = 127;
     const max_panic_msg = 127;
     const max_fault_msg = 127;

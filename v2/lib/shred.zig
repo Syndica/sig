@@ -46,6 +46,12 @@ pub const FecSetId = extern struct {
     }
 };
 
+/// Represents a reconstructed fec set, with its recovered payload.
+///
+/// NOTE: while we have `data_complete`, which indicates we've reached the end of the data, there is
+/// no data *start* bool. This means that we can only start deserialising when
+/// a) id.fec_set_idx == 0 - i.e. it's the first in the slot.
+/// b) the previous fec set is marked as `data_complete.`
 // TODO: this should be sent as a notification/header, with the payload sent separately.
 // Currently this copies a lot.
 pub const DeshreddedFecSet = extern struct {
