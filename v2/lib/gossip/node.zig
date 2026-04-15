@@ -262,7 +262,6 @@ pub fn GossipNode(comptime Effects: type) type {
                 .commit = 0,
                 .feature_set = 0,
                 .client_id = .{ .value = 0 },
-                .prerelease = .stable,
                 .socket_map = config.socket_map,
                 .extensions = .{ .items = &.{} },
             } });
