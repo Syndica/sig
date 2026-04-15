@@ -200,8 +200,10 @@ fn addExeOutputs(
     const install_step = b.getInstallStep();
     install_step.dependOn(&artifact.step);
 
-    const install_opt = if (artifact_opts.no_bin) null else b.addInstallArtifact(artifact, install_opts);
-    const run_opt = if (artifact_opts.no_run) null else b.addRunArtifact(artifact);
+    const install_opt = 
+        if (artifact_opts.no_bin) null else b.addInstallArtifact(artifact, install_opts);
+    const run_opt = 
+        if (artifact_opts.no_run) null else b.addRunArtifact(artifact);
 
     if (install_opt) |install| {
         artifact_step.dependOn(&install.step);
