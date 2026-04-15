@@ -42,3 +42,6 @@ pub fn findExistingSnapshot(snapshot_dir: std.fs.Dir) !?struct { std.fs.File, Sl
 const download = @import("snapshot/download.zig");
 pub const DownloadConfig = download.Config;
 pub const downloadSnapshot = download.downloadSnapshot;
+
+const load = @import("snapshot/load.zig");
+pub const loadSnapshot = load.loadSnapshot;

@@ -63,8 +63,16 @@ pub fn build(b: *Build) !void {
         .tracy_on_demand = tracy_on_demand,
         .tracy_callstack = 6,
     }).module("tracy");
+    // TODO: remove for lib.solana.bincode
     const binkode_mod = b.dependency("binkode", .{}).module("binkode");
-    const base58_mod = b.dependency("base58", .{}).module("base58");
+    const base58_mod = b.dependency("base58", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("base58");
+    const zstd_mod = b.dependency("zstd", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("zstd");
 
     const fmt_check_step = b.addFmt(.{
         .check = true,
@@ -80,6 +88,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "base58", .module = base58_mod },
             .{ .name = "binkode", .module = binkode_mod },
             .{ .name = "tracy", .module = tracy_mod },
+            .{ .name = "zstd", .module = zstd_mod },
         },
     });
     _ = addTestOutputs(b, test_step, null, artifact_opts, .{
