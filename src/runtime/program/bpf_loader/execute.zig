@@ -131,8 +131,8 @@ fn executeBpfProgram(
         .account_data_direct_mapping,
         ic.tc.slot,
     );
-    const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
-        .stricter_abi_and_runtime_constraints,
+    const virtual_address_space_adjustments = ic.tc.feature_set.active(
+        .virtual_address_space_adjustments,
         ic.tc.slot,
     );
     const mask_out_rent_epoch_in_vm_serialization = ic.tc.feature_set.active(
@@ -149,7 +149,7 @@ fn executeBpfProgram(
         allocator,
         ic,
         account_data_direct_mapping,
-        stricter_abi_and_runtime_constraints,
+        virtual_address_space_adjustments,
         mask_out_rent_epoch_in_vm_serialization,
     );
     defer serialized.deinit(allocator);
@@ -209,7 +209,7 @@ fn executeBpfProgram(
         result,
         &ic.tc.custom_error,
         &ic.tc.compute_meter,
-        stricter_abi_and_runtime_constraints,
+        virtual_address_space_adjustments,
         ic.tc.feature_set.active(.deplete_cu_meter_on_vm_failure, ic.tc.slot),
     );
 
@@ -218,7 +218,7 @@ fn executeBpfProgram(
         bpf_serialize.deserializeParameters(
             allocator,
             ic,
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             account_data_direct_mapping,
             serialized.memory.items,
             serialized.account_metas.constSlice(),
@@ -236,7 +236,7 @@ fn handleExecutionResult(
     result: sig.vm.interpreter.Result,
     custom_error: *?u32,
     compute_meter: *u64,
-    stricter_abi_and_runtime_constraints: bool,
+    virtual_address_space_adjustments: bool,
     deplete_cu_meter: bool,
 ) ?ExecutionError {
     switch (result) {
@@ -252,7 +252,7 @@ fn handleExecutionResult(
             const err_kind = sig.vm.getExecutionErrorKind(err);
             if (deplete_cu_meter and err_kind != .Syscall)
                 compute_meter.* = 0;
-            if (stricter_abi_and_runtime_constraints and err == error.AccessViolation)
+            if (virtual_address_space_adjustments and err == error.AccessViolation)
                 std.debug.print("TODO: Handle AccessViolation: {s}\n", .{@errorName(err)});
             return err;
         },
