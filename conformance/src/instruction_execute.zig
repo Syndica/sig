@@ -95,19 +95,6 @@ fn executeInstruction(
     );
     defer utils.deinitTransactionContext(allocator, tc);
 
-    // [agave] https://github.com/anza-xyz/agave/blob/2717084afe/svm-test-harness/src/instr.rs#L174-L177
-    //   `execute_instr` passes `[instruction_data.as_slice()].into_iter()`
-    //   to `process_precompile`, i.e. a single-element slice of the current instruction's data.
-    // [agave] https://github.com/anza-xyz/agave/blob/2717084afe/svm/src/message_processor.rs#L42-L45
-    //   In production, the full transaction's instruction datas are collected via
-    //   `message.instructions_iter().map(|ix| ix.data)`.
-    // Since the conformance harness tests a single instruction in isolation, we mirror the
-    // solfuzz-agave behavior and provide a one-element slice.
-    const instruction_datas = try allocator.alloc([]const u8, 1);
-    defer allocator.free(instruction_datas);
-    instruction_datas[0] = pb_instr_ctx.data;
-    tc.instruction_datas = instruction_datas;
-
     // Create an accounts map for loading programs, account data is owned by transaction context
     // so does not need to be freed
     var accounts_map = sig.utils.collections.PubkeyMap(AccountSharedData){};
@@ -134,6 +121,15 @@ fn executeInstruction(
     );
 
     if (pb_instr_ctx.program_id.len != Pubkey.SIZE) return error.OutOfBounds;
+    const program_id = Pubkey{ .data = pb_instr_ctx.program_id[0..Pubkey.SIZE].* };
+
+    if (sig.runtime.program.PRECOMPILE.get(&program_id) != null) {
+        const instruction_datas = try allocator.alloc([]const u8, 1);
+        instruction_datas[0] = pb_instr_ctx.data;
+        tc.instruction_datas = instruction_datas;
+    }
+    defer if (tc.instruction_datas) |instruction_datas| allocator.free(instruction_datas);
+
     const instr_info = try utils.createInstructionInfo(
         allocator,
         &tc,

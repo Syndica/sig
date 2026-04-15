@@ -46,7 +46,7 @@ const SignatureOffsets = extern struct {
 
 pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!void {
     const instruction_data = ic.ixn_info.instruction_data;
-    const instruction_datas = ic.tc.instruction_datas orelse &.{};
+    const instruction_datas = ic.tc.instruction_datas.?;
 
     verify(instruction_data, instruction_datas, ic.tc.feature_set, ic.tc.slot) catch {
         return error.Custom;
