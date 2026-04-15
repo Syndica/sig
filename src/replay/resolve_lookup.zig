@@ -298,7 +298,9 @@ fn resolveLookupTableAccounts(
         else
             table.meta.last_extended_slot_start_index;
 
-        std.debug.assert(table.meta.last_extended_slot_start_index <= table.addresses.len);
+        // NOTE:- not sure about this, but keeping the old debug assert crashes in the conformance fixture
+        if (table.meta.last_extended_slot_start_index > table.addresses.len)
+            return error.InvalidAddressLookupTableData;
 
         // resolve writable addresses
         for (lookup.writable_indexes) |index| {
