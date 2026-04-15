@@ -264,12 +264,7 @@ pub const Delegation = struct {
 };
 
 pub const AccountsDbFields = struct {
-    account_files: HashMap(Slot, struct { // Vec<StorageEntry>
-        entries: bincode.Vec(struct { // SmallVec<[SerializableAccountStorageEntry; 1]>
-            id: u64, // usize
-            length: u64, // usize
-        }),
-    }),
+    account_file_map: AccountFileMap,
     _unused_write_version: u64,
     slot: Slot,
     bank_hash_info: struct { // BankHashInfo
@@ -287,6 +282,89 @@ pub const AccountsDbFields = struct {
     rooted_slots: bincode.NullOnEof(bincode.Vec(Slot)),
     /// Slots that were roots within the last epoch for which we care about the hash value
     rooted_slot_hashes: bincode.NullOnEof(bincode.Vec(SlotAndHash)),
+};
+
+// HashMap(Slot, struct { // Vec<StorageEntry>
+//     entries: bincode.Vec(struct { // SmallVec<[SerializableAccountStorageEntry; 1]>
+//         id: u64, // usize
+//         length: u64, // usize
+//     }),
+// })
+pub const AccountFileMap = struct {
+    entries: []const Entry,
+    count: u64,
+
+    const Self = @This();
+    pub const Entry = extern struct {
+        slot: u32, // slots should be small enough for this to be the case
+        length: u32, // a single account file length should not be able to go over 4GB
+        id: u64,
+    };
+
+    const HASH_MULT = 0x9E3779B97F4A7C15;
+    const StorageEntry = struct {
+        slot: Slot,
+        small_vec_size: u64,
+        id: u64,
+        length: u64,
+    };
+
+    pub fn bincodeRead(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader) !Self {
+        const n = try reader.takeInt(u64, .little);
+        if (n == 0) return .{ .entries = &.{}, .count = 0 };
+
+        // bump up to load factor (4/5 = 80%)
+        const cap = std.math.ceilPowerOfTwo(u64, (n * 5) / 4) catch return error.OutOfMemory;
+        const entries: []Entry = try fba.allocator().alloc(Entry, cap);
+        @memset(std.mem.sliceAsBytes(entries), 0xff); // make all Entry.slot = maxInt(u32)
+
+        var storage_entry: StorageEntry = undefined;
+        for (0..n) |_| {
+            try reader.readSliceAll(std.mem.asBytes(&storage_entry));
+            if (storage_entry.small_vec_size != 1) return error.InvalidStorageEntry;
+            if (storage_entry.slot >= std.math.maxInt(u32)) return error.InvalidSlot;
+            if (storage_entry.length > std.math.maxInt(u32)) return error.InvalidAccountFileLength;
+
+            // Find insert to insert at.
+            var idx = (storage_entry.slot *% HASH_MULT) >> @intCast(@as(u7, 64) - @ctz(cap));
+            while (entries[idx].slot != std.math.maxInt(u32)) {
+                idx = (idx +% 1) & (cap - 1);
+            }
+
+            entries[idx] = .{
+                .slot = @intCast(storage_entry.slot),
+                .length = @intCast(storage_entry.length),
+                .id = storage_entry.id,
+            };
+        }
+
+        return .{ .entries = entries, .count = n };
+    }
+
+    pub fn getPtr(self: *const Self, slot: Slot) ?*const Entry {
+        if (slot >= std.math.maxInt(u32)) return null;
+
+        var idx = (slot *% HASH_MULT) >> @intCast(@as(u7, 64) - @ctz(self.entries.len));
+        while (true) {
+            const e = &self.entries[idx];
+            idx = (idx +% 1) & (self.entries.len - 1);
+            if (@as(u64, e.slot) == slot) return e;
+            if (e.slot == std.math.maxInt(u32)) return null;
+        }
+    }
+
+    pub fn bincodeWrite(self: *const Self, writer: *std.Io.Writer) !void {
+        try writer.writeInt(u64, self.count, .little);
+        for (self.entries) |*e| {
+            if (e.slot == std.math.maxInt(u32)) continue;
+            try writer.writeAll(std.mem.asBytes(&StorageEntry{
+                .slot = e.slot,
+                .small_vec_size = 1,
+                .id = e.id,
+                .length = e.len,
+            }));
+        }
+    }
 };
 
 pub const ExtraFields = struct {

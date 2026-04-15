@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const Deprecated = void; // noreturn here crashes the compiler
+pub const Deprecated = noreturn;
 const read_func_overload = "bincodeRead";
 const write_func_overload = "bincodeWrite";
 
@@ -42,7 +42,8 @@ pub fn read(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader, comptim
             inline for (info.fields) |f| @field(value, f.name) = try read(fba, reader, f.type);
             return value;
         },
-        .void => return error.Deprecated,
+        .noreturn => return error.Deprecated,
+        .void => return {},
         else => @compileError("unsupported type: " ++ @typeName(T)),
     }
 }
@@ -75,7 +76,8 @@ pub fn write(writer: *std.Io.Writer, value: anytype) !void {
                 return @field(T, write_func_overload)(&value, writer);
             inline for (info.fields) |f| try write(writer, @field(value, f.name));
         },
-        .void => return error.Deprecated,
+        .noreturn => return error.Deprecated,
+        .void => {},
         else => @compileError("unsupported type: " ++ @typeName(T)),
     }
 }

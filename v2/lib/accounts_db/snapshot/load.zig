@@ -103,6 +103,9 @@ pub fn loadSnapshot(
         if (maybe_status_cache == null) return error.MissingStatusCacheFile;
 
         const bank_fields = &maybe_manifest.?.bank_fields;
+        if (bank_fields.slot != slot_hash.slot) return error.InvalidBankSlot;
+        if (!bank_fields.hash.eql(&slot_hash.hash)) return error.InvalidBankHash;
+
         // TODO: use bank_fields + loaded accounts_db to compute leader schedule
         //
         // v1.sig.accountsdb.snapshot.LoadedSnapshot.featureSet(
@@ -140,22 +143,19 @@ pub fn loadSnapshot(
                 return error.InvalidAccountFileName;
 
             const slot = std.fmt.parseInt(u64, tar_file.name["accounts/".len..split], 10) catch
-                return error.InvalidAccountFileName;
+                return error.InvalidAccountFileSlot;
             const id = std.fmt.parseInt(u32, tar_file.name[split + 1 ..], 10) catch
-                return error.InvalidAccountFileName;
+                return error.InvalidAccountFileId;
             if (slot > accounts_db_fields.slot)
-                return error.InvalidAccountFileName;
+                return error.InvalidAccountFileSlot;
 
             // TODO: accelerate this search
-            const info = for (accounts_db_fields.account_files.items) |*e| {
-                if (e.value.entries.items.len != 1) return error.InvalidAccountFileEntry;
-                if (e.key == slot) break e.value.entries.items[0];
-            } else return error.InvalidAccountFileLookup;
-
+            const info = accounts_db_fields.account_file_map.getPtr(slot) orelse
+                return error.InvalidAccountFileSlot;
             if (info.id != id)
-                return error.InvalidAccountFileMapId;
+                return error.InvalidAccountFileId;
             if (info.length > tar_file.size)
-                return error.InvalidAccountFileMapLength;
+                return error.InvalidAccountFileLength;
 
             break :blk .{
                 .init(&tar_reader.interface, .limited64(info.length), &.{}),
