@@ -1,20 +1,28 @@
 const std = @import("std");
 
-pub const Deprecated = void; // noreturn here crashes the compiler
+pub const Deprecated = noreturn;
 const read_func_overload = "bincodeRead";
 const write_func_overload = "bincodeWrite";
 
 pub fn read(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader, comptime T: type) !T {
     switch (@typeInfo(T)) {
         .int => return try reader.takeInt(T, .little),
-        .optional => |info| switch (try reader.takeByte()) {
-            0 => return null,
-            1 => return try read(fba, reader, info.child),
-            else => return error.InvalidOptional,
+        // TODO: is this correct?
+        .float => |info| return @bitCast(try read(fba, reader, std.meta.Int(.unsigned, info.bits))),
+        .bool => switch (try reader.takeByte()) {
+            0 => return false,
+            1 => return true,
+            else => return error.InvalidBool,
+        },
+        .optional => |info| {
+            const is_some = try read(fba, reader, bool);
+            return if (is_some) try read(fba, reader, info.child) else null;
         },
         .array => |info| {
             comptime std.debug.assert(@typeInfo(info.child) == .int);
-            return @bitCast((try reader.takeArray(@sizeOf(info.child) * info.len)).*);
+            var array: T = undefined;
+            try reader.readSliceAll(std.mem.asBytes(&array));
+            return array;
         },
         .@"enum" => |info| {
             const tag = try reader.takeInt(info.tag_type, .little);
@@ -34,7 +42,8 @@ pub fn read(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader, comptim
             inline for (info.fields) |f| @field(value, f.name) = try read(fba, reader, f.type);
             return value;
         },
-        .void => return error.Deprecated,
+        .noreturn => return error.Deprecated,
+        .void => return {},
         else => @compileError("unsupported type: " ++ @typeName(T)),
     }
 }
@@ -44,8 +53,10 @@ pub fn write(writer: *std.Io.Writer, value: anytype) !void {
 
     switch (@typeInfo(T)) {
         .int => try writer.writeInt(T, value, .little),
+        .float => try writer.writeAll(std.mem.asBytes(&value)),
+        .bool => try writer.writeByte(@intFromBool(value)),
         .optional => {
-            try writer.writeByte(@intFromBool(value != null));
+            try write(writer, value != null);
             if (value) |v| try write(writer, v);
         },
         .array => |info| {
@@ -65,7 +76,8 @@ pub fn write(writer: *std.Io.Writer, value: anytype) !void {
                 return @field(T, write_func_overload)(&value, writer);
             inline for (info.fields) |f| try write(writer, @field(value, f.name));
         },
-        .void => return error.Deprecated,
+        .noreturn => return error.Deprecated,
+        .void => {},
         else => @compileError("unsupported type: " ++ @typeName(T)),
     }
 }
@@ -174,6 +186,28 @@ pub fn BitVec(comptime T: type) type {
             const word = &self.words[bit / @bitSizeOf(T)];
             defer word.* |= mask;
             return @intFromBool(word.* & mask > 0);
+        }
+    };
+}
+
+/// If the type fails to read, returns a successful value as null.
+pub fn NullOnEof(comptime T: type) type {
+    return struct {
+        value: ?T,
+
+        const Self = @This();
+
+        pub fn bincodeRead(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader) !Self {
+            return .{ .value = read(fba, reader, T) catch |err| switch (err) {
+                std.Io.Reader.Error.ReadFailed, std.Io.Reader.Error.EndOfStream => {
+                    return .{ .value = null };
+                },
+                else => |e| return e,
+            } };
+        }
+
+        pub fn bincodeWrite(self: *const Self, writer: *std.Io.Writer) !void {
+            if (self.value) |v| try write(writer, v);
         }
     };
 }

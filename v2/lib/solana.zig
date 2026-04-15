@@ -6,6 +6,7 @@ comptime {
 
 pub const bincode = @import("solana/bincode.zig");
 pub const gossip = @import("solana/gossip.zig");
+pub const snapshot = @import("solana/snapshot.zig");
 
 pub const Hash = @import("solana/hash.zig").Hash;
 pub const Pubkey = @import("solana/pubkey.zig").Pubkey;
@@ -21,4 +22,11 @@ pub const Epoch = u64;
 pub const SlotAndHash = extern struct {
     slot: Slot,
     hash: Hash,
+};
+
+pub const MAX_ACCOUNT_SIZE = 10 * 1024 * 1024;
+
+// TODO: file with Blake3 impl
+pub const LtHash = extern struct {
+    _: [1024]u16,
 };

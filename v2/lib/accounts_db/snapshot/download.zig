@@ -1,5 +1,8 @@
 const std = @import("std");
-const tel = @import("../../telemetry.zig");
+const lib = @import("../../lib.zig");
+
+const tel = lib.telemetry;
+const SlotAndHash = lib.solana.SlotAndHash;
 
 pub const Config = struct {
     min_timeout_ns: u64,
@@ -11,11 +14,18 @@ pub const Config = struct {
 pub fn downloadSnapshot(
     logger: tel.Logger("downloadSnapshot"),
     snapshot_dir: std.fs.Dir,
-    path: []const u8,
+    slot_hash: SlotAndHash,
     addr: std.net.Address,
     config: Config,
 ) !std.fs.File {
-    const snapshot_file = try snapshot_dir.createFile(path, .{ .truncate = true });
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = try std.fmt.bufPrint(
+        &path_buf,
+        "snapshot-{d}-{f}.tar.zst",
+        .{ slot_hash.slot, slot_hash.hash },
+    );
+
+    const snapshot_file = try snapshot_dir.createFile(path, .{ .truncate = true, .read = true });
     errdefer {
         snapshot_file.close();
         snapshot_dir.deleteFile(path) catch {};

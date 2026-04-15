@@ -21,5 +21,9 @@
             .url = "git+https://github.com/Syndica/tracy-zig#a767a15d1b4d6d813e929cf352c2265ff97a16da",
             .hash = "zig_tracy-0.13.0-4TLLR1ZkAAAKZh0Gimq4P-Hyyd3b38XfFecg00aAqIaR",
         },
+        .zstd = .{
+            .url = "git+https://github.com/Syndica/zstd.zig#c90641875ffc026f57f86b9ed28c1b4833f83d0a",
+            .hash = "zstd-0.0.1-8QsqCTmhAAA-9ArKPxqvOt77ULmEr3xma_bbpeWm-b2u",
+        },
     },
 }

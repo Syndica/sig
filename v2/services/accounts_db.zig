@@ -7,6 +7,8 @@ const lib = @import("lib");
 
 const tel = lib.telemetry;
 
+const SlotAndHash = lib.solana.SlotAndHash;
+
 comptime {
     _ = start;
 }
@@ -24,6 +26,8 @@ pub const ReadOnly = struct {
     config: *const lib.accounts_db.Config,
 };
 
+var scratch_mem: [1 * 1024 * 1024 * 1024]u8 = undefined;
+
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
@@ -35,13 +39,22 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     defer snapshot_dir.close();
 
     var snapshot_addr_reader = rw.snapshot_queue.incoming.get(.reader);
-    const snapshot_file = try findOrDownloadSnapshot(
+    const snapshot_file, const slot_hash = try findOrDownloadSnapshot(
         .from(logger),
         snapshot_dir,
         &snapshot_addr_reader,
         ro.config.snapshot_download,
     );
     defer snapshot_file.close();
+
+    var fba = std.heap.FixedBufferAllocator.init(&scratch_mem);
+    _ = try lib.accounts_db.snapshot.loadSnapshot(
+        .from(logger),
+        &fba,
+        slot_hash,
+        snapshot_file,
+    );
+    logger.info().logf("finished loading snapshot", .{});
 
     while (true) std.atomic.spinLoopHint();
 }
@@ -51,41 +64,42 @@ fn findOrDownloadSnapshot(
     snapshot_dir: std.fs.Dir,
     snapshot_addr_reader: *lib.accounts_db.SnapshotQueue.Incoming.Iterator(.reader),
     dl_config: lib.accounts_db.snapshot.DownloadConfig,
-) !std.fs.File {
+) !struct { std.fs.File, SlotAndHash } {
     if (try lib.accounts_db.snapshot.findExistingSnapshot(snapshot_dir)) |found| {
-        const snapshot_file, const sh = found;
+        const sh = &found.@"1";
         logger.info().logf(
             "Found existing snapshot: ./snapshot-{d}-{f}.tar.zst",
             .{ sh.slot, sh.hash },
         );
-        return snapshot_file;
+        return found;
     }
 
-    var path_buf: [512]u8 = undefined;
     logger.debug().logf("Waiting for snapshot from gossip...", .{});
     while (true) {
-        const e = snapshot_addr_reader.next() orelse continue;
-        const addr = e.rpc_address;
-        const path = try std.fmt.bufPrint(
-            &path_buf,
-            "snapshot-{d}-{f}.tar.zst",
-            .{ e.slot_hash.slot, e.slot_hash.hash },
-        );
+        const entry_ptr = snapshot_addr_reader.next() orelse continue;
+        const e = entry_ptr.*;
         snapshot_addr_reader.markUsed();
 
-        logger.info().logf("Downloading snapshot from http://{f}/{s}", .{ addr, path });
+        // TODO: downgrade to debug once per-service filtering is implemented
+        logger.info().logf(
+            "Downloading snapshot from http://{f}/snapshot-{d}-{f}.tar.zst",
+            .{ e.rpc_address, e.slot_hash.slot, e.slot_hash.hash },
+        );
         const snapshot_file = lib.accounts_db.snapshot.downloadSnapshot(
             .from(logger),
             snapshot_dir,
-            path,
-            addr,
+            e.slot_hash,
+            e.rpc_address,
             dl_config,
         ) catch |err| {
-            logger.err().logf("snapshot download from {f} failed: {}", .{ addr, err });
+            logger.err().logf("snapshot download from {f} failed: {}", .{ e.rpc_address, err });
             continue;
         };
 
-        logger.info().logf("Downloaded {s}", .{path});
-        return snapshot_file;
+        logger.info().logf(
+            "Downloaded ./snapshot-{d}-{f}.tar.zst",
+            .{ e.slot_hash.slot, e.slot_hash.hash },
+        );
+        return .{ snapshot_file, e.slot_hash };
     }
 }
