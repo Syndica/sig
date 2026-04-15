@@ -18,6 +18,7 @@ comptime {
 
 const services = @import("services.zig");
 const lib = @import("lib");
+const tracy = @import("tracy");
 const tel = lib.telemetry;
 
 const Config = struct {
@@ -49,6 +50,9 @@ const Config = struct {
 };
 
 pub fn main() !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "main" });
+    defer zone.deinit();
+
     var dba_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = dba_state.deinit();
     const allocator = dba_state.allocator();
@@ -148,4 +152,6 @@ pub fn main() !void {
             &shared_regions,
         ),
     }
+
+    tracy.message("exiting");
 }

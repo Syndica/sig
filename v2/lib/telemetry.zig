@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const tracy = @import("tracy");
 
 pub const metric = @import("telemetry/metric.zig");
 pub const log = @import("telemetry/log.zig");
@@ -277,6 +278,8 @@ pub fn Logger(comptime scope_str: []const u8) type {
                     comptime fmt_str: []const u8,
                     args: anytype,
                 ) void {
+                    tracy.print("{}: " ++ fmt_str, .{self.level} ++ args);
+
                     if (@intFromEnum(self.level) > @intFromEnum(self.logger.max_level)) return;
                     const message: log.Message = .{
                         .epoch_millis = @intCast(std.time.milliTimestamp()),

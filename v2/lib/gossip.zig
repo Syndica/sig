@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const lib = @import("lib.zig");
 
 pub const bincode = @import("gossip/bincode.zig");
@@ -84,6 +85,9 @@ pub const ClusterInfo = extern struct {
     }
 
     pub fn getFromEcho(gossip_port: u16, cluster: lib.solana.Cluster) !ClusterInfo {
+        const zone = tracy.Zone.init(@src(), .{ .name = "getFromEcho" });
+        defer zone.deinit();
+
         var result: ClusterInfo = undefined;
         result.entry_addrs_len = 0;
 

@@ -87,9 +87,6 @@ const max_in_progress = 8192;
 const max_done = 65536;
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
-    const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
-    defer zone.deinit();
-
     var fba: std.heap.FixedBufferAllocator = .init(&scratch_memory);
     const allocator = fba.allocator();
 

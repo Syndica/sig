@@ -199,6 +199,10 @@ pub const Region = union(enum) {
     }
 
     pub fn init(self: Region, buf: []align(page_size_min) u8) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "Region.init" });
+        defer zone.deinit();
+        zone.text(@tagName(std.meta.activeTag(self)));
+
         std.log.info("Initialising: {}", .{std.meta.activeTag(self)});
 
         return switch (self) {
@@ -668,6 +672,9 @@ pub fn spawnAndWaitNoSandbox(
     comptime services: []const ServiceInstance,
     regions: []const SharedRegion,
 ) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "spawnAndWaitNoSandbox" });
+    defer zone.deinit();
+
     // Create memfds for each shared memory region
     const region_memfds: []memfd.RW = try allocator.alloc(memfd.RW, regions.len);
     defer allocator.free(region_memfds);
@@ -737,7 +744,8 @@ pub fn spawnAndWaitNoSandbox(
         std.debug.print("spawned {f}\n", .{service_instance});
     }
 
-    std.debug.print("waiting for exit\n", .{});
+    const waiting_zone = tracy.Zone.init(@src(), .{ .name = "waiting on exit" });
+    defer waiting_zone.deinit();
 
     // Wait for first service to exit
     reset_event.wait();
