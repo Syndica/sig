@@ -1636,12 +1636,6 @@ fn validator(
     if (cfg.accounts_db.dbg_db_init and !init_db_exists)
         try saveDbInit(snapshot_dir, .from(logger));
 
-    const static_rpc_ctx: sig.rpc.hook_contexts.StaticHookContext = .{
-        .genesis_hash = loaded_snapshot.genesis_config.hash,
-    };
-
-    try app_base.rpc_hooks.set(allocator, &static_rpc_ctx);
-
     var unrooted_tracy: tracy.TracingAllocator = .{
         .name = "AccountsDB Unrooted",
         .parent = allocator,
@@ -1822,6 +1816,12 @@ fn validator(
     var max_shred_insert_slot: std.atomic.Value(sig.core.Slot) = .init(0);
 
     if (rpc_enabled) {
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.StaticHookContext{
+            .genesis_hash = loaded_snapshot.genesis_config.hash,
+            .identity = my_contact_info.pubkey,
+            .epoch_schedule = &epoch_tracker.epoch_schedule,
+        });
+
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
             .commitments = &replay_service_state.replay_state.commitments.?,
@@ -3144,36 +3144,6 @@ fn startGossip(
         .spy_node = cfg.gossip.spy_node,
         .dump = cfg.gossip.dump,
     });
-
-    try app_base.rpc_hooks.set(allocator, struct {
-        info: ContactInfo,
-
-        pub fn getIdentity(
-            self: @This(),
-            _: std.mem.Allocator,
-            _: anytype,
-        ) !sig.rpc.methods.GetIdentity.Response {
-            return .{ .identity = self.info.pubkey };
-        }
-
-        pub fn getVersion(
-            self: @This(),
-            allocator_: std.mem.Allocator,
-            _: anytype,
-        ) !sig.rpc.methods.GetVersion.Response {
-            const client_version = self.info.version;
-            const solana_version = try std.fmt.allocPrint(allocator_, "{}.{}.{}", .{
-                client_version.major,
-                client_version.minor,
-                client_version.patch,
-            });
-
-            return .{
-                .solana_core = solana_version,
-                .feature_set = client_version.feature_set,
-            };
-        }
-    }{ .info = contact_info });
 
     return service;
 }
