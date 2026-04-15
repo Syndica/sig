@@ -115,12 +115,40 @@ fn downloadToFile(
     try snapshot_file.writeAll(extra_body);
 
     // Start transfering over from socket -> pipe -> file
-    const pipe_buf_size = 64 * 1024; // TODO: get it directly from the pipe
     const pipe = try std.posix.pipe2(.{ .CLOEXEC = true }); // for direct socket -> pipe -> file
     defer {
         std.posix.close(pipe[0]);
         std.posix.close(pipe[1]);
     }
+
+    const MaxPipeSize = struct {
+        var global_size: std.atomic.Value(usize) = .init(0);
+
+        fn get() !usize {
+            var max_size = global_size.load(.monotonic);
+            if (max_size > 0) return max_size;
+
+            const proc_fs = try std.fs.openFileAbsolute(
+                "/proc/sys/fs/pipe-max-size",
+                .{ .mode = .read_only },
+            );
+            defer proc_fs.close();
+
+            var size_buf: [16]u8 = undefined;
+            const size_len = try proc_fs.readAll(&size_buf);
+
+            max_size = @max(
+                std.heap.page_size_min,
+                try std.fmt.parseInt(usize, size_buf[0..size_len -| 1], 10),
+            );
+            global_size.store(max_size, .monotonic);
+            return max_size;
+        }
+    };
+
+    const F_SETPIPE_SZ = 1031;
+    var pipe_buf_size = try MaxPipeSize.get(); // larger pipe size to speed up downloads
+    pipe_buf_size = try std.posix.fcntl(pipe[1], F_SETPIPE_SZ, pipe_buf_size);
 
     tv = .{
         .sec = @intCast(config.min_timeout_ns / std.time.ns_per_s),
@@ -133,9 +161,9 @@ fn downloadToFile(
         std.mem.asBytes(&tv),
     );
 
-    const Period = struct { timestamp: std.time.Instant, transferred: usize };
-    var total: Period = .{ .timestamp = try .now(), .transferred = 0 };
-    var per_sec: Period = .{ .timestamp = total.timestamp, .transferred = 0 };
+    var timer = try std.time.Timer.start();
+    var last_elapsed = timer.read();
+    var total_downloaded: usize = 0;
 
     var past_warmup = false;
     var past_lockin = false;
@@ -143,15 +171,16 @@ fn downloadToFile(
     var in: usize = extra_body.len;
     var out: usize = 0;
     while (in < content_length) {
-        const now = try std.time.Instant.now();
-        const since_per_sec = now.since(per_sec.timestamp);
-
         const may_partial_move = (content_length - in) > pipe_buf_size;
         n = try splice(socket, pipe[1], content_length - in, .{
             .MOVE = true,
             .MORE = may_partial_move,
         });
         in += if (n > 0) n else return error.EndOfStream;
+
+        const total_elapsed = timer.read();
+        const current_elapsed = total_elapsed - last_elapsed;
+        total_downloaded += n;
 
         const will_move_more = in < content_length;
         out += splice(pipe[0], snapshot_file.handle, in - out, .{
@@ -163,22 +192,18 @@ fn downloadToFile(
             else => |err| return err,
         };
 
-        total.transferred += n;
-        per_sec.transferred += n;
-
-        const over_warmup_period = now.since(total.timestamp) >= config.min_warmup_ns;
+        const over_warmup_period = total_elapsed >= config.min_warmup_ns;
         const crossed_warmup_period = over_warmup_period and !past_warmup;
         past_warmup = over_warmup_period;
 
-        if (since_per_sec >= std.time.ns_per_s or crossed_warmup_period) {
-            const elapsed_secs = @as(f64, @floatFromInt(since_per_sec)) / std.time.ns_per_s;
-            const bytes_per_sec: u64 =
-                @intFromFloat(@as(f64, @floatFromInt(per_sec.transferred)) / elapsed_secs);
-            const total_progress = (@as(f64, @floatFromInt(total.transferred)) * 100.0) /
-                @as(f64, @floatFromInt(content_length));
+        if (current_elapsed >= std.time.ns_per_s or crossed_warmup_period) {
+            last_elapsed = total_elapsed;
 
-            per_sec.transferred = 0;
-            per_sec.timestamp = now;
+            const total_elapsed_secs = @as(f64, @floatFromInt(total_elapsed)) / std.time.ns_per_s;
+            const bytes_per_sec: u64 =
+                @intFromFloat(@as(f64, @floatFromInt(total_downloaded)) / total_elapsed_secs);
+            const total_progress = (@as(f64, @floatFromInt(total_downloaded)) * 100.0) /
+                @as(f64, @floatFromInt(content_length));
 
             const over_lockin_percent = (total_progress / 100.0) >= config.min_lockin_percent;
             const crossed_lockin_percent = over_lockin_percent and !past_lockin;
@@ -188,7 +213,7 @@ fn downloadToFile(
             logger.info().logf(" download speed: {B:.2}/s {d:.1}% ({B:.2}/{B:.3}) {s}", .{
                 bytes_per_sec,
                 total_progress,
-                total.transferred,
+                total_downloaded,
                 content_length,
                 if (crossed_lockin_percent) "(locked in)" else "",
             });

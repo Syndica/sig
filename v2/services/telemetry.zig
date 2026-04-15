@@ -58,7 +58,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     }
 
     const listen_addr: std.net.Address = .initIp4(.{ 0, 0, 0, 0 }, region.info.port);
-    var server = try listen_addr.listen(.{ .force_nonblocking = true });
+    var server = try listen_addr.listen(.{ .force_nonblocking = true, .reuse_address = true });
     defer server.deinit();
 
     try setRecvTimeOut(server.stream.handle, .{ .sec = 1, .usec = 0 });
