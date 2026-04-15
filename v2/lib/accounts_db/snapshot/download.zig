@@ -163,13 +163,13 @@ fn downloadToFile(
 
     var timer = try std.time.Timer.start();
     var last_elapsed = timer.read();
-    var total_downloaded: usize = 0;
+    var total_downloaded = extra_body.len;
 
     var past_warmup = false;
     var past_lockin = false;
 
-    var in: usize = extra_body.len;
-    var out: usize = 0;
+    var in = extra_body.len;
+    var out = extra_body.len;
     while (in < content_length) {
         const may_partial_move = (content_length - in) > pipe_buf_size;
         n = try splice(socket, pipe[1], content_length - in, .{
