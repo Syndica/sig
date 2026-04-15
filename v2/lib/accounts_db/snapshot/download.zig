@@ -1,5 +1,8 @@
 const std = @import("std");
-const tel = @import("../../telemetry.zig");
+const lib = @import("../../lib.zig");
+
+const tel = lib.telemetry;
+const SlotAndHash = lib.solana.SlotAndHash;
 
 pub const Config = struct {
     min_timeout_ns: u64,
@@ -11,16 +14,41 @@ pub const Config = struct {
 pub fn downloadSnapshot(
     logger: tel.Logger("downloadSnapshot"),
     snapshot_dir: std.fs.Dir,
-    path: []const u8,
+    slot_hash: SlotAndHash,
     addr: std.net.Address,
     config: Config,
 ) !std.fs.File {
-    const snapshot_file = try snapshot_dir.createFile(path, .{ .truncate = true });
-    errdefer {
-        snapshot_file.close();
-        snapshot_dir.deleteFile(path) catch {};
-    }
+    const TMP_FILE_EXT = ".part";
 
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dl_path = try std.fmt.bufPrint(
+        &path_buf,
+        "snapshot-{d}-{f}.tar.zst" ++ TMP_FILE_EXT,
+        .{ slot_hash.slot, slot_hash.hash },
+    );
+    const ready_path = dl_path[0 .. dl_path.len - TMP_FILE_EXT.len];
+
+    // download the file into dl_path
+    const snapshot_file = try snapshot_dir.createFile(dl_path, .{ .truncate = true });
+    downloadToFile(.from(logger), snapshot_file, ready_path, addr, config) catch |err| {
+        snapshot_file.close();
+        try snapshot_dir.deleteFile(dl_path);
+        return err;
+    };
+
+    // move the file from dl_path to ready_path
+    snapshot_file.close();
+    try snapshot_dir.rename(dl_path, ready_path);
+    return try snapshot_dir.openFile(ready_path, .{ .mode = .read_only });
+}
+
+fn downloadToFile(
+    logger: tel.Logger("downloadSnapshot"),
+    snapshot_file: std.fs.File,
+    path: []const u8,
+    addr: std.net.Address,
+    config: Config,
+) !void {
     const socket = try std.posix.socket(addr.any.family, std.posix.SOCK.STREAM, 0);
     defer std.posix.close(socket);
 
@@ -75,7 +103,7 @@ pub fn downloadSnapshot(
         }
     } else return error.MissingHttpContentLength;
 
-    if (content_length > 512 * 1024 * 1024 * 1024) {
+    if (content_length > 512 * 1024 * 1024 * 1024) { // 512 GB reasonable cap against storage DoS
         return error.SnapshotTooBig;
     }
 
@@ -157,7 +185,7 @@ pub fn downloadSnapshot(
             past_lockin = over_lockin_percent;
 
             // TODO: should be trace() instead when per-service filtering is implemented.
-            logger.info().logf(" download speed: {B:.2}/s {d:.1}% ({B:.2}/{B:.2}) {s}", .{
+            logger.info().logf(" download speed: {B:.2}/s {d:.1}% ({B:.2}/{B:.3}) {s}", .{
                 bytes_per_sec,
                 total_progress,
                 total.transferred,
@@ -185,7 +213,6 @@ pub fn downloadSnapshot(
     // TODO: should be debug() instead when per-service filtering is implemented.
     logger.info().logf(" commiting snapshot file to disk..", .{});
     try snapshot_file.sync();
-    return snapshot_file;
 }
 
 const SPLICE_F = packed struct(u8) {

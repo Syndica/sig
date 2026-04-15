@@ -61,31 +61,28 @@ fn findOrDownloadSnapshot(
         return snapshot_file;
     }
 
-    var path_buf: [512]u8 = undefined;
     logger.debug().logf("Waiting for snapshot from gossip...", .{});
     while (true) {
         const e = snapshot_addr_reader.next() orelse continue;
-        const addr = e.rpc_address;
-        const path = try std.fmt.bufPrint(
-            &path_buf,
-            "snapshot-{d}-{f}.tar.zst",
-            .{ e.slot_hash.slot, e.slot_hash.hash },
-        );
-        snapshot_addr_reader.markUsed();
+        defer snapshot_addr_reader.markUsed();
 
-        logger.info().logf("Downloading snapshot from http://{f}/{s}", .{ addr, path });
+        logger.info().logf(
+            "Downloading snapshot-{d}-{f} from {f}",
+            .{ e.slot_hash.slot, e.slot_hash.hash, e.rpc_address },
+        );
+
         const snapshot_file = lib.accounts_db.snapshot.downloadSnapshot(
             .from(logger),
             snapshot_dir,
-            path,
-            addr,
+            e.slot_hash,
+            e.rpc_address,
             dl_config,
         ) catch |err| {
-            logger.err().logf("snapshot download from {f} failed: {}", .{ addr, err });
+            logger.err().logf("snapshot download from {f} failed: {}", .{ e.rpc_address, err });
             continue;
         };
 
-        logger.info().logf("Downloaded {s}", .{path});
+        logger.info().logf("Downloaded snapshot-{d}-{f}", .{ e.slot_hash.slot, e.slot_hash.hash });
         return snapshot_file;
     }
 }
