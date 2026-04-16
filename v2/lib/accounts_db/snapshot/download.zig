@@ -234,10 +234,6 @@ fn downloadToFile(
             .MORE = may_partial_move,
         });
     }
-
-    // TODO: should be debug() instead when per-service filtering is implemented.
-    logger.info().logf(" commiting snapshot file to disk..", .{});
-    try snapshot_file.sync();
 }
 
 const SPLICE_F = packed struct(u8) {
