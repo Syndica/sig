@@ -832,7 +832,7 @@ test "TransactionStatusMetaBuilder.convertToInnerInstruction" {
             .index_in_transaction = 5,
         },
         .account_metas = account_metas,
-        .dedupe_map = @splat(0xff),
+        .dedupe_map = @splat(0xffff),
         .instruction_data = &[_]u8{ 0x01, 0x02, 0x03 },
         .owned_instruction_data = false,
     };
@@ -870,7 +870,7 @@ test "TransactionStatusMetaBuilder.convertInstructionTrace" {
         .ixn_info = .{
             .program_meta = .{ .pubkey = Pubkey.ZEROES, .index_in_transaction = 0 },
             .account_metas = metas0,
-            .dedupe_map = @splat(0xff),
+            .dedupe_map = @splat(0xffff),
             .instruction_data = &.{},
             .owned_instruction_data = false,
         },
@@ -883,7 +883,7 @@ test "TransactionStatusMetaBuilder.convertInstructionTrace" {
         .ixn_info = .{
             .program_meta = .{ .pubkey = Pubkey.ZEROES, .index_in_transaction = 1 },
             .account_metas = metas1,
-            .dedupe_map = @splat(0xff),
+            .dedupe_map = @splat(0xffff),
             .instruction_data = &.{},
             .owned_instruction_data = false,
         },
@@ -904,7 +904,7 @@ test "TransactionStatusMetaBuilder.convertInstructionTrace" {
         .ixn_info = .{
             .program_meta = .{ .pubkey = Pubkey.ZEROES, .index_in_transaction = 2 },
             .account_metas = metas2,
-            .dedupe_map = @splat(0xff),
+            .dedupe_map = @splat(0xffff),
             .instruction_data = &[_]u8{0x42},
             .owned_instruction_data = false,
         },

@@ -1197,7 +1197,7 @@ test getProcessedSiblingInstruction {
                     .index_in_transaction = 0,
                 },
                 .account_metas = .empty,
-                .dedupe_map = @splat(0xff),
+                .dedupe_map = @splat(0xffff),
                 .instruction_data = @as(*const [1]u8, &trace_indexes[index_in_trace]),
                 .owned_instruction_data = false,
             };
@@ -1481,7 +1481,7 @@ test "set and get return data" {
             .pubkey = program_id,
         },
         .account_metas = .{},
-        .dedupe_map = @splat(0xff),
+        .dedupe_map = @splat(0xffff),
         .instruction_data = &.{},
         .owned_instruction_data = false,
         .initial_account_lamports = 0,
