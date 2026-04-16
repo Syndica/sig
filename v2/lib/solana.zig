@@ -5,6 +5,7 @@ comptime {
 }
 
 pub const bincode = @import("solana/bincode.zig");
+pub const transaction = @import("solana/transaction.zig");
 
 pub const Hash = @import("solana/hash.zig").Hash;
 pub const Pubkey = @import("solana/pubkey.zig").Pubkey;

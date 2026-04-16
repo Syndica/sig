@@ -2,7 +2,7 @@ const std = @import("std");
 const tracy = @import("tracy");
 const lib = @import("lib.zig");
 
-pub const bincode = @import("gossip/bincode.zig");
+const bincode = lib.solana.bincode;
 pub const GossipNode = @import("gossip/node.zig").GossipNode;
 
 const Signature = lib.solana.Signature;

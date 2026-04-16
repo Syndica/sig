@@ -13,10 +13,6 @@
             .url = "git+https://github.com/Syndica/base58-zig#2acfa605d23d4d565a7e5a8ff35ea4a827eaaab9",
             .hash = "base58-0.2.0-wW0iYMIiAABft2x6NlD5mMmFx7-VWfHJq5EAgVQw068t",
         },
-        .binkode = .{
-            .url = "git+https://github.com/InKryption/binkode#c3321598d40e60b830cffb3aa1b98129f3a4abb8",
-            .hash = "binkode-0.0.0-e5-DyL6OAwBTkWPFR2aEvhdxNrSXBOp_wtIB4rVb5CpX",
-        },
         .tracy = .{
             .url = "git+https://github.com/Syndica/tracy-zig#a767a15d1b4d6d813e929cf352c2265ff97a16da",
             .hash = "zig_tracy-0.13.0-4TLLR1ZkAAAKZh0Gimq4P-Hyyd3b38XfFecg00aAqIaR",

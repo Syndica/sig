@@ -13,7 +13,7 @@ const Signature = lib.solana.Signature;
 const Pubkey = lib.solana.Pubkey;
 const Hash = lib.solana.Hash;
 
-const bincode = lib.gossip.bincode;
+const bincode = lib.solana.bincode;
 const GossipMessage = lib.gossip.GossipMessage;
 const GossipData = lib.gossip.GossipData;
 const GossipValue = lib.gossip.GossipValue;
