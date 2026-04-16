@@ -17,6 +17,7 @@ pub const bincode = @import("solana/bincode.zig");
 pub const ids = @import("solana/ids.zig");
 pub const features = @import("solana/features.zig");
 pub const snapshot = @import("solana/snapshot.zig");
+pub const transaction = @import("solana/transaction.zig");
 
 pub const Hash = @import("solana/hash.zig").Hash;
 pub const Pubkey = @import("solana/pubkey.zig").Pubkey;

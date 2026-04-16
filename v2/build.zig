@@ -92,7 +92,6 @@ pub fn build(b: *Build) !void {
         .tracy_on_demand = tracy_on_demand,
         .tracy_callstack = 6,
     }).module("tracy");
-    const binkode_mod = b.dependency("binkode", .{}).module("binkode");
     const base58_mod = b.dependency("base58", .{
         .target = target,
         .optimize = optimize,
@@ -158,7 +157,6 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "base58", .module = base58_mod },
-            .{ .name = "binkode", .module = binkode_mod },
             .{ .name = "tracy", .module = tracy_mod },
             .{ .name = "build-options", .module = build_options_mod },
             .{ .name = "zstd", .module = zstd_mod },
@@ -271,7 +269,6 @@ pub fn build(b: *Build) !void {
                 .{ .name = "lib", .module = lib_mod },
                 .{ .name = "start_service", .module = start_service_mod },
                 .{ .name = "tracy", .module = tracy_mod },
-                .{ .name = "binkode", .module = binkode_mod },
             },
         });
 
