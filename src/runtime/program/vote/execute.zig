@@ -1015,8 +1015,13 @@ fn getVoteStateChecked(
         .v4 => {
             // New flow after v4 feature gate activation:
             // V4 path rejects V0_23_5 at deserialization in agave;
-            // check explicitly here. Always checks uninitialized.
-            if (versioned_state == .v0_23_5 or versioned_state.isUninitialized()) {
+            // check explicitly here.
+            // [agave] VoteStateV3::deserialize_into_ptr returns InvalidAccountData
+            // for variant 0 (V0_23_5) when compiled for target_os = "solana".
+            if (versioned_state == .v0_23_5) {
+                return InstructionError.InvalidAccountData;
+            }
+            if (versioned_state.isUninitialized()) {
                 return InstructionError.UninitializedAccount;
             }
         },

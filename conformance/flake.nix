@@ -90,6 +90,14 @@
       mkdir -p env
       ln -sfn ${test-vectors} env/test-vectors
 
+      if [ ! -d env/syndica-test-vectors ]; then
+        echo "Cloning Syndica test-vectors..."
+        git clone git@github.com:Syndica/test-vectors.git env/syndica-test-vectors
+      else
+        echo "Updating Syndica test-vectors..."
+        git -C env/syndica-test-vectors pull --ff-only origin main
+      fi
+
       python3.13 -m venv env/venv
       source env/venv/bin/activate
       ln -sfn "$PWD/run.py" env/venv/bin/run

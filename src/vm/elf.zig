@@ -286,6 +286,7 @@ fn parseLenient(
         .ro_section = ro_section,
         .text_vaddr = text_section_vaddr,
         .version = version,
+        .text_section_length = text_range.hi - text_range.lo,
     };
 }
 

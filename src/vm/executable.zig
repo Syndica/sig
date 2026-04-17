@@ -19,6 +19,9 @@ pub const Executable = struct {
     text_vaddr: u64,
     function_registry: Registry,
     config: Config,
+    /// Original text section byte length (may not be a multiple of instruction size).
+    /// Used by the verifier to reject programs with misaligned text sections.
+    text_section_length: usize = 0,
 
     pub fn fromAsm(
         allocator: std.mem.Allocator,
@@ -104,6 +107,7 @@ pub const Executable = struct {
         UnalignedImmediate,
         ShiftWithOverflow,
         JumpToMiddleOfLddw,
+        ProgramLengthNotMultiple,
     };
 
     /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/verifier.rs#L227
@@ -116,6 +120,9 @@ pub const Executable = struct {
 
         const version = self.version;
         const instructions = self.instructions;
+        // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/verifier.rs#L94-L101
+        // check_prog_len: text section must be a non-zero multiple of instruction size.
+        if (self.text_section_length % 8 != 0) return error.ProgramLengthNotMultiple;
         if (instructions.len == 0) return error.NoProgram;
 
         var function_start: u64 = 0;

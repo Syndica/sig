@@ -70,6 +70,11 @@ def main():
         action="store_true",
         help="Run with the expectation from the generated fixtures instead of vectors.",
     )
+    parser.add_argument(
+        "--custom",
+        action="store_true",
+        help="Run custom fixtures from env/syndica-test-vectors/ instead of env/test-vectors/.",
+    )
 
     config = parser.parse_args()
 
@@ -79,7 +84,8 @@ def main():
         for fixture in config.fixtures:
             results.append(run_test(fixture, config, len(fixture)))
     else:
-        with open(path("scripts/fixtures.txt")) as f:
+        fixtures_list = "scripts/custom-fixtures.txt" if config.custom else "scripts/fixtures.txt"
+        with open(path(fixtures_list)) as f:
             TESTS = [line.strip() for line in f if line.strip()]
         line_length = max(len(test) for test in TESTS)
         for test in TESTS:
@@ -126,7 +132,8 @@ def run_test(vectors, config, pad):
     elif not config.run_separately:
         print_noln(f"{vectors:<{pad}}")
 
-    vectors_path = path(f"env/test-vectors/{vectors}")
+    vectors_base = "env/syndica-test-vectors" if config.custom else "env/test-vectors"
+    vectors_path = path(f"{vectors_base}/{vectors}")
     created_path = path(f"env/created-fixtures/{vectors}")
     to_run_path = created_path if config.use_created or config.create else vectors_path
     outputs_folder = os.path.dirname(vectors) if vectors.endswith(".fix") else vectors
