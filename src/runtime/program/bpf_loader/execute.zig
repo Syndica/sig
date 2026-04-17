@@ -81,7 +81,20 @@ pub fn execute(
             );
             return InstructionError.ProgramFailedToComplete;
         } else {
-            return sig.vm.instructionErrorFromExecutionError(err);
+            const instruction_err = sig.vm.instructionErrorFromExecutionError(err);
+            // When a CPI callee fails, ProgramFailedToComplete propagates back as an
+            // InstructionError through the caller's VM. The executor skips logging for
+            // ProgramFailedToComplete (to avoid double-logging for direct VM crashes),
+            // so we must log the caller's failure here.
+            // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L576-L579
+            if (instruction_err == InstructionError.ProgramFailedToComplete) {
+                try stable_log.programFailure(
+                    ic.tc,
+                    ic.ixn_info.program_meta.pubkey,
+                    err,
+                );
+            }
+            return instruction_err;
         }
     };
 }
@@ -118,8 +131,8 @@ fn executeBpfProgram(
         .account_data_direct_mapping,
         ic.tc.slot,
     );
-    const stricter_abi_and_runtime_constraints = ic.tc.feature_set.active(
-        .stricter_abi_and_runtime_constraints,
+    const virtual_address_space_adjustments = ic.tc.feature_set.active(
+        .virtual_address_space_adjustments,
         ic.tc.slot,
     );
     const mask_out_rent_epoch_in_vm_serialization = ic.tc.feature_set.active(
@@ -136,7 +149,7 @@ fn executeBpfProgram(
         allocator,
         ic,
         account_data_direct_mapping,
-        stricter_abi_and_runtime_constraints,
+        virtual_address_space_adjustments,
         mask_out_rent_epoch_in_vm_serialization,
     );
     defer serialized.deinit(allocator);
@@ -196,7 +209,7 @@ fn executeBpfProgram(
         result,
         &ic.tc.custom_error,
         &ic.tc.compute_meter,
-        stricter_abi_and_runtime_constraints,
+        virtual_address_space_adjustments,
         ic.tc.feature_set.active(.deplete_cu_meter_on_vm_failure, ic.tc.slot),
     );
 
@@ -205,7 +218,7 @@ fn executeBpfProgram(
         bpf_serialize.deserializeParameters(
             allocator,
             ic,
-            stricter_abi_and_runtime_constraints,
+            virtual_address_space_adjustments,
             account_data_direct_mapping,
             serialized.memory.items,
             serialized.account_metas.constSlice(),
@@ -223,7 +236,7 @@ fn handleExecutionResult(
     result: sig.vm.interpreter.Result,
     custom_error: *?u32,
     compute_meter: *u64,
-    stricter_abi_and_runtime_constraints: bool,
+    virtual_address_space_adjustments: bool,
     deplete_cu_meter: bool,
 ) ?ExecutionError {
     switch (result) {
@@ -239,7 +252,7 @@ fn handleExecutionResult(
             const err_kind = sig.vm.getExecutionErrorKind(err);
             if (deplete_cu_meter and err_kind != .Syscall)
                 compute_meter.* = 0;
-            if (stricter_abi_and_runtime_constraints and err == error.AccessViolation)
+            if (virtual_address_space_adjustments and err == error.AccessViolation)
                 std.debug.print("TODO: Handle AccessViolation: {s}\n", .{@errorName(err)});
             return err;
         },
@@ -1332,7 +1345,7 @@ pub fn executeV3Upgrade(
         V3State.sizeOfBuffer(0),
     );
 
-    try ic.tc.log("Upgraded program {any}", .{new_program_id});
+    try ic.tc.log("Upgraded program {f}", .{new_program_id});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L946-L1010

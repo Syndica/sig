@@ -225,6 +225,7 @@ pub fn build(b: *Build) !void {
     const test_send_transactions_step = b.step("test_send_transactions", "Attempt to land transactions on testnet using QUIC client");
     const test_mock_transfers_step = b.step("test_mock_transfers", "Test MockTransferService in RPC submission mode");
     const docs_step = b.step("docs", "Generate and install documentation for the Sig Library");
+    const feature_set_id_step = b.step("feature_set_id", "Print the generated feature set ID");
 
     // Dependencies
     const dep_opts = .{
@@ -302,7 +303,12 @@ pub fn build(b: *Build) !void {
     });
 
     // Feature set ID for version compatibility
-    const feature_set_id = b.createModule(.{ .root_source_file = generateFeatureSetId(b) });
+    const feature_set_id_gen = addFeatureSetIdGenerator(b);
+    const feature_set_id = b.createModule(.{
+        .root_source_file = b.addRunArtifact(feature_set_id_gen).addOutputFileArg("feature-set-id.zig"),
+    });
+    const print_feature_set_id = b.addRunArtifact(feature_set_id_gen);
+    feature_set_id_step.dependOn(&print_feature_set_id.step);
 
     // Non-circulating supply pubkeys (pre-decoded at build time)
     const non_circulating_supply = b.createModule(.{ .root_source_file = generateNonCirculatingSupply(b) });
@@ -598,12 +604,12 @@ fn generateTable(b: *Build) Build.LazyPath {
     return table_file;
 }
 
-fn generateFeatureSetId(b: *Build) Build.LazyPath {
+fn addFeatureSetIdGenerator(b: *Build) *Build.Step.Compile {
     // This generator runs on the host at build time, so its dependencies must
     // be fetched with default (host) target options — not the cross-compilation
     // target used for the main build. This should be repeated for other scripts if they
     // import a library in the future.
-    const gen = b.addExecutable(.{
+    return b.addExecutable(.{
         .name = "gen_feature_set_id",
         .root_module = b.createModule(.{
             .target = b.graph.host,
@@ -623,7 +629,6 @@ fn generateFeatureSetId(b: *Build) Build.LazyPath {
             },
         }),
     });
-    return b.addRunArtifact(gen).addOutputFileArg("feature-set-id.zig");
 }
 
 fn generateNonCirculatingSupply(b: *Build) Build.LazyPath {

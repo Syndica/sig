@@ -298,7 +298,8 @@ fn resolveLookupTableAccounts(
         else
             table.meta.last_extended_slot_start_index;
 
-        std.debug.assert(table.meta.last_extended_slot_start_index <= table.addresses.len);
+        if (active_addresses_len > table.addresses.len)
+            return error.InvalidAddressLookupTableData;
 
         // resolve writable addresses
         for (lookup.writable_indexes) |index| {

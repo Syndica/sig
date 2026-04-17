@@ -121,6 +121,15 @@ fn executeInstruction(
     );
 
     if (pb_instr_ctx.program_id.len != Pubkey.SIZE) return error.OutOfBounds;
+    const program_id = Pubkey{ .data = pb_instr_ctx.program_id[0..Pubkey.SIZE].* };
+
+    if (sig.runtime.program.PRECOMPILE.get(&program_id) != null) {
+        const instruction_datas = try allocator.alloc([]const u8, 1);
+        instruction_datas[0] = pb_instr_ctx.data;
+        tc.instruction_datas = instruction_datas;
+    }
+    defer if (tc.instruction_datas) |instruction_datas| allocator.free(instruction_datas);
+
     const instr_info = try utils.createInstructionInfo(
         allocator,
         &tc,

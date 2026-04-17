@@ -1050,16 +1050,18 @@ fn setVoteState(
 ) (error{OutOfMemory} || InstructionError)!void {
     switch (state.*) {
         .v4 => |v4_state| {
-            // [SIMD-0185] v4: resize to 3762 if smaller, then check rent exempt, then serialize v4.
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.4/programs/vote/src/vote_state/handler.rs#L655-L673
+            // [SIMD-0185] v4: check rent exempt first, then resize, then serialize v4.
+            // Unlike v3, do not gracefully fall back to storing v1_14_11.
             if (account.constAccountData().len < VoteStateV4.MAX_VOTE_STATE_SIZE) {
+                if (!rent.isExempt(account.account.lamports, VoteStateV4.MAX_VOTE_STATE_SIZE)) {
+                    return InstructionError.AccountNotRentExempt;
+                }
                 try account.setDataLength(
                     allocator,
                     resize_delta,
                     VoteStateV4.MAX_VOTE_STATE_SIZE,
                 );
-                if (!rent.isExempt(account.account.lamports, VoteStateV4.MAX_VOTE_STATE_SIZE)) {
-                    return InstructionError.AccountNotRentExempt;
-                }
             }
             return account.serializeIntoAccountData(VoteStateVersions{ .v4 = v4_state });
         },
