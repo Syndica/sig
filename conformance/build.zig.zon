@@ -7,8 +7,8 @@
     .dependencies = .{
         .sig = .{ .path = "../" },
         .pb = .{
-            .url = "git+https://github.com/Arwalk/zig-protobuf#66d91758c2d4e74feecee0889f171cfc26899617",
-            .hash = "protobuf-3.0.0-0e82ahnTKAChABSv79UCNbcik-g1JNoA1wGAPZcvYzFH",
+            .url = "git+https://github.com/yewman/zig-protobuf#1da1301ca9a00d2bc6ee1e8988ded9a93b80a7b8",
+            .hash = "protobuf-3.0.0-0e82au3YKAAhdxzX7URyHNW4cjLtUovf4vfCOM8ZI4gx",
         },
     },
 }
