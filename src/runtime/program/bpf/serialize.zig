@@ -23,6 +23,61 @@ const INPUT_START = sig.vm.memory.INPUT_START;
 /// `assert_eq(std::mem::align_of::<u128>(), 8)` is true for BPF but not for some host machines
 pub const BPF_ALIGN_OF_U128: usize = 8;
 
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L29
+/// Alignment of the host memory buffer. Agave uses `AlignedMemory::<HOST_ALIGN>` with HOST_ALIGN=16.
+pub const HOST_ALIGN: std.mem.Alignment = .@"16"; // 16 bytes
+
+/// Wraps an allocator to enforce a minimum alignment of HOST_ALIGN (16 bytes).
+/// This is necessary because Agave uses AlignedMemory::<HOST_ALIGN> for the
+/// serialization buffer, which guarantees 16-byte aligned host memory for
+/// input memory regions. The Zig arena allocator only guarantees 8-byte
+/// alignment for its internal nodes, so we need this wrapper.
+const HostAlignAllocator = struct {
+    child: std.mem.Allocator,
+
+    fn allocator(self: *const HostAlignAllocator) std.mem.Allocator {
+        return .{
+            .ptr = @ptrCast(@constCast(self)),
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .remap = remap,
+                .free = free,
+            },
+        };
+    }
+
+    fn clampAlign(alignment: std.mem.Alignment) std.mem.Alignment {
+        return if (@intFromEnum(alignment) < @intFromEnum(HOST_ALIGN)) HOST_ALIGN else alignment;
+    }
+
+    fn alloc(ctx: *anyopaque, n: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *const HostAlignAllocator = @ptrCast(@alignCast(ctx));
+        return self.child.vtable.alloc(self.child.ptr, n, clampAlign(alignment), ra);
+    }
+
+    fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) bool {
+        const self: *const HostAlignAllocator = @ptrCast(@alignCast(ctx));
+        return self.child.vtable.resize(self.child.ptr, buf, clampAlign(alignment), new_len, ra);
+    }
+
+    fn remap(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
+        const self: *const HostAlignAllocator = @ptrCast(@alignCast(ctx));
+        const clamped = clampAlign(alignment);
+        const result = self.child.vtable.remap(self.child.ptr, buf, clamped, new_len, ra) orelse return null;
+        // The child allocator's remap may return a pointer that doesn't satisfy
+        // our minimum alignment (e.g. arena allocator's resize ignores alignment).
+        // Reject it so the caller falls back to alloc+copy.
+        if (!clamped.check(@intFromPtr(result))) return null;
+        return result;
+    }
+
+    fn free(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, ra: usize) void {
+        const self: *const HostAlignAllocator = @ptrCast(@alignCast(ctx));
+        self.child.vtable.free(self.child.ptr, buf, clampAlign(alignment), ra);
+    }
+};
+
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/account-info/src/lib.rs#L17-L18
 pub const MAX_PERMITTED_DATA_INCREASE: usize = 1_024 * 10;
 
@@ -44,6 +99,7 @@ pub const SerializedAccountMeta = struct {
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L31
 pub const Serializer = struct {
     allocator: std.mem.Allocator,
+    host_align_alloc: HostAlignAllocator,
     buffer: std.ArrayListUnmanaged(u8),
     regions: std.ArrayListUnmanaged(Region),
     vaddr: u64,
@@ -60,9 +116,10 @@ pub const Serializer = struct {
         virtual_address_space_adjustments: bool,
         account_data_direct_mapping: bool,
     ) error{OutOfMemory}!Serializer {
-        return .{
+        var self: Serializer = .{
             .allocator = allocator,
-            .buffer = try std.ArrayListUnmanaged(u8).initCapacity(allocator, size),
+            .host_align_alloc = .{ .child = allocator },
+            .buffer = undefined,
             .regions = std.ArrayListUnmanaged(Region){},
             .vaddr = region_start,
             .region_start = 0,
@@ -70,10 +127,18 @@ pub const Serializer = struct {
             .account_data_direct_mapping = account_data_direct_mapping,
             .virtual_address_space_adjustments = virtual_address_space_adjustments,
         };
+        self.buffer = try std.ArrayListUnmanaged(u8).initCapacity(self.bufAllocator(), size);
+        return self;
+    }
+
+    /// Returns an allocator that enforces HOST_ALIGN minimum alignment for
+    /// the serialization buffer, matching Agave's AlignedMemory::<HOST_ALIGN>.
+    fn bufAllocator(self: *Serializer) std.mem.Allocator {
+        return self.host_align_alloc.allocator();
     }
 
     pub fn deinit(self: *Serializer) void {
-        self.buffer.deinit(self.allocator);
+        self.buffer.deinit(self.bufAllocator());
         self.regions.deinit(self.allocator);
     }
 
@@ -105,7 +170,7 @@ pub const Serializer = struct {
                 ) - account.constAccountData().len;
 
                 try self.buffer.appendNTimes(
-                    self.allocator,
+                    self.bufAllocator(),
                     0,
                     MAX_PERMITTED_DATA_INCREASE + align_offset,
                 );
@@ -119,7 +184,7 @@ pub const Serializer = struct {
             _ = self.writeBytes(account.constAccountData()); // intentionally ignored
 
             if (self.aligned) try self.buffer.appendNTimes(
-                self.allocator,
+                self.bufAllocator(),
                 0,
                 MAX_PERMITTED_DATA_INCREASE,
             );
@@ -159,9 +224,9 @@ pub const Serializer = struct {
             ) - account.constAccountData().len;
 
             if (!self.account_data_direct_mapping) {
-                try self.buffer.appendNTimes(self.allocator, 0, align_offset);
+                try self.buffer.appendNTimes(self.bufAllocator(), 0, align_offset);
             } else {
-                try self.buffer.appendNTimes(self.allocator, 0, BPF_ALIGN_OF_U128);
+                try self.buffer.appendNTimes(self.bufAllocator(), 0, BPF_ALIGN_OF_U128);
                 self.region_start += BPF_ALIGN_OF_U128 -| align_offset;
             }
         }
@@ -210,10 +275,12 @@ const SerializeReturn = struct {
     regions: std.ArrayListUnmanaged(Region),
     account_metas: std14.BoundedArray(SerializedAccountMeta, InstructionInfo.MAX_ACCOUNT_METAS),
     instruction_data_offset: u64,
+    host_align_alloc: HostAlignAllocator,
 
     pub fn deinit(self: *SerializeReturn, allocator: std.mem.Allocator) void {
-        self.memory.deinit(allocator);
-        self.regions.deinit(allocator);
+        _ = allocator;
+        self.memory.deinit(self.host_align_alloc.allocator());
+        self.regions.deinit(self.host_align_alloc.child);
     }
 };
 
@@ -381,9 +448,10 @@ fn serializeParametersUnaligned(
     const instruction_data_offset = serializer.writeBytes(instruction_data);
     _ = serializer.writeBytes(&program_id.data);
 
+    const host_align_alloc = serializer.host_align_alloc;
     var memory, var regions = try serializer.finish();
     errdefer {
-        memory.deinit(allocator);
+        memory.deinit(host_align_alloc.allocator());
         regions.deinit(allocator);
     }
 
@@ -392,6 +460,7 @@ fn serializeParametersUnaligned(
         .regions = regions,
         .account_metas = account_metas,
         .instruction_data_offset = instruction_data_offset,
+        .host_align_alloc = host_align_alloc,
     };
 }
 
@@ -510,9 +579,10 @@ fn serializeParametersAligned(
     const instruction_data_offset = serializer.writeBytes(instruction_data);
     _ = serializer.writeBytes(&program_id.data);
 
+    const host_align_alloc = serializer.host_align_alloc;
     var memory, var regions = try serializer.finish();
     errdefer {
-        memory.deinit(allocator);
+        memory.deinit(host_align_alloc.allocator());
         regions.deinit(allocator);
     }
 
@@ -521,6 +591,7 @@ fn serializeParametersAligned(
         .regions = regions,
         .account_metas = account_metas,
         .instruction_data_offset = instruction_data_offset,
+        .host_align_alloc = host_align_alloc,
     };
 }
 
