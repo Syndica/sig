@@ -9,6 +9,13 @@
     .shred_network = .{
         .recv_port = 8002,
     },
+    .accounts_db = .{
+        .folder_path = "./validator",
+        .min_snapshot_download_speed_mb = 20,
+        .min_snapshot_download_warmup_ms = 10_000,
+        .min_snapshot_download_timeout_ms = 10_000,
+        .min_snapshot_download_lockin_percent = 0.10,
+    },
     .telemetry = .{
         .port = 12345,
     },

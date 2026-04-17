@@ -257,7 +257,7 @@ pub const bpf = struct {
     }
 
     /// Only allows writing to stderr, sleeping, and exiting.
-    pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [42]sock_filter {
+    pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [72]sock_filter {
         // load syscall number
         const preamble = .{stmt(LD + W + ABS, @offsetOf(SECCOMP.data, "nr"))};
 
@@ -277,12 +277,30 @@ pub const bpf = struct {
             allowSyscall(@intFromEnum(syscalls.clock_nanosleep)) ++
             allowSyscall(@intFromEnum(syscalls.exit)) ++
             allowSyscall(@intFromEnum(syscalls.exit_group)) ++
-            // net tile
+            // net
             allowSyscall(@intFromEnum(syscalls.sendto)) ++
             allowSyscall(@intFromEnum(syscalls.recvfrom)) ++
             allowSyscall(@intFromEnum(syscalls.close)) ++
             allowSyscall(@intFromEnum(syscalls.bind)) ++
             allowSyscall(@intFromEnum(syscalls.socket)) ++
+            // accounts_db
+            allowSyscall(@intFromEnum(syscalls.openat)) ++ // accounts_db / snapshot dl
+            allowSyscall(@intFromEnum(syscalls.pread64)) ++ // accounts_db
+            allowSyscall(@intFromEnum(syscalls.pwrite64)) ++ // accounts_db + snapshot dl
+            allowSyscall(@intFromEnum(syscalls.fsync)) ++ // accounts_db + snapshot dl
+            allowSyscall(@intFromEnum(syscalls.ftruncate)) ++ // accounts_db + snapshot dl
+            // snapshot download
+            allowSyscall(@intFromEnum(syscalls.lseek)) ++ // snapshot find
+            allowSyscall(@intFromEnum(syscalls.getdents64)) ++ // snapshot find
+            allowSyscall(@intFromEnum(syscalls.connect)) ++ // snapshot dl
+            allowSyscall(@intFromEnum(syscalls.unlinkat)) ++ // deleteFile on snapshot when fail dl
+            allowSyscall(@intFromEnum(syscalls.renameat)) ++ // snapshot dl (change download name)
+            allowSyscall(@intFromEnum(syscalls.setsockopt)) ++ // snapshot dl (timeout)
+            allowSyscall(@intFromEnum(syscalls.pipe2)) ++ // snapshot dl (fast transfer)
+            allowSyscall(@intFromEnum(syscalls.splice)) ++ // snapshot dl (fast transfer)
+            allowSyscall(@intFromEnum(syscalls.write)) ++ // snapshot dl
+            allowSyscall(@intFromEnum(syscalls.read)) ++ // snapshot dl (read proc-fs config)
+            allowSyscall(@intFromEnum(syscalls.fcntl)) ++ // snapshot dl (configure pipe(2) size)
             // telemetry
             allowSyscall(@intFromEnum(syscalls.getsockname)) ++
             allowSyscall(@intFromEnum(syscalls.listen)) ++
@@ -290,7 +308,6 @@ pub const bpf = struct {
             allowSyscall(@intFromEnum(syscalls.pwritev)) ++
             allowSyscall(@intFromEnum(syscalls.readv)) ++
             allowSyscall(@intFromEnum(syscalls.sendmsg)) ++
-            allowSyscall(@intFromEnum(syscalls.setsockopt)) ++
             //
             syscall_fd_filters ++
             fall_through;

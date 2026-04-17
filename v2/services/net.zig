@@ -76,42 +76,46 @@ fn mainInner(
     while (true) {
         // send
         for (pairs, sockets[0..sockets_len]) |pair, sock| {
-            var it = pair.send.get(.reader);
-            defer it.markUsed();
+            var packet_reader = pair.send.get(.reader);
+            defer packet_reader.markUsed();
 
-            // TODO: use std.os.linux.sendmmsg
-            while (it.next()) |p| {
-                const bytes = try std.posix.sendto(
+            // TODO: buffer up std.os.linux.sendmmsg across multiple pairs
+            while (packet_reader.peek()) |p| {
+                const sent = std.posix.sendto(
                     sock,
                     p.data[0..p.size],
-                    std.posix.MSG.NOSIGNAL,
+                    0,
                     &p.addr.any,
                     p.addr.getOsSockLen(),
-                );
-                std.debug.assert(bytes == p.size);
+                ) catch |e| switch (e) {
+                    error.WouldBlock => break,
+                    else => |err| return err,
+                };
+                std.debug.assert(sent == p.size);
+                _ = packet_reader.next();
                 metrics.send_packets.increment(1);
             }
         }
 
         // recv
         for (pairs, sockets[0..sockets_len]) |pair, sock| {
-            var it = pair.recv.get(.writer);
-            defer it.markUsed();
+            var packet_writer = pair.recv.get(.writer);
+            defer packet_writer.markUsed();
 
-            // TODO: use std.os.linux.recvmmsg
-            while (it.peek()) |ptr| {
+            // TODO: buffer std.os.linux.recvmmsg across multiple pairs.
+            while (packet_writer.peek()) |p| {
                 var addr_len: std.posix.socklen_t = @sizeOf(std.net.Address);
-                ptr.size = @intCast(std.posix.recvfrom(
+                p.size = @intCast(std.posix.recvfrom(
                     sock,
-                    &ptr.data,
+                    &p.data,
                     0,
-                    &ptr.addr.any,
+                    &p.addr.any,
                     &addr_len,
-                ) catch |err| switch (err) {
+                ) catch |e| switch (e) {
                     error.WouldBlock => break,
-                    else => |e| return e,
+                    else => |err| return err,
                 });
-                _ = it.next();
+                _ = packet_writer.next();
                 metrics.recv_packets.increment(1);
             }
         }

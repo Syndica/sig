@@ -184,6 +184,14 @@ pub const Region = union(enum) {
         schedule_string: *std.Io.Reader,
         shred_version: u16,
     },
+    snapshot_queue: void,
+    accounts_db_config: struct {
+        folder: []const u8,
+        min_snapshot_download_speed_mb: u64,
+        min_snapshot_download_warmup_ms: u64,
+        min_snapshot_download_timeout_ms: u64,
+        min_snapshot_download_lockin_percent: f64,
+    },
 
     telemetry: tel.Region.Info,
 
@@ -192,6 +200,8 @@ pub const Region = union(enum) {
             .net_pair => @sizeOf(lib.net.Pair),
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
+            .snapshot_queue => @sizeOf(lib.accounts_db.SnapshotQueue),
+            .accounts_db_config => @sizeOf(lib.accounts_db.Config),
             .telemetry => |cfg| cfg.regionSize(),
         };
     }
@@ -226,7 +236,34 @@ pub const Region = union(enum) {
                 );
                 data.shred_version = cfg.shred_version;
             },
+            .snapshot_queue => {
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.SnapshotQueue));
+                const data: *lib.accounts_db.SnapshotQueue = @ptrCast(buf);
 
+                data.incoming.init();
+                data.outgoing.init();
+            },
+            .accounts_db_config => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.Config));
+                const data: *lib.accounts_db.Config = @ptrCast(buf);
+
+                data.folder_path_len = std.math.cast(u8, cfg.folder.len) orelse
+                    return error.FolderPathTooLong;
+                @memcpy(data.folder_path[0..cfg.folder.len], cfg.folder);
+
+                if (cfg.min_snapshot_download_lockin_percent > 1.0) {
+                    std.debug.panic("min_snapshot_download_lockin_percent must be 0 to 1.0: {}", .{
+                        cfg.min_snapshot_download_lockin_percent,
+                    });
+                }
+
+                data.snapshot_download = .{
+                    .min_speed_bytes = cfg.min_snapshot_download_speed_mb * 1_000_000,
+                    .min_warmup_ns = cfg.min_snapshot_download_warmup_ms * 1_000_000,
+                    .min_timeout_ns = cfg.min_snapshot_download_timeout_ms * 1_000_000,
+                    .min_lockin_percent = cfg.min_snapshot_download_lockin_percent,
+                };
+            },
             .telemetry => |info| {
                 std.debug.assert(buf.len == info.regionSize());
                 const data: *tel.Region = @ptrCast(buf);
@@ -313,7 +350,7 @@ fn serviceMap(
                         var exists = false;
                         if (map.getPtr(instance)) |entry| {
                             for (entry.items) |existing_result| {
-                                if (std.meta.eql(existing_result, result)) {
+                                if (lib.util.eql(existing_result, result)) {
                                     exists = true;
                                     break;
                                 }

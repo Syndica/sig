@@ -8,10 +8,22 @@ const test_install_dir: Build.Step.InstallArtifact.Options.Dir = .{
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const use_llvm = b.option(bool, "use-llvm", "Force usage of LLVM (currently ignored for some artifacts).");
+    const use_llvm = b.option(
+        bool,
+        "use-llvm",
+        "Force usage of LLVM (currently ignored for some artifacts).",
+    );
     const artifact_opts: ExeOutput.InitOptions = .{
-        .no_bin = b.option(bool, "no-bin", "Don't install artifacts implied by specified steps.") orelse false,
-        .no_run = b.option(bool, "no-run", "Don't execute run steps implied by the specified steps.") orelse false,
+        .no_bin = b.option(
+            bool,
+            "no-bin",
+            "Don't install artifacts implied by specified steps.",
+        ) orelse false,
+        .no_run = b.option(
+            bool,
+            "no-run",
+            "Don't execute run steps implied by the specified steps.",
+        ) orelse false,
     };
 
     const tracy_enable = b.option(bool, "enable-tracy", "Enables tracy") orelse false;
@@ -188,8 +200,10 @@ fn addExeOutputs(
     const install_step = b.getInstallStep();
     install_step.dependOn(&artifact.step);
 
-    const install_opt = if (artifact_opts.no_bin) null else b.addInstallArtifact(artifact, install_opts);
-    const run_opt = if (artifact_opts.no_run) null else b.addRunArtifact(artifact);
+    const install_opt =
+        if (artifact_opts.no_bin) null else b.addInstallArtifact(artifact, install_opts);
+    const run_opt =
+        if (artifact_opts.no_run) null else b.addRunArtifact(artifact);
 
     if (install_opt) |install| {
         artifact_step.dependOn(&install.step);
