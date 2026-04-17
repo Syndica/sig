@@ -1,3 +1,15 @@
+//! This is the root process, in charge of initialising and spawning all services.
+//!
+//! Responsibilities:
+//!  - Parsing config
+//!  - Creation of shared memory regions
+//!  - Initialising shared data structures / passing through config
+//!  - Creating sandboxed processes (unsandboxed single-process also supported for e.g. profiling)
+//!  - Waiting for first service failure, and shutdown
+//!
+//! See `services` for how this works.
+//!
+
 const std = @import("std");
 
 comptime {
@@ -87,6 +99,7 @@ pub fn main() !void {
         .{ .service = .net },
         .{ .service = .gossip },
         .{ .service = .telemetry },
+        .{ .service = .replay },
     };
 
     const shared_regions = services.toSharedRegions(.{
@@ -118,6 +131,9 @@ pub fn main() !void {
 
             .histogram_data_len = 4096 * 3,
         },
+
+        // shred receiver -> replay
+        .deshredded_out = {},
     });
 
     switch (config.sandboxing_mode) {

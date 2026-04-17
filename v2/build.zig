@@ -24,7 +24,7 @@ pub fn build(b: *Build) !void {
         bool,
         "tracy-on-demand",
         "Start capturing profiler data when tracy starts",
-    ) orelse true;
+    ) orelse false;
 
     const filters = b.option(
         []const []const u8,
@@ -37,6 +37,7 @@ pub fn build(b: *Build) !void {
     const test_step = b.step("test", "Run unit tests");
     const check_step = b.step("check", "Check step.");
     const ci_step = b.step("ci", "Run all checks used for CI");
+    const docs_step = b.step("docs", "Emit docs");
 
     ci_step.dependOn(test_step);
     ci_step.dependOn(install_step);
@@ -120,6 +121,10 @@ pub fn build(b: *Build) !void {
         .use_llvm = true,
     });
 
+    const DocGenModule = struct { name: []const u8, module: *Build.Module };
+    var doc_service_modules: std.ArrayListUnmanaged(DocGenModule) = .empty;
+    defer doc_service_modules.deinit(b.allocator);
+
     // build + link services
     inline for (@import("init/services.zon").services) |s| {
         const service_name = @tagName(s.name);
@@ -131,8 +136,9 @@ pub fn build(b: *Build) !void {
             .omit_frame_pointer = false,
             .imports = &.{
                 .{ .name = "lib", .module = lib_mod },
-                .{ .name = "start", .module = start_service_mod },
+                .{ .name = "start_service", .module = start_service_mod },
                 .{ .name = "tracy", .module = tracy_mod },
+                .{ .name = "binkode", .module = binkode_mod },
             },
         });
 
@@ -149,6 +155,62 @@ pub fn build(b: *Build) !void {
             .filters = filters,
             .use_llvm = use_llvm,
         });
+
+        try doc_service_modules.append(
+            b.allocator,
+            .{ .name = service_name, .module = service_mod },
+        );
+    }
+
+    // generates unified docs for all modules
+    // TODO: `zig build docs` should probably disable installing/building sig binaries
+    {
+        const gen_docs_run = b.addRunArtifact(
+            b.addExecutable(.{
+                .name = "sig-init",
+                .root_module = b.createModule(.{
+                    .target = target,
+                    .optimize = .Debug,
+                    .root_source_file = b.path("scripts/gen_docs_entry.zig"),
+                }),
+                .use_llvm = false,
+            }),
+        );
+
+        const doc_modules: []const DocGenModule = &.{
+            .{ .name = "start_service", .module = start_service_mod },
+            .{ .name = "sig_init", .module = sig_init_mod },
+            .{ .name = "lib", .module = lib_mod },
+        };
+
+        inline for (&.{ doc_service_modules.items, doc_modules }) |module_list| {
+            var services_str = std.io.Writer.Allocating.init(b.allocator);
+            defer services_str.deinit();
+
+            for (module_list, 0..) |svc_mod, i| {
+                const end: []const u8 = if (i == module_list.len - 1) "" else ",";
+                try services_str.writer.print("{s}{s}", .{ svc_mod.name, end });
+            }
+
+            gen_docs_run.addArg(services_str.written());
+        }
+
+        const docs_mod = b.createModule(.{
+            .target = target,
+            .optimize = .Debug,
+            .root_source_file = gen_docs_run.addOutputFileArg("docs.zig"),
+        });
+        for (doc_modules) |mod| docs_mod.addImport(mod.name, mod.module);
+        for (doc_service_modules.items) |mod| docs_mod.addImport(mod.name, mod.module);
+
+        const docs_obj = b.addTest(.{ .name = "docs", .root_module = docs_mod });
+
+        const install_docs = b.addInstallDirectory(.{
+            .source_dir = docs_obj.getEmittedDocs(),
+            .install_dir = .prefix,
+            .install_subdir = "docs",
+        });
+        docs_step.dependOn(&install_docs.step);
     }
 }
 

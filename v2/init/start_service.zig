@@ -13,6 +13,7 @@ const root = @import("root");
 const std = @import("std");
 const builtin = @import("builtin");
 const lib = @import("lib");
+const tracy = @import("tracy");
 
 comptime {
     _ = std.testing.refAllDecls(@This());
@@ -73,6 +74,8 @@ fn serviceLog(
     const prefix2 = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
 
     const fmt_string = "(" ++ @tagName(root.name) ++ ") " ++ level_txt ++ prefix2 ++ format ++ "\n";
+
+    tracy.print(fmt_string, args);
 
     nosuspend writer.interface.print(fmt_string, args) catch return;
 }
