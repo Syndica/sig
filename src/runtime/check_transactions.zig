@@ -689,7 +689,7 @@ test "checkAge: nonce account" {
             .program_meta = .{ .pubkey = sig.runtime.program.system.ID, .index_in_transaction = 0 },
             .account_metas = metas,
             .dedupe_map = blk: {
-                var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+                var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
                 dedupe_map[1] = 1;
                 dedupe_map[2] = 2;
                 break :blk dedupe_map;

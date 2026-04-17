@@ -816,7 +816,7 @@ test "load accounts rent paid" {
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 1 },
             .account_metas = metas,
             .dedupe_map = blk: {
-                var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+                var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
                 dedupe_map[0] = 0;
                 dedupe_map[1] = 1;
                 break :blk dedupe_map;
@@ -969,7 +969,7 @@ test "load accounts with simd 186 and loaderv3 program" {
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 1 },
             .account_metas = meta,
             .dedupe_map = blk: {
-                var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+                var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
                 dedupe_map[0] = 0;
                 dedupe_map[1] = 1;
                 dedupe_map[2] = 2;
@@ -1029,7 +1029,7 @@ test "constructInstructionsAccount" {
             .{
                 .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 1 },
                 .account_metas = .{},
-                .dedupe_map = @splat(0xff),
+                .dedupe_map = @splat(0xffff),
                 .instruction_data = "",
                 .owned_instruction_data = false,
                 .initial_account_lamports = 0,
@@ -1180,7 +1180,7 @@ test "dont double count program owner account data size" {
     var tx: RuntimeTransaction = blk: {
         var tx = try emptyTxWithKeys(allocator, &.{ pk1, pk2 });
 
-        var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+        var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
         dedupe_map[0] = 0;
         dedupe_map[1] = 1;
 
@@ -1317,7 +1317,7 @@ test "invalid program owner owner" {
         .{
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 0 },
             .account_metas = .{},
-            .dedupe_map = @splat(0xff),
+            .dedupe_map = @splat(0xffff),
             .instruction_data = "",
             .owned_instruction_data = false,
             .initial_account_lamports = 0,
@@ -1363,7 +1363,7 @@ test "missing program owner account" {
         .{
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 0 },
             .account_metas = .{},
-            .dedupe_map = @splat(0xff),
+            .dedupe_map = @splat(0xffff),
             .instruction_data = "",
             .owned_instruction_data = false,
             .initial_account_lamports = 0,
@@ -1484,7 +1484,7 @@ test "load v3 program" {
         .{
             .program_meta = .{ .pubkey = pk_v3_program, .index_in_transaction = 0 },
             .account_metas = .{},
-            .dedupe_map = @splat(0xff),
+            .dedupe_map = @splat(0xffff),
             .instruction_data = "",
             .owned_instruction_data = false,
             .initial_account_lamports = 0,
