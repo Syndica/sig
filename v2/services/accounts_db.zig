@@ -47,13 +47,22 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     );
     defer snapshot_file.close();
 
+    const Global = struct {
+        var db: lib.accounts_db.snapshot.load.Db = undefined;
+    };
+    const db = &Global.db;
+    try db.init(snapshot_dir, "accounts.db");
+    defer db.deinit();
+
     var fba = std.heap.FixedBufferAllocator.init(&scratch_mem);
     _ = try lib.accounts_db.snapshot.loadSnapshot(
         .from(logger),
         &fba,
         slot_hash,
         snapshot_file,
+        db,
     );
+    try db.sync(.from(logger));
     logger.info().logf("finished loading snapshot", .{});
 
     while (true) std.atomic.spinLoopHint();
