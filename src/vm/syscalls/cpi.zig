@@ -1558,7 +1558,7 @@ test "translateAccounts" {
         },
     });
 
-    var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+    var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
     dedupe_map[account.index] = 0;
     const cpi_info: InstructionInfo = .{
         .program_meta = ctx.ic.ixn_info.program_meta,

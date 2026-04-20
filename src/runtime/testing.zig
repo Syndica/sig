@@ -336,7 +336,7 @@ pub fn createInstructionInfo(
         if (account.pubkey.equals(&program_id)) break index;
     } else return error.CouldNotFindProgramAccount;
 
-    var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+    var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
     var account_metas = InstructionInfo.AccountMetas{};
     errdefer account_metas.deinit(tc.allocator);
 
@@ -344,7 +344,7 @@ pub fn createInstructionInfo(
         if (acc.index_in_transaction >= tc.accounts.len)
             return error.AccountIndexOutOfBounds;
 
-        if (dedupe_map[acc.index_in_transaction] == 0xff)
+        if (dedupe_map[acc.index_in_transaction] == 0xffff)
             dedupe_map[acc.index_in_transaction] = @intCast(idx);
 
         try account_metas.append(tc.allocator, .{

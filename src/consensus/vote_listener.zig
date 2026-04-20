@@ -1454,7 +1454,7 @@ pub const vote_parser = struct {
             std.debug.assert(message.instructions.len != 0);
             const first_ix = message.instructions[0];
 
-            var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+            var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
 
             // Vote instructions have 4 accounts, below MAX_ACCOUNT_METAS (256)
             const n_instr_accounts = 4;
@@ -1465,7 +1465,7 @@ pub const vote_parser = struct {
             std.debug.assert(first_ix.account_indexes.len == n_instr_accounts);
             for (first_ix.account_indexes, 0..) |acct_index_u8, i| {
                 const acct_index: usize = acct_index_u8;
-                if (dedupe_map[i] == 0xff)
+                if (dedupe_map[i] == 0xffff)
                     dedupe_map[i] = @intCast(i);
 
                 const pubkey = message.account_keys[acct_index];
@@ -1542,7 +1542,7 @@ pub const vote_parser = struct {
         std.debug.assert(message.instructions.len != 0);
         const first_ix = message.instructions[0];
 
-        var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+        var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
         var account_metas = sig.runtime.InstructionInfo.AccountMetas{};
         defer account_metas.deinit(allocator);
 

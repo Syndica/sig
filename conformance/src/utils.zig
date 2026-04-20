@@ -248,9 +248,9 @@ pub fn createInstructionInfo(
     const program_index_in_transaction =
         tc.getAccountIndex(program_id) orelse return error.CouldNotFindProgram;
 
-    var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+    var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
     for (pb_instruction_accounts, 0..) |acc, idx| {
-        if (dedupe_map[acc.index] == 0xff)
+        if (dedupe_map[acc.index] == 0xffff)
             dedupe_map[acc.index] = @intCast(idx);
     }
 

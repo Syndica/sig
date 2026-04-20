@@ -651,7 +651,7 @@ test getInstructionDatasSliceForPrecompiles {
                 .index_in_transaction = 0,
             },
             .account_metas = .{},
-            .dedupe_map = @splat(0xff),
+            .dedupe_map = @splat(0xffff),
             .instruction_data = "data",
             .owned_instruction_data = false,
             .initial_account_lamports = 0,
@@ -676,7 +676,7 @@ test getInstructionDatasSliceForPrecompiles {
                     .index_in_transaction = 0,
                 },
                 .account_metas = .{},
-                .dedupe_map = @splat(0xff),
+                .dedupe_map = @splat(0xffff),
                 .instruction_data = "one",
                 .owned_instruction_data = false,
                 .initial_account_lamports = 0,
@@ -687,7 +687,7 @@ test getInstructionDatasSliceForPrecompiles {
                     .index_in_transaction = 0,
                 },
                 .account_metas = .{},
-                .dedupe_map = @splat(0xff),
+                .dedupe_map = @splat(0xffff),
                 .instruction_data = "two",
                 .owned_instruction_data = false,
                 .initial_account_lamports = 0,
@@ -698,7 +698,7 @@ test getInstructionDatasSliceForPrecompiles {
                     .index_in_transaction = 0,
                 },
                 .account_metas = .{},
-                .dedupe_map = @splat(0xff),
+                .dedupe_map = @splat(0xffff),
                 .instruction_data = "three",
                 .owned_instruction_data = false,
                 .initial_account_lamports = 0,
@@ -818,7 +818,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             },
             .account_metas = metas,
             .dedupe_map = blk: {
-                var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+                var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
                 dedupe_map[0] = 0;
                 dedupe_map[1] = 1;
                 break :blk dedupe_map;
