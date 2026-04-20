@@ -111,6 +111,13 @@ pub fn execute(
             args.seed,
             args.owner,
         ),
+        .create_account_allow_prefund => |args| try executeCreateAccountAllowPrefund(
+            allocator,
+            ic,
+            args.lamports,
+            args.space,
+            args.owner,
+        ),
     };
 }
 
@@ -170,6 +177,45 @@ fn executeCreateAccountWithSeed(
         owner,
         base,
     );
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L530-L563
+fn executeCreateAccountAllowPrefund(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    lamports: u64,
+    space: u64,
+    owner: Pubkey,
+) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "executeCreateAccountAllowPrefund" });
+    defer zone.deinit();
+
+    if (!ic.tc.feature_set.active(.create_account_allow_prefund, ic.tc.slot)) {
+        return InstructionError.InvalidInstructionData;
+    }
+
+    if (lamports > 0) {
+        try ic.ixn_info.checkNumberOfAccounts(2);
+    } else {
+        try ic.ixn_info.checkNumberOfAccounts(1);
+    }
+
+    {
+        var account = try ic.borrowInstructionAccount(0);
+        defer account.release();
+
+        try allocate(allocator, ic, &account, space, account.pubkey);
+        try assign(ic, &account, owner, account.pubkey);
+    }
+
+    if (lamports > 0) {
+        return transfer(
+            ic,
+            1,
+            0,
+            lamports,
+        );
+    }
 }
 
 //// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L365-L375
@@ -1016,6 +1062,135 @@ test "executeCreateAccountWithSeed" {
                 .{ .pubkey = base },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
+        },
+        .{},
+    );
+}
+
+test "executeCreateAccountAllowPrefund with transfer" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const new_account_key = Pubkey.initRandom(prng.random());
+    const funding_account_key = Pubkey.initRandom(prng.random());
+    const owner = Pubkey.initRandom(prng.random());
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        system_program.ID,
+        SystemProgramInstruction{
+            .create_account_allow_prefund = .{
+                .lamports = 1_000_000,
+                .space = 2,
+                .owner = owner,
+            },
+        },
+        &.{
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 1 },
+        },
+        .{
+            .feature_set = &.{.{ .feature = .create_account_allow_prefund }},
+            .accounts = &.{
+                .{ .pubkey = new_account_key, .lamports = 10, .owner = system_program.ID },
+                .{ .pubkey = funding_account_key, .lamports = 2_000_000, .owner = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = system_program.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = new_account_key,
+                    .owner = owner,
+                    .lamports = 1_000_010,
+                    .data = &[_]u8{ 0, 0 },
+                },
+                .{ .pubkey = funding_account_key, .lamports = 1_000_000, .owner = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .accounts_resize_delta = 2,
+        },
+        .{},
+    );
+}
+
+test "executeCreateAccountAllowPrefund no transfer" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const new_account_key = Pubkey.initRandom(prng.random());
+    const owner = Pubkey.initRandom(prng.random());
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        system_program.ID,
+        SystemProgramInstruction{
+            .create_account_allow_prefund = .{
+                .lamports = 0,
+                .space = 2,
+                .owner = owner,
+            },
+        },
+        &.{
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 0 },
+        },
+        .{
+            .feature_set = &.{.{ .feature = .create_account_allow_prefund }},
+            .accounts = &.{
+                .{ .pubkey = new_account_key, .lamports = 10, .owner = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = system_program.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = new_account_key,
+                    .owner = owner,
+                    .lamports = 10,
+                    .data = &[_]u8{ 0, 0 },
+                },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .accounts_resize_delta = 2,
+        },
+        .{},
+    );
+}
+
+test "executeCreateAccountAllowPrefund feature gated" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const new_account_key = Pubkey.initRandom(prng.random());
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidInstructionData,
+        std.testing.allocator,
+        system_program.ID,
+        SystemProgramInstruction{
+            .create_account_allow_prefund = .{
+                .lamports = 0,
+                .space = 2,
+                .owner = system_program.ID,
+            },
+        },
+        &.{
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 0 },
+        },
+        .{
+            .accounts = &.{
+                .{ .pubkey = new_account_key, .lamports = 10, .owner = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{},
     );
