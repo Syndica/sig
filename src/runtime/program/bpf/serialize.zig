@@ -23,6 +23,10 @@ const INPUT_START = sig.vm.memory.INPUT_START;
 /// `assert_eq(std::mem::align_of::<u128>(), 8)` is true for BPF but not for some host machines
 pub const BPF_ALIGN_OF_U128: usize = 8;
 
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L29
+/// Alignment of the host memory buffer. Agave uses `AlignedMemory::<HOST_ALIGN>` with HOST_ALIGN=16.
+pub const HOST_ALIGN: std.mem.Alignment = .@"16"; // 16 bytes
+
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/account-info/src/lib.rs#L17-L18
 pub const MAX_PERMITTED_DATA_INCREASE: usize = 1_024 * 10;
 
@@ -44,7 +48,7 @@ pub const SerializedAccountMeta = struct {
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L31
 pub const Serializer = struct {
     allocator: std.mem.Allocator,
-    buffer: std.ArrayListUnmanaged(u8),
+    buffer: std.ArrayListAlignedUnmanaged(u8, HOST_ALIGN),
     regions: std.ArrayListUnmanaged(Region),
     vaddr: u64,
     region_start: usize,
@@ -62,7 +66,10 @@ pub const Serializer = struct {
     ) error{OutOfMemory}!Serializer {
         return .{
             .allocator = allocator,
-            .buffer = try std.ArrayListUnmanaged(u8).initCapacity(allocator, size),
+            .buffer = try std.ArrayListAlignedUnmanaged(u8, HOST_ALIGN).initCapacity(
+                allocator,
+                size,
+            ),
             .regions = std.ArrayListUnmanaged(Region){},
             .vaddr = region_start,
             .region_start = 0,
@@ -187,7 +194,7 @@ pub const Serializer = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L172
     pub fn finish(self: *Serializer) error{OutOfMemory}!struct {
-        std.ArrayListUnmanaged(u8),
+        std.ArrayListAlignedUnmanaged(u8, HOST_ALIGN),
         std.ArrayListUnmanaged(Region),
     } {
         try self.pushRegion(true);
@@ -206,7 +213,7 @@ pub const Serializer = struct {
 };
 
 const SerializeReturn = struct {
-    memory: std.ArrayListUnmanaged(u8),
+    memory: std.ArrayListAlignedUnmanaged(u8, HOST_ALIGN),
     regions: std.ArrayListUnmanaged(Region),
     account_metas: std14.BoundedArray(SerializedAccountMeta, InstructionInfo.MAX_ACCOUNT_METAS),
     instruction_data_offset: u64,
@@ -323,6 +330,7 @@ fn serializeParametersUnaligned(
         virtual_address_space_adjustments,
         account_data_direct_mapping,
     );
+    errdefer serializer.deinit();
 
     var account_metas: std14.BoundedArray(
         SerializedAccountMeta,
@@ -976,6 +984,7 @@ test serializeParameters {
             false,
         );
         defer serialized.deinit(allocator);
+        try std.testing.expect(HOST_ALIGN.check(@intFromPtr(serialized.memory.items.ptr)));
 
         const serialized_regions = try concatRegions(allocator, serialized.regions.items);
         defer allocator.free(serialized_regions);
