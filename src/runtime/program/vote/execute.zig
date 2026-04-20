@@ -588,6 +588,9 @@ fn updateCommission(
     epoch_schedule: EpochSchedule,
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const disable_commission_update_rule =
+        ic.tc.feature_set.active(.delay_commission_updates, ic.tc.slot);
+
     var vote_state = getVoteStateChecked(
         allocator,
         vote_account,
@@ -595,7 +598,9 @@ fn updateCommission(
         false,
     ) catch |err| {
         // Deserialization failed - enforce the commission update rule
-        if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
+        if (!disable_commission_update_rule and
+            !isCommissionUpdateAllowed(clock.slot, &epoch_schedule))
+        {
             ic.tc.custom_error = @intFromEnum(VoteError.commission_update_too_late);
             return InstructionError.Custom;
         }
@@ -603,10 +608,8 @@ fn updateCommission(
     };
     defer vote_state.deinit(allocator);
 
-    // [SIMD-0185] New commission value multiplied by 100 for bps; compare with current bps.
-    const current_bps = vote_state.inflationRewardsCommissionBps() orelse
-        @as(u16, vote_state.commission()) * 100;
-    const enforce_commission_update_rule = @as(u16, commission) * 100 > current_bps;
+    const enforce_commission_update_rule = !disable_commission_update_rule and
+        commission > vote_state.commission();
 
     if (enforce_commission_update_rule and !isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
         ic.tc.custom_error = @intFromEnum(VoteError.commission_update_too_late);
@@ -697,7 +700,13 @@ fn widthraw(
         return InstructionError.InsufficientFunds;
     };
 
+    const pending_delegator_rewards = vote_state.pendingDelegatorRewards();
+
     if (remaining_balance == 0) {
+        if (pending_delegator_rewards > 0) {
+            return InstructionError.InsufficientFunds;
+        }
+
         const reject_active_vote_account_close = blk: {
             const epoch_credits = vote_state.epochCreditsList();
             if (epoch_credits.len > 0) {
@@ -740,7 +749,13 @@ fn widthraw(
         }
     } else {
         const min_rent_exempt_balance = rent.minimumBalance(vote_account.constAccountData().len);
-        if (remaining_balance < min_rent_exempt_balance) {
+        const min_balance = std.math.add(
+            u64,
+            min_rent_exempt_balance,
+            pending_delegator_rewards,
+        ) catch return InstructionError.ProgramArithmeticOverflow;
+
+        if (remaining_balance < min_balance) {
             return InstructionError.InsufficientFunds;
         }
     }
@@ -2462,6 +2477,112 @@ test "vote_program: update_commission commission update too late is always enfor
                 .epoch_schedule = epoch_schedule,
             },
             .feature_set = &.{}, // No feature flags needed - timing check is always enforced
+        },
+        .{},
+    );
+}
+
+test "vote_program: update_commission too late allowed with delay feature" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 1060,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const epoch_schedule = EpochSchedule{
+        .slots_per_epoch = 100,
+        .leader_schedule_slot_offset = 0,
+        .warmup = false,
+        .first_normal_epoch = 0,
+        .first_normal_slot = 100,
+    };
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const initial_commission: u8 = 10;
+    const final_commission: u8 = 15;
+
+    var initial_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        initial_commission,
+        clock.epoch,
+    ) };
+    defer initial_vote_state.deinit(allocator);
+
+    var final_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        final_commission,
+        clock.epoch,
+    ) };
+    defer final_vote_state.deinit(allocator);
+
+    var initial_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .update_commission = final_commission,
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .epoch_schedule = epoch_schedule,
+            },
+            .feature_set = &.{
+                .{
+                    .feature = .delay_commission_updates,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
         },
         .{},
     );
@@ -5003,6 +5124,182 @@ test "vote_program: widthdraw all with v4 zeros account data" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
+        },
+        .{},
+    );
+}
+
+test "vote_program: widthdraw all with v4 pending rewards fails" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+    const rent = Rent.INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const recipient = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+    const lamports: u64 = 27074400;
+
+    var initial_vote_state_v3 = VoteStateVersions{ .v3 = try VoteStateV3.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock.epoch,
+    ) };
+    defer initial_vote_state_v3.deinit(allocator);
+
+    var initial_vote_state_v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        initial_vote_state_v3.v3,
+        vote_account,
+    );
+    defer initial_vote_state_v4.deinit(allocator);
+    initial_vote_state_v4.pending_delegator_rewards = 1;
+
+    const initial_versioned = VoteStateVersions{ .v4 = initial_vote_state_v4 };
+    var initial_vote_state_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_versioned, .{});
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InsufficientFunds,
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .withdraw = lamports,
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = lamports,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{
+                    .pubkey = recipient,
+                    .lamports = 0,
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = rent,
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{
+                    .feature = .vote_state_v4,
+                    .slot = 0,
+                },
+            },
+        },
+        .{},
+    );
+}
+
+test "vote_program: widthdraw with v4 pending rewards below minimum fails" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const recipient = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const pending_delegator_rewards: u64 = 500;
+    const withdraw_amount: u64 = 1;
+    const min_rent_exempt_balance = rent.minimumBalance(VoteStateV4.MAX_VOTE_STATE_SIZE);
+    const initial_lamports = min_rent_exempt_balance + pending_delegator_rewards;
+
+    var initial_vote_state_v3 = VoteStateVersions{ .v3 = try VoteStateV3.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock.epoch,
+    ) };
+    defer initial_vote_state_v3.deinit(allocator);
+
+    var initial_vote_state_v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        initial_vote_state_v3.v3,
+        vote_account,
+    );
+    defer initial_vote_state_v4.deinit(allocator);
+    initial_vote_state_v4.pending_delegator_rewards = pending_delegator_rewards;
+
+    const initial_versioned = VoteStateVersions{ .v4 = initial_vote_state_v4 };
+    var initial_vote_state_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_versioned, .{});
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InsufficientFunds,
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .withdraw = withdraw_amount,
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = initial_lamports,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{
+                    .pubkey = recipient,
+                    .lamports = 0,
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = rent,
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{
+                    .feature = .vote_state_v4,
+                    .slot = 0,
+                },
+            },
         },
         .{},
     );
