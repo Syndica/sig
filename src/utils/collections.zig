@@ -1164,6 +1164,121 @@ pub fn deinitMapAndValues(allocator: Allocator, const_map: anytype) void {
     (&map).deinit(allocator);
 }
 
+pub fn RingBitSet(capacity: u64) type {
+    return struct {
+        bitset: std.StaticBitSet(capacity),
+        max: u64,
+
+        pub const empty: RingBitSet(capacity) = .{
+            .bitset = .initEmpty(),
+            .max = capacity - 1,
+        };
+
+        pub fn isSet(self: *const RingBitSet(capacity), item: u64) bool {
+            if (item > self.max or item < self.max + 1 - capacity) return false;
+            return self.bitset.isSet(item % capacity);
+        }
+
+        pub fn set(self: *RingBitSet(capacity), item: u64) void {
+            if (item < self.max + 1 -| capacity) return;
+            if (item > self.max) {
+                if (item - self.max >= capacity) {
+                    self.bitset.setRangeValue(.{ .start = 0, .end = capacity }, false);
+                } else {
+                    const start = (self.max + 1) % capacity;
+                    const end = item % capacity;
+                    if (end > start) {
+                        self.bitset.setRangeValue(.{ .start = start, .end = end }, false);
+                    } else if (end < start) {
+                        self.bitset.setRangeValue(.{ .start = start, .end = capacity }, false);
+                        self.bitset.setRangeValue(.{ .start = 0, .end = end }, false);
+                    }
+                }
+                self.max = item;
+            }
+            self.bitset.set(item % capacity);
+        }
+
+        pub fn unset(self: *RingBitSet(capacity), item: u64) void {
+            if (item > self.max or item < self.max + 1 - capacity) return;
+            self.bitset.unset(item % capacity);
+        }
+    };
+}
+
+test "RingBitSet preserves prior slot on consecutive advance" {
+    var ring: RingBitSet(4) = .empty;
+
+    ring.set(4);
+    ring.set(5);
+
+    try std.testing.expect(ring.isSet(4));
+    try std.testing.expect(ring.isSet(5));
+    try std.testing.expect(!ring.isSet(3));
+}
+
+test "RingBitSet clears stale wrapped bits and preserves overlap" {
+    var ring: RingBitSet(4) = .empty;
+
+    ring.set(3);
+    ring.set(6);
+    ring.set(8);
+
+    try std.testing.expect(ring.isSet(6));
+    try std.testing.expect(ring.isSet(8));
+    try std.testing.expect(!ring.isSet(7));
+}
+
+test "RingBitSet clears stale bits when gap equals capacity" {
+    var ring: RingBitSet(4) = .empty;
+
+    ring.set(2);
+    ring.set(7);
+
+    try std.testing.expect(ring.isSet(7));
+    try std.testing.expect(!ring.isSet(6));
+    try std.testing.expect(!ring.isSet(4));
+}
+
+test "RingBitSet clears stale bits when gap exceeds capacity" {
+    var ring: RingBitSet(4) = .empty;
+
+    ring.set(1);
+    ring.set(10);
+
+    try std.testing.expect(ring.isSet(10));
+    try std.testing.expect(!ring.isSet(9));
+    try std.testing.expect(!ring.isSet(8));
+}
+
+test "RingBitSet ignores stale out of order slot writes" {
+    var ring: RingBitSet(4) = .empty;
+
+    ring.set(4);
+    ring.set(7);
+    ring.set(2);
+
+    try std.testing.expect(ring.isSet(4));
+    try std.testing.expect(ring.isSet(7));
+    try std.testing.expect(!ring.isSet(6));
+    try std.testing.expect(!ring.isSet(2));
+}
+
+test "RingBitSet ignores stale out of order unsets" {
+    var ring: RingBitSet(4) = .empty;
+
+    ring.set(4);
+    ring.set(6);
+    ring.set(7);
+    ring.unset(2);
+
+    try std.testing.expect(ring.isSet(6));
+
+    ring.unset(6);
+
+    try std.testing.expect(!ring.isSet(6));
+}
+
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectEqualSlices = std.testing.expectEqualSlices;
