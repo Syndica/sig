@@ -1,9 +1,5 @@
 const std = @import("std");
 
-comptime {
-    _ = std.testing.refAllDecls(@This());
-}
-
 pub const net = @import("net.zig");
 pub const crypto = @import("crypto.zig");
 pub const solana = @import("solana.zig");
@@ -13,6 +9,7 @@ pub const ipc = @import("ipc.zig");
 pub const linux = @import("linux.zig");
 pub const util = @import("util.zig");
 pub const telemetry = @import("telemetry.zig");
+pub const snapshot = @import("snapshot.zig");
 
 comptime {
     _ = net;
@@ -23,6 +20,7 @@ comptime {
     _ = ipc;
     _ = linux;
     _ = telemetry;
+    _ = snapshot;
 }
 
 pub const test_data_dir = "../data/test-data/";

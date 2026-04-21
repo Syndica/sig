@@ -7,6 +7,7 @@
         .gossip_config = .gossip_config,
 
         .telemetry = .telemetry,
+        .snapshot_config = .snapshot_config,
     },
     .services = .{
         .{
@@ -36,6 +37,13 @@
         .{
             .name = .telemetry,
             .regions = .{
+                .{ .name = .telemetry, .access = .rw },
+            },
+        },
+        .{
+            .name = .snapshot,
+            .regions = .{
+                .{ .name = .snapshot_config, .access = .readonly },
                 .{ .name = .telemetry, .access = .rw },
             },
         },

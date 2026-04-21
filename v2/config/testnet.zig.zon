@@ -12,4 +12,7 @@
     .telemetry = .{
         .port = 12345,
     },
+    .snapshot = .{
+        .folder = "./validator",
+    },
 }
