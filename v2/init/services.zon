@@ -26,6 +26,15 @@
         },
     },
     .{
+        .name = .replay,
+        .regions = .{
+            .{ .name = .deshredded_in, .access = .rw },
+            .{ .name = .replay_transaction_pool, .access = .rw },
+            .{ .name = .block_pool, .access = .rw },
+            .{ .name = .exec_req_response, .access = .rw },
+        },
+    },
+    .{
         .name = .snapshot,
         .regions = .{
             .{ .name = .config, .access = .readonly },

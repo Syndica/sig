@@ -312,7 +312,7 @@ pub fn Logger(comptime scope_str: []const u8) type {
                     comptime fmt_str: []const u8,
                     args: anytype,
                 ) void {
-                    tracy.print("{}: " ++ fmt_str, .{self.level} ++ args);
+                    tracy.print("{s}: " ++ fmt_str, .{@tagName(self.level)} ++ args);
 
                     if (@intFromEnum(self.level) > @intFromEnum(self.logger.max_level)) return;
                     const message: log.Message = .{

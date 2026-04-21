@@ -118,6 +118,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                 ro.config.shred_version,
                 packet,
                 &deshred_out,
+                logger.withScope("processPacket"),
             ) catch |err| {
                 std.log.warn("packet failed with {}", .{err});
                 continue;

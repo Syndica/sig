@@ -7,3 +7,4 @@ comptime {
 
 pub const Pool = @import("collections/pool.zig").Pool;
 pub const LCRSTree = @import("collections/lcrs_tree.zig").LCRSTree;
+pub const SharedPool = @import("collections/pool.zig").SharedPool;
