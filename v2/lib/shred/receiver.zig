@@ -67,7 +67,10 @@ pub const Receiver = struct {
         network_shred_version: u16,
         packet: *const Packet,
         deshred_writer: *DeshredRing.Iterator(.writer),
+        logger: lib.telemetry.Logger("processPacket"),
     ) !NonErrorStatus {
+        _ = logger;
+
         const zone = tracy.Zone.init(@src(), .{ .name = "processPacket" });
         defer zone.deinit();
 
@@ -246,7 +249,16 @@ pub const Receiver = struct {
 
         // starting fec set reconstruction now
         // NOTE: as an optimisation we should reconstruct directly into the out buffer
-        reed_sol.reconstructFecSet(fec_set_ctx);
+        {
+            const shreds_bitset, const shreds_reedsol_bufs = fec_set_ctx.erasureEncoded();
+
+            const recover_zone = tracy.Zone.init(@src(), .{ .name = "reconstructFecSet" });
+            reed_sol.recover64(shred.erasureFragment().?.len, &shreds_reedsol_bufs, 32, 32, shreds_bitset.mask) catch @panic("weee");
+            defer recover_zone.deinit();
+
+            fec_set_ctx.data_shreds_received = .initFull();
+        }
+
         std.debug.assert(fec_set_ctx.data_shreds_received.count() == FecSetCtx.data_shreds_max);
 
         // writing out deshredded fec set
@@ -293,6 +305,7 @@ pub const Receiver = struct {
 
             var bytes_written: u16 = 0;
             for (&fec_set_ctx.data_shreds_buf) |*buffer| {
+                // TODO: I think we need to re-validate the data shreds that we recovered
                 const data_shred: *const Shred = Shred.fromBufferUnchecked(buffer);
                 const payload = data_shred.dataPayload();
 
@@ -357,6 +370,56 @@ pub const FecSetCtx = extern struct {
         std.debug.assert(code_recv <= code_shreds_max);
 
         return data_recv + code_recv;
+    }
+
+    // prep for recover64
+    // TODO: clean this code up, it's bad, e.g. we should probably ban constcast
+    fn erasureEncoded(self: *FecSetCtx) struct { std.StaticBitSet(64), [64][]u8 } {
+        const base_variant = variant: {
+            for (&self.data_shreds_buf, 0..) |*data_shred, i| {
+                if (!self.data_shreds_received.isSet(i)) continue;
+                const shred: *const Shred = .fromBufferUnchecked(data_shred);
+                break :variant shred.variant;
+            }
+            for (&self.code_shreds_buf, 0..) |*code_shred, i| {
+                if (!self.code_shreds_received.isSet(i)) continue;
+                const shred: *const Shred = .fromBufferUnchecked(code_shred);
+                break :variant shred.variant;
+            }
+            unreachable;
+        };
+
+        var erasure_buffers: [64][]u8 = undefined;
+
+        for (erasure_buffers[0..32], &self.data_shreds_buf, 0..) |*erasure_buf, *data_shred, i| {
+            const shred: *Shred = .fromBufferUncheckedMut(data_shred);
+
+            // set variant for unused buffers so we can get the erasure fragment offset+size
+            if (!self.data_shreds_received.isSet(i)) {
+                shred.variant = if (base_variant.isCode()) base_variant.swapType() else base_variant;
+            }
+
+            erasure_buf.* = @constCast(shred.erasureFragment().?);
+        }
+
+        for (erasure_buffers[32..64], &self.code_shreds_buf, 0..) |*erasure_buf, *code_shred, i| {
+            const shred: *Shred = .fromBufferUncheckedMut(code_shred);
+
+            // set variant for unused buffers so we can get the erasure fragment offset+size
+            if (!self.code_shreds_received.isSet(i)) {
+                shred.variant = if (base_variant.isData()) base_variant.swapType() else base_variant;
+            }
+
+            erasure_buf.* = @constCast(shred.erasureFragment().?);
+        }
+
+        var bitset: std.StaticBitSet(64) = .{
+            .mask = (@as(u64, self.code_shreds_received.mask) << 32) | @as(u64, self.data_shreds_received.mask),
+        };
+
+        bitset.toggleAll();
+
+        return .{ bitset, erasure_buffers };
     }
 };
 

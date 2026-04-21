@@ -104,6 +104,7 @@ pub fn main() !void {
         .{ .service = .gossip },
         .{ .service = .telemetry },
         .{ .service = .replay },
+        .{ .service = .exec },
     };
 
     const shared_regions = services.toSharedRegions(.{
@@ -138,6 +139,10 @@ pub fn main() !void {
 
         // shred receiver -> replay
         .deshredded_out = {},
+
+        .replay_transaction_pool = {},
+        .block_pool = {},
+        .exec_req_response = {},
     });
 
     switch (config.sandboxing_mode) {

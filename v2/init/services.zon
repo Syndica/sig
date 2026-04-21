@@ -9,6 +9,10 @@
         .telemetry = .telemetry,
 
         .deshredded_out = .deshredded_out,
+
+        .replay_transaction_pool = .replay_transaction_pool,
+        .block_pool = .block_pool,
+        .exec_req_response = .exec_req_response,
     },
     .services = .{
         .{
@@ -46,6 +50,17 @@
             .name = .replay,
             .regions = .{
                 .{ .name = .deshredded_out, .access = .rw },
+                .{ .name = .replay_transaction_pool, .access = .rw },
+                .{ .name = .block_pool, .access = .rw },
+                .{ .name = .exec_req_response, .access = .rw },
+            },
+        },
+        .{
+            .name = .exec,
+            .regions = .{
+                .{ .name = .replay_transaction_pool, .access = .readonly },
+                .{ .name = .block_pool, .access = .readonly },
+                .{ .name = .exec_req_response, .access = .rw },
             },
         },
     },

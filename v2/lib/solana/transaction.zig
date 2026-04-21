@@ -44,7 +44,7 @@ pub const VersionedMessage = union(enum) {
             .v0 => |msg| {
                 try writer.writeByte(1 << 7);
                 try bincode.write(writer, msg);
-            }
+            },
         }
     }
 };
@@ -63,7 +63,6 @@ pub const V0Message = struct {
     instructions: bincode.ShortVec(CompiledInstruction),
     address_table_lookups: bincode.ShortVec(AddressLookup),
 };
-
 
 pub const MessageHeader = struct {
     num_required_signatures: u8,

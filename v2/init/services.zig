@@ -187,6 +187,9 @@ pub const Region = union(enum) {
 
     telemetry: tel.Region.Info,
     deshredded_out,
+    replay_transaction_pool,
+    block_pool,
+    exec_req_response,
 
     pub fn size(self: Region) usize {
         return switch (self) {
@@ -195,6 +198,9 @@ pub const Region = union(enum) {
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
             .telemetry => |cfg| cfg.regionSize(),
             .deshredded_out => @sizeOf(lib.shred.DeshredRing),
+            .replay_transaction_pool => lib.replay.TransactionPool.size(),
+            .block_pool => lib.replay.BlockPool.size(),
+            .exec_req_response => @sizeOf(lib.replay.ExecReqResponse),
         };
     }
 
@@ -243,6 +249,22 @@ pub const Region = union(enum) {
                 std.debug.assert(buf.len == @sizeOf(lib.shred.DeshredRing));
                 const data: *lib.shred.DeshredRing = @ptrCast(buf);
                 data.init();
+            },
+            .replay_transaction_pool => |_| {
+                std.debug.assert(buf.len == lib.replay.TransactionPool.size());
+                const data: *lib.replay.TransactionPool = @ptrCast(buf);
+                data.init();
+            },
+            .block_pool => |_| {
+                std.debug.assert(buf.len == lib.replay.BlockPool.size());
+                const data: *lib.replay.BlockPool = @ptrCast(buf);
+                data.init();
+            },
+            .exec_req_response => |_| {
+                std.debug.assert(buf.len == @sizeOf(lib.replay.ExecReqResponse));
+                const data: *lib.replay.ExecReqResponse = @ptrCast(buf);
+                data.request_ring.init();
+                data.response_ring.init();
             },
         };
     }
@@ -769,6 +791,11 @@ fn threadEntry(
     switch (service) {
         inline else => |svc| tracy.setThreadName("svc: " ++ @tagName(svc)),
     }
+
+    const cpu_index = service_idx;
+    var cpuset = std.mem.zeroes(std.os.linux.cpu_set_t);
+    cpuset[@divFloor(cpu_index, @bitSizeOf(usize))] = @as(usize, 1) << @intCast(cpu_index % @bitSizeOf(usize));
+    std.os.linux.sched_setaffinity(0, &cpuset) catch |err| std.debug.panic("ded: {}\n", .{err});
 
     entry_point(args);
     reset_event.set();
