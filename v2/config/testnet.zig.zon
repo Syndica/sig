@@ -13,4 +13,7 @@
         .port = 12345,
         .log_level = .info,
     },
+    .snapshot = .{
+        .folder = "./validator",
+    },
 }

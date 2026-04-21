@@ -9,6 +9,7 @@
         .telemetry = .telemetry,
 
         .deshredded_out = .deshredded_out,
+        .snapshot_config = .snapshot_config,
     },
     .services = .{
         .{
@@ -46,6 +47,13 @@
             .name = .replay,
             .regions = .{
                 .{ .name = .deshredded_out, .access = .rw },
+            },
+        },
+        .{
+            .name = .snapshot,
+            .regions = .{
+                .{ .name = .snapshot_config, .access = .readonly },
+                .{ .name = .telemetry, .access = .rw },
             },
         },
     },

@@ -32,6 +32,7 @@ const Config = struct {
     shred_network: ShredNetwork,
 
     telemetry: Telemetry,
+    snapshot: Snapshot,
 
     const SandboxingMode = enum { sandboxed, threaded };
 
@@ -46,6 +47,10 @@ const Config = struct {
     const Telemetry = struct {
         port: u16,
         log_level: tel.log.Level,
+    };
+
+    const Snapshot = struct {
+        folder: []const u8,
     };
 };
 
@@ -103,6 +108,7 @@ pub fn main() !void {
         .{ .service = .gossip },
         .{ .service = .telemetry },
         .{ .service = .replay },
+        .{ .service = .snapshot },
     };
 
     const shared_regions = services.toSharedRegions(.{
@@ -137,6 +143,10 @@ pub fn main() !void {
 
         // shred receiver -> replay
         .deshredded_out = {},
+        .snapshot_config = .{
+            .folder_path = config.snapshot.folder,
+            .cluster = config.cluster,
+        },
     });
 
     switch (config.sandboxing_mode) {
