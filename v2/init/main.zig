@@ -144,6 +144,7 @@ pub fn main() !void {
         .{ .service = .accounts_db },
         .{ .service = .replay },
         .{ .service = .telemetry },
+        .{ .service = .exec },
     };
 
     const shared_regions = topology.toSharedRegions(.{
@@ -201,6 +202,10 @@ pub fn main() !void {
 
             .histogram_data_len = 4096 * 3,
         },
+
+        .replay_transaction_pool = {},
+        .block_pool = {},
+        .exec_req_response = {},
     });
 
     switch (config.sandboxing_mode) {

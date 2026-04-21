@@ -281,6 +281,10 @@ pub const Shred = extern struct {
         return @ptrCast(buffer);
     }
 
+    pub fn fromBufferUncheckedMut(buffer: *Packet.Buffer) *Shred {
+        return @ptrCast(buffer);
+    }
+
     // This is combined with fragments from other shreds in the erasure set to
     // reconstruct a collection of entries.
     pub fn erasureFragment(shred: *const Shred) ?[]const u8 {

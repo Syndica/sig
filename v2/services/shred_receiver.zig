@@ -114,6 +114,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
                 ro.config.shred_version,
                 packet,
                 &deshred_out,
+                logger.withScope("processPacket"),
             ) catch |err| {
                 std.log.warn("packet failed with {}", .{err});
                 continue;

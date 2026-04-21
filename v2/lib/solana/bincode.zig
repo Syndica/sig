@@ -62,7 +62,7 @@ pub fn write(writer: *std.Io.Writer, value: anytype) !void {
         .@"union" => {
             if (@hasDecl(T, write_func_overload))
                 return @field(T, write_func_overload)(&value, writer);
-                
+
             switch (std.meta.activeTag(value)) {
                 inline else => |tag| {
                     try write(writer, tag);

@@ -3,6 +3,8 @@ const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
 
+const replay = lib.replay;
+
 const bincode = lib.solana.bincode;
 
 const Hash = lib.solana.Hash;
@@ -15,7 +17,6 @@ const FecSetId = lib.shred.FecSetId;
 const Tree = lib.collections.LCRSTree;
 const Pool = lib.collections.Pool;
 
-
 comptime {
     _ = start;
 }
@@ -27,9 +28,9 @@ pub const std_options = start.options;
 pub const ReadOnly = struct {};
 pub const ReadWrite = struct {
     deshredded_in: *lib.shred.DeshredRing,
-    account_pool: *AccountPool,
-    account_lookups: *AccountLookups,
-    tel: *tel.Region,
+    replay_transaction_pool: *lib.replay.TransactionPool,
+    block_pool: *lib.replay.BlockPool,
+    exec_req_response: *lib.replay.ExecReqResponse,
 };
 
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
@@ -43,8 +44,14 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     var deshredded_iter = rw.deshredded_in.get(.reader);
 
     while (true) {
-        const deshredded_fec_set: *const lib.shred.DeshreddedFecSet = deshredded_iter.next() orelse
-            continue;
+        const deshredded_fec_set: *const lib.shred.DeshreddedFecSet = blk: {
+            const loop_zone = tracy.Zone.init(@src(), .{ .name = "spinning" });
+            defer loop_zone.deinit();
+
+            while (true) {
+                break :blk deshredded_iter.next() orelse continue;
+            }
+        };
         defer deshredded_iter.markUsed();
 
         const received_zone = tracy.Zone.init(@src(), .{ .name = "received fec set" });
@@ -55,29 +62,88 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
 
         // _ = inserted_node;
 
+        var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
+        var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
+
         if (inserted_node.dataStart(map_tree.pool) == true and inserted_node.data_complete) {
             // we can deserialise all at once
 
             var reader = std.io.Reader.fixed(inserted_node.payload());
 
-            var deserialised_buf: [64 * 1024]u8 = undefined;
+            // 64 should be fine, extra is for allocations made by bincode
+            var deserialised_buf: [128 * 1024]u8 = undefined;
             var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
 
-            const entries = try bincode.read(&deserial_fba, &reader, bincode.ShortVec(Entry));
+            const n_entries = try bincode.read(&deserial_fba, &reader, u64);
+            for (0..n_entries) |_| {
+                const num_hashes: u64 = try bincode.read(&deserial_fba, &reader, u64);
+                const hash: Hash = try bincode.read(&deserial_fba, &reader, Hash);
 
-            for (entries.items) |entry| {
-                for (entry.transactions.items) |transaction| {
-                    std.log.info("transaction: ", .{});
+                _ = num_hashes;
+                _ = hash;
 
-                    switch (transaction.message) {
-                        inline else => |msg| {
-                            for (msg.account_keys.items) |account_key| {
-                                std.log.info("account_key: {f}", .{account_key});
-                            }
+                const n_transactions = try bincode.read(&deserial_fba, &reader, u64);
+                for (0..n_transactions) |_| {
+                    var pre = reader; // capture before position
+
+                    const transaction = try bincode.read(&deserial_fba, &reader, lib.solana.transaction.VersionedTransaction);
+
+                    // NOTE: we store bincode-encoded transactions as-is, as:
+                    //       1) we know the upper bound size
+                    //       2) deserialising is cheap, and I think we only have to do it twice
+                    _ = transaction;
+
+                    const transaction_id = try rw.replay_transaction_pool.createId();
+                    defer rw.replay_transaction_pool.destroyId(transaction_id);
+
+                    const transaction_buf: *[1232]u8 = rw.replay_transaction_pool.indexToPtr(transaction_id);
+                    const transaction_bytes: []u8 = transaction_buf[0 .. reader.seek - pre.seek];
+                    pre.readSliceAll(transaction_bytes) catch return error.badbadbad;
+
+                    tracy.plot(u16, "transaction size", @intCast(transaction_bytes.len));
+
+                    const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse @panic("no space");
+                    request.* = .{
+                        .task_id = 0,
+
+                        .request_kind = .transaction_execution,
+                        .data = .{
+                            .transaction_execution = .{
+                                .block_idx = .null,
+                                .tx_idx = transaction_id,
+                            },
                         },
-                    }
+                    };
+                    exec_request_sender.markUsed();
+
+                    const polling_zone = tracy.Zone.init(@src(), .{ .name = "polling" });
+                    while (exec_response_receiver.peek() == null) {}
+                    polling_zone.deinit();
+
+                    const response: *const lib.replay.ExecResponse = exec_response_receiver.next().?;
+                    defer exec_response_receiver.markUsed();
+
+                    std.debug.assert(response.task_id == request.task_id);
+                    std.debug.assert(response.request_kind == request.request_kind);
+                    std.debug.assert(response.data.transaction_execution.success);
                 }
             }
+
+            // const entries = try bincode.read(&deserial_fba, &reader, bincode.Vec(Entry));
+
+            // for (entries.items) |entry| {
+            //     for (entry.transactions.items) |transaction| {
+            //         std.log.info("transaction: ", .{});
+
+            //         switch (transaction.message) {
+            //             inline else => |msg| {
+            //                 for (msg.account_keys.items) |account_key| {
+            //                     std.log.info("account_key: {f}", .{account_key});
+            //                 }
+            //             },
+            //         }
+            //     }
+            // }
         }
 
         // std.log.info(
@@ -117,7 +183,7 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
 }
 
 const BlockTree = struct {
-    node_pool: NodePool,
+    block_pool: *BlockPool,
 
     /// The latest block that has been rooted by consensus
     /// This node may have parents if other subsystems are still holding references to previous
@@ -127,21 +193,20 @@ const BlockTree = struct {
     /// Such subsystems may want to hold onto their own root?
     consensus_rooted_block: BlockRef,
 
-    const capacity = 1024;
-
-    const NodePool = Pool(Node, u32);
+    const BlockPool = replay.BlockPool;
+    const Node = replay.Node;
 
     /// NOTE: this is what we use for referencing blocks. This is equivalent to the block's index
     /// our block mem pool. If you want what Agave calls the "Block ID", this is the merkle root of
     ///  the last fec set.
-    const BlockRef = NodePool.ItemId;
+    const BlockRef = replay.BlockRef;
     const NodeTree = Tree(Node, struct {
-        pool: NodePool,
+        pool: *BlockPool,
 
         const Ctx = @This();
 
         fn buf(ctx: Ctx) []Node {
-            return @ptrCast(ctx.pool.buf[0..ctx.pool.len]);
+            return @ptrCast(ctx.pool.buf()[0..BlockPool.capacity]);
         }
 
         pub fn parentOf(ctx: Ctx, node: *Node) ?*Node {
@@ -165,40 +230,36 @@ const BlockTree = struct {
         }
     });
 
-    // TODO: large values (e.g. Hashes) should probably live elsewhere in memory to keep tree
-    // traversal fast
-    // This could maybe be 24 bytes (u32 idx * 3, slot u64, last merkle root hash u32)
-    const Node = extern struct {
-        parent: BlockRef = .null,
-        child: BlockRef = .null,
-        sibling: BlockRef = .null,
+    // // TODO: large values (e.g. Hashes) should probably live elsewhere in memory to keep tree
+    // // traversal fast
+    // // This could maybe be 24 bytes (u32 idx * 3, slot u64, last merkle root hash u32)
+    // const Node = extern struct {
+    //     parent: BlockRef = .null,
+    //     child: BlockRef = .null,
+    //     sibling: BlockRef = .null,
 
-        slot: Slot,
+    //     slot: Slot,
 
-        // true when inside last_merkle_map
-        last_fecset_received: bool,
+    //     // true when inside last_merkle_map
+    //     last_fecset_received: bool,
 
-        first_fecset_chained_merkle_root: Hash,
+    //     first_fecset_chained_merkle_root: Hash,
 
-        // only valid when last_fecset_received is true
-        // this is the safe way to identify a block
-        last_fecset_merkle_root: Hash,
-    };
+    //     // only valid when last_fecset_received is true
+    //     // this is the safe way to identify a block
+    //     last_fecset_merkle_root: Hash,
+    // };
 
     // You must get the root slot's last fec set's merkle root as this is used to identify blocks.
     // Currently, this is (very annoyingly) not part of the snapshot. This means we must repair the
     // snapshot slot in order to properly identify it.
     // SIMD-0333 `Serialize Block ID in Bank into Snapshot` fixes this problem.
     fn init(
-        allocator: std.mem.Allocator,
+        block_pool: *BlockPool,
         root_slot: Slot,
         root_slot_last_fec_set_merkle_root: *const Hash,
     ) !BlockTree {
-        const pool_buf = try allocator.alloc(Node, capacity);
-        errdefer allocator.free(pool_buf);
-
-        var pool: NodePool = .init(@ptrCast(pool_buf));
-        const root_node = try pool.create();
+        const root_node = try block_pool.create();
 
         root_node.* = .{
             .slot = root_slot,
@@ -208,13 +269,9 @@ const BlockTree = struct {
         };
 
         return .{
-            .node_pool = pool,
-            .consensus_rooted_block = pool.ptrToIndex(root_node),
+            .block_pool = block_pool,
+            .consensus_rooted_block = block_pool.ptrToIndex(root_node),
         };
-    }
-
-    fn deinit(self: *BlockTree, allocator: std.mem.Allocator) void {
-        allocator.free(self.node_pool.buf[0..self.node_pool.len]);
     }
 
     fn findUnrootedParent(
@@ -222,10 +279,7 @@ const BlockTree = struct {
         parent_slot: Slot,
         parent_last_fecset_merkle_root: *const Hash,
     ) ?*Node {
-        std.debug.assert(self.consensus_rooted_block != .null);
-
-        const root_node_index = @intFromEnum(self.consensus_rooted_block);
-        const root_node = &self.node_pool.buf[root_node_index].item;
+        const root_node: *Node = self.block_pool.indexToPtr(self.consensus_rooted_block);
 
         return self.findUnrootedParentRecursive(
             root_node,
@@ -250,7 +304,7 @@ const BlockTree = struct {
         // if the node's slot is >= the parent's slot, we can skip the child traversal, as children
         // always have increasing slots
         if (parent_slot > node.slot and node.child != .null) {
-            const child_node: *Node = self.node_pool.indexToPtr(node.child);
+            const child_node: *Node = self.block_pool.indexToPtr(node.child);
             if (findUnrootedParentRecursive(
                 self,
                 child_node,
@@ -263,7 +317,7 @@ const BlockTree = struct {
         // siblings are nodes which have chained off the same parent node, which does not imply
         // ordering.
         if (node.sibling != .null) {
-            const sibling_node: *Node = self.node_pool.indexToPtr(node.sibling);
+            const sibling_node: *Node = self.block_pool.indexToPtr(node.sibling);
             if (findUnrootedParentRecursive(
                 self,
                 sibling_node,
@@ -306,8 +360,8 @@ const BlockTree = struct {
             return null;
         };
 
-        const new_child = try self.node_pool.create();
-        errdefer self.node_pool.destroy(new_child);
+        const new_child = try self.block_pool.create();
+        errdefer self.block_pool.destroy(new_child);
 
         new_child.* = .{
             .slot = new_slot,
@@ -316,9 +370,9 @@ const BlockTree = struct {
             .last_fecset_merkle_root = undefined, // only set once the last fecset is received
         };
 
-        NodeTree.linkOrphaned(.{ .pool = self.node_pool }, parent, new_child);
+        NodeTree.linkOrphaned(.{ .pool = self.block_pool }, parent, new_child);
 
-        return self.node_pool.ptrToIndex(new_child);
+        return self.block_pool.ptrToIndex(new_child);
     }
 
     /// Asserts node is already linked to parent
@@ -328,9 +382,7 @@ const BlockTree = struct {
         block: BlockRef,
         last_fecset_merkle_root: *const Hash,
     ) void {
-        std.debug.assert(block != .null);
-
-        const node: *Node = @ptrCast(&self.node_pool.buf[@intFromEnum(block)]);
+        const node: *Node = self.block_pool.indexToPtr(block);
 
         std.debug.assert(node.parent != .null);
         node.last_fecset_received = true;
@@ -339,12 +391,13 @@ const BlockTree = struct {
 };
 
 test "Basic blocktree" {
-    const allocator = std.testing.allocator;
-
     const root_hash: Hash = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
 
-    var blocks: BlockTree = try .init(allocator, 0, &root_hash);
-    defer blocks.deinit(allocator);
+    var block_pool_buf: [replay.BlockPool.size()]u8 align(@alignOf(replay.BlockPool)) = undefined;
+    var block_pool: *replay.BlockPool = @ptrCast(&block_pool_buf);
+    block_pool.init();
+
+    var blocks: BlockTree = try .init(block_pool, 0, &root_hash);
 
     const slot_1_block = (try blocks.tryAllocNewBlockId(0, 1, &root_hash)).?;
     const slot_1_hash: Hash = .parse("2GyMeUytf6fcsfNP2QQ6F5e5qwAUoMtKUbnH6QU6bTNm");
@@ -414,6 +467,87 @@ const MerkleNode = extern struct {
             node.slot_complete,
         });
     }
+};
+
+const BlockData = struct {};
+
+const TransactionPool = Pool(EncodedTransaction);
+
+const Pubkey = lib.solana.Pubkey;
+
+const EncodedTransaction = extern struct {
+    bincode_data: [1232]u8,
+};
+
+// "
+// const Transaction = struct {
+//     header: MessageHeader,
+//     recent_blockhash: Hash,
+//     n_account_keys: u16,
+//     n_instructions: u16,
+//     n_address_table_lookups: u16,
+
+//     _buf: [2048]u8, // oversized, TODO: calculate upper bound, it's slightly different from the protocol's tx size
+
+//     fn accountKeys(tx: *const Transaction) []const u8 {
+//         return tx._buf[0..tx.n_account_keys];
+//     }
+
+//     fn instruction(tx: *const Transaction, idx: u16) struct {
+//         program_id_index: u8,
+//         accounts: []const u8,
+//         data: []const u8,
+//     } {
+//         std.debug.assert(idx < tx.n_instructions);
+
+//         // header for the transaction's instructions
+//         const Instr = extern struct {
+//             accounts: struct { start: u16, count: u16 },
+//             data: struct { start: u16, count: u16 },
+//             program_id_index: u8,
+//         };
+
+//         const header: *Instr = &tx._buf[tx.n_account_keys * @sizeOf(lib.solana.Pubkey) + idx * @sizeOf(Instr)];
+
+//         return .{
+//             .program_id_index = header.program_id_index,
+//             .accounts = @as([*]Pubkey, @ptrCast(tx._buf[header.start..].ptr))[0..header.accounts.count],
+//             .data = tx._buf[header.data.start..header.data.count],
+//         };
+//     }
+
+//     fn addressTableLookup(tx: *const Transaction, idx: u16) struct {
+//         account_key: *const Pubkey,
+//         writable_indexes: []const u8,
+//         readonly_indexes: []const u8,
+//     } {
+//         // header for the transaction's address table lookups
+//         const AddrTbl = extern struct {
+//             account_key: Pubkey,
+//             writable_indexes: struct { start: u16, end: u16 },
+//             readonly_indexes: struct { start: u16, end: u16 },
+//         };
+
+//         // TODO
+//         @panic("todo");
+//     }
+
+//     const MessageHeader = struct {
+//         num_required_signatures: u8,
+//         num_readonly_signed_accounts: u8,
+//         num_readonly_unsigned_accounts: u8,
+//     };
+// };
+
+// const CompiledInstruction = struct {
+//     program_id_index: u8,
+//     accounts: bincode.ShortVec(u8),
+//     data: bincode.ShortVec(u8),
+// };
+
+const Microblock = struct {
+    entries: [128]Entry,
+    entries_len: u8,
 };
 
 // TODO: handle eviction
@@ -549,6 +683,9 @@ const MerkleForest = struct {
     // TODO: remove orphans from orphan_map once parented
     /// Returns the newly inserted node, null => node already known (this is not an error).
     fn put(self: *MerkleForest, new_fec_set: *const lib.shred.DeshreddedFecSet) !?*MerkleNode {
+        const zone = tracy.Zone.init(@src(), .{ .name = "MerkleForest.put" });
+        defer zone.deinit();
+
         const map_ctx: MerkleContext = .{ .map = &self.map };
         const orphan_map_ctx: OrphanContext = .{ .map = &self.orphan_map };
 

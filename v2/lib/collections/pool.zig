@@ -1,5 +1,157 @@
 const std = @import("std");
 
+/// An atomic shared mem pool of []Item
+pub fn SharedPool(Item: type, cap: usize) type {
+    // bits required for the power-of-two integer needed to store capacity+1 items
+    const int_bits = @max(
+        8,
+        try std.math.ceilPowerOfTwo(
+            usize,
+            std.math.log2_int_ceil(usize, cap + 2),
+        ),
+    );
+    const IdInt: type = @Type(.{ .int = .{ .bits = int_bits, .signedness = .unsigned } });
+
+    return extern struct {
+        free_list: std.atomic.Value(ItemId),
+
+        // This is effectively a [capacity]Node, however Zig doesn't let us make structs over 4GiB,
+        // which some pools may be.
+        // We're not using a pointer as we want the header field(s) to be in the same buffer as the
+        // pool items.
+        // This should normally only be accessed via .buf().
+        _buf: void align(@alignOf(Node)),
+
+        const PoolSelf = @This();
+        pub const capacity = cap;
+
+        // We know when next_free is active when we walk the free_list
+        const Node = extern union { next_free: ItemId align(@alignOf(Item)), item: Item };
+
+        comptime {
+            if (@sizeOf(Node) != @sizeOf(Item)) unreachable;
+            if (@alignOf(Node) != @alignOf(Item)) unreachable;
+        }
+
+        pub const ItemId = enum(IdInt) {
+            null = std.math.maxInt(IdInt),
+            _,
+
+            comptime {
+                std.debug.assert(capacity < std.math.maxInt(IdInt));
+                _ = PoolSelf;
+            }
+
+            pub fn index(self: ItemId) ?IdInt {
+                if (self == .null) return null;
+                return @intFromEnum(self);
+            }
+
+            pub fn fromInt(int: IdInt) ItemId {
+                return @enumFromInt(int);
+            }
+        };
+
+        pub fn size() usize {
+            return @offsetOf(PoolSelf, "_buf") + capacity * @sizeOf(Item);
+        }
+
+        /// Only use this if you're certain that it's the only way
+        pub fn buf(pool: *PoolSelf) []Node {
+            const base: [*]Node = @ptrCast(&pool._buf);
+            return base[0..capacity];
+        }
+
+        pub fn constBuf(pool: *const PoolSelf) []const Node {
+            const base: [*]const Node = @ptrCast(&pool._buf);
+            return base[0..capacity];
+        }
+
+        pub fn init(pool: *PoolSelf) void {
+            const nodes: []Node = pool.buf();
+
+            // place all nodes in the free list
+            // (0) -> (1) -> ... ->(buf.len - 1) -> (null)
+            for (nodes[0 .. nodes.len - 1], 0..) |*node, i| {
+                node.* = .{ .next_free = @enumFromInt(i + 1) };
+            }
+            nodes[nodes.len - 1] = .{ .next_free = .null };
+
+            pool.free_list = .init(@enumFromInt(0));
+        }
+
+        // take head off free_list
+        pub fn create(self: *PoolSelf) !*Item {
+            while (true) {
+                const head = self.free_list.load(.acquire);
+                if (head == .null) return error.OutOfSpace;
+
+                const new_node: *Node = &self.buf()[head.index().?];
+                const next = new_node.next_free;
+
+                // these atomics may be wrong, but king will smell this and fix it before it gets
+                // in main
+                if (self.free_list.cmpxchgWeak(head, next, .acq_rel, .acquire) != null)
+                    continue;
+
+                return @ptrCast(new_node);
+            }
+        }
+
+        pub fn createId(self: *PoolSelf) !ItemId {
+            const item = try self.create();
+            return self.ptrToIndex(item);
+        }
+
+        // place item as head of free_list
+        pub fn destroy(self: *PoolSelf, item: *Item) void {
+            item.* = undefined;
+            const node: *Node = @ptrCast(item);
+            const id = self.ptrToIndex(item);
+
+            while (true) {
+                const head = self.free_list.load(.acquire);
+                node.* = .{ .next_free = head };
+
+                if (self.free_list.cmpxchgWeak(head, id, .acq_rel, .acquire) != null)
+                    continue;
+
+                return;
+            }
+        }
+
+        pub fn destroyId(self: *PoolSelf, item_id: ItemId) void {
+            std.debug.assert(item_id != .null);
+            const item: *Item = @ptrCast(&self.buf()[item_id.index().?]);
+            self.destroy(item);
+        }
+
+        pub fn indexToPtr(self: *PoolSelf, item_id: ItemId) *Item {
+            std.debug.assert(item_id != .null);
+            return @ptrCast(&self.buf()[item_id.index().?]);
+        }
+
+        pub fn indexToConstPtr(self: *const PoolSelf, item_id: ItemId) *const Item {
+            std.debug.assert(item_id != .null);
+            return @ptrCast(&self.constBuf()[item_id.index().?]);
+        }
+
+        pub fn ptrToIndex(self: *PoolSelf, item: *Item) ItemId {
+            const node: [*]const Node = @ptrCast(item);
+            const base: [*]const Node = self.buf().ptr;
+
+            {
+                // range check
+                const item_addr: usize = @intFromPtr(item);
+                std.debug.assert(item_addr >= @intFromPtr(self.buf().ptr));
+                std.debug.assert(item_addr < @intFromPtr(self.buf().ptr + capacity));
+            }
+
+            return @enumFromInt(node - base);
+        }
+    };
+}
+
 /// A mem pool of []Item
 /// Asserts Item to have an alignment and size >= IdInt
 /// NOTE: this pool is not atomic, but is designed such that it could be made atomic easily
