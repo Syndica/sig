@@ -82,20 +82,20 @@ pub const LogCollector = struct {
         comptime fmt: []const u8,
         args: anytype,
     ) error{OutOfMemory}!void {
-        if (self.bytes_limit_reached) return;
-
-        try self.message_indices.append(allocator, self.message_pool.items.len);
         if (self.bytes_limit) |bl| {
             const msg_len: usize = @intCast(std.fmt.count(fmt, args));
             const bytes_written = self.bytes_written +| msg_len;
             if (bytes_written >= bl and !self.bytes_limit_reached) {
                 self.bytes_limit_reached = true;
+                try self.message_indices.append(allocator, self.message_pool.items.len);
                 try self.message_pool.appendSlice(allocator, LOG_TRUNCATE_MSG);
-            } else {
+            } else if (bytes_written < bl) {
                 self.bytes_written = bytes_written;
+                try self.message_indices.append(allocator, self.message_pool.items.len);
                 try self.message_pool.writer(allocator).print(fmt, args);
             }
         } else {
+            try self.message_indices.append(allocator, self.message_pool.items.len);
             try self.message_pool.writer(allocator).print(fmt, args);
         }
     }
@@ -168,6 +168,40 @@ test "iterator count empty collector" {
     try std.testing.expectEqual(0, iterator.count());
     try std.testing.expectEqual(null, iterator.next());
     try std.testing.expectEqual(0, iterator.count());
+}
+
+test "bytes_limit allows short messages after truncation" {
+    const allocator = std.testing.allocator;
+
+    var log_collector = try LogCollector.init(allocator, 10);
+    defer log_collector.deinit(allocator);
+
+    try log_collector.log(allocator, "1234567890", .{});
+    try log_collector.log(allocator, "x", .{});
+
+    var iter = log_collector.iterator();
+    try expectEqualLogs(
+        &.{ LOG_TRUNCATE_MSG, "x" },
+        &.{ iter.next().?, iter.next().? },
+    );
+}
+
+test "bytes_limit does not create empty messages after repeated overflow" {
+    const allocator = std.testing.allocator;
+
+    var log_collector = try LogCollector.init(allocator, 5);
+    defer log_collector.deinit(allocator);
+
+    try log_collector.log(allocator, "12345", .{});
+    try log_collector.log(allocator, "67890", .{});
+    try log_collector.log(allocator, "x", .{});
+
+    var iter = log_collector.iterator();
+    try expectEqualLogs(
+        &.{ LOG_TRUNCATE_MSG, "x" },
+        &.{ iter.next().?, iter.next().? },
+    );
+    try std.testing.expectEqual(null, iter.next());
 }
 
 fn expectEqualLogs(expected: []const []const u8, actual: []const []const u8) !void {
