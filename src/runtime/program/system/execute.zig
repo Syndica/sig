@@ -1095,7 +1095,11 @@ test "executeCreateAccountAllowPrefund with transfer" {
             .feature_set = &.{.{ .feature = .create_account_allow_prefund }},
             .accounts = &.{
                 .{ .pubkey = new_account_key, .lamports = 10, .owner = system_program.ID },
-                .{ .pubkey = funding_account_key, .lamports = 2_000_000, .owner = system_program.ID },
+                .{
+                    .pubkey = funding_account_key,
+                    .lamports = 2_000_000,
+                    .owner = system_program.ID,
+                },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
@@ -1108,7 +1112,11 @@ test "executeCreateAccountAllowPrefund with transfer" {
                     .lamports = 1_000_010,
                     .data = &[_]u8{ 0, 0 },
                 },
-                .{ .pubkey = funding_account_key, .lamports = 1_000_000, .owner = system_program.ID },
+                .{
+                    .pubkey = funding_account_key,
+                    .lamports = 1_000_000,
+                    .owner = system_program.ID,
+                },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .accounts_resize_delta = 2,

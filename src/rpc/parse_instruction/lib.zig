@@ -5576,9 +5576,9 @@ test "parse_instruction.parseInstruction: system createAccountAllowPrefund with 
     const allocator = arena.allocator();
 
     const system_id = sig.runtime.program.system.ID;
-    const new_account = Pubkey{ .data = [_]u8{1} ** 32 };
-    const source = Pubkey{ .data = [_]u8{2} ** 32 };
-    const owner = Pubkey{ .data = [_]u8{3} ** 32 };
+    const new_account = Pubkey{ .data = @splat(1) };
+    const source = Pubkey{ .data = @splat(2) };
+    const owner = Pubkey{ .data = @splat(3) };
     const static_keys = [_]Pubkey{ new_account, source, system_id };
     const account_keys = AccountKeys.init(&static_keys, null);
 
