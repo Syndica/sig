@@ -19,6 +19,7 @@ pub const Executable = struct {
     text_vaddr: u64,
     function_registry: Registry,
     config: Config,
+    text_section_len: u64 = 0,
 
     pub fn fromAsm(
         allocator: std.mem.Allocator,
@@ -70,6 +71,7 @@ pub const Executable = struct {
         return .{
             .instructions = std.mem.bytesAsSlice(Instruction, source),
             .bytes = source,
+            .text_section_len = source.len,
             .version = version,
             .config = config,
             .function_registry = registry.*,
@@ -89,6 +91,7 @@ pub const Executable = struct {
 
     const VerifierError = error{
         NoProgram,
+        ProgramLengthNotMultiple,
         DivisionByZero,
         UnsupportedLEBEArgument,
         LddwCannotBeLast,
@@ -116,6 +119,8 @@ pub const Executable = struct {
 
         const version = self.version;
         const instructions = self.instructions;
+        // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/verifier.rs#L94-L96
+        if (self.text_section_len % 8 != 0) return error.ProgramLengthNotMultiple;
         if (instructions.len == 0) return error.NoProgram;
 
         var function_start: u64 = 0;

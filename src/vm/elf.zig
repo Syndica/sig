@@ -202,6 +202,7 @@ fn parseStrict(
         .text_vaddr = vm_range_start,
         .config = config,
         .function_registry = function_registry,
+        .text_section_len = bytecode_header.p_filesz,
         .instructions = std.mem.bytesAsSlice(sbpf.Instruction, try safeSlice(
             bytes,
             bytecode_header.p_offset,
@@ -269,7 +270,6 @@ fn parseLenient(
     const ro_section = try parsed.parseRoSections(allocator, config);
 
     const text_range = Elf64.Range.get(text_shdr);
-    if ((text_range.hi - text_range.lo) % 8 != 0) return error.InvalidSize;
     const text_bytes = bytes[text_range.lo..text_range.hi];
     const instruction_count = (text_range.hi - text_range.lo) / 8;
     const instructions = std.mem.bytesAsSlice(
@@ -286,6 +286,7 @@ fn parseLenient(
         .instructions = instructions,
         .ro_section = ro_section,
         .text_vaddr = text_section_vaddr,
+        .text_section_len = text_range.hi - text_range.lo,
         .version = version,
     };
 }
