@@ -269,6 +269,7 @@ fn parseLenient(
     const ro_section = try parsed.parseRoSections(allocator, config);
 
     const text_range = Elf64.Range.get(text_shdr);
+    if ((text_range.hi - text_range.lo) % 8 != 0) return error.InvalidSize;
     const text_bytes = bytes[text_range.lo..text_range.hi];
     const instruction_count = (text_range.hi - text_range.lo) / 8;
     const instructions = std.mem.bytesAsSlice(
