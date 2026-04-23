@@ -250,6 +250,11 @@ pub fn Pool(Item: type, IdInt: type) type {
             return @ptrCast(&self.buf[item_id.index().?]);
         }
 
+        pub fn indexToOptPtr(self: *const PoolSelf, item_id: ItemId) ?*Item {
+            if (item_id == .null) return null;
+            return @ptrCast(&self.buf[item_id.index().?]);
+        }
+
         pub fn ptrToIndex(self: *const PoolSelf, item: *Item) ItemId {
             const node: [*]const Node = @ptrCast(item);
             const base: [*]const Node = self.buf;

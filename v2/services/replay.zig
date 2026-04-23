@@ -35,11 +35,37 @@ pub const ReadWrite = struct {
 
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
+const TransactionsIterator = struct {
+    current_node: *const MerkleNode,
+    current_node_read_transaction_count: u16,
+    current_entry_batch_transaction_count: u16,
+
+    fn init(current_node: *const MerkleNode) TransactionsIterator {
+        return .{
+            .current_node = current_node,
+            .current_node_read_transaction_count = 0,
+            .current_entry_batch_transaction_count = 0,
+        };
+    }
+
+    // returns the n
+    // hash.* == null <=> num_hashes.* == null
+    fn next(
+        iter: *TransactionsIterator,
+        transaction_buf: *[1232]u8,
+        hash: *?Hash,
+        num_hashes: *?u64,
+    ) ?[]const u8 {
+        _ = iter;
+        _ = transaction_buf;
+        _ = hash;
+        _ = num_hashes;
+        // if (current_node_read_transaction_count == 0)
+    }
+};
+
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
     _ = runner;
-    const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
-    defer zone.deinit();
-
     var fba: std.heap.FixedBufferAllocator = .init(&scratch_memory);
     const allocator = fba.allocator();
 
@@ -61,13 +87,35 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         const received_zone = tracy.Zone.init(@src(), .{ .name = "received fec set" });
         defer received_zone.deinit();
 
-        const inserted_node = try map_tree.put(deshredded_fec_set) orelse
+        const inserted_node = try map_tree.put(rw.block_pool, deshredded_fec_set) orelse
             continue; // null => node already known, nothing to do here
 
         // _ = inserted_node;
 
         var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
         var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
+
+        if (inserted_node.block_ref == .null) {
+            // blockrefs are assigned from the 0th fecset, and carried forward. If the newly
+            // inserted node isn't attached to a 0th fecset, we won't be able to execute it until it
+            // is.
+
+            // NOTE: we *could* do some PoH and sig verify tasks early here, but it seems like there
+            // isn't actually an advantage, as a validator executing transactions will have plenty
+            // of "gaps" in exec thread pool usage, and these tasks only have to be finished before
+            // we finish the block as a whole.
+
+            // TODO: with that being said, we could probably benefit from prefetching accounts here.
+            continue;
+        }
+
+        // assert that we've got a chain of fec sets back to the 0th fec set
+        {
+            var maybe_node: ?*MerkleNode = inserted_node;
+            while (maybe_node) |node| : (maybe_node = map_tree.pool.indexToOptPtr(node.parent)) {
+                std.debug.assert(node.parent != .null or node.id.fec_set_idx == 0);
+            }
+        }
 
         if (inserted_node.dataStart(map_tree.pool) == true and inserted_node.data_complete) {
             // we can deserialise all at once
@@ -374,7 +422,7 @@ const BlockTree = struct {
             .last_fecset_merkle_root = undefined, // only set once the last fecset is received
         };
 
-        NodeTree.linkOrphaned(.{ .pool = self.block_pool }, parent, new_child);
+        NodeTree.linkOrphaned(.{ .pool = self.block_pool }, .tail, parent, new_child);
 
         return self.block_pool.ptrToIndex(new_child);
     }
@@ -429,6 +477,18 @@ const MerkleNode = extern struct {
     id: FecSetId,
     data_complete: bool,
     slot_complete: bool,
+
+    // allocated upon insertion of 1st fec set, copied down through children
+    // TODO: allocate additional blockref under equivocation
+    // TODO: eviction
+    block_ref: lib.replay.BlockRef,
+
+    deserialise_finish_pos: extern struct {
+        byte_offset: u16,
+        remaining: enum(u8) { all, transactions, entries, none },
+        n_remaining: u16,
+    } = .{ .byte_offset = 0, .remaining = .all, .n_remaining = 0 },
+
     payload_len: u16,
 
     // TODO: this shouldn't be copied, and should instead come in via a pool
@@ -462,6 +522,7 @@ const MerkleNode = extern struct {
             \\
         , .{
             node.id,
+            node.slot_complete,
             node.parent,
             node.child,
             node.sibling,
@@ -482,72 +543,6 @@ const Pubkey = lib.solana.Pubkey;
 const EncodedTransaction = extern struct {
     bincode_data: [1232]u8,
 };
-
-// "
-// const Transaction = struct {
-//     header: MessageHeader,
-//     recent_blockhash: Hash,
-//     n_account_keys: u16,
-//     n_instructions: u16,
-//     n_address_table_lookups: u16,
-
-//     _buf: [2048]u8, // oversized, TODO: calculate upper bound, it's slightly different from the protocol's tx size
-
-//     fn accountKeys(tx: *const Transaction) []const u8 {
-//         return tx._buf[0..tx.n_account_keys];
-//     }
-
-//     fn instruction(tx: *const Transaction, idx: u16) struct {
-//         program_id_index: u8,
-//         accounts: []const u8,
-//         data: []const u8,
-//     } {
-//         std.debug.assert(idx < tx.n_instructions);
-
-//         // header for the transaction's instructions
-//         const Instr = extern struct {
-//             accounts: struct { start: u16, count: u16 },
-//             data: struct { start: u16, count: u16 },
-//             program_id_index: u8,
-//         };
-
-//         const header: *Instr = &tx._buf[tx.n_account_keys * @sizeOf(lib.solana.Pubkey) + idx * @sizeOf(Instr)];
-
-//         return .{
-//             .program_id_index = header.program_id_index,
-//             .accounts = @as([*]Pubkey, @ptrCast(tx._buf[header.start..].ptr))[0..header.accounts.count],
-//             .data = tx._buf[header.data.start..header.data.count],
-//         };
-//     }
-
-//     fn addressTableLookup(tx: *const Transaction, idx: u16) struct {
-//         account_key: *const Pubkey,
-//         writable_indexes: []const u8,
-//         readonly_indexes: []const u8,
-//     } {
-//         // header for the transaction's address table lookups
-//         const AddrTbl = extern struct {
-//             account_key: Pubkey,
-//             writable_indexes: struct { start: u16, end: u16 },
-//             readonly_indexes: struct { start: u16, end: u16 },
-//         };
-
-//         // TODO
-//         @panic("todo");
-//     }
-
-//     const MessageHeader = struct {
-//         num_required_signatures: u8,
-//         num_readonly_signed_accounts: u8,
-//         num_readonly_unsigned_accounts: u8,
-//     };
-// };
-
-// const CompiledInstruction = struct {
-//     program_id_index: u8,
-//     accounts: bincode.ShortVec(u8),
-//     data: bincode.ShortVec(u8),
-// };
 
 const Microblock = struct {
     entries: [128]Entry,
@@ -664,29 +659,14 @@ const MerkleForest = struct {
         self.orphan_map.deinit(allocator);
     }
 
-    // const InsertResult = union(enum) {
-    //     node_already_known, // merkle root in map early return
-
-    //     waiting_for_child,
-    //     waiting_for_parent,
-    //     waiting_for_parent_and_child,
-
-    //     // The new node's parent and child nodes are both found (or not needed), but we still don't
-    //     // have a complete slot.
-    //     chain_incomplete,
-    //     chain_complete,
-
-    //     pub fn format(self: InsertResult, writer: *std.io.Writer) !void {
-    //         switch (self) {
-    //             inline else => try writer.print("{s}", .{@tagName(self)}),
-    //         }
-    //     }
-    // };
-
     // TODO: eviction
     // TODO: remove orphans from orphan_map once parented
     /// Returns the newly inserted node, null => node already known (this is not an error).
-    fn put(self: *MerkleForest, new_fec_set: *const lib.shred.DeshreddedFecSet) !?*MerkleNode {
+    fn put(
+        self: *MerkleForest,
+        block_pool: *replay.BlockPool,
+        new_fec_set: *const lib.shred.DeshreddedFecSet,
+    ) !?*MerkleNode {
         const zone = tracy.Zone.init(@src(), .{ .name = "MerkleForest.put" });
         defer zone.deinit();
 
@@ -702,15 +682,18 @@ const MerkleForest = struct {
         );
         if (map_result.found_existing) return .node_already_known;
 
-        const node = try self.pool.create();
-        map_result.value_ptr.* = node;
+        const new_node = try self.pool.create();
+        map_result.value_ptr.* = new_node;
 
-        node.* = .{
+        new_node.* = .{
             .merkle_root = new_fec_set.merkle_root,
             .chained_merkle_root = new_fec_set.chained_merkle_root,
             .id = new_fec_set.id,
             .data_complete = new_fec_set.data_complete,
             .slot_complete = new_fec_set.slot_complete,
+
+            .block_ref = if (new_fec_set.id.fec_set_idx == 0) try block_pool.createId() else .null,
+
             .payload_len = new_fec_set.payload_len,
             .payload_buf = new_fec_set.payload_buf,
         };
@@ -719,7 +702,34 @@ const MerkleForest = struct {
 
         // TODO: stop checking cross-slot?
         if (self.map.getAdapted(&new_fec_set.chained_merkle_root, map_ctx)) |parent| {
-            NodeTree.linkOrphaned(.{ .pool = self.pool }, parent, node);
+            // we found the parent of our new node
+
+            var did_insert_equivocated: bool = false;
+
+            if (parent.child == .null) {
+                @branchHint(.likely);
+                new_node.block_ref = parent.block_ref;
+            } else {
+                // This node's parent already has a child. This means the leader produced multiple
+                // conflicting fec sets.
+                // TODO: report this and special case the handling in the caller
+                std.log.warn("Equivocation detected! Fec set {f} has multiple children\n", .{@as(*const MerkleNode, parent)});
+                new_node.block_ref = try block_pool.createId();
+                std.debug.assert(new_node.block_ref != .null);
+                std.debug.assert(new_node.block_ref != parent.block_ref);
+                did_insert_equivocated = true;
+            }
+
+            NodeTree.linkOrphaned(.{ .pool = self.pool }, .tail, parent, new_node);
+
+            if (did_insert_equivocated) {
+                // If we insert equivocated, we should allocate a new blockref. In the case of
+                // equivocation we will "choose" the one that came first by convention - the chosen
+                // fec set will be at the head of the sibling list, i.e. the direct child of the
+                // parent.
+                std.debug.assert(self.pool.indexToPtr(parent.child).block_ref != new_node.block_ref);
+            }
+
             // return .{ .inserted_known_chain = parent };
         } else if (new_fec_set.id.fec_set_idx != 0) {
             // We don't have this fec set's parent yet, and it should have one.
@@ -735,8 +745,21 @@ const MerkleForest = struct {
                 &new_fec_set.chained_merkle_root,
                 orphan_map_ctx,
             );
-            std.debug.assert(!orphan_map_result.found_existing);
-            orphan_map_result.value_ptr.* = node;
+
+            if (orphan_map_result.found_existing) {
+                std.log.warn(
+                    "Equivocation detected! Orphaned Nodes {f} and {f} want the same parent {f}",
+                    .{ orphan_map_result.value_ptr.*, new_node, &new_fec_set.chained_merkle_root },
+                );
+                NodeTree.linkNewOrphanedSibling(.{ .pool = self.pool }, orphan_map_result.value_ptr.*, new_node);
+
+                // Block IDs are allocated by the 0th fec set, and propogated to their children.
+                // Orphans don't have parents, and aren't the 0th fec set.
+                std.debug.assert(orphan_map_result.value_ptr.*.block_ref == .null);
+                std.debug.assert(new_node.block_ref == .null);
+            } else {
+                orphan_map_result.value_ptr.* = new_node;
+            }
 
             must_wait_for_parent = true;
         }
@@ -744,7 +767,16 @@ const MerkleForest = struct {
         var must_wait_for_child: bool = false;
 
         if (self.orphan_map.getAdapted(&new_fec_set.merkle_root, orphan_map_ctx)) |child| {
-            NodeTree.linkOrphaned(.{ .pool = self.pool }, node, child);
+            NodeTree.linkOrphaned(.{ .pool = self.pool }, .tail, new_node, child);
+
+            // propogate our block_ref to the children
+            if (new_node.block_ref != .null) {
+                var child_node: ?*MerkleNode = child;
+
+                while (child_node) |c_n| : (child_node = NodeTree.childOf(.{ .pool = self.pool }, c_n)) {
+                    c_n.block_ref = new_node.block_ref;
+                }
+            }
         } else if (!new_fec_set.slot_complete) {
             // We don't have this fec set's child yet, and it should have one
             //
@@ -784,7 +816,7 @@ const MerkleForest = struct {
         //     return if (start_finished and end_finished) .chain_complete else .chain_incomplete;
         // }
 
-        return node;
+        return new_node;
 
         // if (must_wait_for_child and must_wait_for_parent) return .waiting_for_parent_and_child;
         // if (must_wait_for_child) return .waiting_for_child;
