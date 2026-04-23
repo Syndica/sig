@@ -11,6 +11,12 @@ pub const ResolvedArgs = extern struct {
     ro: [max_regions]?[*]align(page_size_min) const u8,
     ro_len: [max_regions]usize,
 
+    /// Only set when services are running as threads inside init.
+    thread_crash_ctx: ?*anyopaque,
+    thread_crash_fn: ?ThreadCrashFn,
+    service_idx: u16,
+
+    pub const ThreadCrashFn = *const fn (?*anyopaque, u16) callconv(.c) void;
     pub const max_regions = 8; // chosen arbitrarily
     const page_size_min = std.heap.page_size_min;
 };

@@ -27,6 +27,11 @@ const e = E.init;
 
 const services_zon = @import("./services.zon");
 
+const ThreadCrashContext = struct {
+    finished_idx: *std.atomic.Value(u16),
+    reset_event: *std.Thread.ResetEvent,
+};
+
 pub const Service = blk: {
     var fields: []const std.builtin.Type.EnumField = &.{};
     for (services_zon.services) |instance| {
@@ -558,6 +563,10 @@ fn resolveArgs(
         .rw_len = @splat(0),
         .ro = @splat(null),
         .ro_len = @splat(0),
+
+        .thread_crash_ctx = null,
+        .thread_crash_fn = null,
+        .service_idx = std.math.maxInt(u16),
     };
 
     var i_rw: u8 = 0;
@@ -716,6 +725,11 @@ pub fn spawnAndWaitNoSandbox(
     var reset_event: std.Thread.ResetEvent = .{};
     var finished_service_idx: std.atomic.Value(u16) = .init(std.math.maxInt(u16));
 
+    const thread_crash_ctx: ThreadCrashContext = .{
+        .finished_idx = &finished_service_idx,
+        .reset_event = &reset_event,
+    };
+
     // Start up all services, storing their pids
     inline for (services, exit_memfds, 0..) |service_instance, exit, i| {
         _ = try spawnServiceNoSandbox(
@@ -726,6 +740,7 @@ pub fn spawnAndWaitNoSandbox(
             i,
             &finished_service_idx,
             &reset_event,
+            &thread_crash_ctx,
         );
     }
 
@@ -736,6 +751,21 @@ pub fn spawnAndWaitNoSandbox(
     std.debug.assert(exited_idx != std.math.maxInt(u16));
 
     dumpOnExit(@ptrCast(try exit_memfds[exited_idx].mmap(null)), services[exited_idx], 0, 0);
+}
+
+fn signalThreadExit(
+    service_idx: u16,
+    finished_idx: *std.atomic.Value(u16),
+    reset_event: *std.Thread.ResetEvent,
+) void {
+    finished_idx.store(service_idx, .seq_cst);
+    reset_event.set();
+}
+
+fn signalThreadCrash(ctx: ?*anyopaque, service_idx: u16) callconv(.c) void {
+    const ptr = ctx orelse return;
+    const thread_ctx: *const ThreadCrashContext = @ptrCast(@alignCast(ptr));
+    signalThreadExit(service_idx, thread_ctx.finished_idx, thread_ctx.reset_event);
 }
 
 fn threadEntry(
@@ -751,8 +781,7 @@ fn threadEntry(
     }
 
     entry_point(args);
-    reset_event.set();
-    finished_idx.store(service_idx, .seq_cst);
+    signalThreadExit(service_idx, finished_idx, reset_event);
 }
 
 fn spawnServiceNoSandbox(
@@ -763,8 +792,12 @@ fn spawnServiceNoSandbox(
     service_idx: u16,
     finished_idx: *std.atomic.Value(u16),
     reset_event: *std.Thread.ResetEvent,
+    thread_crash_ctx: *const ThreadCrashContext,
 ) !std.Thread {
-    const resolved_args = try resolveArgs(exit, stderr, regions);
+    var resolved_args = try resolveArgs(exit, stderr, regions);
+    resolved_args.thread_crash_ctx = @ptrCast(@constCast(thread_crash_ctx));
+    resolved_args.thread_crash_fn = signalThreadCrash;
+    resolved_args.service_idx = service_idx;
 
     return try std.Thread.spawn(
         .{},
