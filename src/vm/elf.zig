@@ -14,8 +14,6 @@ const Executable = lib.Executable;
 
 const elf = std.elf;
 
-const expect = std.testing.expect;
-
 pub const LoadError = error{
     UnsupportedSBPFVersion,
     WrongClass,
@@ -162,7 +160,9 @@ fn parseStrict(
     }
 
     var expected_offset: u64 = phdr_table_end;
-    for (expected_phdrs[expected_start..], phdrs[0 .. expected_phdrs.len - expected_start]) |entry, phdr| {
+    const exp_phdrs = expected_phdrs[expected_start..];
+    const act_phdrs = phdrs[0 .. expected_phdrs.len - expected_start];
+    for (exp_phdrs, act_phdrs) |entry, phdr| {
         const p_flags, const p_vaddr = entry;
 
         if (phdr.p_type != elf.PT_LOAD or
