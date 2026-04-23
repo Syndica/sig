@@ -9,6 +9,7 @@
         .telemetry = .telemetry,
 
         .deshredded_out = .deshredded_out,
+        .gossip_to_snapshot = .snapshot_source_ring,
         .snapshot_config = .snapshot_config,
     },
     .services = .{
@@ -26,6 +27,7 @@
                 .{ .name = .net_to_gossip, .access = .rw },
                 .{ .name = .gossip_config, .access = .readonly },
                 .{ .name = .telemetry, .access = .rw },
+                .{ .name = .gossip_to_snapshot, .access = .rw },
             },
         },
         .{
@@ -54,6 +56,7 @@
             .regions = .{
                 .{ .name = .snapshot_config, .access = .readonly },
                 .{ .name = .telemetry, .access = .rw },
+                .{ .name = .gossip_to_snapshot, .access = .rw },
             },
         },
     },

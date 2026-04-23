@@ -147,6 +147,8 @@ pub fn main() !void {
             .folder_path = config.snapshot.folder,
             .cluster = config.cluster,
         },
+
+        .gossip_to_snapshot = {},
     });
 
     switch (config.sandboxing_mode) {

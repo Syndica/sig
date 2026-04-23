@@ -25,6 +25,7 @@ pub const std_options = start.options;
 pub const ReadWrite = struct {
     net_pair: *Pair,
     tel: *tel.Region,
+    gossip_to_snapshot: *lib.snapshot.SnapshotSourceRing,
 };
 
 pub const ReadOnly = struct {
@@ -50,6 +51,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     const Effects = struct {
         packet_writer: *lib.net.Pair.PacketRing.Iterator(.writer),
         keypair: *const lib.gossip.KeyPair,
+        snapshot_writer: *lib.snapshot.SnapshotSourceRing.Iterator(.writer),
 
         const Self = @This();
 
@@ -71,11 +73,23 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         pub fn sign(self: Self, msg: []const u8) Signature {
             return self.keypair.sign(msg) catch |e| std.debug.panic("signing failed: {}", .{e});
         }
+
+        pub fn reportSnapshotSource(self: Self, addr: std.net.Address, slot: u64, hash: lib.solana.Hash) void {
+            const entry = self.snapshot_writer.next() orelse return;
+            entry.* = .{
+                .rpc_addr = .fromNetAddress(addr),
+                .slot = slot,
+                .hash = hash,
+            };
+            self.snapshot_writer.markUsed();
+        }
     };
 
     var packet_writer = rw.net_pair.send.get(.writer);
+    var snapshot_writer = rw.gossip_to_snapshot.get(.writer);
     const effects: Effects = .{
         .packet_writer = &packet_writer,
+        .snapshot_writer = &snapshot_writer,
         .keypair = &ro.config.keypair,
     };
 
