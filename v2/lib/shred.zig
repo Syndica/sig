@@ -12,7 +12,6 @@ comptime {
     }
 }
 
-pub const reed_solomon_table = @import("shred/reed_solomon_table.zig");
 pub const Receiver = @import("shred/receiver.zig").Receiver;
 
 const Hash = solana.Hash;
