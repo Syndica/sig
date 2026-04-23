@@ -205,6 +205,22 @@ pub const Instruction = union(enum) {
     ///   0. `[WRITE]` Nonce account
     upgrade_nonce_account,
 
+    /// Create a new account, allowing the account to already have lamports (pre-funded).
+    ///
+    /// # Account references
+    ///   0. `[WRITE, SIGNER]` New account
+    ///   1. `[WRITE, SIGNER]` Funding account (optional, required if lamports > 0)
+    create_account_allow_prefund: struct {
+        /// Number of lamports to transfer to the new account
+        lamports: u64,
+
+        /// Number of bytes of memory to allocate
+        space: u64,
+
+        /// Address of program that will own the new account
+        owner: Pubkey,
+    },
+
     pub fn deinit(self: Instruction, allocator: std.mem.Allocator) void {
         switch (self) {
             .create_account => {},
@@ -216,6 +232,7 @@ pub const Instruction = union(enum) {
             .authorize_nonce_account => {},
             .allocate => {},
             .upgrade_nonce_account => {},
+            .create_account_allow_prefund => {},
 
             inline //
             .create_account_with_seed,
