@@ -27,10 +27,7 @@ const e = E.init;
 
 const services_zon = @import("./services.zon");
 
-const ThreadCrashContext = struct {
-    finished_idx: *std.atomic.Value(u16),
-    reset_event: *std.Thread.ResetEvent,
-};
+const ThreadCrashContext = lib.ipc.ThreadCrashContext;
 
 pub const Service = blk: {
     var fields: []const std.builtin.Type.EnumField = &.{};
@@ -762,9 +759,8 @@ fn signalThreadExit(
     reset_event.set();
 }
 
-fn signalThreadCrash(ctx: ?*anyopaque, service_idx: u16) callconv(.c) void {
-    const ptr = ctx orelse return;
-    const thread_ctx: *const ThreadCrashContext = @ptrCast(@alignCast(ptr));
+fn signalThreadCrash(ctx: ?*const ThreadCrashContext, service_idx: u16) callconv(.c) void {
+    const thread_ctx = ctx orelse return;
     signalThreadExit(service_idx, thread_ctx.finished_idx, thread_ctx.reset_event);
 }
 
@@ -795,7 +791,7 @@ fn spawnServiceNoSandbox(
     thread_crash_ctx: *const ThreadCrashContext,
 ) !std.Thread {
     var resolved_args = try resolveArgs(exit, stderr, regions);
-    resolved_args.thread_crash_ctx = @ptrCast(@constCast(thread_crash_ctx));
+    resolved_args.thread_crash_ctx = thread_crash_ctx;
     resolved_args.thread_crash_fn = signalThreadCrash;
     resolved_args.service_idx = service_idx;
 

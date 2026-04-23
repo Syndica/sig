@@ -2,6 +2,11 @@ const std = @import("std");
 
 pub const Ring = @import("ipc/ring.zig").Ring;
 
+pub const ThreadCrashContext = struct {
+    finished_idx: *std.atomic.Value(u16),
+    reset_event: *std.Thread.ResetEvent,
+};
+
 pub const ResolvedArgs = extern struct {
     stderr: std.os.linux.fd_t,
     exit: [*]align(page_size_min) u8,
@@ -12,11 +17,11 @@ pub const ResolvedArgs = extern struct {
     ro_len: [max_regions]usize,
 
     /// Only set when services are running as threads inside init.
-    thread_crash_ctx: ?*anyopaque,
+    thread_crash_ctx: ?*const ThreadCrashContext,
     thread_crash_fn: ?ThreadCrashFn,
     service_idx: u16,
 
-    pub const ThreadCrashFn = *const fn (?*anyopaque, u16) callconv(.c) void;
+    pub const ThreadCrashFn = *const fn (?*const ThreadCrashContext, u16) callconv(.c) void;
     pub const max_regions = 8; // chosen arbitrarily
     const page_size_min = std.heap.page_size_min;
 };
