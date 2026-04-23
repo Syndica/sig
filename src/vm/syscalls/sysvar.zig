@@ -33,6 +33,13 @@ fn getSyscall(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMa
 
             const value_addr = registers.get(.r1);
 
+            const check_aligned = tc.getCheckAligned();
+
+            // [firedancer-io/agave] https://github.com/firedancer-io/agave/commit/922f201cc0
+            if (!check_aligned) {
+                return SyscallError.UnalignedPointer;
+            }
+
             // SIMD-0219: The destination address of all sysvar related syscalls
             // must be on the stack or heap, meaning their virtual address is
             // inside `0x200000000..0x400000000`.
@@ -48,7 +55,7 @@ fn getSyscall(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMa
                 T,
                 .mutable,
                 value_addr,
-                tc.getCheckAligned(),
+                check_aligned,
             );
 
             const v = try tc.sysvar_cache.get(T);
@@ -85,6 +92,13 @@ pub fn getSysvar(
     const mem_cost = @max(tc.compute_budget.mem_op_base_cost, buf_cost);
     try tc.consumeCompute(tc.compute_budget.sysvar_base_cost +| id_cost +| mem_cost);
 
+    const check_aligned = tc.getCheckAligned();
+
+    // [firedancer-io/agave] https://github.com/firedancer-io/agave/commit/922f201cc0
+    if (!check_aligned) {
+        return SyscallError.UnalignedPointer;
+    }
+
     // SIMD-0219: The destination address of all sysvar related syscalls
     // must be on the stack or heap, meaning their virtual address is
     // inside `0x200000000..0x400000000`.
@@ -96,7 +110,6 @@ pub fn getSysvar(
         return SyscallError.InvalidPointer;
     }
 
-    const check_aligned = tc.getCheckAligned();
     const id = (try memory_map.translateType(Pubkey, .constant, id_addr, check_aligned)).*;
     const value = try memory_map.translateSlice(u8, .mutable, value_addr, length, check_aligned);
 
