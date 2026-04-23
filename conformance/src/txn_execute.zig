@@ -108,7 +108,6 @@ const ComputeBudget = sig.runtime.ComputeBudget;
 const EpochRewards = sig.runtime.sysvar.EpochRewards;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
 const FeatureSet = sig.core.FeatureSet;
-const RecentBlockhashes = sig.runtime.sysvar.RecentBlockhashes;
 const Rent = sig.runtime.sysvar.Rent;
 const SysvarCache = sig.runtime.SysvarCache;
 const RuntimeTransaction = transaction_execution.RuntimeTransaction;
@@ -908,8 +907,10 @@ fn loadBlockhashes(
     pb_txn_ctx: *const pb.TxnContext,
 ) ![]BlockhashEntry {
     const pb_blockhashes = pb_txn_ctx.bank.?.blockhash_queue.items;
-    if (pb_blockhashes.len == 0)
-        return try allocator.dupe(BlockhashEntry, &.{.{ .hash = Hash.ZEROES, .lamports_per_signature = 0 }});
+    if (pb_blockhashes.len == 0) return try allocator.dupe(BlockhashEntry, &.{.{
+        .hash = Hash.ZEROES,
+        .lamports_per_signature = 0,
+    }});
 
     const blockhashes = try allocator.alloc(BlockhashEntry, pb_blockhashes.len);
     errdefer allocator.free(blockhashes);
