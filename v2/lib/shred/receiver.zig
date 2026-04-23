@@ -130,11 +130,21 @@ pub const Receiver = struct {
                 return error.VariantMismatchFromFecSet;
             }
 
-            // NOTE: we do not recalculate the merkle root here to check if it matches the in-progress
-            // set. This is because the merkle root is protected by the signature, which we are already
-            // matching here.
-            // NOTE: firedancer does additional checks on the merkle tree here, see
-            // fd_bmtree_commitp_insert_with_proof.
+            // The signature of a shred protects its merkle root. We now have a shred that matches a
+            // signature that we verified against a merkle root earlier - we just need to check if
+            // the merkle root is the same.
+            //
+            // Checking the signature again requires calculating the merkle root anyway, and is much
+            // more expensive (37us vs 1us on my CPU, as of writing).
+            //
+            // NOTE: firedancer optimises "inserting" shreds into fec sets using
+            // fd_bmtree_commitp_insert_with_proof, which may be of interest.
+            var shred_merkle_root: Hash = undefined;
+            try shred.merkleRoot(&shred_merkle_root);
+            if (!shred_merkle_root.eql(&fec_set_ctx.merkle_root))
+                // This failing implies that signature verification would fail, i.e. it isn't an
+                // equivocation problem.
+                return error.MismatchedMerkleRoot;
 
             break :existing_set fec_set_ctx;
         } else new_set: {
