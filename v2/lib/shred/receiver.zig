@@ -102,7 +102,7 @@ pub const Receiver = struct {
             if (in_type_idx >= FecSetCtx.fec_shred_count) return error.ShredIdxTooLarge;
 
             const merkle_layer_count = 7;
-            if (shred.variant.merkleCount() > merkle_layer_count - 1) {
+            if (shred.variant.merkle_count > merkle_layer_count - 1) {
                 return error.MerkleCountTooLarge;
             }
         }
@@ -120,8 +120,8 @@ pub const Receiver = struct {
         const fec_set_ctx = if (state.in_progress.getFecSetCtx(
             &shred.signature,
         )) |fec_set_ctx| existing_set: {
-            // fec set is already being built
-            @branchHint(.likely); // ~31/32 expected
+            // fec set is already being built. This branch will be taken for 31/64 shreds (assuming
+            // zero packet loss).
 
             // variant should match that of the first recorded shred in the fec set
             if ((shred.variant.isData() and !shred.variant.eql(fec_set_ctx.data_variant)) or
@@ -140,7 +140,7 @@ pub const Receiver = struct {
         } else new_set: {
             // fec set is not currently being built (likely finished already)
 
-            switch (state.done.doneSignatureHash(fec_set_id, &shred.signature)) {
+            switch (state.done.lookupStatus(fec_set_id, &shred.signature)) {
                 // fec set isn't finished, this is a new set
                 .missing => {},
                 // fec set was finished already, let's ignore it
@@ -207,8 +207,6 @@ pub const Receiver = struct {
         errdefer comptime unreachable;
 
         zone.value(fec_set_ctx.totalShredsReceived());
-
-        // if (fec_set_ctx.totalShredsReceived() > FecSetCtx.fec_shred_count) return .shred_already_seen; // TODO: <-- REMOVE THIS ( should be handled be early if in finished check )
 
         tracy.plot(u8, "totalShredsReceived", fec_set_ctx.totalShredsReceived());
 
@@ -662,7 +660,7 @@ const DoneSets = struct {
         entry.value_ptr.* = new_done;
     }
 
-    fn doneSignatureHash(
+    fn lookupStatus(
         self: *const DoneSets,
         id: FecSetId,
         signature: *const Signature,
@@ -732,19 +730,19 @@ test "DoneSets basic usage" {
 
     done_sets.setDone(&sig_1, id_1);
 
-    try std.testing.expectEqual(.matching_signature, done_sets.doneSignatureHash(id_1, &sig_1));
-    try std.testing.expectEqual(.missing, done_sets.doneSignatureHash(id_2, &sig_2));
-    try std.testing.expectEqual(.missing, done_sets.doneSignatureHash(id_3, &sig_3));
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
+    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_2, &sig_2));
+    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_3, &sig_3));
 
     done_sets.setDone(&sig_2, id_2);
 
-    try std.testing.expectEqual(.matching_signature, done_sets.doneSignatureHash(id_1, &sig_1));
-    try std.testing.expectEqual(.matching_signature, done_sets.doneSignatureHash(id_2, &sig_2));
-    try std.testing.expectEqual(.missing, done_sets.doneSignatureHash(id_3, &sig_3));
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
+    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_3, &sig_3));
 
     done_sets.setDone(&sig_3, id_3);
 
-    try std.testing.expectEqual(.missing, done_sets.doneSignatureHash(id_1, &sig_1)); // 1 was evicted
-    try std.testing.expectEqual(.matching_signature, done_sets.doneSignatureHash(id_2, &sig_2));
-    try std.testing.expectEqual(.matching_signature, done_sets.doneSignatureHash(id_3, &sig_3));
+    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_1, &sig_1)); // 1 was evicted
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_3, &sig_3));
 }

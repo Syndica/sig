@@ -105,143 +105,88 @@ pub const Shred = extern struct {
         code_shred_idx: u16 align(1),
     };
 
-    /// The lower 4 bits are used for the number of merkle roots, and the upper 4 bits are used
-    /// to determine which kind of shred we have.
-    /// It would be great to represent this as a packed struct, but Agave decided that the legacy
-    /// Code and Data shreds should be defined like this:
+    /// NOTE: Legacy Code and Data shreds are defined like this, which isn't compatible with the
+    ///       layout of our packed struct. To get around this .isSupported() **must** return true
+    ///       before using any of the other methods.
     ///
     /// pub enum ShredType {
     ///     Data = 0b1010_0101,
     ///     Code = 0b0101_1010,
     /// }
-    pub const Variant = extern struct {
-        inner: u8,
+    ///
+    pub const Variant = packed struct(u8) {
+        merkle_count: u4,
+        kind: enum(u4) {
+            // all supported kinds
+            merkle_code_chained = 0x6,
+            merkle_code_chained_resigned = 0x7,
+            merkle_data_chained = 0x9,
+            merkle_data_chained_resigned = 0xB,
+            _,
+        },
 
         // [firedancer] https://github.com/firedancer-io/firedancer/blob/9f7770af997a1443e7903113fc03ca1ce3b0ad73/src/ballet/shred/fd_shred.c#L16
         // Legacy (non-merkle), and non-chained shreds are deprecated
         // https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0313-drop-unchained-merkle-shreds.md
         fn isSupported(self: Variant) bool {
-            const variant = self.inner;
-
-            return switch (variant & 0xF0) {
-                // test upper 4 bits
-                merkle_data_chained,
-                merkle_code_chained,
-                merkle_data_chained_resigned,
-                merkle_code_chained_resigned,
-                => true,
-
-                else => false,
+            return switch (self.kind) {
+                _ => false,
+                else => true,
             };
         }
 
-        fn headerSize(self: Variant) usize {
-            const shared_base = @offsetOf(Shred, "code_or_data");
+        fn headerSize(self: Variant) u8 {
+            std.debug.assert(self.isSupported());
 
-            return switch (self.inner & 0xF0) {
-                legacy_data, // deprecated
-                merkle_data, // deprecated
-                merkle_data_chained,
-                merkle_data_chained_resigned,
-                => shared_base + @sizeOf(DataHeader),
-
-                legacy_code, // deprecated
-                merkle_code, // deprecated
-                merkle_code_chained,
-                merkle_code_chained_resigned,
-                => shared_base + @sizeOf(CodeHeader),
-
-                else => 0,
-            };
-        }
-
-        pub fn merkleCount(self: Variant) u8 {
-            return switch (self.inner & 0xF0) {
-                legacy_data, legacy_code => 0, // deprecated
-                else => self.inner & 0x0F,
-            };
-        }
-
-        fn merkleSize(self: Variant) u16 {
-            return self.merkleCount() * merkle_node_size;
-        }
-
-        fn isChained(self: Variant) bool {
-            return switch (self.inner & 0xF0) {
-                merkle_data_chained,
-                merkle_code_chained,
-                merkle_data_chained_resigned,
-                merkle_code_chained_resigned,
-                => true,
-                else => false,
-            };
+            return @as(u8, @offsetOf(Shred, "code_or_data")) + if (self.isData())
+                @as(u8, @sizeOf(DataHeader))
+            else
+                @as(u8, @sizeOf(CodeHeader));
         }
 
         fn isResigned(self: Variant) bool {
-            return switch (self.inner & 0xF0) {
-                merkle_data_chained_resigned, merkle_code_chained_resigned => true,
-                else => false,
+            return switch (self.kind) {
+                .merkle_data_chained_resigned, .merkle_code_chained_resigned => true,
+                .merkle_data_chained, .merkle_code_chained => false,
+                _ => unreachable, // unsupported variant
             };
         }
 
         pub fn isData(self: Variant) bool {
-            return switch (self.inner & 0xF0) {
-                legacy_data, // deprecated
-                merkle_data, // deprecated
-                merkle_data_chained,
-                merkle_data_chained_resigned,
-                => true,
-                else => false,
+            return switch (self.kind) {
+                .merkle_data_chained, .merkle_data_chained_resigned => true,
+                .merkle_code_chained, .merkle_code_chained_resigned => false,
+                _ => unreachable, // unsupported variant
             };
         }
 
         pub fn isCode(self: Variant) bool {
-            return switch (self.inner & 0xF0) {
-                legacy_code, // deprecated
-                merkle_code, // deprecated
-                merkle_code_chained,
-                merkle_code_chained_resigned,
-                => true,
-                else => false,
-            };
+            return !self.isData();
         }
 
-        fn isMerkle(self: Variant) bool {
-            return switch (self.inner & 0xF0) {
-                merkle_data, // deprecated
-                merkle_code, // deprecated
-                merkle_data_chained,
-                merkle_code_chained,
-                merkle_data_chained_resigned,
-                merkle_code_chained_resigned,
-                => true,
-                else => false,
-            };
+        fn merkleSize(self: Variant) u16 {
+            std.debug.assert(self.isSupported());
+
+            return @as(u16, self.merkle_count) * merkle_node_size;
         }
 
         pub fn eql(self: Variant, other: Variant) bool {
-            return self.inner == other.inner;
+            return self.kind == other.kind and self.merkle_count == other.merkle_count;
         }
 
         /// returns a code variant as a data variant (or vice versa), preserving its fields
         pub fn swapType(self: Variant) Variant {
-            // swaps bit 4 and 5, swaps bit 6 and 7
             return .{
-                .inner = ((self.inner & 0x50) << 1) |
-                    ((self.inner & 0xA0) >> 1) |
-                    (self.inner & 0x0F),
+                .merkle_count = self.merkle_count,
+                .kind = switch (self.kind) {
+                    .merkle_code_chained => .merkle_data_chained,
+                    .merkle_code_chained_resigned => .merkle_data_chained_resigned,
+                    .merkle_data_chained => .merkle_code_chained,
+                    .merkle_data_chained_resigned => .merkle_code_chained_resigned,
+                    _ => unreachable, // unsupported variant
+                },
             };
         }
-
-        // upper 4 bits
-        const legacy_data = 0xA0; // deprecated
-        const legacy_code = 0x50; // deprecated
-        const merkle_data = 0x80; // deprecated by SIMD-0313
-        const merkle_code = 0x40; // deprecated by SIMD-0313
-        const merkle_data_chained = 0x90;
-        const merkle_code_chained = 0x60;
-        const merkle_data_chained_resigned = 0xB0;
-        const merkle_code_chained_resigned = 0x70;
     };
 
     const min_header_size = @offsetOf(Shred, "code_or_data") +
@@ -263,14 +208,14 @@ pub const Shred = extern struct {
         const shred: *const Shred = @ptrCast(packet);
         if (!shred.variant.isSupported()) return error.UnsupportedVariant;
 
-        const header_size = shred.variant.headerSize();
+        const header_size: u16 = shred.variant.headerSize();
         if (packet.len < header_size) return error.PacketUnderHeaderSize;
 
         const trailer_size: u16 = shred.variant.merkleSize() +
             (if (shred.variant.isResigned()) @as(u16, Signature.SIZE) else 0) +
             @as(u16, Hash.SIZE); // all shreds are chained
 
-        const zero_padding_size, const payload_size = if (shred.variant.isData()) sizes: {
+        const zero_padding_size: u16, const payload_size: u16 = if (shred.variant.isData()) sizes: {
             if (shred.code_or_data.data.size < header_size) return error.DataSmallerThanHeader;
 
             if (packet.len < min_size) return error.DataPacketUnderMinSize;
@@ -344,9 +289,8 @@ pub const Shred = extern struct {
         const payload_size: usize = if (shred.variant.isData()) min_size else max_size;
         // NOTE: all shreds are now chained
         const chained_size: usize = merkle_root_size;
-        const proof_size: usize = @as(usize, shred.variant.merkleCount()) * merkle_node_size;
         const resign_size: usize = if (shred.variant.isResigned()) Signature.SIZE else 0;
-        const trailer = chained_size + proof_size + resign_size;
+        const trailer = chained_size + shred.variant.merkleSize() + resign_size;
 
         if (payload_size < header_size + trailer) return null;
         const cap = payload_size - header_size - trailer;
@@ -377,10 +321,9 @@ pub const Shred = extern struct {
             shred.variant.merkleSize() -
             if (shred.variant.isResigned()) Signature.SIZE else 0;
 
-        const merkle_proof_ptr: [*]const MerkleProofNode =
-            @ptrCast(buffer.ptr + merkle_offset);
+        const merkle_proof_ptr: [*]const MerkleProofNode = @ptrCast(buffer.ptr + merkle_offset);
 
-        return merkle_proof_ptr[0..shred.variant.merkleCount()];
+        return merkle_proof_ptr[0..shred.variant.merkle_count];
     }
 
     // The payload of a data shred. Asserts shred is a data shred.
@@ -392,8 +335,6 @@ pub const Shred = extern struct {
     }
 
     pub fn chainedMerkleRoot(shred: *const Shred) *const Hash {
-        std.debug.assert(shred.variant.isMerkle());
-        std.debug.assert(shred.variant.isChained());
         const buffer: *const Packet.Buffer = @ptrCast(shred);
 
         const resigned_size: u16 = if (shred.variant.isResigned()) Signature.SIZE else 0;
@@ -413,15 +354,14 @@ pub const Shred = extern struct {
     fn merkleProtected(shred: *const Shred) []const u8 {
         const erasure_protected_size = 1115 + @offsetOf(Shred, "code_or_data") + @sizeOf(DataHeader) -
             Signature.SIZE -
-            merkle_node_size * shred.variant.merkleCount() -
-            @intFromBool(shred.variant.isChained()) * @as(usize, merkle_root_size) -
+            shred.variant.merkleSize() -
+            @as(usize, merkle_root_size) -
             @intFromBool(shred.variant.isResigned()) * Signature.SIZE;
 
-        const data_merkle_protected_size = erasure_protected_size +
-            @as(usize, merkle_root_size) * @intFromBool(shred.variant.isChained());
+        const data_merkle_protected_size = erasure_protected_size + @as(usize, merkle_root_size);
 
         const code_merkle_protected_size = erasure_protected_size +
-            @as(usize, merkle_root_size) * @intFromBool(shred.variant.isChained()) +
+            @as(usize, merkle_root_size) +
             @offsetOf(Shred, "code_or_data") + @sizeOf(CodeHeader) -
             Signature.SIZE;
 
@@ -439,6 +379,7 @@ pub const Shred = extern struct {
     fn retransmitterSignature(packet: *const Shred) ?[]const u8 {
         const shred = fromBufferUnchecked(packet);
         _ = shred;
+        @panic("unimplemented");
     }
 
     // Reconstructs the merkle root from a shred
@@ -446,16 +387,12 @@ pub const Shred = extern struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "merkleRoot" });
         defer zone.deinit();
 
-        std.debug.assert(shred.variant.isMerkle());
-
-        const is_data = shred.variant.isData();
-
-        const in_type_idx = if (is_data)
+        const in_type_idx = if (shred.variant.isData())
             shred.slot_idx - shred.fec_set_idx
         else
             shred.code_or_data.code.code_shred_idx;
 
-        const shred_idx = if (is_data)
+        const shred_idx = if (shred.variant.isData())
             in_type_idx
         else
             in_type_idx + shred.code_or_data.code.data_count;
