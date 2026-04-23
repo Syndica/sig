@@ -109,7 +109,7 @@ pub const Executable = struct {
     /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/verifier.rs#L227
     pub fn verify(
         self: *const Executable,
-        loader: *const SyscallMap,
+        _: *const SyscallMap,
     ) VerifierError!void {
         const zone = tracy.Zone.init(@src(), .{ .name = "Executable.Verify" });
         defer zone.deinit();
@@ -118,32 +118,16 @@ pub const Executable = struct {
         const instructions = self.instructions;
         if (instructions.len == 0) return error.NoProgram;
 
-        var function_start: u64 = 0;
-        var function_end: u64 = instructions.len;
+        const function_start: u64 = 0;
+        const function_end: u64 = instructions.len;
         var pc: u64 = 0;
 
-        if (version.enableStricterVerification() and !instructions[pc].isFunctionStartMarker()) {
-            return error.InvalidFunction;
-        }
+        // Note: agave's RequisiteVerifier does not check for function start markers.
         while (pc + 1 <= instructions.len) : (pc += 1) {
             const inst = instructions[pc];
             var store: bool = false;
 
-            if (version.enableStricterVerification() and inst.isFunctionStartMarker()) {
-                function_start = pc;
-                function_end = pc +| 1;
-
-                while (function_end < instructions.len and
-                    !instructions[function_end].isFunctionStartMarker())
-                {
-                    function_end +|= 1;
-                }
-
-                switch (instructions[function_end -| 1].opcode) {
-                    .ja, .@"return" => {},
-                    else => return error.InvalidFunction,
-                }
-            }
+            // Note: agave's RequisiteVerifier does not track function boundaries via markers.
 
             switch (inst.opcode) {
                 .add64_reg,
@@ -358,9 +342,11 @@ pub const Executable = struct {
                 },
 
                 .@"return" => if (!version.enableStaticSyscalls()) return error.UnknownOpCode,
-                .exit_or_syscall => if (version.enableStaticSyscalls()) {
-                    if (loader.get(inst.imm) == null) return error.InvalidSyscall;
-                },
+                // [agave] Agave's RequisiteVerifier does not check syscall validity
+                // at verification time; this is deferred to execution.
+                // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/verifier.rs#L403
+                // `ebpf::EXIT => {}`
+                .exit_or_syscall => {},
 
                 else => return error.UnknownOpCode,
             }

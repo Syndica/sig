@@ -27,36 +27,44 @@ pub const Version = enum(u32) {
     }
 
     /// Enable SIMD-0174: SBPF arithmetics improvements
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/program.rs#L41-L43
     pub fn enablePqr(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0174
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/program.rs#L49-L51
     pub fn swapSubRegImmOperands(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0174
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/program.rs#L53-L55
     pub fn disableNegation(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0174
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/program.rs#L45-L47
     pub fn explicitSignExtensionOfResults(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
 
     /// Enable SIMD-0173: SBPF instruction encoding improvements
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/program.rs#L58-L60
     pub fn callRegUsesSrcReg(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0173
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/program.rs#L62-L64
     pub fn disableLddw(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/program.rs#L70-L72
     pub fn moveMemoryInstructionClasses(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0173
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/program.rs#L66-L68
     pub fn disableLe(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
 
     /// Enable SIMD-0178: SBPF Static Syscalls

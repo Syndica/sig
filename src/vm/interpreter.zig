@@ -587,10 +587,9 @@ pub const Vm = struct {
         /// - the `LDDW` instruction (opcodes `0x18` and `0x00`)"
         pub const ld_dw_imm = v0.unsupported;
 
-        // TODO: find the simd comment that tells us to turn off / reserve these instructions
-        pub const mul32_imm = v0.unsupported;
-        pub const mod32_imm = v0.unsupported;
-        pub const div32_imm = v0.unsupported;
+        // In V3, PQR is disabled (enablePqr == V2 only), so div/mul/mod revert
+        // to V0 semantics. The V2 table already has these from V0, so no override needed.
+        // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/program.rs#L41-L43
 
         inline fn binop(
             self: *Vm,
@@ -809,12 +808,11 @@ pub const Vm = struct {
         }
 
         pub fn exit_or_syscall(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
-            if (self.loader.get(inst.imm)) |entry| {
-                try self.dispatchSyscall(entry);
-                self.registers.set(.pc, pc + 1);
-            } else {
-                @panic("TODO: detect invalid syscall in verifier");
-            }
+            // In V3, 0x95 is still purely exit (not syscall dispatch).
+            // Syscalls are resolved via CALL_IMM (0x85) with src==0.
+            // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/interpreter.rs#L578-L595
+            // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/interpreter.rs#L542-L576
+            return @call(.always_inline, v0.exit_or_syscall, .{ self, inst, pc });
         }
 
         pub fn @"return"(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
