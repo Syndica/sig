@@ -46,6 +46,12 @@ pub fn GossipNode(comptime Effects: type) type {
             _ = .{ self, msg };
             return undefined;
         }
+
+        /// Sends snapshot sources from gossip to snapshot service
+        pub fn reportSnapshotSource(self: Effects, addr: std.net.Address, slot: u64, hash: Hash) void {
+            _ = .{ self, addr, slot, hash };
+            return undefined;
+        }
     });
 
     return struct {
@@ -986,7 +992,18 @@ pub fn GossipNode(comptime Effects: type) type {
                     .lowest_slot => {}, // TODO: send to repair service
                     .epoch_slots => {}, // TODO: send to consensus service
                     .duplicate_shred => {}, // TODO: send to shred/consensus service
-                    .snapshot_hashes => {}, // TODO: send to snapshot service
+                    .snapshot_hashes => |sh_data| {
+                        const sh = sh_data.full;
+                        if (self.table.getPtr(.{ .from = key.from, .index = 0, .tag = .contact_info })) |v| {
+                            var alloc_buf: [16 * 1024]u8 = undefined;
+                            var fba = std.heap.FixedBufferAllocator.init(&alloc_buf);
+                            var reader = std.Io.Reader.fixed(v.value[0..v.size]);
+                            const ci_val = try bincode.read(&fba, &reader, GossipValue);
+                            if (ci_val.data.contact_info.socket_map.get(.rpc)) |rpc_addr| {
+                                self.config.effects.reportSnapshotSource(rpc_addr, sh.slot, sh.hash);
+                            }
+                        }
+                    }, // TODO: send to snapshot service
                     .contact_info => |ci| {
                         if (ci.socket_map.get(.gossip)) |addr| {
                             if (try self.getOrTrackPeer(
@@ -1003,6 +1020,16 @@ pub fn GossipNode(comptime Effects: type) type {
                         // TODO: if ci.socket_map.get(.serve_repair): send to repair service
                         // TODO: if ci.socket_map.get(.tpu_vote): send to consensus service
                         // TODO: if ci.socket_map.get(.rpc): send to snapshot service
+                        if (ci.socket_map.get(.rpc)) |rpc_addr| {
+                            if (self.table.getPtr(.{ .from = key.from, .index = 0, .tag = .snapshot_hashes })) |v| {
+                                var alloc_buf: [16 * 1024]u8 = undefined;
+                                var fba = std.heap.FixedBufferAllocator.init(&alloc_buf);
+                                var reader = std.Io.Reader.fixed(v.value[0..v.size]);
+                                const sh_val = try bincode.read(&fba, &reader, GossipValue);
+                                const sh = sh_val.data.snapshot_hashes.full;
+                                self.config.effects.reportSnapshotSource(rpc_addr, sh.slot, sh.hash);
+                            }
+                        }
                     },
                     .restart_heaviest_fork, .restart_last_voted_fork => {}, // deprecated
                     inline else => |v| {

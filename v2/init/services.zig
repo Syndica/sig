@@ -192,6 +192,8 @@ pub const Region = union(enum) {
         cluster: lib.solana.Cluster,
     },
 
+    snapshot_source_ring: void,
+
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(lib.net.Pair),
@@ -199,6 +201,7 @@ pub const Region = union(enum) {
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
             .telemetry => |cfg| cfg.regionSize(),
             .snapshot_config => @sizeOf(lib.snapshot.SnapshotConfig),
+            .snapshot_source_ring => @sizeOf(lib.snapshot.SnapshotSourceRing),
         };
     }
 
@@ -246,6 +249,11 @@ pub const Region = union(enum) {
                 @memcpy(data.folder_buffer[0..cfg.folder_path.len], cfg.folder_path);
                 data.folder_len = @intCast(cfg.folder_path.len);
                 data.cluster = cfg.cluster;
+            },
+            .snapshot_source_ring => {
+                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotSourceRing));
+                const data: *lib.snapshot.SnapshotSourceRing = @ptrCast(buf);
+                data.init();
             },
         };
     }
