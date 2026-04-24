@@ -4,25 +4,9 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const common = sig.rpc.methods.common;
-const slot_resolution = @import("./slot_resolution.zig");
 
 const Slot = sig.core.Slot;
-const SlotRef = sig.replay.trackers.SlotTracker.Reference;
-const Commitment = common.Commitment;
-const ClientVersion = sig.version.ClientVersion;
 
-const GetSlot = sig.rpc.methods.GetSlot;
-const GetSlotLeader = sig.rpc.methods.GetSlotLeader;
-const GetSlotLeaders = sig.rpc.methods.GetSlotLeaders;
-const GetLeaderSchedule = sig.rpc.methods.GetLeaderSchedule;
-const GetBlockHeight = sig.rpc.methods.GetBlockHeight;
-const GetTransactionCount = sig.rpc.methods.GetTransactionCount;
-const GetHighestSnapshotSlot = sig.rpc.methods.GetHighestSnapshotSlot;
-const GetEpochInfo = sig.rpc.methods.GetEpochInfo;
-const GetLatestBlockhash = sig.rpc.methods.GetLatestBlockhash;
-const GetMinimumBalanceForRentExemption = sig.rpc.methods.GetMinimumBalanceForRentExemption;
-const GetStakeMinimumDelegation = sig.rpc.methods.GetStakeMinimumDelegation;
-const GetVoteAccounts = sig.rpc.methods.GetVoteAccounts;
 const GetClusterNodes = sig.rpc.methods.GetClusterNodes;
 
 const GossipHookContext = @This();
