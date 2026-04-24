@@ -523,7 +523,7 @@ fn prepareSlot(
         }
 
         state.logger
-            .entry(if (entries.len == 0 and !state.empty_slots.isSet(slot)) .trace else .info)
+            .entry(if (entries.len == 0 and state.empty_slots.isSet(slot)) .trace else .info)
             .logf("got {} entries for slot {}", .{ entries.len, slot });
 
         if (entries.len == 0) {
