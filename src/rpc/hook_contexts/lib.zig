@@ -1,7 +1,8 @@
 //! Module that contains the RPC hook definitions.
 pub const LedgerHookContext = @import("Ledger.zig");
 pub const AccountHookContext = @import("Account.zig");
-pub const ConsensusHookContext = @import("Consensus.zig");
+pub const ReplayHookContext = @import("Replay.zig");
+pub const GossipHookContext = @import("Gossip.zig");
 pub const SendTransactionHookContext = @import("SendTransaction.zig");
 pub const RequestAirdropHookContext = @import("RequestAirdrop.zig");
 pub const StaticHookContext = @import("Static.zig");
