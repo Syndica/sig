@@ -321,14 +321,11 @@ pub fn createSysvarCache(
     }
 
     sysvar_cache.last_restart_slot = try cloneSysvarData(allocator, ctx, sysvar.LastRestartSlot.ID);
-    if (std.meta.isError(sysvar_cache.get(sysvar.LastRestartSlot))) {
-        sysvar_cache.last_restart_slot = try sysvar.serialize(
-            allocator,
-            sysvar.LastRestartSlot{
-                .last_restart_slot = 5000,
-            },
-        );
-    }
+    // NOTE: No default fallback for LastRestartSlot. Agave's solfuzz harness only unwraps
+    // clock, epoch_schedule, rent, and recent_blockhashes during setup — LastRestartSlot is
+    // left as None in the sysvar cache when absent from the fixture. At runtime, accessing it
+    // returns UnsupportedSysvar. We must match that behavior.
+    // [solfuzz-agave] https://github.com/firedancer-io/solfuzz-agave/blob/agave-v3.0.3/src/lib.rs#L741-L744
 
     if (sysvar_cache.slot_hashes == null) {
         if (try cloneSysvarData(allocator, ctx, sysvar.SlotHashes.ID)) |slot_hashes_data| {
