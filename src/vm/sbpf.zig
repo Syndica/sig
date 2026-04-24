@@ -5,6 +5,9 @@ const assert = std.debug.assert;
 
 pub const EM_SBPF_V1: u32 = 0x20;
 
+/// Linux BPF machine type, used by the strict ELF parser
+pub const EM_BPF: std.elf.Half = 247;
+
 /// Solana BPF Elf Machine
 pub const EM_SBPF: std.elf.Half = 263;
 

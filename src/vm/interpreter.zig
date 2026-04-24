@@ -813,7 +813,8 @@ pub const Vm = struct {
                 try self.dispatchSyscall(entry);
                 self.registers.set(.pc, pc + 1);
             } else {
-                @panic("TODO: detect invalid syscall in verifier");
+                // Unregistered syscall: treat as exit/return (matches agave behavior)
+                return @call(.always_inline, v0.exit_or_syscall, .{ self, inst, pc });
             }
         }
 
