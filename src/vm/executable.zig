@@ -110,6 +110,29 @@ pub const Executable = struct {
     };
 
     /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/verifier.rs#L227
+    fn verifyJmpOffset(
+        pc: u64,
+        function_start: u64,
+        function_end: u64,
+        inst: Instruction,
+        instructions: []align(1) const Instruction,
+    ) VerifierError!void {
+        const destination = @as(i64, @bitCast(pc)) + 1 + inst.off;
+
+        if (destination < 0 or
+            destination < function_start or
+            destination >= function_end)
+        {
+            return error.JumpOutOfCode;
+        }
+
+        const dest_inst = instructions[@bitCast(destination)];
+        if (@intFromEnum(dest_inst.opcode) == 0) {
+            return error.JumpToMiddleOfLddw;
+        }
+    }
+
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/verifier.rs#L227
     pub fn verify(
         self: *const Executable,
         _: *const SyscallMap,
@@ -212,35 +235,46 @@ pub const Executable = struct {
                     if (inst.imm == 0) return error.DivisionByZero;
                 },
 
+                // PQR opcodes that collide with JMP32 (reg and some imm variants)
                 .udiv32_reg,
                 .udiv64_reg,
                 .sdiv32_reg,
                 .sdiv64_reg,
-                .lmul32_imm,
-                .lmul32_reg,
-                .lmul64_imm,
-                .lmul64_reg,
                 .uhmul64_imm,
                 .uhmul64_reg,
-                .shmul64_imm,
-                .shmul64_reg,
                 .urem32_reg,
                 .urem64_reg,
-                .srem32_reg,
-                .srem64_reg,
-                => if (!version.enablePqr()) return error.UnknownOpCode,
+                .shmul64_imm,
+                .shmul64_reg,
+                => if (version.enablePqr()) {
+                    // valid PQR instruction
+                } else if (version.enableJmp32()) {
+                    try verifyJmpOffset(pc, function_start, function_end, inst, instructions);
+                } else return error.UnknownOpCode,
 
+                // PQR imm opcodes that collide with JMP32
                 .udiv32_imm,
                 .udiv64_imm,
                 .sdiv32_imm,
                 .sdiv64_imm,
                 .urem32_imm,
                 .urem64_imm,
-                .srem32_imm,
-                .srem64_imm,
                 => if (version.enablePqr()) {
                     if (inst.imm == 0) return error.DivisionByZero;
+                } else if (version.enableJmp32()) {
+                    try verifyJmpOffset(pc, function_start, function_end, inst, instructions);
                 } else return error.UnknownOpCode,
+
+                // PQR-only opcodes (no JMP32 equivalent)
+                .lmul32_imm,
+                .lmul32_reg,
+                .lmul64_imm,
+                .lmul64_reg,
+                .srem32_imm,
+                .srem32_reg,
+                .srem64_imm,
+                .srem64_reg,
+                => if (!version.enablePqr()) return error.UnknownOpCode,
 
                 .hor64_imm => if (!version.disableLddw()) return error.UnknownOpCode,
 
@@ -278,19 +312,7 @@ pub const Executable = struct {
                 .jslt_imm,
                 .jslt_reg,
                 => {
-                    const destination = @as(i64, @bitCast(pc)) + 1 + inst.off;
-
-                    if (destination < 0 or
-                        destination < function_start or
-                        destination >= function_end)
-                    {
-                        return error.JumpOutOfCode;
-                    }
-
-                    const dest_inst = instructions[@bitCast(destination)];
-                    if (@intFromEnum(dest_inst.opcode) == 0) {
-                        return error.JumpToMiddleOfLddw;
-                    }
+                    try verifyJmpOffset(pc, function_start, function_end, inst, instructions);
                 },
 
                 .ld_b_reg,
@@ -326,14 +348,7 @@ pub const Executable = struct {
                     if (@intFromEnum(next_instruction.opcode) != 0) return error.IncompleteLddw;
                 } else return error.UnknownOpCode,
 
-                .call_imm => if (version.enableStaticSyscalls()) {
-                    const target_pc = version.computeTargetPc(pc, inst);
-                    if (target_pc >= instructions.len or
-                        !instructions[target_pc].isFunctionStartMarker())
-                    {
-                        return error.InvalidFunction;
-                    }
-                },
+                .call_imm => {},
                 .call_reg => {
                     const reg = if (version.callRegUsesSrcReg())
                         inst.src
@@ -346,7 +361,30 @@ pub const Executable = struct {
                 .@"return" => if (!version.enableStaticSyscalls()) return error.UnknownOpCode,
                 .exit_or_syscall => {},
 
-                else => return error.UnknownOpCode,
+                else => {
+                    // Handle JMP32 opcodes that don't have named PQR enum variants
+                    // (JEQ32 0x16/0x1E, JGT32 0x26/0x2E, JLT32 0xA6/0xAE)
+                    // and unnamed PQR opcodes (SHMUL32 0x86/0x8E) that have no JMP32 equivalent
+                    if (version.enableJmp32()) {
+                        const raw = @intFromEnum(inst.opcode);
+                        const class: u3 = @truncate(raw);
+                        if (class == 0x06) {
+                            // Class 6 = PQR/JMP32
+                            const op_bits = raw & 0xF0;
+                            // Valid JMP32 conditions: 0x10(JEQ), 0x20(JGT), 0x30(JGE), 0x40(JSET), 0x50(JNE)
+                            // 0x60(JSGT), 0x70(JSGE), 0xA0(JLT), 0xB0(JLE), 0xC0(JSLT), 0xD0(JSLE)
+                            switch (op_bits) {
+                                0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0xA0, 0xB0, 0xC0, 0xD0 => {
+                                    try verifyJmpOffset(pc, function_start, function_end, inst, instructions);
+                                    try inst.checkRegisters(store, version);
+                                    continue;
+                                },
+                                else => {},
+                            }
+                        }
+                    }
+                    return error.UnknownOpCode;
+                },
             }
 
             try inst.checkRegisters(store, version);

@@ -799,8 +799,119 @@ pub const Vm = struct {
             for (@typeInfo(v3).@"struct".decls) |field| {
                 array[@intFromEnum(@field(OpCode, field.name))] = @field(v3, field.name);
             }
+            // Override PQR opcodes that are JMP32 in v3
+            // Named PQR variants that collide with JMP32:
+            const jmp32_handler = &struct {
+                fn run(vm: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+                    return branch32(vm, inst, pc);
+                }
+            }.run;
+            // Colliding named PQR opcodes -> JMP32
+            array[@intFromEnum(OpCode.uhmul64_imm)] = jmp32_handler; // 0x36 -> JGE32_IMM
+            array[@intFromEnum(OpCode.uhmul64_reg)] = jmp32_handler; // 0x3E -> JGE32_REG
+            array[@intFromEnum(OpCode.udiv32_imm)] = jmp32_handler; // 0x46 -> JSET32_IMM
+            array[@intFromEnum(OpCode.udiv32_reg)] = jmp32_handler; // 0x4E -> JSET32_REG
+            array[@intFromEnum(OpCode.udiv64_imm)] = jmp32_handler; // 0x56 -> JNE32_IMM
+            array[@intFromEnum(OpCode.udiv64_reg)] = jmp32_handler; // 0x5E -> JNE32_REG
+            array[@intFromEnum(OpCode.urem32_imm)] = jmp32_handler; // 0x66 -> JSGT32_IMM
+            array[@intFromEnum(OpCode.urem32_reg)] = jmp32_handler; // 0x6E -> JSGT32_REG
+            array[@intFromEnum(OpCode.urem64_imm)] = jmp32_handler; // 0x76 -> JSGE32_IMM
+            array[@intFromEnum(OpCode.urem64_reg)] = jmp32_handler; // 0x7E -> JSGE32_REG
+            array[@intFromEnum(OpCode.shmul64_imm)] = jmp32_handler; // 0xB6 -> JLE32_IMM
+            array[@intFromEnum(OpCode.shmul64_reg)] = jmp32_handler; // 0xBE -> JLE32_REG
+            array[@intFromEnum(OpCode.sdiv32_imm)] = jmp32_handler; // 0xC6 -> JSLT32_IMM
+            array[@intFromEnum(OpCode.sdiv32_reg)] = jmp32_handler; // 0xCE -> JSLT32_REG
+            array[@intFromEnum(OpCode.sdiv64_imm)] = jmp32_handler; // 0xD6 -> JSLE32_IMM
+            array[@intFromEnum(OpCode.sdiv64_reg)] = jmp32_handler; // 0xDE -> JSLE32_REG
+            // Unnamed JMP32 opcodes (no named PQR equivalent)
+            array[0x16] = jmp32_handler; // JEQ32_IMM
+            array[0x1E] = jmp32_handler; // JEQ32_REG
+            array[0x26] = jmp32_handler; // JGT32_IMM
+            array[0x2E] = jmp32_handler; // JGT32_REG
+            array[0xA6] = jmp32_handler; // JLT32_IMM
+            array[0xAE] = jmp32_handler; // JLT32_REG
+            // PQR-only opcodes that don't collide with JMP32 -> unsupported in v3
+            array[@intFromEnum(OpCode.lmul32_imm)] = v0.unsupported; // 0x86
+            array[@intFromEnum(OpCode.lmul32_reg)] = v0.unsupported; // 0x8E
+            array[@intFromEnum(OpCode.lmul64_imm)] = v0.unsupported; // 0x96
+            array[@intFromEnum(OpCode.lmul64_reg)] = v0.unsupported; // 0x9E
+            array[@intFromEnum(OpCode.srem32_imm)] = v0.unsupported; // 0xE6
+            array[@intFromEnum(OpCode.srem32_reg)] = v0.unsupported; // 0xEE
+            array[@intFromEnum(OpCode.srem64_imm)] = v0.unsupported; // 0xF6
+            array[@intFromEnum(OpCode.srem64_reg)] = v0.unsupported; // 0xFE
+            // Restore old ALU instructions that were disabled/remapped in v2
+            // In v2: mul32_imm, mod32_imm, div32_imm were marked unsupported
+            // In v3 with PQR disabled, they should work like v0
+            array[@intFromEnum(OpCode.mul32_imm)] = v0.table[@intFromEnum(OpCode.mul32_imm)];
+            array[@intFromEnum(OpCode.mod32_imm)] = v0.table[@intFromEnum(OpCode.mod32_imm)];
+            array[@intFromEnum(OpCode.div32_imm)] = v0.table[@intFromEnum(OpCode.div32_imm)];
+            // Restore memory instructions remapped in v2 (SIMD-0173) back to ALU ops
+            // In v2: mul32_reg -> ld_1b_reg, div32_reg -> ld_2b_reg, mod32_reg -> ld_8b_reg etc.
+            // In v3: these should be ALU operations again
+            array[@intFromEnum(OpCode.mul32_reg)] = v0.table[@intFromEnum(OpCode.mul32_reg)];
+            array[@intFromEnum(OpCode.div32_reg)] = v0.table[@intFromEnum(OpCode.div32_reg)];
+            array[@intFromEnum(OpCode.mod32_reg)] = v0.table[@intFromEnum(OpCode.mod32_reg)];
+            array[@intFromEnum(OpCode.mul64_imm)] = v0.table[@intFromEnum(OpCode.mul64_imm)];
+            array[@intFromEnum(OpCode.mul64_reg)] = v0.table[@intFromEnum(OpCode.mul64_reg)];
+            array[@intFromEnum(OpCode.div64_imm)] = v0.table[@intFromEnum(OpCode.div64_imm)];
+            array[@intFromEnum(OpCode.div64_reg)] = v0.table[@intFromEnum(OpCode.div64_reg)];
+            array[@intFromEnum(OpCode.mod64_imm)] = v0.table[@intFromEnum(OpCode.mod64_imm)];
+            array[@intFromEnum(OpCode.mod64_reg)] = v0.table[@intFromEnum(OpCode.mod64_reg)];
+            array[@intFromEnum(OpCode.neg64)] = v0.table[@intFromEnum(OpCode.neg64)];
+            array[@intFromEnum(OpCode.neg32)] = v0.table[@intFromEnum(OpCode.neg32)];
+            // Restore LDDW which was disabled in v2
+            array[@intFromEnum(OpCode.ld_dw_imm)] = v0.table[@intFromEnum(OpCode.ld_dw_imm)];
+            // Restore old ST/STX/LD/LDX which were disabled in v2
+            array[@intFromEnum(OpCode.ld_b_reg)] = v0.table[@intFromEnum(OpCode.ld_b_reg)];
+            array[@intFromEnum(OpCode.ld_h_reg)] = v0.table[@intFromEnum(OpCode.ld_h_reg)];
+            array[@intFromEnum(OpCode.ld_w_reg)] = v0.table[@intFromEnum(OpCode.ld_w_reg)];
+            array[@intFromEnum(OpCode.ld_dw_reg)] = v0.table[@intFromEnum(OpCode.ld_dw_reg)];
+            array[@intFromEnum(OpCode.st_b_imm)] = v0.table[@intFromEnum(OpCode.st_b_imm)];
+            array[@intFromEnum(OpCode.st_h_imm)] = v0.table[@intFromEnum(OpCode.st_h_imm)];
+            array[@intFromEnum(OpCode.st_w_imm)] = v0.table[@intFromEnum(OpCode.st_w_imm)];
+            array[@intFromEnum(OpCode.st_dw_imm)] = v0.table[@intFromEnum(OpCode.st_dw_imm)];
+            array[@intFromEnum(OpCode.st_b_reg)] = v0.table[@intFromEnum(OpCode.st_b_reg)];
+            array[@intFromEnum(OpCode.st_h_reg)] = v0.table[@intFromEnum(OpCode.st_h_reg)];
+            array[@intFromEnum(OpCode.st_w_reg)] = v0.table[@intFromEnum(OpCode.st_w_reg)];
+            array[@intFromEnum(OpCode.st_dw_reg)] = v0.table[@intFromEnum(OpCode.st_dw_reg)];
             break :table array;
         };
+
+        fn branch32(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+            const raw = @intFromEnum(inst.opcode);
+            const is_reg = (raw & 0x08) != 0;
+            const op_bits = raw & 0xF0;
+
+            const lhs: u32 = @truncate(self.registers.getPtrConst(inst.dst).*);
+            const rhs: u32 = if (is_reg)
+                @truncate(self.registers.getPtrConst(inst.src).*)
+            else
+                inst.imm;
+
+            const lhs_signed: i32 = @bitCast(lhs);
+            const rhs_signed: i32 = if (is_reg)
+                @bitCast(rhs)
+            else
+                @bitCast(inst.imm);
+
+            const predicate: bool = switch (op_bits) {
+                0x10 => lhs == rhs, // JEQ32
+                0x20 => lhs > rhs, // JGT32
+                0x30 => lhs >= rhs, // JGE32
+                0x40 => lhs & rhs != 0, // JSET32
+                0x50 => lhs != rhs, // JNE32
+                0x60 => lhs_signed > rhs_signed, // JSGT32
+                0x70 => lhs_signed >= rhs_signed, // JSGE32
+                0xA0 => lhs < rhs, // JLT32
+                0xB0 => lhs <= rhs, // JLE32
+                0xC0 => lhs_signed < rhs_signed, // JSLT32
+                0xD0 => lhs_signed <= rhs_signed, // JSLE32
+                else => return error.UnsupportedInstruction,
+            };
+
+            const target_pc: u64 = @bitCast(@as(i64, @bitCast(pc)) + 1 + inst.off);
+            self.registers.set(.pc, if (predicate) target_pc else pc + 1);
+        }
 
         pub fn call_imm(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
             const target_pc = sbpf.Version.computeTargetPc(.v3, pc, inst);

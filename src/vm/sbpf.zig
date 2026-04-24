@@ -24,42 +24,47 @@ pub const Version = enum(u32) {
     v3,
     reserved,
 
-    /// Enable SIMD-0166: SBPF dynamic stack frames
+    /// Enable SIMD-0166: SBPF dynamic stack frames (manual stack frame bump)
     pub fn enableDynamicStackFrames(version: Version) bool {
-        return version.gte(.v1);
+        return version == .v1 or version == .v2;
     }
 
     /// Enable SIMD-0174: SBPF arithmetics improvements
     pub fn enablePqr(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0174
     pub fn swapSubRegImmOperands(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0174
     pub fn disableNegation(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0174
     pub fn explicitSignExtensionOfResults(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
 
     /// Enable SIMD-0173: SBPF instruction encoding improvements
     pub fn callRegUsesSrcReg(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0173
     pub fn disableLddw(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     pub fn moveMemoryInstructionClasses(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0173
     pub fn disableLe(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
+    }
+
+    /// Enable JMP32 instructions (SIMD-0173)
+    pub fn enableJmp32(version: Version) bool {
+        return version.gte(.v3);
     }
 
     /// Enable SIMD-0178: SBPF Static Syscalls
