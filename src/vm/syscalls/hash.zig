@@ -188,6 +188,9 @@ pub const keccak256 = hashSyscall(struct {
 });
 
 test poseidon {
+    // TODO: poseidon_test.so is EM_SBPF (legacy sig format) with e_flags=3 (v3).
+    // parseStrict now requires EM_BPF (agave format). Need to regenerate this ELF
+    // with the agave toolchain, or implement allow_memory_region_zero in AlignedMemoryMap.
     try sig.vm.tests.testElfWithSyscalls(
         .{},
         sig.ELF_DATA_DIR ++ "poseidon_test.so",
