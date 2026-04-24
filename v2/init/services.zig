@@ -27,7 +27,12 @@ const e = E.init;
 
 const services_zon = @import("./services.zon");
 
-const ThreadCrashContext = lib.ipc.ThreadCrashContext;
+/// Context created by the service initializer, used to report thread exit or crash and wake the
+/// main thread. Services receive it as opaque data and must not inspect it.
+const ThreadExitContext = struct {
+    finished_idx: *std.atomic.Value(u16),
+    reset_event: *std.Thread.ResetEvent,
+};
 
 pub const Service = blk: {
     var fields: []const std.builtin.Type.EnumField = &.{};
@@ -722,7 +727,7 @@ pub fn spawnAndWaitNoSandbox(
     var reset_event: std.Thread.ResetEvent = .{};
     var finished_service_idx: std.atomic.Value(u16) = .init(std.math.maxInt(u16));
 
-    const thread_crash_ctx: ThreadCrashContext = .{
+    const thread_exit_ctx: ThreadExitContext = .{
         .finished_idx = &finished_service_idx,
         .reset_event = &reset_event,
     };
@@ -735,9 +740,7 @@ pub fn spawnAndWaitNoSandbox(
             std.fs.File.stderr(),
             map.get(service_instance).?.items,
             i,
-            &finished_service_idx,
-            &reset_event,
-            &thread_crash_ctx,
+            &thread_exit_ctx,
         );
     }
 
@@ -750,18 +753,16 @@ pub fn spawnAndWaitNoSandbox(
     dumpOnExit(@ptrCast(try exit_memfds[exited_idx].mmap(null)), services[exited_idx], 0, 0);
 }
 
-fn signalThreadExit(
-    service_idx: u16,
-    finished_idx: *std.atomic.Value(u16),
-    reset_event: *std.Thread.ResetEvent,
-) void {
-    finished_idx.store(service_idx, .seq_cst);
-    reset_event.set();
+fn signalThreadExit(service_idx: u16, ctx: *const ThreadExitContext) void {
+    ctx.finished_idx.store(service_idx, .seq_cst);
+    ctx.reset_event.set();
 }
 
-fn signalThreadCrash(ctx: ?*const ThreadCrashContext, service_idx: u16) callconv(.c) void {
-    const thread_ctx = ctx orelse return;
-    signalThreadExit(service_idx, thread_ctx.finished_idx, thread_ctx.reset_event);
+// Called by service threads in no-sandbox mode. Uses C calling convention because the function
+// pointer crosses service/init compilation units.
+fn signalThreadCrash(ctx: ?*const anyopaque, service_idx: u16) callconv(.c) void {
+    const thread_ctx: *const ThreadExitContext = @ptrCast(@alignCast(ctx orelse return));
+    signalThreadExit(service_idx, thread_ctx);
 }
 
 fn threadEntry(
@@ -769,15 +770,14 @@ fn threadEntry(
     service: Service,
     args: lib.ipc.ResolvedArgs,
     service_idx: u16,
-    finished_idx: *std.atomic.Value(u16),
-    reset_event: *std.Thread.ResetEvent,
+    thread_exit_ctx: *const ThreadExitContext,
 ) void {
     switch (service) {
         inline else => |svc| tracy.setThreadName("svc: " ++ @tagName(svc)),
     }
 
     entry_point(args);
-    signalThreadExit(service_idx, finished_idx, reset_event);
+    signalThreadExit(service_idx, thread_exit_ctx);
 }
 
 fn spawnServiceNoSandbox(
@@ -786,12 +786,10 @@ fn spawnServiceNoSandbox(
     stderr: std.fs.File,
     regions: []const LookupResult,
     service_idx: u16,
-    finished_idx: *std.atomic.Value(u16),
-    reset_event: *std.Thread.ResetEvent,
-    thread_crash_ctx: *const ThreadCrashContext,
+    thread_exit_ctx: *const ThreadExitContext,
 ) !std.Thread {
     var resolved_args = try resolveArgs(exit, stderr, regions);
-    resolved_args.thread_crash_ctx = thread_crash_ctx;
+    resolved_args.thread_crash_ctx = thread_exit_ctx;
     resolved_args.thread_crash_fn = signalThreadCrash;
     resolved_args.service_idx = service_idx;
 
@@ -803,8 +801,7 @@ fn spawnServiceNoSandbox(
             service_instance.service,
             resolved_args,
             service_idx,
-            finished_idx,
-            reset_event,
+            thread_exit_ctx,
         },
     );
 }
