@@ -12,6 +12,7 @@ const Packet = lib.net.Packet;
 const Signature = lib.solana.Signature;
 const Pubkey = lib.solana.Pubkey;
 const Hash = lib.solana.Hash;
+const Slot = lib.solana.Slot;
 
 const bincode = lib.gossip.bincode;
 const GossipMessage = lib.gossip.GossipMessage;
@@ -47,7 +48,7 @@ pub fn GossipNode(comptime Effects: type) type {
         }
 
         /// Sends snapshot sources from gossip to snapshot service
-        pub fn reportSnapshotSource(self: Effects, addr: std.net.Address, slot: u64, hash: Hash) void {
+        pub fn reportSnapshotSource(self: Effects, addr: std.net.Address, slot: Slot, hash: Hash) void {
             _ = .{ self, addr, slot, hash };
             return undefined;
         }

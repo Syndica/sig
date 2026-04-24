@@ -74,7 +74,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             return self.keypair.sign(msg) catch |e| std.debug.panic("signing failed: {}", .{e});
         }
 
-        pub fn reportSnapshotSource(self: Self, addr: std.net.Address, slot: u64, hash: lib.solana.Hash) void {
+        pub fn reportSnapshotSource(self: Self, addr: std.net.Address, slot: lib.solana.Slot, hash: lib.solana.Hash) void {
             const entry = self.snapshot_writer.next() orelse return;
             entry.* = .{
                 .rpc_addr = .fromNetAddress(addr),

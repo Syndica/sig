@@ -5,7 +5,7 @@ pub const SnapshotSourceRing = lib.ipc.Ring(256, SnapshotSource);
 
 pub const SnapshotSource = extern struct {
     rpc_addr: lib.gossip.Address,
-    slot: u64,
+    slot: lib.solana.Slot,
     hash: lib.solana.Hash,
 };
 
