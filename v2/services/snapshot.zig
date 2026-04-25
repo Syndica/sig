@@ -12,7 +12,7 @@ const SnapshotSourceRing = lib.snapshot.SnapshotSourceRing;
 const MAX_DRAIN: u8 = 64;
 const GOSSIP_DRAIN_INTERVAL: std.os.linux.kernel_timespec = .{ .sec = 0, .nsec = 100_000_000 };
 
-const MAX_CONCURRENT_PROBES: u8 = 20;
+const MAX_CONCURRENT_PROBES: u8 = 32;
 
 const ProbeConn = struct {
     phase: enum { unused, connecting, sending, receiving },
@@ -20,7 +20,6 @@ const ProbeConn = struct {
     addr: Address,
     send_buf: [256]u8,
     send_len: u16,
-    send_off: u16,
     recv_buf: [4096]u8,
     net_addr: std.net.Address,
     start_time: std.time.Instant,
@@ -34,7 +33,6 @@ const ProbeConn = struct {
             .addr = undefined,
             .send_buf = undefined,
             .send_len = 0,
-            .send_off = 0,
             .recv_buf = undefined,
             .net_addr = undefined,
             .start_time = undefined,
@@ -62,16 +60,6 @@ const PeerState = struct {
     }
 };
 
-const Metrics = struct {
-    snapshot_sources_received: tel.Counter,
-    snapshot_sources_deduped: tel.Counter,
-    snapshot_sources_new: tel.Counter,
-    snapshot_sources_updated: tel.Counter,
-    snapshot_probes_started: tel.Counter,
-    snapshot_probes_succeeded: tel.Counter,
-    snapshot_probes_failed: tel.Counter,
-};
-
 var dedupe_map_buf: [512 * 1024]u8 = @splat(0);
 const DedupeMap = std.array_hash_map.ArrayHashMapUnmanaged(
     Address,
@@ -85,14 +73,44 @@ const Op = enum(u8) {
     probe_connect,
     probe_send,
     probe_recv,
+};
 
-    pub fn encodeUserData(op: Op, index: u8) u64 {
-        return @intFromEnum(op) | (@as(u64, index) << 8);
+/// Packed into io_uring sqe/cqe user_data field for identifying operations on completion
+const UserData = packed struct(u64) {
+    /// The io_uring operation type that produced this cqe.
+    op: Op,
+    /// Index into the probe_conns array identifying which probe this (s,c)qe belongs to
+    index: u8,
+    /// Byte offset tracking send/recv progress across partial completions.
+    offset: u16,
+    _reserved: u32,
+
+    pub fn init(op: Op, index: u8) UserData {
+        return .{
+            .op = op,
+            .index = index,
+            .offset = 0,
+            ._reserved = 0,
+        };
     }
 
-    pub fn decodeUserData(ud: u64) struct { Op, u8 } {
-        return .{ @enumFromInt(ud & 0xFF), @intCast((ud >> 8) & 0xFF) };
+    pub fn encode(self: UserData) u64 {
+        return @bitCast(self);
     }
+
+    pub fn decode(ud: u64) UserData {
+        return @bitCast(ud);
+    }
+};
+
+const Metrics = struct {
+    snapshot_sources_received: tel.Counter,
+    snapshot_sources_deduped: tel.Counter,
+    snapshot_sources_new: tel.Counter,
+    snapshot_sources_updated: tel.Counter,
+    snapshot_probes_started: tel.Counter,
+    snapshot_probes_succeeded: tel.Counter,
+    snapshot_probes_failed: tel.Counter,
 };
 
 const SnapshotService = struct {
@@ -107,192 +125,31 @@ const SnapshotService = struct {
     metrics: Metrics,
     logger: tel.Logger("snapshot"),
 
-    fn startProbe(self: *SnapshotService, addr: Address, peer: *PeerState) !void {
-        if (self.active_probes >= MAX_CONCURRENT_PROBES) return;
+    fn run(self: *SnapshotService) !noreturn {
+        // TODO: what to init to? bunch of undefineds that feel wrong.
+        var cqes: [256]std.os.linux.io_uring_cqe = undefined;
 
-        // find a free prob
-        const probe_index: u8, const probe = for (&self.probe_conns, 0..) |*p, i| {
-            if (p.phase == .unused) break .{ @intCast(i), p };
-        } else return;
+        // drain messages from gossip service immidiately. This also submits the first timeout for drain interval.
+        try self.handleGossipDrainTimeout();
 
-        // create tcp socket
-        probe.net_addr = addr.toNetAddress();
-        const fd = try std.posix.socket(
-            probe.net_addr.any.family,
-            std.posix.SOCK.STREAM | std.posix.SOCK.NONBLOCK,
-            0,
-        );
-        errdefer std.posix.close(fd);
+        while (true) {
+            _ = try self.ring.submit_and_wait(1);
+            const n = try self.ring.copy_cqes(&cqes, 0);
 
-        // create req
-        var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
-        const hash_str = peer.hash.base58String(&hash_buf);
-        const send_len = std.fmt.bufPrint(
-            &probe.send_buf,
-            "HEAD /snapshot-{d}-{s}.tar.zst HTTP/1.1\r\nHost: {f}\r\nConnection: close\r\n\r\n",
-            .{ peer.slot, hash_str, probe.net_addr },
-        ) catch unreachable;
-        probe.send_len = @intCast(send_len.len);
+            for (cqes[0..n]) |cqe| {
+                const data = UserData.decode(cqe.user_data);
 
-        // submit connect sqe
-        _ = try self.ring.connect(
-            Op.probe_connect.encodeUserData(probe_index),
-            fd,
-            &probe.net_addr.any,
-            probe.net_addr.getOsSockLen(),
-        );
-
-        probe.phase = .connecting;
-        probe.start_time = std.time.Instant.now() catch unreachable;
-        probe.fd = fd;
-        probe.addr = addr;
-        probe.slot = peer.slot;
-        probe.hash = peer.hash;
-
-        peer.probe_status = .in_flight;
-        self.active_probes += 1;
-        self.metrics.snapshot_probes_started.increment(1);
-    }
-
-    fn finishProbe(self: *SnapshotService, probe_index: u8, ok: bool) void {
-        const probe = &self.probe_conns[probe_index];
-        if (self.dedupe_map.getPtr(probe.addr)) |peer| {
-            // NOTE: We gaurd the update here since gossip can update peer in dedupe map while io_uring was completing this probe.
-            // If it was updated underneath us, don't update things here since another/newer probe was alread issued to io_uring.
-            if (peer.slot == probe.slot and std.meta.eql(peer.hash, probe.hash)) {
-                peer.probe_status = if (ok) .succeeded else .failed;
+                switch (data.op) {
+                    .gossip_drain_timeout => {
+                        self.timeout_pending = false;
+                        try self.handleGossipDrainTimeout();
+                    },
+                    .probe_connect => try self.handleProbeConnect(data, cqe),
+                    .probe_send => try self.handleProbeSend(data, cqe),
+                    .probe_recv => try self.handleProbeRecv(data, cqe),
+                }
             }
         }
-
-        if (probe.fd >= 0) std.posix.close(probe.fd);
-        self.probe_conns[probe_index] = ProbeConn.empty();
-        self.active_probes -= 1;
-
-        if (ok) {
-            self.metrics.snapshot_probes_succeeded.increment(1);
-        } else {
-            self.metrics.snapshot_probes_failed.increment(1);
-        }
-    }
-
-    fn probeNextPending(self: *SnapshotService) !void {
-        const keys = self.dedupe_map.keys();
-        const values = self.dedupe_map.values();
-        for (keys, values) |*addr, *peer| {
-            if (peer.probe_status == .pending) {
-                try self.startProbe(addr.*, peer);
-                return;
-            }
-        }
-    }
-
-    fn handleProbeConnect(self: *SnapshotService, probe_index: u8, cqe_res: i32) !void {
-        const probe = &self.probe_conns[probe_index];
-        if (probe.phase != .connecting) {
-            self.logger.warn().logf("unexpected connect cqe idx={d} phase={s}", .{ probe_index, @tagName(probe.phase) });
-            return;
-        }
-        if (cqe_res < 0) {
-            self.logger.info().logf("probe connect failed idx={d} errno={d}", .{ probe_index, -cqe_res });
-            self.finishProbe(probe_index, false);
-            try self.probeNextPending();
-            return;
-        }
-        _ = try self.ring.send(
-            Op.probe_send.encodeUserData(probe_index),
-            probe.fd,
-            probe.send_buf[0..probe.send_len],
-            0,
-        );
-        probe.phase = .sending;
-    }
-
-    fn handleProbeSend(self: *SnapshotService, probe_index: u8, cqe_res: i32) !void {
-        const probe = &self.probe_conns[probe_index];
-        if (probe.phase != .sending) {
-            self.logger.warn().logf("unexpected send cqe idx={d} phase={s}", .{ probe_index, @tagName(probe.phase) });
-            return;
-        }
-        if (cqe_res < 0) {
-            self.logger.info().logf("probe send failed idx={d} errno={d}", .{ probe_index, -cqe_res });
-            self.finishProbe(probe_index, false);
-            try self.probeNextPending();
-            return;
-        }
-
-        // NOTE: used to track how much we've sent to handle potential partial sends properly.
-        // TODO: document that partial sends with io_uring are possible.
-        probe.send_off += @intCast(cqe_res);
-
-        // Check for this partial send case
-        if (probe.send_off < probe.send_len) {
-            _ = try self.ring.send(
-                Op.probe_send.encodeUserData(probe_index),
-                probe.fd,
-                probe.send_buf[probe.send_off..probe.send_len],
-                0,
-            );
-            return;
-        }
-
-        // full req sent, so just submit the recv and move to receiving state.
-        _ = try self.ring.recv(
-            Op.probe_recv.encodeUserData(probe_index),
-            probe.fd,
-            .{ .buffer = &probe.recv_buf },
-            0,
-        );
-        probe.phase = .receiving;
-    }
-
-    fn handleProbeRecv(self: *SnapshotService, probe_index: u8, cqe_res: i32) !void {
-        const probe = &self.probe_conns[probe_index];
-        if (probe.phase != .receiving) {
-            self.logger.warn().logf("unexpected recv cqe idx={d} phase={s}", .{ probe_index, @tagName(probe.phase) });
-            return;
-        }
-        if (cqe_res <= 0) {
-            self.logger.info().logf("probe recv failed idx={d} res={d}", .{ probe_index, cqe_res });
-            self.finishProbe(probe_index, false);
-            try self.probeNextPending();
-            return;
-        }
-
-        // TODO: Currently assuming no partial receives, and response sizes for probes are tiny, but we should handle them for correctness.
-        // accumulate recv bytes across multiple cqes to handle partial receives.
-        const len: usize = @intCast(cqe_res);
-        const response = probe.recv_buf[0..len];
-
-        // parse status line
-        const status_end = std.mem.indexOf(u8, response, "\r\n") orelse {
-            self.finishProbe(probe_index, false);
-            try self.probeNextPending();
-            return;
-        };
-
-        const status_line = response[0..status_end];
-        const ok = std.mem.indexOf(u8, status_line, "200") != null;
-        if (!ok) {
-            self.logger.info().logf("probe recv bad status idx={d} status={s}", .{ probe_index, status_line });
-            self.finishProbe(probe_index, false);
-            try self.probeNextPending();
-            return;
-        }
-
-        // compute & store latency
-        const elapsed_ns = (std.time.Instant.now() catch unreachable).since(probe.start_time);
-        const latency_ms: u32 = @intCast(elapsed_ns / std.time.ns_per_ms);
-        if (self.dedupe_map.getPtr(probe.addr)) |peer| {
-            // NOTE: We gaurd the update here since gossip can update peer in dedupe map while io_uring was completing this probe.
-            // If it was updated underneath us, don't update things here since another/newer probe was alread issued to io_uring.
-            if (peer.slot == probe.slot and std.meta.eql(peer.hash, probe.hash)) {
-                peer.latency_ms = latency_ms;
-            }
-        }
-
-        self.logger.info().logf("probe succeeded idx={d} latency={d}ms addr={f}", .{ probe_index, latency_ms, probe.addr });
-        self.finishProbe(probe_index, true);
-        try self.probeNextPending();
     }
 
     fn handleGossipDrainTimeout(self: *SnapshotService) !void {
@@ -345,7 +202,7 @@ const SnapshotService = struct {
 
         if (!self.timeout_pending) {
             _ = try self.ring.timeout(
-                Op.gossip_drain_timeout.encodeUserData(0),
+                UserData.init(.gossip_drain_timeout, 0).encode(),
                 &GOSSIP_DRAIN_INTERVAL,
                 0,
                 0,
@@ -354,35 +211,207 @@ const SnapshotService = struct {
         }
     }
 
-    fn run(self: *SnapshotService) !noreturn {
-        // TODO: what to init to? bunch of undefineds that feel wrong.
-        var cqes: [256]std.os.linux.io_uring_cqe = undefined;
+    fn startProbe(self: *SnapshotService, addr: Address, peer: *PeerState) !void {
+        if (self.active_probes >= MAX_CONCURRENT_PROBES) return;
 
-        // drain messages from gossip service immidiately. This also submits the first timeout for drain interval.
-        try self.handleGossipDrainTimeout();
+        // find a free prob
+        const probe_index: u8, const probe = for (&self.probe_conns, 0..) |*p, i| {
+            if (p.phase == .unused) break .{ @intCast(i), p };
+        } else return;
 
-        while (true) {
-            _ = try self.ring.submit_and_wait(1);
-            const n = try self.ring.copy_cqes(&cqes, 0);
+        // create tcp socket
+        probe.net_addr = addr.toNetAddress();
+        const fd = try std.posix.socket(
+            probe.net_addr.any.family,
+            std.posix.SOCK.STREAM | std.posix.SOCK.NONBLOCK,
+            0,
+        );
+        errdefer std.posix.close(fd);
 
-            for (cqes[0..n]) |cqe| {
-                const op, const probe_index = Op.decodeUserData(cqe.user_data);
+        // create req
+        var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
+        const hash_str = peer.hash.base58String(&hash_buf);
+        const send_len = std.fmt.bufPrint(
+            &probe.send_buf,
+            "HEAD /snapshot-{d}-{s}.tar.zst HTTP/1.1\r\nHost: {f}\r\nConnection: close\r\n\r\n",
+            .{ peer.slot, hash_str, probe.net_addr },
+        ) catch unreachable;
+        probe.send_len = @intCast(send_len.len);
 
-                switch (op) {
-                    .gossip_drain_timeout => {
-                        self.timeout_pending = false;
-                        try self.handleGossipDrainTimeout();
-                    },
-                    .probe_connect, .probe_send, .probe_recv => {
-                        std.debug.assert(probe_index < MAX_CONCURRENT_PROBES);
-                        switch (op) {
-                            .probe_connect => try self.handleProbeConnect(probe_index, cqe.res),
-                            .probe_send => try self.handleProbeSend(probe_index, cqe.res),
-                            .probe_recv => try self.handleProbeRecv(probe_index, cqe.res),
-                            else => unreachable,
-                        }
-                    },
-                }
+        // submit connect sqe
+        _ = try self.ring.connect(
+            UserData.init(.probe_connect, probe_index).encode(),
+            fd,
+            &probe.net_addr.any,
+            probe.net_addr.getOsSockLen(),
+        );
+
+        probe.phase = .connecting;
+        probe.start_time = std.time.Instant.now() catch unreachable;
+        probe.fd = fd;
+        probe.addr = addr;
+        probe.slot = peer.slot;
+        probe.hash = peer.hash;
+
+        peer.probe_status = .in_flight;
+        self.active_probes += 1;
+        self.metrics.snapshot_probes_started.increment(1);
+    }
+
+    fn handleProbeConnect(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) !void {
+        const probe = &self.probe_conns[data.index];
+        if (probe.phase != .connecting) {
+            self.logger.warn().logf("unexpected connect cqe idx={d} phase={s}", .{ data.index, @tagName(probe.phase) });
+            return;
+        }
+        if (cqe.err() != .SUCCESS) {
+            self.logger.info().logf("probe connect failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
+            self.finishProbe(data.index, false);
+            try self.probeNextPending();
+            return;
+        }
+        _ = try self.ring.send(
+            UserData.init(.probe_send, data.index).encode(),
+            probe.fd,
+            probe.send_buf[0..probe.send_len],
+            0,
+        );
+        probe.phase = .sending;
+    }
+
+    fn handleProbeSend(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) !void {
+        const probe = &self.probe_conns[data.index];
+        if (probe.phase != .sending) {
+            self.logger.warn().logf("unexpected send cqe idx={d} phase={s}", .{ data.index, @tagName(probe.phase) });
+            return;
+        }
+        if (cqe.err() != .SUCCESS) {
+            self.logger.info().logf("probe send failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
+            self.finishProbe(data.index, false);
+            try self.probeNextPending();
+            return;
+        }
+
+        // Track send progress across partial completions via user_data offset.
+        const new_offset = data.offset + @as(u16, @intCast(cqe.res));
+
+        if (new_offset < probe.send_len) {
+            var resubmit = data;
+            resubmit.offset = new_offset;
+            _ = try self.ring.send(
+                resubmit.encode(),
+                probe.fd,
+                probe.send_buf[new_offset..probe.send_len],
+                0,
+            );
+            return;
+        }
+
+        // Full request sent, submit da recv.
+        _ = try self.ring.recv(
+            UserData.init(.probe_recv, data.index).encode(),
+            probe.fd,
+            .{ .buffer = &probe.recv_buf },
+            0,
+        );
+        probe.phase = .receiving;
+    }
+
+    fn handleProbeRecv(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) !void {
+        const probe = &self.probe_conns[data.index];
+        if (probe.phase != .receiving) {
+            self.logger.warn().logf("unexpected recv cqe idx={d} phase={s}", .{ data.index, @tagName(probe.phase) });
+            return;
+        }
+        if (cqe.err() != .SUCCESS) {
+            self.logger.info().logf("probe recv failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
+            self.finishProbe(data.index, false);
+            try self.probeNextPending();
+            return;
+        }
+        if (cqe.res == 0) {
+            self.logger.info().logf("probe recv eof idx={d}", .{data.index});
+            self.finishProbe(data.index, false);
+            try self.probeNextPending();
+            return;
+        }
+
+        // Track recv progress across partial completions via user_data offset.
+        const new_offset = data.offset + @as(u16, @intCast(cqe.res));
+        const response = probe.recv_buf[0..new_offset];
+
+        // Check for end of HTTP headers.
+        const header_end = std.mem.indexOf(u8, response, "\r\n\r\n") orelse {
+            if (new_offset >= probe.recv_buf.len) {
+                self.finishProbe(data.index, false);
+                try self.probeNextPending();
+                return;
+            }
+            // Partial headers, submit another recv.
+            var resubmit = data;
+            resubmit.offset = new_offset;
+            _ = try self.ring.recv(
+                resubmit.encode(),
+                probe.fd,
+                .{ .buffer = probe.recv_buf[new_offset..] },
+                0,
+            );
+            return;
+        };
+
+        // Parse status line from complete headers.
+        const status_end = std.mem.indexOf(u8, response[0..header_end], "\r\n") orelse header_end;
+        const status_line = response[0..status_end];
+        const ok = std.mem.indexOf(u8, status_line, "200") != null;
+        if (!ok) {
+            self.logger.info().logf("probe recv bad status idx={d} status={s}", .{ data.index, status_line });
+            self.finishProbe(data.index, false);
+            try self.probeNextPending();
+            return;
+        }
+
+        // Compute and store latency.
+        const elapsed_ns = (std.time.Instant.now() catch unreachable).since(probe.start_time);
+        const latency_ms: u32 = @intCast(elapsed_ns / std.time.ns_per_ms);
+        if (self.dedupe_map.getPtr(probe.addr)) |peer| {
+            if (peer.slot == probe.slot and std.meta.eql(peer.hash, probe.hash)) {
+                peer.latency_ms = latency_ms;
+            }
+        }
+
+        self.logger.info().logf("probe succeeded idx={d} latency={d}ms addr={f}", .{ data.index, latency_ms, probe.addr });
+        self.finishProbe(data.index, true);
+        try self.probeNextPending();
+    }
+
+    fn finishProbe(self: *SnapshotService, probe_index: u8, ok: bool) void {
+        const probe = &self.probe_conns[probe_index];
+        if (self.dedupe_map.getPtr(probe.addr)) |peer| {
+            // NOTE: We gaurd the update here since gossip can update peer in dedupe map while io_uring was completing this probe.
+            // If it was updated underneath us, don't update things here since another/newer probe was alread issued to io_uring.
+            if (peer.slot == probe.slot and std.meta.eql(peer.hash, probe.hash)) {
+                peer.probe_status = if (ok) .succeeded else .failed;
+            }
+        }
+
+        if (probe.fd >= 0) std.posix.close(probe.fd);
+        self.probe_conns[probe_index] = ProbeConn.empty();
+        self.active_probes -= 1;
+
+        if (ok) {
+            self.metrics.snapshot_probes_succeeded.increment(1);
+        } else {
+            self.metrics.snapshot_probes_failed.increment(1);
+        }
+    }
+
+    fn probeNextPending(self: *SnapshotService) !void {
+        const keys = self.dedupe_map.keys();
+        const values = self.dedupe_map.values();
+        for (keys, values) |*addr, *peer| {
+            if (peer.probe_status == .pending) {
+                try self.startProbe(addr.*, peer);
+                return;
             }
         }
     }
