@@ -19,7 +19,7 @@ pub const Executable = struct {
     text_vaddr: u64,
     function_registry: Registry,
     config: Config,
-    text_section_len: u64 = 0,
+    text_section_len: u64,
 
     pub fn fromAsm(
         allocator: std.mem.Allocator,

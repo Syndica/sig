@@ -193,6 +193,7 @@ fn executeSyscall(
     const executable: sig.vm.Executable = .{
         .instructions = &.{},
         .bytes = rodata,
+        .text_section_len = 0,
         .version = .v0,
         .ro_section = .{ .borrowed = .{
             .offset = memory.RODATA_START,
