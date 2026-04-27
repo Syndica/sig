@@ -237,7 +237,7 @@
     .{ .name = "enforce_fixed_fec_set", .pubkey = "fixfecLZYMfkGzwq6NJA11Yw6KYztzXiK9QcL3K78in" },
     .{ .name = "deprecate_rent_exemption_threshold", .pubkey = "rent6iVy6PDoViPBeJ6k5EJQrkj62h7DPyLbWGHwjrC" },
     .{ .name = "static_instruction_limit", .pubkey = "64ixypL1HPu8WtJhNSMb9mSgfFaJvsANuRkTbHyuLfnx" },
-    .{ .name = "discard_unexpected_data_complete_shreds", .pubkey = "shredXP8xLjJWp1AWh3gAFsFn4GSH1vohhCMDHw5koU" },
+    .{ .name = "discard_unexpected_data_complete_shreds", .pubkey = "dcomRRWHXP1FVWPqi9Mm4oxJhF4ehC795SvAtUdA9os" },
     .{ .name = "account_data_direct_mapping", .pubkey = "CR3dVN2Yoo95Y96kLSTaziWDAQT2MNEpiWh5cqVq2pNE" },
     .{ .name = "provide_instruction_data_offset_in_vm_r2", .pubkey = "5xXZc66h4UdB6Yq7FzdBxBiRAFMMScMLwHxk2QZDaNZL" },
     .{ .name = "poseidon_enforce_padding", .pubkey = "poUdAqRXXsNmfqAZ6UqpjbeYgwBygbfQLEvWSqVhSnb" },
