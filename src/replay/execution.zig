@@ -523,12 +523,11 @@ fn prepareSlot(
         }
 
         state.logger
-            .entry(if (state.log_deduper.isNew(
-                .{ .entries_for_slot = &.{ entries.len, slot } },
-            )) .info else .debug)
+            .entry(if (entries.len == 0 and state.empty_slots.isSet(slot)) .trace else .info)
             .logf("got {} entries for slot {}", .{ entries.len, slot });
 
         if (entries.len == 0) {
+            state.empty_slots.set(slot);
             return .empty;
         }
 

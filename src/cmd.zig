@@ -1822,12 +1822,15 @@ fn validator(
             .epoch_schedule = &epoch_tracker.epoch_schedule,
         });
 
-        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ReplayHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
             .commitments = &replay_service_state.replay_state.commitments.?,
+            .epoch_tracker = &epoch_tracker,
+        });
+
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.GossipHookContext{
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
-            .epoch_tracker = &epoch_tracker,
         });
 
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
@@ -2377,11 +2380,9 @@ fn replayOffline(
     defer replay_service_state.deinit(allocator);
 
     if (rpc_enabled) {
-        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ReplayHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
             .commitments = &replay_service_state.replay_state.commitments.?,
-            .gossip_table_rw = null,
-            .my_shred_version = null,
             .epoch_tracker = &epoch_tracker,
         });
 
