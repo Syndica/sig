@@ -237,14 +237,9 @@ const SnapshotService = struct {
                 );
                 self.metrics.snapshot_sources_updated.increment(1);
             } else {
-                // NOTE: if a peer re-announces itself with the same slot and hash in gossip,
-                // and a previous probe attempt failed, we give it another try, maybe it's healthy again.
-                if (gop.value_ptr.probe_status == .failed) {
-                    gop.value_ptr.probe_status = .pending;
-                    self.startProbe(key, gop.value_ptr) catch |err| {
-                        self.logger.warn().logf("failed to start probe err={}", .{err});
-                    };
-                }
+                // Same addr + same slot/hash. Do not retry failed probes here.
+                // A failed probe is terminal for this snapshot candidate. It will
+                // be retried only if slot/hash changes (the update path above).
                 self.metrics.snapshot_sources_deduped.increment(1);
             }
         }
