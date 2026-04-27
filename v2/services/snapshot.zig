@@ -150,6 +150,7 @@ const Metrics = struct {
     snapshot_probes_succeeded: tel.Counter,
     snapshot_probes_failed: tel.Counter,
     snapshot_probes_timed_out: tel.Counter,
+    snapshot_sq_fulls: tel.Counter,
 };
 
 const SnapshotService = struct {
@@ -282,33 +283,15 @@ const SnapshotService = struct {
         probe.send_len = @intCast(send_len.len);
 
         probe.gen +%= 1;
-        const gen = probe.gen;
-
-        // submit connect sqe with linked timeout.
-        // try is safe here: errdefer closes fd, and active_probes/phase
-        // aren't updated until after submission succeeds.
-        const sqe = try self.ring.connect(
-            UserData.init(.probe_connect, probe_index, gen).encode(),
-            fd,
-            &probe.net_addr.any,
-            probe.net_addr.getOsSockLen(),
-        );
-        sqe.flags |= std.os.linux.IOSQE_IO_LINK;
-        _ = try self.ring.link_timeout(
-            UserData.init(.probe_connect_timeout, probe_index, gen).encode(),
-            &PROBE_TIMEOUT,
-            0,
-        );
-
-        probe.phase = .connecting;
-        probe.gen = gen;
-        probe.active_offset = 0;
-        probe.timed_out = false;
-        probe.start_time = std.time.Instant.now() catch unreachable;
         probe.fd = fd;
         probe.addr = addr;
         probe.slot = peer.slot;
         probe.hash = peer.hash;
+
+        // NOTE: try is safe here since errdefer closes fd, and active_probes
+        // has not been incremented yet, so the slot remains reusable.
+        try self.queueProbeConnectWithTimeout(probe_index, fd);
+        probe.start_time = std.time.Instant.now() catch unreachable;
 
         peer.probe_status = .in_flight;
         self.active_probes += 1;
@@ -327,6 +310,124 @@ const SnapshotService = struct {
             return null;
         }
         return probe;
+    }
+
+    /// An atomic batch of sqes. One is the operation of interest, followed by its timeout.
+    const LinkedSqes = struct {
+        primary: *std.os.linux.io_uring_sqe,
+        timeout: *std.os.linux.io_uring_sqe,
+    };
+
+    /// Reserves the two sqes needed for a primary op + linked timeout.
+    /// NOTE: assumes SnapshotService is the only producer (thread) mutating the ring.
+    fn reserveLinkedSqes(self: *SnapshotService) !LinkedSqes {
+        // NOTE: it is safe to get capacity this way due to single event producing thread.
+        const capacity: u32 = @intCast(self.ring.sq.sqes.len);
+        const ready = self.ring.sq_ready();
+
+        std.debug.assert(ready <= capacity);
+
+        if (capacity - ready < 2) {
+            return error.SubmissionQueueFull;
+        }
+
+        // NOTE: we checked capacity first, and we're producing using a single thread,
+        // so get_sqe failing below should not occur.
+        return .{
+            .primary = self.ring.get_sqe() catch unreachable,
+            .timeout = self.ring.get_sqe() catch unreachable,
+        };
+    }
+
+    /// Enqueues a pair of SQEs to connect and perform the tcp handshake along with a timeout.
+    fn queueProbeConnectWithTimeout(
+        self: *SnapshotService,
+        index: u8,
+        fd: std.posix.fd_t,
+    ) !void {
+        const probe = &self.probe_conns[index];
+
+        const connect_data = UserData.init(.probe_connect, index, probe.gen);
+        var timeout_data = connect_data;
+        timeout_data.op = .probe_connect_timeout;
+
+        const sqes = try self.reserveLinkedSqes();
+
+        sqes.primary.prep_connect(fd, &probe.net_addr.any, probe.net_addr.getOsSockLen());
+        sqes.primary.user_data = connect_data.encode();
+        sqes.primary.flags |= std.os.linux.IOSQE_IO_LINK;
+
+        sqes.timeout.prep_link_timeout(&PROBE_TIMEOUT, 0);
+        sqes.timeout.user_data = timeout_data.encode();
+
+        probe.phase = .connecting;
+        probe.active_offset = 0;
+        probe.timed_out = false;
+    }
+
+    /// Enqueues a pair of SQEs to send the HTTP HEAD request along with a timeout for the corresponding probe.
+    /// After which we update the probe's phase to `sending`.
+    fn queueProbeSendWithTimeout(
+        self: *SnapshotService,
+        data: UserData,
+        /// used to track partial completions.
+        offset: u16,
+    ) !void {
+        const probe = &self.probe_conns[data.index];
+
+        var send_data = data;
+        send_data.op = .probe_send;
+        send_data.offset = offset;
+
+        var timeout_data = send_data;
+        timeout_data.op = .probe_send_timeout;
+
+        std.debug.assert(offset <= probe.send_len);
+
+        const sqes = try self.reserveLinkedSqes();
+
+        sqes.primary.prep_send(probe.fd, probe.send_buf[offset..probe.send_len], 0);
+        sqes.primary.user_data = send_data.encode();
+        sqes.primary.flags |= std.os.linux.IOSQE_IO_LINK;
+
+        sqes.timeout.prep_link_timeout(&PROBE_TIMEOUT, 0);
+        sqes.timeout.user_data = timeout_data.encode();
+
+        probe.phase = .sending;
+        probe.active_offset = offset;
+        probe.timed_out = false;
+    }
+
+    /// Enqueues a pair of SQEs to recv the HTTP response along with a timeout.
+    /// After which we update the probe's phase to `receiving`.
+    fn queueProbeRecvWithTimeout(
+        self: *SnapshotService,
+        data: UserData,
+        /// used to track partial completions.
+        offset: u16,
+    ) !void {
+        const probe = &self.probe_conns[data.index];
+
+        var recv_data = data;
+        recv_data.op = .probe_recv;
+        recv_data.offset = offset;
+
+        var timeout_data = recv_data;
+        timeout_data.op = .probe_recv_timeout;
+
+        std.debug.assert(offset <= probe.recv_buf.len);
+
+        const sqes = try self.reserveLinkedSqes();
+
+        sqes.primary.prep_recv(probe.fd, probe.recv_buf[offset..], 0);
+        sqes.primary.user_data = recv_data.encode();
+        sqes.primary.flags |= std.os.linux.IOSQE_IO_LINK;
+        sqes.timeout.prep_link_timeout(&PROBE_TIMEOUT, 0);
+        sqes.timeout.user_data = timeout_data.encode();
+
+        probe.phase = .receiving;
+        probe.active_offset = offset;
+        probe.timed_out = false;
     }
 
     fn handleProbeTimeout(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
@@ -374,33 +475,18 @@ const SnapshotService = struct {
 
         // TODO: coalesce both
         if (probe.timed_out) {
-            self.finishProbe(data.index, false);
+            self.finishProbe(data.index, .failed);
             try self.probeNextPending();
             return;
         }
         if (cqe.err() != .SUCCESS) {
             self.logger.info().logf("probe connect failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
-            self.finishProbe(data.index, false);
+            self.finishProbe(data.index, .failed);
             try self.probeNextPending();
             return;
         }
 
-        // TODO: make this an fn
-        const sqe = try self.ring.send(
-            UserData.init(.probe_send, data.index, data.gen).encode(),
-            probe.fd,
-            probe.send_buf[0..probe.send_len],
-            0,
-        );
-        sqe.flags |= std.os.linux.IOSQE_IO_LINK;
-        _ = try self.ring.link_timeout(
-            UserData.init(.probe_send_timeout, data.index, data.gen).encode(),
-            &PROBE_TIMEOUT,
-            0,
-        );
-        probe.phase = .sending;
-        probe.active_offset = 0;
-        probe.timed_out = false;
+        try self.queueProbeSendWithTimeout(data, 0);
     }
 
     fn handleProbeSend(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) !void {
@@ -412,13 +498,13 @@ const SnapshotService = struct {
 
         // TODO: coalesce both
         if (probe.timed_out) {
-            self.finishProbe(data.index, false);
+            self.finishProbe(data.index, .failed);
             try self.probeNextPending();
             return;
         }
         if (cqe.err() != .SUCCESS) {
             self.logger.info().logf("probe send failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
-            self.finishProbe(data.index, false);
+            self.finishProbe(data.index, .failed);
             try self.probeNextPending();
             return;
         }
@@ -426,45 +512,14 @@ const SnapshotService = struct {
         // Track send progress across partial completions via user_data offset.
         const new_offset = data.offset + @as(u16, @intCast(cqe.res));
 
+        // The previous send was partial, queue up another and return.
         if (new_offset < probe.send_len) {
-            var resubmit = data;
-            resubmit.offset = new_offset;
-            const sqe = try self.ring.send(
-                resubmit.encode(),
-                probe.fd,
-                probe.send_buf[new_offset..probe.send_len],
-                0,
-            );
-            sqe.flags |= std.os.linux.IOSQE_IO_LINK;
-            var timeout_data = resubmit;
-            timeout_data.op = .probe_send_timeout;
-            _ = try self.ring.link_timeout(
-                timeout_data.encode(),
-                &PROBE_TIMEOUT,
-                0,
-            );
-            probe.active_offset = new_offset;
-            probe.timed_out = false;
+            try self.queueProbeSendWithTimeout(data, new_offset);
             return;
         }
 
-        // Full request sent, submit da recv.
-        // TODO: make this an fn
-        const sqe = try self.ring.recv(
-            UserData.init(.probe_recv, data.index, data.gen).encode(),
-            probe.fd,
-            .{ .buffer = &probe.recv_buf },
-            0,
-        );
-        sqe.flags |= std.os.linux.IOSQE_IO_LINK;
-        _ = try self.ring.link_timeout(
-            UserData.init(.probe_recv_timeout, data.index, data.gen).encode(),
-            &PROBE_TIMEOUT,
-            0,
-        );
-        probe.phase = .receiving;
-        probe.active_offset = 0;
-        probe.timed_out = false;
+        // We sent all of the payload, so queue up a recieve.
+        try self.queueProbeRecvWithTimeout(data, 0);
     }
 
     fn handleProbeRecv(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) !void {
@@ -476,19 +531,19 @@ const SnapshotService = struct {
 
         // TODO: coalesce these 3 conds
         if (probe.timed_out) {
-            self.finishProbe(data.index, false);
+            self.finishProbe(data.index, .failed);
             try self.probeNextPending();
             return;
         }
         if (cqe.err() != .SUCCESS) {
             self.logger.info().logf("probe recv failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
-            self.finishProbe(data.index, false);
+            self.finishProbe(data.index, .failed);
             try self.probeNextPending();
             return;
         }
         if (cqe.res == 0) {
             self.logger.info().logf("probe recv eof idx={d}", .{data.index});
-            self.finishProbe(data.index, false);
+            self.finishProbe(data.index, .failed);
             try self.probeNextPending();
             return;
         }
@@ -500,31 +555,12 @@ const SnapshotService = struct {
         // Check for end of HTTP headers.
         const header_end = std.mem.indexOf(u8, response, "\r\n\r\n") orelse {
             if (new_offset >= probe.recv_buf.len) {
-                self.finishProbe(data.index, false);
+                self.finishProbe(data.index, .failed);
                 try self.probeNextPending();
                 return;
             }
             // Partial headers, submit another recv.
-            var resubmit = data;
-            resubmit.offset = new_offset;
-
-            // TODO: create an fn for both:
-            const sqe = try self.ring.recv(
-                resubmit.encode(),
-                probe.fd,
-                .{ .buffer = probe.recv_buf[new_offset..] },
-                0,
-            );
-            sqe.flags |= std.os.linux.IOSQE_IO_LINK;
-            var timeout_data = resubmit;
-            timeout_data.op = .probe_recv_timeout;
-            _ = try self.ring.link_timeout(
-                timeout_data.encode(),
-                &PROBE_TIMEOUT,
-                0,
-            );
-            probe.active_offset = new_offset;
-            probe.timed_out = false;
+            try self.queueProbeRecvWithTimeout(data, new_offset);
             return;
         };
 
@@ -534,7 +570,7 @@ const SnapshotService = struct {
         const ok = std.mem.indexOf(u8, status_line, "200") != null;
         if (!ok) {
             self.logger.info().logf("probe recv bad status idx={d} status={s}", .{ data.index, status_line });
-            self.finishProbe(data.index, false);
+            self.finishProbe(data.index, .failed);
             try self.probeNextPending();
             return;
         }
@@ -549,11 +585,20 @@ const SnapshotService = struct {
         }
 
         self.logger.info().logf("probe succeeded idx={d} latency={d}ms addr={f}", .{ data.index, latency_ms, probe.addr });
-        self.finishProbe(data.index, true);
+        self.finishProbe(data.index, .succeeded);
         try self.probeNextPending();
     }
 
-    fn finishProbe(self: *SnapshotService, probe_index: u8, ok: bool) void {
+    const ProbeResult = enum {
+        /// probe completed with HTTP 200
+        succeeded,
+        /// peer/network error, bad status, or timeout (peer is bad/not responsive)
+        failed,
+        /// local SQE queue is full (backpressure), so retry operation later.
+        sq_full,
+    };
+
+    fn finishProbe(self: *SnapshotService, probe_index: u8, result: ProbeResult) void {
         const probe = &self.probe_conns[probe_index];
         // NOTE: link timeout sqes produce a second call to finishProbe.
         // If this fn gets called on a probe that's .unused, then return immidiately.
@@ -562,7 +607,11 @@ const SnapshotService = struct {
             // NOTE: We gaurd the update here since gossip can update peer in dedupe map while io_uring was completing this probe.
             // If it was updated underneath us, don't update things here since another/newer probe was alread issued to io_uring.
             if (peer.slot == probe.slot and std.meta.eql(peer.hash, probe.hash)) {
-                peer.probe_status = if (ok) .succeeded else .failed;
+                peer.probe_status = switch (result) {
+                    .succeeded => .succeeded,
+                    .failed => .failed,
+                    .sq_full => .pending,
+                };
             }
         }
 
@@ -572,10 +621,10 @@ const SnapshotService = struct {
         self.probe_conns[probe_index].gen = old_gen;
         self.active_probes -= 1;
 
-        if (ok) {
-            self.metrics.snapshot_probes_succeeded.increment(1);
-        } else {
-            self.metrics.snapshot_probes_failed.increment(1);
+        switch (result) {
+            .succeeded => self.metrics.snapshot_probes_succeeded.increment(1),
+            .failed => self.metrics.snapshot_probes_failed.increment(1),
+            .sq_full => self.metrics.snapshot_sq_fulls.increment(1),
         }
     }
 
