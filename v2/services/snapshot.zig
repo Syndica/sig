@@ -184,9 +184,9 @@ const SnapshotService = struct {
                         self.timeout_pending = false;
                         try self.handleGossipDrainTimeout();
                     },
-                    .probe_connect => try self.handleProbeConnect(data, cqe),
-                    .probe_send => try self.handleProbeSend(data, cqe),
-                    .probe_recv => try self.handleProbeRecv(data, cqe),
+                    .probe_connect => self.handleProbeConnect(data, cqe),
+                    .probe_send => self.handleProbeSend(data, cqe),
+                    .probe_recv => self.handleProbeRecv(data, cqe),
                     .probe_connect_timeout,
                     .probe_send_timeout,
                     .probe_recv_timeout,
@@ -220,12 +220,16 @@ const SnapshotService = struct {
                 // );
                 self.metrics.snapshot_sources_new.increment(1);
 
-                try self.startProbe(key, gop.value_ptr);
+                self.startProbe(key, gop.value_ptr) catch |err| {
+                    self.logger.warn().logf("failed to start probe err={}", .{err});
+                };
             } else if (!gop.value_ptr.eql(value)) {
                 gop.value_ptr.* = value;
 
                 // when a peer's slot/hash changes, start a new probe.
-                try self.startProbe(key, gop.value_ptr);
+                self.startProbe(key, gop.value_ptr) catch |err| {
+                    self.logger.warn().logf("failed to start probe err={}", .{err});
+                };
 
                 self.logger.info().logf(
                     "updated snapshot source {f} slot={d} hash={f}",
@@ -237,7 +241,9 @@ const SnapshotService = struct {
                 // and a previous probe attempt failed, we give it another try, maybe it's healthy again.
                 if (gop.value_ptr.probe_status == .failed) {
                     gop.value_ptr.probe_status = .pending;
-                    try self.startProbe(key, gop.value_ptr);
+                    self.startProbe(key, gop.value_ptr) catch |err| {
+                        self.logger.warn().logf("failed to start probe err={}", .{err});
+                    };
                 }
                 self.metrics.snapshot_sources_deduped.increment(1);
             }
@@ -450,7 +456,7 @@ const SnapshotService = struct {
         if (data.offset != probe.active_offset) return;
 
         switch (cqe.err()) {
-            .CANCELED, .NOENT => {},
+            .CANCELED, .NOENT, .ALREADY => {},
             .TIME => {
                 probe.timed_out = true;
                 self.logger.info().logf("probe timed out idx={d} phase={s}", .{
@@ -466,7 +472,7 @@ const SnapshotService = struct {
         }
     }
 
-    fn handleProbeConnect(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) !void {
+    fn handleProbeConnect(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const probe = self.getProbeForCqe(data) orelse return;
         if (probe.phase != .connecting) {
             self.logger.warn().logf("unexpected connect cqe idx={d} phase={s}", .{ data.index, @tagName(probe.phase) });
@@ -476,20 +482,26 @@ const SnapshotService = struct {
         // TODO: coalesce both
         if (probe.timed_out) {
             self.finishProbe(data.index, .failed);
-            try self.probeNextPending();
+            self.probeNextPending();
             return;
         }
         if (cqe.err() != .SUCCESS) {
             self.logger.info().logf("probe connect failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
             self.finishProbe(data.index, .failed);
-            try self.probeNextPending();
+            self.probeNextPending();
             return;
         }
 
-        try self.queueProbeSendWithTimeout(data, 0);
+        // We've succesfully connected, so send the HTTP HEAD request.
+        // Enqueuing the entries can only fail if the submission queue is full,
+        // if so we finish the probe with result .sq_full so the peer remains .pending for retry later (back pressure).
+        self.queueProbeSendWithTimeout(data, 0) catch {
+            self.finishProbe(data.index, .sq_full);
+            return;
+        };
     }
 
-    fn handleProbeSend(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) !void {
+    fn handleProbeSend(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const probe = self.getProbeForCqe(data) orelse return;
         if (probe.phase != .sending) {
             self.logger.warn().logf("unexpected send cqe idx={d} phase={s}", .{ data.index, @tagName(probe.phase) });
@@ -499,30 +511,38 @@ const SnapshotService = struct {
         // TODO: coalesce both
         if (probe.timed_out) {
             self.finishProbe(data.index, .failed);
-            try self.probeNextPending();
+            self.probeNextPending();
             return;
         }
         if (cqe.err() != .SUCCESS) {
             self.logger.info().logf("probe send failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
             self.finishProbe(data.index, .failed);
-            try self.probeNextPending();
+            self.probeNextPending();
             return;
         }
 
         // Track send progress across partial completions via user_data offset.
+        std.debug.assert(cqe.res > 0);
+        std.debug.assert(cqe.res <= probe.send_len - data.offset);
         const new_offset = data.offset + @as(u16, @intCast(cqe.res));
 
         // The previous send was partial, queue up another and return.
         if (new_offset < probe.send_len) {
-            try self.queueProbeSendWithTimeout(data, new_offset);
+            self.queueProbeSendWithTimeout(data, new_offset) catch {
+                self.finishProbe(data.index, .sq_full);
+                return;
+            };
             return;
         }
 
         // We sent all of the payload, so queue up a recieve.
-        try self.queueProbeRecvWithTimeout(data, 0);
+        self.queueProbeRecvWithTimeout(data, 0) catch {
+            self.finishProbe(data.index, .sq_full);
+            return;
+        };
     }
 
-    fn handleProbeRecv(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) !void {
+    fn handleProbeRecv(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const probe = self.getProbeForCqe(data) orelse return;
         if (probe.phase != .receiving) {
             self.logger.warn().logf("unexpected recv cqe idx={d} phase={s}", .{ data.index, @tagName(probe.phase) });
@@ -532,19 +552,19 @@ const SnapshotService = struct {
         // TODO: coalesce these 3 conds
         if (probe.timed_out) {
             self.finishProbe(data.index, .failed);
-            try self.probeNextPending();
+            self.probeNextPending();
             return;
         }
         if (cqe.err() != .SUCCESS) {
             self.logger.info().logf("probe recv failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
             self.finishProbe(data.index, .failed);
-            try self.probeNextPending();
+            self.probeNextPending();
             return;
         }
         if (cqe.res == 0) {
             self.logger.info().logf("probe recv eof idx={d}", .{data.index});
             self.finishProbe(data.index, .failed);
-            try self.probeNextPending();
+            self.probeNextPending();
             return;
         }
 
@@ -556,11 +576,14 @@ const SnapshotService = struct {
         const header_end = std.mem.indexOf(u8, response, "\r\n\r\n") orelse {
             if (new_offset >= probe.recv_buf.len) {
                 self.finishProbe(data.index, .failed);
-                try self.probeNextPending();
+                self.probeNextPending();
                 return;
             }
             // Partial headers, submit another recv.
-            try self.queueProbeRecvWithTimeout(data, new_offset);
+            self.queueProbeRecvWithTimeout(data, new_offset) catch {
+                self.finishProbe(data.index, .sq_full);
+                return;
+            };
             return;
         };
 
@@ -571,7 +594,7 @@ const SnapshotService = struct {
         if (!ok) {
             self.logger.info().logf("probe recv bad status idx={d} status={s}", .{ data.index, status_line });
             self.finishProbe(data.index, .failed);
-            try self.probeNextPending();
+            self.probeNextPending();
             return;
         }
 
@@ -586,7 +609,7 @@ const SnapshotService = struct {
 
         self.logger.info().logf("probe succeeded idx={d} latency={d}ms addr={f}", .{ data.index, latency_ms, probe.addr });
         self.finishProbe(data.index, .succeeded);
-        try self.probeNextPending();
+        self.probeNextPending();
     }
 
     const ProbeResult = enum {
@@ -594,13 +617,12 @@ const SnapshotService = struct {
         succeeded,
         /// peer/network error, bad status, or timeout (peer is bad/not responsive)
         failed,
-        /// local SQE queue is full (backpressure), so retry operation later.
+        /// local SQE queue is full (back pressure), so retry operation later.
         sq_full,
     };
 
     fn finishProbe(self: *SnapshotService, probe_index: u8, result: ProbeResult) void {
         const probe = &self.probe_conns[probe_index];
-        // NOTE: link timeout sqes produce a second call to finishProbe.
         // If this fn gets called on a probe that's .unused, then return immidiately.
         if (probe.phase == .unused) return;
         if (self.dedupe_map.getPtr(probe.addr)) |peer| {
@@ -628,12 +650,14 @@ const SnapshotService = struct {
         }
     }
 
-    fn probeNextPending(self: *SnapshotService) !void {
+    fn probeNextPending(self: *SnapshotService) void {
         const keys = self.dedupe_map.keys();
         const values = self.dedupe_map.values();
         for (keys, values) |*addr, *peer| {
             if (peer.probe_status == .pending) {
-                try self.startProbe(addr.*, peer);
+                self.startProbe(addr.*, peer) catch |err| {
+                    self.logger.warn().logf("failed to start pending probe err={}", .{err});
+                };
                 return;
             }
         }
