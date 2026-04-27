@@ -50,6 +50,9 @@ const ProbeConn = struct {
     /// set when a linked timeout fired, but we are still waiting for the
     /// primary op's cqe before freeing/reusing the slot.
     timed_out: bool,
+    /// byte offset of the most recently submitted primary op within the current phase.
+    /// Used to distinguish stale timeout cqes from previous partial send/recv ops.
+    active_offset: u16,
 
     pub fn empty() ProbeConn {
         return .{
@@ -65,6 +68,7 @@ const ProbeConn = struct {
             .hash = Hash.ZEROES,
             .gen = 0,
             .timed_out = false,
+            .active_offset = 0,
         };
     }
 };
@@ -298,6 +302,8 @@ const SnapshotService = struct {
 
         probe.phase = .connecting;
         probe.gen = gen;
+        probe.active_offset = 0;
+        probe.timed_out = false;
         probe.start_time = std.time.Instant.now() catch unreachable;
         probe.fd = fd;
         probe.addr = addr;
@@ -340,6 +346,7 @@ const SnapshotService = struct {
             else => unreachable,
         };
         if (probe.phase != expected_phase) return;
+        if (data.offset != probe.active_offset) return;
 
         switch (cqe.err()) {
             .CANCELED, .NOENT => {},
@@ -392,6 +399,8 @@ const SnapshotService = struct {
             0,
         );
         probe.phase = .sending;
+        probe.active_offset = 0;
+        probe.timed_out = false;
     }
 
     fn handleProbeSend(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) !void {
@@ -427,11 +436,15 @@ const SnapshotService = struct {
                 0,
             );
             sqe.flags |= std.os.linux.IOSQE_IO_LINK;
+            var timeout_data = resubmit;
+            timeout_data.op = .probe_send_timeout;
             _ = try self.ring.link_timeout(
-                UserData.init(.probe_send_timeout, data.index, data.gen).encode(),
+                timeout_data.encode(),
                 &PROBE_TIMEOUT,
                 0,
             );
+            probe.active_offset = new_offset;
+            probe.timed_out = false;
             return;
         }
 
@@ -450,6 +463,8 @@ const SnapshotService = struct {
             0,
         );
         probe.phase = .receiving;
+        probe.active_offset = 0;
+        probe.timed_out = false;
     }
 
     fn handleProbeRecv(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) !void {
@@ -501,11 +516,15 @@ const SnapshotService = struct {
                 0,
             );
             sqe.flags |= std.os.linux.IOSQE_IO_LINK;
+            var timeout_data = resubmit;
+            timeout_data.op = .probe_recv_timeout;
             _ = try self.ring.link_timeout(
-                UserData.init(.probe_recv_timeout, data.index, data.gen).encode(),
+                timeout_data.encode(),
                 &PROBE_TIMEOUT,
                 0,
             );
+            probe.active_offset = new_offset;
+            probe.timed_out = false;
             return;
         };
 
