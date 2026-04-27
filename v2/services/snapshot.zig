@@ -12,19 +12,39 @@ const SnapshotSourceRing = lib.snapshot.SnapshotSourceRing;
 const MAX_DRAIN: u8 = 64;
 const GOSSIP_DRAIN_INTERVAL: std.os.linux.kernel_timespec = .{ .sec = 0, .nsec = 100_000_000 };
 
-const MAX_CONCURRENT_PROBES: u8 = 32;
+const MAX_CONCURRENT_PROBES: u8 = 16;
 
 const ProbeConn = struct {
+    /// Current state in the snapshot probing lifecycle for this particaly peer.
+    /// Set to .unused when this slot is available for a new probe.
     phase: enum { unused, connecting, sending, receiving },
+    /// tcp socket fd for the peer.
     fd: std.posix.fd_t,
+    /// gossip addr for peer
     addr: Address,
+    /// stores the http HEAD request pre-formatted to check
     send_buf: [256]u8,
+    /// lenfth of the formatted HTTP HEAD request.
     send_len: u16,
+    /// buffer for the HTTP response from peer
+    /// TODO: prob too big, maybe just close out probes that respond with weird sizes.
     recv_buf: [4096]u8,
+    /// os socket addr that addr gets converted into.
+    /// stored in the probe ring to ensure it remains stable for io_uring.
     net_addr: std.net.Address,
+    /// timestamp captured at probe start. Used to compute
+    /// latency on successful completion.
     start_time: std.time.Instant,
+    /// Snapshot slot that this probe is testing for.
     slot: Slot,
+    /// Snapshot hash that this probe is testing for, used along with
+    /// slot as a staleness guard.
     hash: Hash,
+    /// monotonically increasing counter for this probe array entry,
+    /// incremented each time the entry is reused. Encoded into UserData
+    /// so that late cqes from previous occupant can be detected and
+    /// discarded.
+    gen: u16,
 
     pub fn empty() ProbeConn {
         return .{
@@ -38,6 +58,7 @@ const ProbeConn = struct {
             .start_time = undefined,
             .slot = 0,
             .hash = Hash.ZEROES,
+            .gen = 0,
         };
     }
 };
@@ -83,13 +104,16 @@ const UserData = packed struct(u64) {
     index: u8,
     /// Byte offset tracking send/recv progress across partial completions.
     offset: u16,
-    _reserved: u32,
+    /// monotonic generaton counter to detect stale cqes from reused probe slots.
+    gen: u16,
+    _reserved: u16,
 
-    pub fn init(op: Op, index: u8) UserData {
+    pub fn init(op: Op, index: u8, gen: u16) UserData {
         return .{
             .op = op,
             .index = index,
             .offset = 0,
+            .gen = gen,
             ._reserved = 0,
         };
     }
@@ -202,7 +226,7 @@ const SnapshotService = struct {
 
         if (!self.timeout_pending) {
             _ = try self.ring.timeout(
-                UserData.init(.gossip_drain_timeout, 0).encode(),
+                UserData.init(.gossip_drain_timeout, 0, 0).encode(),
                 &GOSSIP_DRAIN_INTERVAL,
                 0,
                 0,
@@ -238,15 +262,19 @@ const SnapshotService = struct {
         ) catch unreachable;
         probe.send_len = @intCast(send_len.len);
 
+        probe.gen +%= 1;
+        const gen = probe.gen;
+
         // submit connect sqe
         _ = try self.ring.connect(
-            UserData.init(.probe_connect, probe_index).encode(),
+            UserData.init(.probe_connect, probe_index, gen).encode(),
             fd,
             &probe.net_addr.any,
             probe.net_addr.getOsSockLen(),
         );
 
         probe.phase = .connecting;
+        probe.gen = gen;
         probe.start_time = std.time.Instant.now() catch unreachable;
         probe.fd = fd;
         probe.addr = addr;
@@ -258,8 +286,22 @@ const SnapshotService = struct {
         self.metrics.snapshot_probes_started.increment(1);
     }
 
-    fn handleProbeConnect(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) !void {
+    fn getProbeForCqe(self: *SnapshotService, data: UserData) ?*ProbeConn {
+        std.debug.assert(data.index < self.probe_conns.len);
         const probe = &self.probe_conns[data.index];
+        if (probe.phase == .unused) {
+            self.logger.warn().logf("stale cqe for unused probe slot op={s} idx={d}", .{ @tagName(data.op), data.index });
+            return null;
+        }
+        if (probe.gen != data.gen) {
+            self.logger.warn().logf("stale probe cqe op={s} idx={d}", .{ @tagName(data.op), data.index });
+            return null;
+        }
+        return probe;
+    }
+
+    fn handleProbeConnect(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) !void {
+        const probe = self.getProbeForCqe(data) orelse return;
         if (probe.phase != .connecting) {
             self.logger.warn().logf("unexpected connect cqe idx={d} phase={s}", .{ data.index, @tagName(probe.phase) });
             return;
@@ -271,7 +313,7 @@ const SnapshotService = struct {
             return;
         }
         _ = try self.ring.send(
-            UserData.init(.probe_send, data.index).encode(),
+            UserData.init(.probe_send, data.index, data.gen).encode(),
             probe.fd,
             probe.send_buf[0..probe.send_len],
             0,
@@ -280,7 +322,7 @@ const SnapshotService = struct {
     }
 
     fn handleProbeSend(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) !void {
-        const probe = &self.probe_conns[data.index];
+        const probe = self.getProbeForCqe(data) orelse return;
         if (probe.phase != .sending) {
             self.logger.warn().logf("unexpected send cqe idx={d} phase={s}", .{ data.index, @tagName(probe.phase) });
             return;
@@ -309,7 +351,7 @@ const SnapshotService = struct {
 
         // Full request sent, submit da recv.
         _ = try self.ring.recv(
-            UserData.init(.probe_recv, data.index).encode(),
+            UserData.init(.probe_recv, data.index, data.gen).encode(),
             probe.fd,
             .{ .buffer = &probe.recv_buf },
             0,
@@ -318,7 +360,7 @@ const SnapshotService = struct {
     }
 
     fn handleProbeRecv(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) !void {
-        const probe = &self.probe_conns[data.index];
+        const probe = self.getProbeForCqe(data) orelse return;
         if (probe.phase != .receiving) {
             self.logger.warn().logf("unexpected recv cqe idx={d} phase={s}", .{ data.index, @tagName(probe.phase) });
             return;
@@ -395,7 +437,9 @@ const SnapshotService = struct {
         }
 
         if (probe.fd >= 0) std.posix.close(probe.fd);
+        const old_gen = probe.gen;
         self.probe_conns[probe_index] = ProbeConn.empty();
+        self.probe_conns[probe_index].gen = old_gen;
         self.active_probes -= 1;
 
         if (ok) {
