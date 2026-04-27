@@ -83,20 +83,7 @@ pub fn execute(
         if (kind != .Instruction) {
             return InstructionError.ProgramFailedToComplete;
         } else {
-            const instruction_err = sig.vm.instructionErrorFromExecutionError(err);
-            // When a CPI callee fails, ProgramFailedToComplete propagates back as an
-            // InstructionError through the caller's VM. The executor skips logging for
-            // ProgramFailedToComplete (to avoid double-logging for direct VM crashes),
-            // so we must log the caller's failure here.
-            // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L576-L579
-            if (instruction_err == InstructionError.ProgramFailedToComplete) {
-                try stable_log.programFailure(
-                    ic.tc,
-                    ic.ixn_info.program_meta.pubkey,
-                    err,
-                );
-            }
-            return instruction_err;
+            return sig.vm.instructionErrorFromExecutionError(err);
         }
     };
 }
