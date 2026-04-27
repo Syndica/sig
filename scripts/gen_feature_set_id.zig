@@ -23,9 +23,7 @@ pub fn main() !void {
 
     if (argv.len == 0) return error.EmptyArgv;
     const args = argv[1..];
-
-    if (args.len == 0) return error.MissingOutputFileNameArg;
-    const output_file_path = args[0];
+    if (args.len > 1) return error.TooManyArgs;
 
     const features: []const ZonInfo = @import("features");
 
@@ -77,6 +75,17 @@ pub fn main() !void {
         hasher.finalResult()[0..4],
         .little,
     );
+
+    if (args.len == 0) {
+        var stdout_buffer: [64]u8 = undefined;
+        var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+        const stdout = &stdout_writer.interface;
+        try stdout.print("FEATURE_SET_ID: {d}\n", .{feature_set_id});
+        try stdout.flush();
+        return;
+    }
+
+    const output_file_path = args[0];
 
     const output_file = try std.fs.cwd().createFile(output_file_path, .{});
     defer output_file.close();

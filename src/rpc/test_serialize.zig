@@ -4,6 +4,7 @@ const rpc = @import("lib.zig");
 const parse_instruction = @import("parse_instruction/lib.zig");
 
 const methods = rpc.methods;
+const common = methods.common;
 
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
@@ -636,7 +637,7 @@ test GetLargestAccounts {
     try testRequest(
         .getLargestAccounts,
         .{ .config = .{ .commitment = .finalized } },
-        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":"finalized","filter":null}]}
+        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":"finalized","filter":null,"sortResults":null}]}
         ,
     );
 
@@ -644,7 +645,7 @@ test GetLargestAccounts {
     try testRequest(
         .getLargestAccounts,
         .{ .config = .{ .filter = .circulating } },
-        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":null,"filter":"circulating"}]}
+        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":null,"filter":"circulating","sortResults":null}]}
         ,
     );
 
@@ -652,7 +653,23 @@ test GetLargestAccounts {
     try testRequest(
         .getLargestAccounts,
         .{ .config = .{ .commitment = .finalized, .filter = .nonCirculating } },
-        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":"finalized","filter":"nonCirculating"}]}
+        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":"finalized","filter":"nonCirculating","sortResults":null}]}
+        ,
+    );
+
+    // Request with sortResults = false
+    try testRequest(
+        .getLargestAccounts,
+        .{ .config = .{ .sortResults = false } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":null,"filter":null,"sortResults":false}]}
+        ,
+    );
+
+    // Request with sortResults = true
+    try testRequest(
+        .getLargestAccounts,
+        .{ .config = .{ .sortResults = true } },
+        \\{"jsonrpc":"2.0","id":1,"method":"getLargestAccounts","params":[{"commitment":null,"filter":null,"sortResults":true}]}
         ,
     );
 
@@ -956,6 +973,19 @@ test GetSignaturesForAddress {
         .confirmationStatus = .finalized,
     }} },
         \\{"jsonrpc":"2.0","result":[{"blockTime":1700000000,"confirmationStatus":"finalized","err":null,"memo":null,"signature":"56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp","slot":309275388}],"id":1}
+    );
+
+    // Response with transactionIndex populated
+    try testResponse(GetSignaturesForAddress, .{ .result = &.{.{
+        .signature = .parse("56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp"),
+        .slot = 309275388,
+        .err = null,
+        .memo = null,
+        .blockTime = 1700000000,
+        .confirmationStatus = .finalized,
+        .transactionIndex = 5,
+    }} },
+        \\{"jsonrpc":"2.0","result":[{"blockTime":1700000000,"confirmationStatus":"finalized","err":null,"memo":null,"signature":"56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp","slot":309275388,"transactionIndex":5}],"id":1}
     );
 
     // Response with empty results
@@ -1275,10 +1305,10 @@ test GetTransaction {
         .getTransaction,
         .{
             .signature = tx_sig,
-            .config = .{
+            .encoding_or_config = .{ .config = .{
                 .maxSupportedTransactionVersion = 0,
                 .encoding = .base64,
-            },
+            } },
         },
         \\{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",{"commitment":null,"maxSupportedTransactionVersion":0,"encoding":"base64"}]}
         ,
@@ -1297,6 +1327,17 @@ test GetTransaction {
         },
         .block_time = null,
     } }));
+
+    // Request serialization - with encoding only (not config)
+    try testRequest(
+        .getTransaction,
+        .{
+            .signature = tx_sig,
+            .encoding_or_config = .{ .encoding = .base64 },
+        },
+        \\{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp","base64"]}
+        ,
+    );
 
     // Response serialization - full (with meta, version, and blockTime)
     const pre_balances = [_]u64{ 1_000_000_000, 500_000_000 };
@@ -1318,6 +1359,53 @@ test GetTransaction {
         },
         .block_time = 1_700_000_000,
     } }));
+
+    // resolveConfig: no config → defaults (finalized, json)
+    {
+        const cfg = (GetTransaction{ .signature = tx_sig }).resolveConfig();
+        try std.testing.expectEqual(common.Commitment.finalized, cfg.getCommitment());
+        try std.testing.expectEqual(common.TransactionEncoding.json, cfg.getEncoding());
+    }
+
+    // resolveConfig: encoding only → uses that encoding, commitment defaults
+    {
+        const cfg = (GetTransaction{ .signature = tx_sig, .encoding_or_config = .{ .encoding = .base64 } }).resolveConfig();
+        try std.testing.expectEqual(common.TransactionEncoding.base64, cfg.getEncoding());
+        try std.testing.expectEqual(common.Commitment.finalized, cfg.getCommitment());
+    }
+
+    // resolveConfig: full config → uses provided values
+    {
+        const cfg = (GetTransaction{
+            .signature = tx_sig,
+            .encoding_or_config = .{ .config = .{
+                .commitment = .confirmed,
+                .encoding = .jsonParsed,
+                .maxSupportedTransactionVersion = 0,
+            } },
+        }).resolveConfig();
+        try std.testing.expectEqual(common.Commitment.confirmed, cfg.getCommitment());
+        try std.testing.expectEqual(common.TransactionEncoding.jsonParsed, cfg.getEncoding());
+        try std.testing.expectEqual(@as(?u8, 0), cfg.maxSupportedTransactionVersion);
+    }
+
+    // EncodingOrConfig: parses encoding string and config object from JSON
+    {
+        const EoC = common.EncodingOrConfig(common.TransactionEncoding, GetTransaction.Config);
+
+        const enc_parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, "\"base64\"", .{});
+        defer enc_parsed.deinit();
+        const enc_result = try EoC.jsonParseFromValue(std.testing.allocator, enc_parsed.value, .{});
+        try std.testing.expectEqual(common.TransactionEncoding.base64, enc_result.encoding);
+
+        const cfg_parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator,
+            \\{"encoding":"jsonParsed","maxSupportedTransactionVersion":0}
+        , .{});
+        defer cfg_parsed.deinit();
+        const cfg_result = try EoC.jsonParseFromValue(std.testing.allocator, cfg_parsed.value, .{});
+        try std.testing.expectEqual(common.TransactionEncoding.jsonParsed, cfg_result.config.encoding.?);
+        try std.testing.expectEqual(@as(?u8, 0), cfg_result.config.maxSupportedTransactionVersion);
+    }
 }
 
 test GetTransactionCount {
@@ -2151,11 +2239,43 @@ test "GetBlock" {
             .data = "abcd",
         },
     });
+
+    // resolveConfig: no config → all defaults
+    {
+        const cfg = (GetBlock{ .slot = 1 }).resolveConfig();
+        try std.testing.expectEqual(common.Commitment.finalized, cfg.getCommitment());
+        try std.testing.expectEqual(common.TransactionEncoding.json, cfg.getEncoding());
+        try std.testing.expectEqual(common.TransactionDetails.full, cfg.getTransactionDetails());
+        try std.testing.expectEqual(true, cfg.getRewards());
+        try std.testing.expectEqual(@as(?u8, null), cfg.maxSupportedTransactionVersion);
+    }
+
+    // resolveConfig: encoding only → sets encoding, rest defaults
+    {
+        const cfg = (GetBlock{ .slot = 1, .encoding_or_config = .{ .encoding = .base64 } }).resolveConfig();
+        try std.testing.expectEqual(common.TransactionEncoding.base64, cfg.getEncoding());
+        try std.testing.expectEqual(common.Commitment.finalized, cfg.getCommitment());
+        try std.testing.expectEqual(@as(?u8, null), cfg.maxSupportedTransactionVersion);
+    }
+
+    // resolveConfig: full config → uses provided values
+    {
+        const cfg = (GetBlock{ .slot = 1, .encoding_or_config = .{ .config = .{
+            .commitment = .confirmed,
+            .encoding = .jsonParsed,
+            .transactionDetails = .signatures,
+            .maxSupportedTransactionVersion = 0,
+            .rewards = false,
+        } } }).resolveConfig();
+        try std.testing.expectEqual(common.Commitment.confirmed, cfg.getCommitment());
+        try std.testing.expectEqual(common.TransactionEncoding.jsonParsed, cfg.getEncoding());
+        try std.testing.expectEqual(common.TransactionDetails.signatures, cfg.getTransactionDetails());
+        try std.testing.expectEqual(false, cfg.getRewards());
+        try std.testing.expectEqual(@as(?u8, 0), cfg.maxSupportedTransactionVersion);
+    }
 }
 
 test SendTransaction {
-    const common = methods.common;
-
     // Request with default config (base58-encoded transaction)
     try testRequest(
         .sendTransaction,

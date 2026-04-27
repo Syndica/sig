@@ -34,6 +34,7 @@ pub const G1 = Definition(
         .add = c.p1_add_or_double_affine,
         .cneg = c.fp_cneg,
         .mult = c.p1_mult,
+        .affine_is_inf = c.p1_affine_is_inf,
     },
 );
 
@@ -52,6 +53,7 @@ pub const G2 = Definition(
         .add = c.p2_add_or_double_affine,
         .cneg = c.fp2_cneg,
         .mult = c.p2_mult,
+        .affine_is_inf = c.p2_affine_is_inf,
     },
 );
 
@@ -70,6 +72,7 @@ fn Definition(
         add: fn (*Point, *const Point, *const Aff) callconv(.c) void,
         cneg: fn (*Fp, *const Fp, bool) callconv(.c) void,
         mult: fn (*Point, *const Point, [*]const u8, u64) callconv(.c) void,
+        affine_is_inf: fn (*const Aff) callconv(.c) bool,
     },
 ) type {
     return struct {
@@ -97,6 +100,10 @@ fn Definition(
                 const a = try fromBytesUnchecked(bytes, endian);
                 if (!api.affine_in_group(&a.p)) return error.Failed;
                 return a;
+            }
+
+            fn isInf(a: *const Affine) bool {
+                return api.affine_is_inf(&a.p);
             }
         };
 
@@ -213,19 +220,29 @@ pub fn pairingSyscall(
     var g1_ptr: [BATCH_SIZE]*const c.p1_affine = undefined;
     var g2_ptr: [BATCH_SIZE]*const c.p2_affine = undefined;
 
+    var j: u32 = 0;
     for (0..n) |i| {
         const w = try G1.Affine.fromBytes(a[96 * i ..][0..96], endian);
         const z = try G2.Affine.fromBytes(b[96 * 2 * i ..][0..192], endian);
-        g1[i] = w.p;
-        g2[i] = z.p;
-        g1_ptr[i] = &g1[i];
-        g2_ptr[i] = &g2[i];
+
+        // Skip pairs where either side if the point at infinity. blst's
+        // `miller_loop_n` does not handle infinity and silently produces
+        // garbage for such pairs, which does not match what blstrs does.
+        // Matching blstrs, we define e(0, Q) = e(P, 0) = 1 in GT, and simply
+        // omit these pairs from the miller loop.
+        if (w.isInf() or z.isInf()) continue;
+
+        g1[j] = w.p;
+        g2[j] = z.p;
+        g1_ptr[j] = &g1[j];
+        g2_ptr[j] = &g2[j];
+        j += 1;
     }
 
     var r: c.fp12 = c.fp12_one().*;
     if (n > 0) {
         @branchHint(.likely);
-        c.miller_loop_n(&r, &g2_ptr, &g1_ptr, n);
+        c.miller_loop_n(&r, &g2_ptr, &g1_ptr, j);
         c.final_exp(&r, &r);
     }
 

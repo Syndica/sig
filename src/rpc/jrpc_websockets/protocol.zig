@@ -4,7 +4,12 @@ const ws = @import("webzockets");
 const types = @import("types.zig");
 const methods = @import("methods.zig");
 const account_codec = sig.rpc.account_codec;
+const block_encoding = sig.rpc.block_encoding;
+
 const NotifPayload = sig.sync.RcSlice(u8);
+const GetBlock = sig.rpc.methods.GetBlock;
+const Pubkey = sig.core.Pubkey;
+const VersionedTransactionWithStatusMeta = sig.ledger.Reader.VersionedTransactionWithStatusMeta;
 
 const Id = sig.rpc.request.Id;
 /// Responses are small and infrequent, done on IO loop, we just reuse an ArrayList
@@ -125,6 +130,21 @@ pub fn serializeRootNotification(
         .method = "rootNotification",
         .params = .{
             .result = data.root,
+            .subscription = sub_id,
+        },
+    });
+}
+
+pub fn serializeSlotsUpdatesNotification(
+    allocator: std.mem.Allocator,
+    sub_id: types.SubId,
+    data: types.SlotUpdateData,
+) !NotifPayload {
+    return serializeToPayload(allocator, .{
+        .jsonrpc = "2.0",
+        .method = "slotsUpdatesNotification",
+        .params = .{
+            .result = data,
             .subscription = sub_id,
         },
     });
@@ -304,6 +324,155 @@ pub fn serializeLogsNotification(
     });
 }
 
+const SignatureNotificationValue = struct {
+    value: types.SignatureNotificationData.Value,
+
+    pub fn jsonStringify(self: SignatureNotificationValue, jw: anytype) !void {
+        switch (self.value) {
+            .received => try jw.write("receivedSignature"),
+            .final => |result| try jw.write(.{ .err = result.err }),
+        }
+    }
+};
+
+pub fn serializeSignatureNotification(
+    allocator: std.mem.Allocator,
+    sub_id: types.SubId,
+    data: types.SignatureNotificationData,
+) !NotifPayload {
+    return serializeToPayload(allocator, .{
+        .jsonrpc = "2.0",
+        .method = "signatureNotification",
+        .params = .{
+            .result = .{
+                .context = .{ .slot = data.slot },
+                .value = SignatureNotificationValue{ .value = data.value },
+            },
+            .subscription = sub_id,
+        },
+    });
+}
+
+/// Checks whether a transaction mentions a given pubkey. Inspects both static
+/// account keys and loaded addresses (writable + readonly from address lookup tables).
+fn transactionMentionsPubkey(
+    tx: VersionedTransactionWithStatusMeta,
+    target: *const Pubkey,
+) bool {
+    for (tx.transaction.msg.account_keys) |key| {
+        if (key.equals(target)) return true;
+    }
+    for (tx.meta.loaded_addresses.writable) |key| {
+        if (key.equals(target)) return true;
+    }
+    for (tx.meta.loaded_addresses.readonly) |key| {
+        if (key.equals(target)) return true;
+    }
+    return false;
+}
+
+/// blockNotification value when the block was successfully read and encoded.
+const BlockNotificationValue = struct {
+    slot: u64,
+    block: ?GetBlock.Response,
+    err: ?[]const u8,
+};
+
+pub fn serializeBlockNotification(
+    allocator: std.mem.Allocator,
+    sub_id: types.SubId,
+    data: types.BlockJobData,
+) !NotifPayload {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const raw_block = data.block;
+
+    // Apply mentionsAccountOrProgram filter: rebuild the block with only transactions that mention the target pubkey.
+    // If no transactions match, skip this notification entirely (return error to drop it).
+    const block = switch (data.filter) {
+        .all => raw_block,
+        .mentionsAccountOrProgram => |f| filtered: {
+            var filtered_txns: std.ArrayList(VersionedTransactionWithStatusMeta) = .{};
+            for (raw_block.transactions) |tx| {
+                if (transactionMentionsPubkey(tx, &f.mentionsAccountOrProgram)) {
+                    try filtered_txns.append(arena, tx);
+                }
+            }
+            if (filtered_txns.items.len == 0) {
+                return error.NoMatchingTransactions;
+            }
+            var filtered_block = raw_block;
+            filtered_block.transactions = filtered_txns.items;
+            break :filtered filtered_block;
+        },
+    };
+
+    const max_version: ?u8 = if (data.max_supported_transaction_version) |v|
+        std.math.cast(u8, v)
+    else
+        null;
+
+    const response = try block_encoding.encodeBlockWithOptions(
+        arena,
+        block,
+        data.encoding,
+        .{
+            .tx_details = data.transaction_details,
+            .show_rewards = data.show_rewards,
+            .max_supported_version = max_version,
+        },
+    );
+
+    const value: BlockNotificationValue = .{
+        .slot = data.slot,
+        .block = response,
+        .err = null,
+    };
+
+    return serializeToPayload(allocator, .{
+        .jsonrpc = "2.0",
+        .method = "blockNotification",
+        .params = .{
+            .result = .{
+                .context = .{ .slot = data.slot },
+                .value = value,
+            },
+            .subscription = sub_id,
+        },
+    });
+}
+
+pub fn serializeVoteNotification(
+    allocator: std.mem.Allocator,
+    sub_id: types.SubId,
+    data: types.VoteEventData,
+) !NotifPayload {
+    return serializeToPayload(allocator, .{
+        .jsonrpc = "2.0",
+        .method = "voteNotification",
+        .params = .{
+            .result = VoteValue{
+                .votePubkey = data.vote_pubkey,
+                .slots = data.slots,
+                .hash = data.hash,
+                .timestamp = data.timestamp,
+                .signature = data.signature,
+            },
+            .subscription = sub_id,
+        },
+    });
+}
+
+const VoteValue = struct {
+    votePubkey: sig.core.Pubkey,
+    slots: []const u64,
+    hash: sig.core.Hash,
+    timestamp: ?i64,
+    signature: sig.core.Signature,
+};
+
 pub fn serializeNotification(
     allocator: std.mem.Allocator,
     sub_id: types.SubId,
@@ -313,6 +482,9 @@ pub fn serializeNotification(
         .slot => |data| serializeSlotNotification(allocator, sub_id, data),
         .root => |data| serializeRootNotification(allocator, sub_id, data),
         .logs => |data| serializeLogsNotification(allocator, sub_id, data),
+        .block => |data| serializeBlockNotification(allocator, sub_id, data),
+        .slots_updates => |data| serializeSlotsUpdatesNotification(allocator, sub_id, data),
+        .vote => |data| serializeVoteNotification(allocator, sub_id, data),
         .account => |job| serializeAccountNotification(
             allocator,
             sub_id,
@@ -329,6 +501,7 @@ pub fn serializeNotification(
             job.data_slice,
             job.read_ctx,
         ),
+        .signature => |data| serializeSignatureNotification(allocator, sub_id, data),
     };
 }
 
@@ -941,6 +1114,45 @@ test "serializeLogsNotification zero logs" {
     , extractJson(p.payload()));
 }
 
+test "serializeSignatureNotification received payload" {
+    const allocator = std.testing.allocator;
+    const p = try serializeSignatureNotification(allocator, 3, .{
+        .slot = 123,
+        .value = .received,
+    });
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"signatureNotification","params":{"result":{"context":{"slot":123},"value":"receivedSignature"},"subscription":3}}
+    , extractJson(p.payload()));
+}
+
+test "serializeSignatureNotification final payload with null err" {
+    const allocator = std.testing.allocator;
+    const p = try serializeSignatureNotification(allocator, 4, .{
+        .slot = 124,
+        .value = .{ .final = .{ .err = null } },
+    });
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"signatureNotification","params":{"result":{"context":{"slot":124},"value":{"err":null}},"subscription":4}}
+    , extractJson(p.payload()));
+}
+
+test "serializeSignatureNotification final payload with concrete err" {
+    const allocator = std.testing.allocator;
+    const p = try serializeSignatureNotification(allocator, 5, .{
+        .slot = 125,
+        .value = .{ .final = .{ .err = .AccountInUse } },
+    });
+    defer p.deinit(allocator);
+
+    try std.testing.expectEqualStrings(
+        \\{"jsonrpc":"2.0","method":"signatureNotification","params":{"result":{"context":{"slot":125},"value":{"err":"AccountInUse"}},"subscription":5}}
+    , extractJson(p.payload()));
+}
+
 test "serializeNotification dispatches program job type" {
     const allocator = std.testing.allocator;
     const data_buf = try allocator.alloc(u8, 2);
@@ -976,4 +1188,136 @@ test "serializeNotification dispatches program job type" {
     try std.testing.expect(notification.params.result.value.pubkey.len != 0);
     try std.testing.expectEqual(1000, notification.params.result.value.account.lamports);
     try std.testing.expectEqual(42, notification.params.result.context.slot);
+}
+
+test "transactionMentionsPubkey finds match in static account keys" {
+    var target: Pubkey = undefined;
+    @memset(&target.data, 0xAA);
+
+    var other: Pubkey = undefined;
+    @memset(&other.data, 0xBB);
+
+    const tx: sig.ledger.Reader.VersionedTransactionWithStatusMeta = .{
+        .transaction = .{
+            .signatures = &.{},
+            .version = .legacy,
+            .msg = .{
+                .signature_count = 0,
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 0,
+                .account_keys = &.{ other, target },
+                .recent_blockhash = .{ .data = [_]u8{0} ** 32 },
+                .instructions = &.{},
+                .address_lookups = &.{},
+            },
+        },
+        .meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST,
+    };
+    try std.testing.expect(transactionMentionsPubkey(tx, &target));
+}
+
+test "transactionMentionsPubkey finds match in loaded writable addresses" {
+    var target: Pubkey = undefined;
+    @memset(&target.data, 0xCC);
+
+    const tx: sig.ledger.Reader.VersionedTransactionWithStatusMeta = .{
+        .transaction = .{
+            .signatures = &.{},
+            .version = .legacy,
+            .msg = .{
+                .signature_count = 0,
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 0,
+                .account_keys = &.{},
+                .recent_blockhash = .{ .data = [_]u8{0} ** 32 },
+                .instructions = &.{},
+                .address_lookups = &.{},
+            },
+        },
+        .meta = .{
+            .status = null,
+            .fee = 0,
+            .pre_balances = &.{},
+            .post_balances = &.{},
+            .inner_instructions = null,
+            .log_messages = null,
+            .pre_token_balances = null,
+            .post_token_balances = null,
+            .rewards = null,
+            .loaded_addresses = .{
+                .writable = &.{target},
+                .readonly = &.{},
+            },
+            .return_data = null,
+            .compute_units_consumed = null,
+            .cost_units = null,
+        },
+    };
+    try std.testing.expect(transactionMentionsPubkey(tx, &target));
+}
+
+test "transactionMentionsPubkey finds match in loaded readonly addresses" {
+    var target: Pubkey = undefined;
+    @memset(&target.data, 0xDD);
+
+    const tx: sig.ledger.Reader.VersionedTransactionWithStatusMeta = .{
+        .transaction = .{
+            .signatures = &.{},
+            .version = .legacy,
+            .msg = .{
+                .signature_count = 0,
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 0,
+                .account_keys = &.{},
+                .recent_blockhash = .{ .data = [_]u8{0} ** 32 },
+                .instructions = &.{},
+                .address_lookups = &.{},
+            },
+        },
+        .meta = .{
+            .status = null,
+            .fee = 0,
+            .pre_balances = &.{},
+            .post_balances = &.{},
+            .inner_instructions = null,
+            .log_messages = null,
+            .pre_token_balances = null,
+            .post_token_balances = null,
+            .rewards = null,
+            .loaded_addresses = .{
+                .writable = &.{},
+                .readonly = &.{target},
+            },
+            .return_data = null,
+            .compute_units_consumed = null,
+            .cost_units = null,
+        },
+    };
+    try std.testing.expect(transactionMentionsPubkey(tx, &target));
+}
+
+test "transactionMentionsPubkey returns false when no match" {
+    var target: Pubkey = undefined;
+    @memset(&target.data, 0xEE);
+
+    var other: Pubkey = undefined;
+    @memset(&other.data, 0xFF);
+
+    const tx: sig.ledger.Reader.VersionedTransactionWithStatusMeta = .{
+        .transaction = .{
+            .signatures = &.{},
+            .version = .legacy,
+            .msg = .{
+                .signature_count = 0,
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 0,
+                .account_keys = &.{other},
+                .recent_blockhash = .{ .data = [_]u8{0} ** 32 },
+                .instructions = &.{},
+                .address_lookups = &.{},
+            },
+        },
+        .meta = sig.ledger.transaction_status.TransactionStatusMeta.EMPTY_FOR_TEST,
+    };
+    try std.testing.expect(!transactionMentionsPubkey(tx, &target));
 }

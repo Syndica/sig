@@ -1,4 +1,5 @@
 pub const webzockets = @import("webzockets");
+pub const block_encoding = @import("block_encoding.zig");
 pub const client = @import("client.zig");
 pub const filters = @import("filters.zig");
 pub const http = @import("http.zig");

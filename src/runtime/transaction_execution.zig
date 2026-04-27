@@ -113,6 +113,7 @@ pub const ExecutedTransaction = struct {
     log_collector: ?LogCollector,
     instruction_trace: ?InstructionTrace,
     return_data: ?TransactionReturnData,
+    executed_units: u64,
     compute_limit: u64,
     compute_meter: u64,
     accounts_data_len_delta: i64,
@@ -129,7 +130,7 @@ pub const ExecutedTransaction = struct {
     }
 
     pub fn total_cost(self: *const ExecutedTransaction) u64 {
-        return self.compute_limit - self.compute_meter;
+        return self.executed_units;
     }
 };
 
@@ -542,6 +543,7 @@ pub fn executeTransaction(
         .log_collector = tc.takeLogCollector(),
         .instruction_trace = tc.instruction_trace,
         .return_data = tc.takeReturnData(),
+        .executed_units = tc.consumed_units,
         .compute_limit = compute_budget.compute_unit_limit,
         .compute_meter = tc.compute_meter,
         .accounts_data_len_delta = tc.accounts_resize_delta,
@@ -649,7 +651,7 @@ test getInstructionDatasSliceForPrecompiles {
                 .index_in_transaction = 0,
             },
             .account_metas = .{},
-            .dedupe_map = @splat(0xff),
+            .dedupe_map = @splat(0xffff),
             .instruction_data = "data",
             .owned_instruction_data = false,
             .initial_account_lamports = 0,
@@ -674,7 +676,7 @@ test getInstructionDatasSliceForPrecompiles {
                     .index_in_transaction = 0,
                 },
                 .account_metas = .{},
-                .dedupe_map = @splat(0xff),
+                .dedupe_map = @splat(0xffff),
                 .instruction_data = "one",
                 .owned_instruction_data = false,
                 .initial_account_lamports = 0,
@@ -685,7 +687,7 @@ test getInstructionDatasSliceForPrecompiles {
                     .index_in_transaction = 0,
                 },
                 .account_metas = .{},
-                .dedupe_map = @splat(0xff),
+                .dedupe_map = @splat(0xffff),
                 .instruction_data = "two",
                 .owned_instruction_data = false,
                 .initial_account_lamports = 0,
@@ -696,7 +698,7 @@ test getInstructionDatasSliceForPrecompiles {
                     .index_in_transaction = 0,
                 },
                 .account_metas = .{},
-                .dedupe_map = @splat(0xff),
+                .dedupe_map = @splat(0xffff),
                 .instruction_data = "three",
                 .owned_instruction_data = false,
                 .initial_account_lamports = 0,
@@ -816,7 +818,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             },
             .account_metas = metas,
             .dedupe_map = blk: {
-                var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+                var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
                 dedupe_map[0] = 0;
                 dedupe_map[1] = 1;
                 break :blk dedupe_map;
@@ -959,6 +961,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         try std.testing.expectEqual(null, executed_transaction.log_collector);
         try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
         try std.testing.expectEqual(null, executed_transaction.return_data);
+        try std.testing.expectEqual(150, executed_transaction.executed_units);
         try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
         try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
     }
@@ -1007,6 +1010,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         try std.testing.expectEqual(null, executed_transaction.log_collector);
         try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
         try std.testing.expectEqual(null, executed_transaction.return_data);
+        try std.testing.expectEqual(150, executed_transaction.executed_units);
         try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
         try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
     }

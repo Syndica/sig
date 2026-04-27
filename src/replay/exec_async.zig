@@ -25,6 +25,7 @@ const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 const assert = std.debug.assert;
 
+const accumulateSlotEntryStats = replay.execution.accumulateSlotEntryStats;
 const verifyTicks = replay.execution.verifyTicks;
 const verifyPoh = core.entry.verifyPoh;
 const replayBatch = replay.execution.replayBatch;
@@ -96,6 +97,7 @@ pub const ReplaySlotFuture = struct {
                 .transactions = params.transactions,
                 .svm_gateway = params.svm_gateway,
                 .committer = params.committer,
+                .base_transaction_index = params.base_transaction_index,
             },
             .pending = .init(1), // start with 1 for this scope's self.finish()
             .thread_pool = thread_pool,
@@ -158,6 +160,7 @@ pub const ReplaySlotFuture = struct {
             defer wg.finish();
 
             if (self.result_ptr.load(.acquire)) |result_ptr| {
+                accumulateSlotEntryStats(self.txn_scheduler.committer.slot_state, self.entries);
                 result_ptr.* = .{
                     .slot = self.txn_scheduler.svm_gateway.params.slot,
                     .output = .{ .last_entry_hash = self.entries[self.entries.len - 1].hash },
@@ -239,6 +242,9 @@ const TransactionScheduler = struct {
     transactions: []const ResolvedTransaction,
     svm_gateway: SvmGateway,
     committer: Committer,
+    /// Global transaction index offset for this batch of entries.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L1726
+    base_transaction_index: usize,
     workers: std.ArrayListUnmanaged(Worker) = .{},
 
     const Error = Allocator.Error || error{ReplayBatchFailed};
@@ -341,6 +347,7 @@ const TransactionScheduler = struct {
                 try self.workers.append(allocator, .{
                     .scheduler = self,
                     .transaction = transaction,
+                    .transaction_index = self.base_transaction_index + self.workers.items.len,
                     .ref_count = .init(@intCast(txn_deps.count())),
                     .waiters = .{},
                 });
@@ -362,6 +369,10 @@ const TransactionScheduler = struct {
         task: ThreadPool.Task = .{ .callback = run },
         scheduler: *TransactionScheduler,
         transaction: ResolvedTransaction,
+        /// Global transaction index within the slot (across all entries).
+        /// Mirrors Agave's running counter `progress.num_txs`.
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L1726
+        transaction_index: usize,
         ref_count: Atomic(u32),
         waiters: std.ArrayListUnmanaged(u32),
 
@@ -384,6 +395,7 @@ const TransactionScheduler = struct {
                 &self.scheduler.svm_gateway,
                 self.scheduler.committer,
                 &.{self.transaction},
+                self.transaction_index,
                 &future.exit,
             ) catch |err| {
                 future.logger.err().logf("replayBatch failed with error: {}", .{err});
@@ -497,6 +509,7 @@ fn testSchedulerForBatches(
                 .transactions = resolved_transactions,
                 .svm_gateway = svm_gateway,
                 .committer = committer,
+                .base_transaction_index = 0,
             },
             .pending = .init(1), // start with 1 for this scope's future.finish()
             .thread_pool = &thread_pool,

@@ -1507,8 +1507,9 @@ fn validator(
         app_base.shutdown();
         app_base.deinit();
     }
+    const logger = app_base.logger;
 
-    app_base.logger.info().logf("starting validator with cfg: {}", .{cfg});
+    logger.info().logf("starting validator with cfg: {}", .{cfg});
 
     const rpc_enabled = cfg.rpc_port != null;
 
@@ -1521,7 +1522,7 @@ fn validator(
 
     const allocator = gpa_metrics.allocator();
 
-    const genesis_file_path = try ensureGenesis(allocator, cfg, app_base.logger);
+    const genesis_file_path = try ensureGenesis(allocator, cfg, logger);
     defer allocator.free(genesis_file_path);
 
     const repair_port: u16 = cfg.shred_network.repair_port;
@@ -1587,7 +1588,7 @@ fn validator(
 
     const snapshot_files = try sig.accounts_db.snapshot.download.getOrDownloadSnapshotFiles(
         snapshot_tracy_metrics.allocator(),
-        .from(app_base.logger),
+        .from(logger),
         snapshot_dir,
         .{
             .gossip_service = gossip_service,
@@ -1602,7 +1603,7 @@ fn validator(
     defer allocator.free(rooted_file);
 
     const init_db_exists: bool = if (cfg.accounts_db.dbg_db_init)
-        try restoreDbInitIfExists(snapshot_dir, .from(app_base.logger))
+        try restoreDbInitIfExists(snapshot_dir, .from(logger))
     else
         false;
 
@@ -1617,7 +1618,7 @@ fn validator(
     // snapshot
     var loaded_snapshot = try loadSnapshot(
         allocator,
-        .from(app_base.logger),
+        .from(logger),
         snapshot_dir,
         snapshot_files,
         .{
@@ -1633,13 +1634,7 @@ fn validator(
     defer loaded_snapshot.deinit();
 
     if (cfg.accounts_db.dbg_db_init and !init_db_exists)
-        try saveDbInit(snapshot_dir, .from(app_base.logger));
-
-    const static_rpc_ctx: sig.rpc.hook_contexts.StaticHookContext = .{
-        .genesis_hash = loaded_snapshot.genesis_config.hash,
-    };
-
-    try app_base.rpc_hooks.set(allocator, &static_rpc_ctx);
+        try saveDbInit(snapshot_dir, .from(logger));
 
     var unrooted_tracy: tracy.TracingAllocator = .{
         .name = "AccountsDB Unrooted",
@@ -1672,13 +1667,54 @@ fn validator(
     // ledger
     var ledger = try Ledger.init(
         ledger_tracy_metrics.allocator(),
-        .from(app_base.logger),
+        .from(logger),
         ledger_dir,
         app_base.metrics_registry,
     );
     defer ledger.deinit();
+
+    // Backfill historical roots from the snapshot's SlotHistory sysvar.
+    // Without this, getBlockProduction (and other RPC methods that depend on
+    // rooted_slots) would only see roots created after startup.
+    if (rpc_enabled) backfill: {
+        const SlotHistory = sig.runtime.sysvar.SlotHistory;
+        const slot_history: SlotHistory = blk: {
+            const account = (try new_db.rooted.get(allocator, SlotHistory.ID)) orelse {
+                app_base.logger.warn().log(
+                    "SlotHistory sysvar not found, skipping historical root backfill",
+                );
+                break :backfill;
+            };
+            defer account.deinit(allocator);
+
+            var fbs = std.io.fixedBufferStream(account.data);
+            break :blk try sig.bincode.read(
+                allocator,
+                SlotHistory,
+                fbs.reader(),
+                .{},
+            );
+        };
+        defer slot_history.deinit(allocator);
+
+        const rw = ledger.resultWriter();
+        var root_setter = try rw.setRootsIncremental();
+        defer root_setter.deinit();
+        errdefer root_setter.cancel();
+
+        var count: usize = 0;
+        for (slot_history.oldest()..slot_history.newest() + 1) |slot| {
+            if (slot_history.check(slot) == .found) {
+                try root_setter.addRoot(slot);
+                count += 1;
+            }
+        }
+        try root_setter.commit();
+        app_base.logger.info().logf("backfilled {d} historical roots from SlotHistory", .{count});
+    }
+
     const ledger_cleanup_service = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        sig.ledger.cleanup_service.Logger.from(app_base.logger),
+        sig.ledger.cleanup_service.Logger.from(logger),
         &ledger,
         cfg.max_shreds,
         app_base.exit,
@@ -1719,10 +1755,10 @@ fn validator(
         defer if (cfg.vote_account == null) allocator.free(vote_keypair_path);
 
         break :blk sig.identity.readPubkey(
-            .from(app_base.logger),
+            .from(logger),
             vote_keypair_path,
         ) catch |err| {
-            app_base.logger.err().logf(
+            logger.err().logf(
                 "vote-account: failed to read {s}: {}; voting will be disabled",
                 .{ vote_keypair_path, err },
             );
@@ -1737,7 +1773,7 @@ fn validator(
     if (cfg.faucet_keypair) |faucet_keypair_path| {
         if (try cfg.getCluster() == .mainnet) @panic("Cannot use a faucet keypair on mainnet.");
         maybe_faucet_keypair = sig.identity.readKeypair(faucet_keypair_path) catch |err| blk: {
-            app_base.logger.err().logf(
+            logger.err().logf(
                 "faucet-keypair: failed to read {s}: {}; requestAirdrop will be disabled",
                 .{ faucet_keypair_path, err },
             );
@@ -1780,12 +1816,21 @@ fn validator(
     var max_shred_insert_slot: std.atomic.Value(sig.core.Slot) = .init(0);
 
     if (rpc_enabled) {
-        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.StaticHookContext{
+            .genesis_hash = loaded_snapshot.genesis_config.hash,
+            .identity = my_contact_info.pubkey,
+            .epoch_schedule = &epoch_tracker.epoch_schedule,
+        });
+
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ReplayHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
             .commitments = &replay_service_state.replay_state.commitments.?,
+            .epoch_tracker = &epoch_tracker,
+        });
+
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.GossipHookContext{
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
-            .epoch_tracker = &epoch_tracker,
         });
 
         try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.LedgerHookContext{
@@ -1822,7 +1867,7 @@ fn validator(
         cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
         .{
             .allocator = allocator,
-            .logger = .from(app_base.logger),
+            .logger = .from(logger),
             .registry = app_base.metrics_registry,
             .random = prng.random(),
             .ledger = &ledger,
@@ -1837,6 +1882,7 @@ fn validator(
             .max_retransmit_slot = &max_retransmit_slot,
             .max_shred_insert_slot = &max_shred_insert_slot,
             .rpc_hooks = null,
+            .event_sink = event_sink,
             .duplicate = if (replay_service_state.consensus) |consensus| .{
                 .shred_receiver = &duplicate_shreds,
                 .slots_sender = consensus.receivers.duplicate_slots,
@@ -1846,10 +1892,10 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
-    var transaction_sender_service = try sig.TransactionSenderService.init(
+    var tx_sender_service_opt: ?sig.TransactionSenderService = if (rpc_enabled) try .init(
         allocator,
         .{ .unordered = app_base.exit },
-        .from(app_base.logger),
+        .from(logger),
         .{
             .process_interval = .fromSecs(1),
             .retry_interval = .fromSecs(5),
@@ -1865,51 +1911,59 @@ fn validator(
             .status_cache = &replay_service_state.replay_state.status_cache,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
         },
-    );
-    defer transaction_sender_service.deinit();
+    ) else null;
+    defer if (tx_sender_service_opt) |*service| service.deinit();
 
-    try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.SendTransactionHookContext{
-        .slot_tracker = &replay_service_state.replay_state.slot_tracker,
-        .commitments = &replay_service_state.replay_state.commitments.?,
-        .account_store = replay_service_state.replay_state.account_store,
-        .tx_svc_channel = transaction_sender_service.receiver,
-        .epoch_tracker = &epoch_tracker,
-        .status_cache = &replay_service_state.replay_state.status_cache,
-    });
-
-    if (maybe_faucet_keypair) |faucet_keypair| {
-        if (try cfg.getCluster() == .mainnet) @panic("Cannot use a faucet keypair on mainnet.");
-        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.RequestAirdropHookContext{
+    if (tx_sender_service_opt) |*tx_sender_service| {
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.SendTransactionHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
             .commitments = &replay_service_state.replay_state.commitments.?,
-            .tx_svc_channel = transaction_sender_service.receiver,
+            .account_store = replay_service_state.replay_state.account_store,
+            .tx_svc_channel = tx_sender_service.receiver,
+            .epoch_tracker = &epoch_tracker,
+            .status_cache = &replay_service_state.replay_state.status_cache,
+        });
+    }
+
+    if (maybe_faucet_keypair) |faucet_keypair| blk: {
+        if (try cfg.getCluster() == .mainnet) @panic("Cannot use a faucet keypair on mainnet.");
+        const tx_sender_service = if (tx_sender_service_opt) |*ptr| ptr else {
+            logger.warn().logf("provided a faucet keypair, but did not enable RPC.", .{});
+            break :blk;
+        };
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.RequestAirdropHookContext{
+            .slot_tracker = tx_sender_service.ctx.slot_tracker,
+            .commitments = tx_sender_service.ctx.commitments,
+            .tx_svc_channel = tx_sender_service.receiver,
             .faucet_keypair = faucet_keypair,
         });
     }
 
-    const transaction_sender_handle = try std.Thread.spawn(
+    const tx_sender_handle: ?std.Thread = if (tx_sender_service_opt) |*service| try .spawn(
         .{},
         sig.TransactionSenderService.run,
-        .{ &transaction_sender_service, gpa },
-    );
+        .{ service, gpa },
+    ) else null;
 
     var mock_transfer_service: ?sig.MockTransferService = null;
     defer if (mock_transfer_service) |*service| service.deinit();
     var mock_transfer_handle: ?std.Thread = null;
     defer if (mock_transfer_handle) |thread| thread.join();
 
-    if (cfg.mock_transfer_transactions) |n| {
-        if (try cfg.getCluster() == .mainnet)
-            @panic("Cannot run mock transfers on mainnet.");
-
-        mock_transfer_service = sig.MockTransferService{
+    if (cfg.mock_transfer_transactions) |n| blk: {
+        if (try cfg.getCluster() == .mainnet) @panic("Cannot run mock transfers on mainnet.");
+        const tx_sender_service = if (tx_sender_service_opt) |*ptr| ptr else {
+            logger.warn().logf("enabled mock transfer transactions, but did not enable RPC.", .{});
+            break :blk;
+        };
+        mock_transfer_service = .{
             .exit = .{ .unordered = app_base.exit },
-            .logger = .from(app_base.logger),
+            .logger = .from(logger),
             .client = try .init(gpa, rpc_url, .{
                 .max_retries = 5,
                 .logger = .noop,
             }),
-            .submit = .{ .direct = transaction_sender_service.receiver },
+            .submit = .{ .direct = tx_sender_service.receiver },
             .transfers = n,
         };
 
@@ -1923,20 +1977,21 @@ fn validator(
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
         try std.Thread.spawn(.{}, runRPCServer, .{
             allocator,
-            app_base.logger,
+            logger,
             app_base.exit,
             std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port),
             &app_base.rpc_hooks,
             &replay_service_state.replay_state.slot_tracker,
             &replay_service_state.replay_state.commitments.?,
             replay_service_state.replay_state.account_store.reader(),
+            &replay_service_state.replay_state.status_cache,
             event_sink.?,
         })
     else
         null;
 
     if (rpc_server_thread) |thread| thread.join();
-    transaction_sender_handle.join();
+    if (tx_sender_handle) |thread| thread.join();
     replay_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
@@ -1952,6 +2007,7 @@ fn runRPCServer(
     slot_tracker: *sig.replay.trackers.SlotTracker,
     commitments: *sig.replay.trackers.CommitmentTracker,
     account_reader: sig.accounts_db.AccountReader,
+    status_cache: *sig.core.StatusCache,
     event_sink: *jrpc_ws.types.EventSink,
 ) !void {
     var commit_queue = try sig.sync.Channel(jrpc_ws.types.CommitMsg).init(allocator);
@@ -1981,6 +2037,7 @@ fn runRPCServer(
         .slot_tracker = slot_tracker,
         .commitments = commitments,
         .account_reader = account_reader,
+        .status_cache = status_cache,
     };
 
     var ws_runtime_ctx = WSRPCRuntime.init(.{
@@ -2323,11 +2380,9 @@ fn replayOffline(
     defer replay_service_state.deinit(allocator);
 
     if (rpc_enabled) {
-        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ConsensusHookContext{
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.ReplayHookContext{
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
             .commitments = &replay_service_state.replay_state.commitments.?,
-            .gossip_table_rw = null,
-            .my_shred_version = null,
             .epoch_tracker = &epoch_tracker,
         });
 
@@ -2368,6 +2423,7 @@ fn replayOffline(
             &replay_service_state.replay_state.slot_tracker,
             &replay_service_state.replay_state.commitments.?,
             replay_service_state.replay_state.account_store.reader(),
+            &replay_service_state.replay_state.status_cache,
             event_sink.?,
         })
     else
@@ -2497,6 +2553,7 @@ fn shredNetwork(
         .max_retransmit_slot = &max_retransmit_slot_standalone,
         .max_shred_insert_slot = &max_shred_insert_slot_standalone,
         .rpc_hooks = null,
+        .event_sink = null,
         // No consensus in the standalone mode, so duplicate slots are not reported.
         .duplicate = null,
         .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
@@ -3088,36 +3145,6 @@ fn startGossip(
         .spy_node = cfg.gossip.spy_node,
         .dump = cfg.gossip.dump,
     });
-
-    try app_base.rpc_hooks.set(allocator, struct {
-        info: ContactInfo,
-
-        pub fn getIdentity(
-            self: @This(),
-            _: std.mem.Allocator,
-            _: anytype,
-        ) !sig.rpc.methods.GetIdentity.Response {
-            return .{ .identity = self.info.pubkey };
-        }
-
-        pub fn getVersion(
-            self: @This(),
-            allocator_: std.mem.Allocator,
-            _: anytype,
-        ) !sig.rpc.methods.GetVersion.Response {
-            const client_version = self.info.version;
-            const solana_version = try std.fmt.allocPrint(allocator_, "{}.{}.{}", .{
-                client_version.major,
-                client_version.minor,
-                client_version.patch,
-            });
-
-            return .{
-                .solana_core = solana_version,
-                .feature_set = client_version.feature_set,
-            };
-        }
-    }{ .info = contact_info });
 
     return service;
 }

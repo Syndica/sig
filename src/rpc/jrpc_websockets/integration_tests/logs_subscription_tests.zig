@@ -44,32 +44,13 @@ fn parseLogsNotification(
 
 const types = lib.types;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
+const Transaction = sig.core.Transaction;
 
 fn signatureWithFill(fill: u8) Signature {
     var sig_value = Signature.ZEROES;
     @memset(&sig_value.r, fill);
     @memset(&sig_value.s, fill);
     return sig_value;
-}
-
-fn cloneTransactionError(
-    tx_err: ?TransactionError,
-    allocator: std.mem.Allocator,
-) !?TransactionError {
-    const tx_err_value = tx_err orelse return null;
-    if (tx_err_value != .InstructionError) {
-        return tx_err_value;
-    }
-
-    const instruction_index, const err = tx_err_value.InstructionError;
-    if (err != .BorshIoError) {
-        return tx_err_value;
-    }
-
-    return .{ .InstructionError = .{
-        instruction_index,
-        .{ .BorshIoError = try allocator.dupe(u8, err.BorshIoError) },
-    } };
 }
 
 const LogsEventSpec = struct {
@@ -87,28 +68,54 @@ fn makeLogsEvent(
 ) !types.InboundEvent {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
-    const arena_allocator = arena.allocator();
+    const a = arena.allocator();
 
-    const entries = try arena_allocator.alloc(types.TransactionLogsEntry, specs.len);
+    const entries = try a.alloc(
+        types.TransactionEntry,
+        specs.len,
+    );
     for (specs, 0..) |spec, index| {
-        const owned_logs = try arena_allocator.alloc([]const u8, spec.log_lines.len);
-        for (spec.log_lines, 0..) |line, log_index| {
-            owned_logs[log_index] = try arena_allocator.dupe(u8, line);
+        const owned_logs = try a.alloc(
+            []const u8,
+            spec.log_lines.len,
+        );
+        for (spec.log_lines, 0..) |line, li| {
+            owned_logs[li] = try a.dupe(u8, line);
         }
 
         entries[index] = .{
-            .signature = signatureWithFill(spec.signature_fill),
-            .err = try cloneTransactionError(spec.tx_err, arena_allocator),
+            .signature = signatureWithFill(
+                spec.signature_fill,
+            ),
+            .transaction = Transaction.EMPTY,
             .is_vote = spec.is_vote,
-            .logs = owned_logs,
-            .mentioned_pubkeys = try arena_allocator.dupe(Pubkey, spec.mentioned_pubkeys),
+            .transaction_index = index,
+            .err = if (spec.tx_err) |tx_err| try tx_err.clone(a) else null,
+            .fee = 0,
+            .compute_units_consumed = null,
+            .cost_units = 0,
+            .pre_balances = &.{},
+            .post_balances = &.{},
+            .pre_token_balances = null,
+            .post_token_balances = null,
+            .inner_instructions = null,
+            .log_messages = owned_logs,
+            .return_data = null,
+            .loaded_addresses = .{
+                .writable = &.{},
+                .readonly = &.{},
+            },
+            .mentioned_pubkeys = try a.dupe(
+                Pubkey,
+                spec.mentioned_pubkeys,
+            ),
         };
     }
 
-    return .{ .logs = .{
+    return .{ .transaction_batch = .{
         .slot = slot,
         .entries = entries,
-        .arena = arena,
+        .arena_state = arena.state,
     } };
 }
 
@@ -149,7 +156,7 @@ test "logsSubscribe basic subscribe notify unsubscribe" {
         .mentioned_pubkeys = &.{},
     }}));
     server.injectEvent(.{ .slot_frozen = .{ .slot = 50, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 50 });
+    server.injectEvent(.{ .slot_finalized_rooted = 50 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     const parsed_notif = try parseLogsNotification(allocator, handler.received.items[1]);
@@ -221,7 +228,7 @@ test "logsSubscribe all excludes vote transactions" {
         },
     }));
     server.injectEvent(.{ .slot_frozen = .{ .slot = 60, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 60 });
+    server.injectEvent(.{ .slot_finalized_rooted = 60 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expectEqual(2, handler.received.items.len);
@@ -284,7 +291,7 @@ test "logsSubscribe allWithVotes includes vote transactions" {
         },
     }));
     server.injectEvent(.{ .slot_frozen = .{ .slot = 61, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 61 });
+    server.injectEvent(.{ .slot_finalized_rooted = 61 });
 
     waitForMessages(server, &client_env, &handler, 3, 5000);
     const parsed_notif1 = try parseLogsNotification(allocator, handler.received.items[1]);
@@ -355,7 +362,7 @@ test "logsSubscribe mentions matches relevant transactions including votes" {
         },
     }));
     server.injectEvent(.{ .slot_frozen = .{ .slot = 70, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 70 });
+    server.injectEvent(.{ .slot_finalized_rooted = 70 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expectEqual(2, handler.received.items.len);
@@ -576,7 +583,7 @@ test "logsSubscribe confirmed flushes ancestors in order and does not duplicate 
     try std.testing.expectEqualStrings("Program log: slot 2", notif2.params.result.value.logs[0]);
     try std.testing.expectEqualStrings("Program log: slot 3", notif3.params.result.value.logs[0]);
 
-    server.injectEvent(.{ .slot_rooted = 3 });
+    server.injectEvent(.{ .slot_finalized_rooted = 3 });
     runBothLoops(server, &client_env, &handler, 300);
     try std.testing.expectEqual(4, handler.received.items.len);
 }
@@ -638,9 +645,9 @@ test "logsSubscribe finalized publishes rooted slots in order" {
     server.injectEvent(.{ .slot_frozen = .{ .slot = 5, .parent = 4, .root = 0 } });
     server.injectEvent(.{ .slot_frozen = .{ .slot = 6, .parent = 5, .root = 0 } });
 
-    server.injectEvent(.{ .slot_rooted = 4 });
-    server.injectEvent(.{ .slot_rooted = 5 });
-    server.injectEvent(.{ .slot_rooted = 6 });
+    server.injectEvent(.{ .slot_finalized_rooted = 4 });
+    server.injectEvent(.{ .slot_finalized_rooted = 5 });
+    server.injectEvent(.{ .slot_finalized_rooted = 6 });
 
     waitForMessages(server, &client_env, &handler, 4, 5000);
     const parsed_notif1 = try parseLogsNotification(allocator, handler.received.items[1]);
@@ -714,7 +721,7 @@ test "logsSubscribe preserves transaction log order across batches within a slot
     }}));
 
     server.injectEvent(.{ .slot_frozen = .{ .slot = 80, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 80 });
+    server.injectEvent(.{ .slot_finalized_rooted = 80 });
 
     waitForMessages(server, &client_env, &handler, 4, 5000);
     const parsed_notif1 = try parseLogsNotification(allocator, handler.received.items[1]);

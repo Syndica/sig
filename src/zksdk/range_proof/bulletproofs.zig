@@ -489,10 +489,12 @@ pub fn Proof(bit_size: comptime_int) type {
             var agg_delta = negative_z.mul(sum_y);
             var exp_z = zz.mul(z);
             for (bit_lengths) |n_i| {
-                const sum_2 = sumOfPowers(n_i, TWO);
+                var sum_2: [32]u8 = @splat(0);
+                @memset(sum_2[0 .. n_i / 8], 0xFF);
+                if (n_i % 8 != 0) sum_2[n_i / 8] = (@as(u8, 1) << @intCast(n_i % 8)) - 1;
                 agg_delta = Scalar.fromBytes(Edwards25519.scalar.sub(
                     agg_delta.toBytes(),
-                    exp_z.mul(sum_2).toBytes(),
+                    exp_z.mul(.fromBytes(sum_2)).toBytes(),
                 ));
                 exp_z = exp_z.mul(z);
             }

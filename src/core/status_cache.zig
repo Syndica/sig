@@ -18,8 +18,10 @@ const Fork = struct {
     slot: Slot,
     maybe_err: T = null,
 
-    pub fn deinit(self: *Fork, allocator: std.mem.Allocator) void {
-        if (self.maybe_err) |err| err.deinit(allocator);
+    pub fn deinit(self: Fork, allocator: std.mem.Allocator) void {
+        if (self.maybe_err) |err| {
+            err.deinit(allocator);
+        }
     }
 
     pub fn clone(self: *const Fork, allocator: std.mem.Allocator) !Fork {
@@ -64,6 +66,34 @@ pub const StatusCache = struct {
         }),
     };
 
+    fn deinitForks(allocator: std.mem.Allocator, fork_status: *ForkStatus) void {
+        for (fork_status.items) |fork| {
+            fork.deinit(allocator);
+        }
+        fork_status.deinit(allocator);
+    }
+
+    fn deinitStatusValues(allocator: std.mem.Allocator, status_values: *StatusValues) void {
+        for (status_values.items) |value| {
+            if (value.maybe_err) |err| {
+                err.deinit(allocator);
+            }
+        }
+        status_values.deinit(allocator);
+    }
+
+    fn findVisibleFork(
+        roots: *const HashMap(Slot, void),
+        ancestors: *const Ancestors,
+        stored_forks: ForkStatus,
+    ) ?Fork {
+        return for (stored_forks.items) |fork| {
+            if (ancestors.ancestors.contains(fork.slot) or roots.contains(fork.slot)) {
+                break fork;
+            }
+        } else null;
+    }
+
     pub fn deinit(self: *StatusCache, allocator: std.mem.Allocator) void {
         var state = self.state.tryWrite() orelse
             @panic("attempted to deinit StatusCache while still in use");
@@ -74,7 +104,7 @@ pub const StatusCache = struct {
         for (state.mut().cache.values()) |*highest_fork| {
             const highest_fork_map: *KeyMap = &highest_fork.key_map;
             for (highest_fork_map.values()) |*fork_status| {
-                fork_status.deinit(allocator);
+                deinitForks(allocator, fork_status);
             }
             highest_fork_map.deinit(allocator);
         }
@@ -82,7 +112,7 @@ pub const StatusCache = struct {
 
         for (state.mut().slot_deltas.values()) |*status_kv| {
             for (status_kv.values()) |*value| {
-                value.status.deinit(allocator);
+                deinitStatusValues(allocator, &value.status);
             }
             status_kv.deinit(allocator);
         }
@@ -108,12 +138,11 @@ pub const StatusCache = struct {
         const map = state.get().cache.get(blockhash.*) orelse return null;
         const lookup_key = cachedKeySlice(key, map.index);
 
-        const stored_forks: ArrayList(Fork) = map.key_map.get(lookup_key) orelse return null;
-        return for (stored_forks.items) |fork| {
-            if (ancestors.ancestors.contains(fork.slot) or state.get().roots.contains(fork.slot)) {
-                break try fork.clone(allocator);
-            }
-        } else null;
+        const stored_forks: ForkStatus = map.key_map.get(lookup_key) orelse return null;
+        if (findVisibleFork(&state.get().roots, ancestors, stored_forks)) |fork| {
+            return try fork.clone(allocator);
+        }
+        return null;
     }
 
     fn cachedKeySlice(key: []const u8, map_index: usize) [CACHED_KEY_SIZE]u8 {
@@ -210,8 +239,13 @@ pub const StatusCache = struct {
 
         const lookup_key: [CACHED_KEY_SIZE]u8 = key[key_index..][0..CACHED_KEY_SIZE].*;
 
-        const forks = try hash_map.getOrPutValue(allocator, lookup_key, .empty);
-        try forks.value_ptr.append(allocator, .{ .slot = slot, .maybe_err = maybe_err });
+        {
+            const owned_err = if (maybe_err) |err| try err.clone(allocator) else null;
+            errdefer if (owned_err) |err| err.deinit(allocator);
+
+            const forks = try hash_map.getOrPutValue(allocator, lookup_key, .empty);
+            try forks.value_ptr.append(allocator, .{ .slot = slot, .maybe_err = owned_err });
+        }
 
         // Add this key slice to the list of key slices for this slot and blockhash combo.
         const fork_entry = try state.mut().slot_deltas.getOrPutValue(allocator, slot, .empty);
@@ -222,8 +256,13 @@ pub const StatusCache = struct {
             blockhash.*,
             .{ .status = .{}, .key_index = key_index },
         );
-        const hash_entry_map: *StatusValues = &hash_entry.value_ptr.status;
-        try hash_entry_map.append(allocator, .{ .key = lookup_key, .maybe_err = maybe_err });
+        {
+            const owned_err = if (maybe_err) |err| try err.clone(allocator) else null;
+            errdefer if (owned_err) |err| err.deinit(allocator);
+
+            const hash_entry_map: *StatusValues = &hash_entry.value_ptr.status;
+            try hash_entry_map.append(allocator, .{ .key = lookup_key, .maybe_err = owned_err });
+        }
     }
 
     pub fn addRoot(self: *StatusCache, allocator: std.mem.Allocator, fork: Slot) !void {
@@ -254,7 +293,9 @@ pub const StatusCache = struct {
             while (i < cache.count()) {
                 if (entries[i].slot <= min_root) {
                     var purged_fork_map = entries[i].key_map;
-                    for (purged_fork_map.values()) |*fork_status| fork_status.deinit(allocator);
+                    for (purged_fork_map.values()) |*fork_status| {
+                        deinitForks(allocator, fork_status);
+                    }
                     purged_fork_map.deinit(allocator);
 
                     cache.swapRemoveAt(i);
@@ -273,7 +314,7 @@ pub const StatusCache = struct {
             while (i < slot_deltas.count()) {
                 if (entries.items(.key)[i] <= min_root) {
                     var status_kv = entries.items(.value)[i];
-                    for (status_kv.values()) |*value| value.status.deinit(allocator);
+                    for (status_kv.values()) |*value| deinitStatusValues(allocator, &value.status);
                     status_kv.deinit(allocator);
 
                     slot_deltas.swapRemoveAt(i);
@@ -565,6 +606,76 @@ test "status cache root expires" {
     );
 }
 
+test "status cache any-blockhash lookup sees rooted entries and evicts old roots" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const signature = sig.core.Signature.ZEROES;
+    const blockhash = Hash.ZEROES;
+
+    var ancestors: Ancestors = .{};
+
+    var status_cache: StatusCache = .DEFAULT;
+    defer status_cache.deinit(allocator);
+
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0, null);
+    try status_cache.addRoot(allocator, 0);
+
+    try std.testing.expectEqual(
+        Fork{ .slot = 0 },
+        try status_cache.getForkAnyBlockhash(allocator, &signature.toBytes(), &ancestors),
+    );
+
+    for (1..StatusCache.MAX_CACHE_ENTRIES + 2) |i| try status_cache.addRoot(allocator, i);
+
+    try std.testing.expectEqual(
+        null,
+        try status_cache.getForkAnyBlockhash(allocator, &signature.toBytes(), &ancestors),
+    );
+}
+
+test "status cache retains transaction errors for any-blockhash lookup" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const signature = sig.core.Signature.ZEROES;
+    const blockhash = Hash.ZEROES;
+    var ancestors = try Ancestors.initWithSlots(allocator, &.{9});
+    defer ancestors.deinit(allocator);
+
+    const borsh_io = try allocator.dupe(u8, "borsh io");
+    var tx_err: sig.ledger.transaction_status.TransactionError = .{
+        .InstructionError = .{ 7, .{ .BorshIoError = borsh_io } },
+    };
+    defer tx_err.deinit(allocator);
+
+    var status_cache: StatusCache = .DEFAULT;
+    defer status_cache.deinit(allocator);
+
+    try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 9, tx_err);
+
+    const maybe_got = try status_cache.getForkAnyBlockhash(
+        allocator,
+        &signature.toBytes(),
+        &ancestors,
+    );
+    try std.testing.expect(maybe_got != null);
+    const got = maybe_got.?;
+    defer got.deinit(allocator);
+    try std.testing.expectEqual(@as(Slot, 9), got.slot);
+    try std.testing.expect(got.maybe_err != null);
+
+    switch (got.maybe_err.?) {
+        .InstructionError => |instruction_err| {
+            try std.testing.expectEqual(@as(u8, 7), instruction_err[0]);
+            try std.testing.expectEqualStrings("borsh io", instruction_err[1].BorshIoError);
+        },
+        else => try std.testing.expect(false),
+    }
+}
+
 test "status cache insert and retrieve with transaction error" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -584,7 +695,6 @@ test "status cache insert and retrieve with transaction error" {
     const tx_err: sig.ledger.transaction_status.TransactionError = .AccountNotFound;
     try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0, tx_err);
 
-    // getStatus should return a Fork with the error set.
     const result = try status_cache.getFork(
         std.testing.failing_allocator,
         &signature.toBytes(),
@@ -595,7 +705,6 @@ test "status cache insert and retrieve with transaction error" {
     try std.testing.expectEqual(@as(Slot, 0), result.?.slot);
     try std.testing.expectEqual(tx_err, result.?.maybe_err.?);
 
-    // getForkAnyBlockhash should also return the error.
     const result2 = try status_cache.getForkAnyBlockhash(
         std.testing.failing_allocator,
         &signature.toBytes(),

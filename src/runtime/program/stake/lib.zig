@@ -580,7 +580,7 @@ fn authorizeWithSeed(
 
 pub fn getMinimumDelegation(slot: Slot, feature_set: *const FeatureSet) u64 {
     const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
-    return if (feature_set.active(.stake_raise_minimum_delegation_to_1_sol, slot))
+    return if (feature_set.active(.upgrade_bpf_stake_program_to_v5, slot))
         1 * LAMPORTS_PER_SOL
     else
         1;
@@ -3161,7 +3161,7 @@ test "stake.get_minimum_delegation" {
             },
             .compute_meter = 10_000,
             .feature_set = &.{
-                .{ .feature = .stake_raise_minimum_delegation_to_1_sol },
+                .{ .feature = .upgrade_bpf_stake_program_to_v5 },
             },
         },
         .{

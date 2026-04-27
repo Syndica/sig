@@ -87,6 +87,7 @@ pub const TransactionContext = struct {
     /// Instruction compute meter, for tracking compute units consumed against
     /// the designated compute budget during program execution.
     compute_meter: u64,
+    consumed_units: u64 = 0,
     compute_budget: ComputeBudget,
 
     /// If an error other than an InstructionError occurs during execution its value will
@@ -186,6 +187,7 @@ pub const TransactionContext = struct {
         compute: u64,
     ) InstructionError!void {
         if (self.compute_meter < compute) {
+            self.consumed_units +|= self.compute_meter;
             self.compute_meter = 0;
             return InstructionError.ComputationalBudgetExceeded;
         }
@@ -194,6 +196,7 @@ pub const TransactionContext = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L100-L105
     pub fn consumeUnchecked(self: *TransactionContext, compute: u64) void {
+        self.consumed_units +|= compute;
         self.compute_meter -|= compute;
     }
 

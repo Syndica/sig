@@ -263,7 +263,7 @@ pub fn prepareCpiInstructionInfo(
 ) (error{OutOfMemory} || InstructionError)!InstructionInfo {
     const caller = try tc.getCurrentInstructionContext();
 
-    var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+    var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
     var deduped_account_metas: InstructionInfo.AccountMetas = .empty;
     errdefer deduped_account_metas.deinit(tc.allocator);
 

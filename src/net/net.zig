@@ -248,6 +248,42 @@ pub const SocketAddr = union(enum(u8)) {
         };
     }
 
+    /// Returns true if the IP address is globally routable (not loopback,
+    /// private, link-local, unspecified, or broadcast). Equivalent to Rust's
+    /// `IpAddr::is_global()`, used by Agave's `SocketAddrSpace::Global` filter.
+    pub fn isGloballyRoutable(self: *const SocketAddr) bool {
+        return switch (self.*) {
+            .V4 => |addr| blk: {
+                const o = addr.ip.octets;
+                // unspecified: 0.0.0.0
+                if (o[0] == 0) break :blk false;
+                // loopback: 127.0.0.0/8
+                if (o[0] == 127) break :blk false;
+                // private: 10.0.0.0/8
+                if (o[0] == 10) break :blk false;
+                // private: 172.16.0.0/12
+                if (o[0] == 172 and o[1] >= 16 and o[1] <= 31) break :blk false;
+                // private: 192.168.0.0/16
+                if (o[0] == 192 and o[1] == 168) break :blk false;
+                // link-local: 169.254.0.0/16
+                if (o[0] == 169 and o[1] == 254) break :blk false;
+                // broadcast: 255.255.255.255
+                if (o[0] == 255 and o[1] == 255 and o[2] == 255 and o[3] == 255) break :blk false;
+                break :blk true;
+            },
+            .V6 => |addr| blk: {
+                const v = std.mem.readInt(u128, &addr.ip.octets, .big);
+                // unspecified: ::
+                if (v == 0) break :blk false;
+                // loopback: ::1
+                if (v == 1) break :blk false;
+                // link-local: fe80::/10
+                if (v >> 118 == 0b1111111010) break :blk false;
+                break :blk true;
+            },
+        };
+    }
+
     pub fn isMulticast(self: *const SocketAddr) bool {
         return switch (self.*) {
             .V4 => |addr| addr.ip.octets[0] >= 224 and addr.ip.octets[0] <= 239,
@@ -640,6 +676,48 @@ test "set port works" {
     var sa1 = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1000);
     sa1.setPort(1001);
     try std.testing.expectEqual(@as(u16, 1001), sa1.getPort());
+}
+
+test "SocketAddr.isGloballyRoutable filters non-global IPv4 ranges" {
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 0, 0, 0, 0 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 10, 1, 2, 3 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 172, 16, 0, 1 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 172, 31, 255, 255 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 192, 168, 1, 10 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 169, 254, 10, 20 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 255, 255, 255, 255 }, 8000).isGloballyRoutable());
+    try std.testing.expect(SocketAddr.initIpv4(.{ 8, 8, 8, 8 }, 8000).isGloballyRoutable());
+}
+
+test "SocketAddr.isGloballyRoutable filters non-global IPv6 ranges" {
+    try std.testing.expect(!SocketAddr.initIpv6(.{
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+    }, 8000).isGloballyRoutable());
+
+    try std.testing.expect(!SocketAddr.initIpv6(.{
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 1,
+    }, 8000).isGloballyRoutable());
+
+    try std.testing.expect(!SocketAddr.initIpv6(.{
+        0xFE, 0x80, 0, 0,
+        0,    0,    0, 0,
+        0,    0,    0, 0,
+        0,    0,    0, 1,
+    }, 8000).isGloballyRoutable());
+
+    try std.testing.expect(SocketAddr.initIpv6(.{
+        0x20, 0x01, 0x0D, 0xB8,
+        0,    0,    0,    0,
+        0,    0,    0,    0,
+        0,    0,    0,    1,
+    }, 8000).isGloballyRoutable());
 }
 
 test "parse IPv6 if IPv4 fails" {

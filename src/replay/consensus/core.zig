@@ -81,6 +81,7 @@ const ReplayResult = replay.execution.ReplayResult;
 const ProcessResultParams = replay.consensus.process_result.ProcessResultParams;
 const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
 const VoteAccountVisitor = sig.consensus.replay_tower.VoteAccountVisitor;
+const jrpc_types = sig.rpc.jrpc_websockets.types;
 
 const collectClusterVoteState = sig.consensus.replay_tower.collectClusterVoteState;
 const isDuplicateSlotConfirmed = sig.consensus.replay_tower.isDuplicateSlotConfirmed;
@@ -365,6 +366,7 @@ pub const TowerConsensus = struct {
             gossip_verified_vote_hashes: *std.ArrayListUnmanaged(GossipVerifiedVoteHash),
             results: []const ReplayResult,
             vote_account_visitor: ?VoteAccountVisitor = null,
+            event_sink: ?*jrpc_types.EventSink = null,
         },
     ) !replay.service.SlotUpdate {
         var zone = tracy.Zone.init(@src(), .{ .name = "TowerConsensus.process" });
@@ -389,6 +391,7 @@ pub const TowerConsensus = struct {
                     .duplicate_confirmed_slots = params.duplicate_confirmed_slots,
                     .bank_notification = null,
                     .subscriptions = .{},
+                    .event_sink = params.event_sink,
                 },
                 .receivers = .{ .replay_votes = params.receivers.replay_votes },
                 .ledger = params.ledger,
@@ -404,6 +407,7 @@ pub const TowerConsensus = struct {
                 params.slot_tracker,
                 params.senders.ancestor_hashes_replay_update,
                 r,
+                params.event_sink,
             );
         }
 
@@ -493,6 +497,7 @@ pub const TowerConsensus = struct {
         slot_tracker: *SlotTracker,
         ancestor_hashes_replay_update_sender: *Channel(AncestorHashesReplayUpdate),
         result: ReplayResult,
+        event_sink: ?*jrpc_types.EventSink,
     ) !void {
         const process_state: ProcessResultParams = .{
             .allocator = allocator,
@@ -511,6 +516,7 @@ pub const TowerConsensus = struct {
             .duplicate_slots_to_repair = &self.slot_data.duplicate_slots_to_repair,
             .purge_repair_slot_counter = &self.slot_data.purge_repair_slot_counter,
             .ancestor_hashes_replay_update_sender = ancestor_hashes_replay_update_sender,
+            .event_sink = event_sink,
         };
 
         try replay.consensus.process_result.processResult(process_state, result);
@@ -1806,6 +1812,7 @@ test "processResult and handleDuplicateConfirmedFork" {
             .slot = 0,
             .output = .{ .last_entry_hash = .ZEROES },
         },
+        null,
     );
 
     const stats = replay_state.progress_map.map.get(0).?;

@@ -216,10 +216,10 @@ pub fn resolveTransaction(
         var account_metas = InstructionInfo.AccountMetas{};
         errdefer account_metas.deinit(allocator);
 
-        var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0xff);
+        var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
         for (input_ix.account_indexes, 0..) |index_in_transaction, i| {
             // find first usage of this account in this instruction
-            if (dedupe_map[index_in_transaction] == 0xff)
+            if (dedupe_map[index_in_transaction] == 0xffff)
                 dedupe_map[index_in_transaction] = @intCast(i);
 
             // expand the account metadata
@@ -298,7 +298,8 @@ fn resolveLookupTableAccounts(
         else
             table.meta.last_extended_slot_start_index;
 
-        std.debug.assert(table.meta.last_extended_slot_start_index <= table.addresses.len);
+        if (active_addresses_len > table.addresses.len)
+            return error.InvalidAddressLookupTableData;
 
         // resolve writable addresses
         for (lookup.writable_indexes) |index| {

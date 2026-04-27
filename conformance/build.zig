@@ -15,12 +15,9 @@ pub fn build(b: *Build) void {
     const solfuzz_sig_step = b.step("solfuzz_sig", "The solfuzz sig library.");
     const test_step = b.step("test", "Run unit tests");
 
-    // current commit in commits.env
     const proto_step = b.step(
         "protobuf",
-        "Re-generate protobuf definitions based on the `protosol` directory." ++
-            " Must clone the protosol repo for this to work." ++
-            " You should never need to do under normal circumstances.",
+        "Re-generate protobuf definitions from the protosol dependency pinned in build.zig.zon.",
     );
 
     const sig_dep = b.dependency("sig", .{
@@ -88,14 +85,15 @@ pub fn build(b: *Build) void {
         test_step.dependOn(&test_run.step);
     }
 
+    const protosol_dep = b.dependency("protosol", .{});
+    const proto_dir = protosol_dep.path("proto").getPath(b);
     const protoc_run = pb.RunProtocStep.create(pb_dep.builder, target, .{
         .destination_directory = b.path("src/proto"),
         .source_files = &.{
-            "protosol/proto/vm.proto",
-            "protosol/proto/shred.proto",
-            "protosol/proto/txn.proto",
+            std.fs.path.join(b.allocator, &.{ proto_dir, "vm.proto" }) catch @panic("OOM"),
+            std.fs.path.join(b.allocator, &.{ proto_dir, "txn.proto" }) catch @panic("OOM"),
         },
-        .include_directories = &.{"protosol/proto"},
+        .include_directories = &.{proto_dir},
     });
     proto_step.dependOn(&protoc_run.step);
 }

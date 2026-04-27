@@ -41,6 +41,24 @@ pub fn putAccountAtSlot(
     return account_shared;
 }
 
+pub fn insertSignatureStatus(
+    server: *TestServer,
+    slot: u64,
+    blockhash: sig.core.Hash,
+    signature: Signature,
+    tx_err: ?sig.ledger.transaction_status.TransactionError,
+) !void {
+    var prng = std.Random.DefaultPrng.init(slot + 1);
+    try server.status_cache.insert(
+        server.allocator,
+        prng.random(),
+        &blockhash,
+        &signature.toBytes(),
+        slot,
+        tx_err,
+    );
+}
+
 const Channel = sig.sync.Channel;
 const ThreadPool = sig.sync.ThreadPool;
 
@@ -61,12 +79,26 @@ pub const TestServer = struct {
     sub_map: sub_map_mod.RPCSubMap,
     account_db: sig.accounts_db.Db.TestContext,
     slot_tracker: sig.replay.trackers.SlotTracker,
+    status_cache: sig.core.StatusCache,
     commitments: sig.replay.trackers.CommitmentTracker,
     ctx: Runtime,
     server: WebSocketServer,
     port: u16,
+    ledger_state: ?sig.ledger.Ledger = null,
+    ledger_tmp_dir: ?std.testing.TmpDir = null,
 
     pub fn start(allocator: std.mem.Allocator) !*TestServer {
+        return startInternal(allocator, false);
+    }
+
+    pub fn startWithLedger(allocator: std.mem.Allocator) !*TestServer {
+        return startInternal(allocator, true);
+    }
+
+    fn startInternal(
+        allocator: std.mem.Allocator,
+        with_ledger: bool,
+    ) !*TestServer {
         const self = try allocator.create(TestServer);
         errdefer allocator.destroy(self);
 
@@ -95,13 +127,26 @@ pub const TestServer = struct {
         self.slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
         errdefer self.slot_tracker.deinit(allocator);
 
+        self.status_cache = .DEFAULT;
+        errdefer self.status_cache.deinit(allocator);
+
         self.commitments = .init(allocator, 0);
         errdefer self.commitments.deinit(allocator);
+
+        if (with_ledger) {
+            const ledger_and_tmp = try sig.ledger.Ledger.initForTest(allocator);
+            self.ledger_state = ledger_and_tmp[0];
+            self.ledger_tmp_dir = ledger_and_tmp[1];
+        } else {
+            self.ledger_state = null;
+            self.ledger_tmp_dir = null;
+        }
 
         const slot_read_ctx: SlotReadContext = .{
             .slot_tracker = &self.slot_tracker,
             .commitments = &self.commitments,
             .account_reader = .{ .accounts_db = &self.account_db.db },
+            .status_cache = &self.status_cache,
         };
         const logger: sig.trace.Logger("jrpc_ws_integration_tests") = .noop;
         self.ctx = Runtime.init(.{
@@ -142,12 +187,19 @@ pub const TestServer = struct {
         var event = inbound_event;
         switch (event) {
             .slot_frozen => |*slot_data| {
-                slot_data.accounts.deinit();
-                slot_data.accounts = self.event_sink.materializeSlotModifiedAccounts(
+                const new_accounts = self.event_sink.materializeSlotModifiedAccounts(
                     sig.trace.Logger("jrpc_ws_integration_tests").noop,
                     .{ .accounts_db = &self.account_db.db },
                     slot_data.slot,
                 ) catch {
+                    event.deinit(self.event_sink.allocator());
+                    return;
+                };
+                slot_data.accounts.deinit(self.event_sink.allocator());
+                slot_data.accounts = new_accounts;
+            },
+            .slot_dead => |*dead| {
+                dead.err = self.event_sink.allocator().dupe(u8, dead.err) catch {
                     return;
                 };
             },
@@ -158,7 +210,7 @@ pub const TestServer = struct {
                 "failed to send injected event: {}",
                 .{err},
             );
-            event.deinit();
+            event.deinit(self.event_sink.allocator());
         };
     }
 
@@ -192,6 +244,7 @@ pub const TestServer = struct {
         self.server.deinit();
         self.ctx.shutdown(runtime_shutdown_timeout_ms) catch unreachable;
         self.ctx.deinit();
+        self.status_cache.deinit(allocator);
         self.commitments.deinit(allocator);
         self.slot_tracker.deinit(allocator);
         self.account_db.deinit();
@@ -203,6 +256,8 @@ pub const TestServer = struct {
         self.loop.deinit();
         self.commit_queue.deinit();
         self.event_sink.destroy();
+        if (self.ledger_state) |*l| l.deinit();
+        if (self.ledger_tmp_dir) |*tmp| tmp.cleanup();
         allocator.destroy(self);
     }
 };
@@ -257,6 +312,7 @@ pub const IntegratedTestServer = struct {
     sub_map: sub_map_mod.RPCSubMap,
     account_db: sig.accounts_db.Db.TestContext,
     slot_tracker: sig.replay.trackers.SlotTracker,
+    status_cache: sig.core.StatusCache,
     commitments: sig.replay.trackers.CommitmentTracker,
     ctx: Runtime,
     ws_server: WebSocketServer,
@@ -297,6 +353,9 @@ pub const IntegratedTestServer = struct {
         self.slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
         errdefer self.slot_tracker.deinit(allocator);
 
+        self.status_cache = .DEFAULT;
+        errdefer self.status_cache.deinit(allocator);
+
         self.commitments = .init(allocator, 0);
         errdefer self.commitments.deinit(allocator);
 
@@ -304,6 +363,7 @@ pub const IntegratedTestServer = struct {
             .slot_tracker = &self.slot_tracker,
             .commitments = &self.commitments,
             .account_reader = .{ .accounts_db = &self.account_db.db },
+            .status_cache = &self.status_cache,
         };
         const logger: sig.trace.Logger("jrpc_ws_integration_tests") = .noop;
         self.ctx = Runtime.init(.{
@@ -384,12 +444,19 @@ pub const IntegratedTestServer = struct {
         var event = inbound_event;
         switch (event) {
             .slot_frozen => |*slot_data| {
-                slot_data.accounts.deinit();
-                slot_data.accounts = self.event_sink.materializeSlotModifiedAccounts(
+                const new_accounts = self.event_sink.materializeSlotModifiedAccounts(
                     sig.trace.Logger("jrpc_ws_integration_tests").noop,
                     .{ .accounts_db = &self.account_db.db },
                     slot_data.slot,
                 ) catch {
+                    event.deinit(self.event_sink.allocator());
+                    return;
+                };
+                slot_data.accounts.deinit(self.event_sink.allocator());
+                slot_data.accounts = new_accounts;
+            },
+            .slot_dead => |*dead| {
+                dead.err = self.event_sink.allocator().dupe(u8, dead.err) catch {
                     return;
                 };
             },
@@ -400,7 +467,7 @@ pub const IntegratedTestServer = struct {
                 "failed to send injected event: {}",
                 .{err},
             );
-            event.deinit();
+            event.deinit(self.event_sink.allocator());
         };
     }
 
@@ -449,6 +516,7 @@ pub const IntegratedTestServer = struct {
         self.ws_server.deinit();
         self.ctx.shutdown(runtime_shutdown_timeout_ms) catch unreachable;
         self.ctx.deinit();
+        self.status_cache.deinit(allocator);
         self.commitments.deinit(allocator);
         self.slot_tracker.deinit(allocator);
         self.account_db.deinit();

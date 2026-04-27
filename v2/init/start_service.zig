@@ -87,57 +87,16 @@ fn serviceMain(params: lib.ipc.ResolvedArgs) callconv(.c) void {
     panic_state.stderr = params.stderr;
     panic_state.exit = exit;
 
-    // Call main with args specified by ReadWrite/ReadOnly structs
-    const ret_val =
-        if (!@hasDecl(root, "ReadWrite")) err: {
-            var read_only: root.ReadOnly = .{};
-            const root_ro_fields = @typeInfo(root.ReadOnly).@"struct".fields;
-            inline for (
-                root_ro_fields,
-                params.ro[0..root_ro_fields.len],
-                params.ro_len[0..root_ro_fields.len],
-            ) |field, data, data_len| {
-                @field(read_only, field.name) = @ptrCast(data.?[0..data_len]);
-            }
+    const max_regions = lib.ipc.ResolvedArgs.max_regions;
+    var ro: root.ReadOnly = undefined;
+    comptime var ro_index: usize = 0;
+    populateFields(&ro, &ro_index, .ro, max_regions, &params.ro, &params.ro_len);
 
-            break :err root.serviceMain(read_only);
-        } else if (!@hasDecl(root, "ReadOnly")) err: {
-            var read_write: root.ReadWrite = undefined;
-            const root_rw_fields = @typeInfo(root.ReadWrite).@"struct".fields;
-            inline for (
-                root_rw_fields,
-                params.rw[0..root_rw_fields.len],
-                params.rw_len[0..root_rw_fields.len],
-            ) |field, data, data_len| {
-                @field(read_write, field.name) = @ptrCast(data.?[0..data_len]);
-            }
+    var rw: root.ReadWrite = undefined;
+    comptime var rw_index: usize = 0;
+    populateFields(&rw, &rw_index, .rw, max_regions, &params.rw, &params.rw_len);
 
-            break :err root.serviceMain(read_write);
-        } else err: {
-            var read_only: root.ReadOnly = undefined;
-            const root_ro_fields = @typeInfo(root.ReadOnly).@"struct".fields;
-            inline for (
-                root_ro_fields,
-                params.ro[0..root_ro_fields.len],
-                params.ro_len[0..root_ro_fields.len],
-            ) |field, data, data_len| {
-                @field(read_only, field.name) = @ptrCast(data.?[0..data_len]);
-            }
-
-            var read_write: root.ReadWrite = undefined;
-            const root_rw_fields = @typeInfo(root.ReadWrite).@"struct".fields;
-            inline for (
-                root_rw_fields,
-                params.rw[0..root_rw_fields.len],
-                params.rw_len[0..root_rw_fields.len],
-            ) |field, data, data_len| {
-                @field(read_write, field.name) = @ptrCast(data.?[0..data_len]);
-            }
-
-            break :err root.serviceMain(read_only, read_write);
-        };
-
-    ret_val catch |err| {
+    root.serviceMain(ro, rw) catch |err| {
         // write back error name
         const err_len = @min(@errorName(err).len, exit.error_name.len);
         @memcpy(exit.error_name[0..err_len], @errorName(err)[0..err_len]);
@@ -152,6 +111,37 @@ fn serviceMain(params: lib.ipc.ResolvedArgs) callconv(.c) void {
             );
         }
     };
+}
+
+inline fn populateFields(
+    shared_regions_ptr: anytype,
+    comptime ptrs_index: *usize,
+    comptime mode: enum { ro, rw },
+    comptime max_regions: usize,
+    ptrs: *const [max_regions]?switch (mode) {
+        .ro => [*]align(std.heap.page_size_min) const u8,
+        .rw => [*]align(std.heap.page_size_min) u8,
+    },
+    ptr_lens: *const [max_regions]usize,
+) void {
+    const SharedRegions = @TypeOf(shared_regions_ptr.*);
+    const s_info = @typeInfo(SharedRegions).@"struct";
+    inline for (s_info.fields) |s_field| {
+        const field_ptr = &@field(shared_regions_ptr, s_field.name);
+        switch (@typeInfo(s_field.type)) {
+            .@"struct" => populateFields(field_ptr, ptrs_index, mode, max_regions, ptrs, ptr_lens),
+            .pointer => {
+                const ptr = ptrs[ptrs_index.*].?;
+                const len = ptr_lens[ptrs_index.*];
+                field_ptr.* = @ptrCast(ptr[0..len]);
+                ptrs_index.* += 1;
+            },
+            inline else => |_, tag| @compileError(
+                "Expected struct or pointer, got " ++
+                    @tagName(tag) ++ "(" ++ @typeName(s_field.type) ++ ")",
+            ),
+        }
+    }
 }
 
 // Ported over from std.debug.handleSegfaultPosix

@@ -36,26 +36,44 @@
       url = "https://github.com/firedancer-io/solfuzz-agave.git";
       rev = commits.SOLFUZZ_AGAVE_COMMIT;
     };
+    solfuzz-agave-cargo-lock = builtins.fromTOML (builtins.readFile "${solfuzz-agave}/Cargo.lock");
+    findLockedPackageSource = name: let
+      matches = builtins.filter (pkg: pkg.name == name && pkg ? source) solfuzz-agave-cargo-lock.package;
+    in
+      if matches == [] then
+        throw "Could not find ${name} in solfuzz-agave Cargo.lock"
+      else
+        (builtins.head matches).source;
+    lockedGitRev = source: let
+      parts = pkgs.lib.splitString "#" source;
+    in
+      if builtins.length parts < 2 then
+        throw "Could not extract locked git revision from ${source}"
+      else
+        pkgs.lib.last parts;
+    agave-locked-rev = lockedGitRev (findLockedPackageSource "agave-feature-set");
+    sbpf-locked-rev = lockedGitRev (findLockedPackageSource "solana-sbpf");
     protosol = builtins.fetchGit {
       url = "https://github.com/firedancer-io/protosol.git";
-      rev = commits.AGAVE_PROTOSOL_COMMIT;
+      rev = commits.SOLFUZZ_AGAVE_PROTOSOL_COMMIT;
       submodules = true;
     };
     agave = builtins.fetchGit {
       url = "https://github.com/firedancer-io/agave.git";
-      rev = commits.AGAVE_COMMIT;
+      rev = agave-locked-rev;
     };
     sbpf = builtins.fetchGit {
       url = "https://github.com/firedancer-io/sbpf.git";
-      rev = commits.SBPF_COMMIT;
+      rev = sbpf-locked-rev;
     };
 
     # protoc and flatc need to be the exact versions built by protosol
     protosol-toolchain = pkgs.stdenvNoCC.mkDerivation {
       pname = "protosol-toolchain";
-      version = commits.AGAVE_PROTOSOL_COMMIT;
+      version = commits.SOLFUZZ_AGAVE_PROTOSOL_COMMIT;
       src = protosol;
-      nativeBuildInputs = with pkgs; [ cmake gcc ];
+      nativeBuildInputs = with pkgs; [ cmake gcc git pkg-config ];
+      buildInputs = with pkgs; [ abseil-cpp zlib ];
       dontConfigure = true;
       buildPhase = ''
         patchShebangs ./deps.sh

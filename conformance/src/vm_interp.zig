@@ -111,8 +111,8 @@ fn executeVmTest(
         .account_data_direct_mapping,
         slot,
     );
-    const stricter_abi_and_runtime_constraints = tc.feature_set.active(
-        .stricter_abi_and_runtime_constraints,
+    const virtual_address_space_adjustments = tc.feature_set.active(
+        .virtual_address_space_adjustments,
         slot,
     );
     const mask_out_rent_epoch_in_vm_serialization = tc.feature_set.active(
@@ -123,7 +123,7 @@ fn executeVmTest(
         allocator,
         &ic,
         direct_mapping,
-        stricter_abi_and_runtime_constraints,
+        virtual_address_space_adjustments,
         mask_out_rent_epoch_in_vm_serialization,
     );
     defer serialized.deinit(allocator);

@@ -5,6 +5,8 @@
 
         .net_to_gossip = .net_pair,
         .gossip_config = .gossip_config,
+
+        .telemetry = .telemetry,
     },
     .services = .{
         .{
@@ -12,6 +14,7 @@
             .regions = .{
                 .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .net_to_gossip, .access = .rw },
+                .{ .name = .telemetry, .access = .rw },
             },
         },
         .{
@@ -19,6 +22,7 @@
             .regions = .{
                 .{ .name = .net_to_gossip, .access = .rw },
                 .{ .name = .gossip_config, .access = .readonly },
+                .{ .name = .telemetry, .access = .rw },
             },
         },
         .{
@@ -26,6 +30,13 @@
             .regions = .{
                 .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .shred_recv_config, .access = .readonly },
+                .{ .name = .telemetry, .access = .rw },
+            },
+        },
+        .{
+            .name = .telemetry,
+            .regions = .{
+                .{ .name = .telemetry, .access = .rw },
             },
         },
     },

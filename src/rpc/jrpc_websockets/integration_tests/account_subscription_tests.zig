@@ -70,7 +70,7 @@ test "accountSubscribe confirmed publishes on rooted without confirmed event" {
     waitForMessages(server, &client_env, &handler, 1, 5000);
     try std.testing.expect(handler.received.items.len >= 1);
 
-    server.injectEvent(.{ .slot_rooted = 2 });
+    server.injectEvent(.{ .slot_finalized_rooted = 2 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
@@ -228,11 +228,11 @@ test "accountSubscribe does not replay already-visible finalized account on late
     waitForMessages(server, &client_env, &handler, 1, 5000);
     try std.testing.expect(handler.received.items.len >= 1);
 
-    server.injectEvent(.{ .slot_rooted = 4 });
+    server.injectEvent(.{ .slot_finalized_rooted = 4 });
     runBothLoops(server, &client_env, &handler, 300);
     try std.testing.expectEqual(1, handler.received.items.len);
 
-    server.injectEvent(.{ .slot_rooted = 5 });
+    server.injectEvent(.{ .slot_finalized_rooted = 5 });
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
     const parsed_notif = try std.json.parseFromSlice(
@@ -294,7 +294,7 @@ test "accountSubscribe deleted account returns zero-lamport placeholder" {
     waitForMessages(server, &client_env, &handler, 1, 5000);
     try std.testing.expect(handler.received.items.len >= 1);
 
-    server.injectEvent(.{ .slot_rooted = 2 });
+    server.injectEvent(.{ .slot_finalized_rooted = 2 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);

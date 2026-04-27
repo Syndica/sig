@@ -10,6 +10,7 @@ instr/fixtures/bpf-loader-v3
 instr/fixtures/bpf-loader-v3-programs
 instr/fixtures/bpf-loader-v4
 instr/fixtures/compute-budget
+instr/fixtures/precompile
 instr/fixtures/stake
 instr/fixtures/system
 instr/fixtures/unknown

@@ -91,7 +91,7 @@ test "programSubscribe confirmed publishes on rooted without confirmed event" {
     try std.testing.expect(handler.received.items.len >= 1);
 
     server.injectEvent(.{ .slot_frozen = .{ .slot = 88, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 88 });
+    server.injectEvent(.{ .slot_finalized_rooted = 88 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
@@ -222,7 +222,7 @@ test "programSubscribe confirmed flushes frozen ancestors in order" {
     try std.testing.expectEqual(2_222, notif2.params.result.value.account.lamports);
     try std.testing.expectEqual(3_333, notif3.params.result.value.account.lamports);
 
-    server.injectEvent(.{ .slot_rooted = 3 });
+    server.injectEvent(.{ .slot_finalized_rooted = 3 });
     runBothLoops(server, &client_env, &handler, 300);
     try std.testing.expectEqual(4, handler.received.items.len);
 
@@ -511,8 +511,8 @@ test "programSubscribe finalized flushes all newly rooted slots" {
     // Freeze both slots, then root them individually in chain order.
     server.injectEvent(.{ .slot_frozen = .{ .slot = 10, .parent = 0, .root = 0 } });
     server.injectEvent(.{ .slot_frozen = .{ .slot = 11, .parent = 10, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 10 });
-    server.injectEvent(.{ .slot_rooted = 11 });
+    server.injectEvent(.{ .slot_finalized_rooted = 10 });
+    server.injectEvent(.{ .slot_finalized_rooted = 11 });
 
     // Both rooted slots should produce finalized program notifications.
     waitForMessages(server, &client_env, &handler, 3, 5000);
@@ -610,7 +610,7 @@ test "programSubscribe filter dataSize applied" {
     try std.testing.expect(handler.received.items.len >= 1);
 
     server.injectEvent(.{ .slot_frozen = .{ .slot = 50, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 50 });
+    server.injectEvent(.{ .slot_finalized_rooted = 50 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
@@ -705,7 +705,7 @@ test "programSubscribe filter memcmp applied" {
     try std.testing.expect(handler.received.items.len >= 1);
 
     server.injectEvent(.{ .slot_frozen = .{ .slot = 60, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 60 });
+    server.injectEvent(.{ .slot_finalized_rooted = 60 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
@@ -776,7 +776,7 @@ test "programSubscribe tokenAccountState matches account data without token owne
     try std.testing.expect(handler.received.items.len >= 1);
 
     server.injectEvent(.{ .slot_frozen = .{ .slot = 65, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 65 });
+    server.injectEvent(.{ .slot_finalized_rooted = 65 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
@@ -839,7 +839,7 @@ test "programSubscribe zero-lamport account with matching owner publishes" {
     try std.testing.expect(handler.received.items.len >= 1);
 
     server.injectEvent(.{ .slot_frozen = .{ .slot = 70, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 70 });
+    server.injectEvent(.{ .slot_finalized_rooted = 70 });
 
     waitForMessages(server, &client_env, &handler, 2, 5000);
     try std.testing.expect(handler.received.items.len >= 2);
@@ -909,7 +909,7 @@ test "programSubscribe account with non-matching owner does not publish" {
     try std.testing.expect(handler.received.items.len >= 1);
 
     server.injectEvent(.{ .slot_frozen = .{ .slot = 80, .parent = 0, .root = 0 } });
-    server.injectEvent(.{ .slot_rooted = 80 });
+    server.injectEvent(.{ .slot_finalized_rooted = 80 });
 
     runBothLoops(server, &client_env, &handler, 300);
     try std.testing.expectEqual(1, handler.received.items.len);

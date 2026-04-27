@@ -11,6 +11,8 @@ const sig = @import("../../sig.zig");
 const base58 = @import("base58");
 pub const AccountKeys = @import("AccountKeys.zig");
 
+const spl_token = sig.runtime.spl_token;
+
 const Allocator = std.mem.Allocator;
 const JsonValue = std.json.Value;
 const ObjectMap = std.json.ObjectMap;
@@ -28,9 +30,9 @@ const SystemInstruction = sig.runtime.program.system.Instruction;
 const SPL_ASSOCIATED_TOKEN_ACC_ID: Pubkey = .parse("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
 /// SPL Memo v1 program ID
-const SPL_MEMO_V1_ID: Pubkey = .parse("Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo");
+const SPL_MEMO_V1_ID = spl_token.SPL_MEMO_V1_ID;
 /// SPL Memo v3 program ID
-const SPL_MEMO_V3_ID: Pubkey = .parse("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+const SPL_MEMO_V3_ID = spl_token.SPL_MEMO_V3_ID;
 
 /// BPF Loader v2 instruction enum (bincode serialized u32)
 const BpfLoaderInstruction = union(enum(u32)) {
@@ -1126,6 +1128,30 @@ fn parseSystemInstruction(
             try info.put("sourceSeed", .{ .string = tws.from_seed });
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "transferWithSeed" });
+        },
+        .create_account_allow_prefund => |caap| {
+            var info = ObjectMap.init(arena);
+
+            if (caap.lamports > 0) {
+                try checkNumSystemAccounts(instruction.accounts, 2);
+                try info.put("source", try pubkeyToValue(
+                    arena,
+                    account_keys.get(@intCast(instruction.accounts[1])).?,
+                ));
+                try info.put("lamports", .{ .integer = @intCast(caap.lamports) });
+            } else {
+                try checkNumSystemAccounts(instruction.accounts, 1);
+            }
+
+            try info.put("newAccount", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("owner", try pubkeyToValue(arena, caap.owner));
+            try info.put("space", .{ .integer = @intCast(caap.space) });
+
+            try result.put("info", .{ .object = info });
+            try result.put("type", .{ .string = "createAccountAllowPrefund" });
         },
         .upgrade_nonce_account => {
             try checkNumSystemAccounts(instruction.accounts, 1);
@@ -5539,6 +5565,154 @@ test "parse_instruction.parseInstruction: system transfer" {
                 },
                 .partially_decoded => return error.UnexpectedResult,
             }
+        },
+        .compiled => return error.UnexpectedResult,
+    }
+}
+
+test "parse_instruction.parseInstruction: system createAccountAllowPrefund with source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
+    const allocator = arena.allocator();
+
+    const system_id = sig.runtime.program.system.ID;
+    const new_account = Pubkey{ .data = @splat(1) };
+    const source = Pubkey{ .data = @splat(2) };
+    const owner = Pubkey{ .data = @splat(3) };
+    const static_keys = [_]Pubkey{ new_account, source, system_id };
+    const account_keys = AccountKeys.init(&static_keys, null);
+
+    const data = try sig.bincode.writeAlloc(
+        allocator,
+        SystemInstruction{
+            .create_account_allow_prefund = .{
+                .lamports = 1_000_000,
+                .space = 128,
+                .owner = owner,
+            },
+        },
+        .{},
+    );
+
+    const instruction = sig.ledger.transaction_status.CompiledInstruction{
+        .program_id_index = 2,
+        .accounts = &.{ 0, 1 },
+        .data = data,
+    };
+
+    const result = try parseInstruction(
+        allocator,
+        system_id,
+        instruction,
+        &account_keys,
+        null,
+    );
+
+    switch (result) {
+        .parsed => |p| switch (p.*) {
+            .parsed => |pi| {
+                try std.testing.expectEqualStrings("system", pi.program);
+
+                const type_val = pi.parsed.object.get("type").?;
+                try std.testing.expectEqualStrings("createAccountAllowPrefund", type_val.string);
+
+                const info_val = pi.parsed.object.get("info").?;
+                const lamports = info_val.object.get("lamports").?;
+                try std.testing.expectEqual(@as(i64, 1_000_000), lamports.integer);
+
+                const new_account_val = info_val.object.get("newAccount").?;
+                try std.testing.expectEqualStrings(
+                    new_account.base58String().constSlice(),
+                    new_account_val.string,
+                );
+
+                const source_val = info_val.object.get("source").?;
+                try std.testing.expectEqualStrings(
+                    source.base58String().constSlice(),
+                    source_val.string,
+                );
+
+                const owner_val = info_val.object.get("owner").?;
+                try std.testing.expectEqualStrings(
+                    owner.base58String().constSlice(),
+                    owner_val.string,
+                );
+
+                const space = info_val.object.get("space").?;
+                try std.testing.expectEqual(@as(i64, 128), space.integer);
+            },
+            .partially_decoded => return error.UnexpectedResult,
+        },
+        .compiled => return error.UnexpectedResult,
+    }
+}
+
+test "parse_instruction.parseInstruction: system createAccountAllowPrefund no source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
+    const allocator = arena.allocator();
+
+    const system_id = sig.runtime.program.system.ID;
+    const new_account = Pubkey{ .data = [_]u8{1} ** 32 };
+    const owner = Pubkey{ .data = [_]u8{3} ** 32 };
+    const static_keys = [_]Pubkey{ new_account, system_id };
+    const account_keys = AccountKeys.init(&static_keys, null);
+
+    const data = try sig.bincode.writeAlloc(
+        allocator,
+        SystemInstruction{
+            .create_account_allow_prefund = .{
+                .lamports = 0,
+                .space = 128,
+                .owner = owner,
+            },
+        },
+        .{},
+    );
+
+    const instruction = sig.ledger.transaction_status.CompiledInstruction{
+        .program_id_index = 1,
+        .accounts = &.{0},
+        .data = data,
+    };
+
+    const result = try parseInstruction(
+        allocator,
+        system_id,
+        instruction,
+        &account_keys,
+        null,
+    );
+
+    switch (result) {
+        .parsed => |p| switch (p.*) {
+            .parsed => |pi| {
+                try std.testing.expectEqualStrings("system", pi.program);
+
+                const type_val = pi.parsed.object.get("type").?;
+                try std.testing.expectEqualStrings("createAccountAllowPrefund", type_val.string);
+
+                const info_val = pi.parsed.object.get("info").?;
+
+                const new_account_val = info_val.object.get("newAccount").?;
+                try std.testing.expectEqualStrings(
+                    new_account.base58String().constSlice(),
+                    new_account_val.string,
+                );
+
+                const owner_val = info_val.object.get("owner").?;
+                try std.testing.expectEqualStrings(
+                    owner.base58String().constSlice(),
+                    owner_val.string,
+                );
+
+                const space = info_val.object.get("space").?;
+                try std.testing.expectEqual(@as(i64, 128), space.integer);
+
+                try std.testing.expect(info_val.object.get("source") == null);
+                try std.testing.expect(info_val.object.get("lamports") == null);
+            },
+            .partially_decoded => return error.UnexpectedResult,
         },
         .compiled => return error.UnexpectedResult,
     }

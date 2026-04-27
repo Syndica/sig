@@ -13,7 +13,7 @@ const Transaction = sig.core.Transaction;
 pub const InstructionInfo = struct {
     program_meta: ProgramMeta,
     account_metas: AccountMetas,
-    dedupe_map: [MAX_ACCOUNT_METAS]u8,
+    dedupe_map: [MAX_ACCOUNT_METAS]u16,
 
     instruction_data: []const u8,
     owned_instruction_data: bool,
