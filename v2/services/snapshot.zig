@@ -103,11 +103,8 @@ const DedupeMap = std.array_hash_map.ArrayHashMapUnmanaged(
 const Op = enum(u8) {
     gossip_drain_timeout,
     probe_connect,
-    probe_connect_timeout,
     probe_send,
-    probe_send_timeout,
     probe_recv,
-    probe_recv_timeout,
 };
 
 /// Packed into io_uring sqe/cqe user_data field for identifying operations on completion
@@ -120,7 +117,9 @@ const UserData = packed struct(u64) {
     offset: u16,
     /// monotonic generaton counter to detect stale cqes from reused probe slots.
     gen: u16,
-    _reserved: u16,
+    /// true when this cqe is from a linked timeout sqe (not the primary op).
+    is_timeout: bool,
+    _reserved: u15,
 
     pub fn init(op: Op, index: u8, gen: u16) UserData {
         return .{
@@ -128,6 +127,7 @@ const UserData = packed struct(u64) {
             .index = index,
             .offset = 0,
             .gen = gen,
+            .is_timeout = false,
             ._reserved = 0,
         };
     }
@@ -179,6 +179,11 @@ const SnapshotService = struct {
             for (cqes[0..n]) |cqe| {
                 const data = UserData.decode(cqe.user_data);
 
+                if (data.is_timeout) {
+                    self.handleProbeTimeout(data, cqe);
+                    continue;
+                }
+
                 switch (data.op) {
                     .gossip_drain_timeout => {
                         self.timeout_pending = false;
@@ -187,10 +192,6 @@ const SnapshotService = struct {
                     .probe_connect => self.handleProbeConnect(data, cqe),
                     .probe_send => self.handleProbeSend(data, cqe),
                     .probe_recv => self.handleProbeRecv(data, cqe),
-                    .probe_connect_timeout,
-                    .probe_send_timeout,
-                    .probe_recv_timeout,
-                    => self.handleProbeTimeout(data, cqe),
                 }
             }
         }
@@ -350,7 +351,7 @@ const SnapshotService = struct {
 
         const connect_data = UserData.init(.probe_connect, index, probe.gen);
         var timeout_data = connect_data;
-        timeout_data.op = .probe_connect_timeout;
+        timeout_data.is_timeout = true;
 
         const sqes = try self.reserveLinkedSqes();
 
@@ -381,7 +382,7 @@ const SnapshotService = struct {
         send_data.offset = offset;
 
         var timeout_data = send_data;
-        timeout_data.op = .probe_send_timeout;
+        timeout_data.is_timeout = true;
 
         std.debug.assert(offset <= probe.send_len);
 
@@ -414,7 +415,7 @@ const SnapshotService = struct {
         recv_data.offset = offset;
 
         var timeout_data = recv_data;
-        timeout_data.op = .probe_recv_timeout;
+        timeout_data.is_timeout = true;
 
         std.debug.assert(offset <= probe.recv_buf.len);
 
@@ -442,9 +443,9 @@ const SnapshotService = struct {
         if (probe.phase == .unused or probe.gen != data.gen) return;
 
         const expected_phase: @TypeOf(probe.phase) = switch (data.op) {
-            .probe_connect_timeout => .connecting,
-            .probe_send_timeout => .sending,
-            .probe_recv_timeout => .receiving,
+            .probe_connect => .connecting,
+            .probe_send => .sending,
+            .probe_recv => .receiving,
             else => unreachable,
         };
         if (probe.phase != expected_phase) return;
@@ -593,6 +594,14 @@ const SnapshotService = struct {
             return;
         }
 
+        // Parse Content-Length from headers.
+        const content_len = parseContentLength(response[0 .. header_end + 4]) orelse {
+            self.logger.info().logf("probe missing/zero content-length idx={d}", .{data.index});
+            self.finishProbe(data.index, .failed);
+            self.probeNextPending();
+            return;
+        };
+
         // Compute and store latency.
         const elapsed_ns = (std.time.Instant.now() catch unreachable).since(probe.start_time);
         const latency_ms: u32 = @intCast(elapsed_ns / std.time.ns_per_ms);
@@ -602,7 +611,7 @@ const SnapshotService = struct {
             }
         }
 
-        self.logger.info().logf("probe succeeded idx={d} latency={d}ms addr={f}", .{ data.index, latency_ms, probe.addr });
+        self.logger.info().logf("probe succeeded idx={d} latency={d}ms content_len={d} addr={f}", .{ data.index, latency_ms, content_len, probe.addr });
         self.finishProbe(data.index, .succeeded);
         self.probeNextPending();
     }
@@ -658,6 +667,20 @@ const SnapshotService = struct {
         }
     }
 };
+
+/// Parses the Content-Length header value from an HTTP response.
+/// Returns null if the header is missing, zero, or unparseable.
+fn parseContentLength(response: []const u8) ?u64 {
+    var iter = std.http.HeaderIterator.init(response);
+    while (iter.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, "content-length")) {
+            const value = std.fmt.parseInt(u64, header.value, 10) catch return null;
+            if (value == 0) return null;
+            return value;
+        }
+    }
+    return null;
+}
 
 comptime {
     _ = start;
