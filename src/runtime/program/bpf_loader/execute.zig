@@ -72,13 +72,15 @@ pub fn execute(
     // additional borrow relative to Agave. This difference should not cause any issues, but is worth noting.
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L458-L518
     executeBpfProgram(allocator, ic) catch |err| {
+        // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L574-L588
+        // Agave always logs program failure regardless of error kind.
+        try stable_log.programFailure(
+            ic.tc,
+            ic.ixn_info.program_meta.pubkey,
+            err,
+        );
         const kind = sig.vm.getExecutionErrorKind(err);
         if (kind != .Instruction) {
-            try stable_log.programFailure(
-                ic.tc,
-                ic.ixn_info.program_meta.pubkey,
-                err,
-            );
             return InstructionError.ProgramFailedToComplete;
         } else {
             return sig.vm.instructionErrorFromExecutionError(err);
@@ -1332,7 +1334,7 @@ pub fn executeV3Upgrade(
         V3State.sizeOfBuffer(0),
     );
 
-    try ic.tc.log("Upgraded program {any}", .{new_program_id});
+    try ic.tc.log("Upgraded program {f}", .{new_program_id});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L946-L1010

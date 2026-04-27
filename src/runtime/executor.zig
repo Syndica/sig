@@ -194,11 +194,11 @@ fn processNextInstruction(
         defer program_execute.deinit();
 
         // Run the program!
+        const is_bpf_program = !builtin_id.equals(&program_id);
         builtin.func(allocator, ic) catch |err| {
-            // This approach to failure logging is used to prevent requiring all native programs to return
-            // an ExecutionError. Instead, native programs return an InstructionError, and more granular
-            // failure logging for bpf programs is handled in the BPF executor.
-            if (err != InstructionError.ProgramFailedToComplete and !is_precompile) {
+            // BPF programs handle their own failure logging in the BPF executor.
+            // Native programs need failure logging here. Precompiles don't log.
+            if (!is_bpf_program and !is_precompile) {
                 try stable_log.programFailure(
                     ic.tc,
                     program_id,
