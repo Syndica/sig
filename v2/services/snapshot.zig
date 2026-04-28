@@ -134,6 +134,7 @@ const DownloadPhase = enum {
 const DownloadCandidate = struct {
     addr: Address,
     latency_ms: u32,
+    content_len: u64,
     started: bool = false,
 };
 
@@ -153,7 +154,6 @@ const DownloadRace = struct {
 
     slot: Slot,
     hash: Hash,
-    content_len: u64,
 
     candidates: [MAX_DOWNLOAD_CANDIDATES]DownloadCandidate,
     candidate_count: u8,
@@ -166,7 +166,6 @@ const DownloadRace = struct {
             .phase = .idle,
             .slot = 0,
             .hash = Hash.ZEROES,
-            .content_len = 0,
             .candidates = undefined,
             .candidate_count = 0,
             .winner_index = null,
@@ -221,6 +220,8 @@ const DownloadConn = struct {
 
     /// The number of snapshot body bytes written to this peer's temp file.
     bytes_written: u64,
+    /// The expected total size of the snapshot for this racer (from its probe HEAD response).
+    content_len: u64,
     /// The number of bytes moved from the socket into the pipe that still need to be flushed to this peer's temp file.
     pipe_pending: u64,
 
@@ -250,6 +251,7 @@ const DownloadConn = struct {
             .extra_body_len = 0,
 
             .bytes_written = 0,
+            .content_len = 0,
             .pipe_pending = 0,
         };
     }
@@ -822,13 +824,14 @@ const SnapshotService = struct {
         const candidate = DownloadCandidate{
             .addr = probe.addr,
             .latency_ms = latency_ms,
+            .content_len = content_len,
         };
         const slot = probe.slot;
         const hash = probe.hash;
 
         self.finishProbe(data.index, .succeeded);
 
-        self.offerDownloadCandidate(candidate, slot, hash, content_len);
+        self.offerDownloadCandidate(candidate, slot, hash);
         self.probeNextPending();
     }
 
@@ -1065,9 +1068,9 @@ const SnapshotService = struct {
             self.startDownloadRacers();
             return;
         };
-        if (content_len != self.download_race.content_len) {
+        if (content_len != conn.content_len) {
             self.logger.info().logf("download content-length mismatch idx={d} got={d} expected={d}", .{
-                data.index, content_len, self.download_race.content_len,
+                data.index, content_len, conn.content_len,
             });
             self.finishDownload(data.index, .failed);
             self.startDownloadRacers();
@@ -1140,7 +1143,7 @@ const SnapshotService = struct {
         }
 
         conn.bytes_written += conn.extra_body_len;
-        self.maybeSelectWinner();
+        self.maybeSelectWinner(data.index);
 
         // TODO: Perform this check in every place before we queue up next operation.
         if (conn.cancel_requested) {
@@ -1181,7 +1184,7 @@ const SnapshotService = struct {
         }
 
         const n: u64 = @intCast(cqe.res);
-        std.debug.assert(n <= self.download_race.content_len - conn.bytes_written - conn.pipe_pending);
+        std.debug.assert(n <= conn.content_len - conn.bytes_written - conn.pipe_pending);
         conn.pipe_pending += n;
 
         if (conn.cancel_requested) {
@@ -1209,7 +1212,6 @@ const SnapshotService = struct {
         candidate: DownloadCandidate,
         slot: Slot,
         hash: Hash,
-        content_len: u64,
     ) void {
         if (self.download_race.phase == .completed or
             self.download_race.phase == .winner_selected)
@@ -1223,8 +1225,7 @@ const SnapshotService = struct {
             // Only accept a candidate that difers from the failed race target.
             // Accepting the same target would restart the same doomed race.
             const same_target = self.download_race.slot == slot and
-                std.meta.eql(self.download_race.hash, hash) and
-                self.download_race.content_len == content_len;
+                std.meta.eql(self.download_race.hash, hash);
 
             if (same_target) return;
 
@@ -1238,13 +1239,11 @@ const SnapshotService = struct {
             self.download_race.phase = .racing;
             self.download_race.slot = slot;
             self.download_race.hash = hash;
-            self.download_race.content_len = content_len;
         }
 
         // Only accept candidates matching the current race target.
         if (self.download_race.slot != slot) return;
         if (!std.meta.eql(self.download_race.hash, hash)) return;
-        if (self.download_race.content_len != content_len) return;
 
         self.insertDownloadCandidateSorted(candidate);
         self.startDownloadRacers();
@@ -1410,9 +1409,8 @@ const SnapshotService = struct {
 
     fn queueDownloadSpliceInWithTimeout(self: *SnapshotService, index: u8) !void {
         const conn = &self.download_conns[index];
-        const race = &self.download_race;
 
-        const remaining = race.content_len - conn.bytes_written - conn.pipe_pending;
+        const remaining = conn.content_len - conn.bytes_written - conn.pipe_pending;
         std.debug.assert(remaining > 0);
 
         const sqes = try self.reserveLinkedSqes();
@@ -1499,6 +1497,7 @@ const SnapshotService = struct {
         conn.pipe_rd = pipe_fds[0];
         conn.pipe_wr = pipe_fds[1];
         conn.addr = candidate.addr;
+        conn.content_len = candidate.content_len;
 
         try self.queueDownloadConnectWithTimeout(dl_index, fd);
         // TODO: catch error here and totally reset DownloadConn state.
@@ -1508,8 +1507,8 @@ const SnapshotService = struct {
         self.metrics.snapshot_downloads_started.increment(1);
     }
 
-    fn maybeSelectWinner(self: *SnapshotService) void {
-        _ = self;
+    fn maybeSelectWinner(self: *SnapshotService, index: u8) void {
+        _ = .{ self, index };
     }
 
     fn finishDownload(self: *SnapshotService, index: u8, result: DownloadResult) void {
