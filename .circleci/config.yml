@@ -259,34 +259,13 @@ jobs:
             - .zig-cache
             - ~/.cache/zig
       - run:
-          name: Prepare /nix permissions so cache restore works
-          command: |
-            sudo mkdir -p /nix
-            sudo chown "$USER" /nix
-      - restore_cache:
-          key: nix-v1-{{ checksum "conformance/flake.nix" }}-{{ checksum "conformance/flake.lock" }}-{{ checksum "conformance/commits.env" }}
-      - run:
-          name: Install nix
-          command: |
-            sh <(curl --proto '=https' --tlsv1.2 -L https://nixos.org/nix/install) --no-daemon
-            mkdir -p ~/.config/nix
-            echo 'experimental-features = nix-command flakes' > ~/.config/nix/nix.conf
-            echo '. /home/circleci/.nix-profile/etc/profile.d/nix.sh' >> "$BASH_ENV"
-      - run:
           name: Run Fixtures
           command: |
             cd conformance
-            nix develop \
-              -s SPLIT_TESTS true \
-              -s PREBUILT_BIN zig-out/bin/run \
-              -c ./scripts/ci-run.sh
-      - save_cache:
-          key: nix-v1-{{ checksum "conformance/flake.nix" }}-{{ checksum "conformance/flake.lock" }}-{{ checksum "conformance/commits.env" }}
-          paths:
-            - /nix/store
-            - /nix/var/nix/db
-            - /nix/var/nix/profiles
-            - ~/.cache/nix
+            mkdir env
+            cd env
+            git clone https://github.com/firedancer-io/test-vectors.git
+            ../scripts/ci-run.sh
 
   linux_misc_checks:
     executor: linux-executor

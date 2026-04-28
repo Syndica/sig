@@ -4,9 +4,6 @@
 
 set -euxo pipefail
 
-SPLIT_TESTS=${SPLIT_TESTS:-false}
-PREBUILT_BIN=${PREBUILT_BIN:-zig-out/bin/run}
-
 conformance_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd $conformance_dir
 
@@ -24,4 +21,4 @@ comm -23 \
     | xargs -d '\n' cp -t env/split-fixtures/
 
 echo Running fixtures
-${PREBUILT_BIN} env/split-fixtures/ | tee /dev/tty | grep -q "Failed: 0,"
+zig-out/bin/run env/split-fixtures/ 2>&1 | tee /dev/tty | grep -q "Failed: 0,"
