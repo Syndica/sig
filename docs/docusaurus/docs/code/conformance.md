@@ -92,7 +92,7 @@ The conformance system works as follows:
 
 - **Test vectors** are binary `.fix` files in `env/test-vectors/`, each encoding a program input (a transaction, an instruction, an ELF, etc.) along with the expected output that agave produces.
 - **Harnesses** in `src/` deserialize those inputs and feed them into sig's runtime. The harness code is the layer between the test framework and sig's actual logic in `../src/`.
-- **solana-conformance** (a Python CLI in `env/solana-conformance/`) orchestrates test execution, compares outputs, and writes results to `env/test-outputs/`.
+- **solana-conformance** (a Rust CLI binary) orchestrates test execution, compares outputs, and writes results to `env/test-outputs/`.
 - **solfuzz-agave** (`env/solfuzz-agave/`) contains the equivalent harnesses for agave. You can run the tests against agave to regenerate expected outputs, or add print statements to agave for comparison.
 
 The sig source code is in `../src/`. The agave source code is in `env/agave/`. Both can be edited for debugging—just recompile the respective harness afterward.

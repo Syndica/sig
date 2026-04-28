@@ -21,16 +21,12 @@
       inherit system;
       overlays = [rust-overlay.overlays.default zig-overlay.overlays.default];
     };
-    baseDeps = with pkgs; [zigpkgs."0.15.2" python313 git alejandra];
+    baseDeps = with pkgs; [zigpkgs."0.15.2" python313 git alejandra cargo rustc];
     commits = builtins.fromTOML (builtins.readFile ./commits.env);
 
     test-vectors = builtins.fetchGit {
       url = "https://github.com/firedancer-io/test-vectors.git";
       rev = commits.TEST_VECTORS_COMMIT;
-    };
-    solana-conformance = builtins.fetchGit {
-      url = "https://github.com/firedancer-io/solana-conformance.git";
-      rev = commits.SOLANA_CONFORMANCE_COMMIT;
     };
     solfuzz-agave = builtins.fetchGit {
       url = "https://github.com/firedancer-io/solfuzz-agave.git";
@@ -93,9 +89,40 @@
       python3.13 -m venv env/venv
       source env/venv/bin/activate
       ln -sfn "$PWD/run.py" env/venv/bin/run
-      cp -r ${solana-conformance} env/solana-conformance && chmod +w -R env/solana-conformance
-      export SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
-      pip install -e env/solana-conformance[dev,octane]
+      solana_conformance_install_root="$PWD/env/solana-conformance-install"
+      if { [ -n "''${SOLANA_CONFORMANCE_REPO_URL:-}" ] && [ -z "''${SOLANA_CONFORMANCE_REF:-}" ]; } || { [ -z "''${SOLANA_CONFORMANCE_REPO_URL:-}" ] && [ -n "''${SOLANA_CONFORMANCE_REF:-}" ]; }; then
+        echo "ERROR: SOLANA_CONFORMANCE_REPO_URL and SOLANA_CONFORMANCE_REF must both be set together."
+        exit 1
+      fi
+
+      if [ -n "''${SOLANA_CONFORMANCE_REPO_URL:-}" ] && [ -n "''${SOLANA_CONFORMANCE_REF:-}" ]; then
+        echo "SOLANA_CONFORMANCE_REPO_URL/SOLANA_CONFORMANCE_REF provided; cloning pinned source"
+        rm -rf env/solana-conformance-repo
+        git clone "$SOLANA_CONFORMANCE_REPO_URL" env/solana-conformance-repo
+        git -C env/solana-conformance-repo checkout "$SOLANA_CONFORMANCE_REF"
+        export SOLANA_CONFORMANCE_SRC="$PWD/env/solana-conformance-repo/solana-conformance"
+        if [ ! -f "$SOLANA_CONFORMANCE_SRC/Cargo.toml" ]; then
+          echo "ERROR: expected crate at $SOLANA_CONFORMANCE_SRC (Cargo.toml not found)."
+          exit 1
+        fi
+        cargo install --locked --path "$SOLANA_CONFORMANCE_SRC" --root "$solana_conformance_install_root" || exit 1
+        export PATH="$solana_conformance_install_root/bin:$PATH"
+      elif [ -n "''${SOLANA_CONFORMANCE_SRC:-}" ]; then
+        if [ ! -f "$SOLANA_CONFORMANCE_SRC/Cargo.toml" ]; then
+          echo "ERROR: expected crate at $SOLANA_CONFORMANCE_SRC (Cargo.toml not found)."
+          exit 1
+        fi
+        cargo install --locked --path "$SOLANA_CONFORMANCE_SRC" --root "$solana_conformance_install_root" || exit 1
+        export PATH="$solana_conformance_install_root/bin:$PATH"
+      elif command -v solana-conformance >/dev/null 2>&1; then
+        echo "Using system solana-conformance from PATH: $(command -v solana-conformance)"
+      else
+        echo "ERROR: solana-conformance not found."
+        echo "Set SOLANA_CONFORMANCE_REPO_URL and SOLANA_CONFORMANCE_REF,"
+        echo "or set SOLANA_CONFORMANCE_SRC to the crate path (for example /path/to/repo/solana-conformance),"
+        echo "or install solana-conformance so it is available on PATH."
+        exit 1
+      fi
       pip install -e parseout[dev]
     '';
   in {

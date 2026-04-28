@@ -26,8 +26,8 @@ comm -23 \
     | xargs -d '\n' cp -t env/split-fixtures/
 
 echo Running fixtures
-solana-conformance exec-fixtures \
+solana-conformance run-fixtures \
     --num-processes $NUM_THREADS \
     -t ${PREBUILT_LIB_DIR}/libsolfuzz_sig.so \
     -o env/test_results/ \
-    -i env/split-fixtures/ | tee /dev/tty | grep -q "Failed: 0,"
+    -i env/split-fixtures/ | tee /dev/tty | grep -Eq "Results: [0-9]+ passed, 0 failed"

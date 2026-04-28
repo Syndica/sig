@@ -289,8 +289,33 @@ jobs:
       - run:
           name: Run Fixtures
           command: |
+            if { [ -n "${SOLANA_CONFORMANCE_REPO_URL:-}" ] && [ -z "${SOLANA_CONFORMANCE_REF:-}" ]; } || { [ -z "${SOLANA_CONFORMANCE_REPO_URL:-}" ] && [ -n "${SOLANA_CONFORMANCE_REF:-}" ]; }; then
+              echo "ERROR: SOLANA_CONFORMANCE_REPO_URL and SOLANA_CONFORMANCE_REF must both be set together."
+              exit 1
+            fi
+
+            if [ -n "${SOLANA_CONFORMANCE_REPO_URL:-}" ] && [ -n "${SOLANA_CONFORMANCE_REF:-}" ]; then
+              echo "SOLANA_CONFORMANCE_REPO_URL/SOLANA_CONFORMANCE_REF provided; cloning pinned source"
+              rm -rf /tmp/solana-conformance
+              git clone "$SOLANA_CONFORMANCE_REPO_URL" /tmp/solana-conformance
+              git -C /tmp/solana-conformance checkout "$SOLANA_CONFORMANCE_REF"
+              export SOLANA_CONFORMANCE_SRC=/tmp/solana-conformance/solana-conformance
+              echo 'export SOLANA_CONFORMANCE_SRC=/tmp/solana-conformance/solana-conformance' >> "$BASH_ENV"
+            elif [ -n "${SOLANA_CONFORMANCE_SRC:-}" ]; then
+              echo "Using SOLANA_CONFORMANCE_SRC from environment"
+            elif command -v solana-conformance >/dev/null 2>&1; then
+              echo "Using system solana-conformance from PATH"
+            else
+              echo "ERROR: solana-conformance is unavailable."
+              echo "Set one of:"
+              echo "  - SOLANA_CONFORMANCE_REPO_URL and SOLANA_CONFORMANCE_REF"
+              echo "  - SOLANA_CONFORMANCE_SRC"
+              echo "  - system-installed solana-conformance on PATH"
+              exit 1
+            fi
+
             cd conformance
-            nix develop \
+            nix develop --impure \
               -s SPLIT_TESTS true \
               -s PREBUILT_LIB_DIR ../workspace/conformance-release/lib \
               -c ./scripts/ci-run.sh

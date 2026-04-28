@@ -2,6 +2,27 @@
 
 Install [nix](https://nixos.org/download/) if you do not have it.
 
+`solana-conformance` is now provided externally as a Rust CLI crate. Resolution order is:
+
+1. `SOLANA_CONFORMANCE_REPO_URL` and `SOLANA_CONFORMANCE_REF` (must both be set)
+2. `SOLANA_CONFORMANCE_SRC` (crate path, for example `/path/to/repo/solana-conformance`)
+3. a system installation on `PATH`
+
+Example with local source checkout:
+
+```bash
+export SOLANA_CONFORMANCE_SRC=~/src/repo/solana-conformance
+nix develop --impure
+```
+
+Example with repo coordinates (pinned):
+
+```bash
+export SOLANA_CONFORMANCE_REPO_URL=https://<token>@github.com/<org>/<repo>.git
+export SOLANA_CONFORMANCE_REF=<commit-or-tag>
+nix develop --impure
+```
+
 ```bash
 nix develop            # if you only want to run the tests
 nix develop .#agave    # if you also want to run the test vectors against agave
@@ -42,7 +63,7 @@ run.py is a helper script to make this process easier. But in some cases when de
 
 ```bash
 solana-conformance \
-    exec-fixtures \
+    run-fixtures \
     -i env/test-vectors/instr/fixtures/zk_sdk \
     -t zig-out/lib/libsolfuzz_sig.so \
     -o env/test-outputs/
@@ -92,7 +113,7 @@ The conformance system works as follows:
 
 - **Test vectors** are binary `.fix` files in `env/test-vectors/`, each encoding a program input (a transaction, an instruction, an ELF, etc.) along with the expected output that agave produces.
 - **Harnesses** in `src/` deserialize those inputs and feed them into sig's runtime. The harness code is the layer between the test framework and sig's actual logic in `../src/`.
-- **solana-conformance** (a Python CLI in `env/solana-conformance/`) orchestrates test execution, compares outputs, and writes results to `env/test-outputs/`.
+- **solana-conformance** (a Rust CLI binary) orchestrates test execution, compares outputs, and writes results to `env/test-outputs/`.
 - **solfuzz-agave** (`env/solfuzz-agave/`) contains the equivalent harnesses for agave. You can run the tests against agave to regenerate expected outputs, or add print statements to agave for comparison.
 
 The sig source code is in `../src/`. The agave source code is in `env/agave/`. Both can be edited for debugging—just recompile the respective harness afterward.
