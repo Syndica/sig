@@ -20,7 +20,7 @@ const EMIT_LOGS = false;
 const HEAP_MAX = 256 * 1024;
 const STACK_SIZE = 4_096 * 64;
 
-export fn sol_compat_vm_cpi_syscall_v1(
+pub export fn sol_compat_vm_cpi_syscall_v1(
     out_ptr: [*]u8,
     out_size: *u64,
     in_ptr: [*]const u8,
@@ -31,7 +31,7 @@ export fn sol_compat_vm_cpi_syscall_v1(
 
 /// [fd] https://github.com/firedancer-io/firedancer/blob/b5acf851f523ec10a85e1b0c8756b2aea477107e/src/flamenco/runtime/tests/fd_exec_sol_compat.c#L744
 /// [solfuzz-agave] https://github.com/firedancer-io/solfuzz-agave/blob/0b8a7971055d822df3f602c287c368400a784c15/src/vm_syscalls.rs#L45
-export fn sol_compat_vm_syscall_execute_v1(
+pub export fn sol_compat_vm_syscall_execute_v1(
     out_ptr: [*]u8,
     out_size: *u64,
     in_ptr: [*]const u8,

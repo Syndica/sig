@@ -10,9 +10,14 @@ pub fn build(b: *Build) void {
     const bin_run = !(b.option(bool, "no-run", "Don't run any of the executables implied by the specified steps.") orelse false);
     // Disabled by default due to it slowing down test-vector execution.
     const enable_fuzz = b.option(bool, "enable-fuzz", "Enables SanCov points for fuzzing and tracing") orelse false;
+    const include_sig = !(b.option(bool, "no-sig", "Exclude sig from the `run` executable (builds faster)") orelse false);
+
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "include_sig", include_sig);
 
     const install_step = b.getInstallStep();
     const solfuzz_sig_step = b.step("solfuzz_sig", "The solfuzz sig library.");
+    const run_step = b.step("run", "Run test fixtures");
     const test_step = b.step("test", "Run unit tests");
 
     const proto_step = b.step(
@@ -37,6 +42,7 @@ pub fn build(b: *Build) void {
     const common_imports = [_]Build.Module.Import{
         .{ .name = "sig", .module = sig_mod },
         .{ .name = "protobuf", .module = pb_mod },
+        .{ .name = "build-options", .module = build_options.createModule() },
     };
 
     const solfuzz_sig_lib = b.addLibrary(.{
@@ -60,6 +66,34 @@ pub fn build(b: *Build) void {
         const solfuzz_sig_install = b.addInstallArtifact(solfuzz_sig_lib, .{});
         solfuzz_sig_step.dependOn(&solfuzz_sig_install.step);
         install_step.dependOn(&solfuzz_sig_install.step);
+    }
+
+    const exe = b.addExecutable(.{
+        .name = "run",
+        .root_module = b.createModule(.{
+            .target = b.graph.host,
+            .optimize = optimize,
+            .root_source_file = b.path("src/main.zig"),
+            .imports = if (include_sig)
+                &common_imports
+            else
+                &.{.{ .name = "build-options", .module = build_options.createModule() }},
+        }),
+    });
+    exe.linkLibC();
+    exe.use_llvm = true;
+    run_step.dependOn(&exe.step);
+    install_step.dependOn(&exe.step);
+
+    if (bin_install) {
+        const exe_install = b.addInstallArtifact(exe, .{});
+        run_step.dependOn(&exe_install.step);
+        install_step.dependOn(&exe_install.step);
+    }
+    if (bin_run) {
+        const run_cmd = b.addRunArtifact(exe);
+        run_cmd.addArgs(b.args orelse &.{});
+        run_step.dependOn(&run_cmd.step);
     }
 
     const test_exe = b.addTest(.{

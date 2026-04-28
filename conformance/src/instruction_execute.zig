@@ -17,7 +17,7 @@ const EMIT_LOGS = false;
 
 /// [fd] https://github.com/firedancer-io/firedancer/blob/0ad2143a9960b7daa5eb594367835d0cbae25657/src/flamenco/runtime/tests/fd_exec_sol_compat.c#L591
 /// [solfuzz-agave] https://github.com/firedancer-io/solfuzz-agave/blob/98f939ba8afcb1b7a5af4316c6085f92111b62a7/src/lib.rs#L1043
-export fn sol_compat_instr_execute_v1(
+pub export fn sol_compat_instr_execute_v1(
     out_ptr: [*]u8,
     out_size: *u64,
     in_ptr: [*]const u8,

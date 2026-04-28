@@ -10,7 +10,7 @@ const elf = svm.elf;
 
 const xxhash = std.hash.XxHash64.hash;
 
-export fn sol_compat_elf_loader_v1(
+pub export fn sol_compat_elf_loader_v1(
     out_ptr: [*]u8,
     out_size: *u64,
     in_ptr: [*]const u8,
