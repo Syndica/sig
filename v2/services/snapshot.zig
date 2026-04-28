@@ -943,13 +943,13 @@ const SnapshotService = struct {
 
         if (conn.timed_out) {
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         }
         if (cqe.err() != .SUCCESS) {
             self.logger.info().logf("download connect failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         }
 
@@ -959,7 +959,7 @@ const SnapshotService = struct {
             // candidate can be marked unstarted/pending instead of being skipped for this race.
             // For now we treat it as a hard racer failure.
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         };
     }
@@ -973,13 +973,13 @@ const SnapshotService = struct {
 
         if (conn.timed_out) {
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         }
         if (cqe.err() != .SUCCESS) {
             self.logger.info().logf("download send failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         }
 
@@ -991,7 +991,7 @@ const SnapshotService = struct {
             self.queueDownloadSendWithTimeout(data, new_offset) catch {
                 // TODO: Same as in handleDownloadCOnnect. Consider retry.
                 self.finishDownload(data.index, .failed);
-                self.startDownloadRacers();
+                self.startPendingRacers();
                 return;
             };
             return;
@@ -1000,7 +1000,7 @@ const SnapshotService = struct {
         self.queueDownloadRecvHeadersWithTimeout(data, 0) catch {
             // TODO: Same as in handleDownloadCOnnect. Consider retry.
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         };
     }
@@ -1014,19 +1014,19 @@ const SnapshotService = struct {
 
         if (conn.timed_out) {
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         }
         if (cqe.err() != .SUCCESS) {
             self.logger.info().logf("download recv_headers failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         }
         if (cqe.res == 0) {
             self.logger.info().logf("download recv_headers eof idx={d}", .{data.index});
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         }
 
@@ -1040,12 +1040,12 @@ const SnapshotService = struct {
             if (new_offset >= conn.recv_buf.len) {
                 self.logger.info().logf("download headers too large idx={d}", .{data.index});
                 self.finishDownload(data.index, .failed);
-                self.startDownloadRacers();
+                self.startPendingRacers();
                 return;
             }
             self.queueDownloadRecvHeadersWithTimeout(data, new_offset) catch {
                 self.finishDownload(data.index, .failed);
-                self.startDownloadRacers();
+                self.startPendingRacers();
                 return;
             };
             return;
@@ -1057,7 +1057,7 @@ const SnapshotService = struct {
         if (std.mem.indexOf(u8, status_line, "200") == null) {
             self.logger.info().logf("download bad status idx={d} status={s}", .{ data.index, status_line });
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         }
 
@@ -1065,7 +1065,7 @@ const SnapshotService = struct {
         const content_len = parseContentLength(response[0 .. header_end + 4]) orelse {
             self.logger.info().logf("download missing/zero content-length idx={d}", .{data.index});
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         };
         if (content_len != conn.content_len) {
@@ -1073,15 +1073,14 @@ const SnapshotService = struct {
                 data.index, content_len, conn.content_len,
             });
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         }
 
         conn.recv_len = new_offset;
 
         // A winner may have been selected while we were reading headers.
-        // TODO: Perform this check in every place before we queue up next operation.
-        if (conn.cancel_requested) {
+        if (self.shouldCancelDownload(data.index)) {
             self.finishDownload(data.index, .cancelled);
             return;
         }
@@ -1096,14 +1095,14 @@ const SnapshotService = struct {
             conn.extra_body_len = extra_len;
             self.queueDownloadWriteExtra(data, 0) catch {
                 self.finishDownload(data.index, .failed);
-                self.startDownloadRacers();
+                self.startPendingRacers();
                 return;
             };
         } else {
             // Otherwise move into the full download phase.
             self.queueDownloadSpliceInWithTimeout(data.index) catch {
                 self.finishDownload(data.index, .failed);
-                self.startDownloadRacers();
+                self.startPendingRacers();
                 return;
             };
         }
@@ -1119,7 +1118,7 @@ const SnapshotService = struct {
         if (cqe.err() != .SUCCESS) {
             self.logger.info().logf("download write_extra failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         }
 
@@ -1127,8 +1126,7 @@ const SnapshotService = struct {
         std.debug.assert(cqe.res <= conn.extra_body_len - data.offset);
         const new_written = data.offset + @as(u16, @intCast(cqe.res));
 
-        // TODO: Perform this check in every place before we queue up next operation.
-        if (conn.cancel_requested) {
+        if (self.shouldCancelDownload(data.index)) {
             self.finishDownload(data.index, .cancelled);
             return;
         }
@@ -1136,7 +1134,7 @@ const SnapshotService = struct {
         if (new_written < conn.extra_body_len) {
             self.queueDownloadWriteExtra(data, new_written) catch {
                 self.finishDownload(data.index, .failed);
-                self.startDownloadRacers();
+                self.startPendingRacers();
                 return;
             };
             return;
@@ -1145,15 +1143,14 @@ const SnapshotService = struct {
         conn.bytes_written += conn.extra_body_len;
         self.maybeSelectWinner(data.index);
 
-        // TODO: Perform this check in every place before we queue up next operation.
-        if (conn.cancel_requested) {
+        if (self.shouldCancelDownload(data.index)) {
             self.finishDownload(data.index, .cancelled);
             return;
         }
 
         self.queueDownloadSpliceInWithTimeout(data.index) catch {
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         };
     }
@@ -1167,19 +1164,19 @@ const SnapshotService = struct {
 
         if (conn.timed_out) {
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         }
         if (cqe.err() != .SUCCESS) {
             self.logger.info().logf("download splice_in failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         }
         if (cqe.res == 0) {
             self.logger.info().logf("download splice_in eof idx={d}", .{data.index});
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         }
 
@@ -1187,20 +1184,73 @@ const SnapshotService = struct {
         std.debug.assert(n <= conn.content_len - conn.bytes_written - conn.pipe_pending);
         conn.pipe_pending += n;
 
-        if (conn.cancel_requested) {
+        if (self.shouldCancelDownload(data.index)) {
             self.finishDownload(data.index, .cancelled);
             return;
         }
 
         self.queueDownloadSpliceOut(data.index) catch {
             self.finishDownload(data.index, .failed);
-            self.startDownloadRacers();
+            self.startPendingRacers();
             return;
         };
     }
 
     fn handleDownloadSpliceOut(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
-        _ = .{ self, data, cqe };
+        const conn = self.getDownloadForCqe(data) orelse return;
+        if (conn.phase != .splicing_out) {
+            self.logger.warn().logf("unexpected download splice_out cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
+            return;
+        }
+
+        if (cqe.err() != .SUCCESS) {
+            self.logger.info().logf("download splice_out failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
+            self.finishDownload(data.index, .failed);
+            self.startPendingRacers();
+            return;
+        }
+        if (cqe.res <= 0) {
+            self.logger.info().logf("download splice_out zero idx={d}", .{data.index});
+            self.finishDownload(data.index, .failed);
+            self.startPendingRacers();
+            return;
+        }
+
+        const n: u64 = @intCast(cqe.res);
+        std.debug.assert(n <= conn.pipe_pending);
+        conn.pipe_pending -= n;
+        conn.bytes_written += n;
+
+        self.maybeSelectWinner(data.index);
+
+        if (conn.pipe_pending > 0) {
+            self.queueDownloadSpliceOut(data.index) catch {
+                self.finishDownload(data.index, .failed);
+                self.startPendingRacers();
+                return;
+            };
+            return;
+        }
+
+        if (conn.bytes_written >= conn.content_len) {
+            self.queueDownloadFsync(data.index) catch {
+                self.finishDownload(data.index, .failed);
+                self.startPendingRacers();
+                return;
+            };
+            return;
+        }
+
+        if (self.shouldCancelDownload(data.index)) {
+            self.finishDownload(data.index, .cancelled);
+            return;
+        }
+
+        self.queueDownloadSpliceInWithTimeout(data.index) catch {
+            self.finishDownload(data.index, .failed);
+            self.startPendingRacers();
+            return;
+        };
     }
 
     fn handleDownloadFsync(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
@@ -1246,7 +1296,7 @@ const SnapshotService = struct {
         if (!std.meta.eql(self.download_race.hash, hash)) return;
 
         self.insertDownloadCandidateSorted(candidate);
-        self.startDownloadRacers();
+        self.startPendingRacers();
     }
 
     fn insertDownloadCandidateSorted(self: *SnapshotService, candidate: DownloadCandidate) void {
@@ -1273,7 +1323,7 @@ const SnapshotService = struct {
         self.metrics.snapshot_download_candidates.increment(1);
     }
 
-    fn startDownloadRacers(self: *SnapshotService) void {
+    fn startPendingRacers(self: *SnapshotService) void {
         if (self.download_race.phase != .racing) return;
 
         while (self.active_downloads < MAX_DOWNLOAD_RACERS) {
@@ -1436,6 +1486,25 @@ const SnapshotService = struct {
     }
 
     fn queueDownloadSpliceOut(self: *SnapshotService, index: u8) !void {
+        const conn = &self.download_conns[index];
+
+        std.debug.assert(conn.pipe_pending > 0);
+
+        const capacity: u32 = @intCast(self.ring.sq.sqes.len);
+        if (capacity - self.ring.sq_ready() < 1) return error.SubmissionQueueFull;
+        const sqe = self.ring.get_sqe() catch unreachable;
+
+        var splice_ud = UserData.init(.download_splice_out, index, conn.gen);
+        splice_ud.offset = conn.active_offset;
+
+        const len: usize = @intCast(conn.pipe_pending);
+        sqe.prep_splice(conn.pipe_rd, NO_OFFSET, conn.file_fd, conn.bytes_written, len);
+        sqe.user_data = splice_ud.encode();
+
+        conn.phase = .splicing_out;
+    }
+
+    fn queueDownloadFsync(self: *SnapshotService, index: u8) !void {
         _ = .{ self, index };
     }
 
@@ -1505,6 +1574,11 @@ const SnapshotService = struct {
         candidate.started = true;
         self.active_downloads += 1;
         self.metrics.snapshot_downloads_started.increment(1);
+    }
+
+    fn shouldCancelDownload(self: *SnapshotService, index: u8) bool {
+        return self.download_conns[index].cancel_requested and
+            self.download_race.winner_index != index;
     }
 
     fn maybeSelectWinner(self: *SnapshotService, index: u8) void {
