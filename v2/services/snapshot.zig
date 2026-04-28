@@ -16,6 +16,12 @@ const MAX_CONCURRENT_PROBES: u8 = 16;
 const PROBE_TIMEOUT_SECS: i64 = 3;
 const PROBE_TIMEOUT: std.os.linux.kernel_timespec = .{ .sec = PROBE_TIMEOUT_SECS, .nsec = 0 };
 
+const MAX_DOWNLOAD_RACERS: u8 = 5;
+const MAX_DOWNLOAD_CANDIDATES: u8 = 64;
+const DOWNLOAD_RACE_THRESHOLD_PCT: u64 = 5;
+const SPLICE_CHUNK: u32 = 1024 * 1024;
+const NO_OFFSET: u64 = std.math.maxInt(u64);
+
 const ProbeConn = struct {
     /// Current state in the snapshot probing lifecycle for this particaly peer.
     /// Set to .unused when this slot is available for a new probe.
@@ -99,12 +105,174 @@ const DedupeMap = std.array_hash_map.ArrayHashMapUnmanaged(
     true,
 );
 
+/// The current phase of this peer's download during the race.
+const DownloadPhase = enum {
+    /// This entry in the `DownloadConn` array is free. No active download being tracked.
+    unused,
+    /// TCP socket exists for this peer, and an async connect has beeen issued to io_uring.
+    connecting,
+    /// TCP connection succeeded, and an async send of the HTTP GET request issued.
+    sending,
+    /// GET req was sent, async recv() is reading HTTP response (headers) into peer's `recv_buf`.
+    reading_headers,
+    /// The received header also captured some body bytes after parsing `\r\n\r\n`, so a write() has been issued
+    /// to move those body bytes to the peer's temp file.
+    writing_extra,
+    /// Async `splice()` issued to move snapshot body bytes from TCP socket into the pipe.
+    /// represents socket -> pipe.
+    splicing_in,
+    /// Asyne `splice()` moving bytes from pipe to temp file.
+    /// represents pipe -> file.
+    splicing_out,
+    /// All expected bytes written (download complete/this peer won). An async `fsync()` is issued to flush
+    /// remaining bytes to temp file, before final rename. Losers don't reach this state.
+    fsyncing,
+};
+
+const DownloadCandidate = struct {
+    addr: Address,
+    latency_ms: u32,
+    started: bool = false,
+};
+
+const DownloadRace = struct {
+    phase: enum {
+        /// The race hasn't started yet (no candidates have arrived).
+        idle,
+        /// At least one candidate queued/download in flight.
+        racing,
+        /// A winner has been declared. Losers are being stopped.
+        winner_selected,
+        /// The winner's download has completed, final file available.
+        completed,
+        /// The race has totally failed.
+        failed,
+    },
+
+    slot: Slot,
+    hash: Hash,
+    content_len: u64,
+
+    candidates: [MAX_DOWNLOAD_CANDIDATES]DownloadCandidate,
+    candidate_count: u8,
+
+    winner_index: ?u8,
+
+    /// NOTE: resets the race phase to .idle
+    pub fn empty() DownloadRace {
+        return .{
+            .phase = .idle,
+            .slot = 0,
+            .hash = Hash.ZEROES,
+            .content_len = 0,
+            .candidates = undefined,
+            .candidate_count = 0,
+            .winner_index = null,
+        };
+    }
+};
+
+const DownloadConn = struct {
+    phase: DownloadPhase,
+    /// Similar to ProvbeConn's gen. Used to prevent a late-arriving CQE for this DownloadConn when
+    /// the original peer's download was abandoned from overwritting the new peer it's now representing (i.e generations don't match).
+    gen: u16,
+    /// set when a linked timeout fired, but we are still waiting for the
+    /// primary op's cqe before freeing/reusing the slot prematurely.
+    timed_out: bool,
+    /// byte offset of the most recently submitted primary op within the current phase.
+    /// Used to distinguish stale timeout cqes from previous partial send/recv ops when downloading.
+    active_offset: u16,
+    /// Set once a winner is declared so signal that this download should be stopped and cleaned up.
+    cancel_requested: bool,
+
+    /// The tcp socket connected to the snapshot peer. Used for HTTP GET and reading snapshot bytes.
+    /// TODO: Would be nice to transfer tcp connection from probing phase to download phase without needing to re-open.
+    fd: std.posix.fd_t,
+    /// The temp output file being written by this peer.
+    file_fd: std.posix.fd_t,
+    /// The read end of the pipe used by splice to bridge between socket and file.
+    pipe_rd: std.posix.fd_t,
+    /// The write end of the pipe used by splice to bridge between socket and file.
+    pipe_wr: std.posix.fd_t,
+
+    /// Address used for logging/identity.
+    addr: Address,
+    /// Address used for the socket connection (must live long enough for io_uring use, hence stored here).
+    net_addr: std.net.Address,
+
+    /// Used to store the GET request string for this peer.
+    send_buf: [256]u8,
+    /// The length of the GET request's payload.
+    send_len: u16,
+
+    /// Used to store HTTP responses. Needs to live until the recv CQE completes.
+    recv_buf: [4096]u8,
+    /// The length of the HTTP payload received and stored in `recv_buf` currently.
+    recv_len: u16,
+
+    /// Start of the HTTP body bytes in `recv_buf`.
+    extra_body_start: u16,
+    /// End of the HTTP body bytes in `recv_buf`.
+    extra_body_len: u16,
+
+    /// The number of snapshot body bytes written to this peer's temp file.
+    bytes_written: u64,
+    /// The number of bytes moved from the socket into the pipe that still need to be flushed to this peer's temp file.
+    pipe_pending: u64,
+
+    pub fn empty() DownloadConn {
+        return .{
+            .phase = .unused,
+            .gen = 0,
+            .timed_out = false,
+            .active_offset = 0,
+            .cancel_requested = false,
+
+            .fd = -1,
+            .file_fd = -1,
+            .pipe_rd = -1,
+            .pipe_wr = -1,
+
+            .addr = undefined,
+            .net_addr = undefined,
+
+            .send_buf = undefined,
+            .send_len = 0,
+
+            .recv_buf = undefined,
+            .recv_len = 0,
+
+            .extra_body_start = 0,
+            .extra_body_len = 0,
+
+            .bytes_written = 0,
+            .pipe_pending = 0,
+        };
+    }
+};
+
+const DownloadResult = enum {
+    succeeded,
+    failed,
+    cancelled,
+};
+
 // TODO: Can be smaller than u8.
 const Op = enum(u8) {
     gossip_drain_timeout,
+
     probe_connect,
     probe_send,
     probe_recv,
+
+    download_connect,
+    download_send,
+    download_recv_headers,
+    download_write_extra,
+    download_splice_in,
+    download_splice_out,
+    download_fsync,
 };
 
 /// Packed into io_uring sqe/cqe user_data field for identifying operations on completion
@@ -151,6 +319,13 @@ const Metrics = struct {
     snapshot_probes_failed: tel.Counter,
     snapshot_probes_timed_out: tel.Counter,
     snapshot_sq_fulls: tel.Counter,
+    snapshot_download_candidates: tel.Counter,
+    snapshot_downloads_started: tel.Counter,
+    snapshot_downloads_failed: tel.Counter,
+    snapshot_downloads_cancelled: tel.Counter,
+    snapshot_downloads_succeeded: tel.Counter,
+    snapshot_download_winners: tel.Counter,
+    snapshot_download_bytes_written: tel.Counter,
 };
 
 const SnapshotService = struct {
@@ -161,6 +336,11 @@ const SnapshotService = struct {
     probe_conns: [MAX_CONCURRENT_PROBES]ProbeConn,
     active_probes: u8,
     timeout_pending: bool,
+
+    download_conns: [MAX_DOWNLOAD_RACERS]DownloadConn,
+    active_downloads: u8,
+    download_race: DownloadRace,
+    snapshot_dir: []const u8,
 
     metrics: Metrics,
     logger: tel.Logger("snapshot"),
@@ -179,11 +359,25 @@ const SnapshotService = struct {
             for (cqes[0..n]) |cqe| {
                 const data = UserData.decode(cqe.user_data);
 
+                // An operation timed out, invoke the corresponding timeout handler.
                 if (data.is_timeout) {
-                    self.handleProbeTimeout(data, cqe);
+                    switch (data.op) {
+                        .probe_connect,
+                        .probe_send,
+                        .probe_recv,
+                        => self.handleProbeTimeout(data, cqe),
+                        .download_connect,
+                        .download_send,
+                        .download_recv_headers,
+                        .download_splice_in,
+                        => self.handleDownloadTimeout(data, cqe),
+                        // The other op's don't have timeouts.
+                        else => {},
+                    }
                     continue;
                 }
 
+                // Otherwise, an operation has completed, handle state changes.
                 switch (data.op) {
                     .gossip_drain_timeout => {
                         self.timeout_pending = false;
@@ -192,6 +386,14 @@ const SnapshotService = struct {
                     .probe_connect => self.handleProbeConnect(data, cqe),
                     .probe_send => self.handleProbeSend(data, cqe),
                     .probe_recv => self.handleProbeRecv(data, cqe),
+
+                    .download_connect => self.handleDownloadConnect(data, cqe),
+                    .download_send => self.handleDownloadSend(data, cqe),
+                    .download_recv_headers => self.handleDownloadRecvHeaders(data, cqe),
+                    .download_write_extra => self.handleDownloadWriteExtra(data, cqe),
+                    .download_splice_in => self.handleDownloadSpliceIn(data, cqe),
+                    .download_splice_out => self.handleDownloadSpliceOut(data, cqe),
+                    .download_fsync => self.handleDownloadFsync(data, cqe),
                 }
             }
         }
@@ -612,7 +814,18 @@ const SnapshotService = struct {
         }
 
         self.logger.info().logf("probe succeeded idx={d} latency={d}ms content_len={d} addr={f}", .{ data.index, latency_ms, content_len, probe.addr });
+
+        // Finish out the probe before moving peer info onto download phase.
+        const candidate = DownloadCandidate{
+            .addr = probe.addr,
+            .latency_ms = latency_ms,
+        };
+        const slot = probe.slot;
+        const hash = probe.hash;
+
         self.finishProbe(data.index, .succeeded);
+
+        self.offerDownloadCandidate(candidate, slot, hash, content_len);
         self.probeNextPending();
     }
 
@@ -666,6 +879,215 @@ const SnapshotService = struct {
             }
         }
     }
+
+    fn handleDownloadTimeout(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+        _ = .{ self, data, cqe };
+    }
+
+    fn handleDownloadConnect(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+        _ = .{ self, data, cqe };
+    }
+
+    fn handleDownloadSend(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+        _ = .{ self, data, cqe };
+    }
+
+    fn handleDownloadRecvHeaders(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+        _ = .{ self, data, cqe };
+    }
+
+    fn handleDownloadWriteExtra(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+        _ = .{ self, data, cqe };
+    }
+
+    fn handleDownloadSpliceIn(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+        _ = .{ self, data, cqe };
+    }
+
+    fn handleDownloadSpliceOut(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+        _ = .{ self, data, cqe };
+    }
+
+    fn handleDownloadFsync(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+        _ = .{ self, data, cqe };
+    }
+
+    fn offerDownloadCandidate(
+        self: *SnapshotService,
+        candidate: DownloadCandidate,
+        slot: Slot,
+        hash: Hash,
+        content_len: u64,
+    ) void {
+        if (self.download_race.phase == .completed or
+            self.download_race.phase == .winner_selected)
+        {
+            return;
+        }
+
+        // Handles the case where the race for the previous target snapshot (slot + hash)
+        // failed, and we must restart the race with a new slot + hash.
+        if (self.download_race.phase == .failed) {
+            // Only accept a candidate that difers from the failed race target.
+            // Accepting the same target would restart the same doomed race.
+            const same_target = self.download_race.slot == slot and
+                std.meta.eql(self.download_race.hash, hash) and
+                self.download_race.content_len == content_len;
+
+            if (same_target) return;
+
+            // Different target, reset for a new race (.empty() sets phase to .idle).
+            self.download_race = DownloadRace.empty();
+        }
+
+        // The case where we haven't started the race.
+        if (self.download_race.phase == .idle) {
+            self.download_race = DownloadRace.empty();
+            self.download_race.phase = .racing;
+            self.download_race.slot = slot;
+            self.download_race.hash = hash;
+            self.download_race.content_len = content_len;
+        }
+
+        // Only accept candidates matching the current race target.
+        if (self.download_race.slot != slot) return;
+        if (!std.meta.eql(self.download_race.hash, hash)) return;
+        if (self.download_race.content_len != content_len) return;
+
+        self.insertDownloadCandidateSorted(candidate);
+        self.startDownloadRacers();
+    }
+
+    fn insertDownloadCandidateSorted(self: *SnapshotService, candidate: DownloadCandidate) void {
+        const race = &self.download_race;
+
+        // Reject duplicate address.
+        for (race.candidates[0..race.candidate_count]) |*existing| {
+            if (std.meta.eql(existing.addr, candidate.addr)) return;
+        }
+
+        // Full, so we reject the new candidate
+        if (race.candidate_count >= MAX_DOWNLOAD_CANDIDATES) return;
+
+        // Insertion sort by latency_ms (ascending).
+        // TODO: Do we even need this?
+        var pos: u8 = race.candidate_count;
+        while (pos > 0 and race.candidates[pos - 1].latency_ms > candidate.latency_ms) {
+            race.candidates[pos] = race.candidates[pos - 1];
+            pos -= 1;
+        }
+        race.candidates[pos] = candidate;
+        race.candidate_count += 1;
+
+        self.metrics.snapshot_download_candidates.increment(1);
+    }
+
+    fn startDownloadRacers(self: *SnapshotService) void {
+        if (self.download_race.phase != .racing) return;
+
+        while (self.active_downloads < MAX_DOWNLOAD_RACERS) {
+            const candidate_index = self.nextUnstartedCandidate() orelse return;
+
+            self.startDownloadRacer(candidate_index) catch |err| {
+                self.logger.warn().logf("failed to start download racer err={}", .{err});
+                self.download_race.candidates[candidate_index].started = true;
+                continue;
+            };
+        }
+    }
+
+    // TODO: Remove this. store a pending cancidate list that we pull from instead of linear scan.
+    fn nextUnstartedCandidate(self: *SnapshotService) ?u8 {
+        for (self.download_race.candidates[0..self.download_race.candidate_count], 0..) |*c, i| {
+            if (!c.started) return @intCast(i);
+        }
+        return null;
+    }
+
+    fn queueDownloadConnectWithTimeout(
+        self: *SnapshotService,
+        index: u8,
+        fd: std.posix.fd_t,
+    ) !void {
+        const conn = &self.download_conns[index];
+
+        const connect_data = UserData.init(.download_connect, index, conn.gen);
+        var timeout_data = connect_data;
+        timeout_data.is_timeout = true;
+
+        const sqes = try self.reserveLinkedSqes();
+
+        sqes.primary.prep_connect(fd, &conn.net_addr.any, conn.net_addr.getOsSockLen());
+        sqes.primary.user_data = connect_data.encode();
+        sqes.primary.flags |= std.os.linux.IOSQE_IO_LINK;
+
+        sqes.timeout.prep_link_timeout(&PROBE_TIMEOUT, 0);
+        sqes.timeout.user_data = timeout_data.encode();
+
+        conn.phase = .connecting;
+        conn.active_offset = 0;
+        conn.timed_out = false;
+    }
+
+    fn startDownloadRacer(self: *SnapshotService, candidate_index: u8) !void {
+        const candidate = &self.download_race.candidates[candidate_index];
+        const race = &self.download_race;
+
+        // Find a free download conn.
+        const dl_index: u8, const conn = for (&self.download_conns, 0..) |*c, i| {
+            if (c.phase == .unused) break .{ @intCast(i), c };
+        } else return;
+
+        // Create nonblocking TCP socket.
+        conn.net_addr = candidate.addr.toNetAddress();
+        const fd = try std.posix.socket(
+            conn.net_addr.any.family,
+            std.posix.SOCK.STREAM | std.posix.SOCK.NONBLOCK,
+            0,
+        );
+        errdefer std.posix.close(fd);
+
+        // Create pipe for splice.
+        const pipe_fds = try std.posix.pipe2(.{ .NONBLOCK = true });
+        errdefer {
+            std.posix.close(pipe_fds[0]);
+            std.posix.close(pipe_fds[1]);
+        }
+
+        // Create temp file.
+        conn.gen +%= 1;
+        var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+        const tmp_path = formatTempPath(&path_buf, self.snapshot_dir, race.slot, race.hash, dl_index, conn.gen);
+        path_buf[tmp_path.len] = 0;
+        const file_fd = std.posix.openat(std.posix.AT.FDCWD, path_buf[0..tmp_path.len :0], .{
+            .ACCMODE = .WRONLY,
+            .CREAT = true,
+            .TRUNC = true,
+        }, 0o644) catch |err| return err;
+        errdefer std.posix.close(file_fd);
+
+        // Format GET request.
+        var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
+        const hash_str = race.hash.base58String(&hash_buf);
+        const send_len = std.fmt.bufPrint(
+            &conn.send_buf,
+            "GET /snapshot-{d}-{s}.tar.zst HTTP/1.1\r\nHost: {f}\r\nConnection: close\r\n\r\n",
+            .{ race.slot, hash_str, conn.net_addr },
+        ) catch unreachable;
+        conn.send_len = @intCast(send_len.len);
+
+        conn.fd = fd;
+        conn.file_fd = file_fd;
+        conn.pipe_rd = pipe_fds[0];
+        conn.pipe_wr = pipe_fds[1];
+        conn.addr = candidate.addr;
+
+        try self.queueDownloadConnectWithTimeout(dl_index, fd);
+
+        candidate.started = true;
+        self.active_downloads += 1;
+        self.metrics.snapshot_downloads_started.increment(1);
+    }
 };
 
 /// Parses the Content-Length header value from an HTTP response.
@@ -680,6 +1102,26 @@ fn parseContentLength(response: []const u8) ?u64 {
         }
     }
     return null;
+}
+
+/// Formats a temp download path:
+///   {snapshot_dir}/snapshot-{slot}-{hash}.tar.zst.part.{index}.{gen}
+fn formatTempPath(buf: []u8, snapshot_dir: []const u8, slot: Slot, hash: Hash, index: u8, gen: u16) []const u8 {
+    var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
+    const hash_str = hash.base58String(&hash_buf);
+    return std.fmt.bufPrint(buf, "{s}/snapshot-{d}-{s}.tar.zst.part.{d}.{d}", .{
+        snapshot_dir, slot, hash_str, index, gen,
+    }) catch unreachable;
+}
+
+/// Formats the final snapshot path:
+///   {snapshot_dir}/snapshot-{slot}-{hash}.tar.zst
+fn formatFinalPath(buf: []u8, snapshot_dir: []const u8, slot: Slot, hash: Hash) []const u8 {
+    var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
+    const hash_str = hash.base58String(&hash_buf);
+    return std.fmt.bufPrint(buf, "{s}/snapshot-{d}-{s}.tar.zst", .{
+        snapshot_dir, slot, hash_str,
+    }) catch unreachable;
 }
 
 comptime {
@@ -721,6 +1163,10 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         .probe_conns = .{ProbeConn.empty()} ** MAX_CONCURRENT_PROBES,
         .active_probes = 0,
         .timeout_pending = false,
+        .download_conns = .{DownloadConn.empty()} ** MAX_DOWNLOAD_RACERS,
+        .active_downloads = 0,
+        .download_race = DownloadRace.empty(),
+        .snapshot_dir = folder_path,
         .metrics = metrics,
         .logger = logger,
     };
