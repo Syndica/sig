@@ -1,7 +1,8 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const lib = @import("../lib.zig");
 
-const bincode = lib.solana.bincode;
+const bincode = lib.solana.bincode_2;
 
 const Signature = lib.solana.Signature;
 const Pubkey = lib.solana.Pubkey;
@@ -29,13 +30,53 @@ pub const VersionedMessage = union(enum) {
         fba: *std.heap.FixedBufferAllocator,
         reader: *std.Io.Reader,
     ) !VersionedMessage {
-        if ((try reader.peekByte()) & (1 << 7) == 0) {
-            return .{ .legacy = try bincode.read(fba, reader, LegacyMessage) };
-        } else {
-            const version = (try reader.takeByte()) & ((1 << 7) - 1);
-            if (version != 0) return error.InvalidVersion;
-            return .{ .v0 = try bincode.read(fba, reader, V0Message) };
-        }
+        const zone = tracy.Zone.init(@src(), .{ .name = "VersionedMessage.bincodeRead" });
+        defer zone.deinit();
+
+        const num_required_signatures: u8, const kind: std.meta.Tag(VersionedMessage) = byte: {
+            const first_byte: u8 = try bincode.read(fba, reader, u8);
+
+            if (first_byte & (1 << 7) == 0) {
+                break :byte .{ first_byte, .legacy };
+            } else {
+                const version: u8 = first_byte & 0x7f;
+                if (version != 0) return error.InvalidVersion;
+
+                var required_sigs_byte: u8 = undefined;
+                try reader.readSliceAll(std.mem.asBytes(&required_sigs_byte));
+                break :byte .{ required_sigs_byte, .v0 };
+            }
+        };
+
+        const header: MessageHeader = .{
+            .num_required_signatures = num_required_signatures,
+            .num_readonly_signed_accounts = try bincode.read(fba, reader, u8),
+            .num_readonly_unsigned_accounts = try bincode.read(fba, reader, u8),
+        };
+
+        const account_keys = try bincode.read(fba, reader, bincode.ShortVec(Pubkey));
+        const recent_blockhash = try bincode.read(fba, reader, Hash);
+        const instructions = try bincode.read(fba, reader, bincode.ShortVec(CompiledInstruction));
+
+        return switch (kind) {
+            .legacy => .{
+                .legacy = .{
+                    .header = header,
+                    .account_keys = account_keys,
+                    .recent_blockhash = recent_blockhash,
+                    .instructions = instructions,
+                },
+            },
+            .v0 => .{
+                .v0 = .{
+                    .header = header,
+                    .account_keys = account_keys,
+                    .recent_blockhash = recent_blockhash,
+                    .instructions = instructions,
+                    .address_table_lookups = try bincode.read(fba, reader, bincode.ShortVec(AddressLookup)),
+                },
+            },
+        };
     }
 
     pub fn bincodeWrite(self: *const VersionedMessage, writer: *std.Io.Writer) !void {
