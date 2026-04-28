@@ -21,6 +21,8 @@ const MAX_DOWNLOAD_CANDIDATES: u8 = 64;
 const DOWNLOAD_RACE_THRESHOLD_PCT: u64 = 5;
 const SPLICE_CHUNK: u32 = 1024 * 1024;
 const NO_OFFSET: u64 = std.math.maxInt(u64);
+const DOWNLOAD_TIMEOUT_SECS: i64 = 3;
+const DOWNLOAD_TIMEOUT: std.os.linux.kernel_timespec = .{ .sec = PROBE_TIMEOUT_SECS, .nsec = 0 };
 
 const ProbeConn = struct {
     /// Current state in the snapshot probing lifecycle for this particaly peer.
@@ -172,6 +174,7 @@ const DownloadRace = struct {
     }
 };
 
+// TODO: can be unified with ProbeConn in some way, combine all state.
 const DownloadConn = struct {
     phase: DownloadPhase,
     /// Similar to ProvbeConn's gen. Used to prevent a late-arriving CQE for this DownloadConn when
@@ -881,27 +884,316 @@ const SnapshotService = struct {
     }
 
     fn handleDownloadTimeout(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
-        _ = .{ self, data, cqe };
+        std.debug.assert(data.index < self.download_conns.len);
+        const conn = &self.download_conns[data.index];
+
+        if (conn.phase == .unused or conn.gen != data.gen) return;
+
+        const expected_phase: DownloadPhase = switch (data.op) {
+            .download_connect => .connecting,
+            .download_send => .sending,
+            .download_recv_headers => .reading_headers,
+            .download_splice_in => .splicing_in,
+            else => unreachable,
+        };
+        if (conn.phase != expected_phase) return;
+        if (data.offset != conn.active_offset) return;
+
+        switch (cqe.err()) {
+            .CANCELED, .NOENT, .ALREADY => {},
+            .TIME => {
+                conn.timed_out = true;
+                self.logger.info().logf("download timed out idx={d} phase={s}", .{
+                    data.index, @tagName(conn.phase),
+                });
+            },
+            else => {
+                self.logger.warn().logf("unexpected download timeout err idx={d} err={s} res={d}", .{
+                    data.index, @tagName(cqe.err()), cqe.res,
+                });
+            },
+        }
+    }
+
+    fn getDownloadForCqe(self: *SnapshotService, data: UserData) ?*DownloadConn {
+        std.debug.assert(data.index < self.download_conns.len);
+        const conn = &self.download_conns[data.index];
+        if (conn.phase == .unused) {
+            // TODO: likely remove these logs due to noise.
+            self.logger.debug().logf("stale cqe for unused download slot op={s} idx={d}", .{ @tagName(data.op), data.index });
+            return null;
+        }
+        if (conn.gen != data.gen) {
+            // TODO: likely remove these logs due to noise.
+            self.logger.debug().logf("stale download cqe op={s} idx={d}", .{ @tagName(data.op), data.index });
+            return null;
+        }
+        return conn;
     }
 
     fn handleDownloadConnect(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
-        _ = .{ self, data, cqe };
+        const conn = self.getDownloadForCqe(data) orelse return;
+        if (conn.phase != .connecting) {
+            self.logger.warn().logf("unexpected download connect cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
+            return;
+        }
+
+        if (conn.timed_out) {
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        }
+        if (cqe.err() != .SUCCESS) {
+            self.logger.info().logf("download connect failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        }
+
+        self.queueDownloadSendWithTimeout(data, 0) catch {
+            // TODO: This fails only when the submission queue is full, which is a transient
+            // local condition (not a peer failure). Add a retry/backpressure result so the
+            // candidate can be marked unstarted/pending instead of being skipped for this race.
+            // For now we treat it as a hard racer failure.
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        };
     }
 
     fn handleDownloadSend(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
-        _ = .{ self, data, cqe };
+        const conn = self.getDownloadForCqe(data) orelse return;
+        if (conn.phase != .sending) {
+            self.logger.warn().logf("unexpected download send cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
+            return;
+        }
+
+        if (conn.timed_out) {
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        }
+        if (cqe.err() != .SUCCESS) {
+            self.logger.info().logf("download send failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        }
+
+        std.debug.assert(cqe.res > 0);
+        std.debug.assert(cqe.res <= conn.send_len - data.offset);
+        const new_offset = data.offset + @as(u16, @intCast(cqe.res));
+
+        if (new_offset < conn.send_len) {
+            self.queueDownloadSendWithTimeout(data, new_offset) catch {
+                // TODO: Same as in handleDownloadCOnnect. Consider retry.
+                self.finishDownload(data.index, .failed);
+                self.startDownloadRacers();
+                return;
+            };
+            return;
+        }
+
+        self.queueDownloadRecvHeadersWithTimeout(data, 0) catch {
+            // TODO: Same as in handleDownloadCOnnect. Consider retry.
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        };
     }
 
     fn handleDownloadRecvHeaders(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
-        _ = .{ self, data, cqe };
+        const conn = self.getDownloadForCqe(data) orelse return;
+        if (conn.phase != .reading_headers) {
+            self.logger.warn().logf("unexpected download recv_headers cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
+            return;
+        }
+
+        if (conn.timed_out) {
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        }
+        if (cqe.err() != .SUCCESS) {
+            self.logger.info().logf("download recv_headers failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        }
+        if (cqe.res == 0) {
+            self.logger.info().logf("download recv_headers eof idx={d}", .{data.index});
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        }
+
+        std.debug.assert(cqe.res > 0);
+        std.debug.assert(cqe.res <= conn.recv_buf.len - data.offset);
+        const new_offset = data.offset + @as(u16, @intCast(cqe.res));
+        const response = conn.recv_buf[0..new_offset];
+
+        // Check for end of HTTP headers.
+        const header_end = std.mem.indexOf(u8, response, "\r\n\r\n") orelse {
+            if (new_offset >= conn.recv_buf.len) {
+                self.logger.info().logf("download headers too large idx={d}", .{data.index});
+                self.finishDownload(data.index, .failed);
+                self.startDownloadRacers();
+                return;
+            }
+            self.queueDownloadRecvHeadersWithTimeout(data, new_offset) catch {
+                self.finishDownload(data.index, .failed);
+                self.startDownloadRacers();
+                return;
+            };
+            return;
+        };
+
+        // Parse status line.
+        const status_end = std.mem.indexOf(u8, response[0..header_end], "\r\n") orelse header_end;
+        const status_line = response[0..status_end];
+        if (std.mem.indexOf(u8, status_line, "200") == null) {
+            self.logger.info().logf("download bad status idx={d} status={s}", .{ data.index, status_line });
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        }
+
+        // Parse and verify Content-Length matches the race target.
+        const content_len = parseContentLength(response[0 .. header_end + 4]) orelse {
+            self.logger.info().logf("download missing/zero content-length idx={d}", .{data.index});
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        };
+        if (content_len != self.download_race.content_len) {
+            self.logger.info().logf("download content-length mismatch idx={d} got={d} expected={d}", .{
+                data.index, content_len, self.download_race.content_len,
+            });
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        }
+
+        conn.recv_len = new_offset;
+
+        // A winner may have been selected while we were reading headers.
+        // TODO: Perform this check in every place before we queue up next operation.
+        if (conn.cancel_requested) {
+            self.finishDownload(data.index, .cancelled);
+            return;
+        }
+
+        // Detect extra body bytes received after the header terminator.
+        const body_start: u16 = @intCast(header_end + 4);
+        const extra_len: u16 = new_offset - body_start;
+
+        // If we got body bytes during this header parse phase, start writing em to the file.
+        if (extra_len > 0) {
+            conn.extra_body_start = body_start;
+            conn.extra_body_len = extra_len;
+            self.queueDownloadWriteExtra(data, 0) catch {
+                self.finishDownload(data.index, .failed);
+                self.startDownloadRacers();
+                return;
+            };
+        } else {
+            // Otherwise move into the full download phase.
+            self.queueDownloadSpliceInWithTimeout(data.index) catch {
+                self.finishDownload(data.index, .failed);
+                self.startDownloadRacers();
+                return;
+            };
+        }
     }
 
     fn handleDownloadWriteExtra(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
-        _ = .{ self, data, cqe };
+        const conn = self.getDownloadForCqe(data) orelse return;
+        if (conn.phase != .writing_extra) {
+            self.logger.warn().logf("unexpected download write_extra cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
+            return;
+        }
+
+        if (cqe.err() != .SUCCESS) {
+            self.logger.info().logf("download write_extra failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        }
+
+        std.debug.assert(cqe.res > 0);
+        std.debug.assert(cqe.res <= conn.extra_body_len - data.offset);
+        const new_written = data.offset + @as(u16, @intCast(cqe.res));
+
+        // TODO: Perform this check in every place before we queue up next operation.
+        if (conn.cancel_requested) {
+            self.finishDownload(data.index, .cancelled);
+            return;
+        }
+
+        if (new_written < conn.extra_body_len) {
+            self.queueDownloadWriteExtra(data, new_written) catch {
+                self.finishDownload(data.index, .failed);
+                self.startDownloadRacers();
+                return;
+            };
+            return;
+        }
+
+        conn.bytes_written += conn.extra_body_len;
+        self.maybeSelectWinner();
+
+        // TODO: Perform this check in every place before we queue up next operation.
+        if (conn.cancel_requested) {
+            self.finishDownload(data.index, .cancelled);
+            return;
+        }
+
+        self.queueDownloadSpliceInWithTimeout(data.index) catch {
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        };
     }
 
     fn handleDownloadSpliceIn(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
-        _ = .{ self, data, cqe };
+        const conn = self.getDownloadForCqe(data) orelse return;
+        if (conn.phase != .splicing_in) {
+            self.logger.warn().logf("unexpected download splice_in cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
+            return;
+        }
+
+        if (conn.timed_out) {
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        }
+        if (cqe.err() != .SUCCESS) {
+            self.logger.info().logf("download splice_in failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        }
+        if (cqe.res == 0) {
+            self.logger.info().logf("download splice_in eof idx={d}", .{data.index});
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        }
+
+        const n: u64 = @intCast(cqe.res);
+        std.debug.assert(n <= self.download_race.content_len - conn.bytes_written - conn.pipe_pending);
+        conn.pipe_pending += n;
+
+        if (conn.cancel_requested) {
+            self.finishDownload(data.index, .cancelled);
+            return;
+        }
+
+        self.queueDownloadSpliceOut(data.index) catch {
+            self.finishDownload(data.index, .failed);
+            self.startDownloadRacers();
+            return;
+        };
     }
 
     fn handleDownloadSpliceOut(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
@@ -1004,6 +1296,7 @@ const SnapshotService = struct {
         return null;
     }
 
+    // TODO: We can clean these by generalizing over Op and sharing them with probe's fns (redundant).
     fn queueDownloadConnectWithTimeout(
         self: *SnapshotService,
         index: u8,
@@ -1012,6 +1305,7 @@ const SnapshotService = struct {
         const conn = &self.download_conns[index];
 
         const connect_data = UserData.init(.download_connect, index, conn.gen);
+        // TODO: add a lil .timeout() to UserData to get the timeout variant.
         var timeout_data = connect_data;
         timeout_data.is_timeout = true;
 
@@ -1021,12 +1315,130 @@ const SnapshotService = struct {
         sqes.primary.user_data = connect_data.encode();
         sqes.primary.flags |= std.os.linux.IOSQE_IO_LINK;
 
-        sqes.timeout.prep_link_timeout(&PROBE_TIMEOUT, 0);
+        sqes.timeout.prep_link_timeout(&DOWNLOAD_TIMEOUT, 0);
         sqes.timeout.user_data = timeout_data.encode();
 
         conn.phase = .connecting;
         conn.active_offset = 0;
         conn.timed_out = false;
+    }
+
+    fn queueDownloadSendWithTimeout(
+        self: *SnapshotService,
+        data: UserData,
+        offset: u16,
+    ) !void {
+        const conn = &self.download_conns[data.index];
+
+        var send_data = data;
+        send_data.op = .download_send;
+        send_data.offset = offset;
+
+        var timeout_data = send_data;
+        timeout_data.is_timeout = true;
+
+        const sqes = try self.reserveLinkedSqes();
+
+        std.debug.assert(offset < conn.send_len);
+
+        sqes.primary.prep_send(conn.fd, conn.send_buf[offset..conn.send_len], 0);
+        sqes.primary.user_data = send_data.encode();
+        sqes.primary.flags |= std.os.linux.IOSQE_IO_LINK;
+
+        sqes.timeout.prep_link_timeout(&DOWNLOAD_TIMEOUT, 0);
+        sqes.timeout.user_data = timeout_data.encode();
+
+        conn.phase = .sending;
+        conn.active_offset = offset;
+        conn.timed_out = false;
+    }
+
+    fn queueDownloadRecvHeadersWithTimeout(
+        self: *SnapshotService,
+        data: UserData,
+        offset: u16,
+    ) !void {
+        const conn = &self.download_conns[data.index];
+
+        var recv_data = data;
+        recv_data.op = .download_recv_headers;
+        recv_data.offset = offset;
+
+        var timeout_data = recv_data;
+        timeout_data.is_timeout = true;
+
+        std.debug.assert(offset < conn.recv_buf.len);
+
+        const sqes = try self.reserveLinkedSqes();
+
+        sqes.primary.prep_recv(conn.fd, conn.recv_buf[offset..], 0);
+        sqes.primary.user_data = recv_data.encode();
+        sqes.primary.flags |= std.os.linux.IOSQE_IO_LINK;
+
+        sqes.timeout.prep_link_timeout(&DOWNLOAD_TIMEOUT, 0);
+        sqes.timeout.user_data = timeout_data.encode();
+
+        conn.phase = .reading_headers;
+        conn.active_offset = offset;
+        conn.timed_out = false;
+    }
+
+    fn queueDownloadWriteExtra(self: *SnapshotService, data: UserData, written: u16) !void {
+        const conn = &self.download_conns[data.index];
+
+        var write_data = data;
+        write_data.op = .download_write_extra;
+        write_data.offset = written;
+
+        const capacity: u32 = @intCast(self.ring.sq.sqes.len);
+        if (capacity - self.ring.sq_ready() < 1) return error.SubmissionQueueFull;
+        const sqe = self.ring.get_sqe() catch unreachable;
+
+        const buf_start = conn.extra_body_start + written;
+        std.debug.assert(buf_start + (conn.extra_body_len - written) <= conn.recv_len);
+
+        sqe.prep_write(
+            conn.file_fd,
+            conn.recv_buf[buf_start .. conn.extra_body_start + conn.extra_body_len],
+            conn.bytes_written + written,
+        );
+        sqe.user_data = write_data.encode();
+
+        conn.phase = .writing_extra;
+        conn.active_offset = written;
+    }
+
+    fn queueDownloadSpliceInWithTimeout(self: *SnapshotService, index: u8) !void {
+        const conn = &self.download_conns[index];
+        const race = &self.download_race;
+
+        const remaining = race.content_len - conn.bytes_written - conn.pipe_pending;
+        std.debug.assert(remaining > 0);
+
+        const sqes = try self.reserveLinkedSqes();
+
+        conn.active_offset +%= 1;
+
+        var splice_data = UserData.init(.download_splice_in, index, conn.gen);
+        splice_data.offset = conn.active_offset;
+
+        var timeout_data = splice_data;
+        timeout_data.is_timeout = true;
+
+        const len: usize = @intCast(@min(SPLICE_CHUNK, remaining));
+        sqes.primary.prep_splice(conn.fd, NO_OFFSET, conn.pipe_wr, NO_OFFSET, len);
+        sqes.primary.user_data = splice_data.encode();
+        sqes.primary.flags |= std.os.linux.IOSQE_IO_LINK;
+
+        sqes.timeout.prep_link_timeout(&DOWNLOAD_TIMEOUT, 0);
+        sqes.timeout.user_data = timeout_data.encode();
+
+        conn.phase = .splicing_in;
+        conn.timed_out = false;
+    }
+
+    fn queueDownloadSpliceOut(self: *SnapshotService, index: u8) !void {
+        _ = .{ self, index };
     }
 
     fn startDownloadRacer(self: *SnapshotService, candidate_index: u8) !void {
@@ -1054,16 +1466,22 @@ const SnapshotService = struct {
             std.posix.close(pipe_fds[1]);
         }
 
-        // Create temp file.
+        // Create temp file
+        // TODO: can prob be moved into io_uring.
         conn.gen +%= 1;
         var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
-        const tmp_path = formatTempPath(&path_buf, self.snapshot_dir, race.slot, race.hash, dl_index, conn.gen);
+        const tmp_path = formatTempSnapshotPath(&path_buf, self.snapshot_dir, race.slot, race.hash, dl_index, conn.gen);
         path_buf[tmp_path.len] = 0;
-        const file_fd = std.posix.openat(std.posix.AT.FDCWD, path_buf[0..tmp_path.len :0], .{
-            .ACCMODE = .WRONLY,
-            .CREAT = true,
-            .TRUNC = true,
-        }, 0o644) catch |err| return err;
+        const file_fd = try std.posix.openat(
+            std.posix.AT.FDCWD,
+            path_buf[0..tmp_path.len :0],
+            .{
+                .ACCMODE = .WRONLY,
+                .CREAT = true,
+                .TRUNC = true,
+            },
+            0o644,
+        );
         errdefer std.posix.close(file_fd);
 
         // Format GET request.
@@ -1083,10 +1501,19 @@ const SnapshotService = struct {
         conn.addr = candidate.addr;
 
         try self.queueDownloadConnectWithTimeout(dl_index, fd);
+        // TODO: catch error here and totally reset DownloadConn state.
 
         candidate.started = true;
         self.active_downloads += 1;
         self.metrics.snapshot_downloads_started.increment(1);
+    }
+
+    fn maybeSelectWinner(self: *SnapshotService) void {
+        _ = self;
+    }
+
+    fn finishDownload(self: *SnapshotService, index: u8, result: DownloadResult) void {
+        _ = .{ self, index, result };
     }
 };
 
@@ -1106,7 +1533,7 @@ fn parseContentLength(response: []const u8) ?u64 {
 
 /// Formats a temp download path:
 ///   {snapshot_dir}/snapshot-{slot}-{hash}.tar.zst.part.{index}.{gen}
-fn formatTempPath(buf: []u8, snapshot_dir: []const u8, slot: Slot, hash: Hash, index: u8, gen: u16) []const u8 {
+fn formatTempSnapshotPath(buf: []u8, snapshot_dir: []const u8, slot: Slot, hash: Hash, index: u8, gen: u16) []const u8 {
     var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
     const hash_str = hash.base58String(&hash_buf);
     return std.fmt.bufPrint(buf, "{s}/snapshot-{d}-{s}.tar.zst.part.{d}.{d}", .{
@@ -1116,7 +1543,7 @@ fn formatTempPath(buf: []u8, snapshot_dir: []const u8, slot: Slot, hash: Hash, i
 
 /// Formats the final snapshot path:
 ///   {snapshot_dir}/snapshot-{slot}-{hash}.tar.zst
-fn formatFinalPath(buf: []u8, snapshot_dir: []const u8, slot: Slot, hash: Hash) []const u8 {
+fn formatFinalSnapshotPath(buf: []u8, snapshot_dir: []const u8, slot: Slot, hash: Hash) []const u8 {
     var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
     const hash_str = hash.base58String(&hash_buf);
     return std.fmt.bufPrint(buf, "{s}/snapshot-{d}-{s}.tar.zst", .{
