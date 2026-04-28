@@ -5,7 +5,8 @@ const tracy = @import("tracy");
 
 const replay = lib.replay;
 
-const bincode = lib.solana.bincode;
+// const bincode = lib.solana.bincode;
+const bincode_2 = lib.solana.bincode_2;
 
 const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;
@@ -35,40 +36,540 @@ pub const ReadWrite = struct {
 
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
-const TransactionsIterator = struct {
-    current_node: *const MerkleNode,
-    current_node_read_transaction_count: u16,
-    current_entry_batch_transaction_count: u16,
+const SpanningFecSetReader = struct {
+    start_node: *const MerkleNode,
+    merkle_pool: *const MerkleForest.NodePool,
 
-    fn init(current_node: *const MerkleNode) TransactionsIterator {
+    /// NOTE: we won't actually be using the fields inside except for buffer
+    interface: std.Io.Reader,
+
+    fn init(
+        start_node: *const MerkleNode,
+        merkle_pool: *const MerkleForest.NodePool,
+    ) SpanningFecSetReader {
         return .{
-            .current_node = current_node,
-            .current_node_read_transaction_count = 0,
-            .current_entry_batch_transaction_count = 0,
+            .start_node = start_node,
+            .merkle_pool = merkle_pool,
+            .interface = initInterface(start_node),
         };
     }
 
-    // returns the n
-    // hash.* == null <=> num_hashes.* == null
-    fn next(
-        iter: *TransactionsIterator,
-        transaction_buf: *[1232]u8,
-        hash: *?Hash,
-        num_hashes: *?u64,
-    ) ?[]const u8 {
-        _ = iter;
-        _ = transaction_buf;
-        _ = hash;
-        _ = num_hashes;
-        // if (current_node_read_transaction_count == 0)
+    fn initInterface(start_node: *const MerkleNode) std.Io.Reader {
+        return .{
+            .vtable = &.{
+                .rebase = rebase,
+                .stream = stream,
+                .readVec = readVec,
+            },
+            // This is unfortunate - Io.Reader expects a mutable buffer, however it is extremely
+            // important that we do not mutate these buffers.
+            .buffer = @constCast(start_node.payload()[start_node.deserial_state.byte_offset..]),
+            .seek = 0,
+            .end = start_node.payload().len - start_node.deserial_state.byte_offset,
+        };
+    }
+
+    fn advanceIfExhausted(fec_set_reader: *SpanningFecSetReader) error{EndOfStream}!void {
+        if (fec_set_reader.start_node.deserial_state.byte_offset >= fec_set_reader.start_node.payload().len) {
+            const zone = tracy.Zone.init(@src(), .{ .name = "exhausted" });
+            defer zone.deinit();
+
+            const child: *const MerkleNode = MerkleForest.NodeTree.childOf(
+                .{ .pool = fec_set_reader.merkle_pool },
+                fec_set_reader.start_node,
+            ) orelse
+                return error.EndOfStream;
+
+            std.debug.assert(child.block_ref != .null);
+
+            fec_set_reader.interface.buffer = child.payload()[child.deserial_state.byte_offset..];
+            fec_set_reader.interface.seek = 0;
+            fec_set_reader.interface.end = child.payload().len - child.deserial_state.byte_offset;
+
+            fec_set_reader.start_node = child;
+        }
+    }
+
+    fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) !usize {
+        const fec_set_reader: *SpanningFecSetReader = @alignCast(@fieldParentPtr("interface", r));
+        try advanceIfExhausted(fec_set_reader);
+
+        const read_slice = limit.sliceConst(fec_set_reader.start_node.payload()[fec_set_reader.start_node.deserial_state.byte_offset..]);
+        w.writeAll(read_slice);
+        fec_set_reader.start_node.deserial_state.byte_offset += read_slice.len;
+    }
+
+    fn rebase(r: *std.Io.Reader, capacity: usize) !void {
+        _ = .{ r, capacity };
+        @panic("rebase is illegal - our io reader buffer is const");
+    }
+
+    fn readVec(r: *std.Io.Reader, data: [][]u8) !usize {
+        const fec_set_reader: *SpanningFecSetReader = @alignCast(@fieldParentPtr("interface", r));
+        try advanceIfExhausted(fec_set_reader);
+
+        const first = data[0];
+        var writer: std.Io.Writer = .{
+            .buffer = first,
+            .end = 0,
+            .vtable = &.{ .drain = std.Io.Writer.fixedDrain },
+        };
+        const limit: std.Io.Limit = .limited(writer.buffer.len - writer.end);
+        return r.vtable.stream(r, &writer, limit) catch |err| switch (err) {
+            error.WriteFailed => unreachable,
+            else => |e| return e,
+        };
     }
 };
+
+// fn nextTransaction(
+//     current_node: *const MerkleNode,
+//     block_pool: *const lib.replay.BlockPool,
+//     merkle_pool: *const MerkleForest.NodePool,
+//     transaction_pool: *lib.replay.TransactionPool,
+// ) !?struct { id: lib.replay.TransactionPool.ItemId, next: *const MerkleNode } {
+//     if (current_node.block_ref == .null) return null; // no path back to 0th fec set
+
+//     // const Position = current_node.deserialise_finish_pos
+//     // DeserialiserPos
+//     const start_node = if (current_node.id.fec_set_idx == 0) current_node else node: {
+//         const parent: *const MerkleNode =
+//             MerkleForest.NodeTree.parentOf(.{ .pool = merkle_pool }, current_node) orelse
+//             unreachable;
+
+//         if (parent.data_complete) {
+//             std.debug.assert(parent.deserialise_finish_pos.remaining == .none);
+//             break :node current_node;
+//         }
+
+//         break :node switch (parent.deserialise_finish_pos.remaining) {
+//             .all => unreachable, // we should have deserialised at least part of the parent
+//             .none => {
+//                 // Why did the leader not mark the previous fec set as data complete, if we could
+//                 // deserialise the whole thing?
+//                 @panic("weird.");
+//             },
+//             .transactions, .entries => parent,
+//         };
+//     };
+
+//     std.debug.assert(start_node.deserialise_finish_pos.remaining != .none);
+
+//     var fec_set_reader: SpanningFecSetReader = .init(start_node, merkle_pool);
+//     const reader = &fec_set_reader.interface;
+
+//     // std.fs.File.Reader
+
+//     //  (MerkleForest.NodeTree.parentOf(.{ .pool = merkle_pool }, current_node) orelse
+//     //          unreachable)
+
+//     // const start_pos =
+//     // if (current_node.id.fec_set_idx == 0 )
+
+//     // const data_start =  current_node.id.fec_set_idx == 0 or previous: {}  MerkleForest.NodeTree.parentOf(.{ .pool = merkle_pool }, current_node) orelse
+//     //          unreachable
+
+// }
+
+// const TransactionsIterator = struct {
+//     // current_node: *const MerkleNode,
+//     // block_pool: *const *lib.replay.BlockPool,
+//     reader: SpanningFecSetReader,
+
+//     fn init(
+//         current_node: *const MerkleNode,
+//         // block_pool: *const lib.replay.BlockPool,
+//         merkle_pool: *const MerkleForest.NodePool,
+//     ) TransactionsIterator {
+//         // Walk "backwards" towards the 0th fec set, until we reach the point where we finished
+//         // deserialising.
+//         // NOTE: these fec sets are always chained from the 0th, i.e. parent traversal is always
+//         // possible until the 0th.
+//         var node: *const MerkleNode = current_node;
+//         while (!isDeserialiseResumeNode(node, merkle_pool)) {
+//             node = MerkleForest.NodeTree.parentOf(
+//                 .{ .pool = merkle_pool },
+//                 current_node,
+//             ) orelse unreachable;
+//         }
+
+//         std.debug.assert(node.deserial_state.next_action != .complete);
+
+//         return .{
+//             .reader = .init(current_node, merkle_pool),
+//             // .current_node = current_node,
+//             // .current_node_read_transaction_count = 0,
+//             // .current_entry_batch_transaction_count = 0,
+//         };
+//     }
+
+//     // if this is the node from which to start/resume deserialisation from
+//     fn isDeserialiseResumeNode(
+//         current_node: *const MerkleNode,
+//         merkle_pool: *const MerkleForest.NodePool,
+//     ) bool {
+//         std.debug.assert(current_node.block_ref != .null); // 0th fec set is reachable by parent
+
+//         if (current_node.id.fec_set_idx == 0) return true;
+
+//         const parent: *const MerkleNode = MerkleForest.NodeTree.parentOf(
+//             .{ .pool = merkle_pool },
+//             current_node,
+//         ) orelse unreachable; // 0th fec set is reachable by parent
+
+//         if (parent.block_ref != current_node.block_ref)
+//             // we might need secondary state for equivocation...
+//             @panic("iterative deserisation with equivocation not yet implemented");
+
+//         // if our parent is fully deserialsed, we deserialise from current
+//         return parent.deserial_state.next_action == .complete;
+//     }
+
+//     // returns the n
+//     // hash.* == null <=> num_hashes.* == null
+//     fn next(
+//         iter: *TransactionsIterator,
+//         transaction_buf: *[1232]u8,
+//         // hash: *?Hash,
+//         // num_hashes: *?u64,
+//     ) !?[]const u8 {
+//         _ = transaction_buf;
+//         // _ = hash;
+//         // _ = num_hashes;
+
+//         // TODO: remove this, it's just a copy for nothing
+//         var deserialised_buf: [1024 * 1024]u8 = undefined;
+//         var fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
+
+//         loopback: switch (iter.reader.start_node.deserial_state.next_action) {
+//             .complete => return null,
+//             .unknown => {
+//                 if (iter.reader.start_node.id.fec_set_idx == 0) {
+//                     iter.reader.start_node.deserial_state.next_action = .read_n_entries;
+//                     continue :loopback .read_n_entries;
+//                 } else {
+//                     const parent: *const MerkleNode = MerkleForest.NodeTree.parentOf(
+//                         .{ .pool = iter.reader.merkle_pool },
+//                         iter.reader.start_node,
+//                     ) orelse unreachable; // 0th fec set is reachable by parent
+
+//                     if (parent.data_complete) {
+//                         iter.reader.start_node.deserial_state.next_action = .read_n_entries;
+//                         continue :loopback .read_n_entries;
+//                     } else {
+//                         iter.reader.start_node.deserial_state = parent.deserial_state;
+//                         iter.reader.start_node.deserial_state.bytes_read = 0;
+//                         continue :loopback iter.reader.start_node.deserial_state.next_action;
+//                     }
+//                 }
+//             },
+//             .read_n_entries => {
+//                 iter.reader.start_node.deserial_state.n_remaining_entries =
+//                     try bincode_2.read(&fba, &iter.reader.interface, u64);
+
+//                 continue :loopback .read_num_hashes;
+//             },
+//             .read_num_hashes => {
+//                 _ = try bincode_2.read(&fba, &iter.reader.interface, u64);
+
+//                 continue :loopback .read_hash;
+//             },
+//             .read_hash => {
+//                 _ = try bincode_2.read(&fba, &iter.reader.interface, Hash);
+
+//                 continue :loopback .read_n_transactions;
+//             },
+//             .read_n_transactions => {
+//                 iter.reader.start_node.deserial_state.n_remaining_transactions =
+//                     try bincode_2.read(&fba, &iter.reader.interface, u64);
+
+//                 if (iter.reader.start_node.deserial_state.n_remaining_transactions > 0)
+//                     continue :loopback .read_transaction
+//                 else if (iter.reader.start_node.deserial_state.n_remaining_entries > 0)
+//                     continue :loopback .read_num_hashes
+//                 else
+//                     continue :loopback .complete;
+//             },
+//             .read_transaction => {
+//                 const transaction = try bincode.read(&fba, &iter.reader.interface, lib.solana.transaction.VersionedTransaction);
+
+//                 // NOTE: we store bincode-encoded transactions as-is, as:
+//                 //       1) we know the upper bound size
+//                 //       2) deserialising is cheap, and I think we only have to do it twice
+//                 _ = transaction;
+//             },
+//         }
+
+//         // switch (iter.reader.start_node.deserial_state.remaining) {
+//         //     .all => {
+//         //         // const num_hashes: u64 = try bincode.read(&deserial_fba, &iter.reader.interface, u64);
+//         //         // const hash: Hash = try bincode.read(&deserial_fba, &iter.reader.interface, Hash);
+//         //     },
+//         //     .entries => {},
+//         //     .transactions => {},
+//         //     .none => unreachable,
+//         // }
+
+//         // if (iter.reader.start_node.)
+
+//         // if (current_node_read_transaction_count == 0)
+//     }
+// };
+
+const BlockDeserialState = struct {
+    pos_node: *const MerkleNode,
+    pos_offset: usize,
+
+    n_transactions_left: ?u64,
+    n_entries_left: ?u64,
+
+    next_read: NextRead,
+
+    const NextRead = enum { n_entries, num_hashes, hash, n_transactions, transaction };
+
+    const Reader = struct {
+        deserial_state: *BlockDeserialState,
+        merkle_pool: *const MerkleForest.NodePool,
+        interface: std.Io.Reader,
+
+        fn advance(self: *Reader) error{EndOfStream}!void {
+            const child: *const MerkleNode = MerkleForest.NodeTree.childOf(
+                .{ .pool = self.merkle_pool.* },
+                self.deserial_state.pos_node,
+            ) orelse return error.EndOfStream;
+
+            std.debug.assert(child.block_ref != .null);
+            std.debug.assert(child.parent != .null);
+
+            self.deserial_state.pos_node = child;
+            self.deserial_state.pos_offset = 0;
+        }
+
+        fn maybeAdvance(self: *Reader) error{EndOfStream}!void {
+            if (self.deserial_state.pos_offset < self.deserial_state.pos_node.payload_len) return;
+            std.debug.assert(self.deserial_state.pos_offset == self.deserial_state.pos_node.payload_len);
+
+            try self.advance();
+        }
+
+        fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) !usize {
+            const self: *Reader = @alignCast(@fieldParentPtr("interface", r));
+            try self.maybeAdvance();
+
+            const read_slice = limit.sliceConst(self.deserial_state.pos_node.payload()[self.deserial_state.pos_offset..]);
+            try w.writeAll(read_slice);
+            self.deserial_state.pos_offset += read_slice.len;
+            return read_slice.len;
+        }
+
+        fn rebase(r: *std.Io.Reader, capacity: usize) !void {
+            _ = .{ r, capacity };
+            @panic("rebase is illegal");
+        }
+
+        fn readVec(r: *std.Io.Reader, data: [][]u8) !usize {
+            const self: *Reader = @alignCast(@fieldParentPtr("interface", r));
+            try self.maybeAdvance();
+
+            const first = data[0];
+            var writer: std.Io.Writer = .{
+                .buffer = first,
+                .end = 0,
+                .vtable = &.{ .drain = std.Io.Writer.fixedDrain },
+            };
+            const limit: std.Io.Limit = .limited(writer.buffer.len - writer.end);
+            return r.vtable.stream(r, &writer, limit) catch |err| switch (err) {
+                error.WriteFailed => unreachable,
+                else => |e| return e,
+            };
+        }
+    };
+
+    fn init(root_node: *const MerkleNode) BlockDeserialState {
+        std.debug.assert(root_node.block_ref != .null);
+        std.debug.assert(root_node.id.fec_set_idx == 0);
+
+        return .{
+            .pos_node = root_node,
+            .pos_offset = 0,
+
+            .n_transactions_left = null,
+            .n_entries_left = null,
+
+            .next_read = .n_entries,
+        };
+    }
+
+    fn getReader(self: *BlockDeserialState, merkle_pool: *const MerkleForest.NodePool) Reader {
+        return .{
+            .deserial_state = self,
+            .merkle_pool = merkle_pool,
+            .interface = .{
+                .vtable = &.{
+                    .stream = Reader.stream,
+                    .rebase = Reader.rebase,
+                    .readVec = Reader.readVec,
+                },
+                .buffer = &.{},
+                .seek = 0,
+                .end = 0,
+            },
+        };
+    }
+
+    fn diff(
+        before: BlockDeserialState,
+        after: BlockDeserialState,
+        merkle_pool: *const MerkleForest.NodePool,
+    ) usize {
+        if (before.pos_node == after.pos_node) return after.pos_offset - before.pos_offset;
+
+        const after_parent: *const MerkleNode = MerkleForest.NodeTree.parentOf(
+            .{ .pool = merkle_pool.* },
+            after.pos_node,
+        ) orelse unreachable;
+        std.debug.assert(after_parent == before.pos_node);
+
+        const before_bytes_read = before.pos_node.payload_len - before.pos_offset;
+        const after_bytes_read = after.pos_offset;
+
+        return before_bytes_read + after_bytes_read;
+    }
+
+    fn nextTransaction(
+        self: *BlockDeserialState,
+        merkle_pool: *const MerkleForest.NodePool,
+        tx_buf: *[1232]u8,
+    ) !?[]const u8 {
+        const zone = tracy.Zone.init(@src(), .{ .name = "nextTransaction" });
+        defer zone.deinit();
+
+        const backup = self.*;
+
+        return nextTransactionInner(self, merkle_pool, tx_buf) catch |err| switch (err) {
+            error.EndOfStream => {
+                zone.text("EndOfStream");
+                self.* = backup;
+                return null;
+            },
+            else => |e| return e,
+        };
+    }
+
+    fn nextTransactionInner(
+        self: *BlockDeserialState,
+        merkle_pool: *const MerkleForest.NodePool,
+        tx_buf: *[1232]u8,
+    ) !?[]const u8 {
+        var reader = self.getReader(merkle_pool);
+
+        // TODO: remove this, it's just a copy for nothing
+        var deserialised_buf: [128 * 1024]u8 = undefined;
+        var fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
+
+        loopback: switch (self.next_read) {
+            .n_entries => {
+                const zone = tracy.Zone.init(@src(), .{ .name = "n_entries" });
+                defer zone.deinit();
+                errdefer zone.text("err");
+
+                self.n_entries_left = try bincode_2.read(&fba, &reader.interface, u64);
+                if (self.n_entries_left.? == 0) {
+                    self.next_read = .n_entries;
+                    return null; // advance to next?
+
+                }
+
+                self.next_read = .num_hashes;
+                continue :loopback .num_hashes;
+            },
+            // start of entry
+            .num_hashes => {
+                const zone = tracy.Zone.init(@src(), .{ .name = "num_hashes" });
+                defer zone.deinit();
+                errdefer zone.text("err");
+
+                _ = try bincode_2.read(&fba, &reader.interface, u64);
+
+                self.next_read = .hash;
+                continue :loopback .hash;
+            },
+            .hash => {
+                const zone = tracy.Zone.init(@src(), .{ .name = "hash" });
+                defer zone.deinit();
+                errdefer zone.text("err");
+
+                _ = try bincode_2.read(&fba, &reader.interface, Hash);
+
+                self.next_read = .n_transactions;
+                continue :loopback .n_transactions;
+            },
+            .n_transactions => {
+                const zone = tracy.Zone.init(@src(), .{ .name = "n_transactions" });
+                defer zone.deinit();
+                errdefer zone.text("err");
+
+                self.n_transactions_left = try bincode_2.read(&fba, &reader.interface, u64);
+                if (self.n_transactions_left == 0) {
+                    self.n_entries_left.? -= 1;
+                    if (self.n_entries_left.? == 0) {
+                        self.next_read = .n_entries;
+                        return null; // advance to next?
+
+                    }
+
+                    self.next_read = .num_hashes;
+                    continue :loopback .num_hashes;
+                }
+                self.next_read = .transaction;
+                continue :loopback .transaction;
+            },
+            .transaction => {
+                const zone = tracy.Zone.init(@src(), .{ .name = "transaction" });
+                defer zone.deinit();
+                errdefer zone.text("err");
+
+                if (self.n_transactions_left == 0) {
+                    self.n_entries_left.? -= 1;
+                    if (self.n_entries_left.? == 0) {
+                        self.next_read = .n_entries;
+                        return null; // advance to next?
+
+                    }
+
+                    self.next_read = .num_hashes;
+                    continue :loopback .num_hashes;
+                }
+
+                var pre_state = self.*;
+
+                _ = try bincode_2.read(&fba, &reader.interface, lib.solana.transaction.VersionedTransaction);
+                self.n_transactions_left.? -= 1;
+
+                const post_state = self.*;
+
+                const tx_bytes_read = diff(pre_state, post_state, merkle_pool);
+
+                var tx_reader = pre_state.getReader(merkle_pool);
+                try tx_reader.interface.readSliceAll(tx_buf[0..tx_bytes_read]);
+
+                self.next_read = .transaction;
+                return tx_buf[0..tx_bytes_read];
+            },
+        }
+    }
+};
+
+const DeserialStates = [lib.replay.BlockPool.capacity]?BlockDeserialState;
 
 pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     var fba: std.heap.FixedBufferAllocator = .init(&scratch_memory);
     const allocator = fba.allocator();
 
     var map_tree: MerkleForest = try .init(allocator);
+
+    const deserial_states: *DeserialStates = try allocator.create(DeserialStates);
+    @memset(deserial_states, null);
 
     var deshredded_iter = rw.deshredded_in.get(.reader);
 
@@ -89,12 +590,18 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
         const inserted_node = try map_tree.put(rw.block_pool, deshredded_fec_set) orelse
             continue; // null => node already known, nothing to do here
 
+        const received_zone_2 = tracy.Zone.init(@src(), .{ .name = "received fec set (new fec set)" });
+        defer received_zone_2.deinit();
+        received_zone_2.value(inserted_node.id.fec_set_idx);
+
         // _ = inserted_node;
 
-        var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
-        var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
+        // var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
+        // var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
 
         if (inserted_node.block_ref == .null) {
+            const null_zone = tracy.Zone.init(@src(), .{ .name = "received fec set (block_id=null)" });
+            defer null_zone.deinit();
             // blockrefs are assigned from the 0th fecset, and carried forward. If the newly
             // inserted node isn't attached to a 0th fecset, we won't be able to execute it until it
             // is.
@@ -108,94 +615,110 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
             continue;
         }
 
+        const deserial_zone = tracy.Zone.init(@src(), .{ .name = "deserialising" });
+        defer deserial_zone.deinit();
+
         // assert that we've got a chain of fec sets back to the 0th fec set
-        {
+        const fec_0: *const MerkleNode = node: {
             var maybe_node: ?*MerkleNode = inserted_node;
             while (maybe_node) |node| : (maybe_node = map_tree.pool.indexToOptPtr(node.parent)) {
                 std.debug.assert(node.parent != .null or node.id.fec_set_idx == 0);
+                if (node.id.fec_set_idx == 0) break :node node;
             }
+            unreachable;
+        };
+
+        const block_deserial_state: *BlockDeserialState = blk: {
+            const state: *?BlockDeserialState = &deserial_states[inserted_node.block_ref.index().?];
+            if (state.* == null) state.* = .init(fec_0);
+            break :blk &state.*.?;
+        };
+
+        var tx_buf: [1232]u8 = undefined;
+        while (try block_deserial_state.nextTransaction(&map_tree.pool, &tx_buf)) |tx| {
+            tracy.plot(u16, "transaction size", @intCast(tx.len));
         }
 
-        if (inserted_node.dataStart(map_tree.pool) == true and inserted_node.data_complete) {
-            // we can deserialise all at once
+        // if (inserted_node.dataStart(map_tree.pool) == true and inserted_node.data_complete) {
+        //     // we can deserialise all at once
 
-            var reader = std.io.Reader.fixed(inserted_node.payload());
+        //     var reader = std.io.Reader.fixed(inserted_node.payload());
 
-            // 64 should be fine, extra is for allocations made by bincode
-            var deserialised_buf: [128 * 1024]u8 = undefined;
-            var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
+        //     // 64 should be fine, extra is for allocations made by bincode
+        //     var deserialised_buf: [128 * 1024]u8 = undefined;
+        //     var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
 
-            const n_entries = try bincode.read(&deserial_fba, &reader, u64);
-            for (0..n_entries) |_| {
-                const num_hashes: u64 = try bincode.read(&deserial_fba, &reader, u64);
-                const hash: Hash = try bincode.read(&deserial_fba, &reader, Hash);
+        //     const n_entries = try bincode.read(&deserial_fba, &reader, u64);
+        //     for (0..n_entries) |_| {
+        //         const num_hashes: u64 = try bincode.read(&deserial_fba, &reader, u64);
+        //         const hash: Hash = try bincode.read(&deserial_fba, &reader, Hash);
 
-                _ = num_hashes;
-                _ = hash;
+        //         _ = num_hashes;
+        //         _ = hash;
 
-                const n_transactions = try bincode.read(&deserial_fba, &reader, u64);
-                for (0..n_transactions) |_| {
-                    var pre = reader; // capture before position
+        //         const n_transactions = try bincode.read(&deserial_fba, &reader, u64);
+        //         for (0..n_transactions) |_| {
+        //             var pre = reader; // capture before position
 
-                    const transaction = try bincode.read(&deserial_fba, &reader, lib.solana.transaction.VersionedTransaction);
+        //             const transaction = try bincode.read(&deserial_fba, &reader, lib.solana.transaction.VersionedTransaction);
 
-                    // NOTE: we store bincode-encoded transactions as-is, as:
-                    //       1) we know the upper bound size
-                    //       2) deserialising is cheap, and I think we only have to do it twice
-                    _ = transaction;
+        //             // NOTE: we store bincode-encoded transactions as-is, as:
+        //             //       1) we know the upper bound size
+        //             //       2) deserialising is cheap, and I think we only have to do it twice
+        //             _ = transaction;
 
-                    const transaction_id = try rw.replay_transaction_pool.createId();
-                    defer rw.replay_transaction_pool.destroyId(transaction_id);
+        //             const transaction_id = try rw.replay_transaction_pool.createId();
+        //             defer rw.replay_transaction_pool.destroyId(transaction_id);
 
-                    const transaction_buf: *[1232]u8 = rw.replay_transaction_pool.indexToPtr(transaction_id);
-                    const transaction_bytes: []u8 = transaction_buf[0 .. reader.seek - pre.seek];
-                    pre.readSliceAll(transaction_bytes) catch return error.badbadbad;
+        //             const transaction_buf: *[1232]u8 = rw.replay_transaction_pool.indexToPtr(transaction_id);
+        //             const transaction_bytes: []u8 = transaction_buf[0 .. reader.seek - pre.seek];
+        //             pre.readSliceAll(transaction_bytes) catch return error.badbadbad;
 
-                    tracy.plot(u16, "transaction size", @intCast(transaction_bytes.len));
+        //             tracy.plot(u16, "transaction size", @intCast(transaction_bytes.len));
 
-                    const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse @panic("no space");
-                    request.* = .{
-                        .task_id = 0,
+        //             const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse @panic("no space");
+        //             request.* = .{
+        //                 .task_id = 0,
 
-                        .request_kind = .transaction_execution,
-                        .data = .{
-                            .transaction_execution = .{
-                                .block_idx = .null,
-                                .tx_idx = transaction_id,
-                            },
-                        },
-                    };
-                    exec_request_sender.markUsed();
+        //                 .request_kind = .transaction_execution,
+        //                 .data = .{
+        //                     .transaction_execution = .{
+        //                         .block_idx = .null,
+        //                         .tx_idx = transaction_id,
+        //                     },
+        //                 },
+        //             };
+        //             exec_request_sender.markUsed();
 
-                    const polling_zone = tracy.Zone.init(@src(), .{ .name = "polling" });
-                    while (exec_response_receiver.peek() == null) {}
-                    polling_zone.deinit();
+        //             const polling_zone = tracy.Zone.init(@src(), .{ .name = "polling" });
+        //             while (exec_response_receiver.peek() == null) {}
+        //             polling_zone.deinit();
 
-                    const response: *const lib.replay.ExecResponse = exec_response_receiver.next().?;
-                    defer exec_response_receiver.markUsed();
+        //             const response: *const lib.replay.ExecResponse = exec_response_receiver.next().?;
+        //             defer exec_response_receiver.markUsed();
 
-                    std.debug.assert(response.task_id == request.task_id);
-                    std.debug.assert(response.request_kind == request.request_kind);
-                    std.debug.assert(response.data.transaction_execution.success);
-                }
-            }
+        //             std.debug.assert(response.task_id == request.task_id);
+        //             std.debug.assert(response.request_kind == request.request_kind);
+        //             std.debug.assert(response.data.transaction_execution.success);
+        //         }
+        //     }
 
-            // const entries = try bincode.read(&deserial_fba, &reader, bincode.Vec(Entry));
+        //     // const entries = try bincode.read(&deserial_fba, &reader, bincode.Vec(Entry));
 
-            // for (entries.items) |entry| {
-            //     for (entry.transactions.items) |transaction| {
-            //         std.log.info("transaction: ", .{});
+        //     // for (entries.items) |entry| {
+        //     //     for (entry.transactions.items) |transaction| {
+        //     //         std.log.info("transaction: ", .{});
 
-            //         switch (transaction.message) {
-            //             inline else => |msg| {
-            //                 for (msg.account_keys.items) |account_key| {
-            //                     std.log.info("account_key: {f}", .{account_key});
-            //                 }
-            //             },
-            //         }
-            //     }
-            // }
-        }
+        //     //         switch (transaction.message) {
+        //     //             inline else => |msg| {
+        //     //                 for (msg.account_keys.items) |account_key| {
+        //     //                     std.log.info("account_key: {f}", .{account_key});
+        //     //                 }
+        //     //             },
+        //     //         }
+        //     //     }
+        //     // }
+        // }
 
         // std.log.info(
         //     "{}: {f}, last? {}",
@@ -458,6 +981,37 @@ test "Basic blocktree" {
     const slot_2_hash: Hash = .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd");
     blocks.markBlockFullyReceived(slot_2_block, &slot_2_hash);
 }
+
+const DeserialState = extern struct {
+    next_action: NextAction,
+
+    n_remaining_transactions: u64,
+    n_remaining_entries: u64,
+
+    bytes_read: u16,
+
+    const NextAction = enum(u8) {
+        unknown,
+
+        read_n_entries,
+        read_num_hashes,
+        read_hash,
+        read_n_transactions,
+        read_transaction,
+
+        complete,
+    };
+
+    const default: DeserialState = .{
+        .next_action = .unknown,
+
+        .n_remaining_entries = std.math.maxInt(u64),
+        .n_remaining_transactions = std.math.maxInt(u64),
+
+        .bytes_read = 0,
+    };
+};
+
 /// Represents a deshredded FEC set.
 ///
 /// Used as a hashmap value, and a tree node (these are the same memory)
@@ -482,12 +1036,7 @@ const MerkleNode = extern struct {
     // TODO: eviction
     block_ref: lib.replay.BlockRef,
 
-    deserialise_finish_pos: extern struct {
-        byte_offset: u16,
-        remaining: enum(u8) { all, transactions, entries, none },
-        n_remaining: u16,
-    } = .{ .byte_offset = 0, .remaining = .all, .n_remaining = 0 },
-
+    deserial_state: DeserialState = .default,
     payload_len: u16,
 
     // TODO: this shouldn't be copied, and should instead come in via a pool
@@ -533,19 +1082,12 @@ const MerkleNode = extern struct {
     }
 };
 
-const BlockData = struct {};
-
 const TransactionPool = Pool(EncodedTransaction);
 
 const Pubkey = lib.solana.Pubkey;
 
 const EncodedTransaction = extern struct {
     bincode_data: [1232]u8,
-};
-
-const Microblock = struct {
-    entries: [128]Entry,
-    entries_len: u8,
 };
 
 // TODO: handle eviction
@@ -585,13 +1127,13 @@ const MerkleForest = struct {
             return @ptrCast(ctx.pool.buf[0..ctx.pool.len]);
         }
 
-        pub fn parentOf(ctx: Ctx, node: *MerkleNode) ?*MerkleNode {
+        pub fn parentOf(ctx: Ctx, node: *const MerkleNode) ?*MerkleNode {
             return &ctx.buf()[node.parent.index() orelse return null];
         }
-        pub fn childOf(ctx: Ctx, node: *MerkleNode) ?*MerkleNode {
+        pub fn childOf(ctx: Ctx, node: *const MerkleNode) ?*MerkleNode {
             return &ctx.buf()[node.child.index() orelse return null];
         }
-        pub fn siblingOf(ctx: Ctx, node: *MerkleNode) ?*MerkleNode {
+        pub fn siblingOf(ctx: Ctx, node: *const MerkleNode) ?*MerkleNode {
             return &ctx.buf()[node.sibling.index() orelse return null];
         }
 
