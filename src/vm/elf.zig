@@ -102,7 +102,6 @@ pub fn load(
         try parseLenient(allocator, bytes, config, loader, version);
 }
 
-/// [agave] https://github.com/anza-xyz/sbpf/blob/main/src/elf.rs#load_with_strict_parser
 fn parseStrict(
     allocator: std.mem.Allocator,
     bytes: []u8,
@@ -112,9 +111,17 @@ fn parseStrict(
     if (bytes.len < @sizeOf(elf.Elf64_Ehdr)) return error.OutOfBounds;
     const header: elf.Elf64_Ehdr = @bitCast(bytes[0..@sizeOf(elf.Elf64_Ehdr)].*);
 
+    // A list of the first 4 expected program headers.
+    // Since this is a stricter parsing scheme, we need them to match exactly.
+    const expected_phdrs: [4]struct { u32, u64 } = .{
+        .{ elf.PF_X, memory.BYTECODE_START }, // byte code
+        .{ elf.PF_R, memory.RODATA_START }, // read only data
+        .{ elf.PF_R | elf.PF_W, memory.STACK_START }, // stack
+        .{ elf.PF_R | elf.PF_W, memory.HEAP_START }, // heap
+    };
+
     const ident: ElfIdent = @bitCast(header.e_ident);
-    const program_header_table_end =
-        (@sizeOf(elf.Elf64_Phdr) *| header.e_phnum) +| @sizeOf(elf.Elf64_Ehdr);
+    const phdr_table_end = (@sizeOf(elf.Elf64_Phdr) *| header.e_phnum) +| @sizeOf(elf.Elf64_Ehdr);
     if (!std.mem.eql(u8, ident.magic[0..4], elf.MAGIC) or
         ident.class != elf.ELFCLASS64 or
         ident.data != elf.ELFDATA2LSB or
@@ -122,89 +129,46 @@ fn parseStrict(
         ident.osabi != elf.OSABI.NONE or
         ident.abiversion != 0x00 or
         !std.mem.allEqual(u8, &ident.padding, 0) or
-        // e_type
-        header.e_machine != elf.EM.BPF or
+        @intFromEnum(header.e_machine) != sbpf.EM_SBPF or
+        header.e_type != .DYN or
         header.e_version != 1 or
-        // e_entry
         header.e_phoff != @sizeOf(elf.Elf64_Ehdr) or
-        // e_shoff
-        // e_flags
         header.e_ehsize != @sizeOf(elf.Elf64_Ehdr) or
         header.e_phentsize != @sizeOf(elf.Elf64_Phdr) or
-        header.e_phnum == 0 or
-        program_header_table_end > bytes.len)
-    // e_shentsize
-    // e_shnum
-    // e_shstrndx
+        header.e_phnum < expected_phdrs.len or
+        phdr_table_end >= bytes.len or
+        header.e_shentsize != @sizeOf(elf.Elf64_Shdr) or
+        header.e_shstrndx >= header.e_shnum)
     {
         return error.InvalidFileHeader;
     }
 
-    // [agave] Note: Sig's memory constant names are swapped relative to sbpf:
-    //   sbpf MM_RODATA_START (0x0)           == Sig memory.BYTECODE_START
-    //   sbpf MM_BYTECODE_START (0x100000000) == Sig memory.RODATA_START
-    //   sbpf MM_REGION_SIZE (0x100000000)    == Sig memory.RODATA_START
-    const EXPECTED_PROGRAM_HEADERS: [2]struct { u32, u64 } = .{
-        .{ elf.PF_R, memory.BYTECODE_START }, // read only data
-        .{ elf.PF_X, memory.RODATA_START }, // byte code
-    };
     const phdrs = std.mem.bytesAsSlice(
         elf.Elf64_Phdr,
-        bytes[@sizeOf(elf.Elf64_Ehdr)..program_header_table_end],
+        bytes[@sizeOf(elf.Elf64_Ehdr)..phdr_table_end],
     );
-    const skip_rodata_program_header =
-        phdrs[0].p_flags != EXPECTED_PROGRAM_HEADERS[0][0];
-    if (!skip_rodata_program_header and header.e_phnum < 2) {
-        return error.InvalidFileHeader;
-    }
-    // If the first program header is not marked as PF_R (readonly),
-    // then expect to start at the second program header instead.
-    const expected_start: usize = if (skip_rodata_program_header) 1 else 0;
-    var expected_offset: u64 = program_header_table_end;
-    for (
-        EXPECTED_PROGRAM_HEADERS[expected_start..],
-        phdrs[0 .. EXPECTED_PROGRAM_HEADERS.len - expected_start],
-    ) |entry, phdr| {
+    for (expected_phdrs, phdrs[0..expected_phdrs.len]) |entry, phdr| {
         const p_flags, const p_vaddr = entry;
+        // For writable sections, (those with the PF_W bit set), we expect their
+        // value for p_filesz to be zero.
+        const p_filesz = if (p_flags & elf.PF_W != 0) 0 else phdr.p_memsz;
 
         if (phdr.p_type != elf.PT_LOAD or
             phdr.p_flags != p_flags or
-            phdr.p_offset != expected_offset or
+            phdr.p_offset < phdr_table_end or
             phdr.p_offset >= bytes.len or
             phdr.p_offset % 8 != 0 or
             phdr.p_vaddr != p_vaddr or
             phdr.p_paddr != p_vaddr or
-            phdr.p_filesz != phdr.p_memsz or
+            phdr.p_filesz != p_filesz or
             phdr.p_filesz > bytes.len -| phdr.p_offset or
-            phdr.p_filesz % 8 != 0 or
-            phdr.p_memsz >= memory.RODATA_START) // MM_REGION_SIZE
-        {
+            phdr.p_memsz >= memory.RODATA_START // larger than one region
+        ) {
             return error.InvalidProgramHeader;
         }
-        expected_offset = expected_offset +| phdr.p_filesz;
     }
 
-    const bytecode_header = if (skip_rodata_program_header)
-        phdrs[0]
-    else
-        phdrs[1];
-    const ro_section_range_start = if (skip_rodata_program_header)
-        program_header_table_end
-    else
-        phdrs[0].p_offset;
-    const ro_section_range_end = if (skip_rodata_program_header)
-        program_header_table_end
-    else
-        phdrs[0].p_offset +| phdrs[0].p_filesz;
-    const ro_section: Section = .{
-        .borrowed = .{
-            .offset = memory.BYTECODE_START, // MM_RODATA_START = 0
-            .start = ro_section_range_start,
-            .end = ro_section_range_end,
-        },
-    };
-    const text_section_vaddr = bytecode_header.p_vaddr;
-
+    const bytecode_header = phdrs[0];
     const vm_range_start = bytecode_header.p_vaddr;
     const vm_range_end = bytecode_header.p_vaddr +% bytecode_header.p_memsz;
     const entry_chk = header.e_entry +% 7;
@@ -213,18 +177,29 @@ fn parseStrict(
     {
         return error.InvalidFileHeader;
     }
+
     const entry_pc = (header.e_entry -| bytecode_header.p_vaddr) / 8;
+    const entry_inst: sbpf.Instruction = @bitCast(bytes[bytecode_header.p_offset..][0..8].*);
+    if (!entry_inst.isFunctionStartMarker()) {
+        return error.InvalidFileHeader;
+    }
 
     var function_registry: Registry = .{};
     errdefer function_registry.deinit(allocator);
+
+    const rodata_header = phdrs[1];
 
     return .{
         .bytes = bytes,
         .version = sbpf_version,
         .entry_pc = entry_pc,
         .from_asm = false,
-        .ro_section = ro_section,
-        .text_vaddr = text_section_vaddr,
+        .ro_section = .{ .borrowed = .{
+            .offset = rodata_header.p_vaddr,
+            .start = rodata_header.p_offset,
+            .end = rodata_header.p_offset +| rodata_header.p_filesz,
+        } },
+        .text_vaddr = vm_range_start,
         .config = config,
         .function_registry = function_registry,
         .instructions = std.mem.bytesAsSlice(sbpf.Instruction, try safeSlice(
