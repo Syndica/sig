@@ -32,23 +32,23 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var request_reader = rw.exec_req_response.request_ring.get(.reader);
     var response_writer = rw.exec_req_response.response_ring.get(.writer);
 
+    var deserialised_buf: [4096]u8 = undefined;
+    var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
+
     while (true) {
         const request: *const lib.replay.ExecRequest = request_reader.next() orelse continue;
         defer request_reader.markUsed();
+        defer deserial_fba.reset();
 
-        const zone = tracy.Zone.init(@src(), .{ .name = "task" });
+        const zone = tracy.Zone.init(@src(), .{});
         defer zone.deinit();
-        zone.value(request.task_id);
+        zone.name(switch (request.request_kind) {
+            inline else => |val| @as([:0]const u8, @tagName(val)),
+        });
 
         switch (request.request_kind) {
             .transaction_execution => {
-                const tx_zone = tracy.Zone.init(@src(), .{ .name = "transaction_execution" });
-                defer tx_zone.deinit();
-
                 const data = &request.data.transaction_execution;
-
-                var deserialised_buf: [4096]u8 = undefined;
-                var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
 
                 var reader = std.io.Reader.fixed(ro.replay_transaction_pool.indexToConstPtr(data.tx_idx));
 
@@ -59,7 +59,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
                         lib.solana.transaction.VersionedTransaction,
                     );
 
-                std.log.info("transaction: {}", .{transaction});
+                _ = transaction;
 
                 const response: *lib.replay.ExecResponse = response_writer.next() orelse @panic("cant write");
                 response.* = .{
