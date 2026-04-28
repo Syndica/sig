@@ -13,6 +13,12 @@ compute_unit_limit: u64,
 log_64_units: u64,
 /// Number of compute units consumed by a create_program_address call
 create_program_address_units: u64,
+/// Maximum program instruction invocation stack depth. Invocation stack
+/// depth starts at 1 for transaction instructions and the stack depth is
+/// incremented each time a program invokes an instruction and decremented
+/// when a program returns.
+/// Raised from 5 to 9 by SIMD-0268 (`raise_cpi_nesting_limit_to_8`).
+max_instruction_stack_depth: usize,
 /// Maximum SBF to BPF call depth
 max_call_depth: usize,
 /// Size of a stack frame in bytes, must match the size specified in the LLVM SBF backend
@@ -126,14 +132,22 @@ bls12_381_one_pair_cost: u64,
 /// Incremental number of compute units consumed per pair in a bls12_381 pairing.
 bls12_381_additional_pair_cost: u64,
 
-pub const DEFAULT: ComputeBudget = ComputeBudget.init(1_400_000, false);
+pub const DEFAULT: ComputeBudget = ComputeBudget.init(1_400_000, false, false);
 
-/// [agave] https://github.com/anza-xyz/agave/blob/8363752bd5e41aaf8eaf9137711e8d8b11d84be6/program-runtime/src/execution_budget.rs#L162
-pub fn init(compute_unit_limit: u64, simd_0339_active: bool) ComputeBudget {
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/program-runtime/src/execution_budget.rs#L93-L102
+pub fn init(
+    compute_unit_limit: u64,
+    simd_0339_active: bool,
+    simd_0268_active: bool,
+) ComputeBudget {
     return .{
         .compute_unit_limit = compute_unit_limit,
         .log_64_units = 100,
         .create_program_address_units = 1500,
+        .max_instruction_stack_depth = if (simd_0268_active)
+            sig.runtime.transaction_context.MAX_INSTRUCTION_STACK_DEPTH_SIMD_0268
+        else
+            sig.runtime.transaction_context.MAX_INSTRUCTION_STACK_DEPTH,
         .max_call_depth = 64,
         .stack_frame_size = 4096,
         .log_pubkey_units = 100,

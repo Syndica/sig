@@ -129,6 +129,7 @@ pub fn createTransactionContext(
         .compute_budget = .init(
             instr_ctx.cu_avail,
             feature_set.active(.increase_cpi_account_info_limit, slot),
+            feature_set.active(.raise_cpi_nesting_limit_to_8, slot),
         ),
         .custom_error = null,
         .log_collector = log_collector,

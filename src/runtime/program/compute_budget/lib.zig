@@ -73,7 +73,12 @@ pub const ComputeBudgetLimits = struct {
         slot: sig.core.Slot,
     ) sig.runtime.ComputeBudget {
         const simd_0339_active = feature_set.active(.increase_cpi_account_info_limit, slot);
-        var default = sig.runtime.ComputeBudget.init(self.compute_unit_limit, simd_0339_active);
+        const simd_0268_active = feature_set.active(.raise_cpi_nesting_limit_to_8, slot);
+        var default = sig.runtime.ComputeBudget.init(
+            self.compute_unit_limit,
+            simd_0339_active,
+            simd_0268_active,
+        );
         default.heap_size = self.heap_size;
         return default;
     }
