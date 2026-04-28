@@ -14,6 +14,8 @@ comptime {
 }
 
 pub const bincode = @import("solana/bincode.zig");
+pub const bincode_2 = @import("solana/bincode_2.zig");
+
 pub const ids = @import("solana/ids.zig");
 pub const features = @import("solana/features.zig");
 pub const snapshot = @import("solana/snapshot.zig");
