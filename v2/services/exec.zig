@@ -46,6 +46,8 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             inline else => |val| @as([:0]const u8, @tagName(val)),
         });
 
+        zone.value(request.task_id);
+
         switch (request.request_kind) {
             .transaction_execution => {
                 const data = &request.data.transaction_execution;
@@ -65,7 +67,13 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
                 response.* = .{
                     .task_id = request.task_id,
                     .request_kind = .transaction_execution,
-                    .data = .{ .transaction_execution = .{ .success = true } },
+                    .data = .{
+                        .transaction_execution = .{
+                            .success = true,
+                            .block_idx = data.block_idx,
+                            .tx_idx = data.tx_idx,
+                        },
+                    },
                 };
                 response_writer.markUsed();
             },

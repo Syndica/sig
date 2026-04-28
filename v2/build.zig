@@ -190,6 +190,7 @@ pub fn build(b: *Build) !void {
         .root_source_file = b.path("init/main.zig"),
         .target = target,
         .optimize = optimize,
+        .error_tracing = true,
         .imports = runner_imports,
     });
     _ = addTestOutputs(b, unit_test_step, null, artifact_opts, .{
@@ -253,7 +254,7 @@ pub fn build(b: *Build) !void {
         .root_source_file = b.path("init/start_service.zig"),
         .target = target,
         .optimize = optimize,
-        // .error_tracing = true,
+        .error_tracing = true,
         .imports = &.{
             .{ .name = "lib", .module = lib_mod },
             .{ .name = "tracy", .module = tracy_mod },
@@ -280,7 +281,7 @@ pub fn build(b: *Build) !void {
             .optimize = optimize,
             .single_threaded = true,
             .omit_frame_pointer = false,
-            // .error_tracing = true,
+            .error_tracing = true,
             .imports = &.{
                 .{ .name = "lib", .module = lib_mod },
                 .{ .name = "start_service", .module = start_service_mod },
