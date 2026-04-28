@@ -20,7 +20,6 @@ comm -23 \
         -path 'env/test-vectors/block/*' -prune \
         -o -type f -name '*.fix' -printf '%P\n' | sort) \
     <(sort scripts/failing.txt) \
-    | if [ "$SPLIT_TESTS" == "true" ]; then circleci tests split; else cat; fi \
     | sed 's_^_env/test-vectors/_' \
     | xargs -d '\n' cp -t env/split-fixtures/
 

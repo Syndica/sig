@@ -240,7 +240,7 @@ jobs:
           name: Run Ledger Fuzzer
           command: workspace/zig-out-release/bin/fuzz --seed 19 ledger 10000
 
-  build_conformance:
+  solana_conformance:
     executor: linux-executor
     steps:
       - checkout
@@ -252,26 +252,12 @@ jobs:
           name: Build Conformance
           command: |
             cd conformance
-            ../workspace/zig/zig build -p ../workspace/conformance-release --summary all
+            ../workspace/zig/zig build --summary all
       - save_cache:
           key: build_conformance-v1-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-{{ checksum "conformance/build.zig" }}-{{ checksum "conformance/build.zig.zon" }}
           paths:
             - .zig-cache
             - ~/.cache/zig
-      - persist_to_workspace:
-          root: workspace
-          paths:
-            - "conformance-release/bin/run"
-
-  solana_conformance:
-    executor: linux-executor
-    # We need a pretty high parallelism since the vm_interp harness has a *lot* of fixtures. Perhaps
-    # we can raise it even higher if the transaction harness takes too long?
-    parallelism: 6
-    steps:
-      - checkout
-      - attach_workspace:
-          at: workspace
       - run:
           name: Prepare /nix permissions so cache restore works
           command: |
@@ -292,7 +278,7 @@ jobs:
             cd conformance
             nix develop \
               -s SPLIT_TESTS true \
-              -s PREBUILT_BIN ../workspace/conformance-release/bin/run \
+              -s PREBUILT_BIN zig-out/bin/run \
               -c ./scripts/ci-run.sh
       - save_cache:
           key: nix-v1-{{ checksum "conformance/flake.nix" }}-{{ checksum "conformance/flake.lock" }}-{{ checksum "conformance/commits.env" }}
@@ -370,12 +356,9 @@ workflows:
       - linux_misc_checks:
           requires:
             - setup_zig_linux
-      - build_conformance:
-          requires:
-            - setup_zig_linux
       - solana_conformance:
           requires:
-            - build_conformance
+            - setup_zig_linux
 
   check_macos:
     jobs:
