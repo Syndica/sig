@@ -69,7 +69,11 @@ pub const ExecResponse = extern struct {
 
     request_kind: RequestKind,
     data: extern union {
-        transaction_execution: extern struct { success: bool },
+        transaction_execution: extern struct {
+            block_idx: BlockRef,
+            tx_idx: TransactionPool.ItemId,
+            success: bool,
+        },
         transaction_signature_verify: extern struct { success: bool },
     },
 };

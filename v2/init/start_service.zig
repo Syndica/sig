@@ -334,7 +334,7 @@ const SimpleStackIterator = struct {
     }
 };
 
-pub fn servicePanic(
+pub noinline fn servicePanic(
     msg: []const u8,
     first_trace_addr: ?usize,
 ) noreturn {

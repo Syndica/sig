@@ -286,8 +286,12 @@ pub const Receiver = struct {
 
                     len += @intCast(data_shred.dataPayload().len);
 
-                    data_complete = data_complete or flags.data_complete;
                     slot_complete = slot_complete or flags.last_shred_in_slot;
+
+                    if (flags.data_complete) {
+                        data_complete = true;
+                        break;
+                    }
                 }
                 break :blk .{ len, data_complete, slot_complete };
             };
@@ -317,9 +321,10 @@ pub const Receiver = struct {
                 // TODO: I think we need to re-validate the data shreds that we recovered
                 const data_shred: *const Shred = Shred.fromBufferUnchecked(buffer);
                 const payload = data_shred.dataPayload();
-
                 @memcpy(finished.payload_buf[bytes_written..][0..payload.len], payload);
                 bytes_written += @intCast(payload.len);
+
+                if (Shred.fromBufferUnchecked(buffer).code_or_data.data.flags.data_complete) break;
             }
 
             std.debug.assert(bytes_written == total_payload_len);

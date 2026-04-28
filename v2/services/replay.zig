@@ -33,94 +33,6 @@ pub const ReadWrite = struct {
     exec_req_response: *lib.replay.ExecReqResponse,
 };
 
-var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
-
-const SpanningFecSetReader = struct {
-    start_node: *const MerkleNode,
-    merkle_pool: *const MerkleForest.NodePool,
-
-    /// NOTE: we won't actually be using the fields inside except for buffer
-    interface: std.Io.Reader,
-
-    fn init(
-        start_node: *const MerkleNode,
-        merkle_pool: *const MerkleForest.NodePool,
-    ) SpanningFecSetReader {
-        return .{
-            .start_node = start_node,
-            .merkle_pool = merkle_pool,
-            .interface = initInterface(start_node),
-        };
-    }
-
-    fn initInterface(start_node: *const MerkleNode) std.Io.Reader {
-        return .{
-            .vtable = &.{
-                .rebase = rebase,
-                .stream = stream,
-                .readVec = readVec,
-            },
-            // This is unfortunate - Io.Reader expects a mutable buffer, however it is extremely
-            // important that we do not mutate these buffers.
-            .buffer = @constCast(start_node.payload()[start_node.deserial_state.byte_offset..]),
-            .seek = 0,
-            .end = start_node.payload().len - start_node.deserial_state.byte_offset,
-        };
-    }
-
-    fn advanceIfExhausted(fec_set_reader: *SpanningFecSetReader) error{EndOfStream}!void {
-        if (fec_set_reader.start_node.deserial_state.byte_offset >= fec_set_reader.start_node.payload().len) {
-            const zone = tracy.Zone.init(@src(), .{ .name = "exhausted" });
-            defer zone.deinit();
-
-            const child: *const MerkleNode = MerkleForest.NodeTree.childOf(
-                .{ .pool = fec_set_reader.merkle_pool },
-                fec_set_reader.start_node,
-            ) orelse
-                return error.EndOfStream;
-
-            std.debug.assert(child.block_ref != .null);
-
-            fec_set_reader.interface.buffer = child.payload()[child.deserial_state.byte_offset..];
-            fec_set_reader.interface.seek = 0;
-            fec_set_reader.interface.end = child.payload().len - child.deserial_state.byte_offset;
-
-            fec_set_reader.start_node = child;
-        }
-    }
-
-    fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) !usize {
-        const fec_set_reader: *SpanningFecSetReader = @alignCast(@fieldParentPtr("interface", r));
-        try advanceIfExhausted(fec_set_reader);
-
-        const read_slice = limit.sliceConst(fec_set_reader.start_node.payload()[fec_set_reader.start_node.deserial_state.byte_offset..]);
-        w.writeAll(read_slice);
-        fec_set_reader.start_node.deserial_state.byte_offset += read_slice.len;
-    }
-
-    fn rebase(r: *std.Io.Reader, capacity: usize) !void {
-        _ = .{ r, capacity };
-        @panic("rebase is illegal - our io reader buffer is const");
-    }
-
-    fn readVec(r: *std.Io.Reader, data: [][]u8) !usize {
-        const fec_set_reader: *SpanningFecSetReader = @alignCast(@fieldParentPtr("interface", r));
-        try advanceIfExhausted(fec_set_reader);
-
-        const first = data[0];
-        var writer: std.Io.Writer = .{
-            .buffer = first,
-            .end = 0,
-            .vtable = &.{ .drain = std.Io.Writer.fixedDrain },
-        };
-        const limit: std.Io.Limit = .limited(writer.buffer.len - writer.end);
-        return r.vtable.stream(r, &writer, limit) catch |err| switch (err) {
-            error.WriteFailed => unreachable,
-            else => |e| return e,
-        };
-    }
-};
-
 const BlockDeserialState = struct {
     pos_node: *const MerkleNode,
     pos_offset: usize,
@@ -343,7 +255,22 @@ const BlockDeserialState = struct {
     }
 };
 
+const BlockExecState = struct {
+    n_transactions_requested: u32,
+    n_transactions_completed: u32,
+    all_transactions_requested: bool,
+
+    const default: BlockExecState = .{
+        .n_transactions_requested = 0,
+        .n_transactions_completed = 0,
+        .all_transactions_requested = false,
+    };
+};
+
+var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
+
 const DeserialStates = [lib.replay.BlockPool.capacity]?BlockDeserialState;
+const BlockExecStates = [lib.replay.BlockPool.capacity]BlockExecState;
 
 pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     var fba: std.heap.FixedBufferAllocator = .init(&scratch_memory);
@@ -354,104 +281,158 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     const deserial_states: *DeserialStates = try allocator.create(DeserialStates);
     @memset(deserial_states, null);
 
-    var deshredded_iter = rw.deshredded_in.get(.reader);
+    const exec_states: *BlockExecStates = try allocator.create(BlockExecStates);
+    @memset(exec_states, .default);
 
-    while (true) {
-        const deshredded_fec_set: *const lib.shred.DeshreddedFecSet = blk: {
-            const loop_zone = tracy.Zone.init(@src(), .{ .name = "spinning" });
-            defer loop_zone.deinit();
+    // TODO: remove this, it's just a copy for nothing
+    var deserialised_buf: [128 * 1024]u8 = undefined;
+    var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
+
+    var deshredded_iter = rw.deshredded_in.get(.reader);
+    var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
+    var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
+
+    task: switch (@as(enum { exec_response, fec_set, idle }, .idle)) {
+        .idle => {
+            if (exec_response_receiver.peek() != null) continue :task .exec_response;
+            if (deshredded_iter.peek() != null) continue :task .fec_set;
+
+            const zone = tracy.Zone.init(@src(), .{ .name = "idle" });
+            defer zone.deinit();
 
             while (true) {
-                break :blk deshredded_iter.next() orelse continue;
+                if (exec_response_receiver.peek() != null) continue :task .exec_response;
+                if (deshredded_iter.peek() != null) continue :task .fec_set;
             }
-        };
-        defer deshredded_iter.markUsed();
+        },
+        .exec_response => {
+            const zone = tracy.Zone.init(@src(), .{ .name = "exec_response" });
+            defer zone.deinit();
 
-        const received_zone = tracy.Zone.init(@src(), .{ .name = "received fec set" });
-        defer received_zone.deinit();
+            const response: *const lib.replay.ExecResponse = exec_response_receiver.next() orelse unreachable;
+            defer exec_response_receiver.markUsed();
 
-        const inserted_node = try map_tree.put(rw.block_pool, deshredded_fec_set) orelse
-            continue; // null => node already known, nothing to do here
+            zone.value(response.task_id);
 
-        var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
-        var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
+            std.debug.assert(response.request_kind == .transaction_execution); // others unimplemented
+            const response_data = response.data.transaction_execution;
 
-        if (inserted_node.block_ref == .null) {
-            const null_zone = tracy.Zone.init(@src(), .{ .name = "received fec set (block_id=null)" });
-            defer null_zone.deinit();
-            // blockrefs are assigned from the 0th fecset, and carried forward. If the newly
-            // inserted node isn't attached to a 0th fecset, we won't be able to execute it until it
-            // is.
+            defer rw.replay_transaction_pool.destroyId(response_data.tx_idx);
 
-            // NOTE: we *could* do some PoH and sig verify tasks early here, but it seems like there
-            // isn't actually an advantage, as a validator executing transactions will have plenty
-            // of "gaps" in exec thread pool usage, and these tasks only have to be finished before
-            // we finish the block as a whole.
+            const block_ref = response_data.block_idx;
+            const exec_state: *BlockExecState = &exec_states[block_ref.index().?];
 
-            // TODO: with that being said, we could probably benefit from prefetching accounts here.
-            continue;
-        }
+            // We previously used the transaction number within the block as our "task_id".
+            // Asserting that we're receiving them back in order (we have single threaded exec).
+            std.debug.assert(response.task_id == exec_state.n_transactions_completed);
 
-        // assert that we've got a chain of fec sets back to the 0th fec set
-        const fec_0: *const MerkleNode = node: {
-            var maybe_node: ?*MerkleNode = inserted_node;
-            while (maybe_node) |node| : (maybe_node = map_tree.pool.indexToOptPtr(node.parent)) {
-                std.debug.assert(node.parent != .null or node.id.fec_set_idx == 0);
-                if (node.id.fec_set_idx == 0) break :node node;
-            }
-            unreachable;
-        };
+            exec_state.n_transactions_completed += 1;
 
-        const block_deserial_state: *BlockDeserialState = blk: {
-            const state: *?BlockDeserialState = &deserial_states[inserted_node.block_ref.index().?];
-            if (state.* == null) state.* = .init(fec_0);
-            break :blk &state.*.?;
-        };
-
-        // TODO: remove this, it's just a copy for nothing
-        var deserialised_buf: [128 * 1024]u8 = undefined;
-        var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
-
-        while (true) {
-            defer deserial_fba.reset();
-
-            const tx_ref = try rw.replay_transaction_pool.createId();
-            defer rw.replay_transaction_pool.destroyId(tx_ref);
-
-            const tx_buf: *[1232]u8 = rw.replay_transaction_pool.indexToPtr(tx_ref);
-
-            const tx = try block_deserial_state.nextTransaction(&deserial_fba, &map_tree.pool, tx_buf) orelse break;
-            tracy.plot(u16, "transaction size", @intCast(tx.len));
-
-            const success: bool = blk: {
-                const zone = tracy.Zone.init(@src(), .{ .name = "exec" });
-                defer zone.deinit();
-
-                const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse @panic("no space");
-                request.* = .{
-                    .task_id = 0,
-                    .request_kind = .transaction_execution,
-                    .data = .{
-                        .transaction_execution = .{
-                            .block_idx = inserted_node.block_ref,
-                            .tx_idx = tx_ref,
-                        },
+            if (exec_state.all_transactions_requested and
+                exec_state.n_transactions_completed == exec_state.n_transactions_requested)
+            {
+                std.log.info(
+                    "Slot {} ({}) complete! ({}/{})",
+                    .{
+                        rw.block_pool.indexToPtr(block_ref).slot,
+                        block_ref,
+                        exec_state.n_transactions_requested,
+                        exec_state.n_transactions_completed,
                     },
-                };
-                exec_request_sender.markUsed();
+                );
+            }
 
-                const polling_zone = tracy.Zone.init(@src(), .{ .name = "polling" });
-                while (exec_response_receiver.peek() == null) {}
-                polling_zone.deinit();
+            continue :task .idle;
+        },
+        .fec_set => {
+            const zone = tracy.Zone.init(@src(), .{ .name = "received fec set" });
+            defer zone.deinit();
 
-                const response: *const lib.replay.ExecResponse = exec_response_receiver.next().?;
-                defer exec_response_receiver.markUsed();
+            const deshredded_fec_set: *const lib.shred.DeshreddedFecSet =
+                deshredded_iter.next() orelse unreachable;
+            defer deshredded_iter.markUsed();
 
-                break :blk response.data.transaction_execution.success;
+            const inserted_node = try map_tree.put(rw.block_pool, deshredded_fec_set) orelse
+                continue :task .idle; // null => node already known, nothing to do here
+
+            if (inserted_node.block_ref == .null) {
+                const null_zone = tracy.Zone.init(@src(), .{ .name = "received fec set (block_id=null)" });
+                defer null_zone.deinit();
+                // blockrefs are assigned from the 0th fecset, and carried forward. If the newly
+                // inserted node isn't attached to a 0th fecset, we won't be able to execute it until it
+                // is.
+
+                // NOTE: we *could* do some PoH and sig verify tasks early here, but it seems like there
+                // isn't actually an advantage, as a validator executing transactions will have plenty
+                // of "gaps" in exec thread pool usage, and these tasks only have to be finished before
+                // we finish the block as a whole.
+
+                // TODO: with that being said, we could probably benefit from prefetching accounts here.
+                continue :task .idle;
+            }
+
+            // assert that we've got a chain of fec sets back to the 0th fec set
+            const fec_0: *const MerkleNode = node: {
+                var maybe_node: ?*MerkleNode = inserted_node;
+                while (maybe_node) |node| : (maybe_node = map_tree.pool.indexToOptPtr(node.parent)) {
+                    std.debug.assert(node.parent != .null or node.id.fec_set_idx == 0);
+                    if (node.id.fec_set_idx == 0) break :node node;
+                }
+                unreachable;
             };
 
-            _ = success;
-        }
+            const block_deserial_state: *BlockDeserialState = blk: {
+                const state: *?BlockDeserialState = &deserial_states[inserted_node.block_ref.index().?];
+                if (state.* == null) state.* = .init(fec_0);
+                break :blk &state.*.?;
+            };
+
+            zone.value(inserted_node.block_ref.index().?);
+            zone.value(rw.block_pool.indexToConstPtr(inserted_node.block_ref).slot);
+
+            // Read transactions until we can't anymore, sending to exec as we go
+            while (true) {
+                defer deserial_fba.reset();
+
+                const tx_ref = try rw.replay_transaction_pool.createId();
+                // TODO: this is a major leak risk, should use comptime errdefer unreachable
+
+                const tx_buf: *[1232]u8 = rw.replay_transaction_pool.indexToPtr(tx_ref);
+
+                const tx = try block_deserial_state.nextTransaction(&deserial_fba, &map_tree.pool, tx_buf) orelse break;
+                tracy.plot(u16, "transaction size", @intCast(tx.len));
+
+                const exec_state: *BlockExecState = &exec_states[inserted_node.block_ref.index().?];
+
+                // index within the block
+                const tx_index: u32 = exec_state.n_transactions_requested;
+                exec_state.n_transactions_requested += 1;
+
+                zone.value(tx_index);
+
+                // send task to exec
+                {
+                    const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse @panic("no space");
+                    defer exec_request_sender.markUsed();
+                    request.* = .{
+                        .task_id = tx_index,
+                        .request_kind = .transaction_execution,
+                        .data = .{
+                            .transaction_execution = .{
+                                .block_idx = inserted_node.block_ref,
+                                .tx_idx = tx_ref,
+                            },
+                        },
+                    };
+                }
+            }
+            if (inserted_node.slot_complete) {
+                const exec_state: *BlockExecState = &exec_states[inserted_node.block_ref.index().?];
+                exec_state.all_transactions_requested = true;
+            }
+
+            continue :task .idle;
+        },
     }
 }
 
@@ -909,7 +890,19 @@ const MerkleForest = struct {
             .data_complete = new_fec_set.data_complete,
             .slot_complete = new_fec_set.slot_complete,
 
-            .block_ref = if (new_fec_set.id.fec_set_idx == 0) try block_pool.createId() else .null,
+            .block_ref = if (new_fec_set.id.fec_set_idx == 0) ref: {
+                const block_ref = try block_pool.createId();
+                block_pool.indexToPtr(block_ref).* = .{
+                    // TODO: these are probably useless fields
+                    .first_fecset_chained_merkle_root = undefined,
+                    .last_fecset_merkle_root = undefined,
+                    .last_fecset_received = undefined,
+
+                    // TODO: chain if possible
+                    .slot = new_fec_set.id.slot,
+                };
+                break :ref block_ref;
+            } else .null,
 
             .payload_len = new_fec_set.payload_len,
             .payload_buf = new_fec_set.payload_buf,
@@ -925,13 +918,28 @@ const MerkleForest = struct {
 
             if (parent.child == .null) {
                 @branchHint(.likely);
-                new_node.block_ref = parent.block_ref;
+                if (new_node.block_ref == .null)
+                    new_node.block_ref = parent.block_ref
+                else
+                    std.debug.assert(new_node.id.fec_set_idx == 0);
             } else {
                 // This node's parent already has a child. This means the leader produced multiple
                 // conflicting fec sets.
                 // TODO: report this and special case the handling in the caller
                 std.log.warn("Equivocation detected! Fec set {f} has multiple children\n", .{@as(*const MerkleNode, parent)});
-                new_node.block_ref = try block_pool.createId();
+                new_node.block_ref = ref: {
+                    const block_ref = try block_pool.createId();
+                    block_pool.indexToPtr(block_ref).* = .{
+                        // TODO: these are probably useless fields
+                        .first_fecset_chained_merkle_root = undefined,
+                        .last_fecset_merkle_root = undefined,
+                        .last_fecset_received = undefined,
+
+                        // TODO: chain if possible
+                        .slot = new_fec_set.id.slot,
+                    };
+                    break :ref block_ref;
+                };
                 std.debug.assert(new_node.block_ref != .null);
                 std.debug.assert(new_node.block_ref != parent.block_ref);
                 did_insert_equivocated = true;
