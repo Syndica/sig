@@ -93,7 +93,9 @@ pub fn pushInstruction(
     if (tc.instruction_trace.len >= sig.runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH) {
         return InstructionError.MaxInstructionTraceLengthExceeded;
     }
-    if (tc.instruction_stack.len >= sig.runtime.transaction_context.MAX_INSTRUCTION_STACK_DEPTH) {
+    // SIMD-0268 (raise_cpi_nesting_limit_to_8) makes this depth feature-gated, so
+    // read from the per-transaction compute budget instead of a constant.
+    if (tc.instruction_stack.len >= tc.compute_budget.max_instruction_stack_depth) {
         return InstructionError.CallDepth;
     }
 
