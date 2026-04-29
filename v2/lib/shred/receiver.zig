@@ -270,14 +270,15 @@ pub const Receiver = struct {
             const shreds_bitset, const shreds_reedsol_bufs = fec_set_ctx.erasureEncoded();
 
             const recover_zone = tracy.Zone.init(@src(), .{ .name = "reconstructFecSet" });
-            try reed_sol.recover64(
+            defer recover_zone.deinit();
+
+            reed_sol.recover64(
                 shred.erasureFragment().?.len,
                 &shreds_reedsol_bufs,
                 32,
                 32,
                 shreds_bitset.mask,
-            );
-            defer recover_zone.deinit();
+            ) catch @panic("todo: handle bad recovery");
 
             fec_set_ctx.data_shreds_received = .initFull();
         }
