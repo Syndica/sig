@@ -2,44 +2,49 @@
 
 Install [nix](https://nixos.org/download/) if you do not have it.
 
-`solana-conformance` is now provided externally as a Rust CLI crate. Resolution order is:
-
-1. `SOLANA_CONFORMANCE_REPO_URL` and `SOLANA_CONFORMANCE_REF` (must both be set)
-2. `SOLANA_CONFORMANCE_SRC` (crate path, for example `/path/to/repo/solana-conformance`)
-3. a system installation on `PATH`
-
-Example with local source checkout:
-
-```bash
-export SOLANA_CONFORMANCE_SRC=~/src/repo/solana-conformance
-nix develop --impure
-```
-
-Example with repo coordinates (pinned):
-
-```bash
-export SOLANA_CONFORMANCE_REPO_URL=https://<token>@github.com/<org>/<repo>.git
-export SOLANA_CONFORMANCE_REF=<commit-or-tag>
-nix develop --impure
-```
-
 ```bash
 nix develop            # if you only want to run the tests
 nix develop .#agave    # if you also want to run the test vectors against agave
 ```
 
-# Build
+`solana-conformance` is no longer provided by the flake. You'll need to install it manually if you want to use it. We also have our own test runner implemented in `src/main.zig`, so `solana-conformance` is no longer necessary to run the tests.
 
-To run the conformance tests, you'll need a build of solfuzz_sig. Either Debug or ReleaseSafe builds are fine.
+# Run
+
+**Run the test vectors using the zig test runner**
+
+Run all tests against sig:
+
+```bash
+zig build run env/test-vectors   # block tests will fail, this is expected.
+```
+
+Run one test against sig:
+
+```bash
+zig build run env/test-vectors/txn/fixtures/0a3ba0c45b67c887fd2f5b7a9c07f277bf3f8bfe_2212177.fix
+```
+
+Test against arbitrary static libs:
+
+```bash
+zig build run -Dno-sig <fixture-file-or-dir> <path-to-static-lib>
+```
+
+`no-sig` is optional. If you plan to dynamically link a `.so` file, this option speeds up compilation and reduces the binary size.
+
+
+**Run the test vectors using solana-conformance**
+
+The zig implementation can run the tests but offers a minimal feature set. For advanced debugging, you'll likely want to use solana-conformance.
+
+To run the conformance tests using solana-conformance, you'll need a build of solfuzz_sig. Either Debug or ReleaseSafe builds are fine.
 
 ```bash
 zig build solfuzz_sig
 ```
 
-
-# Run
-
-**Run the test vectors**
+Run the tests:
 
 ```bash
 # run all conformance test vectors
@@ -161,14 +166,14 @@ proto value = intFromEnum(InstructionError) + 1
 
 The full table is in `../src/core/instruction.zig` in the `intFromInstructionError` function. Some common ones:
 
-| Proto value | InstructionError             |
-|-------------|------------------------------|
-| 3           | InvalidInstructionData       |
-| 4           | InvalidAccountData           |
-| 26          | Custom                       |
-| 31          | UnsupportedProgramId         |
-| 32          | CallDepth                    |
-| 49          | UnsupportedSysvar            |
+| Proto value | InstructionError       |
+| ----------- | ---------------------- |
+| 3           | InvalidInstructionData |
+| 4           | InvalidAccountData     |
+| 26          | Custom                 |
+| 31          | UnsupportedProgramId   |
+| 32          | CallDepth              |
+| 49          | UnsupportedSysvar      |
 
 `executed_units` reflects total compute units consumed by the transaction up to the point of failure. If agave shows `0` (or no `executed_units` field, which is the protobuf default), the failure occurred before any compute was consumed—often a feature flag check at the top of a program's entrypoint.
 
