@@ -329,7 +329,6 @@ const Metrics = struct {
     snapshot_downloads_failed: tel.Counter,
     snapshot_downloads_cancelled: tel.Counter,
     snapshot_downloads_succeeded: tel.Counter,
-    snapshot_download_winners: tel.Counter,
     snapshot_download_bytes_written: tel.Counter,
 };
 
@@ -1141,6 +1140,7 @@ const SnapshotService = struct {
         }
 
         conn.bytes_written += conn.extra_body_len;
+        self.metrics.snapshot_download_bytes_written.increment(conn.extra_body_len);
         self.maybeSelectWinner(data.index);
 
         if (self.shouldCancelDownload(data.index)) {
@@ -1220,6 +1220,7 @@ const SnapshotService = struct {
         std.debug.assert(n <= conn.pipe_pending);
         conn.pipe_pending -= n;
         conn.bytes_written += n;
+        self.metrics.snapshot_download_bytes_written.increment(n);
 
         self.maybeSelectWinner(data.index);
 
@@ -1657,7 +1658,17 @@ const SnapshotService = struct {
     }
 
     fn finishDownload(self: *SnapshotService, index: u8, result: DownloadResult) void {
-        _ = .{ self, index, result };
+        const conn = &self.download_conns[index];
+        self.logger.info().logf("finishDownload idx={d} result={s} addr={f} bytes_written={d}", .{
+            index, @tagName(result), conn.addr, conn.bytes_written,
+        });
+
+        switch (result) {
+            .failed => self.metrics.snapshot_downloads_failed.increment(1),
+            .cancelled => self.metrics.snapshot_downloads_cancelled.increment(1),
+            .succeeded => self.metrics.snapshot_downloads_succeeded.increment(1),
+        }
+        // TODO: close fds, yeet temp file for non-succeeded, reset conn to .unused, decrement active_downloads.
     }
 };
 
@@ -1676,11 +1687,11 @@ fn parseContentLength(response: []const u8) ?u64 {
 }
 
 /// Formats a temp download path:
-///   {snapshot_dir}/snapshot-{slot}-{hash}.tar.zst.part.{index}.{gen}
+///   {snapshot_dir}/snapshot-{slot}-{hash}.tar.zst.tmp.{index}.{gen}
 fn formatTempSnapshotPath(buf: []u8, snapshot_dir: []const u8, slot: Slot, hash: Hash, index: u8, gen: u16) []const u8 {
     var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
     const hash_str = hash.base58String(&hash_buf);
-    return std.fmt.bufPrint(buf, "{s}/snapshot-{d}-{s}.tar.zst.part.{d}.{d}", .{
+    return std.fmt.bufPrint(buf, "{s}/snapshot-{d}-{s}.tar.zst.tmp.{d}.{d}", .{
         snapshot_dir, slot, hash_str, index, gen,
     }) catch unreachable;
 }
