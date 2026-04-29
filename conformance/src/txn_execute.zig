@@ -654,6 +654,7 @@ fn executeTxnContext(
         transaction,
         .skip_sig_verify,
         feature_set.active(.static_instruction_limit, slot),
+        feature_set.active(.limit_instruction_accounts, slot),
     )) {
         .ok => |hash| hash,
         .err => |err| return serializeSanitizationError(err),
