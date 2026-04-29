@@ -28,10 +28,6 @@
       url = "https://github.com/firedancer-io/test-vectors.git";
       rev = commits.TEST_VECTORS_COMMIT;
     };
-    solana-conformance = builtins.fetchGit {
-      url = "https://github.com/firedancer-io/solana-conformance.git";
-      rev = commits.SOLANA_CONFORMANCE_COMMIT;
-    };
     solfuzz-agave = builtins.fetchGit {
       url = "https://github.com/firedancer-io/solfuzz-agave.git";
       rev = commits.SOLFUZZ_AGAVE_COMMIT;
@@ -93,9 +89,7 @@
       python3.13 -m venv env/venv
       source env/venv/bin/activate
       ln -sfn "$PWD/run.py" env/venv/bin/run
-      cp -r ${solana-conformance} env/solana-conformance && chmod +w -R env/solana-conformance
       export SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
-      pip install -e env/solana-conformance[dev,octane]
       pip install -e parseout[dev]
     '';
   in {

@@ -9,7 +9,7 @@ const STACK_SIZE = 32 * 1024 * 1024;
 
 /// [fd] https://github.com/firedancer-io/firedancer/blob/61e3d2e21419fc71002aa1c037ab637cea85416d/src/flamenco/runtime/tests/harness/fd_exec_sol_compat.c#L583
 /// [solfuzz-agave] https://github.com/firedancer-io/solfuzz-agave/blob/7d039a85e55227fdd7ae5c9d0e1c36c7cf5b01f5/src/txn_fuzzer.rs#L46
-export fn sol_compat_txn_execute_v1(
+pub export fn sol_compat_txn_execute_v1(
     out_ptr: [*]u8,
     out_size: *u64,
     in_ptr: [*]const u8,
