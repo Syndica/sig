@@ -409,11 +409,6 @@ fn executeTxnContext(
         account_store.reader(),
     );
 
-    // Root genesis slot (slot 0) to prevent collision in the unrooted store
-    // when fixture_slot % 4096 == 0. This moves genesis data to the rooted sqlite store
-    // and marks the unrooted slot index as empty.
-    db.updateRoot(0, &ancestors);
-
     slot = fixture_slot;
     parent_slot = slot -| 1;
     parent_hash = slot_hash;
