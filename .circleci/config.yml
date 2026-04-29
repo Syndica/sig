@@ -266,6 +266,7 @@ jobs:
             mkdir env
             cd env
             git clone https://github.com/firedancer-io/test-vectors.git
+            cd test-vectors
             git checkout $TEST_VECTORS_COMMIT
       - run:
           name: Run Fixtures
