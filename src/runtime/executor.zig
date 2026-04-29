@@ -93,7 +93,13 @@ pub fn pushInstruction(
     if (tc.instruction_trace.len >= sig.runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH) {
         return InstructionError.MaxInstructionTraceLengthExceeded;
     }
-    if (tc.instruction_stack.len >= sig.runtime.transaction_context.MAX_INSTRUCTION_STACK_DEPTH) {
+    // SIMD-0268: Use raised CPI nesting limit (depth 9) when feature is active, otherwise depth 5.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/program-runtime/src/execution_budget.rs#L12-L18
+    const max_stack_depth: usize = if (tc.feature_set.active(.raise_cpi_nesting_limit_to_8, tc.slot))
+        sig.runtime.transaction_context.MAX_INSTRUCTION_STACK_DEPTH_SIMD_0268
+    else
+        sig.runtime.transaction_context.MAX_INSTRUCTION_STACK_DEPTH;
+    if (tc.instruction_stack.len >= max_stack_depth) {
         return InstructionError.CallDepth;
     }
 

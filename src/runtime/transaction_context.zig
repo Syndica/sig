@@ -28,8 +28,12 @@ const ProgramMap = sig.runtime.program_loader.ProgramMap;
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/transaction-context/src/lib.rs#L41
 pub const MAX_INSTRUCTION_TRACE_LENGTH = 64;
 
-// https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/execution_budget.rs#L8
+// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/program-runtime/src/execution_budget.rs#L8
 pub const MAX_INSTRUCTION_STACK_DEPTH = 5;
+
+// SIMD-0268: Raised CPI nesting limit (from 4 to 8 nested CPIs, so stack depth 9).
+// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/program-runtime/src/execution_budget.rs#L10
+pub const MAX_INSTRUCTION_STACK_DEPTH_SIMD_0268 = 9;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L136
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L192
@@ -103,7 +107,7 @@ pub const TransactionContext = struct {
 
     pub const InstructionStack = std14.BoundedArray(
         InstructionContext,
-        MAX_INSTRUCTION_STACK_DEPTH,
+        MAX_INSTRUCTION_STACK_DEPTH_SIMD_0268,
     );
 
     pub const InstructionTrace = std14.BoundedArray(struct {
