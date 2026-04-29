@@ -2,6 +2,8 @@ const std = @import("std");
 const tel = @import("../telemetry.zig");
 
 pub const Level = enum(u8) {
+    /// Fatal failure, definitely not recoverable.
+    fatal,
     /// Critical failure; may or may not be recoverable.
     err,
     /// Non-critical failure; worth investigating.

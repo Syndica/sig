@@ -103,7 +103,7 @@ pub const Region = extern struct {
             const full: []align(@alignOf(u64)) u8 = ptr[0..self.info.regionSize()];
             const header_padded_size = comptime Info.regionSize(.{
                 .port = 0,
-                .max_log_level = .err,
+                .max_log_level = .fatal,
                 .service_count = 0,
                 .id_mem_len = 0,
                 .gauges_len = 0,
@@ -195,7 +195,7 @@ pub fn Logger(comptime scope_str: []const u8) type {
 
         pub const noop: LoggerSelf = .{
             .sink = .noop,
-            .max_level = .err,
+            .max_level = .fatal,
         };
 
         pub fn from(logger: anytype) LoggerSelf {
@@ -211,6 +211,10 @@ pub fn Logger(comptime scope_str: []const u8) type {
                 .sink = self.sink,
                 .max_level = self.max_level,
             };
+        }
+
+        pub fn fatal(self: LoggerSelf) Entry(0) {
+            return self.entry(.fatal);
         }
 
         pub fn err(self: LoggerSelf) Entry(0) {
