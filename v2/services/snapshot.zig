@@ -16,9 +16,9 @@ const MAX_CONCURRENT_PROBES: u8 = 16;
 const PROBE_TIMEOUT_SECS: i64 = 3;
 const PROBE_TIMEOUT: std.os.linux.kernel_timespec = .{ .sec = PROBE_TIMEOUT_SECS, .nsec = 0 };
 
-const MAX_DOWNLOAD_RACERS: u8 = 5;
+const MAX_DOWNLOAD_RACERS: u8 = 16;
 const MAX_DOWNLOAD_CANDIDATES: u8 = 64;
-const DOWNLOAD_RACE_THRESHOLD_PCT: u64 = 5;
+const DOWNLOAD_RACE_THRESHOLD_PCT: u64 = 10;
 const SPLICE_CHUNK: u32 = 1024 * 1024;
 const NO_OFFSET: u64 = std.math.maxInt(u64);
 const DOWNLOAD_TIMEOUT_SECS: i64 = 3;
