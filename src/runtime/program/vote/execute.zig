@@ -388,6 +388,17 @@ fn authorize(
                 return InstructionError.InvalidInstructionData;
             }
 
+            // BLS pubkey storage requires V4 state. In Agave, bls_pubkey_management_in_vote_account
+            // implies vote_state_v4 is active (feature dependency), so V3 accounts are always
+            // converted to V4 before reaching this point via get_vote_state_handler_checked
+            // with VoteStateTargetVersion::V4. Reject explicitly if state is V3 to prevent
+            // silently dropping the BLS key.
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_processor.rs#L60
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L675-L686
+            if (vote_state == .v3) {
+                return InstructionError.InvalidAccountData;
+            }
+
             const target_epoch = std.math.add(u64, clock.leader_schedule_epoch, 1) catch {
                 return InstructionError.InvalidAccountData;
             };
@@ -1127,7 +1138,8 @@ fn validateIsSigner(
 
 // The message size is fixed:
 // "ALPENGLOW" (9) + Vote Pubkey (32) = 41 bytes
-// Note: The BLS Pubkey (48 bytes) is appended dynamically.
+// Note: The BLS Pubkey (48 bytes) is appended to form the `bound_payload` used for hashing,
+// not to this message. See verifyBlsProofOfPossession for the full construction.
 const POP_MESSAGE_SIZE = 9 + @sizeOf(Pubkey);
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L1063
@@ -6283,4 +6295,510 @@ test "vote_program: vote with v4 feature" {
         },
         .{},
     );
+}
+
+test "vote_program: voter_with_bls rate-limited to once per epoch (too_soon_to_reauthorize)" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+    const COMPUTE_UNITS = vote_program.COMPUTE_UNITS;
+    const BLS_POPV_UNITS = vote_program.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const new_authorized_voter1 = Pubkey.initRandom(prng.random());
+    const new_authorized_voter2 = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+    const vote_account = Pubkey.initRandom(prng.random());
+
+    // Generate first BLS keypair
+    var sk1 = blst.SecretKey{};
+    sk1.keygen(&([_]u8{0x42} ** 32), null);
+    defer sk1.deinit();
+    const pk1 = try blst.P1.from(&sk1);
+    const pk1_compressed = pk1.compress();
+
+    const pop_message = generatePopMessage(vote_account);
+    const BLS_PK_SIZE = vote_program.state.BLS_PUBLIC_KEY_COMPRESSED_SIZE;
+    const POP_DST = "BLS_POP_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
+
+    // Create V4 state with first BLS key already set (simulate first successful authorize)
+    var v4_state = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock.epoch,
+        vote_account,
+    );
+    // Simulate: first voter_with_bls succeeded, inserting voter for target_epoch=1
+    try v4_state.authorized_voters.insert(allocator, 1, new_authorized_voter1);
+    v4_state.bls_pubkey_compressed = pk1_compressed;
+
+    var initial_vote_state = VoteStateVersions{ .v4 = v4_state };
+    defer initial_vote_state.deinit(allocator);
+
+    var initial_vote_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    // Generate second BLS keypair and PoP
+    var sk2 = blst.SecretKey{};
+    sk2.keygen(&([_]u8{0x43} ** 32), null);
+    defer sk2.deinit();
+    const pk2 = try blst.P1.from(&sk2);
+    const pk2_compressed = pk2.compress();
+
+    var bound_payload2: [POP_MESSAGE_SIZE + BLS_PK_SIZE]u8 = undefined;
+    @memcpy(bound_payload2[0..POP_MESSAGE_SIZE], &pop_message);
+    @memcpy(bound_payload2[POP_MESSAGE_SIZE..][0..BLS_PK_SIZE], &pk2_compressed);
+
+    const pop_sig2 = blst.P2.hash_to(&bound_payload2, POP_DST, null).sign_with(&sk2).compress();
+
+    // Second voter_with_bls in the same epoch -> TooSoonToReauthorize (Custom error)
+    // target_epoch = leader_schedule_epoch + 1 = 1, which is already in authorized_voters.
+    try testing.expectProgramExecuteError(
+        InstructionError.Custom,
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .authorize = .{
+                .new_authority = new_authorized_voter2,
+                .vote_authorize = .{ .voter_with_bls = .{
+                    .bls_pubkey = pk2_compressed,
+                    .bls_proof_of_possession = pop_sig2,
+                } },
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = COMPUTE_UNITS + BLS_POPV_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+test "vote_program: voter_with_bls PoP bound to different vote account fails (replay prevention)" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+    const COMPUTE_UNITS = vote_program.COMPUTE_UNITS;
+    const BLS_POPV_UNITS = vote_program.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const new_authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+    const vote_account = Pubkey.initRandom(prng.random());
+    const other_vote_account = Pubkey.initRandom(prng.random());
+
+    // Generate a BLS keypair and create a PoP bound to a DIFFERENT vote account.
+    var sk = blst.SecretKey{};
+    sk.keygen(&([_]u8{0x42} ** 32), null);
+    defer sk.deinit();
+    const pk = try blst.P1.from(&sk);
+    const pk_compressed = pk.compress();
+
+    // PoP message is bound to other_vote_account, not the actual vote_account.
+    const other_pop_message = generatePopMessage(other_vote_account);
+    const BLS_PK_SIZE = vote_program.state.BLS_PUBLIC_KEY_COMPRESSED_SIZE;
+    var bound_payload: [POP_MESSAGE_SIZE + BLS_PK_SIZE]u8 = undefined;
+    @memcpy(bound_payload[0..POP_MESSAGE_SIZE], &other_pop_message);
+    @memcpy(bound_payload[POP_MESSAGE_SIZE..][0..BLS_PK_SIZE], &pk_compressed);
+
+    const POP_DST = "BLS_POP_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
+    const pop_sig = blst.P2.hash_to(&bound_payload, POP_DST, null).sign_with(&sk).compress();
+
+    // Create V4 state for vote_account (no BLS key yet)
+    var initial_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock.epoch,
+        vote_account,
+    ) };
+    defer initial_vote_state.deinit(allocator);
+
+    var initial_vote_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    // Attempt to use the PoP bound to other_vote_account on vote_account -> InvalidArgument
+    // The PoP verification will fail because the message includes the wrong vote account pubkey.
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidArgument,
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .authorize = .{
+                .new_authority = new_authorized_voter,
+                .vote_authorize = .{ .voter_with_bls = .{
+                    .bls_pubkey = pk_compressed,
+                    .bls_proof_of_possession = pop_sig,
+                } },
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = COMPUTE_UNITS + BLS_POPV_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+test "vote_program: voter_with_bls CU consumed even on signer failure (MissingRequiredSignature)" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+    const COMPUTE_UNITS = vote_program.COMPUTE_UNITS;
+    const BLS_POPV_UNITS = vote_program.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const new_authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const non_signer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+    const vote_account = Pubkey.initRandom(prng.random());
+
+    // Generate valid BLS keypair and PoP
+    var sk = blst.SecretKey{};
+    sk.keygen(&([_]u8{0x42} ** 32), null);
+    defer sk.deinit();
+    const pk = try blst.P1.from(&sk);
+    const pk_compressed = pk.compress();
+
+    const pop_message = generatePopMessage(vote_account);
+    const BLS_PK_SIZE = vote_program.state.BLS_PUBLIC_KEY_COMPRESSED_SIZE;
+    var bound_payload: [POP_MESSAGE_SIZE + BLS_PK_SIZE]u8 = undefined;
+    @memcpy(bound_payload[0..POP_MESSAGE_SIZE], &pop_message);
+    @memcpy(bound_payload[POP_MESSAGE_SIZE..][0..BLS_PK_SIZE], &pk_compressed);
+
+    const POP_DST = "BLS_POP_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
+    const pop_sig = blst.P2.hash_to(&bound_payload, POP_DST, null).sign_with(&sk).compress();
+
+    // Create V4 state
+    var initial_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock.epoch,
+        vote_account,
+    ) };
+    defer initial_vote_state.deinit(allocator);
+
+    var initial_vote_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    // Use non_signer as account[2] (current_authority) - they are NOT the withdrawer
+    // nor the authorized_voter. BLS verification passes (valid PoP), but then signer check fails.
+    // BLS CUs should still be consumed.
+    try testing.expectProgramExecuteError(
+        InstructionError.MissingRequiredSignature,
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .authorize = .{
+                .new_authority = new_authorized_voter,
+                .vote_authorize = .{ .voter_with_bls = .{
+                    .bls_pubkey = pk_compressed,
+                    .bls_proof_of_possession = pop_sig,
+                } },
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            // non_signer is a signer of the tx but NOT the withdrawer or authorized_voter
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = non_signer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = COMPUTE_UNITS + BLS_POPV_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+// Verifies that bincode serialization of `?[48]u8` (Option<[u8; 48]>) round-trips
+// correctly for both `null` (Agave's `None`) and a non-null zero array (Agave's
+// `Some([0u8; 48])`), and that `hasBlsPubkey()` distinguishes them properly.
+//
+// In Agave, `create_test_account()` stores `Some([0u8; BLS_PUBLIC_KEY_COMPRESSED_SIZE])`
+// which makes `has_bls_pubkey()` return `true` and blocks old `VoteAuthorize::Voter`.
+// `create_test_account_no_bls_key()` stores `None` which allows old voter instructions.
+// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L741-L743
+test "vote_program: bls_pubkey_compressed None vs Some([0;48]) bincode round-trip" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const new_authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+    const vote_account = Pubkey.initRandom(prng.random());
+
+    // --- Case 1: bls_pubkey_compressed = null (Agave's None) ---
+    // Old .voter authorize should SUCCEED because hasBlsPubkey() returns false.
+    {
+        const v4_no_bls = try VoteStateV4.init(
+            allocator,
+            node_pubkey,
+            authorized_voter,
+            authorized_withdrawer,
+            commission,
+            clock.epoch,
+            vote_account,
+        );
+        // bls_pubkey_compressed is already null from init
+        std.debug.assert(v4_no_bls.bls_pubkey_compressed == null);
+
+        var initial_state = VoteStateVersions{ .v4 = v4_no_bls };
+        defer initial_state.deinit(allocator);
+
+        var initial_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+        _ = try sig.bincode.writeToSlice(initial_bytes[0..], initial_state, .{});
+
+        // Expected output: new voter authorized for target_epoch (leader_schedule_epoch + 1 = 1)
+        var v4_expected = try VoteStateV4.init(
+            allocator,
+            node_pubkey,
+            authorized_voter,
+            authorized_withdrawer,
+            commission,
+            clock.epoch,
+            vote_account,
+        );
+        try v4_expected.authorized_voters.insert(allocator, 1, new_authorized_voter);
+
+        var expected_state = VoteStateVersions{ .v4 = v4_expected };
+        defer expected_state.deinit(allocator);
+
+        var expected_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+        _ = try sig.bincode.writeToSlice(expected_bytes[0..], expected_state, .{});
+
+        // Old .voter should succeed when bls_pubkey_compressed is null
+        try testing.expectProgramExecuteResult(
+            std.testing.allocator,
+            vote_program.ID,
+            VoteProgramInstruction{
+                .authorize = .{
+                    .new_authority = new_authorized_voter,
+                    .vote_authorize = VoteAuthorize.voter,
+                },
+            },
+            &.{
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+                .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = vote_account,
+                        .lamports = 27074400,
+                        .owner = vote_program.ID,
+                        .data = initial_bytes[0..],
+                    },
+                    .{ .pubkey = Clock.ID },
+                    .{ .pubkey = authorized_withdrawer },
+                    .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+                },
+                .compute_meter = vote_program.COMPUTE_UNITS,
+                .sysvar_cache = .{
+                    .clock = clock,
+                },
+                .feature_set = &.{
+                    .{ .feature = .vote_state_v4, .slot = 0 },
+                    .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
+                },
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = vote_account,
+                        .lamports = 27074400,
+                        .owner = vote_program.ID,
+                        .data = expected_bytes[0..],
+                    },
+                    .{ .pubkey = Clock.ID },
+                    .{ .pubkey = authorized_withdrawer },
+                    .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+                },
+                .compute_meter = 0,
+            },
+            .{},
+        );
+    }
+
+    // --- Case 2: bls_pubkey_compressed = [0;48] (Agave's Some([0u8; 48])) ---
+    // Old .voter authorize should FAIL with InvalidInstructionData because
+    // hasBlsPubkey() returns true (non-null value, even if all zeros).
+    {
+        var v4_zero_bls = try VoteStateV4.init(
+            allocator,
+            node_pubkey,
+            authorized_voter,
+            authorized_withdrawer,
+            commission,
+            clock.epoch,
+            vote_account,
+        );
+        // Set to all-zeros — this is Agave's Some([0u8; 48])
+        v4_zero_bls.bls_pubkey_compressed = [_]u8{0} ** vote_program.state.BLS_PUBLIC_KEY_COMPRESSED_SIZE;
+
+        var initial_state = VoteStateVersions{ .v4 = v4_zero_bls };
+        defer initial_state.deinit(allocator);
+
+        var initial_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+        _ = try sig.bincode.writeToSlice(initial_bytes[0..], initial_state, .{});
+
+        // Old .voter should FAIL when bls_pubkey_compressed is non-null (even all zeros)
+        try testing.expectProgramExecuteError(
+            InstructionError.InvalidInstructionData,
+            std.testing.allocator,
+            vote_program.ID,
+            VoteProgramInstruction{
+                .authorize = .{
+                    .new_authority = new_authorized_voter,
+                    .vote_authorize = VoteAuthorize.voter,
+                },
+            },
+            &.{
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+                .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = vote_account,
+                        .lamports = 27074400,
+                        .owner = vote_program.ID,
+                        .data = initial_bytes[0..],
+                    },
+                    .{ .pubkey = Clock.ID },
+                    .{ .pubkey = authorized_withdrawer },
+                    .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+                },
+                .compute_meter = vote_program.COMPUTE_UNITS,
+                .sysvar_cache = .{
+                    .clock = clock,
+                },
+                .feature_set = &.{
+                    .{ .feature = .vote_state_v4, .slot = 0 },
+                    .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
+                },
+            },
+            .{},
+        );
+    }
 }
