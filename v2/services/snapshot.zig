@@ -22,7 +22,7 @@ const DOWNLOAD_RACE_THRESHOLD_PCT: u64 = 5;
 const SPLICE_CHUNK: u32 = 1024 * 1024;
 const NO_OFFSET: u64 = std.math.maxInt(u64);
 const DOWNLOAD_TIMEOUT_SECS: i64 = 3;
-const DOWNLOAD_TIMEOUT: std.os.linux.kernel_timespec = .{ .sec = PROBE_TIMEOUT_SECS, .nsec = 0 };
+const DOWNLOAD_TIMEOUT: std.os.linux.kernel_timespec = .{ .sec = DOWNLOAD_TIMEOUT_SECS, .nsec = 0 };
 
 const ProbeConn = struct {
     /// Current state in the snapshot probing lifecycle for this particaly peer.
@@ -120,6 +120,8 @@ const DownloadPhase = enum {
     /// The received header also captured some body bytes after parsing `\r\n\r\n`, so a write() has been issued
     /// to move those body bytes to the peer's temp file.
     writing_extra,
+    /// A splice_in returned EAGAIN (socket not readable yet). A poll for POLLIN has been issued.
+    waiting_readable,
     /// Async `splice()` issued to move snapshot body bytes from TCP socket into the pipe.
     /// represents socket -> pipe.
     splicing_in,
@@ -275,6 +277,7 @@ const Op = enum(u8) {
     download_send,
     download_recv_headers,
     download_write_extra,
+    download_poll_in,
     download_splice_in,
     download_splice_out,
     download_fsync,
@@ -373,6 +376,7 @@ const SnapshotService = struct {
                         .download_connect,
                         .download_send,
                         .download_recv_headers,
+                        .download_poll_in,
                         .download_splice_in,
                         => self.handleDownloadTimeout(data, cqe),
                         // The other op's don't have timeouts.
@@ -395,6 +399,7 @@ const SnapshotService = struct {
                     .download_send => self.handleDownloadSend(data, cqe),
                     .download_recv_headers => self.handleDownloadRecvHeaders(data, cqe),
                     .download_write_extra => self.handleDownloadWriteExtra(data, cqe),
+                    .download_poll_in => self.handleDownloadPollIn(data, cqe),
                     .download_splice_in => self.handleDownloadSpliceIn(data, cqe),
                     .download_splice_out => self.handleDownloadSpliceOut(data, cqe),
                     .download_fsync => self.handleDownloadFsync(data, cqe),
@@ -895,6 +900,7 @@ const SnapshotService = struct {
             .download_connect => .connecting,
             .download_send => .sending,
             .download_recv_headers => .reading_headers,
+            .download_poll_in => .waiting_readable,
             .download_splice_in => .splicing_in,
             else => unreachable,
         };
@@ -1155,6 +1161,36 @@ const SnapshotService = struct {
         };
     }
 
+    fn handleDownloadPollIn(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+        const conn = self.getDownloadForCqe(data) orelse return;
+        if (conn.phase != .waiting_readable) {
+            self.logger.warn().logf("unexpected download poll_in cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
+            return;
+        }
+
+        if (conn.timed_out) {
+            self.finishDownload(data.index, .failed);
+            self.startPendingRacers();
+            return;
+        }
+        if (cqe.err() != .SUCCESS) {
+            self.logger.info().logf("download poll_in failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
+            self.finishDownload(data.index, .failed);
+            self.startPendingRacers();
+            return;
+        }
+
+        if (self.shouldCancelDownload(data.index)) {
+            self.finishDownload(data.index, .cancelled);
+            return;
+        }
+
+        self.queueDownloadSpliceInWithTimeout(data.index) catch {
+            self.finishDownload(data.index, .failed);
+            self.startPendingRacers();
+        };
+    }
+
     fn handleDownloadSpliceIn(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         if (conn.phase != .splicing_in) {
@@ -1165,6 +1201,13 @@ const SnapshotService = struct {
         if (conn.timed_out) {
             self.finishDownload(data.index, .failed);
             self.startPendingRacers();
+            return;
+        }
+        if (cqe.err() == .AGAIN) {
+            self.queueDownloadPollInWithTimeout(data.index) catch {
+                self.finishDownload(data.index, .failed);
+                self.startPendingRacers();
+            };
             return;
         }
         if (cqe.err() != .SUCCESS) {
@@ -1224,6 +1267,11 @@ const SnapshotService = struct {
 
         self.maybeSelectWinner(data.index);
 
+        if (self.shouldCancelDownload(data.index)) {
+            self.finishDownload(data.index, .cancelled);
+            return;
+        }
+
         if (conn.pipe_pending > 0) {
             self.queueDownloadSpliceOut(data.index) catch {
                 self.finishDownload(data.index, .failed);
@@ -1240,11 +1288,6 @@ const SnapshotService = struct {
                 self.startPendingRacers();
                 return;
             };
-            return;
-        }
-
-        if (self.shouldCancelDownload(data.index)) {
-            self.finishDownload(data.index, .cancelled);
             return;
         }
 
@@ -1522,6 +1565,30 @@ const SnapshotService = struct {
         conn.timed_out = false;
     }
 
+    fn queueDownloadPollInWithTimeout(self: *SnapshotService, index: u8) !void {
+        const conn = &self.download_conns[index];
+
+        const sqes = try self.reserveLinkedSqes();
+
+        conn.active_offset +%= 1;
+
+        var poll_data = UserData.init(.download_poll_in, index, conn.gen);
+        poll_data.offset = conn.active_offset;
+
+        var timeout_data = poll_data;
+        timeout_data.is_timeout = true;
+
+        sqes.primary.prep_poll_add(conn.fd, std.os.linux.POLL.IN);
+        sqes.primary.user_data = poll_data.encode();
+        sqes.primary.flags |= std.os.linux.IOSQE_IO_LINK;
+
+        sqes.timeout.prep_link_timeout(&DOWNLOAD_TIMEOUT, 0);
+        sqes.timeout.user_data = timeout_data.encode();
+
+        conn.phase = .waiting_readable;
+        conn.timed_out = false;
+    }
+
     fn queueDownloadSpliceOut(self: *SnapshotService, index: u8) !void {
         const conn = &self.download_conns[index];
 
@@ -1659,6 +1726,8 @@ const SnapshotService = struct {
 
     fn finishDownload(self: *SnapshotService, index: u8, result: DownloadResult) void {
         const conn = &self.download_conns[index];
+        if (conn.phase == .unused) return;
+
         self.logger.info().logf("finishDownload idx={d} result={s} addr={f} bytes_written={d}", .{
             index, @tagName(result), conn.addr, conn.bytes_written,
         });
@@ -1668,7 +1737,34 @@ const SnapshotService = struct {
             .cancelled => self.metrics.snapshot_downloads_cancelled.increment(1),
             .succeeded => self.metrics.snapshot_downloads_succeeded.increment(1),
         }
-        // TODO: close fds, yeet temp file for non-succeeded, reset conn to .unused, decrement active_downloads.
+
+        if (conn.fd >= 0) std.posix.close(conn.fd);
+        if (conn.file_fd >= 0) std.posix.close(conn.file_fd);
+        if (conn.pipe_rd >= 0) std.posix.close(conn.pipe_rd);
+        if (conn.pipe_wr >= 0) std.posix.close(conn.pipe_wr);
+
+        if (result != .succeeded) {
+            var tmp_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+            // TODO: we gotta store this bruh.
+            const tmp_path = formatTempSnapshotPath(
+                &tmp_buf,
+                self.snapshot_dir,
+                self.download_race.slot,
+                self.download_race.hash,
+                index,
+                conn.gen,
+            );
+            tmp_buf[tmp_path.len] = 0;
+            std.posix.unlink(tmp_buf[0..tmp_path.len :0]) catch {};
+        }
+
+        const old_gen = conn.gen;
+        // TODO: add an emptyWithGen()
+        self.download_conns[index] = DownloadConn.empty();
+        self.download_conns[index].gen = old_gen;
+
+        std.debug.assert(self.active_downloads > 0);
+        self.active_downloads -= 1;
     }
 };
 
