@@ -7,7 +7,6 @@ const bincode = lib.solana.bincode_2;
 const Signature = lib.solana.Signature;
 const Pubkey = lib.solana.Pubkey;
 const Hash = lib.solana.Hash;
-const Slot = lib.solana.Slot;
 
 pub const Entry = struct {
     num_hashes: u64,
@@ -73,7 +72,11 @@ pub const VersionedMessage = union(enum) {
                     .account_keys = account_keys,
                     .recent_blockhash = recent_blockhash,
                     .instructions = instructions,
-                    .address_table_lookups = try bincode.read(fba, reader, bincode.ShortVec(AddressLookup)),
+                    .address_table_lookups = try bincode.read(
+                        fba,
+                        reader,
+                        bincode.ShortVec(AddressLookup),
+                    ),
                 },
             },
         };

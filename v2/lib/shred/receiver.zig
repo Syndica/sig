@@ -262,7 +262,13 @@ pub const Receiver = struct {
             const shreds_bitset, const shreds_reedsol_bufs = fec_set_ctx.erasureEncoded();
 
             const recover_zone = tracy.Zone.init(@src(), .{ .name = "reconstructFecSet" });
-            reed_sol.recover64(shred.erasureFragment().?.len, &shreds_reedsol_bufs, 32, 32, shreds_bitset.mask) catch @panic("weee");
+            try reed_sol.recover64(
+                shred.erasureFragment().?.len,
+                &shreds_reedsol_bufs,
+                32,
+                32,
+                shreds_bitset.mask,
+            );
             defer recover_zone.deinit();
 
             fec_set_ctx.data_shreds_received = .initFull();
@@ -428,7 +434,8 @@ pub const FecSetCtx = extern struct {
         }
 
         var bitset: std.StaticBitSet(64) = .{
-            .mask = (@as(u64, self.code_shreds_received.mask) << 32) | @as(u64, self.data_shreds_received.mask),
+            .mask = (@as(u64, self.code_shreds_received.mask) << 32) |
+                @as(u64, self.data_shreds_received.mask),
         };
 
         bitset.toggleAll();

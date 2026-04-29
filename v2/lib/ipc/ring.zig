@@ -1,5 +1,4 @@
 const std = @import("std");
-const tracy = @import("tracy");
 
 comptime {
     _ = std.testing.refAllDecls(@This());
