@@ -655,6 +655,7 @@ fn executeTxnContext(
         .skip_sig_verify,
         feature_set.active(.static_instruction_limit, slot),
         feature_set.active(.limit_instruction_accounts, slot),
+        feature_set.active(.require_static_nonce_account, slot),
     )) {
         .ok => |hash| hash,
         .err => |err| return serializeSanitizationError(err),

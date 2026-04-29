@@ -747,6 +747,7 @@ test "preprocessTransaction: invalid compute budget instruction" {
         .skip_sig_verify,
         false,
         false,
+        false,
     );
 
     try std.testing.expectEqual(

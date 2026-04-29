@@ -391,6 +391,19 @@ fn sanitizeTransaction(
         }
     }
 
+    // SIMD-0242: a nonce transaction must reference its nonce account statically.
+    if (preflight_slot_ref.constants().feature_set.active(
+        .require_static_nonce_account,
+        preflight_slot,
+    ) and sig.replay.preprocess_transaction.isAdvanceNonceTransaction(&tx.msg)) {
+        const inst = tx.msg.instructions[0];
+        if (inst.account_indexes.len == 0 or
+            inst.account_indexes[0] >= tx.msg.account_keys.len)
+        {
+            return error.SanitizeFailure;
+        }
+    }
+
     try tx.validate();
 
     const slot_hashes = try getSysvarFromAccount(
