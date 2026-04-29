@@ -67,7 +67,7 @@ pub const Region = extern struct {
             size = std.mem.alignForward(usize, size, @alignOf(log.MessageStream));
             size += self.service_count * @sizeOf(log.MessageStream);
 
-            size += std.mem.alignForward(usize, size, @sizeOf(u8));
+            size = std.mem.alignForward(usize, size, @alignOf(u8));
             size += self.id_mem_len;
             return size;
         }
