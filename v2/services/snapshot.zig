@@ -1232,6 +1232,7 @@ const SnapshotService = struct {
             return;
         }
 
+        // Download's complete.
         if (conn.bytes_written >= conn.content_len) {
             self.queueDownloadFsync(data.index) catch {
                 self.finishDownload(data.index, .failed);
@@ -1254,7 +1255,42 @@ const SnapshotService = struct {
     }
 
     fn handleDownloadFsync(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
-        _ = .{ self, data, cqe };
+        const conn = self.getDownloadForCqe(data) orelse return;
+        if (conn.phase != .fsyncing) {
+            self.logger.warn().logf("unexpected download fsync cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
+            return;
+        }
+
+        std.debug.assert(self.download_race.winner_index == data.index);
+
+        if (cqe.err() != .SUCCESS) {
+            self.logger.err().logf("download fsync failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
+            self.finishDownload(data.index, .failed);
+            self.startPendingRacers();
+            return;
+        }
+
+        // Rename temp file to final path.
+        var tmp_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+        var final_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+
+        const race = &self.download_race;
+        const tmp_path = formatTempSnapshotPath(&tmp_buf, self.snapshot_dir, race.slot, race.hash, data.index, conn.gen);
+        tmp_buf[tmp_path.len] = 0;
+
+        const final_path = formatFinalSnapshotPath(&final_buf, self.snapshot_dir, race.slot, race.hash);
+        final_buf[final_path.len] = 0;
+
+        std.posix.rename(tmp_buf[0..tmp_path.len :0], final_buf[0..final_path.len :0]) catch |err| {
+            self.logger.err().logf("download rename failed after fsync idx={d} err={s}", .{ data.index, @errorName(err) });
+            self.finishDownload(data.index, .failed);
+            self.startPendingRacers();
+            return;
+        };
+
+        self.logger.info().logf("download complete slot={d} path={s}", .{ race.slot, final_path });
+        race.phase = .completed;
+        self.finishDownload(data.index, .succeeded);
     }
 
     fn offerDownloadCandidate(
@@ -1505,7 +1541,20 @@ const SnapshotService = struct {
     }
 
     fn queueDownloadFsync(self: *SnapshotService, index: u8) !void {
-        _ = .{ self, index };
+        const conn = &self.download_conns[index];
+
+        // TODO: this is repeated in bunch of places, can coalesce.
+        const capacity: u32 = @intCast(self.ring.sq.sqes.len);
+        if (capacity - self.ring.sq_ready() < 1) return error.SubmissionQueueFull;
+        const sqe = self.ring.get_sqe() catch unreachable;
+
+        var fsync_data = UserData.init(.download_fsync, index, conn.gen);
+        fsync_data.offset = conn.active_offset;
+
+        sqe.prep_fsync(conn.file_fd, 0);
+        sqe.user_data = fsync_data.encode();
+
+        conn.phase = .fsyncing;
     }
 
     fn startDownloadRacer(self: *SnapshotService, candidate_index: u8) !void {
@@ -1535,6 +1584,7 @@ const SnapshotService = struct {
 
         // Create temp file
         // TODO: can prob be moved into io_uring.
+        // TODO: We create the temp path here, but don't store it anywhere. So need to recreate it again when the winner is declared. kinda cringe.
         conn.gen +%= 1;
         var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
         const tmp_path = formatTempSnapshotPath(&path_buf, self.snapshot_dir, race.slot, race.hash, dl_index, conn.gen);
@@ -1582,7 +1632,28 @@ const SnapshotService = struct {
     }
 
     fn maybeSelectWinner(self: *SnapshotService, index: u8) void {
-        _ = .{ self, index };
+        if (self.download_race.phase != .racing) return;
+
+        const conn = &self.download_conns[index];
+
+        const threshold = @max(
+            @as(u64, 1),
+            conn.content_len * DOWNLOAD_RACE_THRESHOLD_PCT / 100,
+        );
+
+        if (conn.bytes_written < threshold) return;
+
+        self.download_race.phase = .winner_selected;
+        self.download_race.winner_index = index;
+
+        for (&self.download_conns, 0..) |*other, i| {
+            if (i == index) continue;
+            if (other.phase != .unused) {
+                other.cancel_requested = true;
+            }
+        }
+
+        self.logger.info().logf("download winner idx={d} addr={f}", .{ index, conn.addr });
     }
 
     fn finishDownload(self: *SnapshotService, index: u8, result: DownloadResult) void {
