@@ -108,7 +108,6 @@ const ComputeBudget = sig.runtime.ComputeBudget;
 const EpochRewards = sig.runtime.sysvar.EpochRewards;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
 const FeatureSet = sig.core.FeatureSet;
-const RecentBlockhashes = sig.runtime.sysvar.RecentBlockhashes;
 const Rent = sig.runtime.sysvar.Rent;
 const SysvarCache = sig.runtime.SysvarCache;
 const RuntimeTransaction = transaction_execution.RuntimeTransaction;
@@ -257,7 +256,7 @@ fn executeTxnContext(
             errdefer blockhash_queue.deinit(allocator);
             try blockhash_queue.insertGenesisHash(
                 allocator,
-                blockhashes[0], // genesis_config.hash() for production
+                blockhashes[0].hash, // genesis_config.hash() for production
                 fee_rate_governor.lamports_per_signature,
             );
 
@@ -398,6 +397,10 @@ fn executeTxnContext(
     //     bank.set_fork_graph_in_program_cache(Arc::downgrade(&bank_forks));
     // let mut bank = bank_forks.read().unwrap().root_bank();
     //     Just gets the root bank
+
+    // Root genesis slot 0 so its Unrooted ring buffer index can be reused when
+    // fixture_slot collides (i.e. fixture_slot % MAX_SLOTS == 0).
+    try account_store.updateRoot(0, &ancestors);
 
     const slot_hash = try hashSlot(
         allocator,
@@ -594,33 +597,14 @@ fn executeTxnContext(
     try account_store.put(slot, program.config.ID, .EMPTY);
     try account_store.put(slot, program.stake.ID, .EMPTY);
 
-    // Get lamports per signature from first entry in recent blockhashes (read from fixture data directly)
-    const lamports_per_signature = blk: {
-        const rbh_account = accounts_map.get(RecentBlockhashes.ID) orelse break :blk null;
-        const rbh_data = rbh_account.data;
-        if (rbh_data.len < 8) break :blk null;
-
-        const len = std.mem.readInt(u64, rbh_data[0..8], .little);
-        if (len == 0) break :blk null;
-
-        var fbs = std.io.fixedBufferStream(rbh_data[8..]);
-        const first_entry = sig.bincode.read(
-            allocator,
-            RecentBlockhashes.Entry,
-            fbs.reader(),
-            .{},
-        ) catch break :blk null;
-
-        break :blk if (first_entry.lamports_per_signature != 0)
-            first_entry.lamports_per_signature
-        else
-            null;
-    } orelse fee_rate_governor.lamports_per_signature;
-
-    // Register blockhashes and update recent blockhashes sysvar
-    for (blockhashes) |blockhash| {
-        try blockhash_queue.insertHash(allocator, blockhash, lamports_per_signature);
+    // Register blockhashes with per-entry lamports_per_signature from the fixture
+    for (blockhashes) |entry| {
+        try blockhash_queue.insertHash(allocator, entry.hash, entry.lamports_per_signature);
     }
+
+    // last_lamports_per_signature comes from the last entry in the blockhash queue,
+    // matching agave's BlockhashQueue::get_lamports_per_signature(&last_hash).
+    const last_lamports_per_signature = blockhashes[blockhashes.len - 1].lamports_per_signature;
 
     for (accounts_map.keys(), accounts_map.values()) |pubkey, account| {
         try account_store.put(slot, pubkey, .{
@@ -736,8 +720,8 @@ fn executeTxnContext(
 
         // TODO: these values are highly suspicious, we need to note down somewhere how exactly agave
         // juggles the many different versions of lamports_per_signature.
-        .next_lamports_per_signature = lamports_per_signature,
-        .last_lamports_per_signature = lamports_per_signature,
+        .next_lamports_per_signature = last_lamports_per_signature,
+        .last_lamports_per_signature = last_lamports_per_signature,
         .lamports_per_signature = 5000,
     };
 
@@ -916,21 +900,32 @@ fn parsePubkey(bytes: []const u8) !Pubkey {
     return .{ .data = bytes[0..Pubkey.SIZE].* };
 }
 
+const BlockhashEntry = struct {
+    hash: Hash,
+    lamports_per_signature: u64,
+};
+
 /// Load blockhashes from the protobuf transaction context.
 /// If no blockhashes are provided, a default blockhash of zeroes is returned.
 fn loadBlockhashes(
     allocator: std.mem.Allocator,
     pb_txn_ctx: *const pb.TxnContext,
-) ![]Hash {
+) ![]BlockhashEntry {
     const pb_blockhashes = pb_txn_ctx.bank.?.blockhash_queue.items;
-    if (pb_blockhashes.len == 0)
-        return try allocator.dupe(Hash, &.{Hash.ZEROES});
+    if (pb_blockhashes.len == 0) return try allocator.dupe(BlockhashEntry, &.{.{
+        .hash = Hash.ZEROES,
+        .lamports_per_signature = 0,
+    }});
 
-    const blockhashes = try allocator.alloc(Hash, pb_blockhashes.len);
+    const blockhashes = try allocator.alloc(BlockhashEntry, pb_blockhashes.len);
     errdefer allocator.free(blockhashes);
 
-    for (blockhashes, pb_blockhashes) |*blockhash, pb_blockhash|
-        blockhash.* = try parseHash(pb_blockhash.blockhash);
+    for (blockhashes, pb_blockhashes) |*entry, pb_blockhash| {
+        entry.* = .{
+            .hash = try parseHash(pb_blockhash.blockhash),
+            .lamports_per_signature = pb_blockhash.lamports_per_signature,
+        };
+    }
 
     return blockhashes;
 }
