@@ -5836,6 +5836,8 @@ test "vote_program: plain voter rejects when BLS enabled and vote state has BLS 
 test "vote_program: voter_with_bls fails with invalid PoP" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
+    const COMPUTE_UNITS = vote_program.COMPUTE_UNITS;
+    const BLS_POPV_UNITS = vote_program.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -5909,7 +5911,7 @@ test "vote_program: voter_with_bls fails with invalid PoP" {
                 .{ .pubkey = authorized_withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
-            .compute_meter = vote_program.COMPUTE_UNITS + vote_program.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS,
+            .compute_meter = COMPUTE_UNITS + BLS_POPV_UNITS,
             .sysvar_cache = .{
                 .clock = clock,
             },
@@ -5925,6 +5927,8 @@ test "vote_program: voter_with_bls fails with invalid PoP" {
 test "vote_program: voter_with_bls succeeds with valid PoP" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
+    const COMPUTE_UNITS = vote_program.COMPUTE_UNITS;
+    const BLS_POPV_UNITS = vote_program.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -6026,7 +6030,7 @@ test "vote_program: voter_with_bls succeeds with valid PoP" {
                 .{ .pubkey = authorized_withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
-            .compute_meter = vote_program.COMPUTE_UNITS + vote_program.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS,
+            .compute_meter = COMPUTE_UNITS + BLS_POPV_UNITS,
             .sysvar_cache = .{
                 .clock = clock,
             },
