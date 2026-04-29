@@ -820,7 +820,8 @@ fn threadEntry(
 
     const cpu_index = service_idx;
     var cpuset = std.mem.zeroes(std.os.linux.cpu_set_t);
-    cpuset[@divFloor(cpu_index, @bitSizeOf(usize))] = @as(usize, 1) << @intCast(cpu_index % @bitSizeOf(usize));
+    cpuset[@divFloor(cpu_index, @bitSizeOf(usize))] =
+        @as(usize, 1) << @intCast(cpu_index % @bitSizeOf(usize));
     std.os.linux.sched_setaffinity(0, &cpuset) catch |err| std.debug.panic("ded: {}\n", .{err});
 
     entry_point(args);

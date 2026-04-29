@@ -9,7 +9,6 @@ const bincode_2 = lib.solana.bincode_2;
 
 const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;
-const Entry = lib.solana.transaction.Entry;
 
 const Shred = lib.shred.Shred;
 const FecSetId = lib.shred.FecSetId;
@@ -75,7 +74,8 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
             const zone = tracy.Zone.init(@src(), .{ .name = "exec_response" });
             defer zone.deinit();
 
-            const response: *const lib.replay.ExecResponse = exec_response_receiver.next() orelse unreachable;
+            const response: *const lib.replay.ExecResponse = exec_response_receiver.next() orelse
+                unreachable;
             defer exec_response_receiver.markUsed();
 
             zone.value(response.task_id);
@@ -122,7 +122,10 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
                 continue :task .idle; // null => node already known, nothing to do here
 
             if (inserted_node.block_ref == .null) {
-                const null_zone = tracy.Zone.init(@src(), .{ .name = "received fec set (block_id=null)" });
+                const null_zone = tracy.Zone.init(
+                    @src(),
+                    .{ .name = "received fec set (block_id=null)" },
+                );
                 defer null_zone.deinit();
                 // blockrefs are assigned from the 0th fecset, and carried forward. If the newly
                 // inserted node isn't attached to a 0th fecset, we won't be able to execute it until it
@@ -140,7 +143,9 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
             // assert that we've got a chain of fec sets back to the 0th fec set
             const fec_0: *const MerkleNode = node: {
                 var maybe_node: ?*MerkleNode = inserted_node;
-                while (maybe_node) |node| : (maybe_node = map_tree.pool.indexToOptPtr(node.parent)) {
+                while (maybe_node) |node| : (maybe_node = map_tree.pool.indexToOptPtr(
+                    node.parent,
+                )) {
                     std.debug.assert(node.parent != .null or node.id.fec_set_idx == 0);
                     if (node.id.fec_set_idx == 0) break :node node;
                 }
@@ -148,7 +153,8 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
             };
 
             const block_deserial_state: *BlockDeserialState = blk: {
-                const state: *?BlockDeserialState = &deserial_states[inserted_node.block_ref.index().?];
+                const state: *?BlockDeserialState =
+                    &deserial_states[inserted_node.block_ref.index().?];
                 if (state.* == null) state.* = .init(fec_0);
                 break :blk &state.*.?;
             };
@@ -165,7 +171,11 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
 
                 const tx_buf: *[1232]u8 = rw.replay_transaction_pool.indexToPtr(tx_ref);
 
-                const tx = try block_deserial_state.nextTransaction(&deserial_fba, &map_tree.pool, tx_buf) orelse break;
+                const tx = try block_deserial_state.nextTransaction(
+                    &deserial_fba,
+                    &map_tree.pool,
+                    tx_buf,
+                ) orelse break;
                 tracy.plot(u16, "transaction size", @intCast(tx.len));
 
                 const exec_state: *BlockExecState = &exec_states[inserted_node.block_ref.index().?];
@@ -178,7 +188,8 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
 
                 // send task to exec
                 {
-                    const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse @panic("no space");
+                    const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse
+                        @panic("no space");
                     defer exec_request_sender.markUsed();
                     request.* = .{
                         .task_id = tx_index,
@@ -233,7 +244,8 @@ const BlockDeserialState = struct {
 
         fn maybeAdvance(self: *Reader) error{EndOfStream}!void {
             if (self.deserial_state.pos_offset < self.deserial_state.pos_node.payload_len) return;
-            std.debug.assert(self.deserial_state.pos_offset == self.deserial_state.pos_node.payload_len);
+            std.debug.assert(self.deserial_state.pos_offset ==
+                self.deserial_state.pos_node.payload_len);
 
             try self.advance();
         }
@@ -242,7 +254,9 @@ const BlockDeserialState = struct {
             const self: *Reader = @alignCast(@fieldParentPtr("interface", r));
             try self.maybeAdvance();
 
-            const read_slice = limit.sliceConst(self.deserial_state.pos_node.payload()[self.deserial_state.pos_offset..]);
+            const read_slice = limit.sliceConst(
+                self.deserial_state.pos_node.payload()[self.deserial_state.pos_offset..],
+            );
             try w.writeAll(read_slice);
             self.deserial_state.pos_offset += read_slice.len;
             return read_slice.len;
@@ -406,7 +420,11 @@ const BlockDeserialState = struct {
 
                 var pre_state = self.*;
 
-                _ = try bincode_2.read(fba, &reader.interface, lib.solana.transaction.VersionedTransaction);
+                _ = try bincode_2.read(
+                    fba,
+                    &reader.interface,
+                    lib.solana.transaction.VersionedTransaction,
+                );
                 self.n_transactions_left.? -= 1;
 
                 const post_state = self.*;
@@ -712,8 +730,6 @@ const MerkleNode = extern struct {
 
 const TransactionPool = Pool(EncodedTransaction);
 
-const Pubkey = lib.solana.Pubkey;
-
 const EncodedTransaction = extern struct {
     bincode_data: [1232]u8,
 };
@@ -897,7 +913,10 @@ const MerkleForest = struct {
                 // This node's parent already has a child. This means the leader produced multiple
                 // conflicting fec sets.
                 // TODO: report this and special case the handling in the caller
-                std.log.warn("Equivocation detected! Fec set {f} has multiple children\n", .{@as(*const MerkleNode, parent)});
+                std.log.warn(
+                    "Equivocation detected! Fec set {f} has multiple children\n",
+                    .{@as(*const MerkleNode, parent)},
+                );
                 new_node.block_ref = ref: {
                     const block_ref = try block_pool.createId();
                     block_pool.indexToPtr(block_ref).* = .{
@@ -947,7 +966,11 @@ const MerkleForest = struct {
                     "Equivocation detected! Orphaned Nodes {f} and {f} want the same parent {f}",
                     .{ orphan_map_result.value_ptr.*, new_node, &new_fec_set.chained_merkle_root },
                 );
-                NodeTree.linkNewOrphanedSibling(.{ .pool = self.pool }, orphan_map_result.value_ptr.*, new_node);
+                NodeTree.linkNewOrphanedSibling(
+                    .{ .pool = self.pool },
+                    orphan_map_result.value_ptr.*,
+                    new_node,
+                );
 
                 // Block IDs are allocated by the 0th fec set, and propogated to their children.
                 // Orphans don't have parents, and aren't the 0th fec set.
@@ -969,7 +992,10 @@ const MerkleForest = struct {
             if (new_node.block_ref != .null) {
                 var child_node: ?*MerkleNode = child;
 
-                while (child_node) |c_n| : (child_node = NodeTree.childOf(.{ .pool = self.pool }, c_n)) {
+                while (child_node) |c_n| : (child_node = NodeTree.childOf(
+                    .{ .pool = self.pool },
+                    c_n,
+                )) {
                     c_n.block_ref = new_node.block_ref;
                 }
             }
