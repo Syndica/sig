@@ -351,13 +351,14 @@ const BlockDeserialState = struct {
     ) !?[]const u8 {
         var reader = self.getReader(merkle_pool);
 
+        // microblock deserialisation state machine
         loopback: switch (self.next_read) {
+            // start of microblock
             .n_entries => {
                 self.n_entries_left = try bincode_2.read(fba, &reader.interface, u64);
                 if (self.n_entries_left.? == 0) {
                     self.next_read = .n_entries;
                     return null; // advance to next?
-
                 }
 
                 self.next_read = .num_hashes;
@@ -383,7 +384,6 @@ const BlockDeserialState = struct {
                     if (self.n_entries_left.? == 0) {
                         self.next_read = .n_entries;
                         return null; // advance to next?
-
                     }
 
                     self.next_read = .num_hashes;
@@ -398,7 +398,6 @@ const BlockDeserialState = struct {
                     if (self.n_entries_left.? == 0) {
                         self.next_read = .n_entries;
                         return null; // advance to next?
-
                     }
 
                     self.next_read = .num_hashes;
@@ -1058,7 +1057,11 @@ test "MerkleForest fec set completion out of order" {
     const c_hash: Hash = .parse("2GyMeUytf6fcsfNP2QQ6F5e5qwAUoMtKUbnH6QU6bTNm");
     const d_hash: Hash = .parse("Cg37799xhTFEGyqXSEekbVbiCZKQAjzc6CQC75Hk91S9");
 
-    const a_result = try forest.put(&.{
+    var block_pool_buf: [replay.BlockPool.size()]u8 align(@alignOf(replay.BlockPool)) = undefined;
+    const block_pool: *replay.BlockPool = @ptrCast(&block_pool_buf);
+    block_pool.init();
+
+    const a_result = try forest.put(block_pool, &.{
         .merkle_root = a_hash,
         .chained_merkle_root = .parse("DWCWjQciWoWDzJKwqUZ1ntKqTyXtLVt4C8aL7biBJZ4z"), // prev slot
         .id = .{ .slot = 409284941, .fec_set_idx = 0 },
@@ -1069,7 +1072,9 @@ test "MerkleForest fec set completion out of order" {
         .payload_buf = undefined,
     });
 
-    const c_result = try forest.put(&.{
+    try std.testing.expect(a_result.?.block_ref != .null);
+
+    const c_result = try forest.put(block_pool, &.{
         .merkle_root = c_hash,
         .chained_merkle_root = b_hash,
         .id = .{ .slot = 409284941, .fec_set_idx = 64 },
@@ -1080,7 +1085,9 @@ test "MerkleForest fec set completion out of order" {
         .payload_buf = undefined,
     });
 
-    const b_result = try forest.put(&.{
+    try std.testing.expect(c_result.?.block_ref == .null);
+
+    const b_result = try forest.put(block_pool, &.{
         .merkle_root = b_hash,
         .chained_merkle_root = a_hash,
         .id = .{ .slot = 409284941, .fec_set_idx = 32 },
@@ -1091,7 +1098,10 @@ test "MerkleForest fec set completion out of order" {
         .payload_buf = undefined,
     });
 
-    const d_result = try forest.put(&.{
+    try std.testing.expect(b_result.?.block_ref != .null);
+    try std.testing.expect(c_result.?.block_ref != .null);
+
+    const d_result = try forest.put(block_pool, &.{
         .merkle_root = d_hash,
         .chained_merkle_root = c_hash,
         .id = .{ .slot = 409284941, .fec_set_idx = 96 },
@@ -1102,9 +1112,18 @@ test "MerkleForest fec set completion out of order" {
         .payload_buf = undefined,
     });
 
-    _ = .{ a_result, c_result, b_result, d_result };
-    // try std.testing.expectEqual(.waiting_for_child, a_result);
-    // try std.testing.expectEqual(.waiting_for_parent_and_child, c_result);
-    // try std.testing.expectEqual(.chain_incomplete, b_result);
-    // try std.testing.expectEqual(.chain_complete, d_result);
+    try std.testing.expect(d_result.?.block_ref != .null);
+
+    const d_1_result = try forest.put(block_pool, &.{
+        .merkle_root = d_hash,
+        .chained_merkle_root = c_hash,
+        .id = .{ .slot = 409284941, .fec_set_idx = 96 },
+        .slot_complete = true,
+
+        .data_complete = true,
+        .payload_len = undefined,
+        .payload_buf = undefined,
+    });
+
+    try std.testing.expect(d_1_result == null);
 }
