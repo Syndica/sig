@@ -6627,6 +6627,7 @@ test "vote_program: voter_with_bls CU consumed even on signer failure (MissingRe
 test "vote_program: bls_pubkey_compressed None vs Some([0;48]) bincode round-trip" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
+    const BLS_PUBLIC_KEY_COMPRESSED_SIZE = vote_program.state.BLS_PUBLIC_KEY_COMPRESSED_SIZE;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -6753,7 +6754,7 @@ test "vote_program: bls_pubkey_compressed None vs Some([0;48]) bincode round-tri
             vote_account,
         );
         // Set to all-zeros — this is Agave's Some([0u8; 48])
-        v4_zero_bls.bls_pubkey_compressed = [_]u8{0} ** vote_program.state.BLS_PUBLIC_KEY_COMPRESSED_SIZE;
+        v4_zero_bls.bls_pubkey_compressed = [_]u8{0} ** BLS_PUBLIC_KEY_COMPRESSED_SIZE;
 
         var initial_state = VoteStateVersions{ .v4 = v4_zero_bls };
         defer initial_state.deinit(allocator);
