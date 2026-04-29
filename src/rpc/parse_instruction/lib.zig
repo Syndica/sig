@@ -829,6 +829,7 @@ fn voteAuthorizeToValue(auth: sig.runtime.program.vote.vote_instruction.VoteAuth
     return .{ .string = switch (auth) {
         .voter => "Voter",
         .withdrawer => "Withdrawer",
+        .voter_with_bls => "VoterWithBLS",
     } };
 }
 

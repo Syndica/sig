@@ -26,6 +26,10 @@ pub const createTestVoteStateV4 = state_v4.createTestVoteStateV4;
 /// https://github.com/anza-xyz/solana-sdk/blob/00d056c4ce9def466ad5475533588713feebcb2c/vote-interface/src/state/mod.rs#L33
 pub const BLS_PUBLIC_KEY_COMPRESSED_SIZE: usize = 48;
 
+/// Size of a BLS proof of possession in a compressed point representation; matches BLS signature size
+/// https://github.com/anza-xyz/solana-sdk/blob/00d056c4ce9def466ad5475533588713feebcb2c/vote-interface/src/state/mod.rs#L34
+pub const BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE: usize = 96;
+
 pub const MAX_PRIOR_VOTERS: usize = 32;
 pub const MAX_LOCKOUT_HISTORY: usize = 31;
 pub const INITIAL_LOCKOUT: usize = 2;
@@ -1162,13 +1166,28 @@ pub const VoteState = union(enum(u32)) {
         allocator: Allocator,
         new_authorized_voter: Pubkey,
         target_epoch: Epoch,
+        bls_pubkey: ?*const [BLS_PUBLIC_KEY_COMPRESSED_SIZE]u8,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline .v3, .v4 => |*s| try s.setNewAuthorizedVoter(
+            .v3 => |*s| try s.setNewAuthorizedVoter(
                 allocator,
                 new_authorized_voter,
                 target_epoch,
             ),
+            .v4 => |*s| try s.setNewAuthorizedVoter(
+                allocator,
+                new_authorized_voter,
+                target_epoch,
+                bls_pubkey,
+            ),
+        };
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/handler.rs#L938
+    pub fn hasBlsPubkey(self: *const VoteState) bool {
+        return switch (self.*) {
+            .v3 => false,
+            .v4 => |s| s.bls_pubkey_compressed != null,
         };
     }
 

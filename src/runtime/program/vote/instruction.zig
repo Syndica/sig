@@ -100,9 +100,10 @@ pub const VoteAuthorizeCheckedWithSeedArgs = struct {
     }
 };
 
-pub const VoteAuthorize = enum {
+pub const VoteAuthorize = union(enum(u32)) {
     voter,
     withdrawer,
+    voter_with_bls: VoterWithBLSArgs,
 
     pub const AccountIndex = enum(u8) {
         /// `[Write]` Vote account to be updated with the Pubkey for authorization
@@ -114,6 +115,12 @@ pub const VoteAuthorize = enum {
         /// `[SIGNER]` New vote or withdraw authority
         new_authority = 3,
     };
+};
+
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface%40v5.0.0/vote-interface/src/state/vote_instruction_data.rs#L253
+pub const VoterWithBLSArgs = struct {
+    bls_pubkey: [vote_program.state.BLS_PUBLIC_KEY_COMPRESSED_SIZE]u8,
+    bls_proof_of_possession: [vote_program.state.BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE]u8,
 };
 
 pub const UpdateVoteIdentity = struct {

@@ -7,6 +7,10 @@ pub const ID: sig.core.Pubkey = .parse("Vote111111111111111111111111111111111111
 
 pub const COMPUTE_UNITS = 2_100;
 
+/// Cost in compute units for BLS proof-of-possession verification (SIMD-0387).
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_processor.rs#L83
+pub const BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS: u64 = 34_500;
+
 pub const vote_instruction = @import("instruction.zig");
 
 pub const VoteError = @import("error.zig").VoteError;
