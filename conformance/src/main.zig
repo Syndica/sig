@@ -51,12 +51,10 @@ pub fn main() !void {
                 seen.deinit(allocator);
             }
             while (try walker.next()) |entry| {
-                if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".fix")) continue;
+                if (entry.kind != .file) continue;
+                if (!std.mem.eql(u8, std.fs.path.extension(entry.path), ".fix")) continue;
                 // Get the directory portion of this entry's relative path
-                const dir_part = if (std.mem.lastIndexOfScalar(u8, entry.path, '/')) |sep|
-                    entry.path[0..sep]
-                else
-                    "";
+                const dir_part = std.fs.path.dirname(entry.path) orelse "";
                 const group_rel = if (dir_part.len > 0) dir_part else ".";
                 const gop = try seen.getOrPut(allocator, try allocator.dupe(u8, group_rel));
                 if (!gop.found_existing) {
@@ -133,16 +131,6 @@ fn relativeTo(path: []const u8, prefix: []const u8) []const u8 {
     return path;
 }
 
-fn countDigits(n: usize) usize {
-    if (n == 0) return 1;
-    var count: usize = 0;
-    var v = n;
-    while (v > 0) : (v /= 10) {
-        count += 1;
-    }
-    return count;
-}
-
 fn printRow(
     name: []const u8,
     name_width: usize,
@@ -150,26 +138,12 @@ fn printRow(
     failed: usize,
     skipped: usize,
 ) void {
-    const num_width = 5;
-    // Name + padding
-    std.debug.print("{s}", .{name});
-    for (0..name_width - name.len + 1) |_| std.debug.print(" ", .{});
-    // Pass
-    std.debug.print("\xe2\x94\x82 Pass ", .{});
-    printNumPadded(passed, num_width);
-    // Fail
-    std.debug.print(" \xe2\x94\x82 Fail ", .{});
-    printNumPadded(failed, num_width);
-    // Skip
-    std.debug.print(" \xe2\x94\x82 Skip ", .{});
-    printNumPadded(skipped, num_width);
-    std.debug.print("\n", .{});
-}
-
-fn printNumPadded(n: usize, width: usize) void {
-    const digits = countDigits(n);
-    if (width > digits) {
-        for (0..width - digits) |_| std.debug.print(" ", .{});
-    }
-    std.debug.print("{d}", .{n});
+    const stderr = std.fs.File.stderr().deprecatedWriter();
+    stderr.print("{s}", .{name}) catch {};
+    stderr.writeByteNTimes(' ', name_width - name.len + 1) catch {};
+    stderr.print("│ Pass {d: >5} │ Fail {d: >5} │ Skip {d: >5}\n", .{
+        passed,
+        failed,
+        skipped,
+    }) catch {};
 }
