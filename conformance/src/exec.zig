@@ -172,20 +172,6 @@ fn extractProtobufField(message: []const u8, wanted_field: u64) !?[]const u8 {
         const field_number = key >> 3;
         const wire_type = key & 0x07;
 
-        // found the field we want
-        if (field_number == wanted_field and wire_type == 2) {
-            const len_u64 = try readVarint(message, &index);
-            if (len_u64 > std.math.maxInt(usize)) return error.FieldTooLarge;
-
-            const len: usize = @intCast(len_u64);
-            if (len > message.len - index) return error.TruncatedField;
-
-            const field = message[index .. index + len];
-            index += len;
-            return field;
-        }
-
-        // advance past other fields
         switch (wire_type) {
             0 => _ = try readVarint(message, &index),
             1 => {
@@ -197,6 +183,7 @@ fn extractProtobufField(message: []const u8, wanted_field: u64) !?[]const u8 {
                 if (len_u64 > std.math.maxInt(usize)) return error.FieldTooLarge;
                 const len: usize = @intCast(len_u64);
                 if (len > message.len - index) return error.TruncatedField;
+                if (field_number == wanted_field) return message[index .. index + len]; // found it
                 index += len;
             },
             5 => {
