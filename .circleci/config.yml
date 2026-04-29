@@ -262,9 +262,11 @@ jobs:
           name: Clone Fixtures
           command: |
             cd conformance
+            . commits.env
             mkdir env
             cd env
             git clone https://github.com/firedancer-io/test-vectors.git
+            git checkout $TEST_VECTORS_COMMIT
       - run:
           name: Run Fixtures
           command: conformance/scripts/ci-run.sh
