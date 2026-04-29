@@ -52,7 +52,8 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             .transaction_execution => {
                 const data = &request.data.transaction_execution;
 
-                var reader = std.io.Reader.fixed(ro.replay_transaction_pool.indexToConstPtr(data.tx_idx));
+                var reader =
+                    std.io.Reader.fixed(ro.replay_transaction_pool.indexToConstPtr(data.tx_idx));
 
                 const transaction: lib.solana.transaction.VersionedTransaction =
                     try lib.solana.bincode.read(
@@ -63,7 +64,8 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
                 _ = transaction;
 
-                const response: *lib.replay.ExecResponse = response_writer.next() orelse @panic("cant write");
+                const response: *lib.replay.ExecResponse = response_writer.next() orelse
+                    @panic("cant write");
                 response.* = .{
                     .task_id = request.task_id,
                     .request_kind = .transaction_execution,
