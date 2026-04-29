@@ -44,6 +44,8 @@ To run the conformance tests using solana-conformance, you'll need a build of so
 zig build solfuzz_sig
 ```
 
+solana-conformance must either be in path or specified with `SOLANA_CONFORMANCE_BIN` for `run` to work.
+
 Run the tests:
 
 ```bash
