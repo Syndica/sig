@@ -43,6 +43,16 @@ pub fn preprocessTransaction(
         .err = .SanitizeFailure,
     };
 
+    // Check that the full serialized transaction (signatures + message) fits in a packet.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/runtime/src/bank.rs#L5041-5044
+    {
+        const sig_count: u16 = @intCast(txn.signatures.len);
+        const sig_count_size: usize = if (sig_count < 0x80) 1 else if (sig_count < 0x4000) 2 else 3;
+        const sigs_size = txn.signatures.len * @sizeOf(sig.core.Signature);
+        const total_size = sig_count_size + sigs_size + msg_bytes.len;
+        if (total_size > Transaction.MAX_BYTES) return .{ .err = .SanitizeFailure };
+    }
+
     if (sig_verify == .run_sig_verify) {
         if (static_instruction_limit and
             txn.msg.instructions.len > sig.runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH)
