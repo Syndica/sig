@@ -7,15 +7,6 @@ const EpochSchedule = sig.core.EpochSchedule;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
-const ZonInfo = struct {
-    name: [:0]const u8,
-    pubkey: [:0]const u8,
-    activated_on_all_clusters: bool = false,
-    reverted: bool = false,
-};
-const features: []const ZonInfo = @import("features.zon");
-pub const NUM_FEATURES = features.len;
-
 /// The feature set identifier - first 4 bytes of SHA256 hash of all known feature pubkeys (sorted).
 /// This is used for client compatibility checks.
 ///
@@ -24,45 +15,97 @@ pub const NUM_FEATURES = features.len;
 /// [agave] https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/feature-set/src/lib.rs#L2318
 pub const FEATURE_SET_ID: u32 = @import("feature-set-id").FEATURE_SET_ID;
 
-pub const Feature = @Type(.{ .@"enum" = .{
-    .tag_type = u64,
-    .fields = f: {
-        var fields: []const std.builtin.Type.EnumField = &.{};
-        for (features, 0..) |feature, i| {
-            fields = fields ++ .{std.builtin.Type.EnumField{
-                .name = feature.name,
-                .value = i,
-            }};
-        }
-        break :f fields;
+/// Information about a feature, including its name, pubkey, description, and status.
+const ZonInfo = struct {
+    name: [:0]const u8,
+    pubkey: [:0]const u8,
+    description: [:0]const u8,
+    status: union(enum) {
+        /// Feature is active on mainnet and supported by this client.
+        active: struct {
+            /// Only activated path remains.
+            cleaned_up: bool = false,
+            /// Always activated for fuzzing.
+            hardcoded_for_fuzzing: bool = false,
+        },
+        /// Feature is inactive on mainnet and may or may not be supported by this client.
+        inactive: union(enum) {
+            implemented,
+            not_implemented,
+        },
+        /// Feature was proposed but then reverted, and will not be activated.
+        reverted,
     },
-    .decls = &.{},
-    .is_exhaustive = true,
-} });
 
-const Info = struct {
-    key: Pubkey,
-    activated_on_all_clusters: bool,
-    reverted: bool,
-
-    /// Returns the `id` of a feature, aka. the first 8 bytes of the public key.
-    pub fn id(self: Info) u64 {
-        return @bitCast(self.key.data[0..8].*);
+    pub fn id(self: ZonInfo) u64 {
+        const key = Pubkey.parseRuntime(std.mem.sliceTo(self.pubkey, 0)) catch
+            @panic("invalid pubkey in feature definition");
+        return @bitCast(key.data[0..8].*);
     }
 };
 
-pub const map: std.EnumArray(Feature, Info) = map: {
-    @setEvalBranchQuota(NUM_FEATURES * 1000);
-    var s: std.enums.EnumFieldStruct(Feature, Info, null) = undefined;
+/// All known features, including those that are inactive or reverted.
+pub const all_features: []const ZonInfo = @import("features.zon");
+
+/// Available features, those which contribute to the 'FEATURE_SET_ID' and are
+/// availble for 'activation' within the runtime. This excludes 'reverted' features.
+pub const features: []const ZonInfo = blk: {
+    var filtered: []const ZonInfo = &.{};
+    for (all_features) |feature| {
+        switch (feature.status) {
+            .active, .inactive => {},
+            .reverted => continue,
+        }
+        filtered = filtered ++ .{feature};
+    }
+    break :blk filtered;
+};
+
+/// The `Feature` enum represents all available features that can be activated in the runtime. Each
+/// variant corresponds to a feature and is assigned a unique integer value based on its position in
+/// the `features` array. The enum is generated at compile time using the `features` array, ensuring
+/// that only active and inactive features are included, while reverted features are excluded.
+pub const Feature = @Type(.{
+    .@"enum" = .{
+        .tag_type = u64,
+        .fields = f: {
+            var fields: []const std.builtin.Type.EnumField = &.{};
+            for (features, 0..) |feature, i| {
+                const cleaned_up = switch (feature.status) {
+                    .active => |active| active.cleaned_up,
+                    .inactive => false,
+                    .reverted => unreachable,
+                };
+                fields = fields ++ .{std.builtin.Type.EnumField{
+                    .name = feature.name ++ if (cleaned_up) "_cleaned_up" else "",
+                    .value = i,
+                }};
+            }
+            break :f fields;
+        },
+        .decls = &.{},
+        .is_exhaustive = true,
+    },
+});
+
+/// Maps each `Feature` to its corresponding `Pubkey`. This is generated at compile time from the `features`
+/// array, ensuring that the mapping is consistent with the `Feature` enum and only includes active and
+/// inactive features, while reverted features are excluded.
+pub const pubkey_map: std.EnumArray(Feature, Pubkey) = blk: {
+    @setEvalBranchQuota(features.len * 1000);
+    var s: std.enums.EnumFieldStruct(Feature, Pubkey, null) = undefined;
     for (@typeInfo(Feature).@"enum".fields, features) |field, feature| {
-        @field(s, field.name) = .{
-            .key = .parse(feature.pubkey),
-            .activated_on_all_clusters = feature.activated_on_all_clusters,
-            .reverted = feature.reverted,
-        };
+        @field(s, field.name) = .parse(feature.pubkey);
     }
-    break :map .init(s);
+    break :blk .init(s);
 };
+
+/// Checks if the provided `id` corresponds to a known feature by comparing it against the IDs of all known features.
+pub fn isKnownFeatureId(id: u64) bool {
+    for (all_features) |feature| {
+        if (feature.id() == id) return true;
+    } else return false;
+}
 
 /// Represents the set of currently enabled feature flags.
 ///
@@ -96,8 +139,8 @@ pub const Set = struct {
     pub fn setSlotPubkey(self: *Set, pubkey: Pubkey, slot: Slot) !void {
         for (&self.array.values, 0..) |*destination, i| {
             const feature: Feature = @enumFromInt(i);
-            const info = map.getPtrConst(feature).*;
-            if (!info.pubkey.equals(&pubkey)) continue;
+            const feature_pubkey = pubkey_map.getPtrConst(feature).*;
+            if (!feature_pubkey.equals(&pubkey)) continue;
             destination.* = slot;
             return;
         }
@@ -110,8 +153,8 @@ pub const Set = struct {
     pub fn setSlotId(self: *Set, id: u64, slot: Slot) !void {
         for (&self.array.values, 0..) |*destination, i| {
             const feature: Feature = @enumFromInt(i);
-            const pubkey = map.getPtrConst(feature).*.key;
-            const feature_id: u64 = @bitCast(pubkey.data[0..8].*);
+            const feature_pubkey = pubkey_map.getPtrConst(feature).*;
+            const feature_id: u64 = @bitCast(feature_pubkey.data[0..8].*);
             if (feature_id == id) {
                 destination.* = slot;
                 return;
@@ -161,13 +204,13 @@ pub const Set = struct {
         state: State,
         set: *const Set,
         slot: Slot,
-        index: std.math.IntFittingRange(0, NUM_FEATURES),
+        index: std.math.IntFittingRange(0, features.len),
 
         const State = enum { active, inactive };
 
         pub fn next(self: *Iterator) ?Feature {
             while (true) : (self.index += 1) {
-                if (self.index == NUM_FEATURES - 1) return null;
+                if (self.index == features.len - 1) return null;
                 const feature: Feature = @enumFromInt(self.index);
                 const is_active = self.set.active(feature, self.slot);
                 if ((self.state == .active and is_active) or
@@ -229,4 +272,35 @@ test "full inflation enabled" {
     try std.testing.expect(!feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
     new_feature_set.setSlot(.full_inflation_devnet_and_testnet, 0);
     try std.testing.expect(feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
+}
+
+test "runtime feature map excludes reverted entries" {
+    const runtime_feature_name = "deprecate_rewards_sysvar";
+
+    var found_runtime_in_all = false;
+    var expected_runtime_count: usize = 0;
+    var excluded_names: [all_features.len][]const u8 = undefined;
+    var excluded_count: usize = 0;
+
+    for (all_features) |feature| {
+        if (std.mem.eql(u8, std.mem.sliceTo(feature.name, 0), runtime_feature_name)) {
+            found_runtime_in_all = true;
+            try std.testing.expect(feature.status != .reverted);
+        }
+        if (feature.status != .reverted) {
+            expected_runtime_count += 1;
+        } else {
+            excluded_names[excluded_count] = std.mem.sliceTo(feature.name, 0);
+            excluded_count += 1;
+        }
+    }
+
+    try std.testing.expect(found_runtime_in_all);
+    try std.testing.expectEqual(expected_runtime_count, features.len);
+
+    inline for (@typeInfo(Feature).@"enum".fields) |field| {
+        for (excluded_names[0..excluded_count]) |excluded_name| {
+            try std.testing.expect(!std.mem.eql(u8, field.name, excluded_name));
+        }
+    }
 }

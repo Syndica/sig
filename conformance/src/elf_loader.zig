@@ -1,6 +1,7 @@
 const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
 const std = @import("std");
 const sig = @import("sig");
+const utils = @import("utils.zig");
 
 const ELFLoaderCtx = pb.ELFLoaderCtx;
 const ElfLoaderEffects = pb.ELFLoaderEffects;
@@ -64,10 +65,7 @@ fn testAndHandleIO(
 fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEffects {
     const elf_bytes = ctx.elf_data;
 
-    var feature_set: sig.core.FeatureSet = .ALL_DISABLED;
-    if (ctx.features) |features| for (features.features.items) |id| {
-        feature_set.setSlotId(id, 0) catch std.debug.print("unknown feature id: 0x{x}\n", .{id});
-    };
+    const feature_set = try utils.loadFeatureSet(ctx);
 
     const env: svm.Environment = .initV1(
         &feature_set,
