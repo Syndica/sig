@@ -39,8 +39,8 @@ pub const Region = extern struct {
     pub const Info = extern struct {
         /// The port to listen on for the prometheus client.
         port: u16,
-        /// The maximum log level to emit.
-        max_log_level: log.Level,
+        /// The length of the encoded log filters byte string.
+        log_filters_len: u32,
 
         /// Number of other services excluding the telemetry service (of which there is presumably only instance).
         /// This is also the maximum number of log streams to support.
@@ -58,6 +58,9 @@ pub const Region = extern struct {
             var size: usize = 0;
             size += @sizeOf(Region);
 
+            size = std.mem.alignForward(usize, size, @alignOf(u8));
+            size += self.log_filters_len;
+
             size = std.mem.alignForward(usize, size, @alignOf(u64));
             size += self.gauges_len * @sizeOf(u64);
 
@@ -73,21 +76,53 @@ pub const Region = extern struct {
         }
     };
 
+    pub const InitParams = struct {
+        /// The port to listen on for the prometheus client.
+        port: u16,
+        log_filters_encoded: []const u8,
+
+        /// Number of other services excluding the telemetry service (of which there is presumably only instance).
+        /// This is also the maximum number of log streams to support.
+        service_count: u32,
+
+        /// The maximum number of bytes to allow for storing metric ids.
+        id_mem_len: u32,
+        /// The maximum number of (`u64`-sized) elements to support.
+        gauges_len: u32,
+        /// The maximum number of histogram (`u64`-sized) elements to support.
+        histogram_data_len: u32,
+
+        pub fn info(params: InitParams) Info {
+            return .{
+                .port = params.port,
+                .log_filters_len = @intCast(params.log_filters_encoded.len),
+
+                .service_count = params.service_count,
+
+                .id_mem_len = params.id_mem_len,
+                .gauges_len = params.gauges_len,
+                .histogram_data_len = params.histogram_data_len,
+            };
+        }
+    };
+
     pub fn init(
         self: *Region,
-        info: Info,
+        params: InitParams,
     ) void {
         self.* = .{
-            .info = info,
-            .pending_services = .init(info.service_count),
+            .info = params.info(),
+            .pending_services = .init(params.service_count),
             .id_mem_end = .init(0),
             .gauges_end = .init(0),
             .histogram_data_end = .init(0),
             .log_streams = .init(0),
         };
+        @memcpy(self.getSlices().log_filters_encoded, params.log_filters_encoded);
     }
 
     pub const Slices = struct {
+        log_filters_encoded: []u8,
         id_mem: []u8,
         /// NOTE: Some of these are actually `f64`s.
         gauges: []std.atomic.Value(u64),
@@ -103,7 +138,7 @@ pub const Region = extern struct {
             const full: []align(@alignOf(u64)) u8 = ptr[0..self.info.regionSize()];
             const header_padded_size = comptime Info.regionSize(.{
                 .port = 0,
-                .max_log_level = .fatal,
+                .log_filters_len = 0,
                 .service_count = 0,
                 .id_mem_len = 0,
                 .gauges_len = 0,
@@ -112,6 +147,8 @@ pub const Region = extern struct {
             break :trailing full[header_padded_size..];
         };
         var seek: usize = 0;
+        const log_filters =
+            skipPaddingTakeElements(buf, &seek, self.info.log_filters_len, u8);
         const gauges =
             skipPaddingTakeElements(buf, &seek, self.info.gauges_len, std.atomic.Value(u64));
         const histogram_data =
@@ -121,6 +158,7 @@ pub const Region = extern struct {
         const id_mem =
             skipPaddingTakeElements(buf, &seek, self.info.id_mem_len, u8);
         return .{
+            .log_filters_encoded = log_filters,
             .id_mem = id_mem,
             .gauges = gauges,
             .histogram_data = histogram_data,
@@ -163,10 +201,7 @@ pub const Region = extern struct {
 
         std.debug.assert(name.len <= log.MessageStream.Name.MAX_LEN); // see `stream.name.init`
         stream.name.init(name);
-        return .{
-            .sink = .{ .swap_buffer = &stream.swap_buffer },
-            .max_level = self.info.max_log_level,
-        };
+        return .{ .sink = .{ .swap_buffer = &stream.swap_buffer } };
     }
 
     /// Low-level helper for registering metrics.
@@ -188,15 +223,11 @@ pub const Region = extern struct {
 pub fn Logger(comptime scope_str: []const u8) type {
     return struct {
         sink: log.MessageSink,
-        max_level: log.Level,
         const LoggerSelf = @This();
 
         pub const scope = scope_str;
 
-        pub const noop: LoggerSelf = .{
-            .sink = .noop,
-            .max_level = .fatal,
-        };
+        pub const noop: LoggerSelf = .{ .sink = .noop };
 
         pub fn from(logger: anytype) LoggerSelf {
             const LoggerOther = Logger(@TypeOf(logger).scope);
@@ -207,10 +238,7 @@ pub fn Logger(comptime scope_str: []const u8) type {
             self: LoggerSelf,
             comptime new_scope: []const u8,
         ) Logger(new_scope) {
-            return .{
-                .sink = self.sink,
-                .max_level = self.max_level,
-            };
+            return .{ .sink = self.sink };
         }
 
         pub fn fatal(self: LoggerSelf) Entry(0) {
@@ -281,7 +309,6 @@ pub fn Logger(comptime scope_str: []const u8) type {
                     comptime fmt_str: []const u8,
                     args: anytype,
                 ) void {
-                    if (@intFromEnum(self.level) > @intFromEnum(self.logger.max_level)) return;
                     const message: log.Message = .{
                         .epoch_millis = @intCast(std.time.milliTimestamp()),
                         .scope = scope,

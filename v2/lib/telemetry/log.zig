@@ -21,6 +21,23 @@ pub const Level = enum(u8) {
             else => |tag| @tagName(tag),
         };
     }
+
+    pub fn fromText(str: []const u8) ?Level {
+        const Text = enum(u8) {
+            fatal = @intFromEnum(Level.fatal),
+            @"error" = @intFromEnum(Level.err),
+            warn = @intFromEnum(Level.warn),
+            info = @intFromEnum(Level.info),
+            debug = @intFromEnum(Level.debug),
+            trace = @intFromEnum(Level.trace),
+        };
+        const str_text = std.meta.stringToEnum(Text, str) orelse return null;
+        return @enumFromInt(@intFromEnum(str_text));
+    }
+
+    pub fn order(self: Level, other: Level) std.math.Order {
+        return std.math.order(@intFromEnum(self), @intFromEnum(other));
+    }
 };
 
 pub const MessageStream = extern struct {
@@ -241,6 +258,237 @@ test Message {
     );
 }
 
+pub const Filter = struct {
+    service: ?[]const u8,
+    scope: ?[]const u8,
+    level: Level,
+
+    pub fn initLevel(level: Level) Filter {
+        return .{
+            .service = null,
+            .scope = null,
+            .level = level,
+        };
+    }
+
+    /// Returns true if `self` only applies a level filter (`service == null and scope == null`).
+    pub fn isLevelOnly(self: Filter) bool {
+        return self.service == null and self.scope == null;
+    }
+
+    pub const LevelOrder = enum {
+        /// Filters sorted by level will have fatal ordered first, ascending.
+        fatal_first,
+        /// Filters sorted by level will have fatal ordered last, descending.
+        fatal_last,
+    };
+
+    /// Orders filters from least to most information, first by `service`, and then `scope`; where the
+    /// amount of information is equal (both or neither `!= null`), they are ordered lexicographically
+    /// in the same order of priority, and then by `level` (based on `params.level_order`).
+    ///
+    /// NOTE: having multiple filters that would compare equal if the `level` were ignored doesn't make a lot of sense.
+    pub fn order(
+        self: Filter,
+        other: Filter,
+        params: struct {
+            level_order: LevelOrder,
+        },
+    ) std.math.Order {
+        const Mask = packed struct(u2) {
+            scope: bool,
+            service: bool,
+
+            fn from(filter: Filter) @This() {
+                return .{
+                    .scope = filter.scope != null,
+                    .service = filter.service != null,
+                };
+            }
+        };
+        const self_mask: u2 = @bitCast(Mask.from(self));
+        const other_mask: u2 = @bitCast(Mask.from(other));
+        switch (std.math.order(self_mask, other_mask)) {
+            .lt, .gt => |ord| return ord,
+            .eq => {},
+        }
+
+        if (self.service != null) switch (std.mem.order(u8, self.service.?, other.service.?)) {
+            .lt, .gt => |ord| return ord,
+            .eq => {},
+        };
+        if (self.scope != null) switch (std.mem.order(u8, self.scope.?, other.scope.?)) {
+            .lt, .gt => |ord| return ord,
+            .eq => {},
+        };
+
+        const level_order = self.level.order(other.level);
+        return switch (params.level_order) {
+            .fatal_first => level_order,
+            .fatal_last => level_order.invert(),
+        };
+    }
+
+    /// For convenient use with `std.sort` APIs.
+    /// Sorts from "strictest" filters to "broadest" filters.
+    pub fn sortLessThanInverted(_: void, a: Filter, b: Filter) bool {
+        return a.order(b, .{ .level_order = .fatal_last }).invert() == .lt;
+    }
+
+    /// Returns the index of the filter in a sorted list that most specifically applies to the given service & scope pair.
+    pub fn findClosestFilter(
+        params: struct {
+            /// Should be sorted such that `sortLessThanInverted({}, filters[n], filters[n + 1]) == true`.
+            filters: []const Filter,
+            service: []const u8,
+            scope: []const u8,
+        },
+    ) usize {
+        const filters = params.filters;
+        const service = params.service;
+        const scope = params.scope;
+
+        std.debug.assert(filters[filters.len - 1].isLevelOnly());
+        return for (filters, 0..) |filter, i| {
+            if (i != 0) {
+                const prev = filters[i - 1];
+                std.debug.assert(Filter.sortLessThanInverted({}, prev, filter)); // must be sorted
+            }
+
+            if (filter.service) |filter_service| {
+                if (!std.mem.eql(u8, filter_service, service)) continue;
+                if (filter.scope) |filter_scope| {
+                    if (!std.mem.eql(u8, filter_scope, scope)) continue;
+                }
+                break i;
+            } // if `filter.service` is null, that means every filter after this point will also have it as null.
+
+            if (filter.scope) |filter_scope| {
+                if (!std.mem.eql(u8, filter_scope, scope)) continue;
+                break i;
+            } // if `filter.scope` is null, that means every filter after this point will also have it as null.
+
+            // there should be one level-only filter at the end
+            std.debug.assert(i == filters.len - 1);
+            break i;
+        } else unreachable;
+    }
+
+    pub const ParseError = error{InvalidLogLevel};
+    pub fn parse(str: []const u8) ParseError!Filter {
+        const eql_idx = std.mem.indexOfScalarPos(u8, str, 0, '=') orelse {
+            return .{
+                .service = null,
+                .scope = null,
+                .level = Level.fromText(str) orelse return error.InvalidLogLevel,
+            };
+        };
+        const level = Level.fromText(str[eql_idx + 1 ..]) orelse return error.InvalidLogLevel;
+        const colon_idx = std.mem.indexOfScalarPos(u8, str[0..eql_idx], 0, ':') orelse {
+            const service = str[0..eql_idx];
+            return .{
+                .service = if (service.len == 0) null else service,
+                .scope = null,
+                .level = level,
+            };
+        };
+
+        const service = str[0..colon_idx];
+        const scope = str[colon_idx + 1 .. eql_idx];
+        return .{
+            .service = if (service.len == 0) null else service,
+            .scope = if (scope.len == 0) null else scope,
+            .level = level,
+        };
+    }
+
+    /// Parses `str` as a comma-separated list of `Filter`s (`std.mem.splitScalar` & `Filter.parse`).
+    /// If a default filter is missing (ie a filter for which `filter.isLevelOnly() == true`), the
+    /// provided `default_root_log_level` will be used instead.
+    /// `str.len == 0` is treated as an empty list (`default_log_level` will always be written).
+    pub fn parseListAndWriteBinary(
+        w: *std.Io.Writer,
+        default_log_level: Level,
+        str: []const u8,
+    ) (std.Io.Writer.Error || ParseError)!void {
+        var missing_default_level = true;
+
+        if (str.len != 0) {
+            var iter = std.mem.splitScalar(u8, str, ',');
+            while (iter.next()) |filter_str| {
+                const filter: Filter = try .parse(filter_str);
+                try filter.writeBinary(w);
+                missing_default_level = missing_default_level and !filter.isLevelOnly();
+            }
+        }
+
+        if (missing_default_level) {
+            const level_filter: Filter = .initLevel(default_log_level);
+            try writeBinary(level_filter, w);
+        }
+    }
+
+    pub fn writeBinary(
+        self: Filter,
+        w: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        try w.writeStruct(self.computeHeader(), tel.endian);
+        if (self.service) |service| try w.writeAll(service);
+        if (self.scope) |scope| try w.writeAll(scope);
+    }
+
+    pub fn computeHeader(self: Filter) Header {
+        return .{
+            .service_len = if (self.service) |service| @intCast(service.len) else 0,
+            .scope_len = if (self.scope) |scope| @intCast(scope.len) else 0,
+            .level = self.level,
+        };
+    }
+
+    pub const Header = extern struct {
+        /// Length of zero represents `null`.
+        service_len: u32,
+        /// Length of zero represents `null`.
+        scope_len: u32,
+        level: Level,
+
+        pub fn encodedLength(self: Header) u32 {
+            return @sizeOf(Header) +
+                self.service_len +
+                self.scope_len;
+        }
+
+        /// Returns `null` if `fbr` does not have all of the expected slices buffered.
+        /// If `null` is returned, `fbr` will remain unchanged.
+        pub fn getFilterFromFixedReader(
+            self: Header,
+            /// Assumed to behave the same as `std.Io.Reader.fixed`.
+            fbr: *std.Io.Reader,
+        ) ?Filter {
+            if (fbr.bufferedLen() < self.encodedLength() - @sizeOf(Header)) {
+                return null;
+            }
+            const service = fbr.take(self.service_len) catch unreachable;
+            const scope = fbr.take(self.scope_len) catch unreachable;
+            return .{
+                .service = if (service.len == 0) null else service,
+                .scope = if (scope.len == 0) null else scope,
+                .level = self.level,
+            };
+        }
+    };
+
+    pub fn format(self: Filter, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        if (self.service) |service| try w.writeAll(service);
+        if (self.scope) |scope| {
+            try w.writeByte(':');
+            try w.writeAll(scope);
+        }
+        try w.writeByte('=');
+        try w.writeAll(self.level.text());
+    }
+};
+
 pub const EntryField = struct {
     name: []const u8,
     value: EntryValueFmt,
@@ -380,11 +628,14 @@ pub fn streamLogs(
         output: *std.Io.Writer,
         service_name: []const u8,
         log_messages_buffer: []const u8,
+        /// Must satisfy the ordering constraints of `Filter.findClosestFilter`.
+        filters: []const Filter,
     },
 ) (std.Io.Writer.Error || error{ InvalidMagicField, TruncatedLog })!void {
     const output = params.output;
     const service_name = params.service_name;
     const log_messages_buffer = params.log_messages_buffer;
+    const filters = params.filters;
 
     var log_reader: std.Io.Reader = .fixed(log_messages_buffer);
     while (log_reader.bufferedLen() != 0) {
@@ -411,6 +662,13 @@ pub fn streamLogs(
             std.log.err("Expected log message slices, found end of stream.", .{});
             return error.TruncatedLog;
         };
+
+        const filter_index = Filter.findClosestFilter(.{
+            .filters = filters,
+            .service = service_name,
+            .scope = slices.scope,
+        });
+        if (log_msg_header.level.order(filters[filter_index].level) == .gt) continue;
 
         // time
         try output.print("time={f}", .{Iso8601Fmt.fromEpochMillis(log_msg_header.epoch_millis)});
