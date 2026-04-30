@@ -15,10 +15,12 @@ solana_conformance_bin = os.environ.get("SOLANA_CONFORMANCE_BIN", "solana-confor
 def main():
     os.environ["PYTHONUNBUFFERED"] = "1"
 
+    import platform
+    lib_ext = ".dylib" if platform.system() == "Darwin" else ".so"
     create_lib = os.environ.get(
-        "CREATE_LIB", path("env/solfuzz-agave/target/release/libsolfuzz_agave.so")
+        "CREATE_LIB", path(f"env/solfuzz-agave/target/release/libsolfuzz_agave{lib_ext}")
     )
-    exec_lib = os.environ.get("EXEC_LIB", path("zig-out/lib/libsolfuzz_sig.so"))
+    exec_lib = os.environ.get("EXEC_LIB", path(f"zig-out/lib/libsolfuzz_sig{lib_ext}"))
 
     parser = argparse.ArgumentParser(description="Run test fixtures")
     parser.add_argument(
