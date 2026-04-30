@@ -259,10 +259,36 @@ const DownloadConn = struct {
     }
 };
 
-const DownloadResult = enum {
+/// The result set of an individual download being raced.
+const RacerResult = enum {
     succeeded,
     failed,
     cancelled,
+};
+
+const ExistingSnapshot = struct {
+    name_buf: [std.fs.max_path_bytes]u8,
+    name_len: usize,
+
+    fn name(self: *const ExistingSnapshot) []const u8 {
+        return self.name_buf[0..self.name_len];
+    }
+};
+
+const CompletedSnapshot = struct {
+    slot: Slot,
+    hash: Hash,
+};
+
+const DownloadFailureReason = enum {
+    fsync_failed,
+    rename_failed,
+};
+
+const DownloadResult = union(enum) {
+    already_exists: ExistingSnapshot,
+    downloaded: CompletedSnapshot,
+    failed: DownloadFailureReason,
 };
 
 // TODO: Can be smaller than u8.
@@ -335,7 +361,7 @@ const Metrics = struct {
     snapshot_download_bytes_written: tel.Counter,
 };
 
-const SnapshotService = struct {
+const Downloader = struct {
     ring: IoUring,
     gossip_iter: *SnapshotSourceRing.Iterator(.reader),
     dedupe_map: *DedupeMap,
@@ -348,15 +374,31 @@ const SnapshotService = struct {
     active_downloads: u8,
     download_race: DownloadRace,
     snapshot_dir: []const u8,
+    run_result: ?DownloadResult,
 
     metrics: Metrics,
     logger: tel.Logger("snapshot"),
 
-    fn run(self: *SnapshotService) !noreturn {
-        // TODO: what to init to? bunch of undefineds that feel wrong.
+    fn deinit(self: *Downloader) void {
+        for (0..self.probe_conns.len) |i| {
+            if (self.probe_conns[i].phase != .unused) {
+                self.finishProbe(@intCast(i), .failed);
+            }
+        }
+
+        for (0..self.download_conns.len) |i| {
+            if (self.download_conns[i].phase != .unused) {
+                self.finishDownload(@intCast(i), .cancelled);
+            }
+        }
+
+        self.ring.deinit();
+    }
+
+    fn run(self: *Downloader) !DownloadResult {
         var cqes: [256]std.os.linux.io_uring_cqe = undefined;
 
-        // drain messages from gossip service immidiately. This also submits the first timeout for drain interval.
+        // drain messages from gossip service immediately. This also submits the first timeout for drain interval.
         try self.handleGossipDrainTimeout();
 
         while (true) {
@@ -364,6 +406,10 @@ const SnapshotService = struct {
             const n = try self.ring.copy_cqes(&cqes, 0);
 
             for (cqes[0..n]) |cqe| {
+                // A previoud cqe in this copied batch may have set the final result. Stop before
+                // handling any more completions.
+                if (self.run_result) |result| return result;
+
                 const data = UserData.decode(cqe.user_data);
 
                 // An operation timed out, invoke the corresponding timeout handler.
@@ -405,10 +451,15 @@ const SnapshotService = struct {
                     .download_fsync => self.handleDownloadFsync(data, cqe),
                 }
             }
+
+            // It's possible that the last cqe in the copied batch set the final result. The top-of-loop check
+            // will not run again (since the downloader is done, and no more submissions are made).
+            // We check again here to return.
+            if (self.run_result) |result| return result;
         }
     }
 
-    fn handleGossipDrainTimeout(self: *SnapshotService) !void {
+    fn handleGossipDrainTimeout(self: *Downloader) !void {
         if (self.download_race.phase == .completed) {
             self.timeout_pending = false;
             return;
@@ -473,7 +524,7 @@ const SnapshotService = struct {
         }
     }
 
-    fn startProbe(self: *SnapshotService, addr: Address, peer: *PeerState) !void {
+    fn startProbe(self: *Downloader, addr: Address, peer: *PeerState) !void {
         if (self.download_race.phase == .completed) return;
         if (self.active_probes >= MAX_CONCURRENT_PROBES) return;
 
@@ -517,7 +568,7 @@ const SnapshotService = struct {
         self.metrics.snapshot_probes_started.increment(1);
     }
 
-    fn getProbeForCqe(self: *SnapshotService, data: UserData) ?*ProbeConn {
+    fn getProbeForCqe(self: *Downloader, data: UserData) ?*ProbeConn {
         std.debug.assert(data.index < self.probe_conns.len);
         const probe = &self.probe_conns[data.index];
         if (probe.phase == .unused) {
@@ -539,7 +590,7 @@ const SnapshotService = struct {
 
     /// Reserves the two sqes needed for a primary op + linked timeout.
     /// NOTE: assumes SnapshotService is the only producer (thread) mutating the ring.
-    fn reserveLinkedSqes(self: *SnapshotService) !LinkedSqes {
+    fn reserveLinkedSqes(self: *Downloader) !LinkedSqes {
         // NOTE: it is safe to get capacity this way due to single event producing thread.
         const capacity: u32 = @intCast(self.ring.sq.sqes.len);
         const ready = self.ring.sq_ready();
@@ -560,7 +611,7 @@ const SnapshotService = struct {
 
     /// Enqueues a pair of SQEs to connect and perform the tcp handshake along with a timeout.
     fn queueProbeConnectWithTimeout(
-        self: *SnapshotService,
+        self: *Downloader,
         index: u8,
         fd: std.posix.fd_t,
     ) !void {
@@ -587,7 +638,7 @@ const SnapshotService = struct {
     /// Enqueues a pair of SQEs to send the HTTP HEAD request along with a timeout for the corresponding probe.
     /// After which we update the probe's phase to `sending`.
     fn queueProbeSendWithTimeout(
-        self: *SnapshotService,
+        self: *Downloader,
         data: UserData,
         /// used to track partial completions.
         offset: u16,
@@ -620,7 +671,7 @@ const SnapshotService = struct {
     /// Enqueues a pair of SQEs to recv the HTTP response along with a timeout.
     /// After which we update the probe's phase to `receiving`.
     fn queueProbeRecvWithTimeout(
-        self: *SnapshotService,
+        self: *Downloader,
         data: UserData,
         /// used to track partial completions.
         offset: u16,
@@ -649,7 +700,7 @@ const SnapshotService = struct {
         probe.timed_out = false;
     }
 
-    fn handleProbeTimeout(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleProbeTimeout(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         std.debug.assert(data.index < self.probe_conns.len);
         const probe = &self.probe_conns[data.index];
 
@@ -685,7 +736,7 @@ const SnapshotService = struct {
         }
     }
 
-    fn handleProbeConnect(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleProbeConnect(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const probe = self.getProbeForCqe(data) orelse return;
         if (probe.phase != .connecting) {
             self.logger.warn().logf("unexpected connect cqe idx={d} phase={s}", .{ data.index, @tagName(probe.phase) });
@@ -714,7 +765,7 @@ const SnapshotService = struct {
         };
     }
 
-    fn handleProbeSend(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleProbeSend(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const probe = self.getProbeForCqe(data) orelse return;
         if (probe.phase != .sending) {
             self.logger.warn().logf("unexpected send cqe idx={d} phase={s}", .{ data.index, @tagName(probe.phase) });
@@ -755,7 +806,7 @@ const SnapshotService = struct {
         };
     }
 
-    fn handleProbeRecv(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleProbeRecv(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const probe = self.getProbeForCqe(data) orelse return;
         if (probe.phase != .receiving) {
             self.logger.warn().logf("unexpected recv cqe idx={d} phase={s}", .{ data.index, @tagName(probe.phase) });
@@ -854,7 +905,7 @@ const SnapshotService = struct {
         sq_full,
     };
 
-    fn finishProbe(self: *SnapshotService, probe_index: u8, result: ProbeResult) void {
+    fn finishProbe(self: *Downloader, probe_index: u8, result: ProbeResult) void {
         const probe = &self.probe_conns[probe_index];
         // If this fn gets called on a probe that's .unused, then return immidiately.
         if (probe.phase == .unused) return;
@@ -883,7 +934,7 @@ const SnapshotService = struct {
         }
     }
 
-    fn probeNextPending(self: *SnapshotService) void {
+    fn probeNextPending(self: *Downloader) void {
         if (self.download_race.phase == .completed) return;
 
         const keys = self.dedupe_map.keys();
@@ -898,7 +949,7 @@ const SnapshotService = struct {
         }
     }
 
-    fn handleDownloadTimeout(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadTimeout(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         std.debug.assert(data.index < self.download_conns.len);
         const conn = &self.download_conns[data.index];
 
@@ -931,7 +982,7 @@ const SnapshotService = struct {
         }
     }
 
-    fn getDownloadForCqe(self: *SnapshotService, data: UserData) ?*DownloadConn {
+    fn getDownloadForCqe(self: *Downloader, data: UserData) ?*DownloadConn {
         std.debug.assert(data.index < self.download_conns.len);
         const conn = &self.download_conns[data.index];
         if (conn.phase == .unused) {
@@ -947,7 +998,7 @@ const SnapshotService = struct {
         return conn;
     }
 
-    fn handleDownloadConnect(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadConnect(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         if (conn.phase != .connecting) {
             self.logger.warn().logf("unexpected download connect cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
@@ -977,7 +1028,7 @@ const SnapshotService = struct {
         };
     }
 
-    fn handleDownloadSend(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadSend(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         if (conn.phase != .sending) {
             self.logger.warn().logf("unexpected download send cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
@@ -1018,7 +1069,7 @@ const SnapshotService = struct {
         };
     }
 
-    fn handleDownloadRecvHeaders(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadRecvHeaders(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         if (conn.phase != .reading_headers) {
             self.logger.warn().logf("unexpected download recv_headers cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
@@ -1121,7 +1172,7 @@ const SnapshotService = struct {
         }
     }
 
-    fn handleDownloadWriteExtra(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadWriteExtra(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         if (conn.phase != .writing_extra) {
             self.logger.warn().logf("unexpected download write_extra cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
@@ -1169,7 +1220,7 @@ const SnapshotService = struct {
         };
     }
 
-    fn handleDownloadPollIn(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadPollIn(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         if (conn.phase != .waiting_readable) {
             self.logger.warn().logf("unexpected download poll_in cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
@@ -1199,7 +1250,7 @@ const SnapshotService = struct {
         };
     }
 
-    fn handleDownloadSpliceIn(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadSpliceIn(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         if (conn.phase != .splicing_in) {
             self.logger.warn().logf("unexpected download splice_in cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
@@ -1247,7 +1298,7 @@ const SnapshotService = struct {
         };
     }
 
-    fn handleDownloadSpliceOut(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadSpliceOut(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         if (conn.phase != .splicing_out) {
             self.logger.warn().logf("unexpected download splice_out cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
@@ -1306,7 +1357,7 @@ const SnapshotService = struct {
         };
     }
 
-    fn handleDownloadFsync(self: *SnapshotService, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadFsync(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         if (conn.phase != .fsyncing) {
             self.logger.warn().logf("unexpected download fsync cqe idx={d} phase={s}", .{ data.index, @tagName(conn.phase) });
@@ -1325,6 +1376,7 @@ const SnapshotService = struct {
             race.phase = .failed;
             self.finishOtherDownloads(data.index);
             self.finishDownload(data.index, .failed);
+            self.run_result = .{ .failed = .fsync_failed };
             return;
         }
 
@@ -1349,6 +1401,7 @@ const SnapshotService = struct {
             race.phase = .failed;
             self.finishOtherDownloads(data.index);
             self.finishDownload(data.index, .failed);
+            self.run_result = .{ .failed = .rename_failed };
             return;
         };
 
@@ -1357,10 +1410,12 @@ const SnapshotService = struct {
 
         self.logger.info().logf("download complete slot={d} path={s}", .{ race.slot, final_path });
         self.finishDownload(data.index, .succeeded);
+
+        self.run_result = .{ .downloaded = .{ .slot = race.slot, .hash = race.hash } };
     }
 
     fn offerDownloadCandidate(
-        self: *SnapshotService,
+        self: *Downloader,
         candidate: DownloadCandidate,
         slot: Slot,
         hash: Hash,
@@ -1401,7 +1456,7 @@ const SnapshotService = struct {
         self.startPendingRacers();
     }
 
-    fn insertDownloadCandidateSorted(self: *SnapshotService, candidate: DownloadCandidate) void {
+    fn insertDownloadCandidateSorted(self: *Downloader, candidate: DownloadCandidate) void {
         const race = &self.download_race;
 
         // Reject duplicate address.
@@ -1425,7 +1480,7 @@ const SnapshotService = struct {
         self.metrics.snapshot_download_candidates.increment(1);
     }
 
-    fn startPendingRacers(self: *SnapshotService) void {
+    fn startPendingRacers(self: *Downloader) void {
         if (self.download_race.phase != .racing) return;
 
         while (self.active_downloads < MAX_DOWNLOAD_RACERS) {
@@ -1440,7 +1495,7 @@ const SnapshotService = struct {
     }
 
     // TODO: Remove this. store a pending cancidate list that we pull from instead of linear scan.
-    fn nextUnstartedCandidate(self: *SnapshotService) ?u8 {
+    fn nextUnstartedCandidate(self: *Downloader) ?u8 {
         for (self.download_race.candidates[0..self.download_race.candidate_count], 0..) |*c, i| {
             if (!c.started) return @intCast(i);
         }
@@ -1449,7 +1504,7 @@ const SnapshotService = struct {
 
     // TODO: We can clean these by generalizing over Op and sharing them with probe's fns (redundant).
     fn queueDownloadConnectWithTimeout(
-        self: *SnapshotService,
+        self: *Downloader,
         index: u8,
         fd: std.posix.fd_t,
     ) !void {
@@ -1475,7 +1530,7 @@ const SnapshotService = struct {
     }
 
     fn queueDownloadSendWithTimeout(
-        self: *SnapshotService,
+        self: *Downloader,
         data: UserData,
         offset: u16,
     ) !void {
@@ -1505,7 +1560,7 @@ const SnapshotService = struct {
     }
 
     fn queueDownloadRecvHeadersWithTimeout(
-        self: *SnapshotService,
+        self: *Downloader,
         data: UserData,
         offset: u16,
     ) !void {
@@ -1534,7 +1589,7 @@ const SnapshotService = struct {
         conn.timed_out = false;
     }
 
-    fn queueDownloadWriteExtra(self: *SnapshotService, data: UserData, written: u16) !void {
+    fn queueDownloadWriteExtra(self: *Downloader, data: UserData, written: u16) !void {
         const conn = &self.download_conns[data.index];
 
         var write_data = data;
@@ -1559,7 +1614,7 @@ const SnapshotService = struct {
         conn.active_offset = written;
     }
 
-    fn queueDownloadSpliceInWithTimeout(self: *SnapshotService, index: u8) !void {
+    fn queueDownloadSpliceInWithTimeout(self: *Downloader, index: u8) !void {
         const conn = &self.download_conns[index];
 
         const remaining = conn.content_len - conn.bytes_written - conn.pipe_pending;
@@ -1587,7 +1642,7 @@ const SnapshotService = struct {
         conn.timed_out = false;
     }
 
-    fn queueDownloadPollInWithTimeout(self: *SnapshotService, index: u8) !void {
+    fn queueDownloadPollInWithTimeout(self: *Downloader, index: u8) !void {
         const conn = &self.download_conns[index];
 
         const sqes = try self.reserveLinkedSqes();
@@ -1611,7 +1666,7 @@ const SnapshotService = struct {
         conn.timed_out = false;
     }
 
-    fn queueDownloadSpliceOut(self: *SnapshotService, index: u8) !void {
+    fn queueDownloadSpliceOut(self: *Downloader, index: u8) !void {
         const conn = &self.download_conns[index];
 
         std.debug.assert(conn.pipe_pending > 0);
@@ -1630,7 +1685,7 @@ const SnapshotService = struct {
         conn.phase = .splicing_out;
     }
 
-    fn queueDownloadFsync(self: *SnapshotService, index: u8) !void {
+    fn queueDownloadFsync(self: *Downloader, index: u8) !void {
         const conn = &self.download_conns[index];
 
         // TODO: this is repeated in bunch of places, can coalesce.
@@ -1647,7 +1702,7 @@ const SnapshotService = struct {
         conn.phase = .fsyncing;
     }
 
-    fn startDownloadRacer(self: *SnapshotService, candidate_index: u8) !void {
+    fn startDownloadRacer(self: *Downloader, candidate_index: u8) !void {
         const candidate = &self.download_race.candidates[candidate_index];
         const race = &self.download_race;
 
@@ -1717,12 +1772,12 @@ const SnapshotService = struct {
         self.metrics.snapshot_downloads_started.increment(1);
     }
 
-    fn shouldCancelDownload(self: *SnapshotService, index: u8) bool {
+    fn shouldCancelDownload(self: *Downloader, index: u8) bool {
         return self.download_conns[index].cancel_requested and
             self.download_race.winner_index != index;
     }
 
-    fn maybeSelectWinner(self: *SnapshotService, index: u8) void {
+    fn maybeSelectWinner(self: *Downloader, index: u8) void {
         if (self.download_race.phase != .racing) return;
 
         const conn = &self.download_conns[index];
@@ -1750,7 +1805,7 @@ const SnapshotService = struct {
     /// Retires all active download connections except the one at `keep_index`.
     /// Used after the race reaches a terminal state (completed or failed) to
     /// clean up losers. Late CQEs from retired slots are ignored via gen mismatch.
-    fn finishOtherDownloads(self: *SnapshotService, keep_index: u8) void {
+    fn finishOtherDownloads(self: *Downloader, keep_index: u8) void {
         for (&self.download_conns, 0..) |*conn, i| {
             if (i == @as(usize, keep_index)) continue;
             if (conn.phase == .unused) continue;
@@ -1759,7 +1814,7 @@ const SnapshotService = struct {
         }
     }
 
-    fn finishDownload(self: *SnapshotService, index: u8, result: DownloadResult) void {
+    fn finishDownload(self: *Downloader, index: u8, result: RacerResult) void {
         const conn = &self.download_conns[index];
         if (conn.phase == .unused) return;
 
@@ -1838,6 +1893,34 @@ fn formatFinalSnapshotPath(buf: []u8, snapshot_dir: []const u8, slot: Slot, hash
     }) catch unreachable;
 }
 
+fn isFinalSnapshotFilename(file_name: []const u8) bool {
+    return std.mem.startsWith(u8, file_name, "snapshot-") and
+        std.mem.endsWith(u8, file_name, ".tar.zst") and
+        std.mem.indexOf(u8, file_name, ".tmp.") == null;
+}
+
+/// Scans the snapshot directory for an existing finalized snapshot file.
+/// TODO: check how old the snapshot is on disk before skipping.
+fn findExistingSnapshot(snapshot_dir: []const u8) !?ExistingSnapshot {
+    var dir = try std.fs.cwd().openDir(snapshot_dir, .{ .iterate = true });
+    defer dir.close();
+
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!isFinalSnapshotFilename(entry.name)) continue;
+
+        var existing: ExistingSnapshot = undefined;
+        const n = @min(entry.name.len, existing.name_buf.len);
+        @memcpy(existing.name_buf[0..n], entry.name[0..n]);
+        existing.name_len = n;
+
+        return existing;
+    }
+
+    return null;
+}
+
 comptime {
     _ = start;
 }
@@ -1859,35 +1942,70 @@ pub const ReadWrite = struct {
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "snapshot");
     const metrics = rw.tel.metricAppender().appendFields(Metrics, .{});
+
     rw.tel.signalReady();
 
     const folder_path = ro.config.folder_buffer[0..ro.config.folder_len];
-    logger.info().logf("snapshot path {s}", .{folder_path});
 
-    // Create a map for deduping candidate node addresses streaming in from gossip service.
-    var dedupe_fba = std.heap.FixedBufferAllocator.init(&dedupe_map_buf);
-    var dedupe_map = DedupeMap{};
-    var gossip_iter = rw.gossip_to_snapshot.get(.reader);
+    const result: DownloadResult = result: {
+        std.fs.cwd().makeDir(folder_path) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => |e| return e,
+        };
 
-    // TODO: obtain `snapshot_to_accounts_db` ring to poll for snapshot download cancellation
-    // when accountsdb service detects a valid db to load from disk instead.
+        logger.info().logf("snapshot path {s}", .{folder_path});
 
-    var service = SnapshotService{
-        .ring = try IoUring.init(256, 0),
-        .gossip_iter = &gossip_iter,
-        .dedupe_map = &dedupe_map,
-        .dedupe_alloc = dedupe_fba.allocator(),
-        .probe_conns = .{ProbeConn.empty()} ** MAX_CONCURRENT_PROBES,
-        .active_probes = 0,
-        .timeout_pending = false,
-        .download_conns = .{DownloadConn.empty()} ** MAX_DOWNLOAD_RACERS,
-        .active_downloads = 0,
-        .download_race = DownloadRace.empty(),
-        .snapshot_dir = folder_path,
-        .metrics = metrics,
-        .logger = logger,
+        if (try findExistingSnapshot(folder_path)) |existing| {
+            break :result .{ .already_exists = existing };
+        }
+
+        var dedupe_fba = std.heap.FixedBufferAllocator.init(&dedupe_map_buf);
+        var dedupe_map = DedupeMap{};
+        var gossip_iter = rw.gossip_to_snapshot.get(.reader);
+
+        var downloader = Downloader{
+            .ring = try IoUring.init(256, 0),
+            .gossip_iter = &gossip_iter,
+            .dedupe_map = &dedupe_map,
+            .dedupe_alloc = dedupe_fba.allocator(),
+            .probe_conns = .{ProbeConn.empty()} ** MAX_CONCURRENT_PROBES,
+            .active_probes = 0,
+            .timeout_pending = false,
+            .download_conns = .{DownloadConn.empty()} ** MAX_DOWNLOAD_RACERS,
+            .active_downloads = 0,
+            .download_race = DownloadRace.empty(),
+            .snapshot_dir = folder_path,
+            .run_result = null,
+            .metrics = metrics,
+            .logger = logger,
+        };
+        defer downloader.deinit();
+
+        break :result try downloader.run();
     };
-    defer service.ring.deinit();
 
-    try service.run();
+    switch (result) {
+        .already_exists => |existing| {
+            logger.info().logf("snapshot already exists, skipping download name={s}", .{
+                existing.name(),
+            });
+        },
+        .downloaded => |snapshot| {
+            // TODO: would be better to return the final path that was downloaded. Or, add a method
+            // on CompletedSnapshot that takes in a buffer and constructs the path to snapshot.
+            // Likely will refactor this as part of the other TODOs around constructing paths
+            // (temp paths included) just once.
+            logger.info().logf("snapshot download completed slot={d} hash={f}", .{
+                snapshot.slot,
+                snapshot.hash,
+            });
+        },
+        .failed => |reason| {
+            logger.err().logf("snapshot download failed reason={s}", .{
+                @tagName(reason),
+            });
+        },
+    }
+
+    while (true) std.atomic.spinLoopHint();
 }
