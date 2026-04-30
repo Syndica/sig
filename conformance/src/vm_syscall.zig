@@ -332,6 +332,7 @@ fn executeSyscall(
             if (execution_error == null) registers.set(.r0, vm.registers.get(.r0));
             break :blk registers;
         },
+        .skip_input_data_regions = execution_error != null and virtual_address_space_adjustments,
     });
 
     if (emit_logs) {
