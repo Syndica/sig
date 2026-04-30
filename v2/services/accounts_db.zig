@@ -145,16 +145,7 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
                 return error.InvalidAccountData;
 
             // The account read & written to disk (a more compact format)
-            var disk_acc: extern struct {
-                info: packed struct(u64) {
-                    executable: bool,
-                    data_len: u24,
-                    rent_epoch: u39,
-                },
-                pubkey: Pubkey,
-                owner: Pubkey,
-                lamports: u64,
-            } = .{
+            var disk_acc: lib.accounts_db.Account = .{
                 .info = .{
                     .executable = header.executable > 0,
                     .data_len = @intCast(header.data_len),
