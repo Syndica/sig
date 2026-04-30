@@ -409,6 +409,11 @@ const SnapshotService = struct {
     }
 
     fn handleGossipDrainTimeout(self: *SnapshotService) !void {
+        if (self.download_race.phase == .completed) {
+            self.timeout_pending = false;
+            return;
+        }
+
         var drained: u8 = 0;
         while (drained < MAX_DRAIN) : (drained += 1) {
             const source = self.gossip_iter.next() orelse break;
@@ -469,6 +474,7 @@ const SnapshotService = struct {
     }
 
     fn startProbe(self: *SnapshotService, addr: Address, peer: *PeerState) !void {
+        if (self.download_race.phase == .completed) return;
         if (self.active_probes >= MAX_CONCURRENT_PROBES) return;
 
         // find a free prob
@@ -878,6 +884,8 @@ const SnapshotService = struct {
     }
 
     fn probeNextPending(self: *SnapshotService) void {
+        if (self.download_race.phase == .completed) return;
+
         const keys = self.dedupe_map.keys();
         const values = self.dedupe_map.values();
         for (keys, values) |*addr, *peer| {
@@ -1307,18 +1315,29 @@ const SnapshotService = struct {
 
         std.debug.assert(self.download_race.winner_index == data.index);
 
+        const race = &self.download_race;
+
+        // Since this is the final stage for fsyncing the downloaded file, a failure here is likely not to resolve
+        // with retry/re-download (local storage issue). So cancel all other running downloads as well as with winner's.
+        // TODO: should we consider EINTR for retry?
         if (cqe.err() != .SUCCESS) {
             self.logger.err().logf("download fsync failed idx={d} err={s}", .{ data.index, @tagName(cqe.err()) });
+            race.phase = .failed;
+            self.finishOtherDownloads(data.index);
             self.finishDownload(data.index, .failed);
-            self.startPendingRacers();
             return;
+        }
+
+        // Close file before publishing final path.
+        if (conn.file_fd >= 0) {
+            std.posix.close(conn.file_fd);
+            conn.file_fd = -1;
         }
 
         // Rename temp file to final path.
         var tmp_buf: [std.fs.max_path_bytes:0]u8 = undefined;
         var final_buf: [std.fs.max_path_bytes:0]u8 = undefined;
 
-        const race = &self.download_race;
         const tmp_path = formatTempSnapshotPath(&tmp_buf, self.snapshot_dir, race.slot, race.hash, data.index, conn.gen);
         tmp_buf[tmp_path.len] = 0;
 
@@ -1326,14 +1345,17 @@ const SnapshotService = struct {
         final_buf[final_path.len] = 0;
 
         std.posix.rename(tmp_buf[0..tmp_path.len :0], final_buf[0..final_path.len :0]) catch |err| {
-            self.logger.err().logf("download rename failed after fsync idx={d} err={s}", .{ data.index, @errorName(err) });
+            self.logger.err().logf("download rename failed after fsync+close idx={d} err={s}", .{ data.index, @errorName(err) });
+            race.phase = .failed;
+            self.finishOtherDownloads(data.index);
             self.finishDownload(data.index, .failed);
-            self.startPendingRacers();
             return;
         };
 
-        self.logger.info().logf("download complete slot={d} path={s}", .{ race.slot, final_path });
         race.phase = .completed;
+        self.finishOtherDownloads(data.index);
+
+        self.logger.info().logf("download complete slot={d} path={s}", .{ race.slot, final_path });
         self.finishDownload(data.index, .succeeded);
     }
 
@@ -1644,6 +1666,7 @@ const SnapshotService = struct {
         errdefer std.posix.close(fd);
 
         // Create pipe for splice.
+        // TODO: Do we want to size the pipe?
         const pipe_fds = try std.posix.pipe2(.{ .NONBLOCK = true });
         errdefer {
             std.posix.close(pipe_fds[0]);
@@ -1724,6 +1747,18 @@ const SnapshotService = struct {
         self.logger.info().logf("download winner idx={d} addr={f}", .{ index, conn.addr });
     }
 
+    /// Retires all active download connections except the one at `keep_index`.
+    /// Used after the race reaches a terminal state (completed or failed) to
+    /// clean up losers. Late CQEs from retired slots are ignored via gen mismatch.
+    fn finishOtherDownloads(self: *SnapshotService, keep_index: u8) void {
+        for (&self.download_conns, 0..) |*conn, i| {
+            if (i == @as(usize, keep_index)) continue;
+            if (conn.phase == .unused) continue;
+
+            self.finishDownload(@intCast(i), .cancelled);
+        }
+    }
+
     fn finishDownload(self: *SnapshotService, index: u8, result: DownloadResult) void {
         const conn = &self.download_conns[index];
         if (conn.phase == .unused) return;
@@ -1743,6 +1778,7 @@ const SnapshotService = struct {
         if (conn.pipe_rd >= 0) std.posix.close(conn.pipe_rd);
         if (conn.pipe_wr >= 0) std.posix.close(conn.pipe_wr);
 
+        // If this download was cancelled/failed delete its temp file.
         if (result != .succeeded) {
             var tmp_buf: [std.fs.max_path_bytes:0]u8 = undefined;
             // TODO: we gotta store this bruh.
@@ -1759,7 +1795,7 @@ const SnapshotService = struct {
         }
 
         const old_gen = conn.gen;
-        // TODO: add an emptyWithGen()
+        // TODO: add an emptyWithGen() or reset()
         self.download_conns[index] = DownloadConn.empty();
         self.download_conns[index].gen = old_gen;
 
