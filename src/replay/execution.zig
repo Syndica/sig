@@ -530,6 +530,7 @@ fn prepareSlot(
             state.empty_slots.set(slot);
             return .empty;
         }
+        state.empty_slots.unset(slot);
 
         confirmation_progress.last_entry = entries[entries.len - 1].hash;
         confirmation_progress.num_shreds += num_shreds;
