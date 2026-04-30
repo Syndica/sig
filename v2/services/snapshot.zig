@@ -1869,6 +1869,9 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var dedupe_map = DedupeMap{};
     var gossip_iter = rw.gossip_to_snapshot.get(.reader);
 
+    // TODO: obtain `snapshot_to_accounts_db` ring to poll for snapshot download cancellation
+    // when accountsdb service detects a valid db to load from disk instead.
+
     var service = SnapshotService{
         .ring = try IoUring.init(256, 0),
         .gossip_iter = &gossip_iter,
