@@ -210,7 +210,6 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
 
 pub fn Stakes(comptime stakes_type: StakesType) type {
     const T = stakes_type.T();
-    const StakeAccounts = std.AutoArrayHashMapUnmanaged(Pubkey, T);
 
     return struct {
         vote_accounts: VoteAccounts,
@@ -220,6 +219,8 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
         stake_history: StakeHistory,
 
         const Self = @This();
+
+        pub const StakeAccounts = std.AutoArrayHashMapUnmanaged(Pubkey, T);
 
         pub const EMPTY: Self = .{
             .vote_accounts = .{},

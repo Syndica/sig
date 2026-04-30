@@ -555,7 +555,7 @@
         .name = "stake_minimum_delegation_for_rewards",
         .pubkey = "G6ANXD6ptCSyNd9znZm7j4dEczAJCfx7Cy43oBx3rKHJ",
         .description = "TODO: Add description",
-        .status = .supported,
+        .status = .reverted,
     },
     .{
         .name = "add_set_compute_unit_price_ix",

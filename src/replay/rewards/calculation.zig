@@ -318,8 +318,6 @@ fn calculateRewardsForPartitioning(
 
     const validator_rewards = try calculateValidatorRewards(
         allocator,
-        slot,
-        feature_set,
         previous_epoch,
         prev_inflation_rewards.validator_rewards,
         stakes_cache,
@@ -364,8 +362,6 @@ const ValidatorRewards = struct {
 
 fn calculateValidatorRewards(
     allocator: Allocator,
-    slot: Slot,
-    feature_set: *const FeatureSet,
     rewarded_epoch: Epoch,
     rewards: u64,
     stakes_cache: *StakesCache,
@@ -376,14 +372,12 @@ fn calculateValidatorRewards(
     defer stakes_lg.unlock();
 
     const stake_history = &stakes.stake_history;
-    var filtered_stake_delegations =
-        try filterStakesDelegations(allocator, slot, feature_set, stakes);
-    defer filtered_stake_delegations.deinit(allocator);
+    const stake_accounts = &stakes.stake_accounts;
 
     const point_value = try calculateRewardPointsPartitioned(
         rewards,
-        &stakes.stake_history,
-        filtered_stake_delegations.items(.stake),
+        stake_history,
+        stake_accounts.values(),
         epoch_vote_accounts,
         new_warmup_and_cooldown_rate_epoch,
     ) orelse return null;
@@ -391,7 +385,7 @@ fn calculateValidatorRewards(
     return try calculateStakeVoteRewards(
         allocator,
         stake_history,
-        filtered_stake_delegations,
+        stake_accounts,
         epoch_vote_accounts,
         rewarded_epoch,
         point_value,
@@ -400,31 +394,6 @@ fn calculateValidatorRewards(
 }
 
 const FilteredStakesDelegations = std.MultiArrayList(struct { pubkey: Pubkey, stake: Stake });
-
-fn filterStakesDelegations(
-    allocator: Allocator,
-    slot: u64,
-    feature_set: *const FeatureSet,
-    stakes: *const Stakes(.stake),
-) !FilteredStakesDelegations {
-    var result = FilteredStakesDelegations{};
-    if (feature_set.active(.stake_minimum_delegation_for_rewards, slot)) {
-        const min_delegation = @max(sig.runtime.program.stake.getMinimumDelegation(
-            slot,
-            feature_set,
-        ), 1_000_000_000); // LAMPORTS_PER_SOL
-
-        for (stakes.stake_accounts.keys(), stakes.stake_accounts.values()) |key, value| {
-            if (value.delegation.stake < min_delegation) continue;
-            try result.append(allocator, .{ .pubkey = key, .stake = value });
-        }
-    } else {
-        for (stakes.stake_accounts.keys(), stakes.stake_accounts.values()) |key, value| {
-            try result.append(allocator, .{ .pubkey = key, .stake = value });
-        }
-    }
-    return result;
-}
 
 fn calculateRewardPointsPartitioned(
     rewards: u64,
@@ -457,7 +426,7 @@ const VoteReward = struct {
 fn calculateStakeVoteRewards(
     allocator: Allocator,
     stake_history: *const StakeHistory,
-    stake_delegations: FilteredStakesDelegations,
+    stake_accounts: *const Stakes(.stake).StakeAccounts,
     cached_vote_accounts: *const VoteAccounts,
     rewarded_epoch: Epoch,
     point_value: PointValue,
@@ -475,9 +444,7 @@ fn calculateStakeVoteRewards(
 
     // Use par iter?
     var total_stake_rewards: u64 = 0;
-    const pubkeys = stake_delegations.items(.pubkey);
-    const stakes = stake_delegations.items(.stake);
-    for (pubkeys, stakes) |stake_pubkey, *stake| {
+    for (stake_accounts.keys(), stake_accounts.values()) |stake_pubkey, *stake| {
         const vote_pubkey = stake.delegation.voter_pubkey;
         const vote_account = cached_vote_accounts.getAccount(vote_pubkey) orelse continue;
 
@@ -854,17 +821,13 @@ test calculateValidatorRewards {
     const random = prng.random();
 
     { // Null
-        const slot = 0;
         const previous_epoch = 0;
         const previous_rewards: u64 = 0;
-        const feature_set = FeatureSet.ALL_DISABLED;
         const epoch_vote_accounts = VoteAccounts{};
         var stakes_cache = StakesCache.EMPTY;
 
         const rewards = try calculateValidatorRewards(
             allocator,
-            slot,
-            &feature_set,
             previous_epoch,
             previous_rewards,
             &stakes_cache,
@@ -875,11 +838,9 @@ test calculateValidatorRewards {
         try std.testing.expectEqual(null, rewards);
     }
 
-    const slot = 32;
     const epoch = 1;
     const previous_epoch = 0;
     const previous_rewards: u64 = 0;
-    const feature_set = FeatureSet.ALL_DISABLED;
 
     const vote_account_0_pubkey = Pubkey.initRandom(random);
     const vote_account_0_stake: u64 = 5_000_000_000;
@@ -941,8 +902,6 @@ test calculateValidatorRewards {
 
     const rewards = try calculateValidatorRewards(
         allocator,
-        slot,
-        &feature_set,
         previous_epoch,
         previous_rewards,
         &stakes_cache,
@@ -952,41 +911,11 @@ test calculateValidatorRewards {
     defer rewards.?.deinit(allocator);
 }
 
-test filterStakesDelegations {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
-    const random = prng.random();
-
-    const slot = 30;
-    const stakes = try Stakes(.stake).initRandom(allocator, random, 100);
-    defer stakes.deinit(allocator);
-
-    var feature_set = FeatureSet.ALL_DISABLED;
-
-    {
-        var result = try filterStakesDelegations(allocator, slot, &feature_set, &stakes);
-        defer result.deinit(allocator);
-        try std.testing.expectEqual(stakes.stake_accounts.count(), result.items(.stake).len);
-    }
-
-    feature_set.setSlot(.stake_minimum_delegation_for_rewards, slot);
-
-    {
-        var result = try filterStakesDelegations(allocator, slot, &feature_set, &stakes);
-        defer result.deinit(allocator);
-
-        for (result.items(.stake)) |stake| {
-            try std.testing.expect(stake.delegation.stake >= 1_000_000_000);
-        }
-    }
-}
-
 test calculateRewardPointsPartitioned {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    const slot = 32;
     const epoch = 1;
 
     { // Empty returns null point value
@@ -996,19 +925,11 @@ test calculateRewardPointsPartitioned {
         var vote_accounts = VoteAccounts{};
         defer vote_accounts.deinit(allocator);
 
-        var filtered_stake_delegations = try filterStakesDelegations(
-            allocator,
-            slot,
-            &FeatureSet.ALL_DISABLED,
-            &stakes,
-        );
-        defer filtered_stake_delegations.deinit(allocator);
-
         const rewards: u64 = 1_000_000_000;
         const point_value = try calculateRewardPointsPartitioned(
             rewards,
             &stakes.stake_history,
-            filtered_stake_delegations.items(.stake),
+            stakes.stake_accounts.values(),
             &vote_accounts,
             null,
         );
@@ -1094,8 +1015,8 @@ test calculateStakeVoteRewards {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    var stake_delegations = FilteredStakesDelegations{};
-    defer stake_delegations.deinit(allocator);
+    var stakes = Stakes(.stake).EMPTY;
+    defer stakes.deinit(allocator);
 
     var cached_vote_accounts = VoteAccounts{};
     defer cached_vote_accounts.deinit(allocator);
@@ -1126,13 +1047,13 @@ test calculateStakeVoteRewards {
         stake_epoch_credits,
         stake_activation_epoch,
     );
-    try stake_delegations.append(allocator, .{ .pubkey = stake_0_pubkey, .stake = stake_0 });
+    try stakes.stake_accounts.put(allocator, stake_0_pubkey, stake_0);
 
     { // No Credits To Redeem
         const result = try calculateStakeVoteRewards(
             allocator,
             &StakeHistory.INIT,
-            stake_delegations,
+            &stakes.stake_accounts,
             &cached_vote_accounts,
             rewarded_epoch,
             .{ .rewards = 1, .points = 0 },
@@ -1149,7 +1070,7 @@ test calculateStakeVoteRewards {
         const result = try calculateStakeVoteRewards(
             allocator,
             &StakeHistory.INIT,
-            stake_delegations,
+            &stakes.stake_accounts,
             &cached_vote_accounts,
             rewarded_epoch,
             .ZERO,
@@ -1167,7 +1088,7 @@ test calculateStakeVoteRewards {
     }
 
     rewarded_epoch += 1;
-    var stake_account = &stake_delegations.items(.stake)[0];
+    var stake_account = &stakes.stake_accounts.values()[0];
     stake_account.credits_observed = 5;
 
     var vote_account = cached_vote_accounts.vote_accounts.getPtr(vote_pubkey_0).?;
@@ -1184,7 +1105,7 @@ test calculateStakeVoteRewards {
         const result = try calculateStakeVoteRewards(
             allocator,
             &stake_history,
-            stake_delegations,
+            &stakes.stake_accounts,
             &cached_vote_accounts,
             rewarded_epoch,
             .{ .points = 1, .rewards = 1 },
