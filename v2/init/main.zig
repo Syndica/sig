@@ -21,6 +21,7 @@ const Config = struct {
 
     telemetry: Telemetry,
     snapshot: Snapshot,
+    accounts_db: AccountsDb,
 
     const SandboxingMode = enum { sandboxed, threaded };
 
@@ -38,6 +39,27 @@ const Config = struct {
 
     const Snapshot = struct {
         folder: []const u8,
+    };
+
+    const AccountsDb = struct {
+        file: []const u8,
+        memory: Memory,
+    };
+
+    const Memory = union(enum) {
+        bytes: usize,
+        kb: usize,
+        mb: usize,
+        gb: usize,
+
+        fn asBytes(self: Memory) usize {
+            return switch (self) {
+                .bytes => |b| b,
+                .kb => |kb| kb * 1024,
+                .mb => |mb| mb * 1024 * 1024,
+                .gb => |gb| gb * 1024 * 1024 * 1024,
+            };
+        }
     };
 };
 
@@ -93,9 +115,21 @@ pub fn main() !void {
         .{ .service = .gossip },
         .{ .service = .telemetry },
         .{ .service = .snapshot },
+        .{ .service = .accounts_db },
     };
 
     const shared_regions = services.toSharedRegions(.{
+        .telemetry = .{
+            .port = config.telemetry.port,
+            .max_log_level = log_level,
+            .service_count = service_instances.len - 1,
+
+            .id_mem_len = 4096 * 16,
+            .gauges_len = 4096 * 2,
+
+            .histogram_data_len = 4096 * 3,
+        },
+
         // net -> shred
         .net_to_shred = .{ .port = config.shred_network.recv_port },
         // shred constants
@@ -114,23 +148,17 @@ pub fn main() !void {
             .turbine_recv_port = config.shred_network.recv_port,
         },
 
-        .telemetry = .{
-            .port = config.telemetry.port,
-            .max_log_level = log_level,
-            .service_count = service_instances.len - 1,
-
-            .id_mem_len = 4096 * 16,
-            .gauges_len = 4096 * 2,
-
-            .histogram_data_len = 4096 * 3,
-        },
-
+        .gossip_to_snapshot = {},
         .snapshot_config = .{
             .folder_path = config.snapshot.folder,
             .cluster = config.cluster,
         },
 
-        .gossip_to_snapshot = {},
+        .snapshot_to_accounts_db = {},
+        .accounts_db_config = .{
+            .file_path = config.accounts_db.file,
+            .memory = config.accounts_db.memory.asBytes(),
+        },
     });
 
     switch (config.sandboxing_mode) {

@@ -52,7 +52,14 @@ pub fn build(b: *Build) !void {
         .tracy_callstack = 6,
     }).module("tracy");
     const binkode_mod = b.dependency("binkode", .{}).module("binkode");
-    const base58_mod = b.dependency("base58", .{}).module("base58");
+    const base58_mod = b.dependency("base58", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("base58");
+    const zstd_mod = b.dependency("zstd", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+    }).module("zstd");
 
     const fmt_check_step = b.addFmt(.{
         .check = true,
@@ -133,6 +140,7 @@ pub fn build(b: *Build) !void {
                 .{ .name = "lib", .module = lib_mod },
                 .{ .name = "start", .module = start_service_mod },
                 .{ .name = "tracy", .module = tracy_mod },
+                .{ .name = "zstd", .module = zstd_mod },
             },
         });
 

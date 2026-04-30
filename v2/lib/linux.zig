@@ -195,18 +195,24 @@ pub const memfd = struct {
         pub const mmap = mmapInner;
     };
 
-    fn mmapInner(self: anytype, ptr: ?[*]align(page_size_min) u8) ![]align(page_size_min) u8 {
+    pub const MapArgs = struct {
+        at_ptr: ?[*]align(page_size_min) u8 = null,
+        populate: bool = false,
+    };
+
+    fn mmapInner(self: anytype, args: MapArgs) ![]align(page_size_min) u8 {
         const access = switch (@TypeOf(self)) {
             *const RW, *RW, RW => linux.PROT.READ | linux.PROT.WRITE,
             *const RO, *RO, RO => linux.PROT.READ,
             else => @compileError("unsupported type"),
         };
 
+        // TODO: HUGEPAGE support
         return try std.posix.mmap(
-            ptr,
+            args.at_ptr,
             self.size,
             access,
-            .{ .TYPE = .SHARED },
+            .{ .TYPE = .SHARED, .POPULATE = args.populate },
             self.fd,
             0,
         );
@@ -257,7 +263,7 @@ pub const bpf = struct {
     }
 
     /// Only allows writing to stderr, sleeping, and exiting.
-    pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [62]sock_filter {
+    pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [66]sock_filter {
         // load syscall number
         const preamble = .{stmt(LD + W + ABS, @offsetOf(SECCOMP.data, "nr"))};
 
@@ -295,13 +301,16 @@ pub const bpf = struct {
             allowSyscall(@intFromEnum(syscalls.io_uring_setup)) ++
             allowSyscall(@intFromEnum(syscalls.io_uring_enter)) ++
             allowSyscall(@intFromEnum(syscalls.io_uring_register)) ++
-            allowSyscall(@intFromEnum(syscalls.mmap)) ++
-            allowSyscall(@intFromEnum(syscalls.munmap)) ++
+            allowSyscall(@intFromEnum(syscalls.mmap)) ++ // io_uring
+            allowSyscall(@intFromEnum(syscalls.munmap)) ++ // io_uring
             allowSyscall(@intFromEnum(syscalls.openat)) ++
             allowSyscall(@intFromEnum(syscalls.pipe2)) ++
             allowSyscall(@intFromEnum(syscalls.rename)) ++
             allowSyscall(@intFromEnum(syscalls.unlinkat)) ++
             allowSyscall(@intFromEnum(syscalls.unlink)) ++
+            allowSyscall(@intFromEnum(syscalls.fsync)) ++
+            // accounts_db
+            allowSyscall(@intFromEnum(syscalls.statx)) ++
             //
             syscall_fd_filters ++
             fall_through;

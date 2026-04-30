@@ -1816,8 +1816,9 @@ pub const ReadOnly = struct {
 };
 
 pub const ReadWrite = struct {
-    tel: *tel.Region,
     gossip_to_snapshot: *SnapshotSourceRing,
+    snapshot_to_accounts_db: *lib.snapshot.SnapshotDecodeRing,
+    tel: *tel.Region,
 };
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
@@ -1828,27 +1829,82 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     const folder_path = ro.config.folder_buffer[0..ro.config.folder_len];
     logger.info().logf("snapshot path {s}", .{folder_path});
 
-    // Create a map for deduping candidate node addresses streaming in from gossip service.
-    var dedupe_fba = std.heap.FixedBufferAllocator.init(&dedupe_map_buf);
-    var dedupe_map = DedupeMap{};
-    var gossip_iter = rw.gossip_to_snapshot.get(.reader);
+    var snapshot_dir = try std.fs.cwd().openDir(folder_path, .{ .iterate = true });
+    defer snapshot_dir.close();
 
-    var service = SnapshotService{
-        .ring = try IoUring.init(256, 0),
-        .gossip_iter = &gossip_iter,
-        .dedupe_map = &dedupe_map,
-        .dedupe_alloc = dedupe_fba.allocator(),
-        .probe_conns = .{ProbeConn.empty()} ** MAX_CONCURRENT_PROBES,
-        .active_probes = 0,
-        .timeout_pending = false,
-        .download_conns = .{DownloadConn.empty()} ** MAX_DOWNLOAD_RACERS,
-        .active_downloads = 0,
-        .download_race = DownloadRace.empty(),
-        .snapshot_dir = folder_path,
-        .metrics = metrics,
-        .logger = logger,
-    };
-    defer service.ring.deinit();
+    // TODO: iterate validator dir. If existing snapshot, starting loading. If not, download one.
 
-    try service.run();
+    if (false) {
+        // Create a map for deduping candidate node addresses streaming in from gossip service.
+        var dedupe_fba = std.heap.FixedBufferAllocator.init(&dedupe_map_buf);
+        var dedupe_map = DedupeMap{};
+        var gossip_iter = rw.gossip_to_snapshot.get(.reader);
+
+        var service = SnapshotService{
+            .ring = try IoUring.init(256, 0),
+            .gossip_iter = &gossip_iter,
+            .dedupe_map = &dedupe_map,
+            .dedupe_alloc = dedupe_fba.allocator(),
+            .probe_conns = .{ProbeConn.empty()} ** MAX_CONCURRENT_PROBES,
+            .active_probes = 0,
+            .timeout_pending = false,
+            .download_conns = .{DownloadConn.empty()} ** MAX_DOWNLOAD_RACERS,
+            .active_downloads = 0,
+            .download_race = DownloadRace.empty(),
+            .snapshot_dir = folder_path,
+            .metrics = metrics,
+            .logger = logger,
+        };
+        defer service.ring.deinit();
+
+        try service.run();
+    }
+
+    {
+        // TODO: remove
+        // const snapshot_path = "snapshot-402515577-5SPkvcsowihaSsfHvxVKK1N9USmkXGTczC8fnbA9hERf.tar.zst"; // testnet
+        const snapshot_path = "snapshot-415105595-799NqpWUQ5bux9BQZsM7eXYxz9XnTXqgyDZjb8MJyirK.tar.zst"; // mainnet
+
+        const Global = struct {
+            var file_reader: lib.accounts_db.io.FileReader(1 * 1024 * 1024) = undefined;
+        };
+        const file_reader = &Global.file_reader;
+        try file_reader.init(snapshot_dir, snapshot_path);
+        defer file_reader.deinit();
+
+        // InBuffer & OutBuffer aren't public, so quick hack to get them
+        const Decompressor = @FieldType(@import("zstd").Reader, "decompressor");
+        const decomp_params = @typeInfo(@TypeOf(Decompressor.decompressStream)).@"fn".params;
+        const InBuffer = @typeInfo(decomp_params[1].type.?).pointer.child;
+        const OutBuffer = @typeInfo(decomp_params[2].type.?).pointer.child;
+
+        var decompressor = try Decompressor.init(.{});
+        defer decompressor.deinit();
+
+        // Pipe data from file_reader to SnapshotDecodeRing
+        defer rw.snapshot_to_accounts_db.close(.writer);
+        loop: while (true) {
+            // Read compressed bytes from the file.
+            const compressed = try file_reader.getSlice(.from(logger)); // blocks until available
+            if (compressed.len == 0) break; // EOF
+
+            // Get buffer to write decompressed bytes into.
+            // Bound to reasonable size so SnapshotDecodeRing.reader isnt too stalled by us.
+            const decompressed = while (true) : (std.atomic.spinLoopHint()) {
+                const buf = rw.snapshot_to_accounts_db.getSlice(.writer) catch break :loop;
+                if (buf.len == 0) continue;
+                break buf[0..@min(128 * 1024, buf.len)];
+            };
+
+            var in = InBuffer{ .src = compressed.ptr, .size = compressed.len, .pos = 0 };
+            var out = OutBuffer{ .dst = decompressed.ptr, .size = decompressed.len, .pos = 0 };
+            _ = try decompressor.decompressStream(&in, &out);
+
+            try file_reader.advance(in.pos);
+            rw.snapshot_to_accounts_db.advance(.writer, out.pos);
+        }
+    }
+
+    logger.info().logf("snapshot service finished", .{});
+    while (true) std.atomic.spinLoopHint();
 }

@@ -172,6 +172,8 @@ pub const SharedRegion = struct {
 };
 
 pub const Region = union(enum) {
+    telemetry: tel.Region.Info,
+
     net_pair: struct { port: u16 },
     gossip_config: struct {
         cluster_info: lib.gossip.ClusterInfo,
@@ -185,23 +187,28 @@ pub const Region = union(enum) {
         shred_version: u16,
     },
 
-    telemetry: tel.Region.Info,
-
     snapshot_config: struct {
         folder_path: []const u8,
         cluster: lib.solana.Cluster,
     },
-
     snapshot_source_ring: void,
+    snapshot_decode_ring: void,
+
+    accounts_db_config: struct {
+        file_path: []const u8,
+        memory: usize,
+    },
 
     pub fn size(self: Region) usize {
         return switch (self) {
+            .telemetry => |cfg| cfg.regionSize(),
             .net_pair => @sizeOf(lib.net.Pair),
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
-            .telemetry => |cfg| cfg.regionSize(),
             .snapshot_config => @sizeOf(lib.snapshot.SnapshotConfig),
             .snapshot_source_ring => @sizeOf(lib.snapshot.SnapshotSourceRing),
+            .snapshot_decode_ring => @sizeOf(lib.snapshot.SnapshotDecodeRing),
+            .accounts_db_config => |cfg| @sizeOf(lib.accounts_db.DbConfig) + cfg.memory,
         };
     }
 
@@ -253,7 +260,23 @@ pub const Region = union(enum) {
             .snapshot_source_ring => {
                 std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotSourceRing));
                 const data: *lib.snapshot.SnapshotSourceRing = @ptrCast(buf);
+
                 data.init();
+            },
+            .snapshot_decode_ring => {
+                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotDecodeRing));
+                const data: *lib.snapshot.SnapshotDecodeRing = @ptrCast(buf);
+
+                data.init();
+            },
+            .accounts_db_config => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.DbConfig) + cfg.memory);
+                const data: *lib.accounts_db.DbConfig = @ptrCast(buf);
+
+                @memcpy(data.file_path[0..cfg.file_path.len], cfg.file_path);
+                data.file_path_len = @intCast(cfg.file_path.len);
+                data.memory_len = @intCast(cfg.memory);
+                // assume remaining memory is zero-faulted
             },
         };
     }
@@ -407,7 +430,7 @@ pub fn spawnAndWait(
     // Creates a mapping for each memfd region, initialising them, and unmapping them. We must unmap
     // to avoid sharing regions with services that don't need them.
     for (regions, region_memfds) |shared_region, region_memfd| {
-        const buf = try region_memfd.mmap(shared_region.requested_location);
+        const buf = try region_memfd.mmap(.{ .at_ptr = shared_region.requested_location });
         defer std.posix.munmap(buf);
         try shared_region.region.init(buf);
 
@@ -444,7 +467,7 @@ pub fn spawnAndWait(
     // We only mmap the exit regions after spawning the child processes, as we don't want them
     // mapped in children
     for (exit_meta.items(.exit), exit_memfds) |*exit, exit_fd| {
-        exit.* = @ptrCast(try exit_fd.mmap(null));
+        exit.* = @ptrCast(try exit_fd.mmap(.{}));
     }
 
     // Wait for the first child to exit
@@ -574,7 +597,7 @@ fn resolveArgs(
 ) !lib.ipc.ResolvedArgs {
     var args: lib.ipc.ResolvedArgs = .{
         .stderr = stderr.handle,
-        .exit = (try exit.mmap(null)).ptr,
+        .exit = (try exit.mmap(.{})).ptr,
 
         .rw = @splat(null),
         .rw_len = @splat(0),
@@ -589,12 +612,18 @@ fn resolveArgs(
         std.debug.assert(region.shared.region.size() == region.memfd.size);
 
         if (region.rw) {
-            args.rw[i_rw] = (try region.memfd.mmap(region.shared.requested_location)).ptr;
+            args.rw[i_rw] = (try region.memfd.mmap(.{
+                .at_ptr = region.shared.requested_location,
+                .populate = true,
+            })).ptr;
             args.rw_len[i_rw] = region.shared.region.size();
             i_rw += 1;
         } else {
             const ro_memfd = try memfd.RO.fromRW(region.memfd);
-            args.ro[i_ro] = (try ro_memfd.mmap(region.shared.requested_location)).ptr;
+            args.ro[i_ro] = (try ro_memfd.mmap(.{
+                .at_ptr = region.shared.requested_location,
+                .populate = true,
+            })).ptr;
             args.ro_len[i_ro] = region.shared.region.size();
             i_ro += 1;
         }
@@ -722,7 +751,7 @@ pub fn spawnAndWaitNoSandbox(
 
     // Creates a mapping for each memfd region, initialising them, and unmapping them.
     for (regions, region_memfds) |shared_region, region_memfd| {
-        const buf = try region_memfd.mmap(shared_region.requested_location);
+        const buf = try region_memfd.mmap(.{ .at_ptr = shared_region.requested_location });
         defer std.posix.munmap(buf);
         try shared_region.region.init(buf);
 
@@ -757,7 +786,7 @@ pub fn spawnAndWaitNoSandbox(
     const exited_idx = finished_service_idx.load(.seq_cst);
     std.debug.assert(exited_idx != std.math.maxInt(u16));
 
-    dumpOnExit(@ptrCast(try exit_memfds[exited_idx].mmap(null)), services[exited_idx], 0, 0);
+    dumpOnExit(@ptrCast(try exit_memfds[exited_idx].mmap(.{})), services[exited_idx], 0, 0);
 }
 
 fn threadEntry(

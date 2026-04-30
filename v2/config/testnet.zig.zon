@@ -15,4 +15,8 @@
     .snapshot = .{
         .folder = "./validator",
     },
+    .accounts_db = .{
+        .file = "./validator/accounts.db",
+        .memory = .{ .gb = 8 }, // mainnet needs 64, testnet only 8 or so
+    },
 }

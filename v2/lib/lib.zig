@@ -10,6 +10,7 @@ pub const linux = @import("linux.zig");
 pub const util = @import("util.zig");
 pub const telemetry = @import("telemetry.zig");
 pub const snapshot = @import("snapshot.zig");
+pub const accounts_db = @import("accounts_db.zig");
 
 comptime {
     _ = net;
@@ -21,6 +22,7 @@ comptime {
     _ = linux;
     _ = telemetry;
     _ = snapshot;
+    _ = accounts_db;
 }
 
 pub const test_data_dir = "../data/test-data/";
