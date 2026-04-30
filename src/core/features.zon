@@ -1637,11 +1637,8 @@
     .{
         .name = "delay_commission_updates",
         .pubkey = "76dHtohc2s5dR3ahJyBxs7eJJVipFkaPdih9CLgTTb4B",
-        .description = "",
-        // Currently implemented in both agave and firedancer.
-        // TODO: Check Implementation. Only branchees in vote program execute
-        // are implemented, while agave and firedancer branch in multiple other
-        // locations as well.
+        .description = "SIMD-0249: Delay commission updates by at least one full epoch",
+        // Implemented in vote program (UpdateCommission) and epoch rewards calculation.
         .status = .{ .inactive = .implemented },
     },
     .{
