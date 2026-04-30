@@ -1,14 +1,16 @@
+const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
 const std = @import("std");
 const sig = @import("sig");
-const types = @import("elf_types.zig");
 
-const ELFLoaderCtx = types.ELFLoaderCtx;
-const ElfLoaderEffects = types.ELFLoaderEffects;
+const ELFLoaderCtx = pb.ELFLoaderCtx;
+const ElfLoaderEffects = pb.ELFLoaderEffects;
 
 const svm = sig.vm;
 const elf = svm.elf;
 
-export fn sol_compat_elf_loader_v2(
+const xxhash = std.hash.XxHash64.hash;
+
+pub export fn sol_compat_elf_loader_v1(
     out_ptr: [*]u8,
     out_size: *u64,
     in_ptr: [*]const u8,
@@ -16,9 +18,9 @@ export fn sol_compat_elf_loader_v2(
 ) i32 {
     testAndHandleIO(out_ptr, out_size, in_ptr, in_size) catch |e| {
         std.debug.print("error: {s}\n", .{@errorName(e)});
-        return -1;
+        return 0;
     };
-    return 0;
+    return 1;
 }
 
 fn testAndHandleIO(
@@ -33,20 +35,34 @@ fn testAndHandleIO(
     var decode_arena = std.heap.ArenaAllocator.init(allocator);
     defer decode_arena.deinit();
 
-    var ctx = try ELFLoaderCtx.decode(decode_arena.allocator(), in_ptr[0..in_size]);
+    const in_slice = in_ptr[0..in_size];
+    var in_reader: std.Io.Reader = .fixed(in_slice);
+
+    var ctx = try ELFLoaderCtx.decode(&in_reader, decode_arena.allocator());
     defer ctx.deinit(decode_arena.allocator());
 
-    var elf_effects = try executeElfTest(ctx, allocator);
-    defer elf_effects.deinit(allocator);
+    var effects = try executeElfTest(ctx, allocator);
+    defer effects.deinit(allocator);
 
-    const effect_bytes = elf_effects.encode();
-    if (out_size.* < effect_bytes.len) return error.OutputTooSmall;
-    @memcpy(out_ptr[0..effect_bytes.len], &effect_bytes);
-    out_size.* = effect_bytes.len;
+    var writer: std.Io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+    try effects.encode(&writer.writer, allocator);
+    const effects_bytes = writer.written();
+
+    const out_slice = out_ptr[0..out_size.*];
+    if (effects_bytes.len > out_slice.len) {
+        std.debug.print("out_slice.len: {d} < effects_bytes.len: {d}\n", .{
+            out_slice.len,
+            effects_bytes.len,
+        });
+        return error.OutputTooSmall;
+    }
+    @memcpy(out_slice[0..effects_bytes.len], effects_bytes);
+    out_size.* = effects_bytes.len;
 }
 
 fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEffects {
-    const elf_bytes = ctx.elf orelse return error.Unknown;
+    const elf_bytes = ctx.elf_data;
 
     var feature_set: sig.core.FeatureSet = .ALL_DISABLED;
     if (ctx.features) |features| for (features.features.items) |id| {
@@ -70,8 +86,8 @@ fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEff
         env.config,
     ) catch |err| {
         return .{
-            .@"error" = ebpfErrToCode(err),
-            .calldests = .{},
+            .err_code = ebpfErrToCode(err),
+            .calldests_hash = 0,
         };
     };
     defer executable.deinit(allocator);
@@ -81,33 +97,35 @@ fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEff
         .borrowed => |a| executable.bytes[a.start..a.end],
     };
 
-    var elf_effects: ElfLoaderEffects = .{
-        .@"error" = 0,
-        .rodata = try allocator.dupe(u8, ro_data),
-        .rodata_sz = ro_data.len,
-        .entry_pc = executable.entry_pc,
-        .text_off = executable.text_vaddr -| svm.memory.RODATA_START,
-        .text_cnt = executable.instructions.len,
-        .calldests = .{},
+    const calldests_hash: u64 = blk: {
+        var calldests_map = std.AutoHashMapUnmanaged(u64, void).empty;
+        defer calldests_map.deinit(allocator);
+        var map_iter = executable.function_registry.map.iterator();
+        while (map_iter.next()) |entry| {
+            const fn_addr = entry.value_ptr.value;
+            try calldests_map.put(allocator, fn_addr, {});
+        }
+        var calldests = std.ArrayList(u64).empty;
+        defer calldests.deinit(allocator);
+        var iter = calldests_map.keyIterator();
+        while (iter.next()) |key| {
+            try calldests.append(allocator, key.*);
+        }
+        std.sort.heap(u64, calldests.items, {}, std.sort.asc(u64));
+        break :blk xxhash(0, std.mem.sliceAsBytes(calldests.items));
     };
 
-    var calldests: std.AutoHashMapUnmanaged(u64, void) = .{};
-    defer calldests.deinit(allocator);
-    var map_iter = executable.function_registry.map.iterator();
-    while (map_iter.next()) |entry| {
-        const fn_addr = entry.value_ptr.value;
-        try calldests.put(allocator, fn_addr, {});
-    }
-    var iter = calldests.keyIterator();
-    while (iter.next()) |key| {
-        try elf_effects.calldests.append(allocator, key.*);
-    }
-    std.sort.heap(u64, elf_effects.calldests.items, {}, std.sort.asc(u64));
-
-    return elf_effects;
+    return .{
+        .err_code = 0,
+        .rodata_hash = xxhash(0, ro_data),
+        .text_cnt = executable.instructions.len,
+        .text_off = executable.text_vaddr -| svm.memory.RODATA_START,
+        .entry_pc = executable.entry_pc,
+        .calldests_hash = calldests_hash,
+    };
 }
 
-fn ebpfErrToCode(err: elf.LoadError) i32 {
+fn ebpfErrToCode(err: elf.LoadError) u32 {
     return switch (err) {
         error.InvalidSectionHeader,
         error.Overlap,

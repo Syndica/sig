@@ -240,7 +240,7 @@ jobs:
           name: Run Ledger Fuzzer
           command: workspace/zig-out-release/bin/fuzz --seed 19 ledger 10000
 
-  build_conformance:
+  solana_conformance:
     executor: linux-executor
     steps:
       - checkout
@@ -252,55 +252,25 @@ jobs:
           name: Build Conformance
           command: |
             cd conformance
-            ../workspace/zig/zig build -p ../workspace/conformance-release --summary all
+            ../workspace/zig/zig build --summary all
       - save_cache:
           key: build_conformance-v1-{{ checksum "build.zig" }}-{{ checksum "build.zig.zon" }}-{{ checksum "conformance/build.zig" }}-{{ checksum "conformance/build.zig.zon" }}
           paths:
             - .zig-cache
             - ~/.cache/zig
-      - persist_to_workspace:
-          root: workspace
-          paths:
-            - "conformance-release/lib/libsolfuzz_sig.so"
-
-  solana_conformance:
-    executor: linux-executor
-    # We need a pretty high parallelism since the vm_interp harness has a *lot* of fixtures. Perhaps
-    # we can raise it even higher if the transaction harness takes too long?
-    parallelism: 6
-    steps:
-      - checkout
-      - attach_workspace:
-          at: workspace
       - run:
-          name: Prepare /nix permissions so cache restore works
-          command: |
-            sudo mkdir -p /nix
-            sudo chown "$USER" /nix
-      - restore_cache:
-          key: nix-v1-{{ checksum "conformance/flake.nix" }}-{{ checksum "conformance/flake.lock" }}-{{ checksum "conformance/commits.env" }}
-      - run:
-          name: Install nix
-          command: |
-            sh <(curl --proto '=https' --tlsv1.2 -L https://nixos.org/nix/install) --no-daemon
-            mkdir -p ~/.config/nix
-            echo 'experimental-features = nix-command flakes' > ~/.config/nix/nix.conf
-            echo '. /home/circleci/.nix-profile/etc/profile.d/nix.sh' >> "$BASH_ENV"
-      - run:
-          name: Run Fixtures
+          name: Clone Fixtures
           command: |
             cd conformance
-            nix develop \
-              -s SPLIT_TESTS true \
-              -s PREBUILT_LIB_DIR ../workspace/conformance-release/lib \
-              -c ./scripts/ci-run.sh
-      - save_cache:
-          key: nix-v1-{{ checksum "conformance/flake.nix" }}-{{ checksum "conformance/flake.lock" }}-{{ checksum "conformance/commits.env" }}
-          paths:
-            - /nix/store
-            - /nix/var/nix/db
-            - /nix/var/nix/profiles
-            - ~/.cache/nix
+            . commits.env
+            mkdir env
+            cd env
+            git clone https://github.com/firedancer-io/test-vectors.git
+            cd test-vectors
+            git checkout $TEST_VECTORS_COMMIT
+      - run:
+          name: Run Fixtures
+          command: conformance/scripts/ci-run.sh
 
   linux_misc_checks:
     executor: linux-executor
@@ -370,12 +340,9 @@ workflows:
       - linux_misc_checks:
           requires:
             - setup_zig_linux
-      - build_conformance:
-          requires:
-            - setup_zig_linux
       - solana_conformance:
           requires:
-            - build_conformance
+            - setup_zig_linux
 
   check_macos:
     jobs:
