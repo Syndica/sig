@@ -41,7 +41,7 @@ pub fn applyFeatureActivations(
 
     var iterator = new_feature_activations.iterator(slot, .active);
     while (iterator.next()) |feature| {
-        const feature_id: Pubkey = features.map.get(feature).key;
+        const feature_id: Pubkey = features.pubkey_map.get(feature);
         const db_account =
             try tryGetAccount(allocator, account_store.reader(), feature_id) orelse continue;
         defer db_account.deinit(allocator);
@@ -76,41 +76,6 @@ pub fn applyFeatureActivations(
         &new_feature_activations,
         allow_new_activations,
     );
-
-    if (new_feature_activations.active(.update_hashes_per_tick, slot))
-        return error.UpdateHashesPerTickActivationNotImplemented;
-
-    if (new_feature_activations.active(.update_hashes_per_tick2, slot))
-        return error.UpdateHashesPerTick2ActivationNotImplemented;
-
-    if (new_feature_activations.active(.update_hashes_per_tick3, slot))
-        return error.UpdateHashesPerTick3ActivationNotImplemented;
-
-    if (new_feature_activations.active(.update_hashes_per_tick4, slot))
-        return error.UpdateHashesPerTick4ActivationNotImplemented;
-
-    if (new_feature_activations.active(.update_hashes_per_tick5, slot))
-        return error.UpdateHashesPerTick5ActivationNotImplemented;
-
-    if (new_feature_activations.active(.update_hashes_per_tick6, slot))
-        return error.UpdateHashesPerTick6ActivationNotImplemented;
-
-    if (new_feature_activations.active(.accounts_lt_hash, slot))
-        return error.AccountsLtHashActivationNotImplemented;
-
-    if (new_feature_activations.active(.raise_block_limits_to_50m, slot) and
-        !feature_set.active(.raise_block_limits_to_60m, slot))
-        return error.RaiseBlockLimitsTo50MActivationNotImplemented;
-
-    if (new_feature_activations.active(.raise_block_limits_to_60m, slot) and
-        !feature_set.active(.raise_block_limits_to_100m, slot))
-        return error.RaiseBlockLimitsTo60MActivationNotImplemented;
-
-    if (new_feature_activations.active(.raise_block_limits_to_100m, slot))
-        return error.RaiseBlockLimitsTo100MActivationNotImplemented;
-
-    if (new_feature_activations.active(.remove_accounts_delta_hash, slot))
-        return error.RemoveAccountsDeltaHashActivationNotImplemented;
 }
 
 fn applyBuiltinProgramFeatureTransitions(
@@ -220,7 +185,7 @@ fn computeActiveFeatureSet(
 
     var iterator = feature_set.iterator(slot, .inactive);
     while (iterator.next()) |feature| {
-        const feature_id: Pubkey = features.map.get(feature).key;
+        const feature_id: Pubkey = features.pubkey_map.get(feature);
         var maybe_activation_slot: ?u64 = null;
 
         if (try tryGetAccount(allocator, account_reader, feature_id)) |account| {

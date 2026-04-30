@@ -176,13 +176,16 @@ pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
     const pb_features = switch (@TypeOf(ctx)) {
         *pb.TxnContext, *const pb.TxnContext => (ctx.bank orelse return .ALL_DISABLED).features,
         pb.InstrContext => ctx.features,
+        pb.ELFLoaderCtx => ctx.features,
         else => comptime unreachable,
     } orelse return .ALL_DISABLED;
 
     var feature_set: FeatureSet = .ALL_DISABLED;
     for (pb_features.features.items) |id| {
-        // only way for `setSlotId` to fail is if the `id` doesn't exist.
-        feature_set.setSlotId(id, 0) catch std.debug.print("unknown feature id: 0x{x}\n", .{id});
+        // only way for `setSlotId` to fail is if the `id` doesn't exist in runtime features.
+        feature_set.setSlotId(id, 0) catch if (!sig.core.features.isKnownFeatureId(id)) {
+            std.debug.print("unknown feature id: 0x{x}\n", .{id});
+        };
     }
     return feature_set;
 }
