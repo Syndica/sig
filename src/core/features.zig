@@ -7,7 +7,7 @@ const EpochSchedule = sig.core.EpochSchedule;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
-/// The feature set identifier - first 4 bytes of SHA256 hash of all known feature pubkeys (sorted).
+/// The feature set identifier - first 4 bytes of SHA256 hash of all known (non-reverted) feature pubkeys (sorted).
 /// This is used for client compatibility checks.
 ///
 /// Generated at build time by `scripts/gen_feature_set_id.zig` to avoid comptime compiler issues.
@@ -15,7 +15,8 @@ const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 /// [agave] https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/feature-set/src/lib.rs#L2318
 pub const FEATURE_SET_ID: u32 = @import("feature-set-id").FEATURE_SET_ID;
 
-/// Information about a feature, including its name, pubkey, description, and status.
+/// ZonInfo represents the metadata for a feature, including its name, pubkey, description, status, and an optional note.
+/// It is used to record the history and current state of all features, including those that have been reverted or staged for future activation.
 const ZonInfo = struct {
     name: [:0]const u8,
     pubkey: [:0]const u8,
@@ -37,9 +38,8 @@ const ZonInfo = struct {
         /// Fuzzing: advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
         persisted,
     },
-    /// Optional note about the feature status. Required for all non-supported features,
-    /// and may be provided for supported features to clarify their status or provide
-    /// additional context.
+    /// Optional note about the feature status.
+    /// Required for all staged features.
     note: ?[:0]const u8 = null,
 
     pub fn id(self: ZonInfo) u64 {
@@ -49,11 +49,12 @@ const ZonInfo = struct {
     }
 };
 
-/// All known features, including those that are inactive or reverted.
+/// All known features past and present.
+/// Includes features which previously existed in agave but have since been removed.
 pub const all_features: []const ZonInfo = @import("features.zon");
 
-/// Available features, those which contribute to the 'FEATURE_SET_ID' and are
-/// availble for 'activation' within the runtime. This excludes 'reverted' features.
+/// All known features which are active, or pending activation (sometimes for a very long time...).
+/// These features form the basis for the `Feature` enum and the `FEATURE_SET_ID` computation.
 pub const features: []const ZonInfo = blk: {
     var filtered: []const ZonInfo = &.{};
     for (all_features) |feature| {
@@ -66,10 +67,9 @@ pub const features: []const ZonInfo = blk: {
     break :blk filtered;
 };
 
-/// The `Feature` enum represents all available features that can be activated in the runtime. Each
-/// variant corresponds to a feature and is assigned a unique integer value based on its position in
-/// the `features` array. The enum is generated at compile time using the `features` array, ensuring
-/// that only active and inactive features are included, while reverted features are excluded.
+/// The `Feature` enum represents all available features that could be activated.
+/// - `staged` features are included to allow deliberate failure if encountered, but are not advertised for fuzzing.
+/// - `persisted` features have a suffix '_persisted' to provide comptime hint to ensure they are no longer referenced in source.
 pub const Feature = @Type(.{
     .@"enum" = .{
         .tag_type = u64,
@@ -92,9 +92,7 @@ pub const Feature = @Type(.{
     },
 });
 
-/// Maps each `Feature` to its corresponding `Pubkey`. This is generated at compile time from the `features`
-/// array, ensuring that the mapping is consistent with the `Feature` enum and only includes active and
-/// inactive features, while reverted features are excluded.
+/// Maps each `Feature` to its corresponding `Pubkey`.
 pub const pubkey_map: std.EnumArray(Feature, Pubkey) = blk: {
     @setEvalBranchQuota(features.len * 1000);
     var s: std.enums.EnumFieldStruct(Feature, Pubkey, null) = undefined;
@@ -104,7 +102,7 @@ pub const pubkey_map: std.EnumArray(Feature, Pubkey) = blk: {
     break :blk .init(s);
 };
 
-/// Checks if the provided `id` corresponds to a known feature by comparing it against the IDs of all known features.
+/// Checks if the provided `id` corresponds to a known feature by comparing it against the `id`s of all known features.
 pub fn isKnownFeatureId(id: u64) bool {
     for (all_features) |feature| {
         if (feature.id() == id) return true;
