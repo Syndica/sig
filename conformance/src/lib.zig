@@ -28,15 +28,14 @@ const SolCompatFeatures = extern struct {
 
 const FEATURES: SolCompatFeatures = f: {
     @setEvalBranchQuota(sig.core.features.all_features.len * 1_000);
-
     var hardcoded_features: []const u64 = &.{};
     var supported_features: []const u64 = &.{};
 
     for (sig.core.features.features) |feature| {
         const hardcoded_for_fuzzing = switch (feature.status) {
-            .active => |active| active.hardcoded_for_fuzzing,
-            .inactive => false,
-            .reverted => unreachable,
+            .reverted, .staged => continue,
+            .supported => false,
+            .hardcoded, .persisted => true,
         };
         if (hardcoded_for_fuzzing)
             hardcoded_features = hardcoded_features ++ .{feature.id()}

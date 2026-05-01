@@ -21,21 +21,26 @@ const ZonInfo = struct {
     pubkey: [:0]const u8,
     description: [:0]const u8,
     status: union(enum) {
-        /// Feature is active on mainnet and supported by this client.
-        active: struct {
-            /// Only activated path remains.
-            cleaned_up: bool = false,
-            /// Always activated for fuzzing.
-            hardcoded_for_fuzzing: bool = false,
-        },
-        /// Feature is inactive on mainnet and may or may not be supported by this client.
-        inactive: union(enum) {
-            implemented,
-            not_implemented,
-        },
-        /// Feature was proposed but then reverted, and will not be activated.
+        /// The feature has been removed from the feature set and its implementation has been removed from source.
+        /// Fuzzing: reverted features may appear in historical regression fixtures.
         reverted,
+        /// This feature is contained in the feature set and its implementation is not complete.
+        /// Fuzzing: not advertised as a supported feature for fuzzing (i.e. it will not be toggled on).
+        staged,
+        /// This feature is contained in the feature set and its implementation is complete.
+        /// Fuzzing: advertised as a supported feature for fuzzing (i.e. it may be toggled on and off).
+        supported,
+        /// This feature has been implemented and is included in the feature set.
+        /// Fuzzing: advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
+        hardcoded,
+        /// This feature has been implemented and is included in the feature set.
+        /// Fuzzing: advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
+        persisted,
     },
+    /// Optional note about the feature status. Required for all non-supported features,
+    /// and may be provided for supported features to clarify their status or provide
+    /// additional context.
+    note: ?[:0]const u8 = null,
 
     pub fn id(self: ZonInfo) u64 {
         const key = Pubkey.parseRuntime(std.mem.sliceTo(self.pubkey, 0)) catch
@@ -53,8 +58,8 @@ pub const features: []const ZonInfo = blk: {
     var filtered: []const ZonInfo = &.{};
     for (all_features) |feature| {
         switch (feature.status) {
-            .active, .inactive => {},
             .reverted => continue,
+            else => {},
         }
         filtered = filtered ++ .{feature};
     }
@@ -71,13 +76,12 @@ pub const Feature = @Type(.{
         .fields = f: {
             var fields: []const std.builtin.Type.EnumField = &.{};
             for (features, 0..) |feature, i| {
-                const cleaned_up = switch (feature.status) {
-                    .active => |active| active.cleaned_up,
-                    .inactive => false,
-                    .reverted => unreachable,
+                const suffix = switch (feature.status) {
+                    .persisted => "_persisted",
+                    else => "",
                 };
                 fields = fields ++ .{std.builtin.Type.EnumField{
-                    .name = feature.name ++ if (cleaned_up) "_cleaned_up" else "",
+                    .name = feature.name ++ suffix,
                     .value = i,
                 }};
             }

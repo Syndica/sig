@@ -3,26 +3,32 @@
 const std = @import("std");
 const base58 = @import("base58");
 
+/// Information about a feature, including its name, pubkey, description, and status.
 const ZonInfo = struct {
     name: [:0]const u8,
     pubkey: [:0]const u8,
     description: [:0]const u8,
     status: union(enum) {
-        // Feature is active on mainnet and supported by this client.
-        active: struct {
-            // Only activated path remains.
-            cleaned_up: bool = false,
-            // Always activated for fuzzing.
-            hardcoded_for_fuzzing: bool = false,
-        },
-        // Feature is inactive on mainnet and may or may not be supported by this client.
-        inactive: union(enum) {
-            implemented,
-            not_implemented,
-        },
-        // Feature was proposed but then reverted, and will not be activated.
+        /// The feature has been removed from the feature set and its implementation has been removed from source.
+        /// Fuzzing: reverted features may appear in historical regression fixtures.
         reverted,
+        /// This feature is contained in the feature set and its implementation is not complete.
+        /// Fuzzing: not advertised as a supported feature for fuzzing (i.e. it will not be toggled on).
+        staged,
+        /// This feature is contained in the feature set and its implementation is complete.
+        /// Fuzzing: advertised as a supported feature for fuzzing (i.e. it may be toggled on and off).
+        supported,
+        /// This feature has been implemented and is included in the feature set.
+        /// Fuzzing: advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
+        hardcoded,
+        /// This feature has been implemented and is included in the feature set.
+        /// Fuzzing: advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
+        persisted,
     },
+    /// Optional note about the feature status. Required for all non-supported features,
+    /// and may be provided for supported features to clarify their status or provide
+    /// additional context.
+    note: ?[:0]const u8 = null,
 };
 
 const PUBKEY_SIZE = 32;
@@ -47,8 +53,8 @@ pub fn main() !void {
     var pubkey_count: usize = 0;
     for (features) |feature| {
         switch (feature.status) {
-            .active, .inactive => {},
             .reverted => continue,
+            else => {},
         }
         const pubkey = &pubkeys[pubkey_count];
         var decoded_buf: [base58.decodedMaxSize(base58.encodedMaxSize(pubkey.len))]u8 = undefined;
