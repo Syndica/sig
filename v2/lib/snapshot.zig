@@ -1,6 +1,12 @@
 const std = @import("std");
 const lib = @import("lib.zig");
 
+pub const download = @import("snapshot/download.zig");
+
+comptime {
+    _ = download;
+}
+
 pub const SnapshotSourceRing = lib.ipc.Ring(256, SnapshotSource);
 
 pub const SnapshotSource = extern struct {
