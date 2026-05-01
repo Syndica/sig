@@ -25,6 +25,9 @@ const Rent = sig.runtime.sysvar.Rent;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/transaction-context/src/lib.rs#L17
+pub const MAX_ACCOUNTS_PER_INSTRUCTION = 255;
+
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/transaction-context/src/lib.rs#L41
 pub const MAX_INSTRUCTION_TRACE_LENGTH = 64;
 

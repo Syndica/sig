@@ -44,6 +44,7 @@ const MAX_BASE58_SIZE: usize = 1683;
 /// Analogous to [MAX_BASE64_SIZE](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4341)
 const MAX_BASE64_SIZE: usize = 1644;
 const MAX_INSTRUCTION_TRACE_LENGTH = sig.runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH;
+const MAX_ACCOUNTS_PER_INSTRUCTION = sig.runtime.transaction_context.MAX_ACCOUNTS_PER_INSTRUCTION;
 const PACKET_DATA_SIZE = sig.net.Packet.DATA_SIZE;
 
 const SendTransactionHookContext = @This();
@@ -374,6 +375,20 @@ fn sanitizeTransaction(
     );
     if (enable_static_ixn_limit and tx.msg.instructions.len > MAX_INSTRUCTION_TRACE_LENGTH) {
         return error.SanitizeFailure;
+    }
+
+    // SIMD-0406: Reject transactions with instructions that reference more than 255 accounts.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/rpc/src/rpc.rs#L3870
+    const enable_instruction_accounts_limit = preflight_slot_ref.constants().feature_set.active(
+        .limit_instruction_accounts,
+        preflight_slot,
+    );
+    if (enable_instruction_accounts_limit) {
+        for (tx.msg.instructions) |instr| {
+            if (instr.account_indexes.len > MAX_ACCOUNTS_PER_INSTRUCTION) {
+                return error.SanitizeFailure;
+            }
+        }
     }
 
     try tx.validate();
