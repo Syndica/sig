@@ -2,6 +2,7 @@ const std = @import("std");
 const lib = @import("lib.zig");
 
 pub const bincode = @import("snapshot/bincode.zig");
+pub const tar = @import("snapshot/tar.zig");
 
 pub const SnapshotSourceRing = lib.ipc.Ring(256, SnapshotSource);
 pub const SnapshotSource = extern struct {

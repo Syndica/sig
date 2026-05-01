@@ -4,8 +4,23 @@ const tracy = @import("tracy");
 
 const tel = lib.telemetry;
 
-const page_size = 64 * 1024;
+pub const page_size = 64 * 1024;
 const sector_align = 4 * 1024;
+
+pub fn openDirect(dir: std.fs.Dir, path: []const u8, mode: enum { rw, read_only }) !std.fs.File {
+    return .{ .handle = try std.posix.openat(
+        dir.fd,
+        path,
+        .{
+            .ACCMODE = if (mode == .rw) .RDWR else .RDONLY,
+            .CREAT = mode == .rw,
+            .NOATIME = true,
+            .CLOEXEC = true,
+            .DIRECT = true,
+        },
+        0o777,
+    ) };
+}
 
 pub fn FileWriter(buffer_size: comptime_int) type {
     const Page = u32;
@@ -31,18 +46,11 @@ pub fn FileWriter(buffer_size: comptime_int) type {
 
         const Self = @This();
 
-        pub fn init(self: *Self, dir: std.fs.Dir, path: []const u8) !void {
+        pub fn init(self: *Self, file: std.fs.File) !void {
             self.ring = try .init(num_pages, std.os.linux.IORING_SETUP_SQPOLL);
             errdefer self.ring.deinit();
 
-            self.file = .{ .handle = try std.posix.openat(
-                dir.fd,
-                path,
-                .{ .ACCMODE = .RDWR, .NOATIME = true, .CLOEXEC = true, .DIRECT = true },
-                0o777,
-            ) };
-            errdefer self.file.close();
-
+            self.file = file;
             self.tail = 0;
             self.inflight = 0;
             @memset(&self.writing, false);
@@ -50,7 +58,6 @@ pub fn FileWriter(buffer_size: comptime_int) type {
 
         pub fn deinit(self: *Self) void {
             self.ring.deinit();
-            self.file.close();
         }
 
         pub fn getSlice(self: *Self, logger: tel.Logger("FileWriter")) ![]u8 {
@@ -158,8 +165,18 @@ pub fn FileWriter(buffer_size: comptime_int) type {
 }
 
 pub fn FileReader(buffer_size: comptime_int) type {
+    const Page = u32;
+    const Read = std.math.IntFittingRange(0, page_size + 1);
+    const Index = std.meta.Int(.unsigned, 64 - 32 - @bitSizeOf(Read));
+
+    const UserData = packed struct(u64) {
+        disk_page: Page,
+        bytes_read: Read,
+        page_idx: Index,
+    };
+
     const num_pages = @divExact(buffer_size, page_size);
-    std.debug.assert(num_pages <= std.math.maxInt(u8));
+    std.debug.assert(num_pages <= std.math.maxInt(Index) + 1);
 
     return struct {
         ring: std.os.linux.IoUring,
@@ -170,30 +187,21 @@ pub fn FileReader(buffer_size: comptime_int) type {
         pages: [num_pages]extern struct { bytes: [page_size]u8 align(sector_align) },
 
         const Self = @This();
-        const UserData = packed struct(u64) { disk_page: u32, bytes_read: u24, page_idx: u8 };
 
-        pub fn init(self: *Self, dir: std.fs.Dir, path: []const u8) !void {
-            self.head = 0;
-            self.tail = 0;
-            @memset(&self.meta, .{ .ready = false, .len = 0 });
-
+        pub fn init(self: *Self, file: std.fs.File) !void {
             self.ring = try .init(num_pages, std.os.linux.IORING_SETUP_SQPOLL);
             errdefer self.ring.deinit();
 
-            self.file = .{ .handle = try std.posix.openat(
-                dir.fd,
-                path,
-                .{ .ACCMODE = .RDWR, .NOATIME = true, .CLOEXEC = true, .DIRECT = true },
-                0o777,
-            ) };
-            errdefer self.file.close();
+            self.file = file;
+            self.head = 0;
+            self.tail = 0;
+            @memset(&self.meta, .{ .ready = false, .len = 0 });
 
             for (0..num_pages) |_| try self.enqueue();
         }
 
         pub fn deinit(self: *Self) void {
             self.ring.deinit();
-            self.file.close();
         }
 
         pub fn enqueue(self: *Self) !void {

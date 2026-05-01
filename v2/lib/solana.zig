@@ -9,6 +9,7 @@ pub const Pubkey = @import("solana/pubkey.zig").Pubkey;
 pub const Signature = @import("solana/signature.zig").Signature;
 pub const Cluster = @import("solana/cluster.zig").Cluster;
 pub const LeaderSchedule = @import("solana/leader_schedule.zig").LeaderSchedule;
+pub const SnapshotReader = @import("solana/snapshot.zig").SnapshotReader;
 
 pub const Lamports = u64;
 pub const Nonce = u32;

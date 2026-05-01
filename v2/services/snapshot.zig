@@ -1862,8 +1862,12 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
     {
         // TODO: remove
-        // const snapshot_path = "snapshot-402515577-5SPkvcsowihaSsfHvxVKK1N9USmkXGTczC8fnbA9hERf.tar.zst"; // testnet
-        const snapshot_path = "snapshot-415105595-799NqpWUQ5bux9BQZsM7eXYxz9XnTXqgyDZjb8MJyirK.tar.zst"; // mainnet
+        const snapshot_path = "snapshot-402515577-5SPkvcsowihaSsfHvxVKK1N9USmkXGTczC8fnbA9hERf.tar.zst"; // testnet
+        // const snapshot_path = "snapshot-415105595-799NqpWUQ5bux9BQZsM7eXYxz9XnTXqgyDZjb8MJyirK.tar.zst"; // mainnet
+
+        const snapshot_file =
+            try lib.accounts_db.io.openDirect(snapshot_dir, snapshot_path, .read_only);
+        defer snapshot_file.close();
 
         const Global = struct {
             var file_reader: lib.accounts_db.io.FileReader(1 * 1024 * 1024) = undefined;
