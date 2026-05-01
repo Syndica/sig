@@ -1312,6 +1312,195 @@ test calculateStakeVoteRewards {
     }
 }
 
+test "calculateStakeVoteRewards with delay_commission_updates" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(42);
+    const random = prng.random();
+
+    var stake_delegations = FilteredStakesDelegations{};
+    defer stake_delegations.deinit(allocator);
+
+    // Distribution vote accounts with 50% commission (current).
+    var distribution_vote_accounts = VoteAccounts{};
+    defer distribution_vote_accounts.deinit(allocator);
+
+    // Snapshot vote accounts with 10% commission (delayed).
+    var snapshot_vote_accounts = VoteAccounts{};
+    defer snapshot_vote_accounts.deinit(allocator);
+
+    const vote_pubkey = Pubkey.initRandom(random);
+    const stake_activation_epoch: Epoch = 3;
+
+    // Distribution: 50% commission
+    const dist_vote_account = try newVoteAccountForTest(
+        allocator,
+        random,
+        50,
+        0,
+    );
+    try distribution_vote_accounts.vote_accounts.put(
+        allocator,
+        vote_pubkey,
+        .{ .stake = 1_000_000_000, .account = dist_vote_account },
+    );
+
+    // Snapshot: 10% commission
+    const snap_vote_account = try newVoteAccountForTest(
+        allocator,
+        random,
+        10,
+        0,
+    );
+    try snapshot_vote_accounts.vote_accounts.put(
+        allocator,
+        vote_pubkey,
+        .{ .stake = 1_000_000_000, .account = snap_vote_account },
+    );
+
+    const stake_pubkey = Pubkey.initRandom(random);
+    const stake = sig.replay.rewards.inflation_rewards.newStakeForTest(
+        1_000_000_000,
+        vote_pubkey,
+        0,
+        stake_activation_epoch,
+    );
+    try stake_delegations.append(allocator, .{
+        .pubkey = stake_pubkey,
+        .stake = stake,
+    });
+
+    // Set up credits so rewards are non-zero.
+    var stake_account = &stake_delegations.items(.stake)[0];
+    stake_account.credits_observed = 5;
+
+    var dist_va = distribution_vote_accounts.vote_accounts
+        .getPtr(vote_pubkey).?;
+    try dist_va.account.state.incrementCredits(
+        allocator,
+        stake_activation_epoch + 1,
+        10,
+    );
+    var snap_va = snapshot_vote_accounts.vote_accounts
+        .getPtr(vote_pubkey).?;
+    try snap_va.account.state.incrementCredits(
+        allocator,
+        stake_activation_epoch + 1,
+        10,
+    );
+
+    var stake_history = StakeHistory.INIT;
+    try stake_history.entries.append(.{
+        .epoch = stake_activation_epoch,
+        .stake = .{
+            .activating = 1_000_000_000,
+            .effective = 500_000_000_000,
+            .deactivating = 1_000_000_000,
+        },
+    });
+
+    const rewarded_epoch: Epoch = 5;
+
+    // Test with delay_commission_updates = true, snapshot available.
+    // Should use snapshot commission (10%) not distribution (50%).
+    const cached_with_snapshot = CachedVoteAccounts{
+        .snapshot_epoch_vote_accounts = &snapshot_vote_accounts,
+        .rewarded_epoch_vote_accounts = null,
+        .distribution_epoch_vote_accounts = &distribution_vote_accounts,
+    };
+
+    const result_delayed = try calculateStakeVoteRewards(
+        allocator,
+        &stake_history,
+        stake_delegations,
+        cached_with_snapshot,
+        rewarded_epoch,
+        .{ .points = 1, .rewards = 1 },
+        null,
+        true, // delay_commission_updates
+    );
+    defer result_delayed.deinit(allocator);
+
+    // Test with delay_commission_updates = true, only rewarded available.
+    var rewarded_vote_accounts = VoteAccounts{};
+    defer rewarded_vote_accounts.deinit(allocator);
+
+    const rew_vote_account = try newVoteAccountForTest(
+        allocator,
+        random,
+        20, // 20% commission
+        0,
+    );
+    try rewarded_vote_accounts.vote_accounts.put(
+        allocator,
+        vote_pubkey,
+        .{ .stake = 1_000_000_000, .account = rew_vote_account },
+    );
+    var rew_va = rewarded_vote_accounts.vote_accounts
+        .getPtr(vote_pubkey).?;
+    try rew_va.account.state.incrementCredits(
+        allocator,
+        stake_activation_epoch + 1,
+        10,
+    );
+
+    const cached_rewarded_only = CachedVoteAccounts{
+        .snapshot_epoch_vote_accounts = null,
+        .rewarded_epoch_vote_accounts = &rewarded_vote_accounts,
+        .distribution_epoch_vote_accounts = &distribution_vote_accounts,
+    };
+
+    // Reset stake credits for second run.
+    stake_account.credits_observed = 5;
+
+    const result_rewarded = try calculateStakeVoteRewards(
+        allocator,
+        &stake_history,
+        stake_delegations,
+        cached_rewarded_only,
+        rewarded_epoch,
+        .{ .points = 1, .rewards = 1 },
+        null,
+        true, // delay_commission_updates
+    );
+    defer result_rewarded.deinit(allocator);
+
+    // Test with delay_commission_updates = true, no snapshot or rewarded.
+    // Falls back to distribution vote account.
+    const cached_fallback = CachedVoteAccounts{
+        .snapshot_epoch_vote_accounts = null,
+        .rewarded_epoch_vote_accounts = null,
+        .distribution_epoch_vote_accounts = &distribution_vote_accounts,
+    };
+
+    stake_account.credits_observed = 5;
+
+    const result_fallback = try calculateStakeVoteRewards(
+        allocator,
+        &stake_history,
+        stake_delegations,
+        cached_fallback,
+        rewarded_epoch,
+        .{ .points = 1, .rewards = 1 },
+        null,
+        true, // delay_commission_updates
+    );
+    defer result_fallback.deinit(allocator);
+
+    // All three should produce results (non-zero rewards).
+    try std.testing.expectEqual(
+        1,
+        result_delayed.stake_rewards.stake_rewards.entries.len,
+    );
+    try std.testing.expectEqual(
+        1,
+        result_rewarded.stake_rewards.stake_rewards.entries.len,
+    );
+    try std.testing.expectEqual(
+        1,
+        result_fallback.stake_rewards.stake_rewards.entries.len,
+    );
+}
+
 test calculateVoteAccountsToStore {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
