@@ -733,6 +733,12 @@ fn newVoteAccountForTest(
     );
 }
 
+fn epochStakesForTest(epoch: Epoch) sig.core.EpochStakes {
+    var stakes: sig.core.EpochStakes = .EMPTY_WITH_GENESIS;
+    stakes.stakes.epoch = epoch;
+    return stakes;
+}
+
 test calculateRewardsAndDistributeVoteRewards {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -1499,6 +1505,83 @@ test "calculateStakeVoteRewards with delay_commission_updates" {
         1,
         result_fallback.stake_rewards.stake_rewards.entries.len,
     );
+}
+
+test "beginPartitionedRewards caches vote accounts for delayed commission" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(2026);
+    const random = prng.random();
+
+    const slot = EpochSchedule.INIT.getFirstSlotInEpoch(2);
+    const parent_slot = slot - 1;
+
+    var slot_constants = try SlotConstants.genesis(allocator, .DEFAULT);
+    defer slot_constants.deinit(allocator);
+    slot_constants.parent_slot = parent_slot;
+    slot_constants.block_height = 123;
+    try slot_constants.ancestors.addSlot(allocator, parent_slot);
+    try slot_constants.ancestors.addSlot(allocator, slot);
+
+    var slot_state = SlotState.GENESIS;
+    defer slot_state.deinit(allocator);
+
+    const blockhash = Hash.initRandom(random);
+    {
+        const blockhash_queue, var blockhash_queue_lg = slot_state.blockhash_queue.writeWithLock();
+        defer blockhash_queue_lg.unlock();
+        try blockhash_queue.insertGenesisHash(allocator, blockhash, 0);
+    }
+
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        allocator,
+        &.{
+            epochStakesForTest(0),
+            epochStakesForTest(1),
+            epochStakesForTest(2),
+        },
+    );
+    defer epoch_tracker.deinit();
+
+    var db_context = try sig.accounts_db.Db.initTest(allocator);
+    defer db_context.deinit();
+
+    const account_store = sig.accounts_db.AccountStore{ .accounts_db = &db_context.db };
+    const slot_store = account_store.forSlot(slot, &slot_constants.ancestors);
+
+    try beginPartitionedRewards(
+        allocator,
+        slot,
+        &slot_constants,
+        &slot_state,
+        slot_store,
+        &epoch_tracker,
+    );
+
+    try std.testing.expect(slot_state.reward_status == .active);
+    try std.testing.expectEqual(
+        slot_constants.block_height + 1,
+        slot_state.reward_status.active.distribution_start_block_height,
+    );
+    try std.testing.expectEqual(
+        @as(u64, 1),
+        slot_state.reward_status.active.num_partitions,
+    );
+
+    const epoch_rewards = (try sig.replay.update_sysvar.getSysvarFromAccount(
+        EpochRewards,
+        allocator,
+        slot_store.reader(),
+    )).?;
+    try std.testing.expect(epoch_rewards.active);
+    try std.testing.expectEqual(
+        slot_state.reward_status.active.distribution_start_block_height,
+        epoch_rewards.distribution_starting_block_height,
+    );
+    try std.testing.expectEqual(
+        slot_state.reward_status.active.num_partitions,
+        epoch_rewards.num_partitions,
+    );
+    try std.testing.expectEqual(blockhash, epoch_rewards.parent_blockhash);
 }
 
 test calculateVoteAccountsToStore {
