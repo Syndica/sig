@@ -30,6 +30,8 @@ pub const RecvConfig = extern struct {
 
 pub const DeshredRing = Ring(256, DeshreddedFecSet);
 
+/// NOTE: these are not necessarily unique IDs - under equivocation there may be multiple FEC sets
+///       of the same FecSetId.
 pub const FecSetId = extern struct {
     slot: Slot,
     fec_set_idx: u32,

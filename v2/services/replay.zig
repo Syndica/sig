@@ -847,6 +847,8 @@ const MerkleForest = struct {
     // TODO: eviction
     // TODO: remove orphans from orphan_map once parented
     /// Returns the newly inserted node, null => node already known (this is not an error).
+    /// This function is responsible for linking together fec sets, including across slots, and
+    /// allocating BlockRefs.
     fn put(
         self: *MerkleForest,
         block_pool: *replay.BlockPool,
@@ -870,6 +872,8 @@ const MerkleForest = struct {
         const new_node = try self.pool.create();
         map_result.value_ptr.* = new_node;
 
+        const new_node_is_first_in_slot = new_fec_set.id.fec_set_idx == 0;
+
         new_node.* = .{
             .merkle_root = new_fec_set.merkle_root,
             .chained_merkle_root = new_fec_set.chained_merkle_root,
@@ -877,15 +881,10 @@ const MerkleForest = struct {
             .data_complete = new_fec_set.data_complete,
             .slot_complete = new_fec_set.slot_complete,
 
-            .block_ref = if (new_fec_set.id.fec_set_idx == 0) ref: {
+            .block_ref = if (new_node_is_first_in_slot) ref: {
                 const block_ref = try block_pool.createId();
                 block_pool.indexToPtr(block_ref).* = .{
-                    // TODO: these are probably useless fields
-                    .first_fecset_chained_merkle_root = undefined,
-                    .last_fecset_merkle_root = undefined,
-                    .last_fecset_received = undefined,
-
-                    // TODO: chain if possible
+                    // NOTE: we chain to the parent below
                     .slot = new_fec_set.id.slot,
                 };
                 break :ref block_ref;
@@ -895,58 +894,81 @@ const MerkleForest = struct {
             .payload_buf = new_fec_set.payload_buf,
         };
 
-        var must_wait_for_parent: bool = false;
+        std.debug.assert((new_node.block_ref != .null) == (new_node.id.fec_set_idx == 0));
 
-        // TODO: stop checking cross-slot?
+        var must_wait_for_parent: bool = false;
         if (self.map.getAdapted(&new_fec_set.chained_merkle_root, map_ctx)) |parent| {
             // we found the parent of our new node
 
-            var did_insert_equivocated: bool = false;
+            // TODO: maybe overbearing assert (malicious leader?)
+            std.debug.assert(new_node.id.order(&parent.id) == .gt);
 
-            if (parent.child == .null) {
-                @branchHint(.likely);
-                if (new_node.block_ref == .null)
-                    new_node.block_ref = parent.block_ref
-                else
-                    std.debug.assert(new_node.id.fec_set_idx == 0);
+            // parent node already has a child =>
+            const equivocated_insert: bool = parent.child != .null;
+            if (!equivocated_insert) {
+                @branchHint(.likely); // no equivocation
+
+                if (!new_node_is_first_in_slot) {
+                    // Our new node isn't the first in its slot, and we have found its parent.
+                    // As the parent doesn't have a child yet, the node should inherit the BlockRef
+                    // of its parent.
+                    std.debug.assert(new_node.block_ref == .null);
+
+                    // TODO: maybe overbearing assert (malicious leader?)
+                    std.debug.assert(new_node.id.slot == parent.id.slot);
+                    std.debug.assert(new_node.id.fec_set_idx == parent.id.fec_set_idx + 32);
+
+                    new_node.block_ref = parent.block_ref;
+                } else {
+                    // Node is the first in its slot, and we've already given it a BlockRef of its
+                    // own.
+                    // Let's connect this fec set to the previous slot.
+
+                    std.debug.assert(new_node.block_ref != .null);
+                    if (parent.block_ref != .null) {
+                        const parent_block = block_pool.indexToPtr(parent.block_ref);
+                        const new_block = block_pool.indexToPtr(new_node.block_ref);
+                        std.debug.assert(new_block.parent == .null);
+
+                        parent_block.child = new_node.block_ref;
+                        new_block.parent = parent.block_ref;
+
+                        // TODO: maybe overbearing assert (malicious leader?)
+                        std.debug.assert(new_node.id.slot > parent.id.slot);
+                    }
+                }
             } else {
                 // This node's parent already has a child. This means the leader produced multiple
                 // conflicting fec sets.
                 // TODO: report this and special case the handling in the caller
-                std.log.warn(
+                std.log.err(
                     "Equivocation detected! Fec set {f} has multiple children\n",
                     .{@as(*const MerkleNode, parent)},
                 );
                 new_node.block_ref = ref: {
                     const block_ref = try block_pool.createId();
                     block_pool.indexToPtr(block_ref).* = .{
-                        // TODO: these are probably useless fields
-                        .first_fecset_chained_merkle_root = undefined,
-                        .last_fecset_merkle_root = undefined,
-                        .last_fecset_received = undefined,
+                        // TODO: chain this BlockRef to the parent
 
-                        // TODO: chain if possible
                         .slot = new_fec_set.id.slot,
                     };
                     break :ref block_ref;
                 };
                 std.debug.assert(new_node.block_ref != .null);
                 std.debug.assert(new_node.block_ref != parent.block_ref);
-                did_insert_equivocated = true;
+                @panic("Equivocation not yet properly handled, abort");
             }
 
             NodeTree.linkOrphaned(.{ .pool = self.pool }, .tail, parent, new_node);
 
-            if (did_insert_equivocated) {
+            if (equivocated_insert) {
                 // If we insert equivocated, we should allocate a new blockref. In the case of
                 // equivocation we will "choose" the one that came first by convention - the chosen
                 // fec set will be at the head of the sibling list, i.e. the direct child of the
                 // parent.
                 std.debug.assert(self.pool.indexToPtr(parent.child).block_ref != new_node.block_ref);
             }
-
-            // return .{ .inserted_known_chain = parent };
-        } else if (new_fec_set.id.fec_set_idx != 0) {
+        } else {
             // We don't have this fec set's parent yet, and it should have one.
             //
             // The chained merkle root of a node is the node's parent; nodes encode enough
@@ -983,8 +1005,6 @@ const MerkleForest = struct {
             must_wait_for_parent = true;
         }
 
-        var must_wait_for_child: bool = false;
-
         if (self.orphan_map.getAdapted(&new_fec_set.merkle_root, orphan_map_ctx)) |child| {
             NodeTree.linkOrphaned(.{ .pool = self.pool }, .tail, new_node, child);
 
@@ -999,13 +1019,6 @@ const MerkleForest = struct {
                     c_n.block_ref = new_node.block_ref;
                 }
             }
-        } else if (!new_fec_set.slot_complete) {
-            // We don't have this fec set's child yet, and it should have one
-            //
-            // There is nothing to do here, the child can find its parent through the child's
-            // chained merkle root in self.map.
-
-            must_wait_for_child = true;
         }
 
         return new_node;
