@@ -23,17 +23,7 @@ pub const Node = extern struct {
     parent: BlockRef = .null,
     child: BlockRef = .null,
     sibling: BlockRef = .null,
-
     slot: solana.Slot,
-
-    // true when inside last_merkle_map
-    last_fecset_received: bool,
-
-    first_fecset_chained_merkle_root: solana.Hash,
-
-    // only valid when last_fecset_received is true
-    // this is the safe way to identify a block
-    last_fecset_merkle_root: solana.Hash,
 };
 
 pub const ExecReqResponse = extern struct {
