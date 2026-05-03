@@ -34,8 +34,8 @@ jobs:
           cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build
-        run: zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36
-          -Denable-tsan=false -Dno-network-tests --summary all
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=false -Dno-network-tests
+          --summary all
 
       - name: Configure docker user/mount defaults
         run: |
