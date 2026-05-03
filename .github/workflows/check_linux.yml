@@ -1,0 +1,352 @@
+name: check_linux
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+  merge_group:
+    types:
+      - checks_requested
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  setup_zig_linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Zig
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y wget unzip xz-utils
+          wget https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
+          tar xf zig-x86_64-linux-0.15.2.tar.xz
+          mkdir -p workspace
+          mv zig-x86_64-linux-0.15.2 workspace/zig
+          tar -C workspace -cf zig-linux-workspace.tar zig
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zig-linux-workspace
+          path: zig-linux-workspace.tar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  test_kcov_linux:
+    runs-on: ubuntu-latest
+    needs:
+      - setup_zig_linux
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: zig-linux-workspace
+          path: workspace-artifact
+
+      - name: Extract Workspace
+        run: |
+          mkdir -p workspace
+          tar -C workspace -xf workspace-artifact/zig-linux-workspace.tar
+          chmod +x workspace/zig/zig
+
+      - uses: actions/cache/restore@v4
+        with:
+          key: linux-x86_64-0.15.2-${{ hashFiles('build.zig') }}-${{ hashFiles('build.zig.zon') }}-selfhosted
+          path: |
+            .zig-cache
+            ~/.cache/zig
+
+      - name: Build
+        run: workspace/zig/zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-network-tests --summary all
+
+      - name: Configure docker user/mount defaults
+        run: |
+          echo "DOCKER_UID_GID=$(id -u):$(id -g)" >> "$GITHUB_ENV"
+          printf 'DOCKER_MOUNT=-v %s:%s -w %s -e HOME=%s -u %s\n' "$PWD" "$PWD" "$PWD" "$PWD" "$(id -u):$(id -g)" >> "$GITHUB_ENV"
+
+      - name: Test and Collect
+        run: |
+          docker run --security-opt seccomp=unconfined \
+                     $DOCKER_MOUNT \
+                     kcov/kcov \
+                     bash scripts/kcov_ci.sh
+
+      - name: Upload coverage to Codecov
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "=== Codecov SHA debug ==="
+          echo "GITHUB_EVENT_NAME: ${GITHUB_EVENT_NAME}"
+          echo "GITHUB_SHA:        $GITHUB_SHA"
+          echo "GITHUB_REF:        ${GITHUB_REF_NAME:-unset}"
+          echo "HEAD:              $(git rev-parse HEAD)"
+          echo "HEAD^1:            $(git rev-parse HEAD^1 2>/dev/null || echo 'N/A')"
+          echo "HEAD^2:            $(git rev-parse HEAD^2 2>/dev/null || echo 'N/A (not a merge commit)')"
+          UPLOAD_SHA="$GITHUB_SHA"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            UPLOAD_SHA="$PR_HEAD_SHA"
+            echo "Pull request event detected"
+          elif git rev-parse HEAD^2 >/dev/null 2>&1; then
+            echo "Merge commit detected"
+          else
+            echo "Not a merge commit"
+          fi
+          echo "Uploading coverage for $UPLOAD_SHA"
+          echo "========================="
+
+          curl -fsSLo codecov https://cli.codecov.io/v11.2.6/linux/codecov
+          chmod +x codecov
+          ./codecov --verbose upload-coverage \
+            --dir kcov-merged/kcov-merged \
+            --commit-sha "$UPLOAD_SHA"
+
+  gossip_and_fuzz:
+    runs-on: ubuntu-latest
+    needs:
+      - setup_zig_linux
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: zig-linux-workspace
+          path: workspace-artifact
+
+      - name: Extract Workspace
+        run: |
+          mkdir -p workspace
+          tar -C workspace -xf workspace-artifact/zig-linux-workspace.tar
+          chmod +x workspace/zig/zig
+
+      - id: cache
+        uses: actions/cache/restore@v4
+        with:
+          key: linux-x86_64-0.15.2-${{ hashFiles('build.zig') }}-${{ hashFiles('build.zig.zon') }}-selfhosted-release
+          path: |
+            .zig-cache
+            ~/.cache/zig
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh workspace/zig/zig
+          workspace/zig/zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p workspace/zig-out-release --summary all
+
+      - uses: actions/cache/save@v4
+        if: ${{ success() && steps.cache.outputs.cache-hit != 'true' }}
+        with:
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+          path: |
+            .zig-cache
+            ~/.cache/zig
+
+      - name: Run Gossip
+        run: bash scripts/gossip_test.sh 120 workspace/zig-out-release/bin/sig
+
+      - name: Run Gossip Service Fuzzer
+        run: workspace/zig-out-release/bin/fuzz --seed 19 gossip-service 10000
+
+      - name: Run Gossip Table Fuzzer
+        run: workspace/zig-out-release/bin/fuzz --seed 19 gossip-table 100000
+
+      - name: Run Allocators Fuzzer
+        run: workspace/zig-out-release/bin/fuzz --seed 19 allocators 10000
+
+      - name: Run Ledger Fuzzer
+        run: workspace/zig-out-release/bin/fuzz --seed 19 ledger 10000
+
+  build_and_test_linux:
+    runs-on: ubuntu-latest
+    needs:
+      - setup_zig_linux
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: zig-linux-workspace
+          path: workspace-artifact
+
+      - name: Extract Workspace
+        run: |
+          mkdir -p workspace
+          tar -C workspace -xf workspace-artifact/zig-linux-workspace.tar
+          chmod +x workspace/zig/zig
+
+      - id: cache
+        uses: actions/cache/restore@v4
+        with:
+          key: linux-x86_64-0.15.2-${{ hashFiles('build.zig') }}-${{ hashFiles('build.zig.zon') }}-selfhosted
+          path: |
+            .zig-cache
+            ~/.cache/zig
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh workspace/zig/zig
+          workspace/zig/zig build -Denable-tsan=true -p workspace/zig-out -Dcpu=x86_64_v3 --summary all
+
+      - uses: actions/cache/save@v4
+        if: ${{ success() && steps.cache.outputs.cache-hit != 'true' }}
+        with:
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+          path: |
+            .zig-cache
+            ~/.cache/zig
+
+      - name: Build Tests
+        run: workspace/zig/zig build test -Dno-run -Dlong-tests -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --summary all
+
+      - name: Run Tests
+        run: zig-out/bin/test 2>&1 | cat
+
+  linux_misc_checks:
+    runs-on: ubuntu-latest
+    needs:
+      - setup_zig_linux
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: zig-linux-workspace
+          path: workspace-artifact
+
+      - name: Extract Workspace
+        run: |
+          mkdir -p workspace
+          tar -C workspace -xf workspace-artifact/zig-linux-workspace.tar
+          chmod +x workspace/zig/zig
+
+      - uses: actions/cache/restore@v4
+        with:
+          key: linux-x86_64-0.15.2-${{ hashFiles('build.zig') }}-${{ hashFiles('build.zig.zon') }}-selfhosted
+          path: |
+            .zig-cache
+            ~/.cache/zig
+
+      - name: Install Python PIP
+        run: |
+          sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -yq update
+          sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -yq install python3 python3-pip
+
+      - name: Lint (Zig)
+        run: |
+          workspace/zig/zig fmt --check src/ build.zig
+          cd conformance/
+          ../workspace/zig/zig fmt --check src/ build.zig
+
+      - name: Check style
+        run: |
+          python3 scripts/style.py --check src
+          python3 scripts/style.py --check conformance/src
+          python3 scripts/style.py --check v2/lib
+          python3 scripts/style.py --check v2/services
+          python3 scripts/style.py --check v2/init
+
+      - name: Check docs
+        run: python3 docs/check.py ./
+
+      - name: V2 checks
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh workspace/zig/zig
+          cd v2/
+          ../workspace/zig/zig build ci --summary all
+
+      - name: Build and test hashmap ledger (linux)
+        run: |
+          workspace/zig/zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
+          zig-out/bin/test 2>&1 | cat
+
+      - uses: actions/cache/restore@v4
+        with:
+          key: linux-x86_64-0.14.1-${{ hashFiles('build.zig.zon') }}-selfhosted
+          path: |
+            .zig-cache
+            ~/.cache/zig
+
+      - name: Webzockets tests (linux)
+        run: |
+          cd src/rpc/webzockets
+          ../../../workspace/zig/zig build test -Dcpu=x86_64_v3 --summary all
+
+  solana_conformance:
+    runs-on: ubuntu-latest
+    needs:
+      - setup_zig_linux
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: zig-linux-workspace
+          path: workspace-artifact
+
+      - name: Extract Workspace
+        run: |
+          mkdir -p workspace
+          tar -C workspace -xf workspace-artifact/zig-linux-workspace.tar
+          chmod +x workspace/zig/zig
+
+      - id: cache
+        uses: actions/cache/restore@v4
+        with:
+          key: build_conformance-v1-${{ hashFiles('build.zig') }}-${{ hashFiles('build.zig.zon') }}-${{ hashFiles('conformance/build.zig') }}-${{ hashFiles('conformance/build.zig.zon') }}
+          path: |
+            .zig-cache
+            ~/.cache/zig
+
+      - name: Build Conformance
+        run: |
+          cd conformance
+          ../workspace/zig/zig build --summary all
+
+      - uses: actions/cache/save@v4
+        if: ${{ success() && steps.cache.outputs.cache-hit != 'true' }}
+        with:
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+          path: |
+            .zig-cache
+            ~/.cache/zig
+
+      - name: Clone Fixtures
+        run: |
+          cd conformance
+          . commits.env
+          mkdir env
+          cd env
+          git clone https://github.com/firedancer-io/test-vectors.git
+          cd test-vectors
+          git checkout $TEST_VECTORS_COMMIT
+
+      - name: Run Fixtures
+        run: conformance/scripts/ci-run.sh
