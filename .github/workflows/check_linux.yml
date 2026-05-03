@@ -33,52 +33,11 @@ jobs:
           version: 0.15.2
           cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
-      - name: Build
-        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=false -Dno-network-tests
-          --summary all
-
-      - name: Configure docker user/mount defaults
-        run: |
-          echo "DOCKER_UID_GID=$(id -u):$(id -g)" >> "$GITHUB_ENV"
-          printf 'DOCKER_MOUNT=-v %s:%s -w %s -e HOME=%s -u %s\n' "$PWD" "$PWD" "$PWD" "$PWD" "$(id -u):$(id -g)" >> "$GITHUB_ENV"
-
-      - name: Test and Collect
-        run: |
-          docker run --security-opt seccomp=unconfined \
-                     $DOCKER_MOUNT \
-                     kcov/kcov \
-                     bash scripts/kcov_ci.sh
-
-      - name: Upload coverage to Codecov
+      - name: Run test_kcov_linux
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          echo "=== Codecov SHA debug ==="
-          echo "GITHUB_EVENT_NAME: ${GITHUB_EVENT_NAME}"
-          echo "GITHUB_SHA:        $GITHUB_SHA"
-          echo "GITHUB_REF:        ${GITHUB_REF_NAME:-unset}"
-          echo "HEAD:              $(git rev-parse HEAD)"
-          echo "HEAD^1:            $(git rev-parse HEAD^1 2>/dev/null || echo 'N/A')"
-          echo "HEAD^2:            $(git rev-parse HEAD^2 2>/dev/null || echo 'N/A (not a merge commit)')"
-          UPLOAD_SHA="$GITHUB_SHA"
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            UPLOAD_SHA="$PR_HEAD_SHA"
-            echo "Pull request event detected"
-          elif git rev-parse HEAD^2 >/dev/null 2>&1; then
-            echo "Merge commit detected"
-          else
-            echo "Not a merge commit"
-          fi
-          echo "Uploading coverage for $UPLOAD_SHA"
-          echo "========================="
-
-          curl -fsSLo codecov https://cli.codecov.io/v11.2.6/linux/codecov
-          chmod +x codecov
-          ./codecov --verbose upload-coverage \
-            --fail-on-error \
-            --dir kcov-merged/kcov-merged \
-            --commit-sha "$UPLOAD_SHA"
+        run: ./scripts/check_linux.sh test_kcov_linux
 
   gossip_and_fuzz:
     runs-on: ubuntu-latest
@@ -94,26 +53,8 @@ jobs:
           version: 0.15.2
           cache-key: selfhosted-release-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
-      - name: Build
-        run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh zig
-          zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -p workspace/zig-out-release --summary all
-
-      - name: Run Gossip
-        run: bash scripts/gossip_test.sh 120 workspace/zig-out-release/bin/sig
-
-      - name: Run Gossip Service Fuzzer
-        run: workspace/zig-out-release/bin/fuzz --seed 19 gossip-service 10000
-
-      - name: Run Gossip Table Fuzzer
-        run: workspace/zig-out-release/bin/fuzz --seed 19 gossip-table 100000
-
-      - name: Run Allocators Fuzzer
-        run: workspace/zig-out-release/bin/fuzz --seed 19 allocators 10000
-
-      - name: Run Ledger Fuzzer
-        run: workspace/zig-out-release/bin/fuzz --seed 19 ledger 10000
+      - name: Run gossip_and_fuzz
+        run: ./scripts/check_linux.sh gossip_and_fuzz
 
   build_and_test_linux:
     runs-on: ubuntu-latest
@@ -129,18 +70,8 @@ jobs:
           version: 0.15.2
           cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
-      - name: Build
-        run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh zig
-          zig build -Denable-tsan=true -p workspace/zig-out --summary all
-
-      - name: Build Tests
-        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
-          --summary all
-
-      - name: Run Tests
-        run: zig-out/bin/test 2>&1 | cat
+      - name: Run build_and_test_linux
+        run: ./scripts/check_linux.sh build_and_test_linux
 
   linux_misc_checks:
     runs-on: ubuntu-latest
@@ -156,44 +87,8 @@ jobs:
           version: 0.15.2
           cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
-      - name: Install Python PIP
-        run: |
-          sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -yq update
-          sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -yq install python3 python3-pip
-
-      - name: Lint (Zig)
-        run: |
-          zig fmt --check src/ build.zig
-          cd conformance/
-          zig fmt --check src/ build.zig
-
-      - name: Check style
-        run: |
-          python3 scripts/style.py --check src
-          python3 scripts/style.py --check conformance/src
-          python3 scripts/style.py --check v2/lib
-          python3 scripts/style.py --check v2/services
-          python3 scripts/style.py --check v2/init
-
-      - name: Check docs
-        run: python3 docs/check.py ./
-
-      - name: V2 checks
-        run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh zig
-          cd v2/
-          zig build ci --summary all
-
-      - name: Build and test hashmap ledger (linux)
-        run: |
-          zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" --summary all
-          zig-out/bin/test 2>&1 | cat
-
-      - name: Webzockets tests (linux)
-        run: |
-          cd src/rpc/webzockets
-          zig build test --summary all
+      - name: Run linux_misc_checks
+        run: ./scripts/check_linux.sh linux_misc_checks
 
   solana_conformance:
     runs-on: ubuntu-latest
@@ -210,27 +105,10 @@ jobs:
           cache-key: build_conformance-v1-${{ hashFiles('build.zig', 'build.zig.zon',
             'conformance/build.zig', 'conformance/build.zig.zon') }}
 
-      - name: Build Conformance
-        run: |
-          cd conformance
-          zig build --summary all
-
-      - id: test_vectors_cache
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           key: test-vectors-${{ hashFiles('conformance/commits.env') }}
           path: conformance/env/test-vectors
 
-      - name: Clone Fixtures
-        if: steps.test_vectors_cache.outputs.cache-hit != 'true'
-        run: |
-          cd conformance
-          . commits.env
-          mkdir -p env
-          cd env
-          git clone https://github.com/firedancer-io/test-vectors.git
-          cd test-vectors
-          git checkout $TEST_VECTORS_COMMIT
-
-      - name: Run Fixtures
-        run: conformance/scripts/ci-run.sh
+      - name: Run solana_conformance
+        run: ./scripts/check_linux.sh solana_conformance
