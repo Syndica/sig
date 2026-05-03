@@ -79,6 +79,7 @@ jobs:
           curl -fsSLo codecov https://cli.codecov.io/v11.2.6/linux/codecov
           chmod +x codecov
           ./codecov --verbose upload-coverage \
+            --fail-on-error \
             --dir kcov-merged/kcov-merged \
             --commit-sha "$UPLOAD_SHA"
 
@@ -217,11 +218,18 @@ jobs:
           cd conformance
           zig build --summary all
 
+      - id: test_vectors_cache
+        uses: actions/cache@v4
+        with:
+          key: test-vectors-${{ hashFiles('conformance/commits.env') }}
+          path: conformance/env/test-vectors
+
       - name: Clone Fixtures
+        if: steps.test_vectors_cache.outputs.cache-hit != 'true'
         run: |
           cd conformance
           . commits.env
-          mkdir env
+          mkdir -p env
           cd env
           git clone https://github.com/firedancer-io/test-vectors.git
           cd test-vectors
