@@ -18,23 +18,15 @@ on:
 permissions:
   contents: read
 
-env:
-  MACOS_ZIG_CPU: apple_m1
-
 jobs:
   build_check_macos:
-    runs-on: macos-14
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
             github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
-
-      - name: Select Xcode 15.4
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
 
       - uses: mlugg/setup-zig@v2
         with:
@@ -42,20 +34,12 @@ jobs:
           cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build Check
-        run: |
-          hard_limit="$(ulimit -Hn)"
-          ulimit -Sn "$hard_limit"
-
-          # CircleCI pinned the macOS CPU because feature detection on its VMs was unreliable.
-          # GitHub-hosted macos-14 runners are Apple M1, so pin the runner's actual CPU.
-          zig build -Denable-tsan=true -Dcpu=$MACOS_ZIG_CPU --summary all -Dno-run -Dno-bin
+        run: zig build -Denable-tsan=true --summary all -Dno-run -Dno-bin
 
   test_macos:
-    runs-on: macos-14
+    runs-on: macos-26
     needs:
       - build_check_macos
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,39 +47,27 @@ jobs:
             github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      - name: Select Xcode 15.4
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
-
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
           cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build Tests
-        run: zig build test -Dno-run -Denable-tsan=true -Dcpu=$MACOS_ZIG_CPU --summary
-          all
+        run: zig build test -Dno-run -Denable-tsan=true --summary all
 
       - name: Run Tests
-        run: |
-          hard_limit="$(ulimit -Hn)"
-          ulimit -Sn "$hard_limit"
-          zig-out/bin/test 2>&1 | cat
+        run: zig-out/bin/test 2>&1 | cat
 
   test_macos_hashmap_ledger:
-    runs-on: macos-14
+    runs-on: macos-26
     needs:
       - build_check_macos
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
             github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
-
-      - name: Select Xcode 15.4
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
 
       - uses: mlugg/setup-zig@v2
         with:
@@ -103,28 +75,20 @@ jobs:
           cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build Tests
-        run: zig build test -Dno-run -Denable-tsan=true -Dcpu=$MACOS_ZIG_CPU --summary
-          all -Dlong-tests -Dledger=hashmap -Dfilter="ledger"
+        run: zig build test -Dno-run -Denable-tsan=true --summary all -Dlong-tests
+          -Dledger=hashmap -Dfilter="ledger"
 
       - name: Run Tests
-        run: |
-          hard_limit="$(ulimit -Hn)"
-          ulimit -Sn "$hard_limit"
-          zig-out/bin/test 2>&1 | cat
+        run: zig-out/bin/test 2>&1 | cat
 
   test_webzockets_macos:
-    runs-on: macos-14
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
             github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
-
-      - name: Select Xcode 15.4
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
 
       - uses: mlugg/setup-zig@v2
         with:
@@ -135,7 +99,5 @@ jobs:
 
       - name: Build and Run Webzockets Tests
         run: |
-          hard_limit="$(ulimit -Hn)"
-          ulimit -Sn "$hard_limit"
           cd src/rpc/webzockets
-          zig build test -Dcpu=$MACOS_ZIG_CPU --summary all
+          zig build test --summary all
