@@ -5,7 +5,7 @@ on:
     branches:
       - main
     tags:
-      - '*'
+      - "*"
   pull_request:
     types:
       - opened
@@ -22,56 +22,23 @@ permissions:
   contents: read
 
 jobs:
-  setup_zig_linux:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download Zig
-        run: |
-          sudo apt-get update -y && sudo apt-get install -y wget unzip xz-utils
-          wget https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
-          tar xf zig-x86_64-linux-0.15.2.tar.xz
-          mkdir -p workspace
-          mv zig-x86_64-linux-0.15.2 workspace/zig
-          tar -C workspace -cf zig-linux-workspace.tar zig
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: zig-linux-workspace
-          path: zig-linux-workspace.tar
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 1
-
   test_kcov_linux:
     runs-on: ubuntu-latest
-    needs:
-      - setup_zig_linux
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: mlugg/setup-zig@v2
         with:
-          name: zig-linux-workspace
-          path: workspace-artifact
-
-      - name: Extract Workspace
-        run: |
-          mkdir -p workspace
-          tar -C workspace -xf workspace-artifact/zig-linux-workspace.tar
-          chmod +x workspace/zig/zig
-
-      - uses: actions/cache/restore@v4
-        with:
-          key: linux-x86_64-0.15.2-${{ hashFiles('build.zig') }}-${{ hashFiles('build.zig.zon') }}-selfhosted
-          path: |
-            .zig-cache
-            ~/.cache/zig
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build
-        run: workspace/zig/zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-network-tests --summary all
+        run: zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36
+          -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-network-tests --summary all
 
       - name: Configure docker user/mount defaults
         run: |
@@ -117,46 +84,23 @@ jobs:
 
   gossip_and_fuzz:
     runs-on: ubuntu-latest
-    needs:
-      - setup_zig_linux
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: mlugg/setup-zig@v2
         with:
-          name: zig-linux-workspace
-          path: workspace-artifact
-
-      - name: Extract Workspace
-        run: |
-          mkdir -p workspace
-          tar -C workspace -xf workspace-artifact/zig-linux-workspace.tar
-          chmod +x workspace/zig/zig
-
-      - id: cache
-        uses: actions/cache/restore@v4
-        with:
-          key: linux-x86_64-0.15.2-${{ hashFiles('build.zig') }}-${{ hashFiles('build.zig.zon') }}-selfhosted-release
-          path: |
-            .zig-cache
-            ~/.cache/zig
+          version: 0.15.2
+          cache-key: selfhosted-release-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build
         run: |
           sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh workspace/zig/zig
-          workspace/zig/zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p workspace/zig-out-release --summary all
-
-      - uses: actions/cache/save@v4
-        if: ${{ success() && steps.cache.outputs.cache-hit != 'true' }}
-        with:
-          key: ${{ steps.cache.outputs.cache-primary-key }}
-          path: |
-            .zig-cache
-            ~/.cache/zig
+          ./scripts/proxy_workaround.sh zig
+          zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p workspace/zig-out-release --summary all
 
       - name: Run Gossip
         run: bash scripts/gossip_test.sh 120 workspace/zig-out-release/bin/sig
@@ -175,80 +119,44 @@ jobs:
 
   build_and_test_linux:
     runs-on: ubuntu-latest
-    needs:
-      - setup_zig_linux
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: mlugg/setup-zig@v2
         with:
-          name: zig-linux-workspace
-          path: workspace-artifact
-
-      - name: Extract Workspace
-        run: |
-          mkdir -p workspace
-          tar -C workspace -xf workspace-artifact/zig-linux-workspace.tar
-          chmod +x workspace/zig/zig
-
-      - id: cache
-        uses: actions/cache/restore@v4
-        with:
-          key: linux-x86_64-0.15.2-${{ hashFiles('build.zig') }}-${{ hashFiles('build.zig.zon') }}-selfhosted
-          path: |
-            .zig-cache
-            ~/.cache/zig
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build
         run: |
           sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh workspace/zig/zig
-          workspace/zig/zig build -Denable-tsan=true -p workspace/zig-out -Dcpu=x86_64_v3 --summary all
-
-      - uses: actions/cache/save@v4
-        if: ${{ success() && steps.cache.outputs.cache-hit != 'true' }}
-        with:
-          key: ${{ steps.cache.outputs.cache-primary-key }}
-          path: |
-            .zig-cache
-            ~/.cache/zig
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out -Dcpu=x86_64_v3 --summary all
 
       - name: Build Tests
-        run: workspace/zig/zig build test -Dno-run -Dlong-tests -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --summary all
+        run: zig build test -Dno-run -Dlong-tests -Dcpu=x86_64_v3 -Denable-tsan=true
+          -Dno-network-tests --summary all
 
       - name: Run Tests
         run: zig-out/bin/test 2>&1 | cat
 
   linux_misc_checks:
     runs-on: ubuntu-latest
-    needs:
-      - setup_zig_linux
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: mlugg/setup-zig@v2
         with:
-          name: zig-linux-workspace
-          path: workspace-artifact
-
-      - name: Extract Workspace
-        run: |
-          mkdir -p workspace
-          tar -C workspace -xf workspace-artifact/zig-linux-workspace.tar
-          chmod +x workspace/zig/zig
-
-      - uses: actions/cache/restore@v4
-        with:
-          key: linux-x86_64-0.15.2-${{ hashFiles('build.zig') }}-${{ hashFiles('build.zig.zon') }}-selfhosted
-          path: |
-            .zig-cache
-            ~/.cache/zig
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Install Python PIP
         run: |
@@ -257,9 +165,9 @@ jobs:
 
       - name: Lint (Zig)
         run: |
-          workspace/zig/zig fmt --check src/ build.zig
+          zig fmt --check src/ build.zig
           cd conformance/
-          ../workspace/zig/zig fmt --check src/ build.zig
+          zig fmt --check src/ build.zig
 
       - name: Check style
         run: |
@@ -275,68 +183,39 @@ jobs:
       - name: V2 checks
         run: |
           sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh workspace/zig/zig
+          ./scripts/proxy_workaround.sh zig
           cd v2/
-          ../workspace/zig/zig build ci --summary all
+          zig build ci --summary all
 
       - name: Build and test hashmap ledger (linux)
         run: |
-          workspace/zig/zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
+          zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
           zig-out/bin/test 2>&1 | cat
-
-      - uses: actions/cache/restore@v4
-        with:
-          key: linux-x86_64-0.14.1-${{ hashFiles('build.zig.zon') }}-selfhosted
-          path: |
-            .zig-cache
-            ~/.cache/zig
 
       - name: Webzockets tests (linux)
         run: |
           cd src/rpc/webzockets
-          ../../../workspace/zig/zig build test -Dcpu=x86_64_v3 --summary all
+          zig build test -Dcpu=x86_64_v3 --summary all
 
   solana_conformance:
     runs-on: ubuntu-latest
-    needs:
-      - setup_zig_linux
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: mlugg/setup-zig@v2
         with:
-          name: zig-linux-workspace
-          path: workspace-artifact
-
-      - name: Extract Workspace
-        run: |
-          mkdir -p workspace
-          tar -C workspace -xf workspace-artifact/zig-linux-workspace.tar
-          chmod +x workspace/zig/zig
-
-      - id: cache
-        uses: actions/cache/restore@v4
-        with:
-          key: build_conformance-v1-${{ hashFiles('build.zig') }}-${{ hashFiles('build.zig.zon') }}-${{ hashFiles('conformance/build.zig') }}-${{ hashFiles('conformance/build.zig.zon') }}
-          path: |
-            .zig-cache
-            ~/.cache/zig
+          version: 0.15.2
+          cache-key: build_conformance-v1-${{ hashFiles('build.zig', 'build.zig.zon',
+            'conformance/build.zig', 'conformance/build.zig.zon') }}
 
       - name: Build Conformance
         run: |
           cd conformance
-          ../workspace/zig/zig build --summary all
-
-      - uses: actions/cache/save@v4
-        if: ${{ success() && steps.cache.outputs.cache-hit != 'true' }}
-        with:
-          key: ${{ steps.cache.outputs.cache-primary-key }}
-          path: |
-            .zig-cache
-            ~/.cache/zig
+          zig build --summary all
 
       - name: Clone Fixtures
         run: |

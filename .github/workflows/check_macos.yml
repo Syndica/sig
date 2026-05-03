@@ -5,7 +5,7 @@ on:
     branches:
       - main
     tags:
-      - '*'
+      - "*"
   pull_request:
     types:
       - opened
@@ -25,77 +25,33 @@ env:
   MACOS_ZIG_CPU: apple_m1
 
 jobs:
-  setup_zig_macos:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download Zig
-        run: |
-          sudo apt-get update -y && sudo apt-get install -y wget unzip xz-utils
-          wget https://ziglang.org/download/0.15.2/zig-aarch64-macos-0.15.2.tar.xz
-          tar xf zig-aarch64-macos-0.15.2.tar.xz
-          mkdir -p workspace
-          mv zig-aarch64-macos-0.15.2 workspace/zig
-          tar -C workspace -cf zig-macos-workspace.tar zig
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: zig-macos-workspace
-          path: zig-macos-workspace.tar
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 1
-
   build_check_macos:
     runs-on: macos-14
-    needs:
-      - setup_zig_macos
     env:
       DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       - name: Select Xcode 15.4
         run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
 
-      - uses: actions/download-artifact@v4
+      - uses: mlugg/setup-zig@v2
         with:
-          name: zig-macos-workspace
-          path: workspace-artifact
-
-      - name: Extract Workspace
-        run: |
-          mkdir -p workspace
-          tar -C workspace -xf workspace-artifact/zig-macos-workspace.tar
-          chmod +x workspace/zig/zig
-
-      - id: cache
-        uses: actions/cache/restore@v4
-        with:
-          key: macos-aarch64-0.15.2-${{ hashFiles('build.zig') }}-${{ hashFiles('build.zig.zon') }}
-          path: |
-            .zig-cache
-            ~/.cache/zig
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build Check
         run: |
           hard_limit="$(ulimit -Hn)"
           ulimit -Sn "$hard_limit"
-          export PATH="workspace/zig:$PATH"
 
           # CircleCI pinned the macOS CPU because feature detection on its VMs was unreliable.
           # GitHub-hosted macos-14 runners are Apple M1, so pin the runner's actual CPU.
           zig build -Denable-tsan=true -Dcpu=$MACOS_ZIG_CPU --summary all -Dno-run -Dno-bin
-
-      - uses: actions/cache/save@v4
-        if: ${{ success() && steps.cache.outputs.cache-hit != 'true' }}
-        with:
-          key: ${{ steps.cache.outputs.cache-primary-key }}
-          path: |
-            .zig-cache
-            ~/.cache/zig
 
   test_macos:
     runs-on: macos-14
@@ -106,47 +62,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       - name: Select Xcode 15.4
         run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
 
-      - uses: actions/download-artifact@v4
+      - uses: mlugg/setup-zig@v2
         with:
-          name: zig-macos-workspace
-          path: workspace-artifact
-
-      - name: Extract Workspace
-        run: |
-          mkdir -p workspace
-          tar -C workspace -xf workspace-artifact/zig-macos-workspace.tar
-          chmod +x workspace/zig/zig
-
-      - id: cache
-        uses: actions/cache/restore@v4
-        with:
-          key: macos-aarch64-0.15.2-${{ hashFiles('build.zig') }}-${{ hashFiles('build.zig.zon') }}
-          path: |
-            .zig-cache
-            ~/.cache/zig
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build Tests
-        run: workspace/zig/zig build test -Dno-run -Denable-tsan=true -Dcpu=$MACOS_ZIG_CPU --summary all
+        run: zig build test -Dno-run -Denable-tsan=true -Dcpu=$MACOS_ZIG_CPU --summary
+          all
 
       - name: Run Tests
         run: |
           hard_limit="$(ulimit -Hn)"
           ulimit -Sn "$hard_limit"
           zig-out/bin/test 2>&1 | cat
-
-      - uses: actions/cache/save@v4
-        if: ${{ success() && steps.cache.outputs.cache-hit != 'true' }}
-        with:
-          key: ${{ steps.cache.outputs.cache-primary-key }}
-          path: |
-            .zig-cache
-            ~/.cache/zig
 
   test_macos_hashmap_ledger:
     runs-on: macos-14
@@ -157,33 +93,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       - name: Select Xcode 15.4
         run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
 
-      - uses: actions/download-artifact@v4
+      - uses: mlugg/setup-zig@v2
         with:
-          name: zig-macos-workspace
-          path: workspace-artifact
-
-      - name: Extract Workspace
-        run: |
-          mkdir -p workspace
-          tar -C workspace -xf workspace-artifact/zig-macos-workspace.tar
-          chmod +x workspace/zig/zig
-
-      - id: cache
-        uses: actions/cache/restore@v4
-        with:
-          key: macos-aarch64-0.15.2-${{ hashFiles('build.zig') }}-${{ hashFiles('build.zig.zon') }}
-          path: |
-            .zig-cache
-            ~/.cache/zig
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build Tests
-        run: workspace/zig/zig build test -Dno-run -Denable-tsan=true -Dcpu=$MACOS_ZIG_CPU --summary all -Dlong-tests -Dledger=hashmap -Dfilter="ledger"
+        run: zig build test -Dno-run -Denable-tsan=true -Dcpu=$MACOS_ZIG_CPU --summary
+          all -Dlong-tests -Dledger=hashmap -Dfilter="ledger"
 
       - name: Run Tests
         run: |
@@ -191,50 +115,30 @@ jobs:
           ulimit -Sn "$hard_limit"
           zig-out/bin/test 2>&1 | cat
 
-      - uses: actions/cache/save@v4
-        if: ${{ success() && steps.cache.outputs.cache-hit != 'true' }}
-        with:
-          key: ${{ steps.cache.outputs.cache-primary-key }}
-          path: |
-            .zig-cache
-            ~/.cache/zig
-
   test_webzockets_macos:
     runs-on: macos-14
-    needs:
-      - setup_zig_macos
     env:
       DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       - name: Select Xcode 15.4
         run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
 
-      - uses: actions/download-artifact@v4
+      - uses: mlugg/setup-zig@v2
         with:
-          name: zig-macos-workspace
-          path: workspace-artifact
-
-      - name: Extract Workspace
-        run: |
-          mkdir -p workspace
-          tar -C workspace -xf workspace-artifact/zig-macos-workspace.tar
-          chmod +x workspace/zig/zig
-
-      - uses: actions/cache/restore@v4
-        with:
-          key: macos-aarch64-0.14.1-${{ hashFiles('build.zig.zon') }}
-          path: |
-            .zig-cache
-            ~/.cache/zig
+          version: 0.15.2
+          cache-key: macos-webzockets-${{ hashFiles('build.zig.zon',
+            'src/rpc/webzockets/build.zig', 'src/rpc/webzockets/build.zig.zon')
+            }}
 
       - name: Build and Run Webzockets Tests
         run: |
           hard_limit="$(ulimit -Hn)"
           ulimit -Sn "$hard_limit"
           cd src/rpc/webzockets
-          ../../../workspace/zig/zig build test -Dcpu=$MACOS_ZIG_CPU --summary all
+          zig build test -Dcpu=$MACOS_ZIG_CPU --summary all
