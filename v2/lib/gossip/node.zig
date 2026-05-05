@@ -996,7 +996,7 @@ pub fn GossipNode(comptime Effects: type) type {
             value: GossipValue,
         ) !void {
             if (!key.from.equals(&self.identity())) {
-                logger.debug().logf("Discovered {f}", .{key});
+                logger.trace().logf("Discovered {f}", .{key});
 
                 switch (value.data) {
                     .vote => {}, // TODO: send to consensus service
