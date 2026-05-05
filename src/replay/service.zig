@@ -1792,7 +1792,6 @@ test "Execute testnet block single threaded" {
         .shreds_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/shreds.json.gz",
         .accounts_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/accounts.json.gz",
     });
-    return error.Fail; // TODO remove
 }
 
 test "Execute testnet block multi threaded" {
