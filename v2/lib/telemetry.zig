@@ -385,10 +385,60 @@ pub const Counter = struct {
 pub const Gauge = struct {
     value: *std.atomic.Value(u64),
 
-    pub fn set(self: Counter, value: u64) void {
+    pub fn set(self: Gauge, value: u64) void {
         self.value.store(value, .monotonic);
     }
 };
+
+/// Can be used as a counter or a gauge.
+pub fn Variant(comptime V: type) type {
+    return struct {
+        counts: [Indexer.count]*std.atomic.Value(u64),
+        const VariantCounterSelf = @This();
+
+        pub const Value = V;
+        pub const Enum = std.meta.FieldEnum(Value);
+        pub const Tag = switch (@typeInfo(Value)) {
+            .@"enum" => Value,
+            .@"union" => |u_info| u_info.tag_type.?,
+            .error_set => Value,
+            else => @compileError("Unsupported: " ++ @typeName(Value)),
+        };
+
+        pub const Indexer = std.enums.EnumIndexer(Enum);
+
+        pub fn set(self: *const VariantCounterSelf, tag: Tag, value: u64) void {
+            _ = self.counts[Indexer.indexOf(enumFromTag(tag))].store(value, .monotonic);
+        }
+
+        pub fn increment(self: *const VariantCounterSelf, tag: Tag, amount: u64) void {
+            _ = self.counts[Indexer.indexOf(enumFromTag(tag))].fetchAdd(amount, .monotonic);
+        }
+
+        pub fn reset(self: *const VariantCounterSelf, tag: Tag) void {
+            self.counts[Indexer.indexOf(enumFromTag(tag))].store(0, .monotonic);
+        }
+
+        pub fn resetAll(self: *const VariantCounterSelf) void {
+            for (&self.counts) |*count| count.store(0, .monotonic);
+        }
+
+        fn enumFromTag(value: Tag) Enum {
+            return switch (@typeInfo(Value)) {
+                .@"enum" => if (Enum == Value) value else switch (value) {
+                    inline else => |itag| @field(Enum, @tagName(itag)),
+                },
+                .@"union" => |u_info| if (Enum == u_info.tag_type) value else switch (value) {
+                    inline else => |_, itag| @field(Enum, @tagName(itag)),
+                },
+                .error_set => switch (value) {
+                    inline else => |tag| @field(Enum, @errorName(tag)),
+                },
+                else => @compileError("Unsupported: " ++ @typeName(Value)),
+            };
+        }
+    };
+}
 
 /// This struct consists of pointers to a contiguous list of elements of size `@sizeOf(u64)`
 /// and alignment `@alignOf(u64)`.

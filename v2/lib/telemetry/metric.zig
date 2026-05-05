@@ -188,6 +188,50 @@ pub const Appender = struct {
         return .{ .value = self.appendGaugeRaw(id, .int, 0) };
     }
 
+    pub fn appendVariantCounter(
+        self: Appender,
+        name: []const u8,
+        comptime V: type,
+    ) tel.Variant(V) {
+        const Vc = tel.Variant(V);
+        var vc: Vc = .{
+            .counts = @splat(undefined),
+        };
+
+        const gauges_count = @typeInfo(Vc.Enum).@"enum".fields.len;
+        const gauges_start = self.gauges_end.fetchAdd(gauges_count, .monotonic);
+        const gauges = self.gauges[gauges_start..][0..gauges_count];
+
+        for (
+            &vc.counts,
+            gauges,
+            gauges_start..,
+            0..,
+        ) |*gauge_ptr, *gauge, gauge_index, tag_index| {
+            gauge_ptr.* = gauge;
+            const tag = Vc.Indexer.keyForIndex(tag_index);
+            const id: Id = .{
+                .name = name,
+                .label_count = 1,
+                .labels = switch (tag) {
+                    inline else => |itag| comptime labels: {
+                        const str = "variant=\"" ++ @tagName(itag) ++ "\"";
+                        const no_sentinel: [str.len]u8 = str.*;
+                        break :labels &no_sentinel ++ [_:'}']u8{};
+                    },
+                },
+            };
+            const detail: Detail = .{
+                .id = id,
+                .kind = .gauge_int,
+                .index = @intCast(gauge_index),
+            };
+            self.appendId(detail);
+        }
+
+        return vc;
+    }
+
     pub fn appendHistogram(
         self: Appender,
         id: Id,
@@ -208,18 +252,24 @@ pub const Appender = struct {
             const field_ptr = &@field(result, s_field.name);
             const field_config = @field(fields_config, s_field.name);
 
-            const id: Id =
+            const id_name: []const u8 =
                 field_config.id_override orelse
-                .initNameOnly(s_field.name);
+                s_field.name;
 
             field_ptr.* = switch (s_field.type) {
-                tel.Counter => self.appendCounter(id),
+                tel.Counter => self.appendCounter(.initNameOnly(id_name)),
+                tel.Gauge => self.appendGauge(.initNameOnly(id_name)),
                 tel.Histogram => self.appendHistogram(
-                    id,
+                    .initNameOnly(id_name),
                     field_config.upper_bounds orelse
                         &tel.Histogram.DEFAULT_UPPER_BOUNDS,
                 ),
-                else => comptime unreachable,
+                else => blk: {
+                    if (isVariantCounter(s_field.type)) {
+                        break :blk self.appendVariantCounter(id_name, s_field.type.Value);
+                    }
+                    comptime unreachable;
+                },
             };
         }
         return result;
@@ -272,10 +322,10 @@ pub const Appender = struct {
     }
 };
 
-pub const FieldConfigCounter = struct {
+pub const FieldConfigBasic = struct {
     id_override: ?[]const u8,
 
-    const default: FieldConfigCounter = .{
+    const default: FieldConfigBasic = .{
         .id_override = null,
     };
 };
@@ -296,9 +346,13 @@ pub fn FieldsConfig(comptime S: type) type {
     @setEvalBranchQuota(s_info.fields.len);
     for (s_info.fields, &new_fields) |s_field, *new_field| {
         const Field = switch (s_field.type) {
-            tel.Counter => FieldConfigCounter,
+            tel.Counter => FieldConfigBasic,
+            tel.Gauge => FieldConfigBasic,
             tel.Histogram => FieldConfigHistogram,
-            else => @compileError("Unsupported: " ++ @typeName(s_field.type)),
+            else => blk: {
+                if (isVariantCounter(s_field.type)) break :blk FieldConfigBasic;
+                @compileError("Unsupported: " ++ @typeName(s_field.type));
+            },
         };
         new_field.* = .{
             .name = s_field.name,
@@ -315,6 +369,21 @@ pub fn FieldsConfig(comptime S: type) type {
         .decls = &.{},
         .is_tuple = false,
     } });
+}
+
+inline fn isVariantCounter(comptime S: type) bool {
+    comptime {
+        if (!@hasDecl(S, "Value")) return false;
+        if (@TypeOf(S.Value) != type) return false;
+        const is_variant = switch (@typeInfo(S.Value)) {
+            .@"enum", .error_set => true,
+            .@"union" => |u_info| u_info.tag_type != null,
+            else => false,
+        };
+        if (!is_variant) return false;
+        if (tel.Variant(S.Value) != S) return false;
+        return true;
+    }
 }
 
 pub const Any = union(Kind) {
