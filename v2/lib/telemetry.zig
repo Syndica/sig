@@ -382,6 +382,14 @@ pub const Counter = struct {
     }
 };
 
+pub const Gauge = struct {
+    value: *std.atomic.Value(u64),
+
+    pub fn set(self: Counter, value: u64) void {
+        self.value.store(value, .monotonic);
+    }
+};
+
 /// This struct consists of pointers to a contiguous list of elements of size `@sizeOf(u64)`
 /// and alignment `@alignOf(u64)`.
 /// The order of the elements match the field order.

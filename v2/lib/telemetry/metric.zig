@@ -184,6 +184,10 @@ pub const Appender = struct {
         return .{ .value = self.appendGaugeRaw(id, .int, 0) };
     }
 
+    pub fn appendGauge(self: Appender, id: Id) tel.Gauge {
+        return .{ .value = self.appendGaugeRaw(id, .int, 0) };
+    }
+
     pub fn appendHistogram(
         self: Appender,
         id: Id,
