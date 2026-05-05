@@ -140,7 +140,9 @@ jobs:
           --summary all
 
       - name: Run Tests
-        run: zig-out/bin/test 2>&1 | cat
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
 
   linux_misc_checks:
     runs-on: ubuntu-latest
@@ -187,6 +189,7 @@ jobs:
 
       - name: Build and test hashmap ledger (linux)
         run: |
+          set -eo pipefail
           zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" --summary all
           zig-out/bin/test 2>&1 | cat
 
