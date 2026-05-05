@@ -83,6 +83,63 @@ const Config = struct {
     pub fn format(self: Config, writer: *std.Io.Writer) !void {
         try std.zon.stringify.serialize(self, .{ .whitespace = true }, writer);
     }
+
+    fn zonFmt(self: Config, params: ZonFmt.Params) ZonFmt {
+        return .{
+            .value = self,
+            .params = params,
+        };
+    }
+
+    const ZonFmt = struct {
+        value: Config,
+        params: Params,
+
+        pub const Params = struct {
+            indent_level: u8 = 0,
+        };
+
+        pub fn format(self: ZonFmt, w: *std.Io.Writer) std.Io.Writer.Error!void {
+            var sz: std.zon.Serializer = .{
+                .writer = w,
+                .indent_level = self.params.indent_level,
+                .options = .{ .whitespace = true },
+            };
+            var struct_sz = try sz.beginStruct(.{
+                .whitespace_style = .{ .wrap = true },
+            });
+
+            const FieldEnum = std.meta.FieldEnum(Config);
+            inline for (@typeInfo(Config).@"struct".fields) |s_field| {
+                try struct_sz.fieldPrefix(s_field.name);
+                const field_ptr = &@field(self.value, s_field.name);
+                switch (@field(FieldEnum, s_field.name)) {
+                    .sandboxing_mode,
+                    .cluster,
+                    .leader_schedule_file,
+                    => try sz.value(field_ptr.*, .{}),
+                    // print all structs as mult-line
+                    .gossip,
+                    .shred_network,
+                    .snapshot,
+                    .accounts_db,
+                    .telemetry,
+                    => {
+                        var field_struct_sz = try sz.beginStruct(.{
+                            .whitespace_style = .{ .wrap = true },
+                        });
+                        inline for (@typeInfo(s_field.type).@"struct".fields) |s_field_field| {
+                            try field_struct_sz.fieldPrefix(s_field_field.name);
+                            try sz.value(@field(field_ptr, s_field_field.name), .{});
+                        }
+                        try field_struct_sz.end();
+                    },
+                }
+            }
+
+            try struct_sz.end();
+        }
+    };
 };
 
 pub fn main() !void {
@@ -126,7 +183,7 @@ pub fn main() !void {
     };
     defer std.zon.parse.free(allocator, config);
 
-    std.log.info("config: {f}", .{config});
+    std.log.info("config: {f}", .{config.zonFmt(.{})});
 
     const gossip_cluster_info: lib.gossip.ClusterInfo =
         try .getFromEcho(config.gossip.port, config.cluster);
