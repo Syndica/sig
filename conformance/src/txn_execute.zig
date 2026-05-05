@@ -18,6 +18,8 @@ pub export fn sol_compat_txn_execute_v1(
     errdefer |err| std.debug.panic("err: {s}", .{@errorName(err)});
     const allocator = std.heap.c_allocator;
 
+    if (true) return 0; // TODO remove
+
     var decode_arena = std.heap.ArenaAllocator.init(allocator);
     defer decode_arena.deinit();
 
