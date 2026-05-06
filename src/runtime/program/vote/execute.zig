@@ -170,6 +170,14 @@ pub fn execute(
             &vote_account,
             args.tower_sync,
         ),
+        ._reserved_initialize_account_v2 => return InstructionError.InvalidInstructionData,
+        .update_commission_collector => |kind| return try executeUpdateCommissionCollector(
+            allocator,
+            ic,
+            &vote_account,
+            kind,
+            target_version,
+        ),
     };
 }
 
@@ -547,8 +555,123 @@ fn updateValidatorIdentity(
     }
 
     vote_state.nodePubkeyMut().* = new_identity;
-    if (vote_state.blockRevenueCollectorMut()) |collector| {
-        collector.* = new_identity; // [SIMD-0185] until SIMD-0232
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L828-L832
+    // Before SIMD-0232, block_revenue_collector is always synced with node_pubkey.
+    // After SIMD-0232, the collector can be set independently.
+    if (!ic.tc.feature_set.active(.custom_commission_collector, ic.tc.slot)) {
+        if (vote_state.blockRevenueCollectorMut()) |collector| {
+            collector.* = new_identity;
+        }
+    }
+
+    try setVoteState(
+        allocator,
+        vote_account,
+        &vote_state,
+        &ic.tc.rent,
+        &ic.tc.accounts_resize_delta,
+    );
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_processor.rs#L348-L376
+fn executeUpdateCommissionCollector(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    kind: vote_instruction.CommissionKind,
+    target_version: VoteVersion,
+) (error{OutOfMemory} || InstructionError)!void {
+    // SIMD-0232: Custom Commission Collector Account
+    // Requires SIMD-0185: Vote State V4
+    const custom_collector_enabled =
+        ic.tc.feature_set.active(.custom_commission_collector, ic.tc.slot);
+    if (!(custom_collector_enabled and target_version == .v4)) {
+        return InstructionError.InvalidInstructionData;
+    }
+
+    // Determine if collector is the vote account itself or a new account.
+    const collector_account_index = 1;
+    const collector_pubkey = &(ic.ixn_info.getAccountMetaAtIndex(collector_account_index) orelse
+        return InstructionError.MissingAccount).pubkey;
+
+    const is_vote_account = collector_pubkey.equals(&vote_account.pubkey);
+
+    try updateCommissionCollector(
+        allocator,
+        ic,
+        vote_account,
+        kind,
+        collector_pubkey.*,
+        is_vote_account,
+        target_version,
+    );
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L914-L973
+fn updateCommissionCollector(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    kind: vote_instruction.CommissionKind,
+    new_collector_key: Pubkey,
+    is_vote_account: bool,
+    target_version: VoteVersion,
+) (error{OutOfMemory} || InstructionError)!void {
+    var vote_state = try getVoteStateChecked(
+        allocator,
+        vote_account,
+        target_version,
+        true,
+    );
+    defer vote_state.deinit(allocator);
+
+    // Require authorized withdrawer to sign.
+    if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawerKey().*)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    // Per SIMD-0232: the designated commission collector must either
+    // be equal to the vote account's address OR satisfy ALL of the
+    // following constraints.
+    if (!is_vote_account) {
+        const collector_account_index = 1;
+        var collector_account = try ic.borrowInstructionAccount(
+            collector_account_index,
+        );
+        defer collector_account.release();
+
+        // 1. Must be a system program owned account.
+        const system_program = sig.runtime.program.system;
+        if (!collector_account.account.owner.equals(&system_program.ID)) {
+            return InstructionError.InvalidAccountOwner;
+        }
+
+        // 2. Must be rent-exempt.
+        const data_len = collector_account.constAccountData().len;
+        if (!ic.tc.rent.isExempt(
+            collector_account.account.lamports,
+            data_len,
+        )) {
+            return InstructionError.InsufficientFunds;
+        }
+
+        // 3. Must not be a reserved account (checked via writable).
+        if (!collector_account.context.is_writable) {
+            return InstructionError.InvalidArgument;
+        }
+    }
+
+    switch (kind) {
+        .inflation_rewards => {
+            if (vote_state.inflationRewardsCollectorMut()) |collector| {
+                collector.* = new_collector_key;
+            }
+        },
+        .block_revenue => {
+            if (vote_state.blockRevenueCollectorMut()) |collector| {
+                collector.* = new_collector_key;
+            }
+        },
     }
 
     try setVoteState(
@@ -5645,5 +5768,983 @@ test "vote_program: vote with v4 feature" {
             .compute_meter = 0,
         },
         .{},
+    );
+}
+
+// ── SIMD-0232: UpdateCommissionCollector tests ──────────────────────
+
+test "update_commission_collector inflation_rewards" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const rent = Rent{
+        .lamports_per_byte_year = 3480,
+        .exemption_threshold = 2.0,
+        .burn_percent = 50,
+    };
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const vote_acct = Pubkey.initRandom(prng.random());
+    const new_collector = Pubkey.initRandom(prng.random());
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer initial_v4.deinit(allocator);
+
+    var final_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer final_v4.deinit(allocator);
+    final_v4.inflation_rewards_collector = new_collector;
+
+    const init_ver = VoteStateVersions{ .v4 = initial_v4 };
+    const final_ver = VoteStateVersions{ .v4 = final_v4 };
+
+    var init_bytes =
+        ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(
+        init_bytes[0..],
+        init_ver,
+        .{},
+    );
+
+    var final_bytes =
+        ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(
+        final_bytes[0..],
+        final_ver,
+        .{},
+    );
+
+    // [agave] vote_processor.rs test_vote_update_commission_collector
+    try testing.expectProgramExecuteResult(
+        allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .update_commission_collector = .inflation_rewards,
+        },
+        &.{
+            .{
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 1,
+            },
+            .{
+                .is_signer = true,
+                .is_writable = false,
+                .index_in_transaction = 2,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{
+                    .pubkey = new_collector,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = sig.runtime.program.system.ID,
+                },
+                .{ .pubkey = withdrawer },
+                .{
+                    .pubkey = vote_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = rent,
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{
+                    .feature = .custom_commission_collector,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = final_bytes[0..],
+                },
+                .{
+                    .pubkey = new_collector,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = sig.runtime.program.system.ID,
+                },
+                .{ .pubkey = withdrawer },
+                .{
+                    .pubkey = vote_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+}
+
+test "update_commission_collector block_revenue" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const rent = Rent{
+        .lamports_per_byte_year = 3480,
+        .exemption_threshold = 2.0,
+        .burn_percent = 50,
+    };
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const vote_acct = Pubkey.initRandom(prng.random());
+    const new_collector = Pubkey.initRandom(prng.random());
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer initial_v4.deinit(allocator);
+
+    var final_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer final_v4.deinit(allocator);
+    final_v4.block_revenue_collector = new_collector;
+
+    const init_ver = VoteStateVersions{ .v4 = initial_v4 };
+    const final_ver = VoteStateVersions{ .v4 = final_v4 };
+
+    var init_bytes =
+        ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(
+        init_bytes[0..],
+        init_ver,
+        .{},
+    );
+
+    var final_bytes =
+        ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(
+        final_bytes[0..],
+        final_ver,
+        .{},
+    );
+
+    try testing.expectProgramExecuteResult(
+        allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .update_commission_collector = .block_revenue,
+        },
+        &.{
+            .{
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 1,
+            },
+            .{
+                .is_signer = true,
+                .is_writable = false,
+                .index_in_transaction = 2,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{
+                    .pubkey = new_collector,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = sig.runtime.program.system.ID,
+                },
+                .{ .pubkey = withdrawer },
+                .{
+                    .pubkey = vote_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = rent,
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{
+                    .feature = .custom_commission_collector,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = final_bytes[0..],
+                },
+                .{
+                    .pubkey = new_collector,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = sig.runtime.program.system.ID,
+                },
+                .{ .pubkey = withdrawer },
+                .{
+                    .pubkey = vote_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+}
+
+test "update_commission_collector feature disabled" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const rent = Rent{
+        .lamports_per_byte_year = 3480,
+        .exemption_threshold = 2.0,
+        .burn_percent = 50,
+    };
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const vote_acct = Pubkey.initRandom(prng.random());
+    const new_collector = Pubkey.initRandom(prng.random());
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer initial_v4.deinit(allocator);
+
+    const init_ver = VoteStateVersions{ .v4 = initial_v4 };
+
+    var init_bytes =
+        ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(
+        init_bytes[0..],
+        init_ver,
+        .{},
+    );
+
+    // Feature disabled → InvalidInstructionData.
+    const result = testing.expectProgramExecuteResult(
+        allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .update_commission_collector = .inflation_rewards,
+        },
+        &.{
+            .{
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 1,
+            },
+            .{
+                .is_signer = true,
+                .is_writable = false,
+                .index_in_transaction = 2,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{
+                    .pubkey = new_collector,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = sig.runtime.program.system.ID,
+                },
+                .{ .pubkey = withdrawer },
+                .{
+                    .pubkey = vote_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = rent,
+                .clock = clock,
+            },
+            // vote_state_v4 active, custom_commission_collector NOT
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{
+                    .pubkey = new_collector,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = sig.runtime.program.system.ID,
+                },
+                .{ .pubkey = withdrawer },
+                .{
+                    .pubkey = vote_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+
+    try std.testing.expectError(
+        InstructionError.InvalidInstructionData,
+        result,
+    );
+}
+
+test "update_commission_collector withdrawer not signer" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const rent = Rent{
+        .lamports_per_byte_year = 3480,
+        .exemption_threshold = 2.0,
+        .burn_percent = 50,
+    };
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const vote_acct = Pubkey.initRandom(prng.random());
+    const new_collector = Pubkey.initRandom(prng.random());
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer initial_v4.deinit(allocator);
+
+    const init_ver = VoteStateVersions{ .v4 = initial_v4 };
+
+    var init_bytes =
+        ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(
+        init_bytes[0..],
+        init_ver,
+        .{},
+    );
+
+    // Withdrawer not signer → MissingRequiredSignature.
+    const result = testing.expectProgramExecuteResult(
+        allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .update_commission_collector = .inflation_rewards,
+        },
+        &.{
+            .{
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 1,
+            },
+            // withdrawer NOT signing
+            .{
+                .is_signer = false,
+                .is_writable = false,
+                .index_in_transaction = 2,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{
+                    .pubkey = new_collector,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = sig.runtime.program.system.ID,
+                },
+                .{ .pubkey = withdrawer },
+                .{
+                    .pubkey = vote_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = rent,
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{
+                    .feature = .custom_commission_collector,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{
+                    .pubkey = new_collector,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = sig.runtime.program.system.ID,
+                },
+                .{ .pubkey = withdrawer },
+                .{
+                    .pubkey = vote_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+
+    try std.testing.expectError(
+        InstructionError.MissingRequiredSignature,
+        result,
+    );
+}
+
+test "update_commission_collector not system owned" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const rent = Rent{
+        .lamports_per_byte_year = 3480,
+        .exemption_threshold = 2.0,
+        .burn_percent = 50,
+    };
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const vote_acct = Pubkey.initRandom(prng.random());
+    const new_collector = Pubkey.initRandom(prng.random());
+    const bad_owner = Pubkey.initRandom(prng.random());
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer initial_v4.deinit(allocator);
+
+    const init_ver = VoteStateVersions{ .v4 = initial_v4 };
+
+    var init_bytes =
+        ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(
+        init_bytes[0..],
+        init_ver,
+        .{},
+    );
+
+    // Not system-owned → InvalidAccountOwner.
+    const result = testing.expectProgramExecuteResult(
+        allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .update_commission_collector = .inflation_rewards,
+        },
+        &.{
+            .{
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 1,
+            },
+            .{
+                .is_signer = true,
+                .is_writable = false,
+                .index_in_transaction = 2,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{
+                    .pubkey = new_collector,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = bad_owner,
+                },
+                .{ .pubkey = withdrawer },
+                .{
+                    .pubkey = vote_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = rent,
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{
+                    .feature = .custom_commission_collector,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{
+                    .pubkey = new_collector,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = bad_owner,
+                },
+                .{ .pubkey = withdrawer },
+                .{
+                    .pubkey = vote_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+
+    try std.testing.expectError(
+        InstructionError.InvalidAccountOwner,
+        result,
+    );
+}
+
+test "update_commission_collector not rent exempt" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const rent = Rent{
+        .lamports_per_byte_year = 3480,
+        .exemption_threshold = 2.0,
+        .burn_percent = 50,
+    };
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const vote_acct = Pubkey.initRandom(prng.random());
+    const new_collector = Pubkey.initRandom(prng.random());
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer initial_v4.deinit(allocator);
+
+    const init_ver = VoteStateVersions{ .v4 = initial_v4 };
+
+    var init_bytes =
+        ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(
+        init_bytes[0..],
+        init_ver,
+        .{},
+    );
+
+    // Not rent-exempt → InsufficientFunds.
+    const result = testing.expectProgramExecuteResult(
+        allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .update_commission_collector = .inflation_rewards,
+        },
+        &.{
+            .{
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            .{
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 1,
+            },
+            .{
+                .is_signer = true,
+                .is_writable = false,
+                .index_in_transaction = 2,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{
+                    .pubkey = new_collector,
+                    .lamports = 1, // not rent exempt
+                    .owner = sig.runtime.program.system.ID,
+                },
+                .{ .pubkey = withdrawer },
+                .{
+                    .pubkey = vote_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = rent,
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{
+                    .feature = .custom_commission_collector,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{
+                    .pubkey = new_collector,
+                    .lamports = 1,
+                    .owner = sig.runtime.program.system.ID,
+                },
+                .{ .pubkey = withdrawer },
+                .{
+                    .pubkey = vote_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+
+    try std.testing.expectError(
+        InstructionError.InsufficientFunds,
+        result,
+    );
+}
+
+test "update_commission_collector not writable" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const rent = Rent{
+        .lamports_per_byte_year = 3480,
+        .exemption_threshold = 2.0,
+        .burn_percent = 50,
+    };
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const vote_acct = Pubkey.initRandom(prng.random());
+    const new_collector = Pubkey.initRandom(prng.random());
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer initial_v4.deinit(allocator);
+
+    const init_ver = VoteStateVersions{ .v4 = initial_v4 };
+
+    var init_bytes =
+        ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(
+        init_bytes[0..],
+        init_ver,
+        .{},
+    );
+
+    // Not writable → InvalidArgument.
+    const result = testing.expectProgramExecuteResult(
+        allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .update_commission_collector = .inflation_rewards,
+        },
+        &.{
+            .{
+                .is_signer = false,
+                .is_writable = true,
+                .index_in_transaction = 0,
+            },
+            // collector NOT writable
+            .{
+                .is_signer = false,
+                .is_writable = false,
+                .index_in_transaction = 1,
+            },
+            .{
+                .is_signer = true,
+                .is_writable = false,
+                .index_in_transaction = 2,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{
+                    .pubkey = new_collector,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = sig.runtime.program.system.ID,
+                },
+                .{ .pubkey = withdrawer },
+                .{
+                    .pubkey = vote_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = rent,
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{
+                    .feature = .custom_commission_collector,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{
+                    .pubkey = new_collector,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = sig.runtime.program.system.ID,
+                },
+                .{ .pubkey = withdrawer },
+                .{
+                    .pubkey = vote_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+
+    try std.testing.expectError(
+        InstructionError.InvalidArgument,
+        result,
     );
 }
