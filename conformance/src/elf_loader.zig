@@ -158,6 +158,14 @@ fn ebpfErrToCode(err: elf.LoadError) u32 {
         error.OutOfBounds => 21,
         error.UnsupportedSBPFVersion => 22,
         error.InvalidProgramHeader => 23,
-        else => unreachable,
+        // These all map to ElfError::FailedToParse in agave (code 1).
+        // [agave] solfuzz-agave/src/utils/err_map.rs:25 — ElfError::FailedToParse(_) => 1
+        error.NoSectionNameStringTable,
+        error.InvalidRelocationTable,
+        error.NoStringTable,
+        error.NoDynamicStringTable,
+        error.InvalidString,
+        error.OutOfMemory,
+        => 1,
     };
 }

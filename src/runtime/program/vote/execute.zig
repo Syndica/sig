@@ -1127,34 +1127,47 @@ fn getVoteStateChecked(
     target_version: VoteVersion,
     check_initialized: bool,
 ) (error{OutOfMemory} || InstructionError)!VoteState {
-    var versioned_state = try vote_account.deserializeFromAccountData(
+    const data = vote_account.account.data;
+
+    switch (target_version) {
+        .v3 => {
+            // [agave] VoteStateV3::deserialize_into_ptr variant 0 → InvalidAccountData
+            // https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/sdk/vote-interface/src/state/vote_state_v3.rs (line ~159)
+            // (crate: solana-vote-interface-5.0.0/src/state/vote_state_v3.rs:159)
+            if (data.len >= 4 and std.mem.readInt(u32, data[0..4], .little) == 0) {
+                return InstructionError.InvalidAccountData;
+            }
+        },
+        .v4 => {
+            // [agave] VoteStateVersions::deserialize variant 0 → UninitializedAccount
+            // https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/sdk/vote-interface/src/state/vote_state_versions.rs (line ~155)
+            // (crate: solana-vote-interface-5.0.0/src/state/vote_state_versions.rs:155)
+            if (data.len < 4 or std.mem.readInt(u32, data[0..4], .little) == 0) {
+                return InstructionError.UninitializedAccount;
+            }
+        },
+    }
+
+    var versioned_state = vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
-    );
+    ) catch return InstructionError.InvalidAccountData;
     errdefer versioned_state.deinit(allocator);
 
     const target_v4 = target_version == .v4;
 
     switch (target_version) {
         .v3 => {
-            // V0_23_5 is no longer supported. agave's
-            // VoteStateV3::deserialize_into_ptr returns InvalidAccountData for variant 0
-            // when compiled for target_os = "solana".
-            if (versioned_state == .v0_23_5) {
-                return InstructionError.InvalidAccountData;
-            }
-            // Existing flow before v4 feature gate activation:
-            // Deserialize as VoteStateVersions (converting during deserialization).
-            // Some callsites deserialize without checking initialization status.
+            // [agave] get_vote_state_handler_checked V3 path: check_initialized → UninitializedAccount
+            // https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L65
             if (check_initialized and versioned_state.isUninitialized()) {
                 return InstructionError.UninitializedAccount;
             }
         },
         .v4 => {
-            // New flow after v4 feature gate activation:
-            // V4 path rejects V0_23_5 at deserialization in agave;
-            // check explicitly here. Always checks uninitialized.
-            if (versioned_state == .v0_23_5 or versioned_state.isUninitialized()) {
+            // [agave] get_vote_state_handler_checked V4 path: always checks uninitialized
+            // https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L76
+            if (versioned_state.isUninitialized()) {
                 return InstructionError.UninitializedAccount;
             }
         },
