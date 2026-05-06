@@ -273,8 +273,13 @@ const CallerAccount = struct {
             .virtual_address_space_adjustments,
             ic.tc.slot,
         );
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/program-runtime/src/cpi.rs#L312-L314
+        const syscall_parameter_address_restrictions = ic.tc.feature_set.active(
+            .syscall_parameter_address_restrictions,
+            ic.tc.slot,
+        );
 
-        if (virtual_address_space_adjustments) {
+        if (syscall_parameter_address_restrictions) {
             try checkAccountInfoPtr(
                 ic,
                 account_info.key_addr,
@@ -303,7 +308,7 @@ const CallerAccount = struct {
                 lamports_addr,
                 ic.getCheckAligned(),
             );
-            if (virtual_address_space_adjustments) {
+            if (syscall_parameter_address_restrictions) {
                 if (lamports_addr >= MM_INPUT_START) {
                     return SyscallError.InvalidPointer;
                 }
@@ -332,7 +337,7 @@ const CallerAccount = struct {
         const serialized, const vm_data_addr, const ref_to_len_addr = blk: {
             // See above on lamports regarding Rc(RefCell) pointer accessing.
             const data_ptr: u64 = @intFromPtr(account_info.data.deref().asPtr());
-            if (virtual_address_space_adjustments and data_ptr >= MM_INPUT_START) {
+            if (syscall_parameter_address_restrictions and data_ptr >= MM_INPUT_START) {
                 return SyscallError.InvalidPointer;
             }
 
@@ -343,7 +348,7 @@ const CallerAccount = struct {
                 data_ptr,
                 ic.getCheckAligned(),
             )).*;
-            if (virtual_address_space_adjustments) {
+            if (syscall_parameter_address_restrictions) {
                 try checkAccountInfoPtr(
                     ic,
                     data.ptr,
@@ -355,7 +360,7 @@ const CallerAccount = struct {
             try ic.tc.consumeCompute(data.len / ic.tc.compute_budget.cpi_bytes_per_unit);
 
             const vm_len_addr = data_ptr +| @sizeOf(u64);
-            if (virtual_address_space_adjustments) {
+            if (syscall_parameter_address_restrictions) {
                 // In the same vein as the other check_account_info_pointer() checks, we don't lock
                 // this pointer to a specific address but we don't want it to be inside accounts, or
                 // callees might be able to write to the pointed memory.
@@ -403,8 +408,13 @@ const CallerAccount = struct {
             .virtual_address_space_adjustments,
             ic.tc.slot,
         );
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/program-runtime/src/cpi.rs#L446-L448
+        const syscall_parameter_address_restrictions = ic.tc.feature_set.active(
+            .syscall_parameter_address_restrictions,
+            ic.tc.slot,
+        );
 
-        if (virtual_address_space_adjustments) {
+        if (syscall_parameter_address_restrictions) {
             try checkAccountInfoPtr(
                 ic,
                 account_info.key_addr,
@@ -494,6 +504,7 @@ fn updateCalleeAccount(
     ic: *const InstructionContext,
     callee_account: *BorrowedAccount,
     caller_account: *const CallerAccount,
+    syscall_parameter_address_restrictions: bool,
     virtual_address_space_adjustments: bool,
     account_data_direct_mapping: bool,
 ) !bool {
@@ -507,11 +518,16 @@ fn updateCalleeAccount(
         const prev_len = callee_account.constAccountData().len;
         const post_len = (try caller_account.ref_to_len_in_vm.get(.constant)).*;
         if (prev_len != post_len) {
-            const is_caller_loader_deprecated = !ic.getCheckAligned();
-            const address_space = caller_account.original_data_len +|
-                (MAX_PERMITTED_DATA_INCREASE * @intFromBool(!is_caller_loader_deprecated));
-            if (post_len > address_space) {
-                return InstructionError.InvalidRealloc;
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/program-runtime/src/cpi.rs#L262-L272
+            // InvalidRealloc check is gated on syscall_parameter_address_restrictions in agave
+            // (inside get_serialized_data), but we inline it here.
+            if (syscall_parameter_address_restrictions) {
+                const is_caller_loader_deprecated = !ic.getCheckAligned();
+                const address_space = caller_account.original_data_len +|
+                    (MAX_PERMITTED_DATA_INCREASE * @intFromBool(!is_caller_loader_deprecated));
+                if (post_len > address_space) {
+                    return InstructionError.InvalidRealloc;
+                }
             }
             try callee_account.setDataLength(allocator, &ic.tc.accounts_resize_delta, post_len);
             // pointer to data may have changed, so caller must be updated
@@ -586,12 +602,17 @@ fn translateAccounts(
         .virtual_address_space_adjustments,
         tc.slot,
     );
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/program-runtime/src/cpi.rs#L998-L1000
+    const syscall_parameter_address_restrictions = tc.feature_set.active(
+        .syscall_parameter_address_restrictions,
+        tc.slot,
+    );
     const increase_info_limit = tc.feature_set.active(.increase_cpi_account_info_limit, tc.slot);
 
     // In the same vein as the other checkAccountInfoPtr() checks, we don't lock
     // this pointer to a specific address but we don't want it to be inside accounts, or
     // callees might be able to write to the pointed memory.
-    if (virtual_address_space_adjustments and
+    if (syscall_parameter_address_restrictions and
         (account_infos_addr +| (account_infos_len *| @sizeOf(AccountType))) >= MM_INPUT_START)
     {
         return SyscallError.InvalidPointer;
@@ -712,6 +733,7 @@ fn translateAccounts(
             ic,
             &callee_account,
             &caller_account,
+            syscall_parameter_address_restrictions,
             virtual_address_space_adjustments,
             account_data_direct_mapping,
         );
@@ -1924,6 +1946,7 @@ test "updateCalleeAccount: lamports owner" {
             &callee_account,
             &caller_account,
             virtual_address_space_adjustments,
+            virtual_address_space_adjustments,
             false, // account_data_direct_mapping
         );
 
@@ -1962,6 +1985,7 @@ test "updateCalleeAccount: data writable" {
             &callee_account,
             &caller_account,
             virtual_address_space_adjustments,
+            virtual_address_space_adjustments,
             false, // account_data_direct_mapping
         );
         try std.testing.expectEqualSlices(u8, callee_account.constAccountData(), "boobar");
@@ -1977,6 +2001,7 @@ test "updateCalleeAccount: data writable" {
                 &ctx.ic,
                 &callee_account,
                 &caller_account,
+                virtual_address_space_adjustments,
                 virtual_address_space_adjustments,
                 true, // account_data_direct_mapping
             ),
@@ -1994,6 +2019,7 @@ test "updateCalleeAccount: data writable" {
                 &callee_account,
                 &caller_account,
                 virtual_address_space_adjustments,
+                virtual_address_space_adjustments,
                 true, // account_data_direct_mapping
             ),
         );
@@ -2009,6 +2035,7 @@ test "updateCalleeAccount: data writable" {
             &callee_account,
             &caller_account,
             virtual_address_space_adjustments,
+            virtual_address_space_adjustments,
             true, // account_data_direct_mapping
         );
         try std.testing.expectEqualSlices(u8, callee_account.constAccountData(), "");
@@ -2020,6 +2047,7 @@ test "updateCalleeAccount: data writable" {
             &ctx.ic,
             &callee_account,
             &caller_account,
+            virtual_address_space_adjustments,
             virtual_address_space_adjustments,
             true, // account_data_direct_mapping
         );
@@ -2068,6 +2096,7 @@ test "updateCalleeAccount: data readonly" {
                 &ctx.ic,
                 &callee_account,
                 &caller_account,
+                false, // syscall_parameter_address_restrictions
                 false, // virtual_address_space_adjustments
                 false, // account_data_direct_mapping
             ),
@@ -2085,6 +2114,7 @@ test "updateCalleeAccount: data readonly" {
                 &callee_account,
                 &caller_account,
                 virtual_address_space_adjustments,
+                virtual_address_space_adjustments,
                 true, // account_data_direct_mapping
             ),
         );
@@ -2100,6 +2130,7 @@ test "updateCalleeAccount: data readonly" {
                 &ctx.ic,
                 &callee_account,
                 &caller_account,
+                virtual_address_space_adjustments,
                 virtual_address_space_adjustments,
                 true, // account_data_direct_mapping
             ),
