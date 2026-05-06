@@ -408,19 +408,28 @@ pub fn Variant(comptime V: type) type {
         pub const Indexer = std.enums.EnumIndexer(Enum);
 
         pub fn set(self: *const VariantCounterSelf, tag: Tag, value: u64) void {
-            _ = self.counts[Indexer.indexOf(enumFromTag(tag))].store(value, .monotonic);
+            _ = self.counts[indexFromTag(tag)].store(value, .monotonic);
         }
 
         pub fn increment(self: *const VariantCounterSelf, tag: Tag, amount: u64) void {
-            _ = self.counts[Indexer.indexOf(enumFromTag(tag))].fetchAdd(amount, .monotonic);
+            _ = self.counts[indexFromTag(tag)].fetchAdd(amount, .monotonic);
+        }
+
+        /// Asserts `amount` to be less than the current value.
+        pub fn decrement(self: *const VariantCounterSelf, tag: Tag, amount: u64) void {
+            std.debug.assert(amount <= self.counts[indexFromTag(tag)].fetchSub(amount, .monotonic));
         }
 
         pub fn reset(self: *const VariantCounterSelf, tag: Tag) void {
-            self.counts[Indexer.indexOf(enumFromTag(tag))].store(0, .monotonic);
+            self.counts[indexFromTag(tag)].store(0, .monotonic);
         }
 
         pub fn resetAll(self: *const VariantCounterSelf) void {
             for (&self.counts) |*count| count.store(0, .monotonic);
+        }
+
+        fn indexFromTag(value: Tag) usize {
+            return Indexer.indexOf(enumFromTag(value));
         }
 
         fn enumFromTag(value: Tag) Enum {

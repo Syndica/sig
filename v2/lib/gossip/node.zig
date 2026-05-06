@@ -19,6 +19,7 @@ const GossipMessage = lib.gossip.GossipMessage;
 const GossipData = lib.gossip.GossipData;
 const GossipValue = lib.gossip.GossipValue;
 const BloomFilter = lib.gossip.BloomFilter;
+const Metrics = lib.gossip.Metrics;
 
 pub fn GossipNode(comptime Effects: type) type {
     lib.util.assertInterface(Effects, struct {
@@ -79,6 +80,8 @@ pub fn GossipNode(comptime Effects: type) type {
         push_timeout: u64 = 0,
         pull_timeout: u64 = 0,
         no_peers_timeout: u64 = 0,
+
+        metrics: Metrics,
 
         const PULL_INTERVAL_MS = 500;
         const PUSH_INTERVAL_MS = 5 * 1000;
@@ -229,7 +232,12 @@ pub fn GossipNode(comptime Effects: type) type {
             entrypoints: []const lib.gossip.Address,
         };
 
-        pub fn init(fba: *std.heap.FixedBufferAllocator, now: u64, config: Config) !Self {
+        pub fn init(
+            fba: *std.heap.FixedBufferAllocator,
+            now: u64,
+            metrics: Metrics,
+            config: Config,
+        ) !Self {
             var table: Table = .empty;
             try table.ensureTotalCapacity(fba.allocator(), 16384);
 
@@ -283,6 +291,7 @@ pub fn GossipNode(comptime Effects: type) type {
                 .prng = prng,
                 .config = config,
                 .created = now,
+                .metrics = metrics,
             };
         }
 
@@ -317,16 +326,20 @@ pub fn GossipNode(comptime Effects: type) type {
                     "invalid msg from ({f}, len={}): {}",
                     .{ packet.addr, packet.len, e },
                 );
+                self.metrics.invalid_packets.increment(1);
                 return;
             };
+            self.metrics.valid_packets.increment(1);
 
             self.processMessage(.from(logger), now, packet.addr, msg) catch |err| {
                 logger.err().logf(
                     "failed to process msg ({f}, {s}) {}",
                     .{ packet.addr, @tagName(msg), err },
                 );
+                self.metrics.invalid_messages.increment(err, 1);
                 return;
             };
+            self.metrics.processed_messages.increment(msg, 1);
         }
 
         const ProcessMessageError = error{
@@ -718,6 +731,7 @@ pub fn GossipNode(comptime Effects: type) type {
                     },
                 };
                 values.appendAssumeCapacity(value);
+                self.metrics.pushed_values.increment(value.data, 1);
             }
 
             // Send out remaining push message.
@@ -777,7 +791,7 @@ pub fn GossipNode(comptime Effects: type) type {
 
                 if (v.wallclock <= now -| STALE_TABLE_THRESHOLD_MS) {
                     self.addExpired(now, v.hash);
-                    self.table.swapRemoveAt(i);
+                    self.tableSwapRemoveAt(i);
                 } else {
                     i += 1;
                 }
@@ -982,10 +996,10 @@ pub fn GossipNode(comptime Effects: type) type {
                     for (self.table.values()[1..], 1..) |*v, j| {
                         if (v.wallclock < self.table.values()[i].wallclock) i = j;
                     }
-                    self.table.swapRemoveAt(i);
+                    self.tableSwapRemoveAt(i);
                 }
 
-                const gop = self.table.getOrPutAssumeCapacity(key);
+                const gop = self.tableGetOrPutAssumeCapacity(key);
                 break :blk .{ gop.found_existing, gop.value_ptr };
             };
 
@@ -1130,6 +1144,7 @@ pub fn GossipNode(comptime Effects: type) type {
                         unreachable;
                     },
                 }
+                self.metrics.discoveries.increment(value.data, 1);
             }
         }
 
@@ -1188,6 +1203,20 @@ pub fn GossipNode(comptime Effects: type) type {
             return peer;
         }
 
+        fn tableGetOrPutAssumeCapacity(self: *Self, key: Key) Table.GetOrPutResult {
+            const gop = self.table.getOrPutAssumeCapacity(key);
+            if (!gop.found_existing) {
+                self.metrics.table_entry_count.increment(key.tag, 1);
+            }
+            return gop;
+        }
+
+        fn tableSwapRemoveAt(self: *Self, index: usize) void {
+            const removed_tag = self.table.keys()[index].tag;
+            self.table.swapRemoveAt(index);
+            self.metrics.table_entry_count.decrement(removed_tag, 1);
+        }
+
         fn identity(self: *const Self) Pubkey {
             return self.config.effects.getIdentity();
         }
@@ -1216,6 +1245,7 @@ pub fn GossipNode(comptime Effects: type) type {
             packet.len = @intCast(writer.buffered().len);
 
             self.config.effects.flushWrittenPackets();
+            self.metrics.pushed_messages.increment(msg, 1);
         }
     };
 }
