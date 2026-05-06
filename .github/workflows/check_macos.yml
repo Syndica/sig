@@ -38,8 +38,6 @@ jobs:
 
   test_macos:
     runs-on: macos-26
-    needs:
-      - build_check_macos
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,8 +60,6 @@ jobs:
 
   test_macos_hashmap_ledger:
     runs-on: macos-26
-    needs:
-      - build_check_macos
     steps:
       - uses: actions/checkout@v4
         with:
