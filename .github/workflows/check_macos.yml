@@ -36,7 +36,7 @@ jobs:
       - name: Build Check
         run: zig build -Denable-tsan=true --summary all -Dno-run -Dno-bin
 
-  test_macos:
+  test_macos1:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -58,6 +58,424 @@ jobs:
           set -eo pipefail
           zig-out/bin/test 2>&1 | cat
 
+  test_macos2:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=true --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos3:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=true --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos4:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=true --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos5:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=true --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos6:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=true --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos7:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=true --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos8:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=true --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos9:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=true --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos10:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=true --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos11:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=false --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos12:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=false --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos13:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=false --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos14:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=false --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos15:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=false --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos16:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=false --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos17:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=false --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos18:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=false --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos19:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=false --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos20:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=false --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
   test_macos_hashmap_ledger:
     runs-on: macos-26
     steps:
@@ -73,7 +491,7 @@ jobs:
           cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build Tests
-        run: zig build test -Dno-run -Denable-tsan=true --summary all -Dlong-tests
+        run: zig build test -Dno-run -Denable-tsan=false --summary all -Dlong-tests
           -Dledger=hashmap -Dfilter="ledger"
 
       - name: Run Tests

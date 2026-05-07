@@ -115,7 +115,7 @@ jobs:
       - name: Run Ledger Fuzzer
         run: workspace/zig-out-release/bin/fuzz --seed 19 ledger 10000
 
-  build_and_test_linux:
+  build_and_test_linux1:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -137,6 +137,557 @@ jobs:
 
       - name: Build Tests
         run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux4:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux5:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux6:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux7:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux8:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux9:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux10:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux11:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests -Dcpu=x86_64_v3
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux12:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests -Dcpu=x86_64_v3
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux13:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests -Dcpu=x86_64_v3
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux14:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests -Dcpu=x86_64_v3
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux15:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests -Dcpu=x86_64_v3
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux16:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests -Dcpu=x86_64_v3
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux17:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests -Dcpu=x86_64_v3
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux18:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests -Dcpu=x86_64_v3
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux19:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests -Dcpu=x86_64_v3
+          --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  build_and_test_linux20:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests -Dcpu=x86_64_v3
           --summary all
 
       - name: Run Tests
