@@ -250,11 +250,10 @@ pub const Appender = struct {
         var result: S = undefined;
         inline for (@typeInfo(S).@"struct".fields) |s_field| {
             const field_ptr = &@field(result, s_field.name);
-            const field_config = @field(fields_config, s_field.name);
+            const field_config = @field(fields_config.fields, s_field.name);
 
-            const id_name: []const u8 =
-                field_config.id_override orelse
-                s_field.name;
+            const id_name: []const u8 = fields_config.prefix ++ "_" ++
+                (field_config.id_override orelse s_field.name);
 
             field_ptr.* = switch (s_field.type) {
                 tel.Counter => self.appendCounter(.initNameOnly(id_name)),
@@ -341,6 +340,13 @@ pub const FieldConfigHistogram = struct {
 };
 
 pub fn FieldsConfig(comptime S: type) type {
+    return struct {
+        prefix: []const u8,
+        fields: FieldConfigs(S) = .{},
+    };
+}
+
+pub fn FieldConfigs(comptime S: type) type {
     const s_info = @typeInfo(S).@"struct";
     var new_fields: [s_info.fields.len]std.builtin.Type.StructField = undefined;
     @setEvalBranchQuota(s_info.fields.len);

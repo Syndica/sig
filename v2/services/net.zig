@@ -31,7 +31,9 @@ pub fn serviceMain(
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
 
     const metric_appender = rw.tel.metricAppender();
-    const metrics = metric_appender.appendFields(Metrics, .{});
+    const metrics = metric_appender.appendFields(Metrics, .{
+        .prefix = @tagName(name),
+    });
     rw.tel.signalReady();
 
     try mainInner(
