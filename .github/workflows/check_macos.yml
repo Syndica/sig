@@ -1,0 +1,103 @@
+name: check_macos
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "*"
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+  merge_group:
+    types:
+      - checks_requested
+
+permissions:
+  contents: read
+
+jobs:
+  build_check_macos:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Check
+        run: zig build -Denable-tsan=true --summary all -Dno-run -Dno-bin
+
+  test_macos:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=true --summary all
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_macos_hashmap_ledger:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Build Tests
+        run: zig build test -Dno-run -Denable-tsan=true --summary all -Dlong-tests
+          -Dledger=hashmap -Dfilter="ledger"
+
+      - name: Run Tests
+        run: |
+          set -eo pipefail
+          zig-out/bin/test 2>&1 | cat
+
+  test_webzockets_macos:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: macos-webzockets-${{ hashFiles('build.zig.zon',
+            'src/rpc/webzockets/build.zig', 'src/rpc/webzockets/build.zig.zon')
+            }}
+
+      - name: Build and Run Webzockets Tests
+        run: |
+          cd src/rpc/webzockets
+          zig build test --summary all
