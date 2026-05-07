@@ -319,14 +319,8 @@ pub fn createSysvarCache(
     }
 
     sysvar_cache.last_restart_slot = try cloneSysvarData(allocator, ctx, sysvar.LastRestartSlot.ID);
-    if (std.meta.isError(sysvar_cache.get(sysvar.LastRestartSlot))) {
-        sysvar_cache.last_restart_slot = try sysvar.serialize(
-            allocator,
-            sysvar.LastRestartSlot{
-                .last_restart_slot = 5000,
-            },
-        );
-    }
+    // [agave] harness does NOT create a default LastRestartSlot — if not in fixture,
+    // sol_get_last_restart_slot_sysvar should return UnsupportedSysvar.
 
     if (sysvar_cache.slot_hashes == null) {
         if (try cloneSysvarData(allocator, ctx, sysvar.SlotHashes.ID)) |slot_hashes_data| {
