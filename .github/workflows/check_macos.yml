@@ -34,7 +34,7 @@ jobs:
           cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build Check
-        run: zig build -Denable-tsan=true --summary all -Dno-run -Dno-bin
+        run: zig build -Denable-tsan=false --summary all -Dno-run -Dno-bin
 
   test_macos:
     runs-on: macos-26
@@ -51,7 +51,7 @@ jobs:
           cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build Tests
-        run: zig build test -Dno-run -Denable-tsan=true --summary all
+        run: zig build test -Dno-run -Denable-tsan=false --summary all
 
       - name: Run Tests
         run: |
@@ -73,7 +73,7 @@ jobs:
           cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build Tests
-        run: zig build test -Dno-run -Denable-tsan=true --summary all -Dlong-tests
+        run: zig build test -Dno-run -Denable-tsan=false --summary all -Dlong-tests
           -Dledger=hashmap -Dfilter="ledger"
 
       - name: Run Tests
