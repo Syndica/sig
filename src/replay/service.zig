@@ -743,11 +743,11 @@ pub fn getActiveFeatures(
     const allocator = arena.allocator();
 
     var features: sig.core.FeatureSet = .ALL_DISABLED;
-    for (0..sig.core.features.NUM_FEATURES) |i| {
+    for (0..sig.core.features.features.len) |i| {
         defer _ = arena.reset(.retain_capacity);
 
         const possible_feature: sig.core.features.Feature = @enumFromInt(i);
-        const possible_feature_pubkey = sig.core.features.map.get(possible_feature).key;
+        const possible_feature_pubkey = sig.core.features.pubkey_map.get(possible_feature);
 
         const feature_account = try account_reader.get(allocator, possible_feature_pubkey) orelse
             continue;
@@ -1391,7 +1391,7 @@ test "getActiveFeatures rejects wrong ownership" {
 
     try accounts.put(
         allocator,
-        sig.core.features.map.get(.system_transfer_zero_check).key,
+        sig.core.features.pubkey_map.get(.system_transfer_zero_check),
         acct,
     );
 
@@ -1401,7 +1401,7 @@ test "getActiveFeatures rejects wrong ownership" {
     acct.owner = sig.runtime.ids.FEATURE_PROGRAM_ID;
     try accounts.put(
         allocator,
-        sig.core.features.map.get(.system_transfer_zero_check).key,
+        sig.core.features.pubkey_map.get(.system_transfer_zero_check),
         acct,
     );
 
