@@ -21,7 +21,7 @@ const test_inclusion_roots = [_][]const u8{ "lib/lib.zig", "lint/main.zig" };
 
 /// Runs v2 lint and exits with 0 for no diagnostics, 1 for diagnostics, and 2 for CLI or internal
 /// errors (lint didn't run at all or failed to finish).
-pub fn main() !u8 {
+pub fn main() u8 {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
     defer _ = debug_allocator.deinit();
     const allocator = debug_allocator.allocator();
@@ -64,7 +64,11 @@ pub fn main() !u8 {
         return 2;
     };
 
-    try core.printDiagnostics(ctx.diagnostics.items);
+    core.printDiagnostics(ctx.diagnostics.items) catch |err| {
+        std.debug.print("failed to print diagnostics: {s}\n", .{@errorName(err)});
+        if (@errorReturnTrace()) |trace| std.debug.dumpStackTrace(trace.*);
+        return 2;
+    };
     if (ctx.diagnostics.items.len == 0) return 0;
     return 1;
 }
