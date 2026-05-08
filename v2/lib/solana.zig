@@ -1,7 +1,11 @@
-const std = @import("std");
-
 comptime {
-    _ = std.testing.refAllDecls(@This());
+    if (@import("builtin").is_test) {
+        _ = @import("solana/cluster.zig");
+        _ = @import("solana/hash.zig");
+        _ = @import("solana/leader_schedule.zig");
+        _ = @import("solana/pubkey.zig");
+        _ = @import("solana/signature.zig");
+    }
 }
 
 pub const Hash = @import("solana/hash.zig").Hash;

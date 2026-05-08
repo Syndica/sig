@@ -17,7 +17,6 @@ const bincode = lib.gossip.bincode;
 const GossipMessage = lib.gossip.GossipMessage;
 const GossipData = lib.gossip.GossipData;
 const GossipValue = lib.gossip.GossipValue;
-const ContactInfo = lib.gossip.ContactInfo;
 const BloomFilter = lib.gossip.BloomFilter;
 
 pub fn GossipNode(comptime Effects: type) type {
@@ -384,8 +383,9 @@ pub fn GossipNode(comptime Effects: type) type {
                     var prune_len: usize = 0;
 
                     for (push.values.items) |value| {
-                        const key, const duplicates =
-                            (try self.insertValue(.from(logger), now, .push, value)) orelse continue;
+                        const maybe_insert =
+                            try self.insertValue(.from(logger), now, .push, value);
+                        const key, const duplicates = maybe_insert orelse continue;
 
                         // Add to prunes if enough duplicates.
                         if (duplicates >= DUPLICATE_THRESHOLD_UNTIL_PRUNE) {
@@ -407,7 +407,11 @@ pub fn GossipNode(comptime Effects: type) type {
 
                         // Dont send back prunes from pushes that arent peers with a ContactInfo.
                         const peer = self.peers.getPtr(push.from) orelse break :blk;
-                        const ci_key: Key = .{ .from = push.from, .tag = .contact_info, .index = 0 };
+                        const ci_key: Key = .{
+                            .from = push.from,
+                            .tag = .contact_info,
+                            .index = 0,
+                        };
                         if (!self.table.contains(ci_key)) break :blk;
 
                         var sign_buf: [Packet.len]u8 = undefined;
@@ -819,7 +823,8 @@ pub fn GossipNode(comptime Effects: type) type {
             now: u64,
             value: GossipValue,
         ) !void {
-            const key, _ = (try self.insertValue(.from(logger), now, .us, value)) orelse unreachable;
+            const maybe_insert = try self.insertValue(.from(logger), now, .us, value);
+            const key, _ = maybe_insert orelse unreachable;
             assert(key.from.equals(&self.identity()));
         }
 

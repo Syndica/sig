@@ -4,6 +4,13 @@ const builtin = @import("builtin");
 pub const metric = @import("telemetry/metric.zig");
 pub const log = @import("telemetry/log.zig");
 pub const prometheus = @import("telemetry/prometheus.zig");
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("telemetry/log.zig");
+        _ = @import("telemetry/metric.zig");
+        _ = @import("telemetry/prometheus.zig");
+    }
+}
 
 comptime {
     _ = metric;

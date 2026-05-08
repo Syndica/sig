@@ -1,7 +1,8 @@
 const std = @import("std");
-
 comptime {
-    _ = std.testing.refAllDecls(@This());
+    if (@import("builtin").is_test) {
+        _ = @import("shred/test_shreds.zig");
+    }
 }
 
 const lib = @import("lib.zig");
@@ -1130,8 +1131,11 @@ pub const ShredFlags = packed struct(u8) {
 };
 
 pub const layout = struct {
+    // lint: allow_unused
     const SIZE_OF_COMMON_SHRED_HEADER: usize = 83;
+    // lint: allow_unused
     const SIZE_OF_DATA_SHRED_HEADERS: usize = 88;
+    // lint: allow_unused
     const SIZE_OF_CODE_SHRED_HEADERS: usize = 89;
     const SIZE_OF_SIGNATURE: usize = Signature.SIZE;
     const SIZE_OF_SHRED_VARIANT: usize = 1;

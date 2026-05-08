@@ -1,7 +1,5 @@
 /// This service consumes information from other services,
 /// and sends them to an aggregator (prometheus).
-const tel = @This();
-
 const std = @import("std");
 const start = @import("start");
 const lib = @import("lib");

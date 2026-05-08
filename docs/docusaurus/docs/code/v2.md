@@ -39,6 +39,32 @@ advertise a turbine receive port.
 
 2. Use `.sandboxing_mode = .threaded` in your config
 
+# Linting
+
+Run V2 lint checks from this directory:
+
+```sh
+zig build lint
+```
+
+Pass explicit linter args after `--`:
+
+```sh
+zig build lint -- --fix
+```
+
+Run lint unit tests:
+
+```sh
+zig build lint-test
+```
+
+Lint exit codes:
+
+- `0`: no diagnostics
+- `1`: diagnostics found
+- `2`: CLI or internal linter error
+
 # Adding a New Service
 
 v2 runs each service as an isolated process. Services cannot allocate memory or open files at runtime. 
