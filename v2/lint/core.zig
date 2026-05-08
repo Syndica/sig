@@ -138,19 +138,11 @@ pub const SourceFiles = struct {
     }
 
     fn indexOf(self: *const SourceFiles, path: []const u8) ?usize {
-        var left: usize = 0;
-        var right = self.items.items.len;
-        while (left < right) {
-            const mid = left + (right - left) / 2;
-            const file = &self.items.items[mid];
-            const order = std.mem.order(u8, file.path, path);
-            switch (order) {
-                .eq => return mid,
-                .lt => left = mid + 1,
-                .gt => right = mid,
+        return std.sort.binarySearch(SourceFile, self.items.items, path, struct {
+            fn compare(target_path: []const u8, file: SourceFile) std.math.Order {
+                return std.mem.order(u8, target_path, file.path);
             }
-        }
-        return null;
+        }.compare);
     }
 };
 
