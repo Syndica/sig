@@ -34,11 +34,13 @@ jobs:
           cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Install kcov
-        run: apt-get update && apt-get install -y kcov
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y kcov
 
       - name: Build
-        run: zig build test -Dno-run -Dlong-tests
-          -Denable-tsan=false -Dno-network-tests --summary all
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=false -Dno-network-tests
+          --summary all
 
       - name: Collect v1 coverage
         run: bash scripts/kcov_ci.sh
