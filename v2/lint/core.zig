@@ -122,21 +122,6 @@ pub const SourceFiles = struct {
         return &self.items.items[index];
     }
 
-    pub fn writeChanged(self: *const SourceFiles) !void {
-        for (self.items.items) |*file| {
-            try file.writeIfChanged();
-        }
-    }
-
-    pub fn fmtChanged(self: *const SourceFiles, allocator: Allocator) !void {
-        for (self.items.items) |*file| {
-            if (!file.has_changes) {
-                continue;
-            }
-            try runZigFmt(allocator, file.path);
-        }
-    }
-
     fn indexOf(self: *const SourceFiles, path: []const u8) ?usize {
         return std.sort.binarySearch(SourceFile, self.items.items, path, struct {
             fn compare(target_path: []const u8, file: SourceFile) std.math.Order {

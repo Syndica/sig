@@ -550,7 +550,6 @@ test "fix removes cascading aliases" {
         .allocator = allocator,
         .config = .{ .mode = .fix },
     };
-    defer ctx.config.deinit(allocator);
     defer ctx.deinit();
 
     var file = try core.SourceFile.readAndParse(allocator, path);

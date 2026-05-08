@@ -29,22 +29,20 @@ pub fn main() u8 {
     const parse_result = cli.parseArgs(allocator) catch |err| {
         switch (err) {
             error.InvalidArguments => {},
-            else => {
-                std.debug.print("unexpected lint CLI error: {s}\n", .{@errorName(err)});
+            error.OutOfMemory => {
+                std.debug.print("OOM parsing args \n", .{});
                 if (@errorReturnTrace()) |trace| std.debug.dumpStackTrace(trace.*);
             },
         }
         return 2;
     };
-    var config = switch (parse_result) {
+    const config = switch (parse_result) {
         .config => |config| config,
         .help => {
             cli.printHelp();
             return 0;
         },
     };
-    defer config.deinit(allocator);
-
     var ctx: core.Context = .{ .allocator = allocator, .config = config };
     defer ctx.deinit();
 
@@ -52,7 +50,7 @@ pub fn main() u8 {
         switch (err) {
             error.UncommittedChanges => {
                 std.debug.print(
-                    "cannot run lint fix mode: there are uncommitted changes/\n",
+                    "cannot run lint fix mode: there are uncommitted changes\n",
                     .{},
                 );
             },
@@ -80,28 +78,30 @@ fn run(ctx: *core.Context) !void {
     defer files.deinit();
 
     if (ctx.config.verbose) {
-        std.debug.print("lint files: {d}\n", .{files.items.items.len});
+        std.debug.print("linting {d} files\n", .{files.items.items.len});
     }
 
-    if (ctx.config.ruleEnabled(.line_length)) {
-        try line_length.lintExcludedPathsExist(ctx, &files);
+    try line_length.lintExcludedPathsExist(ctx, &files);
+
+    for (files.items.items) |*file| {
+        try lintFileLevelRules(ctx, file);
     }
 
-    if (ctx.config.ruleEnabled(.line_length) or ctx.config.ruleEnabled(.unused_declarations)) {
-        for (files.items.items) |*file| {
-            try lintFileLevelRules(ctx, file);
-        }
-    }
-
-    if (ctx.config.ruleEnabled(.test_inclusion)) {
-        for (test_inclusion_roots) |root| {
-            try test_inclusion.lint(ctx, root, &files);
-        }
+    for (test_inclusion_roots) |root| {
+        try test_inclusion.lint(ctx, root, &files);
     }
 
     if (ctx.config.mode == .fix) {
-        try files.writeChanged();
-        try files.fmtChanged(ctx.allocator);
+        for (files.items.items) |*file| {
+            if (!file.has_changes) {
+                continue;
+            }
+            if (ctx.config.verbose) {
+                std.debug.print("fixing: {s}\n", .{file.path});
+            }
+            try file.writeIfChanged();
+            try core.runZigFmt(ctx.allocator, file.path);
+        }
     }
 }
 
@@ -140,13 +140,8 @@ fn lintFileLevelRules(ctx: *core.Context, file: *core.SourceFile) !void {
         try ctx.addDiagnosticId(file.path, 1, 1, core.parse_errors_diagnostic_id, "parse error");
         return;
     }
-
-    if (ctx.config.ruleEnabled(.line_length)) {
-        try line_length.lint(ctx, file);
-    }
-    if (ctx.config.ruleEnabled(.unused_declarations)) {
-        try unused_declarations.lint(ctx, file);
-    }
+    try line_length.lint(ctx, file);
+    try unused_declarations.lint(ctx, file);
 }
 
 test "parse errors report diagnostic and skip file-level rules" {
@@ -157,9 +152,7 @@ test "parse errors report diagnostic and skip file-level rules" {
     try std.fs.cwd().writeFile(.{ .sub_path = path, .data = source });
     defer std.fs.cwd().deleteFile(path) catch {};
 
-    var config: cli.Config = .{};
-    defer config.deinit(allocator);
-    try config.rules.append(allocator, .line_length);
+    const config: cli.Config = .{};
     var ctx: core.Context = .{ .allocator = allocator, .config = config };
     defer ctx.deinit();
 
@@ -224,8 +217,7 @@ test "dirty preflight rejects tracked and untracked changes unless force is set"
     try tmp.dir.writeFile(.{ .sub_path = "repo/v2/file.zig", .data = "pub const x = 2;\n" });
     try std.testing.expect(try hasUncommittedChanges(allocator, paths.v2));
 
-    var config: cli.Config = .{ .mode = .fix };
-    defer config.deinit(allocator);
+    const config: cli.Config = .{ .mode = .fix };
     var ctx: core.Context = .{ .allocator = allocator, .config = config };
     defer ctx.deinit();
     try std.testing.expectError(error.UncommittedChanges, ensureFixModeCleanAtPath(&ctx, paths.v2));

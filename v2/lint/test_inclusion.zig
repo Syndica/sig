@@ -710,7 +710,6 @@ fn expectCheckDiagnostics(
     defer deinitManagedBlocks(allocator, &managed_blocks);
 
     var ctx: core.Context = .{ .allocator = allocator, .config = .{} };
-    defer ctx.config.deinit(allocator);
     defer ctx.deinit();
 
     try check(
@@ -1144,7 +1143,6 @@ test "fix skips files with multiple managed blocks" {
         .allocator = allocator,
         .config = .{ .mode = .fix },
     };
-    defer ctx.config.deinit(allocator);
     defer ctx.deinit();
 
     try lintDir(&ctx, "lib/lib.zig", "lib", "lib", &.{ "lib/lib.zig", "lib/a.zig" }, &files);

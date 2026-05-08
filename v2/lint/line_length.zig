@@ -107,8 +107,7 @@ fn beforeLineComment(line: []const u8) []const u8 {
 
 test "detects code and ignores comments strings fmt-off and trailing comments" {
     const allocator = std.testing.allocator;
-    var config: cli.Config = .{};
-    defer config.deinit(allocator);
+    const config: cli.Config = .{};
     var ctx: core.Context = .{ .allocator = allocator, .config = config };
     defer ctx.deinit();
 
@@ -139,8 +138,7 @@ test "detects code and ignores comments strings fmt-off and trailing comments" {
 
 test "excluded paths report stale entries" {
     const allocator = std.testing.allocator;
-    var config: cli.Config = .{};
-    defer config.deinit(allocator);
+    const config: cli.Config = .{};
     var ctx: core.Context = .{ .allocator = allocator, .config = config };
     defer ctx.deinit();
     var files: core.SourceFiles = .{ .allocator = allocator, .items = .empty };
