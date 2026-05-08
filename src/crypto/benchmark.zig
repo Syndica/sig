@@ -121,7 +121,15 @@ pub const BenchmarkPohHash = struct {
         var start = sig.time.Timer.start();
         Hash.hashRepeated(&input_hash, &input_hash, args.count);
         std.mem.doNotOptimizeAway(&input_hash);
-        return start.read().div(args.count);
+        const elapsed = start.read().div(args.count);
+
+        var expected: Hash = .ZEROES;
+        for (0..args.count) |_| {
+            Sha256.hash(&expected.data, &expected.data, .{});
+        }
+        if (!std.mem.eql(u8, &input_hash.data, &expected.data)) return error.HashMismatch;
+
+        return elapsed;
     }
 
     pub fn normal(args: BenchmarkInputs) !sig.time.Duration {
@@ -131,6 +139,12 @@ pub const BenchmarkPohHash = struct {
             Sha256.hash(&input_hash.data, &input_hash.data, .{});
         }
         std.mem.doNotOptimizeAway(&input_hash);
-        return start.read().div(args.count);
+        const elapsed = start.read().div(args.count);
+
+        var expected: Hash = .ZEROES;
+        Hash.hashRepeated(&expected, &expected, args.count);
+        if (!std.mem.eql(u8, &input_hash.data, &expected.data)) return error.HashMismatch;
+
+        return elapsed;
     }
 };
