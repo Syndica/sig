@@ -81,7 +81,7 @@ pub const TransactionContext = struct {
     /// Only set if a precompile is present and the move precompiles to svm feature is enabled
     instruction_datas: ?[]const []const u8 = null,
 
-    instruction_stack: InstructionStack = .{},
+    instruction_stack: InstructionStack,
     instruction_trace: InstructionTrace = .{},
     top_level_instruction_index: u16 = 0,
     return_data: TransactionReturnData = .{},
@@ -108,10 +108,36 @@ pub const TransactionContext = struct {
     prev_blockhash: Hash,
     prev_lamports_per_signature: u64,
 
-    pub const InstructionStack = std14.BoundedArray(
-        InstructionContext,
-        MAX_INSTRUCTION_STACK_DEPTH_SIMD_0268,
-    );
+    pub const InstructionStack = struct {
+        buffer: []InstructionContext,
+        len: usize = 0,
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            capacity: usize,
+        ) error{OutOfMemory}!InstructionStack {
+            return .{ .buffer = try allocator.alloc(InstructionContext, capacity) };
+        }
+
+        pub fn deinit(self: InstructionStack, allocator: std.mem.Allocator) void {
+            allocator.free(self.buffer);
+        }
+
+        pub fn appendAssumeCapacity(self: *InstructionStack, item: InstructionContext) void {
+            self.buffer[self.len] = item;
+            self.len += 1;
+        }
+
+        pub fn pop(self: *InstructionStack) ?InstructionContext {
+            if (self.len == 0) return null;
+            self.len -= 1;
+            return self.buffer[self.len];
+        }
+
+        pub fn constSlice(self: *const InstructionStack) []const InstructionContext {
+            return self.buffer[0..self.len];
+        }
+    };
 
     pub const InstructionTrace = std14.BoundedArray(struct {
         ixn_info: InstructionInfo,
@@ -123,6 +149,7 @@ pub const TransactionContext = struct {
         defer zone.deinit();
 
         self.allocator.free(self.accounts);
+        self.instruction_stack.deinit(self.allocator);
         if (self.log_collector) |*lc| lc.deinit(self.allocator);
 
         // Clean up CPI instruction infos stored in the trace.

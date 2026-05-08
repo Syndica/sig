@@ -476,7 +476,7 @@ pub fn executeTransaction(
         .program_map = program_map,
         .accounts = accounts,
         .serialized_accounts = .{},
-        .instruction_stack = .{},
+        .instruction_stack = try .init(allocator, compute_budget.max_instruction_stack_depth),
         .instruction_trace = .{},
         .return_data = .{},
         .accounts_resize_delta = 0,
@@ -490,6 +490,7 @@ pub fn executeTransaction(
         .slot = environment.slot,
         .instruction_datas = instruction_datas,
     };
+    defer tc.instruction_stack.deinit(allocator);
 
     const pre_account_rent_states = try transactionAccountsRentState(
         allocator,

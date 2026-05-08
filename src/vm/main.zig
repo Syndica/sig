@@ -18,6 +18,7 @@ const Hash = sig.core.Hash;
 const EpochStakes = sig.core.EpochStakes;
 const SysvarCache = sig.runtime.SysvarCache;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
+const ComputeBudget = sig.runtime.ComputeBudget;
 
 pub fn main() !void {
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
@@ -64,7 +65,7 @@ pub fn main() !void {
         .next_vm_environment = null,
         .accounts = &.{},
         .serialized_accounts = .{},
-        .instruction_stack = .{},
+        .instruction_stack = try .init(gpa, ComputeBudget.DEFAULT.max_instruction_stack_depth),
         .instruction_trace = .{},
         .accounts_resize_delta = 0,
         .return_data = .{},

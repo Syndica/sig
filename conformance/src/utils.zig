@@ -13,6 +13,7 @@ const TransactionContextAccount = sig.runtime.transaction_context.TransactionCon
 const SysvarCache = sig.runtime.SysvarCache;
 const EpochStakes = sig.core.EpochStakes;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
+const ComputeBudget = sig.runtime.ComputeBudget;
 const FeatureSet = sig.core.FeatureSet;
 
 const intFromInstructionError = sig.core.instruction.intFromInstructionError;
@@ -107,6 +108,11 @@ pub fn createTransactionContext(
     errdefer log_collector.deinit(allocator);
 
     const slot = 0;
+    const compute_budget = ComputeBudget.init(
+        instr_ctx.cu_avail,
+        feature_set.active(.increase_cpi_account_info_limit, slot),
+        feature_set.active(.raise_cpi_nesting_limit_to_8, slot),
+    );
     tc.* = TransactionContext{
         .allocator = allocator,
         .programs_allocator = allocator,
@@ -121,16 +127,12 @@ pub fn createTransactionContext(
             instr_ctx.accounts.items,
         ),
         .serialized_accounts = .{},
-        .instruction_stack = .{},
+        .instruction_stack = try .init(allocator, compute_budget.max_instruction_stack_depth),
         .instruction_trace = .{},
         .return_data = .{},
         .accounts_resize_delta = 0,
         .compute_meter = instr_ctx.cu_avail,
-        .compute_budget = .init(
-            instr_ctx.cu_avail,
-            feature_set.active(.increase_cpi_account_info_limit, slot),
-            feature_set.active(.raise_cpi_nesting_limit_to_8, slot),
-        ),
+        .compute_budget = compute_budget,
         .custom_error = null,
         .log_collector = log_collector,
         .rent = sysvar_cache.get(sysvar.Rent) catch sysvar.Rent.INIT,
