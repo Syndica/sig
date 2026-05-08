@@ -1748,4 +1748,34 @@
         \\\ Implemented in both agave and firedancer
         ,
     },
+    .{
+        .name = "set_lamports_per_byte_to_6333",
+        .pubkey = "4a6f7o7iTcA8hRDCrPLkSatnt5Ykxiu36wo5p1Tt12wC",
+        .description = "SIMD-0437-1: Set lamports per byte to 6333",
+        .status = .supported,
+    },
+    .{
+        .name = "set_lamports_per_byte_to_5080",
+        .pubkey = "61BtM7BkDEE8Yq5fskEVAQT9mYA8qCejJWoLe5apqg81",
+        .description = "SIMD-0437-2: Set lamports per byte to 5080",
+        .status = .supported,
+    },
+    .{
+        .name = "set_lamports_per_byte_to_2575",
+        .pubkey = "Ftxb3ZKq7aNqgxDBbP7EonvR2RszZk9ctjdsTX38kQaz",
+        .description = "SIMD-0437-3: Set lamports per byte to 2575",
+        .status = .supported,
+    },
+    .{
+        .name = "set_lamports_per_byte_to_1322",
+        .pubkey = "GsUBNYNDPdMLHPD37TToHzrzcNcjpC9w5n1EcJk5iTaM",
+        .description = "SIMD-0437-4: Set lamports per byte to 1322",
+        .status = .supported,
+    },
+    .{
+        .name = "set_lamports_per_byte_to_696",
+        .pubkey = "mZdnRh9T2EbDNvqKjkCR3bvo5c816tJaojtE9Xs7iuY",
+        .description = "SIMD-0437-5: Set lamports per byte to 696",
+        .status = .supported,
+    },
 }

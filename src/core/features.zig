@@ -212,7 +212,7 @@ pub const Set = struct {
 
         pub fn next(self: *Iterator) ?Feature {
             while (true) : (self.index += 1) {
-                if (self.index == features.len - 1) return null;
+                if (self.index == features.len) return null;
                 const feature: Feature = @enumFromInt(self.index);
                 const is_active = self.set.active(feature, self.slot);
                 if ((self.state == .active and is_active) or
