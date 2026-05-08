@@ -600,6 +600,52 @@ test "fix removes clean nested declarations" {
     try std.testing.expectEqualStrings(expected, fixed);
 }
 
+test "fix removes unused functions" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\fn unused() void {
+        \\    const x = 1;
+        \\    _ = x;
+        \\}
+        \\pub const kept = 1;
+        \\
+    ;
+    const expected =
+        \\pub const kept = 1;
+        \\
+    ;
+    var candidates: std.ArrayList(DeclarationCandidate) = .empty;
+    defer candidates.deinit(allocator);
+    try findUnusedDeclarationsInSource(allocator, source, &candidates);
+    try std.testing.expectEqual(1, candidates.items.len);
+    try std.testing.expect(candidates.items[0].fixable);
+    const fixed = (try applyDeclarationRemovals(allocator, source, candidates.items)).?;
+    defer allocator.free(fixed);
+    try std.testing.expectEqualStrings(expected, fixed);
+}
+
+test "fix removes multiline imports" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\const unused =
+        \\    @import("unused.zig");
+        \\pub const kept = 1;
+        \\
+    ;
+    const expected =
+        \\pub const kept = 1;
+        \\
+    ;
+    var candidates: std.ArrayList(DeclarationCandidate) = .empty;
+    defer candidates.deinit(allocator);
+    try findUnusedDeclarationsInSource(allocator, source, &candidates);
+    try std.testing.expectEqual(1, candidates.items.len);
+    try std.testing.expect(candidates.items[0].fixable);
+    const fixed = (try applyDeclarationRemovals(allocator, source, candidates.items)).?;
+    defer allocator.free(fixed);
+    try std.testing.expectEqualStrings(expected, fixed);
+}
+
 test "fix skips compact nested declarations" {
     const allocator = std.testing.allocator;
     const source =
