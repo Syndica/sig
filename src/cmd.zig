@@ -1328,7 +1328,9 @@ const Cmd = struct {
                     },
                     .bench_poh = .{
                         .help = .{
-                            .short = "Replay the PoH SHA chain over ledger entries and report latency.",
+                            .short = 
+                            \\Replay the PoH SHA chain over ledger entries and report latency.
+                            ,
                             .long =
                             \\Reads all entries for slots in [start-slot, end-slot] and runs the
                             \\PoH SHA-256 chain (verifyPoh-style) over them, then prints how long
