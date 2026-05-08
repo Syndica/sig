@@ -1256,9 +1256,15 @@ const Cmd = struct {
         action: ?union(enum) {
             bounds,
             retain: Retain,
+            bench_poh: BenchPoh,
         },
 
         const Retain = struct {
+            start_slot: ?Slot,
+            end_slot: ?Slot,
+        };
+
+        const BenchPoh = struct {
             start_slot: ?Slot,
             end_slot: ?Slot,
         };
@@ -1269,8 +1275,9 @@ const Cmd = struct {
                 .long =
                 \\Provides utilities for working with the ledger database:
                 \\
-                \\  bounds  - Print the min and max slot in the ledger
-                \\  retain  - Remove all slots from the ledger outside the specified range
+                \\  bounds     - Print the min and max slot in the ledger
+                \\  retain     - Remove all slots from the ledger outside the specified range
+                \\  bench-poh  - Replay the PoH SHA chain over ledger entries and report latency
                 \\
                 \\Use --validator-dir to specify the validator directory containing the ledger.
                 ,
@@ -1314,6 +1321,45 @@ const Cmd = struct {
                                 .config = {},
                                 .help =
                                 \\The last slot to retain (inclusive).
+                                \\Defaults to max slot in ledger.
+                                ,
+                            },
+                        },
+                    },
+                    .bench_poh = .{
+                        .help = .{
+                            .short = "Replay the PoH SHA chain over ledger entries and report latency.",
+                            .long =
+                            \\Reads all entries for slots in [start-slot, end-slot] and runs the
+                            \\PoH SHA-256 chain (verifyPoh-style) over them, then prints how long
+                            \\the hashing took. The hash impl is selected at compile time:
+                            \\
+                            \\  -Dcpu=znver4      uses SHA-NI inline asm
+                            \\  -Dcpu=znver4-sha  falls back to std.crypto.hash.sha2.Sha256
+                            \\
+                            \\Build twice with the two flags to compare latency.
+                            ,
+                        },
+                        .sub = .{
+                            .start_slot = .{
+                                .kind = .named,
+                                .name_override = "start-slot",
+                                .alias = .none,
+                                .default_value = null,
+                                .config = {},
+                                .help =
+                                \\The first slot to read (inclusive).
+                                \\Defaults to min slot in ledger.
+                                ,
+                            },
+                            .end_slot = .{
+                                .kind = .named,
+                                .name_override = "end-slot",
+                                .alias = .none,
+                                .default_value = null,
+                                .config = {},
+                                .help =
+                                \\The last slot to read (inclusive).
                                 \\Defaults to max slot in ledger.
                                 ,
                             },
@@ -2985,7 +3031,195 @@ fn ledgerTool(
                 end_slot,
             });
         },
+        .bench_poh => |params| {
+            const lowest_slot = try reader.lowestSlot();
+            const highest_slot = try reader.highestSlot() orelse lowest_slot;
+
+            const start_slot = params.start_slot orelse lowest_slot;
+            const end_slot = params.end_slot orelse highest_slot;
+
+            if (start_slot > end_slot) {
+                logger.err().logf("Invalid range: start-slot ({d}) > end-slot ({d})", .{
+                    start_slot,
+                    end_slot,
+                });
+                return error.InvalidSlotRange;
+            }
+
+            try benchPoh(allocator, .from(logger), &reader, stdout, start_slot, end_slot);
+        },
     }
+}
+
+/// Reads every entry in `[start_slot, end_slot]` and replays the PoH SHA chain
+/// over them, timing the hashing only (not I/O). The hash implementation is
+/// chosen at compile time:
+///   - if SHA + AVX2 are in the target features, `Hash.hashRepeated` runs
+///     SHA-NI inline asm
+///   - otherwise it falls back to `std.crypto.hash.sha2.Sha256.hash`
+fn benchPoh(
+    allocator: std.mem.Allocator,
+    logger: Logger,
+    reader: *const sig.ledger.Reader,
+    stdout: *std.Io.Writer,
+    start_slot: Slot,
+    end_slot: Slot,
+) !void {
+    const Hash = sig.core.hash.Hash;
+    const hashTransactions = sig.core.entry.hashTransactions;
+    const schema = sig.ledger.schema.schema;
+
+    const sha_ni_available = comptime std.Target.x86.featureSetHasAll(
+        builtin.cpu.features,
+        &.{ .sha, .avx2 },
+    );
+    const impl_label = if (sha_ni_available) "SHA-NI" else "software (Sha256.hash)";
+
+    try stdout.print("PoH bench: slots [{d}, {d}], impl={s}\n", .{
+        start_slot,
+        end_slot,
+        impl_label,
+    });
+
+    // Seed `current_hash` the same way replay does: it's the last entry hash
+    // from the parent slot. We look up start_slot's parent in slot_meta, fetch
+    // its entries, and take the final hash. After that, each slot threads its
+    // last entry hash into the next slot, matching `confirmation_progress.last_entry`
+    // in replay/execution.zig.
+    var current_hash: Hash = blk: {
+        const slot_meta = (try reader.ledger.db.get(
+            allocator,
+            schema.slot_meta,
+            start_slot,
+        )) orelse {
+            logger.warn().logf(
+                "no slot_meta for start_slot {d}; seeding chain with ZEROES",
+                .{start_slot},
+            );
+            break :blk .ZEROES;
+        };
+        defer slot_meta.deinit();
+        const parent_slot = slot_meta.parent_slot orelse {
+            logger.warn().logf(
+                "start_slot {d} has no parent; seeding chain with ZEROES",
+                .{start_slot},
+            );
+            break :blk .ZEROES;
+        };
+        const parent_entries = reader.getSlotEntries(allocator, parent_slot, 0) catch |err| {
+            logger.warn().logf(
+                "couldn't read parent slot {d} entries ({s}); seeding chain with ZEROES",
+                .{ parent_slot, @errorName(err) },
+            );
+            break :blk .ZEROES;
+        };
+        defer {
+            for (parent_entries) |e| e.deinit(allocator);
+            allocator.free(parent_entries);
+        }
+        if (parent_entries.len == 0) {
+            logger.warn().logf(
+                "parent slot {d} had no entries; seeding chain with ZEROES",
+                .{parent_slot},
+            );
+            break :blk .ZEROES;
+        }
+        break :blk parent_entries[parent_entries.len - 1].hash;
+    };
+
+    var slots_processed: u64 = 0;
+    var slots_skipped: u64 = 0;
+    var entries_total: u64 = 0;
+    var hashes_total: u64 = 0;
+    var hash_ns_total: u64 = 0;
+
+    var slot = start_slot;
+    while (slot <= end_slot) : (slot += 1) {
+        const entries = reader.getSlotEntries(allocator, slot, 0) catch |err| {
+            logger.warn().logf("skipping slot {d}: {s}", .{ slot, @errorName(err) });
+            slots_skipped += 1;
+            continue;
+        };
+        defer {
+            for (entries) |e| e.deinit(allocator);
+            allocator.free(entries);
+        }
+        if (entries.len == 0) {
+            slots_skipped += 1;
+            continue;
+        }
+
+        var slot_hashes: u64 = 0;
+        for (entries) |entry| slot_hashes += entry.num_hashes;
+
+        var timer = sig.time.Timer.start();
+        for (entries) |entry| {
+            if (entry.num_hashes == 0) continue;
+
+            const count = (entry.num_hashes - 1) +
+                @intFromBool(entry.transactions.len == 0);
+            if (count != 0) Hash.hashRepeated(&current_hash, &current_hash, count);
+            if (entry.transactions.len > 0) {
+                const mixin = hashTransactions(entry.transactions);
+                current_hash = current_hash.extend(&mixin.data);
+            }
+        }
+        const elapsed_ns = timer.read().asNanos();
+        std.mem.doNotOptimizeAway(&current_hash);
+
+        // Thread the last entry hash through to the next slot, matching how
+        // replay updates `confirmation_progress.last_entry` after each slot.
+        current_hash = entries[entries.len - 1].hash;
+
+        slots_processed += 1;
+        entries_total += entries.len;
+        hashes_total += slot_hashes;
+        hash_ns_total += elapsed_ns;
+    }
+
+    if (slots_processed == 0) {
+        try stdout.print(
+            "No slots with entries in [{d}, {d}] (skipped {d}).\n",
+            .{ start_slot, end_slot, slots_skipped },
+        );
+        return;
+    }
+
+    const total_ms = hash_ns_total / std.time.ns_per_ms;
+    const ns_per_hash_x100: u64 = if (hashes_total == 0)
+        0
+    else
+        (hash_ns_total * 100) / hashes_total;
+    const hashes_per_sec: u64 = if (hash_ns_total == 0)
+        0
+    else
+        (hashes_total * std.time.ns_per_s) / hash_ns_total;
+
+    try stdout.print(
+        \\
+        \\Results ({s}):
+        \\  slots processed   : {d}
+        \\  slots skipped     : {d}
+        \\  entries hashed    : {d}
+        \\  total SHA rounds  : {d}
+        \\  total hash time   : {d} ms ({d} ns)
+        \\  ns per SHA round  : {d}.{d:0>2}
+        \\  hashes per second : {d}
+        \\
+    ,
+        .{
+            impl_label,
+            slots_processed,
+            slots_skipped,
+            entries_total,
+            hashes_total,
+            total_ms,
+            hash_ns_total,
+            ns_per_hash_x100 / 100,
+            ns_per_hash_x100 % 100,
+            hashes_per_sec,
+        },
+    );
 }
 
 /// State that typically needs to be initialized at the start of the app,
