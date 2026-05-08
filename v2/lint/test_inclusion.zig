@@ -352,7 +352,12 @@ fn fix(
     const canonical = if (all_expected_imports.len == 0)
         null
     else
-        try canonicalTestBlock(ctx.allocator, all_expected_imports, skipped_imports);
+        try canonicalTestBlock(
+            ctx.allocator,
+            all_expected_imports,
+            skipped_imports,
+            if (target == null) .insert else .replace,
+        );
     defer if (canonical) |block| ctx.allocator.free(block);
 
     try checkObsoleteRefAllDecls(ctx, companion_path, source);
@@ -447,7 +452,7 @@ fn findManagedBlocks(allocator: Allocator, source: []const u8) !std.ArrayList(Ma
             if (try parseManagedBlock(
                 allocator,
                 source[pos..],
-                lineStartIncludingPreviousBlank(source, pos),
+                core.lineStart(source, pos),
                 source.len,
             )) |parsed_block| {
                 var block = parsed_block;
@@ -461,8 +466,8 @@ fn findManagedBlocks(allocator: Allocator, source: []const u8) !std.ArrayList(Ma
         if (try parseManagedBlock(
             allocator,
             source[pos .. close + 1],
-            lineStartIncludingPreviousBlank(source, pos),
-            lineEndIncludingNextBlank(source, close + 1),
+            core.lineStart(source, pos),
+            core.lineEndIncludingNewline(source, close + 1),
         )) |parsed_block| {
             var block = parsed_block;
             errdefer block.imports.deinit(allocator);
@@ -581,10 +586,16 @@ fn managedImportPath(line: []const u8) ?[]const u8 {
     return import_path;
 }
 
+const CanonicalTestBlockFix = enum {
+    replace,
+    insert,
+};
+
 fn canonicalTestBlock(
     allocator: Allocator,
     imports: []const []const u8,
     skipped_imports: []const []const u8,
+    context: CanonicalTestBlockFix,
 ) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
@@ -601,28 +612,11 @@ fn canonicalTestBlock(
         }
     }
     try out.appendSlice(allocator, "    }\n");
-    try out.appendSlice(allocator, "}\n\n");
+    try out.appendSlice(allocator, "}\n");
+    if (context == .insert) {
+        try out.appendSlice(allocator, "\n");
+    }
     return out.toOwnedSlice(allocator);
-}
-
-fn lineStartIncludingPreviousBlank(source: []const u8, start: usize) usize {
-    var result = core.lineStart(source, start);
-    if (result > 0) {
-        const prev_start = core.lineStart(source, result - 1);
-        const prev = source[prev_start .. result - 1];
-        if (std.mem.trim(u8, prev, " \t\r").len == 0) result = prev_start;
-    }
-    return result;
-}
-
-fn lineEndIncludingNextBlank(source: []const u8, end: usize) usize {
-    var result = core.lineEndIncludingNewline(source, end);
-    const next = core.lineEndIncludingNewline(source, result);
-    if (next > result) {
-        const line = source[result..next];
-        if (std.mem.trim(u8, line, " \t\r\n").len == 0) result = next;
-    }
-    return result;
 }
 
 fn skipWhitespace(source: []const u8, offset: usize) usize {
@@ -746,11 +740,16 @@ fn expectManagedBlockParse(
 test "canonical block and parsing" {
     const allocator = std.testing.allocator;
     const imports = [_][]const u8{ "a.zig", "b.zig" };
-    const block = try canonicalTestBlock(allocator, &imports, &.{});
+    const block = try canonicalTestBlock(allocator, &imports, &.{}, .replace);
     defer allocator.free(block);
     try std.testing.expect(std.mem.indexOf(u8, block, "@import(\"builtin\").is_test") != null);
     try std.testing.expect(std.mem.indexOf(u8, block, "_ = @import(\"a.zig\");") != null);
     try std.testing.expect(std.mem.indexOf(u8, block, "_ = @import(\"b.zig\");") != null);
+    try std.testing.expect(std.mem.endsWith(u8, block, "}\n"));
+
+    const inserted_block = try canonicalTestBlock(allocator, &imports, &.{}, .insert);
+    defer allocator.free(inserted_block);
+    try std.testing.expect(std.mem.endsWith(u8, inserted_block, "}\n\n"));
 
     var managed_blocks = try findManagedBlocks(allocator, block);
     defer deinitManagedBlocks(allocator, &managed_blocks);
@@ -984,7 +983,7 @@ test "check reports missing managed block" {
 test "check reports extra managed block" {
     const allocator = std.testing.allocator;
     const imports = [_][]const u8{"a.zig"};
-    const source = try canonicalTestBlock(allocator, &imports, &.{});
+    const source = try canonicalTestBlock(allocator, &imports, &.{}, .replace);
     defer allocator.free(source);
 
     try expectCheckDiagnostics(
@@ -1156,6 +1155,61 @@ test "fix skips files with multiple managed blocks" {
     try std.testing.expectEqualStrings(source, files.items.items[0].source);
 }
 
+test "fix preserves blank lines around managed block" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\const std = @import("std");
+        \\
+        \\comptime {
+        \\    if (@import("builtin").is_test) {
+        \\        _ = @import("a.zig");
+        \\        _ = @import("b.zig");
+        \\    }
+        \\}
+        \\
+        \\pub const value = 1;
+        \\
+    ;
+    const expected =
+        \\const std = @import("std");
+        \\
+        \\comptime {
+        \\    if (@import("builtin").is_test) {
+        \\        _ = @import("a.zig");
+        \\    }
+        \\}
+        \\
+        \\pub const value = 1;
+        \\
+    ;
+    const path = try allocator.dupe(u8, "lib/lib.zig");
+    errdefer allocator.free(path);
+    const source_z = try allocator.dupeZ(u8, source);
+    errdefer allocator.free(source_z);
+    var ast = try std.zig.Ast.parse(allocator, source_z, .zig);
+    errdefer ast.deinit(allocator);
+
+    var files: core.SourceFiles = .{ .allocator = allocator, .items = .empty };
+    defer files.deinit();
+    try files.items.append(allocator, .{
+        .path = path,
+        .source = source_z,
+        .ast = ast,
+    });
+
+    var ctx: core.Context = .{
+        .allocator = allocator,
+        .config = .{ .mode = .fix },
+    };
+    defer ctx.deinit();
+
+    try lintDir(&ctx, "lib/lib.zig", "lib", "lib", &.{ "lib/lib.zig", "lib/a.zig" }, &files);
+
+    try std.testing.expectEqual(0, ctx.diagnostics.items.len);
+    try std.testing.expect(files.items.items[0].has_changes);
+    try std.testing.expectEqualStrings(expected, files.items.items[0].source);
+}
+
 test "canonical block emits skip comments" {
     const allocator = std.testing.allocator;
     const source =
@@ -1172,7 +1226,7 @@ test "canonical block emits skip comments" {
     try std.testing.expectEqualStrings("b.zig", skipped.items[0]);
     const expected_raw = [_][]const u8{ "a.zig", "b.zig" };
 
-    const block = try canonicalTestBlock(allocator, &expected_raw, skipped.items);
+    const block = try canonicalTestBlock(allocator, &expected_raw, skipped.items, .replace);
     defer allocator.free(block);
     try std.testing.expect(std.mem.indexOf(u8, block, "@import(\"a.zig\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, block, "@import(\"b.zig\")") == null);
