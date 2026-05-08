@@ -21,8 +21,6 @@ permissions:
 jobs:
   test_kcov_linux:
     runs-on: ubuntu-latest
-    container:
-      image: kcov/kcov:v42
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,6 +32,9 @@ jobs:
         with:
           version: 0.15.2
           cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+
+      - name: Install kcov
+        run: apt-get update && apt-get install -y kcov
 
       - name: Build
         run: zig build test -Dno-run -Dlong-tests
