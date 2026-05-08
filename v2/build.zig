@@ -9,6 +9,7 @@ pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const use_llvm = b.option(bool, "use-llvm", "Force usage of LLVM (currently ignored for some artifacts).");
+    const use_kcov = b.option(bool, "kcov", "Use kcov to run the tests.") orelse false;
     const artifact_opts: ExeOutput.InitOptions = .{
         .no_bin = b.option(bool, "no-bin", "Don't install artifacts implied by specified steps.") orelse false,
         .no_run = b.option(bool, "no-run", "Don't execute run steps implied by the specified steps.") orelse false,
@@ -42,6 +43,19 @@ pub fn build(b: *Build) !void {
     ci_step.dependOn(install_step);
     check_step.dependOn(install_step);
 
+    const kcov_merge_run = if (use_kcov and !artifact_opts.no_run) kcov_merge: {
+        const run = b.addSystemCommand(&.{ "kcov", "--merge" });
+        const cache_dir = run.addOutputDirectoryArg("merged");
+        const install_dir = b.addInstallDirectory(.{
+            .source_dir = cache_dir,
+            .install_dir = .prefix,
+            .install_subdir = "kcov",
+        });
+        install_dir.step.dependOn(&run.step);
+        test_step.dependOn(&install_dir.step);
+        break :kcov_merge run;
+    } else null;
+
     const tracy_mod = b.dependency("tracy", .{
         .target = target,
         .optimize = .ReleaseFast,
@@ -70,7 +84,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "tracy", .module = tracy_mod },
         },
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+    _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "lib",
         .root_module = lib_mod,
         .filters = filters,
@@ -86,7 +100,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "tracy", .module = tracy_mod },
         },
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+    _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "sig-init",
         .root_module = sig_init_mod,
         .filters = filters,
@@ -114,7 +128,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "tracy", .module = tracy_mod },
         },
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+    _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "start_service",
         .root_module = start_service_mod,
         .use_llvm = true,
@@ -143,7 +157,7 @@ pub fn build(b: *Build) !void {
         });
         sig_init_mod.linkLibrary(service_lib);
 
-        _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+        _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
             .root_module = service_mod,
             .name = service_name,
             .filters = filters,
@@ -167,13 +181,36 @@ fn addTestOutputs(
     artifact_step: *Build.Step,
     dest_sub_path: ?[]const u8,
     artifact_opts: ExeOutput.InitOptions,
+    maybe_kcov_merge_run: ?*Build.Step.Run,
     test_options: Build.TestOptions,
 ) ExeOutput {
     const mod_test_exe = b.addTest(test_options);
-    return addExeOutputs(b, mod_test_exe, artifact_step, artifact_opts, .{
+    const install_opts: Build.Step.InstallArtifact.Options = .{
         .dest_sub_path = dest_sub_path,
         .dest_dir = test_install_dir,
-    });
+    };
+
+    if (maybe_kcov_merge_run) |kcov_merge_run| {
+        const kcov_run = b.addSystemCommand(&.{
+            "kcov",
+            "--collect-only",
+            "--include-pattern=v2/",
+            "--exclude-pattern=.cache",
+        });
+        const output_dir = kcov_run.addOutputDirectoryArg("output");
+        kcov_run.addArtifactArg(mod_test_exe);
+        kcov_run.has_side_effects = true;
+
+        kcov_merge_run.step.dependOn(&kcov_run.step);
+        kcov_merge_run.addDirectoryArg(output_dir);
+
+        var outputs = addExeOutputs(b, mod_test_exe, artifact_step, .{
+            .no_bin = artifact_opts.no_bin,
+            .no_run = true,
+        }, install_opts);
+        outputs.run = kcov_run;
+        return outputs;
+    } else return addExeOutputs(b, mod_test_exe, artifact_step, artifact_opts, install_opts);
 }
 
 fn addExeOutputs(

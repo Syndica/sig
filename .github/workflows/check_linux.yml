@@ -21,6 +21,8 @@ permissions:
 jobs:
   test_kcov_linux:
     runs-on: ubuntu-latest
+    container:
+      image: kcov/kcov:v42
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,20 +36,16 @@ jobs:
           cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build
-        run: zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36
+        run: zig build test -Dno-run -Dlong-tests
           -Denable-tsan=false -Dno-network-tests --summary all
 
-      - name: Configure docker user/mount defaults
-        run: |
-          echo "DOCKER_UID_GID=$(id -u):$(id -g)" >> "$GITHUB_ENV"
-          printf 'DOCKER_MOUNT=-v %s:%s -w %s -e HOME=%s -u %s\n' "$PWD" "$PWD" "$PWD" "$PWD" "$(id -u):$(id -g)" >> "$GITHUB_ENV"
+      - name: Collect v1 coverage
+        run: bash scripts/kcov_ci.sh
 
-      - name: Test and Collect
+      - name: Collect v2 coverage
         run: |
-          docker run --security-opt seccomp=unconfined \
-                     $DOCKER_MOUNT \
-                     kcov/kcov \
-                     bash scripts/kcov_ci.sh
+          cd v2
+          zig build test -Dkcov --summary all
 
       - name: Upload coverage to Codecov
         env:
@@ -78,6 +76,7 @@ jobs:
           ./codecov --verbose upload-coverage \
             --fail-on-error \
             --dir kcov-merged/kcov-merged \
+            --dir v2/zig-out/kcov \
             --commit-sha "$UPLOAD_SHA"
 
   gossip_and_fuzz:
