@@ -71,10 +71,10 @@ pub fn pushInstruction(
 
     // [agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/program-runtime/src/invoke_context.rs#L245-L283
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1048-L1070
-    for (tc.instruction_stack.constSlice(), 0..) |ic, level| {
+    for (tc.instruction_stack.items, 0..) |ic, level| {
         // If the program is on the stack, it must be the last entry otherwise it is a reentrancy violation
         if (program_id.equals(&ic.ixn_info.program_meta.pubkey) and
-            level != tc.instruction_stack.len - 1)
+            level != tc.instruction_stack.items.len - 1)
         {
             return InstructionError.ReentrancyNotAllowed;
         }
@@ -82,7 +82,7 @@ pub fn pushInstruction(
 
     // Push to transaction context():
     // [agave] https://github.com/anza-xyz/agave/blob/v3.0/transaction-context/src/lib.rs#L420
-    if (tc.instruction_stack.len > 0 and tc.accounts_lamport_delta != 0) {
+    if (tc.instruction_stack.items.len > 0 and tc.accounts_lamport_delta != 0) {
         return InstructionError.UnbalancedInstruction;
     }
 
@@ -95,19 +95,19 @@ pub fn pushInstruction(
     }
     // SIMD-0268 (raise_cpi_nesting_limit_to_8) makes this depth feature-gated, so
     // read from the per-transaction compute budget instead of a constant.
-    if (tc.instruction_stack.len >= tc.compute_budget.max_instruction_stack_depth) {
+    if (tc.instruction_stack.items.len >= tc.compute_budget.max_instruction_stack_depth) {
         return InstructionError.CallDepth;
     }
 
     tc.instruction_stack.appendAssumeCapacity(.{
         .tc = tc,
         .ixn_info = instruction_info,
-        .depth = @intCast(tc.instruction_stack.len),
+        .depth = @intCast(tc.instruction_stack.items.len),
     });
 
     tc.instruction_trace.appendAssumeCapacity(.{
         .ixn_info = instruction_info,
-        .depth = @intCast(tc.instruction_stack.len),
+        .depth = @intCast(tc.instruction_stack.items.len),
     });
 
     if (tc.getAccountIndex(sig.runtime.sysvar.instruction.ID)) |index_in_transaction| {
@@ -138,8 +138,8 @@ fn processNextInstruction(
     defer zone.deinit();
 
     // Get next instruction context from the stack
-    if (tc.instruction_stack.len == 0) return InstructionError.CallDepth;
-    const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+    if (tc.instruction_stack.items.len == 0) return InstructionError.CallDepth;
+    const ic = &tc.instruction_stack.items[tc.instruction_stack.items.len - 1];
 
     // Lookup the program id
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/invoke_context.rs#L515-L528
@@ -187,7 +187,7 @@ fn processNextInstruction(
         try stable_log.programInvoke(
             ic.tc,
             program_id,
-            ic.tc.instruction_stack.len,
+            ic.tc.instruction_stack.items.len,
         );
     }
 
@@ -232,7 +232,7 @@ pub fn popInstruction(
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L291-L294
 
     // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L407-L409
-    if (tc.instruction_stack.len == 0) return InstructionError.CallDepth;
+    if (tc.instruction_stack.items.len == 0) return InstructionError.CallDepth;
 
     // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L411-L426
     const unbalanced_instruction = blk: {
@@ -249,7 +249,7 @@ pub fn popInstruction(
     };
 
     _ = tc.instruction_stack.pop();
-    if (tc.instruction_stack.len == 0) {
+    if (tc.instruction_stack.items.len == 0) {
         tc.top_level_instruction_index +|= 1;
     }
 
@@ -420,7 +420,7 @@ test pushInstruction {
     try pushInstruction(&tc, instruction_info);
     try std.testing.expectEqual(
         1,
-        tc.instruction_stack.len,
+        tc.instruction_stack.items.len,
     );
 
     {
@@ -443,7 +443,7 @@ test pushInstruction {
     try pushInstruction(&tc, instruction_info);
     try std.testing.expectEqual(
         2,
-        tc.instruction_stack.len,
+        tc.instruction_stack.items.len,
     );
 
     // Failure: ReentrancyNotAllowed
@@ -698,7 +698,7 @@ test popInstruction {
     try popInstruction(&tc);
     try std.testing.expectEqual(
         0,
-        tc.instruction_stack.len,
+        tc.instruction_stack.items.len,
     );
 }
 

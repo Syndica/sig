@@ -65,7 +65,10 @@ pub fn main() !void {
         .next_vm_environment = null,
         .accounts = &.{},
         .serialized_accounts = .{},
-        .instruction_stack = try .init(gpa, ComputeBudget.DEFAULT.max_instruction_stack_depth),
+        .instruction_stack = try .initCapacity(
+            gpa,
+            ComputeBudget.DEFAULT.max_instruction_stack_depth,
+        ),
         .instruction_trace = .{},
         .accounts_resize_delta = 0,
         .return_data = .{},

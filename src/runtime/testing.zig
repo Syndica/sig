@@ -205,7 +205,10 @@ fn initTransactionContext(
         .program_map = program_map,
         .accounts = try accounts.toOwnedSlice(allocator),
         .serialized_accounts = .{},
-        .instruction_stack = try .init(allocator, params.compute_budget.max_instruction_stack_depth),
+        .instruction_stack = try .initCapacity(
+            allocator,
+            params.compute_budget.max_instruction_stack_depth,
+        ),
         .instruction_trace = .{},
         .instruction_datas = params.instruction_datas,
         .return_data = return_data,

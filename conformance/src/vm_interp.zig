@@ -105,7 +105,7 @@ fn executeVmTest(
 
     try executor.pushInstruction(&tc, instr_info);
 
-    var ic = tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+    var ic = tc.instruction_stack.items[tc.instruction_stack.items.len - 1];
 
     const direct_mapping = tc.feature_set.active(
         .account_data_direct_mapping,

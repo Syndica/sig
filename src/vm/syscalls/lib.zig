@@ -416,7 +416,7 @@ pub fn getProcessedSiblingInstruction(
     try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
 
     var reverse_index: usize = 0;
-    const stack_height = tc.instruction_stack.len;
+    const stack_height = tc.instruction_stack.items.len;
     const maybe_info = for (0..tc.instruction_trace.len) |i| {
         const trace = &tc.instruction_trace.buffer[tc.instruction_trace.len - i - 1]; // reversed
         if (trace.depth < stack_height) break null;
@@ -512,8 +512,8 @@ pub fn setReturnData(
             tc.getCheckAligned(),
         );
 
-    if (tc.instruction_stack.len == 0) return error.CallDepth;
-    const ic = tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+    if (tc.instruction_stack.items.len == 0) return error.CallDepth;
+    const ic = tc.instruction_stack.items[tc.instruction_stack.items.len - 1];
     const program_id = ic.ixn_info.program_meta.pubkey;
 
     tc.return_data.program_id = program_id;
@@ -573,7 +573,7 @@ pub fn getStackHeight(
     registers: *RegisterMap,
 ) Error!void {
     try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
-    registers.set(.r0, tc.instruction_stack.len);
+    registers.set(.r0, tc.instruction_stack.items.len);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1968-L1986
@@ -1187,10 +1187,10 @@ test getProcessedSiblingInstruction {
 
     const trace_indexes: [8]u8 = std.simd.iota(u8, 8);
     for ([_]u8{ 1, 2, 3, 2, 2, 3, 4, 3 }, 0..) |stack_height, index_in_trace| {
-        while (stack_height <= tc.instruction_stack.len) {
+        while (stack_height <= tc.instruction_stack.items.len) {
             _ = tc.instruction_stack.pop();
         }
-        if (stack_height > tc.instruction_stack.len) {
+        if (stack_height > tc.instruction_stack.items.len) {
             var info = InstructionInfo{
                 .program_meta = .{
                     .pubkey = tc.accounts[0].pubkey,
@@ -1214,10 +1214,10 @@ test getProcessedSiblingInstruction {
             tc.instruction_stack.appendAssumeCapacity(.{
                 .tc = &tc,
                 .ixn_info = info,
-                .depth = @intCast(tc.instruction_stack.len),
+                .depth = @intCast(tc.instruction_stack.items.len),
             });
 
-            const depth: u8 = @intCast(tc.instruction_stack.len);
+            const depth: u8 = @intCast(tc.instruction_stack.items.len);
             tc.instruction_trace.appendAssumeCapacity(.{
                 .ixn_info = info,
                 .depth = depth,

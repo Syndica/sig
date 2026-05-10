@@ -127,7 +127,10 @@ pub fn createTransactionContext(
             instr_ctx.accounts.items,
         ),
         .serialized_accounts = .{},
-        .instruction_stack = try .init(allocator, compute_budget.max_instruction_stack_depth),
+        .instruction_stack = try .initCapacity(
+            allocator,
+            compute_budget.max_instruction_stack_depth,
+        ),
         .instruction_trace = .{},
         .return_data = .{},
         .accounts_resize_delta = 0,
