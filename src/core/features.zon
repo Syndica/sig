@@ -1779,4 +1779,10 @@
         .description = "SIMD-0437-5: Set lamports per byte to 696",
         .status = .supported,
     },
+    .{
+        .name = "raise_cpi_nesting_limit_to_8",
+        .pubkey = "6TkHkRmP7JZy1fdM6fg5uXn76wChQBWGokHBJzrLB3mj",
+        .description = "SIMD-0268: Raise CPI nesting limit from 4 to 8",
+        .status = .supported,
+    },
 }
