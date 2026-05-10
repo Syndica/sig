@@ -21,6 +21,8 @@ pub const SigVerifyOption = enum {
     skip_sig_verify,
 };
 
+const MAX_ACCOUNTS_PER_INSTRUCTION = sig.runtime.transaction_context.MAX_ACCOUNTS_PER_INSTRUCTION;
+
 /// Checks that a transaction is valid for execution.
 ///     1. Ensure the transaction is valid i.e. signature counts make sense, there are enough accounts, etc.
 ///     2. Ensure the transaction message is serialisable
@@ -33,6 +35,7 @@ pub fn preprocessTransaction(
     txn: Transaction,
     sig_verify: SigVerifyOption,
     static_instruction_limit: bool,
+    instruction_accounts_limit: bool,
 ) PreprocessTransactionResult {
     var zone = tracy.Zone.init(@src(), .{ .name = "preprocessTransaction" });
     defer zone.deinit();
@@ -43,12 +46,34 @@ pub fn preprocessTransaction(
         .err = .SanitizeFailure,
     };
 
+    // Check that the full serialized transaction (signatures + message) fits in a packet.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/runtime/src/bank.rs#L5041-5044
+    {
+        const sig_count: u16 = @intCast(txn.signatures.len);
+        const sig_count_size: usize = if (sig_count < 0x80) 1 else if (sig_count < 0x4000) 2 else 3;
+        const sigs_size = txn.signatures.len * @sizeOf(sig.core.Signature);
+        const total_size = sig_count_size + sigs_size + msg_bytes.len;
+        if (total_size > Transaction.MAX_BYTES) return .{ .err = .SanitizeFailure };
+    }
+
+    // SIMD-0406: Reject transactions with instructions that reference more than 255 accounts.
+    // Runs before sig verification, matching Agave's sanitize_instructions ordering.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/transaction-view/src/sanitize.rs#L98-L102
+    if (instruction_accounts_limit) {
+        for (txn.msg.instructions) |instr| {
+            if (instr.account_indexes.len > MAX_ACCOUNTS_PER_INSTRUCTION) {
+                return .{ .err = .SanitizeFailure };
+            }
+        }
+    }
+
     if (sig_verify == .run_sig_verify) {
         if (static_instruction_limit and
             txn.msg.instructions.len > sig.runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH)
         {
             return .{ .err = .SanitizeFailure };
         }
+
         txn.verifySignatures(msg_bytes.constSlice()) catch |err| {
             return switch (err) {
                 error.SignatureVerificationFailed => .{ .err = .SignatureFailure },
@@ -84,11 +109,11 @@ test preprocessTransaction {
 
         try std.testing.expectEqual(
             .ok,
-            std.meta.activeTag(preprocessTransaction(txn, .run_sig_verify, false)),
+            std.meta.activeTag(preprocessTransaction(txn, .run_sig_verify, false, false)),
         );
         try std.testing.expectEqual(
             .ok,
-            std.meta.activeTag(preprocessTransaction(txn, .skip_sig_verify, false)),
+            std.meta.activeTag(preprocessTransaction(txn, .skip_sig_verify, false, false)),
         );
     }
 
@@ -115,7 +140,7 @@ test preprocessTransaction {
             },
         };
 
-        const err = preprocessTransaction(txn, .skip_sig_verify, false).err;
+        const err = preprocessTransaction(txn, .skip_sig_verify, false, false).err;
         try std.testing.expectEqual(TransactionError.SanitizeFailure, err);
     }
 
@@ -134,7 +159,7 @@ test preprocessTransaction {
             },
         };
 
-        const err = preprocessTransaction(txn, .skip_sig_verify, false).err;
+        const err = preprocessTransaction(txn, .skip_sig_verify, false, false).err;
         try std.testing.expectEqual(TransactionError.SanitizeFailure, err);
     }
 
@@ -160,7 +185,7 @@ test preprocessTransaction {
         };
         defer for (txn.msg.instructions) |instr| allocator.free(instr.data);
 
-        _, const details = preprocessTransaction(txn, .skip_sig_verify, false).ok;
+        _, const details = preprocessTransaction(txn, .skip_sig_verify, false, false).ok;
         const compute_limits = compute_budget.sanitize(details, &.ALL_DISABLED, 0).ok;
         try std.testing.expectEqual(1_000_000, compute_limits.compute_unit_limit);
     }
@@ -192,7 +217,7 @@ test preprocessTransaction {
         };
         defer for (txn.msg.instructions) |instr| allocator.free(instr.data);
 
-        const err = preprocessTransaction(txn, .skip_sig_verify, false).err;
+        const err = preprocessTransaction(txn, .skip_sig_verify, false, false).err;
         try std.testing.expectEqual(TransactionError{ .DuplicateInstruction = 1 }, err);
     }
 
@@ -221,7 +246,76 @@ test preprocessTransaction {
             },
         };
 
-        const err = preprocessTransaction(txn, .run_sig_verify, true).err;
+        const err = preprocessTransaction(txn, .run_sig_verify, true, false).err;
         try std.testing.expectEqual(.SanitizeFailure, err);
+    }
+
+    { // SIMD-0406, instruction with more than 255 accounts should fail when limit is enabled.
+        var account_indexes: [256]u8 = undefined;
+        @memset(&account_indexes, 0);
+
+        // Use a non-compute-budget program, matching Agave's test which uses Pubkey::new_unique().
+        // https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime-transaction/src/runtime_transaction/sdk_transactions.rs#L396-L452
+        const dummy_program = Pubkey{ .data = .{1} ** 32 };
+        const txn = Transaction{
+            .signatures = &.{Signature.ZEROES},
+            .version = .legacy,
+            .msg = .{
+                .signature_count = 1,
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 1,
+                .account_keys = &.{ Pubkey.ZEROES, dummy_program },
+                .recent_blockhash = Hash.ZEROES,
+                .instructions = &.{.{
+                    .program_index = 1,
+                    .account_indexes = &account_indexes,
+                    .data = &.{},
+                }},
+                .address_lookups = &.{},
+            },
+        };
+
+        // Skip sig verify — Agave's equivalent test (try_create) only runs sanitization.
+        // With limit enabled, 256 accounts should fail.
+        const err = preprocessTransaction(txn, .skip_sig_verify, false, true).err;
+        try std.testing.expectEqual(.SanitizeFailure, err);
+
+        // With limit disabled, 256 accounts should pass sanitization.
+        try std.testing.expectEqual(
+            .ok,
+            std.meta.activeTag(
+                preprocessTransaction(txn, .skip_sig_verify, false, false),
+            ),
+        );
+    }
+
+    { // SIMD-0406, instruction with exactly 255 accounts should pass.
+        var account_indexes: [255]u8 = undefined;
+        @memset(&account_indexes, 0);
+
+        const dummy_program = Pubkey{ .data = .{1} ** 32 };
+        const txn = Transaction{
+            .signatures = &.{Signature.ZEROES},
+            .version = .legacy,
+            .msg = .{
+                .signature_count = 1,
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 1,
+                .account_keys = &.{ Pubkey.ZEROES, dummy_program },
+                .recent_blockhash = Hash.ZEROES,
+                .instructions = &.{.{
+                    .program_index = 1,
+                    .account_indexes = &account_indexes,
+                    .data = &.{},
+                }},
+                .address_lookups = &.{},
+            },
+        };
+
+        // With limit enabled, exactly 255 accounts should pass.
+        try std.testing.expectEqual(
+            .ok,
+            std.meta.activeTag(preprocessTransaction(txn, .skip_sig_verify, false, true)),
+        );
     }
 }

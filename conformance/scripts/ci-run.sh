@@ -4,10 +4,6 @@
 
 set -euxo pipefail
 
-SPLIT_TESTS=${SPLIT_TESTS:-false}
-PREBUILT_LIB_DIR=${PREBUILT_LIB_DIR:-zig-out/lib}
-NUM_THREADS=${NUM_THREADS:-$(nproc || sysctl -n hw.ncpu || echo 1)}
-
 conformance_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd $conformance_dir
 
@@ -21,13 +17,8 @@ comm -23 \
         -path 'env/test-vectors/block/*' -prune \
         -o -type f -name '*.fix' -printf '%P\n' | sort) \
     <(sort scripts/failing.txt) \
-    | if [ "$SPLIT_TESTS" == "true" ]; then circleci tests split; else cat; fi \
     | sed 's_^_env/test-vectors/_' \
     | xargs -d '\n' cp -t env/split-fixtures/
 
 echo Running fixtures
-solana-conformance exec-fixtures \
-    --num-processes $NUM_THREADS \
-    -t ${PREBUILT_LIB_DIR}/libsolfuzz_sig.so \
-    -o env/test_results/ \
-    -i env/split-fixtures/ | tee /dev/tty | grep -q "Failed: 0,"
+zig-out/bin/run env/split-fixtures/ 2>&1 | tee /dev/stderr | grep -q "Failed: 0,"

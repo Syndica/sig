@@ -176,13 +176,16 @@ pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
     const pb_features = switch (@TypeOf(ctx)) {
         *pb.TxnContext, *const pb.TxnContext => (ctx.bank orelse return .ALL_DISABLED).features,
         pb.InstrContext => ctx.features,
+        pb.ELFLoaderCtx => ctx.features,
         else => comptime unreachable,
     } orelse return .ALL_DISABLED;
 
     var feature_set: FeatureSet = .ALL_DISABLED;
     for (pb_features.features.items) |id| {
-        // only way for `setSlotId` to fail is if the `id` doesn't exist.
-        feature_set.setSlotId(id, 0) catch std.debug.print("unknown feature id: 0x{x}\n", .{id});
+        // only way for `setSlotId` to fail is if the `id` doesn't exist in runtime features.
+        feature_set.setSlotId(id, 0) catch if (!sig.core.features.isKnownFeatureId(id)) {
+            std.debug.print("unknown feature id: 0x{x}\n", .{id});
+        };
     }
     return feature_set;
 }
@@ -452,6 +455,7 @@ pub fn createSyscallEffect(allocator: std.mem.Allocator, params: struct {
     frame_count: u64,
     memory_map: sig.vm.memory.MemoryMap,
     registers: sig.vm.interpreter.RegisterMap = sig.vm.interpreter.RegisterMap.initFill(0),
+    skip_input_data_regions: bool = false,
 }) !pb.SyscallEffects {
     var log: std.ArrayList(u8) = .{};
     defer log.deinit(allocator);
@@ -464,10 +468,18 @@ pub fn createSyscallEffect(allocator: std.mem.Allocator, params: struct {
         if (log.items.len > 0) _ = log.pop();
     }
 
-    const input_data_regions = try extractInputDataRegions(
-        allocator,
-        params.memory_map,
-    );
+    // When virtual_address_space_adjustments is enabled, Agave's cpi_common()
+    // calls update_caller_account_region only after process_instruction succeeds
+    // (agave: program-runtime/src/cpi.rs). On failure the `?` propagates before
+    // regions are updated, so they contain stale data. Return an empty list to
+    // match that behaviour. See: https://github.com/firedancer-io/solfuzz-agave/pull/501
+    const input_data_regions: std.ArrayList(pb.InputDataRegion) = if (params.skip_input_data_regions)
+        .{}
+    else
+        try extractInputDataRegions(
+            allocator,
+            params.memory_map,
+        );
 
     return .{
         .@"error" = params.err,

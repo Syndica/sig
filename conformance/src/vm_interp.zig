@@ -18,7 +18,7 @@ const memory = svm.memory;
 const HEAP_MAX = 256 * 1024;
 const STACK_SIZE = 4_096 * 64;
 
-export fn sol_compat_vm_interp_v1(
+pub export fn sol_compat_vm_interp_v1(
     out_ptr: [*]u8,
     out_size: *u64,
     in_ptr: [*]const u8,
@@ -164,6 +164,7 @@ fn executeVmTest(
     const executable: Executable = .{
         .instructions = std.mem.bytesAsSlice(Instruction, rodata),
         .bytes = rodata,
+        .text_section_len = rodata.len,
         .version = sbpf_version,
         .config = env.config,
         .function_registry = function_registry,

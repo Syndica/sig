@@ -3,38 +3,24 @@
 import argparse
 import json
 import os
+import re
 import shlex
+import subprocess
 import sys
-import textwrap
-
-from collections import defaultdict
 
 conformance_dir = os.path.dirname(os.path.realpath(__file__))
-
-try:
-    from typer.testing import CliRunner
-    from test_suite.test_suite import app as solana_test_suite
-except:
-    print(
-        textwrap.dedent(
-            f"""
-          To activate the environment:
-
-              nix develop
-
-          """
-        )
-    )
-    raise
+solana_conformance_bin = os.environ.get("SOLANA_CONFORMANCE_BIN", "solana-conformance")
 
 
 def main():
     os.environ["PYTHONUNBUFFERED"] = "1"
 
+    import platform
+    lib_ext = ".dylib" if platform.system() == "Darwin" else ".so"
     create_lib = os.environ.get(
-        "CREATE_LIB", path("env/solfuzz-agave/target/release/libsolfuzz_agave.so")
+        "CREATE_LIB", path(f"env/solfuzz-agave/target/release/libsolfuzz_agave{lib_ext}")
     )
-    exec_lib = os.environ.get("EXEC_LIB", path("zig-out/lib/libsolfuzz_sig.so"))
+    exec_lib = os.environ.get("EXEC_LIB", path(f"zig-out/lib/libsolfuzz_sig{lib_ext}"))
 
     parser = argparse.ArgumentParser(description="Run test fixtures")
     parser.add_argument(
@@ -62,7 +48,7 @@ def main():
     parser.add_argument(
         "--run-separately",
         action="store_true",
-        help="Run each fixture with a separate invocation of solana-test-suite. "
+        help="Run each fixture with a separate invocation of solana-conformance. "
         "This makes it easier to see which fixture caused a panic, but takes longer.",
     )
     parser.add_argument(
@@ -184,7 +170,7 @@ def run_test(vectors, config, pad):
 def exec_fixtures(config, fixtures_path, outputs_path):
     # fmt: off
     result = run_command([
-        "exec-fixtures",
+        "run-fixtures",
             "--num-processes", config.num_processes,
             "-i", fixtures_path,
             "-t", config.exec_lib,
@@ -198,17 +184,20 @@ def exec_fixtures(config, fixtures_path, outputs_path):
     failed = 1  # assume failure unless there is a good output
     skipped = 0
     failed_fixtures = []
-    if result.exit_code == 0:
-        try:
-            summary = result.stdout.split("\n")[3]
-            passed = int(summary.split(",")[0].split(": ")[1])
-            failed = int(summary.split(",")[1].split(": ")[1])
-            skipped = int(summary.split(",")[2].split(": ")[1])
-            if failed > 0:
-                failed_fixtures = result.stdout.split("\n")[4].strip("Failed tests: ").strip()
-                failed_fixtures = json.loads(failed_fixtures.replace("'", '"'))
-        except IndexError:
-            pass  # reached when the harness panics
+    combined_output = result.stdout
+    if result.stderr:
+        combined_output += "\n" + result.stderr
+
+    summary = parse_summary(combined_output)
+    if summary is not None:
+        passed, failed, skipped = summary
+
+    if failed > 0:
+        for line in combined_output.splitlines():
+            if line.startswith("Failed tests:"):
+                failed_fixtures_text = line.removeprefix("Failed tests:").strip()
+                failed_fixtures = json.loads(failed_fixtures_text.replace("'", '"'))
+                break
 
     print(f" │ Pass{passed:>5} │ Fail{failed:>5} │ Skip{skipped:>5}")
 
@@ -230,23 +219,62 @@ def print_noln(string):
 
 
 def run_command(args, verbose=False, show_output=False):
+    del show_output
     str_args = [str(c) for c in args]
-    cmd_to_show = f"solana-test-suite " + " ".join(str_args)
+    cmd_to_show = " ".join([solana_conformance_bin, *str_args])
     if verbose:
         print("\n" + cmd_to_show)
-    runner = CliRunner(mix_stderr=False)
-    result = runner.invoke(
-        solana_test_suite,
-        str_args,
-        standalone_mode=False,
-        catch_exceptions=False,
-    )
-    if result.exit_code != 0:
-        inject_command = ":\n" if verbose else f":\n\n  {cmd_to_show}\n\n"
-        print(f"command failed{inject_command}{result.stdout}\n{result.stderr}")
+
+    try:
+        completed = subprocess.run(
+            [solana_conformance_bin, *str_args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        print(
+            "command failed:\n\n"
+            f"  {cmd_to_show}\n\n"
+            f"Could not find '{solana_conformance_bin}' on PATH.\n"
+            "Run `nix develop --impure` with either:\n"
+            "  - SOLANA_CONFORMANCE_REPO_URL and SOLANA_CONFORMANCE_REF\n"
+            "  - SOLANA_CONFORMANCE_SRC set to the crate path\n"
+            "or install solana-conformance system-wide."
+        )
+        return RunResult(1, "", "")
+
+    if completed.returncode != 0:
+        combined_output = completed.stdout
+        if completed.stderr:
+            combined_output += "\n" + completed.stderr
+
+        if parse_summary(combined_output) is None:
+            inject_command = ":\n" if verbose else f":\n\n  {cmd_to_show}\n\n"
+            print(f"command failed{inject_command}{completed.stdout}\n{completed.stderr}")
     elif verbose:
-        print(f"{result.stdout}\n{result.stderr}")
-    return result
+        print(f"{completed.stdout}\n{completed.stderr}")
+
+    return RunResult(completed.returncode, completed.stdout, completed.stderr)
+
+
+class RunResult:
+    def __init__(self, exit_code, stdout, stderr):
+        self.exit_code = exit_code
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def parse_summary(output):
+    match = re.search(r"Passed:\s*(\d+),\s*Failed:\s*(\d+),\s*Skipped:\s*(\d+)", output)
+    if match is not None:
+        return tuple(int(group) for group in match.groups())
+
+    match = re.search(r"Results:\s*(\d+)\s+passed,\s*(\d+)\s+failed,\s*(\d+)\s+skipped", output)
+    if match is None:
+        return None
+    return tuple(int(group) for group in match.groups())
 
 
 if __name__ == "__main__":
