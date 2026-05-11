@@ -95,7 +95,7 @@ fn lintDir(
         try std.fmt.allocPrint(ctx.allocator, "{s}.zig", .{dir_path});
     defer if (!is_root_dir) ctx.allocator.free(companion_path);
 
-    const companion_file = source_files.getMut(companion_path) orelse {
+    const companion_file = source_files.get(companion_path) orelse {
         try ctx.addDiagnostic(
             companion_path,
             1,

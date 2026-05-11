@@ -112,12 +112,7 @@ pub const SourceFiles = struct {
         self.items.deinit(self.allocator);
     }
 
-    pub fn get(self: *const SourceFiles, path: []const u8) ?*const SourceFile {
-        const index = self.indexOf(path) orelse return null;
-        return &self.items.items[index];
-    }
-
-    pub fn getMut(self: *SourceFiles, path: []const u8) ?*SourceFile {
+    pub fn get(self: *const SourceFiles, path: []const u8) ?*SourceFile {
         const index = self.indexOf(path) orelse return null;
         return &self.items.items[index];
     }
