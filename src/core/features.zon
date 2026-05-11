@@ -177,12 +177,13 @@
         .name = "libsecp256k1_fail_on_bad_count",
         .pubkey = "8aXvSuopd1PUj7UhehfXJRg6619RHp8ZvwTyyJHdUYsj",
         .description = "fail libsecp256k1_verify if count appears wrong",
-        .status = .unsupported,
+        .status = .hardcoded,
         .note =
-        \\\ TODO: Low Priority 
-        \\\ Look into the future plan for this feature, why not revert it? 
-        \\\ Replaced by `libsecp256k1_fail_on_bad_count2`.
-        \\\ Not implemented in any client.
+        \\\ TODO: Low Priority
+        \\\ Inactive on all clusters.
+        \\\ Hardcoded for compatibility.
+        \\\ Marked as hardcoded for fuzzing in solfuzz-agave and firedancer.
+        \\\ Why not remove this from hardcoded features for fuzzing and mark reverted?  
         ,
     },
     .{
@@ -1441,11 +1442,12 @@
         .name = "enable_turbine_extended_fanout_experiments",
         .pubkey = "turbRpTzBzDU6PJmWvRTbcJXXGxUs19CvQamUrRD9bN",
         .description = "enable turbine extended fanout experiments #",
-        .status = .unsupported,
+        .status = .hardcoded,
         .note =
         \\\ TODO: Low Priority
-        \\\ Look into the future plan for this feature.
-        \\\ Not implemented in any client.
+        \\\ Inactive on all clusters.
+        \\\ Hardcoded for compatibility.
+        \\\ Marked as hardcoded for fuzzing in solfuzz-agave, but not in firedancer.
         ,
     },
     .{
