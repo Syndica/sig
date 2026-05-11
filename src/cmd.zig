@@ -1328,7 +1328,7 @@ const Cmd = struct {
                     },
                     .bench_poh = .{
                         .help = .{
-                            .short = 
+                            .short =
                             \\Replay the PoH SHA chain over ledger entries and report latency.
                             ,
                             .long =

@@ -787,20 +787,33 @@ test "jsonParseFromValue for rpc params" {
 }
 
 test "hashRepeated matches std Sha256 reference" {
-    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
-    const random = rng.random();
+    const cases = [_]struct { Hash, usize }{
+        .{ Hash.ZEROES, 0 },
+        .{ Hash.ZEROES, 1 },
+        .{ Hash.ZEROES, 7 },
+        .{ Hash.ZEROES, 64 },
+        .{ .{ .data = @as([32]u8, @splat(0xff)) }, 0 },
+        .{ .{ .data = @as([32]u8, @splat(0xff)) }, 1 },
+        .{ .{ .data = @as([32]u8, @splat(0xff)) }, 64 },
+        .{ Hash.init("hello"), 1 },
+        .{ Hash.init("hello"), 256 },
+    };
 
-    const iterations: usize = 100_000;
-    for (0..iterations) |i| {
-        const count: usize = i % 8;
-        const input: Hash = .initRandom(random);
+    for (cases) |case| {
+        const input, const count = case;
 
+        // reference
         var expected: Hash = input;
         for (0..count) |_| Sha256.hash(&expected.data, &expected.data, .{});
 
+        // non-aliased
         var actual: Hash = undefined;
         Hash.hashRepeated(&input, &actual, count);
-
         try std.testing.expectEqual(expected, actual);
+
+        // aliased (input == out)
+        var aliased: Hash = input;
+        Hash.hashRepeated(&aliased, &aliased, count);
+        try std.testing.expectEqual(expected, aliased);
     }
 }
