@@ -54,6 +54,8 @@ pub fn build(b: *Build) !void {
 
     ci_step.dependOn(test_step);
     ci_step.dependOn(install_step);
+    ci_step.dependOn(lint_step);
+    ci_step.dependOn(lint_test_step);
     check_step.dependOn(install_step);
 
     const tracy_mod = b.dependency("tracy", .{
