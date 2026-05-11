@@ -383,9 +383,9 @@ pub fn GossipNode(comptime Effects: type) type {
                     var prune_len: usize = 0;
 
                     for (push.values.items) |value| {
-                        const maybe_insert =
+                        const maybe_key_value =
                             try self.insertValue(.from(logger), now, .push, value);
-                        const key, const duplicates = maybe_insert orelse continue;
+                        const key, const duplicates = maybe_key_value orelse continue;
 
                         // Add to prunes if enough duplicates.
                         if (duplicates >= DUPLICATE_THRESHOLD_UNTIL_PRUNE) {
@@ -823,8 +823,8 @@ pub fn GossipNode(comptime Effects: type) type {
             now: u64,
             value: GossipValue,
         ) !void {
-            const maybe_insert = try self.insertValue(.from(logger), now, .us, value);
-            const key, _ = maybe_insert orelse unreachable;
+            const maybe_key_value = try self.insertValue(.from(logger), now, .us, value);
+            const key, _ = maybe_key_value orelse unreachable;
             assert(key.from.equals(&self.identity()));
         }
 
