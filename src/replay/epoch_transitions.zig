@@ -191,7 +191,7 @@ pub fn computeFeatureSet(
     var new_activations = FeatureSet.ALL_DISABLED;
     var inactive_iterator = feature_set.iterator(slot, .inactive);
     while (inactive_iterator.next()) |feature| {
-        const feature_id = features.map.get(feature).key;
+        const feature_id = features.pubkey_map.get(feature);
         const feature_account = try slot_store.reader().get(
             arena.allocator(),
             feature_id,
@@ -823,7 +823,7 @@ const TestEnvironment = struct {
         feature: features.Feature,
         activation_slot: ?Slot,
     ) !void {
-        const feature_id = features.map.get(feature).key;
+        const feature_id = features.pubkey_map.get(feature);
         const data = try allocator.alloc(u8, 9);
         defer allocator.free(data);
         @memset(data, 0);

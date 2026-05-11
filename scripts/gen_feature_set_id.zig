@@ -3,11 +3,19 @@
 const std = @import("std");
 const base58 = @import("base58");
 
+/// Keep in sync with definition in `src/features.zig`
 const ZonInfo = struct {
     name: [:0]const u8,
     pubkey: [:0]const u8,
-    activated_on_all_clusters: bool = false,
-    reverted: bool = false,
+    description: [:0]const u8,
+    status: union(enum) {
+        reverted,
+        unsupported,
+        supported,
+        hardcoded_for_fuzzing,
+        hardcoded,
+    },
+    note: ?[:0]const u8 = null,
 };
 
 const PUBKEY_SIZE = 32;
@@ -27,9 +35,15 @@ pub fn main() !void {
 
     const features: []const ZonInfo = @import("features");
 
-    // Collect all pubkeys
+    // Collect all runtime-supported pubkeys
     var pubkeys: [features.len][PUBKEY_SIZE]u8 = undefined;
-    for (&pubkeys, features) |*pubkey, feature| {
+    var pubkey_count: usize = 0;
+    for (features) |feature| {
+        switch (feature.status) {
+            .reverted => continue,
+            else => {},
+        }
+        const pubkey = &pubkeys[pubkey_count];
         var decoded_buf: [base58.decodedMaxSize(base58.encodedMaxSize(pubkey.len))]u8 = undefined;
         const decoded_len = BASE58_ENDEC.decode(&decoded_buf, feature.pubkey) catch |err| {
             std.log.err(
@@ -56,10 +70,13 @@ pub fn main() !void {
             return error.BadPubkey;
         }
         pubkey.* = decoded[0..pubkey.len].*;
+        pubkey_count += 1;
     }
 
+    const included_pubkeys = pubkeys[0..pubkey_count];
+
     // Sort pubkeys lexicographically
-    std.mem.sort([PUBKEY_SIZE]u8, &pubkeys, {}, struct {
+    std.mem.sort([PUBKEY_SIZE]u8, included_pubkeys, {}, struct {
         fn lessThan(_: void, a: [PUBKEY_SIZE]u8, b: [PUBKEY_SIZE]u8) bool {
             return std.mem.order(u8, &a, &b) == .lt;
         }
@@ -67,7 +84,7 @@ pub fn main() !void {
 
     // Hash all pubkeys
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    for (pubkeys) |pk| {
+    for (included_pubkeys) |pk| {
         hasher.update(&pk);
     }
     const feature_set_id = std.mem.readInt(
