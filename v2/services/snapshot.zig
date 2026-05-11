@@ -48,6 +48,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     rw.tel.signalReady();
 
     const folder_path = ro.config.folder_buffer[0..ro.config.folder_len];
+    const known_validators = ro.config.knownValidators();
 
     const result: DownloadResult = result: {
         std.fs.cwd().makeDir(folder_path) catch |err| switch (err) {
@@ -71,6 +72,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             .gossip_iter = &gossip_iter,
             .dedupe_map = &dedupe_map,
             .dedupe_alloc = dedupe_fba.allocator(),
+            .known_validators = known_validators,
             .probe_conns = .{ProbeConn.empty()} ** download.MAX_CONCURRENT_PROBES,
             .active_probes = 0,
             .timeout_pending = false,

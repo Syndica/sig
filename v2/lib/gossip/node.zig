@@ -1006,7 +1006,7 @@ pub fn GossipNode(comptime Effects: type) type {
                             var reader = std.Io.Reader.fixed(v.value[0..v.size]);
                             const ci_val = try bincode.read(&fba, &reader, GossipValue);
                             if (ci_val.data.contact_info.socket_map.get(.rpc)) |rpc_addr| {
-                                self.config.effects.reportSnapshotSource(rpc_addr, sh.slot, sh.hash);
+                                self.config.effects.reportSnapshotSource(key.from, rpc_addr, sh.slot, sh.hash);
                             }
                         }
                     }, // TODO: send to snapshot service
@@ -1033,7 +1033,7 @@ pub fn GossipNode(comptime Effects: type) type {
                                 var reader = std.Io.Reader.fixed(v.value[0..v.size]);
                                 const sh_val = try bincode.read(&fba, &reader, GossipValue);
                                 const sh = sh_val.data.snapshot_hashes.full;
-                                self.config.effects.reportSnapshotSource(rpc_addr, sh.slot, sh.hash);
+                                self.config.effects.reportSnapshotSource(key.from, rpc_addr, sh.slot, sh.hash);
                             }
                         }
                     },

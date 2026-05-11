@@ -4,10 +4,12 @@ const lib = @import("../lib.zig");
 const tel = lib.telemetry;
 
 const Address = lib.gossip.Address;
+const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
 const Hash = lib.solana.Hash;
 const IoUring = std.os.linux.IoUring;
 const SnapshotSourceRing = lib.snapshot.SnapshotSourceRing;
+const KnownValidators = lib.snapshot.SnapshotConfig.KnownValidators;
 
 const MAX_DRAIN: u8 = 64;
 const GOSSIP_DRAIN_INTERVAL: std.os.linux.kernel_timespec = .{ .sec = 0, .nsec = 100_000_000 };
@@ -93,6 +95,8 @@ const ProbeStatus = enum(u8) {
 };
 
 pub const PeerState = struct {
+    // TODO: currently unused, add this pubkey to logs.
+    from: Pubkey,
     slot: Slot,
     hash: Hash,
     probe_status: ProbeStatus,
@@ -104,6 +108,7 @@ pub const PeerState = struct {
 };
 
 /// The current phase of this peer's download during the race.
+// TODO: make this a union, then stuff the state dependent stuff into those sub-structs.
 const DownloadPhase = enum {
     /// This entry in the `DownloadConn` array is free. No active download being tracked.
     unused,
@@ -431,6 +436,8 @@ pub const Downloader = struct {
     gossip_iter: *SnapshotSourceRing.Iterator(.reader),
     dedupe_map: *DedupeMap,
     dedupe_alloc: std.mem.Allocator,
+    known_validators: KnownValidators,
+
     probe_conns: [MAX_CONCURRENT_PROBES]ProbeConn,
     active_probes: u8,
     timeout_pending: bool,
@@ -538,8 +545,14 @@ pub const Downloader = struct {
             const source = self.gossip_iter.next() orelse break;
             self.metrics.snapshot_sources_received.increment(1);
 
+            // Check and skip non-whitelisted known validators.
+            if (!self.known_validators.trusts(source.from)) {
+                continue;
+            }
+
             const key = source.rpc_addr;
             const value: PeerState = .{
+                .from = source.from,
                 .slot = source.slot,
                 .hash = source.hash,
                 .probe_status = .pending,

@@ -34,6 +34,8 @@ const Config = struct {
     telemetry: Telemetry,
     snapshot: Snapshot,
 
+    known_validators: [][]const u8,
+
     const SandboxingMode = enum { sandboxed, threaded };
 
     const Gossip = struct {
@@ -52,6 +54,10 @@ const Config = struct {
     const Snapshot = struct {
         folder: []const u8,
     };
+
+    pub fn format(self: Config, writer: *std.Io.Writer) !void {
+        try std.zon.stringify.serialize(self, .{ .whitespace = true }, writer);
+    }
 };
 
 pub fn main() !void {
@@ -92,7 +98,7 @@ pub fn main() !void {
     };
     defer std.zon.parse.free(allocator, config);
 
-    std.log.info("config: {}", .{config});
+    std.log.info("config: {f}", .{config});
 
     const gossip_cluster_info: lib.gossip.ClusterInfo =
         try .getFromEcho(config.gossip.port, config.cluster);
@@ -146,6 +152,7 @@ pub fn main() !void {
         .snapshot_config = .{
             .folder_path = config.snapshot.folder,
             .cluster = config.cluster,
+            .known_validators = config.known_validators,
         },
 
         .gossip_to_snapshot = {},
