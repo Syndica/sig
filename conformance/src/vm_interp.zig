@@ -164,6 +164,7 @@ fn executeVmTest(
     const executable: Executable = .{
         .instructions = std.mem.bytesAsSlice(Instruction, rodata),
         .bytes = rodata,
+        .text_section_len = rodata.len,
         .version = sbpf_version,
         .config = env.config,
         .function_registry = function_registry,
