@@ -535,7 +535,9 @@ test "detects unused call declarations" {
 
 test "fix removes cascading aliases" {
     const allocator = std.testing.allocator;
-    const path = "lint/.tmp_unused_declarations_fix.zig";
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
     const source =
         \\const Writer = fmt.Writer;
         \\const fmt = std.fmt;
@@ -543,8 +545,9 @@ test "fix removes cascading aliases" {
         \\const std = @import("std");
         \\
     ;
-    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = source });
-    defer std.fs.cwd().deleteFile(path) catch {};
+    try tmp.dir.writeFile(.{ .sub_path = "unused_declarations_fix.zig", .data = source });
+    const path = try tmp.dir.realpathAlloc(allocator, "unused_declarations_fix.zig");
+    defer allocator.free(path);
 
     var ctx = core.Context{
         .allocator = allocator,
