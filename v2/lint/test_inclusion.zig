@@ -243,10 +243,6 @@ fn check(
         return;
     };
 
-    if (std.meta.eql(@as([]const []const u8, block.imports.items), expected_imports)) {
-        return;
-    }
-
     const loc = core.lineColumn(source, block.start);
     if (!isSorted(block.imports.items)) {
         try addTestInclusionDiagnostic(
