@@ -43,7 +43,7 @@ const obsolete_ref_all_decls = "std.testing.refAllDecls(@This())";
 pub fn lint(
     ctx: *core.Context,
     root_file: []const u8,
-    source_files: *core.SourceFiles,
+    source_files: *const core.SourceFiles,
 ) !void {
     const root_dir = std.fs.path.dirname(root_file) orelse
         return error.InvalidTestInclusionRootFile;
@@ -86,7 +86,7 @@ fn lintDir(
     root_dir: []const u8,
     dir_path: []const u8,
     dir_source_paths: []const []const u8,
-    source_files: *core.SourceFiles,
+    source_files: *const core.SourceFiles,
 ) !void {
     const is_root_dir = std.mem.eql(u8, dir_path, root_dir);
     const companion_path = if (is_root_dir)
