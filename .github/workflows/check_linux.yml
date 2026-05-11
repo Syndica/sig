@@ -236,3 +236,56 @@ jobs:
 
       - name: Run Fixtures
         run: conformance/scripts/ci-run.sh
+
+  feature_compat_conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          cache-key: feature_compat-v1-${{ hashFiles('build.zig', 'build.zig.zon',
+            'conformance/build.zig', 'conformance/build.zig.zon') }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM/Clang for Rust bindgen
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y clang libclang-dev llvm-dev
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          key: feature-compat-cargo-${{ runner.os }}-${{ hashFiles('conformance/commits.env') }}
+          restore-keys: |
+            feature-compat-cargo-${{ runner.os }}-
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            conformance/env/solfuzz-agave/target
+
+      - name: Build Sig target and Agave target
+        run: |
+          cd conformance
+          zig build solfuzz_sig --summary all
+          . commits.env
+
+          mkdir -p env
+          rm -rf env/solfuzz-agave
+          git clone https://github.com/firedancer-io/solfuzz-agave.git env/solfuzz-agave
+          cd env/solfuzz-agave
+          git checkout "$SOLFUZZ_AGAVE_COMMIT"
+          cargo build --lib --release
+
+      - name: Check feature compatibility
+        run: |
+          cd conformance
+          python3 scripts/check_feature_compat.py \
+            zig-out/lib/libsolfuzz_sig.so \
+            env/solfuzz-agave/target/release/libsolfuzz_agave.so
