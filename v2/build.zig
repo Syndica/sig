@@ -32,6 +32,27 @@ pub fn build(b: *Build) !void {
         "List of unit test filters.",
     ) orelse &.{};
 
+    const disable_sha = b.option(
+        bool,
+        "disable-sha",
+        "Opt in to a slower software fallback when the target lacks the x86 SHA extension. " ++
+            "Without this flag, building for a target without SHA-NI is a compile-time error " ++
+            "so the performance hit is not silently accepted.",
+    ) orelse false;
+
+    const disable_avx512 = b.option(
+        bool,
+        "disable-avx512",
+        "Opt in to a slower generic ed25519 path when the target lacks AVX-512 " ++
+            "(avx512ifma + avx512vl). Without this flag, building for an x86_64 target without " ++
+            "these features is a compile-time error so the performance hit is not silently accepted.",
+    ) orelse false;
+
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "disable_sha", disable_sha);
+    build_options.addOption(bool, "disable_avx512", disable_avx512);
+    const build_options_mod = build_options.createModule();
+
     const install_step = b.getInstallStep();
     const run_step = b.step("run", "Run supervisor");
     const test_step = b.step("test", "Run unit tests");
@@ -68,6 +89,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "base58", .module = base58_mod },
             .{ .name = "binkode", .module = binkode_mod },
             .{ .name = "tracy", .module = tracy_mod },
+            .{ .name = "build-options", .module = build_options_mod },
         },
     });
     _ = addTestOutputs(b, test_step, null, artifact_opts, .{

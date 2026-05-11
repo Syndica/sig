@@ -6,9 +6,19 @@ comptime {
 
 const builtin = @import("builtin");
 const base58 = @import("base58");
+const build_options = @import("build-options");
 
 const BASE58_ENDEC = base58.Table.BITCOIN;
 const Sha256 = std.crypto.hash.sha2.Sha256;
+
+const has_sha_ni = builtin.cpu.arch == .x86_64 and
+    std.Target.x86.featureSetHasAll(builtin.cpu.features, &.{ .sha, .avx });
+comptime {
+    if (builtin.cpu.arch == .x86_64 and !has_sha_ni and !build_options.disable_sha) @compileError(
+        "Target lacks the x86 SHA extension required for the fast hashRepeated path. " ++
+            "Re-build with -Ddisable-sha=true to opt in to the slower AVX software fallback.",
+    );
+}
 
 pub const Hash = extern struct {
     data: [SIZE]u8,
@@ -145,7 +155,7 @@ pub const Hash = extern struct {
             @byteSwap(@as(V, @bitCast(input.data[16..32].*))),
         };
 
-        if (comptime std.Target.x86.featureSetHasAll(builtin.cpu.features, &.{ .sha, .avx })) {
+        if (comptime has_sha_ni) {
             var first: [4]V = .{ state[0], state[1] } ++ pad_vec;
             const feba: V = comptime .{ iv[5], iv[4], iv[1], iv[0] };
             const hgdc: V = comptime .{ iv[7], iv[6], iv[3], iv[2] };
