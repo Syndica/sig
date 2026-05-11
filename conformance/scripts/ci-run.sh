@@ -21,4 +21,4 @@ comm -23 \
     | xargs -d '\n' cp -t env/split-fixtures/
 
 echo Running fixtures
-zig-out/bin/run env/split-fixtures/ 2>&1 | tee /dev/tty | grep -q "Failed: 0,"
+zig-out/bin/run env/split-fixtures/ 2>&1 | tee /dev/stderr | grep -q "Failed: 0,"

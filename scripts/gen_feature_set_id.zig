@@ -3,31 +3,18 @@
 const std = @import("std");
 const base58 = @import("base58");
 
-/// Information about a feature, including its name, pubkey, description, and status.
+/// Keep in sync with definition in `src/features.zig`
 const ZonInfo = struct {
     name: [:0]const u8,
     pubkey: [:0]const u8,
     description: [:0]const u8,
     status: union(enum) {
-        /// The feature has been removed from the feature set and its implementation has been removed from source.
-        /// Fuzzing: reverted features may appear in historical regression fixtures.
         reverted,
-        /// This feature is contained in the feature set and its implementation is not complete.
-        /// Fuzzing: not advertised as a supported feature for fuzzing (i.e. it will not be toggled on).
-        staged,
-        /// This feature is contained in the feature set and its implementation is complete.
-        /// Fuzzing: advertised as a supported feature for fuzzing (i.e. it may be toggled on and off).
+        unsupported,
         supported,
-        /// This feature has been implemented and is included in the feature set.
-        /// Fuzzing: advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
+        hardcoded_for_fuzzing,
         hardcoded,
-        /// This feature has been implemented and is included in the feature set.
-        /// Fuzzing: advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
-        persisted,
     },
-    /// Optional note about the feature status. Required for all non-supported features,
-    /// and may be provided for supported features to clarify their status or provide
-    /// additional context.
     note: ?[:0]const u8 = null,
 };
 

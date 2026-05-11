@@ -277,6 +277,31 @@ pub fn applyFeatureActivations(
         });
     }
 
+    // SIMD-0437: incremental reduction of lamports_per_byte. Each gate assumes
+    // SIMD-0194 (deprecate_rent_exemption_threshold) has already activated, so
+    // rent.lamports_per_byte_year is set directly. If multiple gates activate
+    // in the same epoch, or out of order, the last one in this list wins.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/runtime/src/bank.rs#L5645-L5677
+    const rent_feature_gates = [_]struct { sig.core.features.Feature, u64 }{
+        .{ .set_lamports_per_byte_to_6333, 6333 },
+        .{ .set_lamports_per_byte_to_5080, 5080 },
+        .{ .set_lamports_per_byte_to_2575, 2575 },
+        .{ .set_lamports_per_byte_to_1322, 1322 },
+        .{ .set_lamports_per_byte_to_696, 696 },
+    };
+    for (rent_feature_gates) |gate| {
+        const feature, const lamports_per_byte = gate;
+        if (new_activations.active(feature, slot)) {
+            slot_constants.rent_collector.rent.lamports_per_byte_year = lamports_per_byte;
+            try updateRent(allocator, slot_constants.rent_collector.rent, .{
+                .slot = slot,
+                .slot_store = slot_store,
+                .capitalization = &slot_state.capitalization,
+                .rent = &slot_constants.rent_collector.rent,
+            });
+        }
+    }
+
     if (new_activations.active(.pico_inflation, slot)) {
         slot_constants.inflation = .PICO;
         slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
@@ -1142,6 +1167,99 @@ test "applyFeatureActivations: basic activations" {
         try std.testing.expectError(
             error.RaiseAccountCuLimitActivationNotImplemented,
             err,
+        );
+    }
+}
+
+test "applyFeatureActivations: SIMD-0437 incremental rent reduction" {
+    const allocator = std.testing.allocator;
+
+    const cases = [_]struct { features.Feature, u64 }{
+        .{ .set_lamports_per_byte_to_6333, 6333 },
+        .{ .set_lamports_per_byte_to_5080, 5080 },
+        .{ .set_lamports_per_byte_to_2575, 2575 },
+        .{ .set_lamports_per_byte_to_1322, 1322 },
+        .{ .set_lamports_per_byte_to_696, 696 },
+    };
+
+    // Each gate, on first activation, sets lamports_per_byte_year to its target.
+    for (cases) |case| {
+        const feature, const expected = case;
+        const slot: Slot = 0;
+
+        var env = try TestEnvironment.init(allocator);
+        defer env.deinit(allocator);
+        try env.ancestors.addSlot(allocator, slot);
+
+        try env.insertFeatureAccount(allocator, slot, 1, feature, null);
+        try applyFeatureActivations(
+            allocator,
+            slot,
+            &env.slot_constants,
+            &env.slot_state,
+            env.slotAccountStore(slot),
+            .noop,
+        );
+
+        try std.testing.expectEqual(0, env.slot_constants.feature_set.get(feature));
+        try std.testing.expectEqual(
+            expected,
+            env.slot_constants.rent_collector.rent.lamports_per_byte_year,
+        );
+    }
+
+    { // Already-activated gate does not re-apply: state unchanged from initial.
+        const slot: Slot = 1;
+
+        var env = try TestEnvironment.init(allocator);
+        defer env.deinit(allocator);
+        try env.ancestors.addSlot(allocator, slot);
+
+        const initial_lpb_year = env.slot_constants.rent_collector.rent.lamports_per_byte_year;
+
+        try env.insertFeatureAccount(allocator, slot, 1, .set_lamports_per_byte_to_696, 1);
+        try applyFeatureActivations(
+            allocator,
+            slot,
+            &env.slot_constants,
+            &env.slot_state,
+            env.slotAccountStore(slot),
+            .noop,
+        );
+
+        try std.testing.expectEqual(
+            1,
+            env.slot_constants.feature_set.get(.set_lamports_per_byte_to_696),
+        );
+        try std.testing.expectEqual(
+            initial_lpb_year,
+            env.slot_constants.rent_collector.rent.lamports_per_byte_year,
+        );
+    }
+
+    { // All five activate in the same epoch: last in list (696) wins.
+        const slot: Slot = 0;
+
+        var env = try TestEnvironment.init(allocator);
+        defer env.deinit(allocator);
+        try env.ancestors.addSlot(allocator, slot);
+
+        for (cases) |case| {
+            const feature, _ = case;
+            try env.insertFeatureAccount(allocator, slot, 1, feature, null);
+        }
+        try applyFeatureActivations(
+            allocator,
+            slot,
+            &env.slot_constants,
+            &env.slot_state,
+            env.slotAccountStore(slot),
+            .noop,
+        );
+
+        try std.testing.expectEqual(
+            696,
+            env.slot_constants.rent_collector.rent.lamports_per_byte_year,
         );
     }
 }

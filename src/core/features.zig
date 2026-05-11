@@ -16,30 +16,30 @@ const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 pub const FEATURE_SET_ID: u32 = @import("feature-set-id").FEATURE_SET_ID;
 
 /// ZonInfo represents the metadata for a feature, including its name, pubkey, description, status, and an optional note.
-/// It is used to record the history and current state of all features, including those that have been reverted or staged for future activation.
+/// It is used to record the history and current state of all features, including those that have been reverted.
 const ZonInfo = struct {
     name: [:0]const u8,
     pubkey: [:0]const u8,
     description: [:0]const u8,
     status: union(enum) {
         /// The feature has been removed from the feature set and its implementation has been removed from source.
-        /// Fuzzing: reverted features may appear in historical regression fixtures.
+        /// The feature is not advertised as a supported feature for fuzzing (i.e. it will not be toggled on).
         reverted,
-        /// This feature is contained in the feature set and its implementation is not complete.
-        /// Fuzzing: not advertised as a supported feature for fuzzing (i.e. it will not be toggled on).
-        staged,
-        /// This feature is contained in the feature set and its implementation is complete.
-        /// Fuzzing: advertised as a supported feature for fuzzing (i.e. it may be toggled on and off).
+        /// The feature is contained in the feature set but its implementation is not complete.
+        /// The feature is not advertised as a supported feature for fuzzing (i.e. it will not be toggled on).
+        unsupported,
+        /// The feature is contained in the feature set and its implementation is complete.
+        /// The feature is advertised as a supported feature for fuzzing (i.e. it may be toggled on and off).
         supported,
-        /// This feature has been implemented and is included in the feature set.
-        /// Fuzzing: advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
+        /// The feature is contained in the feature set, its implementation is complete, and the inactive path remains in source.
+        /// The feature is advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
+        hardcoded_for_fuzzing,
+        /// The feature is contained in the feature set, its implementation is complete, and the inactive path has been removed from source.
+        /// The feature is advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
         hardcoded,
-        /// This feature has been implemented and is included in the feature set.
-        /// Fuzzing: advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
-        persisted,
     },
     /// Optional note about the feature status.
-    /// Required for all staged features.
+    /// Required for all unsupported features.
     note: ?[:0]const u8 = null,
 
     pub fn id(self: ZonInfo) u64 {
@@ -68,8 +68,8 @@ pub const features: []const ZonInfo = blk: {
 };
 
 /// The `Feature` enum represents all available features that could be activated.
-/// - `staged` features are included to allow deliberate failure if encountered, but are not advertised for fuzzing.
-/// - `persisted` features have a suffix '_persisted' to provide comptime hint to ensure they are no longer referenced in source.
+/// - `unsupported` features are included to allow deliberate failure if encountered, but are not advertised for fuzzing.
+/// - `hardcoded` features have a suffix '_hardcoded' to provide comptime hint to ensure they are no longer referenced in source.
 pub const Feature = @Type(.{
     .@"enum" = .{
         .tag_type = u64,
@@ -77,7 +77,7 @@ pub const Feature = @Type(.{
             var fields: []const std.builtin.Type.EnumField = &.{};
             for (features, 0..) |feature, i| {
                 const suffix = switch (feature.status) {
-                    .persisted => "_persisted",
+                    .hardcoded => "_hardcoded",
                     else => "",
                 };
                 fields = fields ++ .{std.builtin.Type.EnumField{
@@ -212,7 +212,7 @@ pub const Set = struct {
 
         pub fn next(self: *Iterator) ?Feature {
             while (true) : (self.index += 1) {
-                if (self.index == features.len - 1) return null;
+                if (self.index == features.len) return null;
                 const feature: Feature = @enumFromInt(self.index);
                 const is_active = self.set.active(feature, self.slot);
                 if ((self.state == .active and is_active) or

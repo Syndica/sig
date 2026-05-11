@@ -33,9 +33,9 @@ const FEATURES: SolCompatFeatures = f: {
 
     for (sig.core.features.features) |feature| {
         const hardcoded_for_fuzzing = switch (feature.status) {
-            .reverted, .staged => continue,
+            .reverted, .unsupported => continue,
             .supported => false,
-            .hardcoded, .persisted => true,
+            .hardcoded_for_fuzzing, .hardcoded => true,
         };
         if (hardcoded_for_fuzzing)
             hardcoded_features = hardcoded_features ++ .{feature.id()}
