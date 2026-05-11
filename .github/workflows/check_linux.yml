@@ -178,8 +178,9 @@ jobs:
         run: python3 docs/check.py ./
 
       - name: V2 checks
-        working-directory: v2
-        run: zig build ci --summary all
+        run: |
+          cd v2/
+          zig build ci --summary all
 
       - name: Build and test hashmap ledger (linux)
         run: |
