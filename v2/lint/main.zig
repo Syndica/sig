@@ -146,11 +146,14 @@ fn lintFileLevelRules(ctx: *core.Context, file: *core.SourceFile) !void {
 
 test "parse errors report diagnostic and skip file-level rules" {
     const allocator = std.testing.allocator;
-    const path = "lint/.tmp_parse_error_test.zig";
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
     const source = "const x = ; // 12345678901234567890123456789012345678901234567890" ++
         "12345678901234567890123456789012345678901234567890\n";
-    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = source });
-    defer std.fs.cwd().deleteFile(path) catch {};
+    try tmp.dir.writeFile(.{ .sub_path = "parse_error_test.zig", .data = source });
+    const path = try tmp.dir.realpathAlloc(allocator, "parse_error_test.zig");
+    defer allocator.free(path);
 
     const config: cli.Config = .{};
     var ctx: core.Context = .{ .allocator = allocator, .config = config };
@@ -183,51 +186,40 @@ fn runGit(allocator: std.mem.Allocator, cwd: []const u8, argv: []const []const u
     }
 }
 
-fn tempRepoPaths(
-    allocator: std.mem.Allocator,
-    sub_path: []const u8,
-) !struct { repo: []u8, v2: []u8 } {
-    const repo = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/repo", .{sub_path});
-    errdefer allocator.free(repo);
-    const v2 = try std.fmt.allocPrint(allocator, "{s}/v2", .{repo});
-    errdefer allocator.free(v2);
-    return .{ .repo = repo, .v2 = v2 };
-}
-
 test "dirty preflight rejects tracked and untracked changes unless force is set" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const paths = try tempRepoPaths(allocator, tmp.sub_path[0..]);
-    defer allocator.free(paths.repo);
-    defer allocator.free(paths.v2);
+    try tmp.dir.makePath("v2");
+    const repo_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(repo_path);
+    const v2_path = try tmp.dir.realpathAlloc(allocator, "v2");
+    defer allocator.free(v2_path);
+    try tmp.dir.writeFile(.{ .sub_path = "v2/file.zig", .data = "pub const x = 1;\n" });
 
-    try tmp.dir.makePath("repo/v2");
-    try tmp.dir.writeFile(.{ .sub_path = "repo/v2/file.zig", .data = "pub const x = 1;\n" });
+    try runGit(allocator, repo_path, &.{ "git", "init" });
+    try runGit(allocator, repo_path, &.{ "git", "config", "user.email", "lint@example.com" });
+    try runGit(allocator, repo_path, &.{ "git", "config", "user.name", "Lint Test" });
+    try runGit(allocator, repo_path, &.{ "git", "add", "v2/file.zig" });
+    try runGit(allocator, repo_path, &.{ "git", "commit", "-m", "init" });
 
-    try runGit(allocator, paths.repo, &.{ "git", "init" });
-    try runGit(allocator, paths.repo, &.{ "git", "config", "user.email", "lint@example.com" });
-    try runGit(allocator, paths.repo, &.{ "git", "config", "user.name", "Lint Test" });
-    try runGit(allocator, paths.repo, &.{ "git", "add", "v2/file.zig" });
-    try runGit(allocator, paths.repo, &.{ "git", "commit", "-m", "init" });
+    try std.testing.expect(!(try hasUncommittedChanges(allocator, v2_path)));
 
-    try std.testing.expect(!(try hasUncommittedChanges(allocator, paths.v2)));
-
-    try tmp.dir.writeFile(.{ .sub_path = "repo/v2/file.zig", .data = "pub const x = 2;\n" });
-    try std.testing.expect(try hasUncommittedChanges(allocator, paths.v2));
+    try tmp.dir.writeFile(.{ .sub_path = "v2/file.zig", .data = "pub const x = 2;\n" });
+    try std.testing.expect(try hasUncommittedChanges(allocator, v2_path));
 
     const config: cli.Config = .{ .mode = .fix };
     var ctx: core.Context = .{ .allocator = allocator, .config = config };
     defer ctx.deinit();
-    try std.testing.expectError(error.UncommittedChanges, ensureFixModeCleanAtPath(&ctx, paths.v2));
+    try std.testing.expectError(error.UncommittedChanges, ensureFixModeCleanAtPath(&ctx, v2_path));
 
     ctx.config.force = true;
-    try ensureFixModeCleanAtPath(&ctx, paths.v2);
+    try ensureFixModeCleanAtPath(&ctx, v2_path);
 
-    try runGit(allocator, paths.repo, &.{ "git", "add", "v2/file.zig" });
-    try runGit(allocator, paths.repo, &.{ "git", "commit", "-m", "tracked" });
-    try tmp.dir.writeFile(.{ .sub_path = "repo/v2/untracked.zig", .data = "pub const y = 1;\n" });
+    try runGit(allocator, repo_path, &.{ "git", "add", "v2/file.zig" });
+    try runGit(allocator, repo_path, &.{ "git", "commit", "-m", "tracked" });
+    try tmp.dir.writeFile(.{ .sub_path = "v2/untracked.zig", .data = "pub const y = 1;\n" });
 
-    try std.testing.expect(try hasUncommittedChanges(allocator, paths.v2));
+    try std.testing.expect(try hasUncommittedChanges(allocator, v2_path));
 }
