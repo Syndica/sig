@@ -185,6 +185,8 @@ jobs:
       - name: Build and test hashmap ledger (linux)
         run: |
           set -eo pipefail
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
           zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" --summary all
           zig-out/bin/test 2>&1 | cat
 
@@ -210,6 +212,8 @@ jobs:
 
       - name: Build Conformance
         run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
           cd conformance
           zig build --summary all
 
