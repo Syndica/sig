@@ -47,13 +47,15 @@ pub const SourceFile = struct {
         return self.ast.errors.len != 0;
     }
 
+    /// Takes ownership of `source`, replacing the existing source and refreshing the AST for this
+    /// SourceFile. If an error is returned then ownership is not transferred and caller must
+    /// free `source`.
     pub fn replaceSource(
         self: *SourceFile,
         allocator: Allocator,
         source: [:0]u8,
         fix_name: []const u8,
     ) !void {
-        errdefer allocator.free(source);
         var ast = try std.zig.Ast.parse(allocator, source, .zig);
         errdefer ast.deinit(allocator);
         if (ast.errors.len != 0) {
