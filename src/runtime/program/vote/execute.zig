@@ -577,12 +577,9 @@ fn executeUpdateCommission(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L837
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/programs/vote/src/vote_state/mod.rs#L788
 ///
-/// Update the vote account's commission.
-/// When delay_commission_updates (SIMD-0249) is active, the commission update
-/// timing restriction is disabled because the runtime imposes a minimum delay
-/// of one full epoch before the new commission rate takes effect.
+/// Update the vote account's commission
 fn updateCommission(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
