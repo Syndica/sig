@@ -89,10 +89,16 @@ pub const SourceFiles = struct {
     allocator: Allocator,
     items: std.ArrayList(SourceFile),
 
-    pub fn collectAndReadRecursive(allocator: Allocator, paths: []const []const u8) !SourceFiles {
+    pub fn collectAndReadRecursive(
+        allocator: Allocator,
+        root_paths: []const []const u8,
+    ) !SourceFiles {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const scratch = arena.allocator();
+
         var collected: std.ArrayList([]const u8) = .empty;
-        defer freeStringList(allocator, &collected);
-        for (paths) |path| try collectPathRecursive(allocator, path, &collected);
+        for (root_paths) |path| try collectPathRecursive(scratch, path, &collected);
         sortStrings(collected.items);
 
         var files: SourceFiles = .{ .allocator = allocator, .items = .empty };
@@ -188,12 +194,8 @@ pub fn printDiagnostics(diagnostics: []const Diagnostic) !void {
     }
 }
 
-pub fn freeStringList(allocator: Allocator, strings: *std.ArrayList([]const u8)) void {
-    for (strings.items) |string| allocator.free(string);
-    strings.deinit(allocator);
-}
-
-pub fn collectPathRecursive(
+/// `paths` are borrowed from `path` or allocated by `allocator`.
+fn collectPathRecursive(
     allocator: Allocator,
     path: []const u8,
     paths: *std.ArrayList([]const u8),
@@ -202,31 +204,20 @@ pub fn collectPathRecursive(
     switch (stat.kind) {
         .file => {
             if (std.mem.endsWith(u8, path, ".zig")) {
-                const path_owned = try allocator.dupe(u8, path);
-                errdefer allocator.free(path_owned);
-                try paths.append(allocator, path_owned);
+                try paths.append(allocator, path);
             }
         },
         .directory => if (!isSkippedDir(std.fs.path.basename(path))) {
-            try collectDirRecursive(allocator, path, paths);
+            var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
+            defer dir.close();
+            var it = dir.iterate();
+            while (try it.next()) |entry| {
+                if (entry.kind == .directory and isSkippedDir(entry.name)) continue;
+                const child = try std.fs.path.join(allocator, &.{ path, entry.name });
+                try collectPathRecursive(allocator, child, paths);
+            }
         },
         else => {},
-    }
-}
-
-pub fn collectDirRecursive(
-    allocator: Allocator,
-    dir_path: []const u8,
-    paths: *std.ArrayList([]const u8),
-) anyerror!void {
-    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
-    defer dir.close();
-    var it = dir.iterate();
-    while (try it.next()) |entry| {
-        if (entry.kind == .directory and isSkippedDir(entry.name)) continue;
-        const child = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
-        defer allocator.free(child);
-        try collectPathRecursive(allocator, child, paths);
     }
 }
 
