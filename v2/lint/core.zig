@@ -182,9 +182,8 @@ pub const Context = struct {
 };
 
 pub fn printDiagnostics(diagnostics: []const Diagnostic) !void {
-    const out = std.fs.File.stderr().deprecatedWriter();
     for (diagnostics) |diag| {
-        try out.print("{s}:{d}:{d}: error[{s}]: {s}\n", .{
+        std.debug.print("{s}:{d}:{d}: error[{s}]: {s}\n", .{
             diag.path,
             diag.line,
             diag.column,
