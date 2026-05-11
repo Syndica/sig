@@ -35,7 +35,8 @@ jobs:
 
       - name: Build
         run: zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36
-          -Denable-tsan=false -Dno-network-tests --summary all
+          -Denable-tsan=false -Dno-network-tests -Ddisable-sha=true
+          -Ddisable-avx512=true --summary all
 
       - name: Configure docker user/mount defaults
         run: |
@@ -98,7 +99,7 @@ jobs:
         run: |
           sudo apt-get update -y && sudo apt-get install wget -y
           ./scripts/proxy_workaround.sh zig
-          zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -p workspace/zig-out-release --summary all
+          zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Ddisable-sha=true -Ddisable-avx512=true -p workspace/zig-out-release --summary all
 
       - name: Run Gossip
         run: bash scripts/gossip_test.sh 120 workspace/zig-out-release/bin/sig
@@ -133,11 +134,11 @@ jobs:
         run: |
           sudo apt-get update -y && sudo apt-get install wget -y
           ./scripts/proxy_workaround.sh zig
-          zig build -Denable-tsan=true -p workspace/zig-out --summary all
+          zig build -Denable-tsan=true -Ddisable-sha=true -Ddisable-avx512=true -p workspace/zig-out --summary all
 
       - name: Build Tests
         run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
-          --summary all
+          -Ddisable-sha=true -Ddisable-avx512=true --summary all
 
       - name: Run Tests
         run: |
@@ -185,12 +186,12 @@ jobs:
           sudo apt-get update -y && sudo apt-get install wget -y
           ./scripts/proxy_workaround.sh zig
           cd v2/
-          zig build ci --summary all
+          zig build ci -Ddisable-sha=true -Ddisable-avx512=true --summary all
 
       - name: Build and test hashmap ledger (linux)
         run: |
           set -eo pipefail
-          zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" --summary all
+          zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" -Ddisable-sha=true -Ddisable-avx512=true --summary all
           zig-out/bin/test 2>&1 | cat
 
       - name: Webzockets tests (linux)
@@ -216,7 +217,7 @@ jobs:
       - name: Build Conformance
         run: |
           cd conformance
-          zig build --summary all
+          zig build -Ddisable-sha=true -Ddisable-avx512=true --summary all
 
       - id: test_vectors_cache
         uses: actions/cache@v4

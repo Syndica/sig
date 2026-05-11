@@ -33,7 +33,7 @@ jobs:
           version: 0.15.2
 
       - name: build-docs
-        run: zig build docs
+        run: zig build docs -Ddisable-sha=true -Ddisable-avx512=true
       
       - name: upload
         uses: actions/upload-pages-artifact@v3
