@@ -785,3 +785,22 @@ test "jsonParseFromValue for rpc params" {
         ),
     );
 }
+
+test "hashRepeated matches std Sha256 reference" {
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = rng.random();
+
+    const iterations: usize = 100_000;
+    for (0..iterations) |i| {
+        const count: usize = i % 8;
+        const input: Hash = .initRandom(random);
+
+        var expected: Hash = input;
+        for (0..count) |_| Sha256.hash(&expected.data, &expected.data, .{});
+
+        var actual: Hash = undefined;
+        Hash.hashRepeated(&input, &actual, count);
+
+        try std.testing.expectEqual(expected, actual);
+    }
+}
