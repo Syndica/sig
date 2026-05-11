@@ -17,9 +17,22 @@ const allow_unused_comment = "// lint: allow_unused";
 const DeclarationCandidate = struct {
     line: usize,
     column: usize,
-    remove_start: usize,
-    remove_end: usize,
-    fixable: bool,
+    removal: Removal,
+};
+
+const Removal = union(enum) {
+    range: RemovalRange,
+    blocked: UnfixableReason,
+};
+
+const RemovalRange = struct {
+    start: usize,
+    end: usize,
+};
+
+const UnfixableReason = enum {
+    preceding_comment,
+    not_isolated,
 };
 
 pub fn lint(ctx: *core.Context, file: *core.SourceFile) !void {
@@ -27,27 +40,19 @@ pub fn lint(ctx: *core.Context, file: *core.SourceFile) !void {
         .check => {
             var candidates: std.ArrayList(DeclarationCandidate) = .empty;
             defer candidates.deinit(ctx.allocator);
-            try findUnusedDeclarations(
+            try findAndSortUnusedDeclarations(
                 ctx.allocator,
                 file.source,
                 &file.ast,
                 &candidates,
             );
-            for (candidates.items) |candidate| {
-                try ctx.addDiagnostic(
-                    file.path,
-                    candidate.line,
-                    candidate.column,
-                    .unused_declarations,
-                    "unused declaration",
-                );
-            }
+            try addUnusedDeclarationDiagnostics(ctx, file, candidates.items);
         },
         .fix => {
             while (true) {
                 var candidates: std.ArrayList(DeclarationCandidate) = .empty;
                 defer candidates.deinit(ctx.allocator);
-                try findUnusedDeclarations(
+                try findAndSortUnusedDeclarations(
                     ctx.allocator,
                     file.source,
                     &file.ast,
@@ -56,18 +61,52 @@ pub fn lint(ctx: *core.Context, file: *core.SourceFile) !void {
                 if (candidates.items.len == 0) {
                     break;
                 }
-                const fixed = try applyDeclarationRemovals(
+                const fixed = try applySortedDeclarationRemovals(
                     ctx.allocator,
                     file.source,
                     candidates.items,
-                ) orelse break;
+                ) orelse {
+                    try addUnusedDeclarationDiagnostics(ctx, file, candidates.items);
+                    break;
+                };
                 try file.replaceSource(ctx.allocator, fixed, "unused_declarations");
             }
         },
     }
 }
 
-fn findUnusedDeclarations(
+fn addUnusedDeclarationDiagnostics(
+    ctx: *core.Context,
+    file: *const core.SourceFile,
+    candidates: []const DeclarationCandidate,
+) !void {
+    for (candidates) |candidate| {
+        const unused_message = "unused declaration";
+        const message = switch (ctx.config.mode) {
+            .check => unused_message,
+            .fix => switch (candidate.removal) {
+                .range => unused_message,
+                .blocked => |reason| unfixableMessage(reason),
+            },
+        };
+        try ctx.addDiagnostic(
+            file.path,
+            candidate.line,
+            candidate.column,
+            .unused_declarations,
+            message,
+        );
+    }
+}
+
+fn unfixableMessage(reason: UnfixableReason) []const u8 {
+    return switch (reason) {
+        .preceding_comment => "unused declaration not fixed: preceding comment may document it",
+        .not_isolated => "unused declaration not fixed: not isolated on its own line",
+    };
+}
+
+fn findAndSortUnusedDeclarations(
     allocator: Allocator,
     source: []const u8,
     ast: *const std.zig.Ast,
@@ -93,14 +132,10 @@ fn findUnusedDeclarations(
         )) continue;
 
         const loc = core.lineColumn(source, ast.tokenStart(decl.name_token));
-        const removal_range = cleanRemovalRange(source, ast, decl.first_token, decl.last_token);
-        const fallback_offset = ast.tokenStart(decl.first_token);
         try candidates.append(allocator, .{
             .line = loc.line,
             .column = loc.column,
-            .remove_start = if (removal_range) |range| range.start else fallback_offset,
-            .remove_end = if (removal_range) |range| range.end else fallback_offset,
-            .fixable = removal_range != null,
+            .removal = declarationRemoval(source, ast, decl.first_token, decl.last_token),
         });
     }
 
@@ -171,19 +206,16 @@ fn functionDeclaration(
     };
 }
 
-const RemovalRange = struct {
-    start: usize,
-    end: usize,
-};
-
-fn cleanRemovalRange(
+fn declarationRemoval(
     source: []const u8,
     ast: *const std.zig.Ast,
     first: std.zig.Ast.TokenIndex,
     last: std.zig.Ast.TokenIndex,
-) ?RemovalRange {
+) Removal {
     const token_start = ast.tokenStart(first);
-    if (previousLineComment(source, token_start)) return null;
+    if (previousLineComment(source, token_start)) {
+        return .{ .blocked = .preceding_comment };
+    }
     var end_token = last;
     const token_after_last = last + 1;
     if (token_after_last < ast.tokens.len and ast.tokenTag(token_after_last) == .semicolon) {
@@ -192,9 +224,12 @@ fn cleanRemovalRange(
     const token_end = ast.tokenStart(end_token) + ast.tokenSlice(end_token).len;
     const line_start = core.lineStart(source, token_start);
     const line_end = core.lineEndIncludingNewline(source, token_end);
-    if (!isWhitespace(source[line_start..token_start])) return null;
-    if (!isWhitespace(source[token_end..line_end])) return null;
-    return .{ .start = line_start, .end = line_end };
+    if (!isWhitespace(source[line_start..token_start]) or
+        !isWhitespace(source[token_end..line_end]))
+    {
+        return .{ .blocked = .not_isolated };
+    }
+    return .{ .range = .{ .start = line_start, .end = line_end } };
 }
 
 fn hasAllowUnusedComment(source: []const u8, token_start: usize) bool {
@@ -225,8 +260,8 @@ fn isWhitespace(bytes: []const u8) bool {
 fn sortDeclarationCandidates(candidates: []DeclarationCandidate) void {
     std.mem.sort(DeclarationCandidate, candidates, {}, struct {
         fn lessThan(_: void, a: DeclarationCandidate, b: DeclarationCandidate) bool {
-            if (a.remove_start == b.remove_start) return a.remove_end > b.remove_end;
-            return a.remove_start < b.remove_start;
+            if (a.line == b.line) return a.column < b.column;
+            return a.line < b.line;
         }
     }.lessThan);
 }
@@ -270,7 +305,8 @@ fn identifierUsedOutsideDecl(
     return total_count > declaration_count;
 }
 
-fn applyDeclarationRemovals(
+/// Applies declaration removals to source. Note the removals must be sorted.
+fn applySortedDeclarationRemovals(
     allocator: Allocator,
     source: []const u8,
     candidates: []const DeclarationCandidate,
@@ -279,14 +315,17 @@ fn applyDeclarationRemovals(
     defer edits.deinit(allocator);
     var cursor: usize = 0;
     for (candidates) |candidate| {
-        if (!candidate.fixable) continue;
-        if (candidate.remove_start < cursor) continue;
+        const range = switch (candidate.removal) {
+            .range => |range| range,
+            .blocked => continue,
+        };
+        if (range.start < cursor) continue;
         try edits.append(allocator, .{
-            .start = candidate.remove_start,
-            .end = candidate.remove_end,
+            .start = range.start,
+            .end = range.end,
             .replacement = "",
         });
-        cursor = candidate.remove_end;
+        cursor = range.end;
     }
     if (edits.items.len == 0) return null;
     return try core.applySortedEdits(allocator, source, edits.items);
@@ -300,7 +339,7 @@ fn findUnusedDeclarationsInSource(
     var ast = try std.zig.Ast.parse(allocator, source, .zig);
     defer ast.deinit(allocator);
     if (ast.errors.len != 0) return error.ParseError;
-    try findUnusedDeclarations(allocator, source, &ast, candidates);
+    try findAndSortUnusedDeclarations(allocator, source, &ast, candidates);
 }
 
 test "detects unused declarations through token usage" {
@@ -596,8 +635,8 @@ test "fix removes clean nested declarations" {
     defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
-    try std.testing.expect(candidates.items[0].fixable);
-    const fixed = (try applyDeclarationRemovals(allocator, source, candidates.items)).?;
+    try std.testing.expectEqual(.range, std.meta.activeTag(candidates.items[0].removal));
+    const fixed = (try applySortedDeclarationRemovals(allocator, source, candidates.items)).?;
     defer allocator.free(fixed);
     try std.testing.expectEqualStrings(expected, fixed);
 }
@@ -620,8 +659,8 @@ test "fix removes unused functions" {
     defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
-    try std.testing.expect(candidates.items[0].fixable);
-    const fixed = (try applyDeclarationRemovals(allocator, source, candidates.items)).?;
+    try std.testing.expectEqual(.range, std.meta.activeTag(candidates.items[0].removal));
+    const fixed = (try applySortedDeclarationRemovals(allocator, source, candidates.items)).?;
     defer allocator.free(fixed);
     try std.testing.expectEqualStrings(expected, fixed);
 }
@@ -642,8 +681,8 @@ test "fix removes multiline imports" {
     defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
-    try std.testing.expect(candidates.items[0].fixable);
-    const fixed = (try applyDeclarationRemovals(allocator, source, candidates.items)).?;
+    try std.testing.expectEqual(.range, std.meta.activeTag(candidates.items[0].removal));
+    const fixed = (try applySortedDeclarationRemovals(allocator, source, candidates.items)).?;
     defer allocator.free(fixed);
     try std.testing.expectEqualStrings(expected, fixed);
 }
@@ -659,9 +698,26 @@ test "fix skips compact nested declarations" {
     defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
-    try std.testing.expect(!candidates.items[0].fixable);
-    const fixed = try applyDeclarationRemovals(allocator, source, candidates.items);
+    try std.testing.expectEqual(.blocked, std.meta.activeTag(candidates.items[0].removal));
+    const fixed = try applySortedDeclarationRemovals(allocator, source, candidates.items);
     try std.testing.expectEqual(null, fixed);
+}
+
+test "fix removes unused single line container before blocked nested declarations" {
+    const allocator = std.testing.allocator;
+    const source = "const S = struct { const a = 1; const b = 2; };\n";
+
+    var candidates: std.ArrayList(DeclarationCandidate) = .empty;
+    defer candidates.deinit(allocator);
+    try findUnusedDeclarationsInSource(allocator, source, &candidates);
+    try std.testing.expectEqual(3, candidates.items.len);
+    try std.testing.expectEqual(.range, std.meta.activeTag(candidates.items[0].removal));
+    try std.testing.expectEqual(.blocked, std.meta.activeTag(candidates.items[1].removal));
+    try std.testing.expectEqual(.blocked, std.meta.activeTag(candidates.items[2].removal));
+
+    const fixed = (try applySortedDeclarationRemovals(allocator, source, candidates.items)).?;
+    defer allocator.free(fixed);
+    try std.testing.expectEqualStrings("", fixed);
 }
 
 test "fix skips declarations with preceding comment" {
@@ -675,9 +731,38 @@ test "fix skips declarations with preceding comment" {
     defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
-    try std.testing.expect(!candidates.items[0].fixable);
-    const fixed = try applyDeclarationRemovals(allocator, source, candidates.items);
+    try std.testing.expectEqual(.blocked, std.meta.activeTag(candidates.items[0].removal));
+    const fixed = try applySortedDeclarationRemovals(allocator, source, candidates.items);
     try std.testing.expectEqual(null, fixed);
+}
+
+test "fix reports declarations it cannot remove" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\// keep this note
+        \\const unused = 1;
+        \\
+    ;
+    const path = try allocator.dupe(u8, "lib/example.zig");
+    errdefer allocator.free(path);
+    const source_z = try allocator.dupeZ(u8, source);
+    errdefer allocator.free(source_z);
+    var ast = try std.zig.Ast.parse(allocator, source_z, .zig);
+    errdefer ast.deinit(allocator);
+    var file: core.SourceFile = .{ .path = path, .source = source_z, .ast = ast };
+    defer file.deinit(allocator);
+
+    var ctx: core.Context = .{ .allocator = allocator, .config = .{ .mode = .fix } };
+    defer ctx.deinit();
+
+    try lint(&ctx, &file);
+
+    try std.testing.expect(!file.has_changes);
+    try std.testing.expectEqual(1, ctx.diagnostics.items.len);
+    try std.testing.expectEqualStrings(
+        "unused declaration not fixed: preceding comment may document it",
+        ctx.diagnostics.items[0].message,
+    );
 }
 
 test "removes declaration at eof without trailing newline" {
@@ -687,7 +772,7 @@ test "removes declaration at eof without trailing newline" {
     defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
-    const fixed = (try applyDeclarationRemovals(allocator, source, candidates.items)).?;
+    const fixed = (try applySortedDeclarationRemovals(allocator, source, candidates.items)).?;
     defer allocator.free(fixed);
     try std.testing.expectEqualStrings("", fixed);
 }
@@ -710,7 +795,7 @@ test "removes multiple unused declarations" {
     defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(2, candidates.items.len);
-    const fixed = (try applyDeclarationRemovals(allocator, source, candidates.items)).?;
+    const fixed = (try applySortedDeclarationRemovals(allocator, source, candidates.items)).?;
     defer allocator.free(fixed);
     try std.testing.expectEqualStrings(expected, fixed);
 }
