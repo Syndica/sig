@@ -558,18 +558,20 @@ fn calculateStakeVoteRewards(
         // delay the effect of commission updates by at least one
         // full epoch (SIMD-0249).
         const commission: u8 = if (delay_commission_updates) blk: {
-            const snapshot = cached_vote_accounts
-                .snapshot_epoch_vote_accounts;
-            const vote_state_for_commission = if (snapshot) |s|
-                if (s.getAccount(vote_pubkey)) |a| &a.state else null
-            else
-                null;
-            const resolved = vote_state_for_commission orelse
-                if (cached_vote_accounts.rewarded_epoch_vote_accounts) |rewarded|
-                    if (rewarded.getAccount(vote_pubkey)) |a| &a.state else null
-                else
-                    null;
-            break :blk (resolved orelse &vote_account.state).commission();
+            const snapshot = cached_vote_accounts.snapshot_epoch_vote_accounts;
+            const vote_state_for_commission = vsfc: {
+                const s = snapshot orelse break :vsfc null;
+                const a = s.getAccount(vote_pubkey) orelse break :vsfc null;
+                break :vsfc a.state;
+            };
+            const resolved = vote_state_for_commission orelse resolved: {
+                const rewarded = cached_vote_accounts.rewarded_epoch_vote_accounts orelse
+                    break :resolved null;
+                const a = rewarded.getAccount(vote_pubkey) orelse
+                    break :resolved null;
+                break :resolved a.state;
+            };
+            break :blk (resolved orelse vote_account.state).commission();
         } else vote_account.state.commission();
 
         const redeemed = redeemRewards(
@@ -585,7 +587,7 @@ fn calculateStakeVoteRewards(
             else => return e,
         };
 
-        var voters_reward_entry = try vote_account_rewards_map.getOrPut(allocator, vote_pubkey);
+        const voters_reward_entry = try vote_account_rewards_map.getOrPut(allocator, vote_pubkey);
         if (!voters_reward_entry.found_existing) {
             voters_reward_entry.value_ptr.* = .{
                 .commission = commission,
@@ -1320,7 +1322,7 @@ test calculateStakeVoteRewards {
 
 test "calculateStakeVoteRewards with delay_commission_updates" {
     const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(42);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var stake_delegations = FilteredStakesDelegations{};
@@ -1563,7 +1565,7 @@ test "beginPartitionedRewards caches vote accounts for delayed commission" {
         slot_state.reward_status.active.distribution_start_block_height,
     );
     try std.testing.expectEqual(
-        @as(u64, 1),
+        1,
         slot_state.reward_status.active.num_partitions,
     );
 
