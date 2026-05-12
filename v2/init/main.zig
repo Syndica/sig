@@ -117,16 +117,6 @@ pub fn main() !void {
     };
 
     const shared_regions = services.toSharedRegions(.{
-        // net -> shred
-        .net_to_shred = .{ .port = config.shred_network.recv_port },
-        // shred constants
-        .shred_recv_config = .{
-            .schedule_string = &reader.interface,
-            .shred_version = gossip_cluster_info.shred_version,
-        },
-
-        // net -> gossip
-        .net_to_gossip = .{ .port = config.gossip.port },
         // gossip constants
         .gossip_config = .{
             .cluster_info = gossip_cluster_info,
@@ -134,17 +124,26 @@ pub fn main() !void {
             .keypair = .fromKeyPair(.generate()),
             .turbine_recv_port = config.shred_network.recv_port,
         },
-
+        // shred constants
+        .shred_recv_config = .{
+            .schedule_string = &reader.interface,
+            .shred_version = gossip_cluster_info.shred_version,
+        },
         .snapshot_config = .{
             .folder_path = config.snapshot.folder,
             .cluster = config.cluster,
             .known_validators = config.snapshot.known_validators,
         },
 
-        .gossip_to_snapshot = {},
-
         // shred receiver -> replay
-        .deshredded_out = {},
+        .shreds_to_replay = {},
+        // gossip -(source)-> snapshot
+        .gossip_source_to_snapshot = {},
+
+        // net -> gossip
+        .net_to_gossip = .{ .port = config.gossip.port },
+        // net -> shred
+        .net_to_shred = .{ .port = config.shred_network.recv_port },
 
         .telemetry = .{
             .port = config.telemetry.port,

@@ -25,161 +25,48 @@ const memfd = lib.linux.memfd;
 const E = linux.E;
 const e = E.init;
 
-const services_zon = @import("./services.zon");
-
-/// Context created by the service initializer, used to report thread exit or crash and wake the
-/// main thread. Services receive it as opaque data and must not inspect it.
-const ThreadExitContext = struct {
-    finished_idx: *std.atomic.Value(u16),
-    reset_event: *std.Thread.ResetEvent,
+const topology_schema: lib.TopologySchema = .{
+    .services = @import("./services.zon"),
 };
 
-pub const Service = blk: {
-    var fields: []const std.builtin.Type.EnumField = &.{};
-    for (services_zon.services) |instance| {
-        const exists = for (fields) |f| {
-            if (std.mem.eql(u8, f.name, @tagName(instance.name))) break true;
-        } else false;
+const topology = topology_schema.Bind(Region, .init(.{
+    .gossip_config = .initOne(.@"gossip:config"),
+    .shred_recv_config = .initOne(.@"shred_receiver:config"),
+    .snapshot_config = .initOne(.@"snapshot:config"),
 
-        if (!exists) {
-            fields = fields ++ &[_]std.builtin.Type.EnumField{
-                .{ .name = @tagName(instance.name), .value = fields.len },
-            };
-        }
-    }
+    .gossip_source_to_snapshot = .initMany(&.{
+        .@"gossip:source_to_snapshot",
+        .@"snapshot:source_from_gossip",
+    }),
+    .shreds_to_replay = .initMany(&.{
+        .@"shred_receiver:deshredded_out",
+        .@"replay:deshredded_in",
+    }),
+    .net_to_gossip = .initMany(&.{
+        .@"net:to_gossip",
+        .@"gossip:from_net",
+    }),
+    .net_to_shred = .initMany(&.{
+        .@"net:to_shred",
+        .@"shred_receiver:from_net",
+    }),
 
-    break :blk @Type(.{ .@"enum" = .{
-        .decls = &.{},
-        .fields = fields,
-        .is_exhaustive = true,
-        .tag_type = u8,
-    } });
-};
+    .telemetry = .initMany(&.{
+        .@"telemetry:main",
+        .@"net:telemetry",
+        .@"gossip:telemetry",
+        .@"shred_receiver:telemetry",
+        .@"snapshot:telemetry",
+    }),
+}));
 
-fn getRequiredRegions(service: Service) []const RequiredRegion {
-    switch (service) {
-        inline else => |s| {
-            inline for (services_zon.services) |_service| {
-                if (comptime std.mem.eql(u8, @tagName(_service.name), @tagName(s))) {
-                    comptime var required: []const RequiredRegion = &.{};
-                    inline for (_service.regions) |r| {
-                        required = required ++ &[_]RequiredRegion{.{
-                            .region = @field(services_zon.regions, @tagName(r.name)),
-                            .rw = switch (r.access) {
-                                .rw => true,
-                                .readonly => false,
-                                else => @compileError("invalid access: " ++ @tagName(r.access)),
-                            },
-                        }};
-                    }
-                    return required;
-                }
-            } else comptime unreachable;
-        },
-    }
-}
-
-fn getFaultHandler(service: Service) sigaction_fn {
-    return switch (service) {
-        inline else => |s| @extern(
-            sigaction_fn,
-            .{ .name = "svc_fault_handler_" ++ @tagName(s) },
-        ),
-    };
-}
-
-pub fn getEntrypoint(service: Service) ServiceEntrypoint {
-    return switch (service) {
-        inline else => |s| @extern(
-            ServiceEntrypoint,
-            .{ .name = "svc_main_" ++ @tagName(s) },
-        ),
-    };
-}
-
-const RequiredRegion = struct {
-    region: std.meta.Tag(Region),
-    rw: bool = false,
-};
-
-const service_region_fields = @typeInfo(@TypeOf(services_zon.regions)).@"struct".fields;
-
-pub const SharedRegionInstances = blk: {
-    var fields: []const std.builtin.Type.StructField = &.{};
-    for (service_region_fields) |r| {
-        const region_tag = @field(services_zon.regions, r.name);
-        const RegionType = @FieldType(Region, @tagName(region_tag));
-        fields = fields ++ [_]std.builtin.Type.StructField{.{
-            .name = r.name,
-            .type = RegionType,
-            .default_value_ptr = null,
-            .is_comptime = false,
-            .alignment = @alignOf(RegionType),
-        }};
-    }
-    break :blk @Type(.{ .@"struct" = .{
-        .layout = .auto,
-        .is_tuple = false,
-        .decls = &.{},
-        .fields = fields,
-    } });
-};
-
-pub fn toSharedRegions(
-    instances: SharedRegionInstances,
-) [service_region_fields.len]SharedRegion {
-    @setEvalBranchQuota(
-        service_region_fields.len * services_zon.services.len *
-            128 * // reasonable upper bound of 128 services
-            100, // reasonable upper bound of 100 bytes per service name
-    );
-    var shared_regions: [service_region_fields.len]SharedRegion = undefined;
-    inline for (service_region_fields, 0..) |r, i| {
-        comptime var shares: []const Share = &.{};
-        inline for (services_zon.services) |s| {
-            inline for (s.regions) |s_reg| {
-                if (comptime std.mem.eql(u8, @tagName(s_reg.name), r.name)) {
-                    // TODO: support referencing multiple service instances (.n > 0)
-                    shares = shares ++ &[_]Share{.{
-                        .instance = .{ .service = s.name, .n = 0 },
-                        .rw = switch (s_reg.access) {
-                            .rw => true,
-                            .readonly => false,
-                            else => @compileError("invalid access: " ++ @tagName(s_reg.access)),
-                        },
-                    }};
-                }
-            }
-        }
-        shared_regions[i] = .{
-            .region = @unionInit(
-                Region,
-                @tagName(@field(services_zon.regions, r.name)),
-                @field(instances, r.name),
-            ),
-            .shares = shares,
-        };
-    }
-    return shared_regions;
-}
-
-pub const SharedRegion = struct {
-    region: Region,
-    shares: []const Share,
-    requested_location: ?[*]align(page_size_min) u8 = null,
-
-    pub fn format(self: SharedRegion, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        try writer.print("Region `{s}` shared with [ ", .{@tagName(self.region)});
-        for (self.shares) |share| try writer.print(
-            "{f} ({s}), ",
-            .{ share.instance, if (share.rw) "rw" else "ro" },
-        );
-        try writer.print("]", .{});
-    }
-};
+pub const ServiceId = topology.ServiceId;
+pub const SharedRegion = topology.SharedRegion;
+pub const toSharedRegions = topology.toSharedRegions;
+pub const ServiceInstance = topology.ServiceInstance;
+const getRequiredRegions = topology.getRequiredRegions;
 
 pub const Region = union(enum) {
-    net_pair: struct { port: u16 },
     gossip_config: struct {
         cluster_info: lib.gossip.ClusterInfo,
         // TODO: this should live in signing service
@@ -191,27 +78,48 @@ pub const Region = union(enum) {
         schedule_string: *std.Io.Reader,
         shred_version: u16,
     },
-
-    deshredded_out,
-
     snapshot_config: struct {
         folder_path: []const u8,
         cluster: lib.solana.Cluster,
         known_validators: []const []const u8,
     },
 
-    snapshot_source_ring: void,
+    shreds_to_replay,
+    gossip_source_to_snapshot,
+
+    net_to_gossip: NetPair,
+    net_to_shred: NetPair,
 
     telemetry: tel.Region.InitParams,
 
+    pub const Tag = @typeInfo(Region).@"union".tag_type.?;
+
+    pub const NetPair = struct {
+        port: u16,
+
+        pub fn init(cfg: NetPair, buf: []align(page_size_min) u8) !void {
+            std.debug.assert(buf.len == @sizeOf(lib.net.Pair));
+            const data: *lib.net.Pair = @ptrCast(buf);
+
+            data.recv.init();
+            data.send.init();
+            data.port = cfg.port;
+        }
+    };
+
     pub fn size(self: Region) usize {
         return switch (self) {
-            .net_pair => @sizeOf(lib.net.Pair),
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
-            .deshredded_out => @sizeOf(lib.shred.DeshredRing),
             .snapshot_config => @sizeOf(lib.snapshot.SnapshotConfig),
-            .snapshot_source_ring => @sizeOf(lib.snapshot.SnapshotSourceRing),
+
+            .shreds_to_replay => @sizeOf(lib.shred.DeshredRing),
+            .gossip_source_to_snapshot => @sizeOf(lib.snapshot.SnapshotSourceRing),
+
+            .net_to_gossip,
+            .net_to_shred,
+            => @sizeOf(lib.net.Pair),
+
             .telemetry => |params| params.info().regionSize(),
         };
     }
@@ -220,14 +128,6 @@ pub const Region = union(enum) {
         std.log.info("Initialising: {}", .{std.meta.activeTag(self)});
 
         return switch (self) {
-            .net_pair => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(lib.net.Pair));
-                const data: *lib.net.Pair = @ptrCast(buf);
-
-                data.recv.init();
-                data.send.init();
-                data.port = cfg.port;
-            },
             .gossip_config => |cfg| {
                 std.debug.assert(buf.len == @sizeOf(lib.gossip.Config));
                 const data: *lib.gossip.Config = @ptrCast(buf);
@@ -245,11 +145,6 @@ pub const Region = union(enum) {
                     cfg.schedule_string,
                 );
                 data.shred_version = cfg.shred_version;
-            },
-            .deshredded_out => {
-                std.debug.assert(buf.len == @sizeOf(lib.shred.DeshredRing));
-                const data: *lib.shred.DeshredRing = @ptrCast(buf);
-                data.init();
             },
             .snapshot_config => |cfg| {
                 std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotConfig));
@@ -303,11 +198,22 @@ pub const Region = union(enum) {
                     }
                 }
             },
-            .snapshot_source_ring => {
+
+            .shreds_to_replay => {
+                std.debug.assert(buf.len == @sizeOf(lib.shred.DeshredRing));
+                const data: *lib.shred.DeshredRing = @ptrCast(buf);
+                data.init();
+            },
+            .gossip_source_to_snapshot => {
                 std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotSourceRing));
                 const data: *lib.snapshot.SnapshotSourceRing = @ptrCast(buf);
                 data.init();
             },
+
+            .net_to_gossip,
+            .net_to_shred,
+            => |cfg| cfg.init(buf),
+
             .telemetry => |params| {
                 std.debug.assert(buf.len == params.info().regionSize());
                 const data: *tel.Region = @ptrCast(buf);
@@ -315,16 +221,6 @@ pub const Region = union(enum) {
                 data.init(params);
             },
         };
-    }
-};
-
-pub const ServiceInstance = struct {
-    service: Service,
-    /// for supporting multiple services of the same kind
-    n: u8 = 0,
-
-    pub fn format(self: ServiceInstance, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        try writer.print("{s}_{}", .{ @tagName(self.service), self.n });
     }
 };
 
@@ -345,11 +241,6 @@ pub fn telemetryServiceCount(comptime services: []const ServiceInstance) u32 {
 
     return count;
 }
-
-const Share = struct {
-    instance: ServiceInstance,
-    rw: bool = false,
-};
 
 const Map = std.AutoArrayHashMapUnmanaged(ServiceInstance, MapEntry);
 
@@ -435,6 +326,31 @@ fn serviceMap(
     }
 
     return map;
+}
+
+/// Context created by the service initializer, used to report thread exit or crash and wake the
+/// main thread. Services receive it as opaque data and must not inspect it.
+const ThreadExitContext = struct {
+    finished_idx: *std.atomic.Value(u16),
+    reset_event: *std.Thread.ResetEvent,
+};
+
+fn getFaultHandler(service: ServiceId) sigaction_fn {
+    return switch (service) {
+        inline else => |s| @extern(
+            sigaction_fn,
+            .{ .name = "svc_fault_handler_" ++ @tagName(s) },
+        ),
+    };
+}
+
+pub fn getEntrypoint(service: ServiceId) ServiceEntrypoint {
+    return switch (service) {
+        inline else => |s| @extern(
+            ServiceEntrypoint,
+            .{ .name = "svc_main_" ++ @tagName(s) },
+        ),
+    };
 }
 
 /// Initialises the shared memory regions with their parameters, then securely starts up services.
@@ -859,7 +775,7 @@ fn signalThreadCrash(ctx: ?*const anyopaque, service_idx: u16) callconv(.c) void
 
 fn threadEntry(
     entry_point: ServiceEntrypoint,
-    service: Service,
+    service: ServiceId,
     args: lib.ipc.ResolvedArgs,
     service_idx: u16,
     thread_exit_ctx: *const ThreadExitContext,
