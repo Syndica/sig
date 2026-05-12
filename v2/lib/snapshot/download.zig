@@ -21,71 +21,162 @@ const PROBE_TIMEOUT: std.os.linux.kernel_timespec = .{ .sec = PROBE_TIMEOUT_SECS
 pub const MAX_DOWNLOAD_RACERS: u8 = 16;
 const MAX_DOWNLOAD_CANDIDATES: u8 = 64;
 const DOWNLOAD_RACE_THRESHOLD_PCT: u64 = 10;
-const SPLICE_CHUNK: u32 = 1024 * 1024;
+const SPLICE_CHUNK: u32 = 1 * 1024 * 1024;
 const NO_OFFSET: u64 = std.math.maxInt(u64);
 const DOWNLOAD_TIMEOUT_SECS: i64 = 3;
 const DOWNLOAD_TIMEOUT: std.os.linux.kernel_timespec = .{ .sec = DOWNLOAD_TIMEOUT_SECS, .nsec = 0 };
 
 pub const ProbeConn = struct {
-    /// Current state in the snapshot probing lifecycle for this particaly peer.
-    /// Set to .unused when this slot is available for a new probe.
-    phase: enum { unused, connecting, sending, receiving },
-    /// tcp socket fd for the peer.
-    fd: std.posix.fd_t,
-    /// gossip addr for peer
-    addr: Address,
-    /// pubkey of the peer that announced this snapshot, used for identity in logs.
-    from: Pubkey,
-    /// stores the http HEAD request pre-formatted to check
-    send_buf: [256]u8,
-    /// lenfth of the formatted HTTP HEAD request.
-    send_len: u16,
-    /// buffer for the HTTP response from peer
-    /// TODO: prob too big, maybe just close out probes that respond with weird sizes.
-    recv_buf: [4096]u8,
-    /// os socket addr that addr gets converted into.
-    /// stored in the probe ring to ensure it remains stable for io_uring.
-    net_addr: std.net.Address,
-    /// timestamp captured at probe start. Used to compute
-    /// latency on successful completion.
-    start_time: std.time.Instant,
-    /// Snapshot slot that this probe is testing for.
-    slot: Slot,
-    /// Snapshot hash that this probe is testing for, used along with
-    /// slot as a staleness guard.
-    hash: Hash,
     /// monotonically increasing counter for this probe array entry,
     /// incremented each time the entry is reused. Encoded into UserData
     /// so that late cqes from previous occupant can be detected and
     /// discarded.
     gen: u16,
-    /// set when a linked timeout fired, but we are still waiting for the
-    /// primary op's cqe before freeing/reusing the slot.
-    timed_out: bool,
-    /// byte offset of the most recently submitted primary op within the current phase.
-    /// Used to distinguish stale timeout cqes from previous partial send/recv ops.
-    active_offset: u16,
-    /// Timestamp captured when the current io_uring op was submitted.
-    /// Used to measure SQE to CQE received latency.
-    op_start_time: std.time.Instant,
+    /// Current state in the snapshot probing lifecycle for this particular peer.
+    /// Set to .unused when this slot is available for a new probe.
+    state: ProbeState,
+
+    const ProbeActive = struct {
+        /// tcp socket fd for the peer.
+        fd: std.posix.fd_t,
+        /// gossip addr for peer
+        addr: Address,
+        /// pubkey of the peer that announced this snapshot, used for identity in logs.
+        from: Pubkey,
+        /// os socket addr that addr gets converted into.
+        /// stored in the probe ring to ensure it remains stable for io_uring.
+        net_addr: std.net.Address,
+        /// timestamp captured at probe start. Used to compute
+        /// latency on successful completion.
+        start_time: std.time.Instant,
+        /// Snapshot slot that this probe is testing for.
+        slot: Slot,
+        /// Snapshot hash that this probe is testing for, used along with
+        /// slot as a staleness guard.
+        hash: Hash,
+    };
+
+    const ProbeTimedOp = struct {
+        /// set when a linked timeout fired, but we are still waiting for the
+        /// primary op's cqe before freeing/reusing the slot.
+        timed_out: bool,
+        /// byte offset of the most recently submitted primary op within the current phase.
+        /// Used to distinguish stale timeout cqes from previous partial send/recv ops.
+        active_offset: u16,
+        /// Timestamp captured when the current io_uring op was submitted.
+        /// Used to measure SQE to CQE received latency.
+        op_start_time: std.time.Instant,
+    };
+
+    const ProbeConnecting = struct {
+        active: ProbeActive,
+        op: ProbeTimedOp,
+    };
+
+    const ProbeSending = struct {
+        active: ProbeActive,
+        op: ProbeTimedOp,
+        /// stores the http HEAD request pre-formatted to check
+        send_buf: [256]u8,
+        /// lenfth of the formatted HTTP HEAD request.
+        send_len: u16,
+    };
+
+    const ProbeReceiving = struct {
+        active: ProbeActive,
+        op: ProbeTimedOp,
+        /// buffer for the HTTP response from peer
+        /// TODO: prob too big, maybe just close out probes that respond with weird sizes.
+        recv_buf: [4096]u8,
+    };
+
+    const ProbeState = union(enum) {
+        unused,
+        connecting: ProbeConnecting,
+        sending: ProbeSending,
+        receiving: ProbeReceiving,
+    };
 
     pub fn empty() ProbeConn {
         return .{
-            .phase = .unused,
-            .fd = -1,
-            .addr = undefined,
-            .from = Pubkey.ZEROES,
-            .send_buf = undefined,
-            .send_len = 0,
-            .recv_buf = undefined,
-            .net_addr = undefined,
-            .start_time = undefined,
-            .slot = 0,
-            .hash = Hash.ZEROES,
             .gen = 0,
-            .timed_out = false,
-            .active_offset = 0,
-            .op_start_time = undefined,
+            .state = .unused,
+        };
+    }
+
+    fn isUnused(self: *const ProbeConn) bool {
+        return self.state == .unused;
+    }
+
+    fn phaseName(self: *const ProbeConn) []const u8 {
+        return @tagName(std.meta.activeTag(self.state));
+    }
+
+    fn activePtr(self: *ProbeConn) ?*ProbeActive {
+        return switch (self.state) {
+            .unused => null,
+            inline else => |*state| &state.active,
+        };
+    }
+
+    fn timedOpPtr(self: *ProbeConn) ?*ProbeTimedOp {
+        return switch (self.state) {
+            .unused => null,
+            inline else => |*state| &state.op,
+        };
+    }
+
+    fn enterSending(self: *ProbeConn) *ProbeSending {
+        switch (self.state) {
+            .connecting => |state| {
+                self.state = .{ .sending = .{
+                    .active = state.active,
+                    .op = undefined,
+                    .send_buf = undefined,
+                    .send_len = 0,
+                } };
+            },
+            .sending => {},
+            else => unreachable,
+        }
+
+        return &self.state.sending;
+    }
+
+    fn enterReceiving(self: *ProbeConn) *ProbeReceiving {
+        switch (self.state) {
+            .sending => |state| {
+                self.state = .{ .receiving = .{
+                    .active = state.active,
+                    .op = undefined,
+                    .recv_buf = undefined,
+                } };
+            },
+            .receiving => {},
+            else => unreachable,
+        }
+
+        return &self.state.receiving;
+    }
+
+    fn expectConnecting(self: *ProbeConn) ?*ProbeConnecting {
+        return switch (self.state) {
+            .connecting => |*state| state,
+            else => null,
+        };
+    }
+
+    fn expectSending(self: *ProbeConn) ?*ProbeSending {
+        return switch (self.state) {
+            .sending => |*state| state,
+            else => null,
+        };
+    }
+
+    fn expectReceiving(self: *ProbeConn) ?*ProbeReceiving {
+        return switch (self.state) {
+            .receiving => |*state| state,
+            else => null,
         };
     }
 };
@@ -318,6 +409,15 @@ const Op = enum(u8) {
     download_splice_in,
     download_splice_out,
     download_fsync,
+
+    fn expectedProbeState(self: Op) ?std.meta.Tag(ProbeConn.ProbeState) {
+        return switch (self) {
+            .probe_connect => .connecting,
+            .probe_send => .sending,
+            .probe_recv => .receiving,
+            else => null,
+        };
+    }
 };
 
 /// Packed into io_uring sqe/cqe user_data field for identifying operations on completion
@@ -459,7 +559,7 @@ pub const Downloader = struct {
 
     pub fn deinit(self: *Downloader) void {
         for (0..self.probe_conns.len) |i| {
-            if (self.probe_conns[i].phase != .unused) {
+            if (!self.probe_conns[i].isUnused()) {
                 self.finishProbe(@intCast(i), .failed);
             }
         }
@@ -613,39 +713,35 @@ pub const Downloader = struct {
 
         // find a free prob
         const probe_index: u8, const probe = for (&self.probe_conns, 0..) |*p, i| {
-            if (p.phase == .unused) break .{ @intCast(i), p };
+            if (p.isUnused()) break .{ @intCast(i), p };
         } else return;
 
         // create tcp socket
-        probe.net_addr = addr.toNetAddress();
+        const net_addr = addr.toNetAddress();
         const fd = try std.posix.socket(
-            probe.net_addr.any.family,
+            net_addr.any.family,
             std.posix.SOCK.STREAM | std.posix.SOCK.NONBLOCK,
             0,
         );
         errdefer std.posix.close(fd);
 
-        // create req
-        var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
-        const hash_str = peer.hash.base58String(&hash_buf);
-        const send_len = std.fmt.bufPrint(
-            &probe.send_buf,
-            "HEAD /snapshot-{d}-{s}.tar.zst HTTP/1.1\r\nHost: {f}\r\nConnection: close\r\n\r\n",
-            .{ peer.slot, hash_str, probe.net_addr },
-        ) catch unreachable;
-        probe.send_len = @intCast(send_len.len);
-
         probe.gen +%= 1;
-        probe.fd = fd;
-        probe.addr = addr;
-        probe.from = peer.from;
-        probe.slot = peer.slot;
-        probe.hash = peer.hash;
+        probe.state = .{ .connecting = .{
+            .active = .{
+                .fd = fd,
+                .addr = addr,
+                .from = peer.from,
+                .net_addr = net_addr,
+                .start_time = std.time.Instant.now() catch unreachable,
+                .slot = peer.slot,
+                .hash = peer.hash,
+            },
+            .op = undefined,
+        } };
 
         // NOTE: try is safe here since errdefer closes fd, and active_probes
         // has not been incremented yet, so the slot remains reusable.
         try self.queueProbeConnectWithTimeout(probe_index, fd);
-        probe.start_time = std.time.Instant.now() catch unreachable;
 
         peer.probe_status = .in_flight;
         self.active_probes += 1;
@@ -655,7 +751,7 @@ pub const Downloader = struct {
     fn getProbeForCqe(self: *Downloader, data: UserData) ?*ProbeConn {
         std.debug.assert(data.index < self.probe_conns.len);
         const probe = &self.probe_conns[data.index];
-        if (probe.phase == .unused) {
+        if (probe.isUnused()) {
             self.logger.warn().logf("stale cqe for unused probe slot op={s} idx={d}", .{ @tagName(data.op), data.index });
             return null;
         }
@@ -700,6 +796,7 @@ pub const Downloader = struct {
         fd: std.posix.fd_t,
     ) !void {
         const probe = &self.probe_conns[index];
+        const connecting = &probe.state.connecting;
 
         const connect_data = UserData.init(.probe_connect, index, probe.gen);
         var timeout_data = connect_data;
@@ -707,17 +804,18 @@ pub const Downloader = struct {
 
         const sqes = try self.reserveLinkedSqes();
 
-        sqes.primary.prep_connect(fd, &probe.net_addr.any, probe.net_addr.getOsSockLen());
+        sqes.primary.prep_connect(fd, &connecting.active.net_addr.any, connecting.active.net_addr.getOsSockLen());
         sqes.primary.user_data = connect_data.encode();
         sqes.primary.flags |= std.os.linux.IOSQE_IO_LINK;
 
         sqes.timeout.prep_link_timeout(&PROBE_TIMEOUT, 0);
         sqes.timeout.user_data = timeout_data.encode();
 
-        probe.phase = .connecting;
-        probe.active_offset = 0;
-        probe.timed_out = false;
-        probe.op_start_time = std.time.Instant.now() catch unreachable;
+        connecting.op = .{
+            .active_offset = 0,
+            .timed_out = false,
+            .op_start_time = std.time.Instant.now() catch unreachable,
+        };
     }
 
     /// Enqueues a pair of SQEs to send the HTTP HEAD request along with a timeout for the corresponding probe.
@@ -737,21 +835,36 @@ pub const Downloader = struct {
         var timeout_data = send_data;
         timeout_data.is_timeout = true;
 
-        std.debug.assert(offset <= probe.send_len);
+        const needs_request = probe.state == .connecting;
+        const sending = probe.enterSending();
+        if (needs_request) {
+            std.debug.assert(offset == 0);
+
+            var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
+            const hash_str = sending.active.hash.base58String(&hash_buf);
+            const send_len = std.fmt.bufPrint(
+                &sending.send_buf,
+                "HEAD /snapshot-{d}-{s}.tar.zst HTTP/1.1\r\nHost: {f}\r\nConnection: close\r\n\r\n",
+                .{ sending.active.slot, hash_str, sending.active.net_addr },
+            ) catch unreachable;
+            sending.send_len = @intCast(send_len.len);
+        }
+        std.debug.assert(offset <= sending.send_len);
 
         const sqes = try self.reserveLinkedSqes();
 
-        sqes.primary.prep_send(probe.fd, probe.send_buf[offset..probe.send_len], 0);
+        sqes.primary.prep_send(sending.active.fd, sending.send_buf[offset..sending.send_len], 0);
         sqes.primary.user_data = send_data.encode();
         sqes.primary.flags |= std.os.linux.IOSQE_IO_LINK;
 
         sqes.timeout.prep_link_timeout(&PROBE_TIMEOUT, 0);
         sqes.timeout.user_data = timeout_data.encode();
 
-        probe.phase = .sending;
-        probe.active_offset = offset;
-        probe.timed_out = false;
-        probe.op_start_time = std.time.Instant.now() catch unreachable;
+        sending.op = .{
+            .active_offset = offset,
+            .timed_out = false,
+            .op_start_time = std.time.Instant.now() catch unreachable,
+        };
     }
 
     /// Enqueues a pair of SQEs to recv the HTTP response along with a timeout.
@@ -771,20 +884,22 @@ pub const Downloader = struct {
         var timeout_data = recv_data;
         timeout_data.is_timeout = true;
 
-        std.debug.assert(offset <= probe.recv_buf.len);
+        const receiving = probe.enterReceiving();
+        std.debug.assert(offset <= receiving.recv_buf.len);
 
         const sqes = try self.reserveLinkedSqes();
 
-        sqes.primary.prep_recv(probe.fd, probe.recv_buf[offset..], 0);
+        sqes.primary.prep_recv(receiving.active.fd, receiving.recv_buf[offset..], 0);
         sqes.primary.user_data = recv_data.encode();
         sqes.primary.flags |= std.os.linux.IOSQE_IO_LINK;
         sqes.timeout.prep_link_timeout(&PROBE_TIMEOUT, 0);
         sqes.timeout.user_data = timeout_data.encode();
 
-        probe.phase = .receiving;
-        probe.active_offset = offset;
-        probe.timed_out = false;
-        probe.op_start_time = std.time.Instant.now() catch unreachable;
+        receiving.op = .{
+            .active_offset = offset,
+            .timed_out = false,
+            .op_start_time = std.time.Instant.now() catch unreachable,
+        };
     }
 
     fn handleProbeTimeout(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
@@ -795,30 +910,28 @@ pub const Downloader = struct {
         // or reused by a new probe. Both are expected since the primary cqe completed
         // before the timeout fired. If the probe is marked unused, or the generations don't match,
         // then this timeout is stale. Just ignore it.
-        if (probe.phase == .unused or probe.gen != data.gen) return;
+        if (probe.isUnused() or probe.gen != data.gen) return;
 
-        const expected_phase: @TypeOf(probe.phase) = switch (data.op) {
-            .probe_connect => .connecting,
-            .probe_send => .sending,
-            .probe_recv => .receiving,
-            else => unreachable,
-        };
-        if (probe.phase != expected_phase) return;
-        if (data.offset != probe.active_offset) return;
+        const expected_state = data.op.expectedProbeState() orelse unreachable;
+        if (std.meta.activeTag(probe.state) != expected_state) return;
+
+        const active = probe.activePtr() orelse return;
+        const timed_op = probe.timedOpPtr() orelse return;
+        if (data.offset != timed_op.active_offset) return;
 
         switch (cqe.err()) {
             .CANCELED, .NOENT, .ALREADY => {},
             .TIME => {
-                probe.timed_out = true;
+                timed_op.timed_out = true;
                 self.onOpTimeout(data.op);
                 self.logger.debug().logf("probe timed out from={f} phase={s}", .{
-                    probe.from, @tagName(probe.phase),
+                    active.from, probe.phaseName(),
                 });
                 self.metrics.snapshot_probes_timed_out.increment(1);
             },
             else => {
                 self.logger.warn().logf("unexpected timeout err from={f} err={s}", .{
-                    probe.from, @tagName(cqe.err()),
+                    active.from, @tagName(cqe.err()),
                 });
             },
         }
@@ -826,25 +939,26 @@ pub const Downloader = struct {
 
     fn handleProbeConnect(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const probe = self.getProbeForCqe(data) orelse return;
-        if (probe.phase != .connecting) {
-            self.logger.warn().logf("unexpected connect cqe from={f} phase={s}", .{ probe.from, @tagName(probe.phase) });
+        const connecting = probe.expectConnecting() orelse {
+            const active = probe.activePtr() orelse return;
+            self.logger.warn().logf("unexpected connect cqe from={f} phase={s}", .{ active.from, probe.phaseName() });
             return;
-        }
+        };
 
         // TODO: coalesce both
-        if (probe.timed_out) {
+        if (connecting.op.timed_out) {
             self.finishProbe(data.index, .failed);
             self.probeNextPending();
             return;
         }
         if (cqe.err() != .SUCCESS) {
-            self.logger.debug().logf("probe connect failed from={f} err={s}", .{ probe.from, @tagName(cqe.err()) });
+            self.logger.debug().logf("probe connect failed from={f} err={s}", .{ connecting.active.from, @tagName(cqe.err()) });
             self.finishProbe(data.index, .failed);
             self.probeNextPending();
             return;
         }
 
-        self.onOpComplete(.probe_connect, probe.op_start_time);
+        self.onOpComplete(.probe_connect, connecting.op.op_start_time);
 
         // We've succesfully connected, so send the HTTP HEAD request.
         // Enqueuing the entries can only fail if the submission queue is full,
@@ -857,33 +971,34 @@ pub const Downloader = struct {
 
     fn handleProbeSend(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const probe = self.getProbeForCqe(data) orelse return;
-        if (probe.phase != .sending) {
-            self.logger.warn().logf("unexpected send cqe from={f} phase={s}", .{ probe.from, @tagName(probe.phase) });
+        const sending = probe.expectSending() orelse {
+            const active = probe.activePtr() orelse return;
+            self.logger.warn().logf("unexpected send cqe from={f} phase={s}", .{ active.from, probe.phaseName() });
             return;
-        }
+        };
 
         // TODO: coalesce both
-        if (probe.timed_out) {
+        if (sending.op.timed_out) {
             self.finishProbe(data.index, .failed);
             self.probeNextPending();
             return;
         }
         if (cqe.err() != .SUCCESS) {
-            self.logger.debug().logf("probe send failed from={f} err={s}", .{ probe.from, @tagName(cqe.err()) });
+            self.logger.debug().logf("probe send failed from={f} err={s}", .{ sending.active.from, @tagName(cqe.err()) });
             self.finishProbe(data.index, .failed);
             self.probeNextPending();
             return;
         }
 
-        self.onOpComplete(.probe_send, probe.op_start_time);
+        self.onOpComplete(.probe_send, sending.op.op_start_time);
 
         // Track send progress across partial completions via user_data offset.
         std.debug.assert(cqe.res > 0);
-        std.debug.assert(cqe.res <= probe.send_len - data.offset);
+        std.debug.assert(cqe.res <= sending.send_len - data.offset);
         const new_offset = data.offset + @as(u16, @intCast(cqe.res));
 
         // The previous send was partial, queue up another and return.
-        if (new_offset < probe.send_len) {
+        if (new_offset < sending.send_len) {
             self.queueProbeSendWithTimeout(data, new_offset) catch {
                 self.finishProbe(data.index, .sq_full);
                 return;
@@ -900,39 +1015,40 @@ pub const Downloader = struct {
 
     fn handleProbeRecv(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
         const probe = self.getProbeForCqe(data) orelse return;
-        if (probe.phase != .receiving) {
-            self.logger.warn().logf("unexpected recv cqe from={f} phase={s}", .{ probe.from, @tagName(probe.phase) });
+        const receiving = probe.expectReceiving() orelse {
+            const active = probe.activePtr() orelse return;
+            self.logger.warn().logf("unexpected recv cqe from={f} phase={s}", .{ active.from, probe.phaseName() });
             return;
-        }
+        };
 
         // TODO: coalesce these 3 conds
-        if (probe.timed_out) {
+        if (receiving.op.timed_out) {
             self.finishProbe(data.index, .failed);
             self.probeNextPending();
             return;
         }
         if (cqe.err() != .SUCCESS) {
-            self.logger.warn().logf("probe recv failed from={f} err={s}", .{ probe.from, @tagName(cqe.err()) });
+            self.logger.warn().logf("probe recv failed from={f} err={s}", .{ receiving.active.from, @tagName(cqe.err()) });
             self.finishProbe(data.index, .failed);
             self.probeNextPending();
             return;
         }
         if (cqe.res == 0) {
-            self.logger.warn().logf("probe recv eof from={f}", .{probe.from});
+            self.logger.warn().logf("probe recv eof from={f}", .{receiving.active.from});
             self.finishProbe(data.index, .failed);
             self.probeNextPending();
             return;
         }
 
-        self.onOpComplete(.probe_recv, probe.op_start_time);
+        self.onOpComplete(.probe_recv, receiving.op.op_start_time);
 
         // Track recv progress across partial completions via user_data offset.
         const new_offset = data.offset + @as(u16, @intCast(cqe.res));
-        const response = probe.recv_buf[0..new_offset];
+        const response = receiving.recv_buf[0..new_offset];
 
         // Check for end of HTTP headers.
         const header_end = std.mem.indexOf(u8, response, "\r\n\r\n") orelse {
-            if (new_offset >= probe.recv_buf.len) {
+            if (new_offset >= receiving.recv_buf.len) {
                 self.finishProbe(data.index, .failed);
                 self.probeNextPending();
                 return;
@@ -950,7 +1066,7 @@ pub const Downloader = struct {
         const status_line = response[0..status_end];
         const ok = std.mem.indexOf(u8, status_line, "200") != null;
         if (!ok) {
-            self.logger.warn().logf("probe recv bad status from={f} status={s}", .{ probe.from, status_line });
+            self.logger.warn().logf("probe recv bad status from={f} status={s}", .{ receiving.active.from, status_line });
             self.finishProbe(data.index, .failed);
             self.probeNextPending();
             return;
@@ -958,32 +1074,32 @@ pub const Downloader = struct {
 
         // Parse Content-Length from headers.
         const content_len = parseContentLength(response[0 .. header_end + 4]) orelse {
-            self.logger.warn().logf("probe missing/zero content-length from={f}", .{probe.from});
+            self.logger.warn().logf("probe missing/zero content-length from={f}", .{receiving.active.from});
             self.finishProbe(data.index, .failed);
             self.probeNextPending();
             return;
         };
 
         // Compute and store latency.
-        const elapsed_ns = (std.time.Instant.now() catch unreachable).since(probe.start_time);
+        const elapsed_ns = (std.time.Instant.now() catch unreachable).since(receiving.active.start_time);
         const latency_ms: u32 = @intCast(elapsed_ns / std.time.ns_per_ms);
-        if (self.dedupe_map.getPtr(probe.addr)) |peer| {
-            if (peer.slot == probe.slot and std.meta.eql(peer.hash, probe.hash)) {
+        if (self.dedupe_map.getPtr(receiving.active.addr)) |peer| {
+            if (peer.slot == receiving.active.slot and std.meta.eql(peer.hash, receiving.active.hash)) {
                 peer.latency_ms = latency_ms;
             }
         }
 
-        self.logger.debug().logf("probe succeeded from={f} addr={f} latency={d}ms content_len={d}", .{ probe.from, probe.addr, latency_ms, content_len });
+        self.logger.debug().logf("probe succeeded from={f} addr={f} latency={d}ms content_len={d}", .{ receiving.active.from, receiving.active.addr, latency_ms, content_len });
 
         // Finish out the probe before moving peer info onto download phase.
         const candidate = DownloadCandidate{
-            .addr = probe.addr,
-            .from = probe.from,
+            .addr = receiving.active.addr,
+            .from = receiving.active.from,
             .latency_ms = latency_ms,
             .content_len = content_len,
         };
-        const slot = probe.slot;
-        const hash = probe.hash;
+        const slot = receiving.active.slot;
+        const hash = receiving.active.hash;
 
         self.finishProbe(data.index, .succeeded);
 
@@ -1003,11 +1119,11 @@ pub const Downloader = struct {
     fn finishProbe(self: *Downloader, probe_index: u8, result: ProbeResult) void {
         const probe = &self.probe_conns[probe_index];
         // If this fn gets called on a probe that's .unused, then return immidiately.
-        if (probe.phase == .unused) return;
-        if (self.dedupe_map.getPtr(probe.addr)) |peer| {
+        const active = probe.activePtr() orelse return;
+        if (self.dedupe_map.getPtr(active.addr)) |peer| {
             // NOTE: We gaurd the update here since gossip can update peer in dedupe map while io_uring was completing this probe.
             // If it was updated underneath us, don't update things here since another/newer probe was alread issued to io_uring.
-            if (peer.slot == probe.slot and std.meta.eql(peer.hash, probe.hash)) {
+            if (peer.slot == active.slot and std.meta.eql(peer.hash, active.hash)) {
                 peer.probe_status = switch (result) {
                     .succeeded => .succeeded,
                     .failed => .failed,
@@ -1016,7 +1132,7 @@ pub const Downloader = struct {
             }
         }
 
-        if (probe.fd >= 0) std.posix.close(probe.fd);
+        std.posix.close(active.fd);
         const old_gen = probe.gen;
         self.probe_conns[probe_index] = ProbeConn.empty();
         self.probe_conns[probe_index].gen = old_gen;
