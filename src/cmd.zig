@@ -2,12 +2,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build-options");
 const cli = @import("cli");
-const sig = @import("sig.zig");
+const sig = @import("sig");
 const xev = @import("xev");
-const config = @import("config.zig");
+const config = sig.config;
 const tracy = @import("tracy");
 
-const jrpc_ws = @import("rpc/jrpc_websockets/lib.zig");
+const jrpc_ws = sig.rpc.jrpc_websockets;
 const socket_opts = @import("webzockets").socket_opts;
 
 const replay = sig.replay;

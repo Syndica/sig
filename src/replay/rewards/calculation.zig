@@ -261,7 +261,7 @@ fn storeVoteAccountsPartitioned(
         // NOTE: Cloning should not be necessary here. Check and store only uses the account data to deserialise
         // the stake state and obtain the delegation and credits observed. This will be addressed during
         // transition to using stakes delegations deltas, so is acceptable for now.
-        var account_shared_data = try AccountSharedData.fromAccount(allocator, &account);
+        var account_shared_data = try sig.runtime.accountSharedDataFromAccount(allocator, &account);
         defer account_shared_data.deinit(allocator);
 
         account_shared_data.lamports = vote_reward.account.lamports;

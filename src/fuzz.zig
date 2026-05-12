@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("sig.zig");
+const sig = @import("sig");
 const cli = @import("cli");
 
 const accountsdb_fuzz = sig.accounts_db.fuzz;

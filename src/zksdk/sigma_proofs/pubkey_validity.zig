@@ -2,7 +2,7 @@
 //! [agave](https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/pubkey_validity.rs)
 
 const std = @import("std");
-const sig = @import("../../sig.zig");
+const sig = @import("../../../shared/lib.zig");
 
 const ed25519 = sig.crypto.ed25519;
 const Edwards25519 = std.crypto.ecc.Edwards25519;

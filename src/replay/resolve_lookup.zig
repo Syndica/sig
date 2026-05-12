@@ -189,12 +189,18 @@ pub fn resolveTransaction(
     for (message.account_keys, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = message.isSigner(i),
-        .is_writable = message.isWritable(i, lookups, params.reserved_accounts),
+        .is_writable = sig.core.transaction.isWritable(
+            message,
+            i,
+            lookups,
+            params.reserved_accounts,
+        ),
     });
     for (lookups.writable, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = false,
-        .is_writable = message.isWritable(
+        .is_writable = sig.core.transaction.isWritable(
+            message,
             message.account_keys.len + i,
             lookups,
             params.reserved_accounts,

@@ -1,4 +1,4 @@
-const sig = @import("../../sig.zig");
+const sig = @import("../../../shared/lib.zig");
 const std = @import("std");
 const std14 = @import("std14");
 const builtin = @import("builtin");

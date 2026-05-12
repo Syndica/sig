@@ -1,6 +1,6 @@
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../../sig.zig");
+const sig = @import("../../../shared/lib.zig");
 
 const ed25519 = sig.crypto.ed25519;
 const Edwards25519 = std.crypto.ecc.Edwards25519;

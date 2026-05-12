@@ -7,7 +7,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const std14 = @import("std14");
-const sig = @import("../../sig.zig");
+const sig = @import("../../../shared/lib.zig");
 const table = @import("table");
 pub const InnerProductProof = @import("ipp.zig").Proof; // pub so tests can run
 

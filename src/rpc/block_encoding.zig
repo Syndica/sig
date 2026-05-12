@@ -635,7 +635,8 @@ fn parseLegacyMessageAccounts(
     for (message.account_keys, 0..) |account_key, i| {
         accounts[i] = .{
             .pubkey = account_key,
-            .writable = message.isWritable(
+            .writable = sig.core.transaction.isWritable(
+                message,
                 i,
                 null,
                 reserved_account_keys,
@@ -666,7 +667,7 @@ fn parseV0MessageAccounts(
         const account_key = account_keys.get(i).?;
         accounts[i] = .{
             .pubkey = account_key,
-            .writable = message.isWritable(i, .{
+            .writable = sig.core.transaction.isWritable(message, i, .{
                 .writable = loaded_addresses.writable,
                 .readonly = loaded_addresses.readonly,
             }, reserved_account_keys),

@@ -1,4 +1,5 @@
 pub const cleanup_service = @import("cleanup_service.zig");
+pub const benchmarks = @import("benchmarks.zig");
 pub const database = @import("database/lib.zig");
 pub const db = @import("db.zig");
 pub const fuzz_ledger = @import("fuzz.zig");

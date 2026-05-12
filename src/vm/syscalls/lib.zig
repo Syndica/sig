@@ -1,6 +1,6 @@
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../../sig.zig");
+const sig = @import("../../../shared/lib.zig");
 
 pub const cpi = @import("cpi.zig");
 pub const memops = @import("memops.zig");

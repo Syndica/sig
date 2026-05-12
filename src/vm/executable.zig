@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../../shared/lib.zig");
 const tracy = @import("tracy");
 
 const sbpf = sig.vm.sbpf;

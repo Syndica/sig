@@ -136,7 +136,10 @@ pub fn getWithModifiedSlot(
     }
     // then try finding it in the rooted storage
     if (try self.rooted.getWithModifiedSlot(allocator, address)) |data| {
-        return .{ .account = data.account.toOwnedAccount(), .modified_slot = data.modified_slot };
+        return .{
+            .account = sig.runtime.accountSharedDataToOwnedAccount(data.account),
+            .modified_slot = data.modified_slot,
+        };
     }
     // doesn't exist
     return null;
@@ -155,7 +158,10 @@ pub fn getWithModifiedSlotOwned(
     }
     const rooted = &self.rooted;
     if (try rooted.getWithModifiedSlot(allocator, address)) |data| {
-        return .{ .account = data.account.toOwnedAccount(), .modified_slot = data.modified_slot };
+        return .{
+            .account = sig.runtime.accountSharedDataToOwnedAccount(data.account),
+            .modified_slot = data.modified_slot,
+        };
     }
     return null;
 }
@@ -232,7 +238,7 @@ pub const SlotModifiedIterator = struct {
         const pubkey = self.slot.entries.keys()[self.cursor];
         const acc = self.slot.entries.values()[self.cursor];
 
-        var account = acc.asAccount();
+        var account = sig.runtime.accountSharedDataAsAccount(acc);
         account.data = .{ .owned_allocation = try allocator.dupe(u8, acc.data) };
 
         return .{ pubkey, account };

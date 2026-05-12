@@ -353,6 +353,20 @@ pub fn build(b: *Build) !void {
         }),
     });
 
+    const shared_mod = b.addModule("shared", .{
+        .root_source_file = b.path("shared.zig"),
+        .target = config.target,
+        .optimize = config.optimize,
+        .imports = imports,
+    });
+
+    shared_mod.addImport("std14", std14_mod);
+
+    switch (config.ledger_db) {
+        .rocksdb => shared_mod.addImport("rocksdb", rocksdb_mod),
+        .hashmap => {},
+    }
+
     const sig_mod = b.addModule("sig", .{
         .root_source_file = b.path("src/sig.zig"),
         .target = config.target,
@@ -361,6 +375,8 @@ pub fn build(b: *Build) !void {
     });
 
     sig_mod.addImport("std14", std14_mod);
+    sig_mod.addImport("cli", cli_mod);
+    sig_mod.addImport("shared", shared_mod);
 
     switch (config.ledger_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
@@ -382,6 +398,8 @@ pub fn build(b: *Build) !void {
     });
     sig_exe.root_module.addObject(memcpy);
     sig_exe.root_module.addImport("cli", cli_mod);
+    sig_exe.root_module.addImport("sig", sig_mod);
+    sig_exe.root_module.addImport("shared", shared_mod);
     sig_exe.root_module.addImport("std14", std14_mod);
 
     // make sure pyroscope's got enough info to profile
@@ -407,6 +425,8 @@ pub fn build(b: *Build) !void {
     });
     unit_tests_exe.root_module.addObject(memcpy);
     unit_tests_exe.root_module.addImport("cli", cli_mod);
+    unit_tests_exe.root_module.addImport("sig", sig_mod);
+    unit_tests_exe.root_module.addImport("shared", shared_mod);
     unit_tests_exe.root_module.addImport("std14", std14_mod);
     switch (config.ledger_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
@@ -429,6 +449,8 @@ pub fn build(b: *Build) !void {
     });
     fuzz_exe.root_module.addObject(memcpy);
     fuzz_exe.root_module.addImport("cli", cli_mod);
+    fuzz_exe.root_module.addImport("sig", sig_mod);
+    fuzz_exe.root_module.addImport("shared", shared_mod);
     fuzz_exe.root_module.addImport("std14", std14_mod);
     switch (config.ledger_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
@@ -451,6 +473,8 @@ pub fn build(b: *Build) !void {
     });
     benchmark_exe.root_module.addObject(memcpy);
     benchmark_exe.root_module.addImport("cli", cli_mod);
+    benchmark_exe.root_module.addImport("sig", sig_mod);
+    benchmark_exe.root_module.addImport("shared", shared_mod);
     benchmark_exe.root_module.addImport("std14", std14_mod);
 
     // make sure pyroscope's got enough info to profile
@@ -623,7 +647,7 @@ fn addFeatureSetIdGenerator(b: *Build) *Build.Step.Compile {
                 .{
                     .name = "features",
                     .module = b.createModule(.{
-                        .root_source_file = b.path("src/core/features.zon"),
+                        .root_source_file = b.path("shared/core/features.zon"),
                     }),
                 },
             },

@@ -1,6 +1,7 @@
 const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../sig.zig");
+const shared = sig.shared;
 const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
@@ -243,55 +244,7 @@ pub const SignatureCounts = struct {
     }
 };
 
-pub const FeeDetails = struct {
-    transaction_fee: u64,
-    prioritization_fee: u64,
-    /// The compute unit price in micro-lamports per compute unit.
-    /// Used by PrioritizationFeeCache to track per-slot minimum fees for RPC queries.
-    compute_unit_price: u64,
-
-    pub const DEFAULT: FeeDetails = .{
-        .transaction_fee = 0,
-        .prioritization_fee = 0,
-        .compute_unit_price = 0,
-    };
-
-    pub fn init(
-        sig_counts: SignatureCounts,
-        lamports_per_signature: u64,
-        enable_secp256r1: bool,
-        prioritization_fee: u64,
-        compute_unit_price: u64,
-    ) FeeDetails {
-        return .{
-            .transaction_fee = calculateSignatureFee(
-                sig_counts,
-                lamports_per_signature,
-                enable_secp256r1,
-            ),
-            .prioritization_fee = prioritization_fee,
-            .compute_unit_price = compute_unit_price,
-        };
-    }
-
-    /// [agave] https://github.com/anza-xyz/agave/blob/dad81b9b2ecf81ceb518dd9f7cc91e83ba33bda8/fee/src/lib.rs#L66
-    fn calculateSignatureFee(
-        sig_counts: SignatureCounts,
-        lamports_per_signature: u64,
-        enable_secp256r1: bool,
-    ) u64 {
-        const sig_count = sig_counts.num_transaction_signatures +|
-            sig_counts.num_ed25519_signatures +|
-            sig_counts.num_secp256k1_signatures +|
-            if (enable_secp256r1) sig_counts.num_secp256r1_signatures else 0;
-
-        return sig_count *| lamports_per_signature;
-    }
-
-    pub fn total(self: FeeDetails) u64 {
-        return self.prioritization_fee +| self.transaction_fee;
-    }
-};
+pub const FeeDetails = shared.runtime.fee_details.FeeDetails;
 
 pub const FeeBudgetLimits = struct {
     /// non-zero

@@ -2,7 +2,7 @@ const std = @import("std");
 const std14 = @import("std14");
 const cli = @import("cli");
 const builtin = @import("builtin");
-const sig = @import("sig.zig");
+const sig = @import("sig");
 const pt = @import("prettytable");
 const math = std.math;
 
@@ -57,49 +57,49 @@ fn usageText() []const u8 {
 fn getBenchmarks(comptime filter: Filter) []const Benchmark {
     return switch (filter) {
         .sync => &.{.{
-            .type = @import("sync/channel.zig").BenchmarkChannel,
+            .type = sig.sync.channel.BenchmarkChannel,
             .resolution = .nanos,
         }},
         .socket_utils => &.{.{
-            .type = @import("net/socket_utils.zig").BenchmarkPacketProcessing,
+            .type = sig.net.socket_utils.BenchmarkPacketProcessing,
             .resolution = .millis,
         }},
         .gossip => &.{
             .{
-                .type = @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
+                .type = sig.gossip.service.BenchmarkGossipServiceGeneral,
                 .resolution = .nanos,
             },
             .{
-                .type = @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
+                .type = sig.gossip.service.BenchmarkGossipServicePullRequests,
                 .resolution = .nanos,
             },
         },
         .crypto => &.{
             .{
-                .type = @import("crypto/benchmark.zig").BenchmarkSigVerify,
+                .type = sig.crypto.benchmark.BenchmarkSigVerify,
                 .resolution = .micros,
             },
             .{
-                .type = @import("crypto/benchmark.zig").BenchmarkPohHash,
+                .type = sig.crypto.benchmark.BenchmarkPohHash,
                 .resolution = .nanos,
             },
         },
         .ledger => &.{
             .{
-                .type = @import("ledger/benchmarks.zig").BenchmarkLedger,
+                .type = sig.ledger.benchmarks.BenchmarkLedger,
                 .resolution = .nanos,
             },
             .{
-                .type = @import("ledger/benchmarks.zig").BenchmarkLedgerSlow,
+                .type = sig.ledger.benchmarks.BenchmarkLedgerSlow,
                 .resolution = .millis,
             },
         },
         .bincode => &.{.{
-            .type = @import("bincode/benchmarks.zig").BenchmarkEntry,
+            .type = sig.bincode.benchmarks.BenchmarkEntry,
             .resolution = .nanos,
         }},
         .zksdk => &.{.{
-            .type = @import("zksdk/benchmarks.zig").Benchmark,
+            .type = sig.zksdk.benchmarks.Benchmark,
             .resolution = .micros,
         }},
         .geyser => &.{},
@@ -228,7 +228,7 @@ pub fn main() !void {
         .geyser => {
             // NOTE: we dont support CSV output on this method so all results are printed as debug
             logger.debug().log("Geyser Streaming Benchmark:");
-            try @import("geyser/lib.zig").benchmark.runBenchmark(.from(logger));
+            try sig.geyser.benchmark.runBenchmark(.from(logger));
         },
     }
 

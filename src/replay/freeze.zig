@@ -574,7 +574,7 @@ pub fn deltaLtHash(
             ) |data, key| {
                 defer _ = arena.reset(.retain_capacity);
 
-                const account = data.asAccount();
+                const account = sig.runtime.accountSharedDataAsAccount(data);
 
                 const old_account = self.db.get(
                     arena.allocator(),
