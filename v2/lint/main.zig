@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const Allocator = std.mem.Allocator;
+
 const cli = @import("cli.zig");
 const core = @import("core.zig");
 const line_length = @import("line_length.zig");
@@ -23,7 +25,7 @@ const test_inclusion_roots = [_][]const u8{ "lib/lib.zig", "lint/main.zig" };
 /// errors (lint didn't run at all or failed to finish).
 pub fn main() u8 {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = debug_allocator.deinit();
+    // note: intentionally leaking allocator, OS will cleanup memory on process exit
     const allocator = debug_allocator.allocator();
 
     const parse_result = cli.parseArgs(allocator) catch |err| {
@@ -43,8 +45,7 @@ pub fn main() u8 {
             return 0;
         },
     };
-    var ctx: core.Context = .{ .allocator = allocator, .config = config };
-    defer ctx.deinit();
+    var ctx: core.Context = .{ .arena = allocator, .config = config };
 
     run(&ctx) catch |err| {
         switch (err) {
@@ -74,8 +75,7 @@ pub fn main() u8 {
 fn run(ctx: *core.Context) !void {
     try ensureFixModeCleanAtPath(ctx, ".");
 
-    var files = try core.SourceFiles.collectAndReadRecursive(ctx.allocator, &project_paths);
-    defer files.deinit();
+    var files = try core.SourceFiles.collectAndReadRecursive(ctx.arena, &project_paths);
 
     if (ctx.config.verbose) {
         std.debug.print("linting {d} files\n", .{files.items.items.len});
@@ -100,7 +100,7 @@ fn run(ctx: *core.Context) !void {
                 std.debug.print("fixing: {s}\n", .{file.path});
             }
             try file.writeIfChanged();
-            try core.runZigFmt(ctx.allocator, file.path);
+            try core.runZigFmt(ctx.arena, file.path);
         }
     }
 }
@@ -109,7 +109,7 @@ fn ensureFixModeCleanAtPath(ctx: *const core.Context, cwd: []const u8) !void {
     if (ctx.config.mode != .fix or ctx.config.force) {
         return;
     }
-    if (try hasUncommittedChanges(ctx.allocator, cwd)) {
+    if (try hasUncommittedChanges(ctx.arena, cwd)) {
         return error.UncommittedChanges;
     }
 }
@@ -145,7 +145,7 @@ fn lintFileLevelRules(ctx: *core.Context, file: *core.SourceFile) !void {
 }
 
 test "parse errors report diagnostic and skip file-level rules" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -153,14 +153,11 @@ test "parse errors report diagnostic and skip file-level rules" {
         "12345678901234567890123456789012345678901234567890\n";
     try tmp.dir.writeFile(.{ .sub_path = "parse_error_test.zig", .data = source });
     const path = try tmp.dir.realpathAlloc(allocator, "parse_error_test.zig");
-    defer allocator.free(path);
 
     const config: cli.Config = .{};
-    var ctx: core.Context = .{ .allocator = allocator, .config = config };
-    defer ctx.deinit();
+    var ctx: core.Context = .{ .arena = allocator, .config = config };
 
     var file = try core.SourceFile.readAndParse(allocator, path);
-    defer file.deinit(allocator);
 
     try lintFileLevelRules(&ctx, &file);
 
@@ -210,8 +207,7 @@ test "dirty preflight rejects tracked and untracked changes unless force is set"
     try std.testing.expect(try hasUncommittedChanges(allocator, v2_path));
 
     const config: cli.Config = .{ .mode = .fix };
-    var ctx: core.Context = .{ .allocator = allocator, .config = config };
-    defer ctx.deinit();
+    var ctx: core.Context = .{ .arena = allocator, .config = config };
     try std.testing.expectError(error.UncommittedChanges, ensureFixModeCleanAtPath(&ctx, v2_path));
 
     ctx.config.force = true;

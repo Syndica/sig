@@ -30,11 +30,11 @@ pub const ParseArgsError = error{
     OutOfMemory,
 };
 
-pub fn parseArgs(allocator: Allocator) ParseArgsError!ParseResult {
+/// Parse cli arguments, assumes arena allocator and no memory is freed by this function.
+pub fn parseArgs(arena: Allocator) ParseArgsError!ParseResult {
     var config: Config = .{};
 
-    var args = try std.process.argsWithAllocator(allocator);
-    defer args.deinit();
+    var args = try std.process.argsWithAllocator(arena);
     _ = args.next();
 
     while (args.next()) |arg| {

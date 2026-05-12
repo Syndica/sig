@@ -106,10 +106,9 @@ fn beforeLineComment(line: []const u8) []const u8 {
 }
 
 test "detects code and ignores comments strings fmt-off and trailing comments" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const config: cli.Config = .{};
-    var ctx: core.Context = .{ .allocator = allocator, .config = config };
-    defer ctx.deinit();
+    var ctx: core.Context = .{ .arena = allocator, .config = config };
 
     const source = "const x = 123456789012345678901234567890123456789012345678901234567890" ++
         "12345678901234567890123456789012345678901;\n" ++
@@ -124,25 +123,21 @@ test "detects code and ignores comments strings fmt-off and trailing comments" {
         "const z = 1; // 12345678901234567890123456789012345678901234567890" ++
         "123456789012345678901234567890\n";
     const source_z = try allocator.dupeZ(u8, source);
-    defer allocator.free(source_z);
-    var tree = try std.zig.Ast.parse(allocator, source_z, .zig);
-    defer tree.deinit(allocator);
+    const ast = try std.zig.Ast.parse(allocator, source_z, .zig);
     const file: core.SourceFile = .{
         .path = "lib/example.zig",
         .source = source_z,
-        .ast = tree,
+        .ast = ast,
     };
     try lint(&ctx, &file);
     try std.testing.expectEqual(1, ctx.diagnostics.items.len);
 }
 
 test "excluded paths report stale entries" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const config: cli.Config = .{};
-    var ctx: core.Context = .{ .allocator = allocator, .config = config };
-    defer ctx.deinit();
-    var files: core.SourceFiles = .{ .allocator = allocator, .items = .empty };
-    defer files.deinit();
+    var ctx: core.Context = .{ .arena = allocator, .config = config };
+    const files: core.SourceFiles = .{ .items = .empty };
 
     try lintExcludedPathsExist(&ctx, &files);
 

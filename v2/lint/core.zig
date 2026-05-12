@@ -26,38 +26,33 @@ pub const SourceFile = struct {
     ast: std.zig.Ast,
     has_changes: bool = false,
 
-    pub fn readAndParse(allocator: Allocator, path: []const u8) !SourceFile {
-        const path_owned = try allocator.dupe(u8, path);
-        errdefer allocator.free(path_owned);
+    /// Path is borrowed and must live at least as long as the returned SourceFile.
+    pub fn readAndParse(arena: Allocator, path: []const u8) !SourceFile {
         const source = try std.fs.cwd().readFileAllocOptions(
-            allocator,
+            arena,
             path,
             max_source_file_size,
             null,
             .of(u8),
             0,
         );
-        errdefer allocator.free(source);
-        var ast = try std.zig.Ast.parse(allocator, source, .zig);
-        errdefer ast.deinit(allocator);
-        return .{ .path = path_owned, .source = source, .ast = ast };
+        const ast = try std.zig.Ast.parse(arena, source, .zig);
+        return .{ .path = path, .source = source, .ast = ast };
     }
 
     pub fn hasParseErrors(self: *const SourceFile) bool {
         return self.ast.errors.len != 0;
     }
 
-    /// Takes ownership of `source`, replacing the existing source and refreshing the AST for this
-    /// SourceFile. If an error is returned then ownership is not transferred and caller must
-    /// free `source`.
+    /// Borrows `source`, replacing the existing source and refreshing the AST for this
+    /// SourceFile.
     pub fn replaceSource(
         self: *SourceFile,
-        allocator: Allocator,
+        arena: Allocator,
         source: [:0]u8,
         fix_name: []const u8,
     ) !void {
-        var ast = try std.zig.Ast.parse(allocator, source, .zig);
-        errdefer ast.deinit(allocator);
+        const ast = try std.zig.Ast.parse(arena, source, .zig);
         if (ast.errors.len != 0) {
             std.debug.print(
                 "lint internal error: fix {s} produced source with parse errors for {s}\n",
@@ -66,8 +61,6 @@ pub const SourceFile = struct {
             return error.PostFixParseFailed;
         }
 
-        self.ast.deinit(allocator);
-        allocator.free(self.source);
         self.source = source;
         self.ast = ast;
         self.has_changes = true;
@@ -79,75 +72,55 @@ pub const SourceFile = struct {
         }
         try std.fs.cwd().writeFile(.{ .sub_path = self.path, .data = self.source });
     }
-
-    pub fn deinit(self: *SourceFile, allocator: Allocator) void {
-        self.ast.deinit(allocator);
-        allocator.free(self.source);
-        allocator.free(self.path);
-    }
 };
 
 pub const SourceFiles = struct {
-    allocator: Allocator,
     items: std.ArrayList(SourceFile),
 
     pub fn collectAndReadRecursive(
-        allocator: Allocator,
+        arena: Allocator,
         root_paths: []const []const u8,
     ) !SourceFiles {
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
-        const scratch = arena.allocator();
-
         var collected: std.ArrayList([]const u8) = .empty;
-        for (root_paths) |path| try collectPathRecursive(scratch, path, &collected);
+        for (root_paths) |path| try collectPathRecursive(arena, path, &collected);
         sortStrings(collected.items);
 
-        var files: SourceFiles = .{ .allocator = allocator, .items = .empty };
-        errdefer files.deinit();
+        var files: SourceFiles = .{ .items = .empty };
 
         for (collected.items) |path| {
-            var file = try SourceFile.readAndParse(allocator, path);
-            errdefer file.deinit(allocator);
-            try files.items.append(allocator, file);
+            const file = try SourceFile.readAndParse(arena, path);
+            try files.items.append(arena, file);
         }
 
         return files;
     }
 
-    pub fn deinit(self: *SourceFiles) void {
-        for (self.items.items) |*file| file.deinit(self.allocator);
-        self.items.deinit(self.allocator);
-    }
-
     pub fn get(self: *const SourceFiles, path: []const u8) ?*SourceFile {
-        const index = self.indexOf(path) orelse return null;
-        return &self.items.items[index];
-    }
-
-    fn indexOf(self: *const SourceFiles, path: []const u8) ?usize {
-        return std.sort.binarySearch(SourceFile, self.items.items, path, struct {
+        const comparer = struct {
             fn compare(target_path: []const u8, file: SourceFile) std.math.Order {
                 return std.mem.order(u8, target_path, file.path);
             }
-        }.compare);
+        };
+
+        const index = std.sort.binarySearch(SourceFile, self.items.items, path, comparer.compare);
+        if (index) |i| {
+            if (std.mem.eql(u8, self.items.items[i].path, path)) {
+                return &self.items.items[i];
+            }
+        }
+
+        return null;
     }
 };
 
 pub const Context = struct {
-    allocator: Allocator,
     config: cli.Config,
     diagnostics: std.ArrayList(Diagnostic) = .empty,
+    /// This is the "global arena" for all linting operations and diagnostics. It is never reset or
+    /// freed and will retain all allocations for the full linting execution.
+    arena: Allocator,
 
-    pub fn deinit(self: *Context) void {
-        for (self.diagnostics.items) |diag| {
-            self.allocator.free(diag.path);
-            self.allocator.free(diag.rule_id);
-            self.allocator.free(diag.message);
-        }
-        self.diagnostics.deinit(self.allocator);
-    }
-
+    /// Arguments are borrowed and must live at least as long as this Context.
     pub fn addDiagnostic(
         self: *Context,
         path: []const u8,
@@ -159,6 +132,7 @@ pub const Context = struct {
         try self.addDiagnosticId(path, line, column, rule.id(), message);
     }
 
+    /// Arguments are borrowed and must live at least as long as this Context.
     pub fn addDiagnosticId(
         self: *Context,
         path: []const u8,
@@ -167,18 +141,12 @@ pub const Context = struct {
         rule_id: []const u8,
         message: []const u8,
     ) !void {
-        const path_owned = try self.allocator.dupe(u8, path);
-        errdefer self.allocator.free(path_owned);
-        const rule_id_owned = try self.allocator.dupe(u8, rule_id);
-        errdefer self.allocator.free(rule_id_owned);
-        const message_owned = try self.allocator.dupe(u8, message);
-        errdefer self.allocator.free(message_owned);
-        try self.diagnostics.append(self.allocator, .{
-            .path = path_owned,
+        try self.diagnostics.append(self.arena, .{
+            .path = path,
             .line = line,
             .column = column,
-            .rule_id = rule_id_owned,
-            .message = message_owned,
+            .rule_id = rule_id,
+            .message = message,
         });
     }
 };
@@ -195,9 +163,9 @@ pub fn printDiagnostics(diagnostics: []const Diagnostic) !void {
     }
 }
 
-/// `paths` are borrowed from `path` or allocated by `allocator`.
+/// `paths` are borrowed from `path` or allocated by `arena`.
 fn collectPathRecursive(
-    allocator: Allocator,
+    arena: Allocator,
     path: []const u8,
     paths: *std.ArrayList([]const u8),
 ) anyerror!void {
@@ -205,7 +173,7 @@ fn collectPathRecursive(
     switch (stat.kind) {
         .file => {
             if (std.mem.endsWith(u8, path, ".zig")) {
-                try paths.append(allocator, path);
+                try paths.append(arena, path);
             }
         },
         .directory => if (!isSkippedDir(std.fs.path.basename(path))) {
@@ -214,8 +182,8 @@ fn collectPathRecursive(
             var it = dir.iterate();
             while (try it.next()) |entry| {
                 if (entry.kind == .directory and isSkippedDir(entry.name)) continue;
-                const child = try std.fs.path.join(allocator, &.{ path, entry.name });
-                try collectPathRecursive(allocator, child, paths);
+                const child = try std.fs.path.join(arena, &.{ path, entry.name });
+                try collectPathRecursive(arena, child, paths);
             }
         },
         else => {},
@@ -253,22 +221,21 @@ pub fn sortEdits(edits: []Edit) void {
 }
 
 pub fn applySortedEdits(
-    allocator: Allocator,
+    arena: Allocator,
     source: []const u8,
     edits: []const Edit,
 ) ![:0]u8 {
     var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(allocator);
     var cursor: usize = 0;
     for (edits) |edit| {
         if (edit.start < cursor) return error.OverlappingEdits;
         if (edit.start > edit.end or edit.end > source.len) return error.InvalidEditRange;
-        try out.appendSlice(allocator, source[cursor..edit.start]);
-        try out.appendSlice(allocator, edit.replacement);
+        try out.appendSlice(arena, source[cursor..edit.start]);
+        try out.appendSlice(arena, edit.replacement);
         cursor = edit.end;
     }
-    try out.appendSlice(allocator, source[cursor..]);
-    return out.toOwnedSliceSentinel(allocator, 0);
+    try out.appendSlice(arena, source[cursor..]);
+    return out.toOwnedSliceSentinel(arena, 0);
 }
 
 pub fn runZigFmt(allocator: Allocator, path: []const u8) !void {

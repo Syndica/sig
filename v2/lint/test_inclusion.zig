@@ -49,14 +49,13 @@ pub fn lint(
         return error.InvalidTestInclusionRootFile;
 
     var source_paths: std.ArrayList([]const u8) = .empty;
-    defer source_paths.deinit(ctx.allocator);
     for (source_files.items.items) |source_file| {
         // gather source files that are in or under the root directory
         if (source_file.path.len > root_dir.len and
             std.mem.startsWith(u8, source_file.path, root_dir) and
             source_file.path[root_dir.len] == '/')
         {
-            try source_paths.append(ctx.allocator, source_file.path);
+            try source_paths.append(ctx.arena, source_file.path);
         }
     }
 
@@ -92,8 +91,7 @@ fn lintDir(
     const companion_path = if (is_root_dir)
         root_file
     else
-        try std.fmt.allocPrint(ctx.allocator, "{s}.zig", .{dir_path});
-    defer if (!is_root_dir) ctx.allocator.free(companion_path);
+        try std.fmt.allocPrint(ctx.arena, "{s}.zig", .{dir_path});
 
     const companion_file = source_files.get(companion_path) orelse {
         try ctx.addDiagnostic(
@@ -107,28 +105,24 @@ fn lintDir(
     };
 
     var all_expected_imports: std.ArrayList([]const u8) = .empty;
-    defer all_expected_imports.deinit(ctx.allocator);
     for (dir_source_paths) |source_path| {
         if (std.mem.eql(u8, source_path, companion_path)) continue;
         try all_expected_imports.append(
-            ctx.allocator,
+            ctx.arena,
             try expectedImportPath(root_dir, companion_path, source_path),
         );
     }
     core.sortStrings(all_expected_imports.items);
 
     const source = companion_file.source;
-    var skipped_imports = try skippedTestInclusionImports(ctx.allocator, source);
-    defer skipped_imports.deinit(ctx.allocator);
-    var expected_imports = try filteredExpectedImports(
-        ctx.allocator,
+    const skipped_imports = try skippedTestInclusionImports(ctx.arena, source);
+    const expected_imports = try filteredExpectedImports(
+        ctx.arena,
         all_expected_imports.items,
         skipped_imports.items,
     );
-    defer expected_imports.deinit(ctx.allocator);
 
-    var managed_blocks = try findManagedBlocks(ctx.allocator, source);
-    defer deinitManagedBlocks(ctx.allocator, &managed_blocks);
+    const managed_blocks = try findManagedBlocks(ctx.arena, source);
 
     switch (ctx.config.mode) {
         .check => try check(
@@ -341,7 +335,6 @@ fn fix(
     target: ?ManagedBlock,
 ) !void {
     var edits: std.ArrayList(core.Edit) = .empty;
-    defer edits.deinit(ctx.allocator);
 
     const source = companion_file.source;
     const companion_path = companion_file.path;
@@ -349,12 +342,11 @@ fn fix(
         null
     else
         try canonicalTestBlock(
-            ctx.allocator,
+            ctx.arena,
             all_expected_imports,
             skipped_imports,
             if (target == null) .insert else .replace,
         );
-    defer if (canonical) |block| ctx.allocator.free(block);
 
     try checkObsoleteRefAllDecls(ctx, companion_path, source);
 
@@ -371,7 +363,7 @@ fn fix(
         }
         const replacement = canonical orelse "";
         if (!std.mem.eql(u8, source[block.start..block.end], replacement)) {
-            try edits.append(ctx.allocator, .{
+            try edits.append(ctx.arena, .{
                 .start = block.start,
                 .end = block.end,
                 .replacement = replacement,
@@ -379,7 +371,7 @@ fn fix(
         }
     } else if (all_expected_imports.len != 0) {
         const insert_at = testBlockInsertOffset(source);
-        try edits.append(ctx.allocator, .{
+        try edits.append(ctx.arena, .{
             .start = insert_at,
             .end = insert_at,
             .replacement = canonical.?,
@@ -388,16 +380,15 @@ fn fix(
 
     if (edits.items.len == 0) return;
     core.sortEdits(edits.items);
-    const fixed = try core.applySortedEdits(ctx.allocator, source, edits.items);
-    try companion_file.replaceSource(ctx.allocator, fixed, "test_inclusion");
+    const fixed = try core.applySortedEdits(ctx.arena, source, edits.items);
+    try companion_file.replaceSource(ctx.arena, fixed, "test_inclusion");
 }
 
 fn skippedTestInclusionImports(
-    allocator: Allocator,
+    arena: Allocator,
     source: []const u8,
 ) !std.ArrayList([]const u8) {
     var skipped: std.ArrayList([]const u8) = .empty;
-    errdefer skipped.deinit(allocator);
 
     const prefix = "// lint: skip ";
     var lines = std.mem.splitScalar(u8, source, '\n');
@@ -406,31 +397,29 @@ fn skippedTestInclusionImports(
         if (!std.mem.startsWith(u8, trimmed, prefix)) continue;
         const import_path = std.mem.trim(u8, trimmed[prefix.len..], " \t\r");
         if (import_path.len == 0) continue;
-        try skipped.append(allocator, import_path);
+        try skipped.append(arena, import_path);
     }
 
     return skipped;
 }
 
 fn filteredExpectedImports(
-    allocator: Allocator,
+    arena: Allocator,
     expected: []const []const u8,
     skipped: []const []const u8,
 ) !std.ArrayList([]const u8) {
     var filtered: std.ArrayList([]const u8) = .empty;
-    errdefer filtered.deinit(allocator);
 
     for (expected) |import_path| {
         if (containsString(skipped, import_path)) continue;
-        try filtered.append(allocator, import_path);
+        try filtered.append(arena, import_path);
     }
 
     return filtered;
 }
 
-fn findManagedBlocks(allocator: Allocator, source: []const u8) !std.ArrayList(ManagedBlock) {
+fn findManagedBlocks(arena: Allocator, source: []const u8) !std.ArrayList(ManagedBlock) {
     var managed_blocks: std.ArrayList(ManagedBlock) = .empty;
-    errdefer deinitManagedBlocks(allocator, &managed_blocks);
 
     var index: usize = 0;
     while (std.mem.indexOfPos(u8, source, index, "comptime")) |pos| {
@@ -446,46 +435,32 @@ fn findManagedBlocks(allocator: Allocator, source: []const u8) !std.ArrayList(Ma
         }
         const close = findMatchingBrace(source, cursor) orelse {
             if (try parseManagedBlock(
-                allocator,
+                arena,
                 source[pos..],
                 core.lineStart(source, pos),
                 source.len,
             )) |parsed_block| {
-                var block = parsed_block;
-                errdefer block.imports.deinit(allocator);
-                try managed_blocks.append(allocator, block);
+                try managed_blocks.append(arena, parsed_block);
                 break;
             }
             index = cursor + 1;
             continue;
         };
         if (try parseManagedBlock(
-            allocator,
+            arena,
             source[pos .. close + 1],
             core.lineStart(source, pos),
             core.lineEndIncludingNewline(source, close + 1),
         )) |parsed_block| {
-            var block = parsed_block;
-            errdefer block.imports.deinit(allocator);
-            try managed_blocks.append(allocator, block);
+            try managed_blocks.append(arena, parsed_block);
         }
         index = close + 1;
     }
     return managed_blocks;
 }
 
-fn deinitManagedBlocks(
-    allocator: Allocator,
-    managed_blocks: *std.ArrayList(ManagedBlock),
-) void {
-    for (managed_blocks.items) |*block| {
-        block.imports.deinit(allocator);
-    }
-    managed_blocks.deinit(allocator);
-}
-
 fn parseManagedBlock(
-    allocator: Allocator,
+    arena: Allocator,
     text: []const u8,
     start: usize,
     end: usize,
@@ -508,7 +483,6 @@ fn parseManagedBlock(
         .malformed = false,
         .custom_logic = false,
     };
-    errdefer block.imports.deinit(allocator);
 
     var state: State = .comptime_open;
     var lines = std.mem.splitScalar(u8, text, '\n');
@@ -539,7 +513,7 @@ fn parseManagedBlock(
                 } else if (std.mem.startsWith(u8, trimmed, "// lint: skip ")) {
                     continue;
                 } else if (managedImportPath(trimmed)) |import_path| {
-                    try block.imports.append(allocator, import_path);
+                    try block.imports.append(arena, import_path);
                 } else if (std.mem.indexOfAny(u8, trimmed, "{}") != null) {
                     block.malformed = true;
                     break;
@@ -588,31 +562,30 @@ const CanonicalTestBlockFix = enum {
 };
 
 fn canonicalTestBlock(
-    allocator: Allocator,
+    arena: Allocator,
     imports: []const []const u8,
     skipped_imports: []const []const u8,
     context: CanonicalTestBlockFix,
 ) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(allocator);
-    try out.appendSlice(allocator, "comptime {\n");
-    try out.appendSlice(allocator, "    if (@import(\"builtin\").is_test) {\n");
+    try out.appendSlice(arena, "comptime {\n");
+    try out.appendSlice(arena, "    if (@import(\"builtin\").is_test) {\n");
     for (imports) |import| {
         if (containsString(skipped_imports, import)) {
-            try out.writer(allocator).print(
+            try out.writer(arena).print(
                 "        // lint: skip {s}\n",
                 .{import},
             );
         } else {
-            try out.writer(allocator).print("        _ = @import(\"{s}\");\n", .{import});
+            try out.writer(arena).print("        _ = @import(\"{s}\");\n", .{import});
         }
     }
-    try out.appendSlice(allocator, "    }\n");
-    try out.appendSlice(allocator, "}\n");
+    try out.appendSlice(arena, "    }\n");
+    try out.appendSlice(arena, "}\n");
     if (context == .insert) {
-        try out.appendSlice(allocator, "\n");
+        try out.appendSlice(arena, "\n");
     }
-    return out.toOwnedSlice(allocator);
+    return out.toOwnedSlice(arena);
 }
 
 fn skipWhitespace(source: []const u8, offset: usize) usize {
@@ -696,11 +669,9 @@ fn expectCheckDiagnostics(
     expected_imports: []const []const u8,
     expected_messages: []const []const u8,
 ) !void {
-    var managed_blocks = try findManagedBlocks(allocator, source);
-    defer deinitManagedBlocks(allocator, &managed_blocks);
+    const managed_blocks = try findManagedBlocks(allocator, source);
 
-    var ctx: core.Context = .{ .allocator = allocator, .config = .{} };
-    defer ctx.deinit();
+    var ctx: core.Context = .{ .arena = allocator, .config = .{} };
 
     try check(
         &ctx,
@@ -720,10 +691,9 @@ fn expectManagedBlockParse(
     malformed: bool,
     custom_logic: bool,
 ) !void {
-    var block = (try parseManagedBlock(allocator, source, 0, source.len)) orelse {
+    const block = (try parseManagedBlock(allocator, source, 0, source.len)) orelse {
         return error.TestUnexpectedResult;
     };
-    defer block.imports.deinit(allocator);
 
     try std.testing.expectEqual(malformed, block.malformed);
     try std.testing.expectEqual(custom_logic, block.custom_logic);
@@ -734,21 +704,18 @@ fn expectManagedBlockParse(
 }
 
 test "canonical block and parsing" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const imports = [_][]const u8{ "a.zig", "b.zig" };
     const block = try canonicalTestBlock(allocator, &imports, &.{}, .replace);
-    defer allocator.free(block);
     try std.testing.expect(std.mem.indexOf(u8, block, "@import(\"builtin\").is_test") != null);
     try std.testing.expect(std.mem.indexOf(u8, block, "_ = @import(\"a.zig\");") != null);
     try std.testing.expect(std.mem.indexOf(u8, block, "_ = @import(\"b.zig\");") != null);
     try std.testing.expect(std.mem.endsWith(u8, block, "}\n"));
 
     const inserted_block = try canonicalTestBlock(allocator, &imports, &.{}, .insert);
-    defer allocator.free(inserted_block);
     try std.testing.expect(std.mem.endsWith(u8, inserted_block, "}\n\n"));
 
-    var managed_blocks = try findManagedBlocks(allocator, block);
-    defer deinitManagedBlocks(allocator, &managed_blocks);
+    const managed_blocks = try findManagedBlocks(allocator, block);
     try std.testing.expectEqual(1, managed_blocks.items.len);
     try std.testing.expect(!managed_blocks.items[0].malformed);
     try std.testing.expect(!managed_blocks.items[0].custom_logic);
@@ -758,7 +725,7 @@ test "canonical block and parsing" {
 }
 
 test "find managed blocks ignores invalid candidates" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\const comptime_value = 1;
         \\comptime if (true) {}
@@ -767,13 +734,12 @@ test "find managed blocks ignores invalid candidates" {
         \\
     ;
 
-    var managed_blocks = try findManagedBlocks(allocator, source);
-    defer deinitManagedBlocks(allocator, &managed_blocks);
+    const managed_blocks = try findManagedBlocks(allocator, source);
     try std.testing.expectEqual(0, managed_blocks.items.len);
 }
 
 test "find managed blocks ignores unmanaged blocks" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    const value = 1;
@@ -781,13 +747,12 @@ test "find managed blocks ignores unmanaged blocks" {
         \\
     ;
 
-    var managed_blocks = try findManagedBlocks(allocator, source);
-    defer deinitManagedBlocks(allocator, &managed_blocks);
+    const managed_blocks = try findManagedBlocks(allocator, source);
     try std.testing.expectEqual(0, managed_blocks.items.len);
 }
 
 test "find managed blocks ignores obsolete unmanaged blocks" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    _ = std.testing.refAllDecls(@This());
@@ -801,8 +766,7 @@ test "find managed blocks ignores obsolete unmanaged blocks" {
         \\
     ;
 
-    var managed_blocks = try findManagedBlocks(allocator, source);
-    defer deinitManagedBlocks(allocator, &managed_blocks);
+    const managed_blocks = try findManagedBlocks(allocator, source);
     try std.testing.expectEqual(1, managed_blocks.items.len);
     try std.testing.expect(!managed_blocks.items[0].malformed);
     try std.testing.expect(!managed_blocks.items[0].custom_logic);
@@ -810,7 +774,7 @@ test "find managed blocks ignores obsolete unmanaged blocks" {
 }
 
 test "managed block parser accepts skip comments" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    if (@import("builtin").is_test) {
@@ -826,7 +790,7 @@ test "managed block parser accepts skip comments" {
 }
 
 test "find managed blocks marks malformed wrapper order" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    const value = 1;
@@ -836,15 +800,14 @@ test "find managed blocks marks malformed wrapper order" {
         \\
     ;
 
-    var managed_blocks = try findManagedBlocks(allocator, source);
-    defer deinitManagedBlocks(allocator, &managed_blocks);
+    const managed_blocks = try findManagedBlocks(allocator, source);
     try std.testing.expectEqual(1, managed_blocks.items.len);
     try std.testing.expect(managed_blocks.items[0].malformed);
     try std.testing.expect(!managed_blocks.items[0].custom_logic);
 }
 
 test "find managed blocks marks missing inner closing brace" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    if (@import("builtin").is_test) {
@@ -853,8 +816,7 @@ test "find managed blocks marks missing inner closing brace" {
     ;
     const expected = [_][]const u8{"a.zig"};
 
-    var managed_blocks = try findManagedBlocks(allocator, source);
-    defer deinitManagedBlocks(allocator, &managed_blocks);
+    const managed_blocks = try findManagedBlocks(allocator, source);
     try std.testing.expectEqual(1, managed_blocks.items.len);
     try std.testing.expect(managed_blocks.items[0].malformed);
     try std.testing.expect(!managed_blocks.items[0].custom_logic);
@@ -863,7 +825,7 @@ test "find managed blocks marks missing inner closing brace" {
 }
 
 test "find managed blocks marks missing outer closing brace" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    if (@import("builtin").is_test) {
@@ -873,8 +835,7 @@ test "find managed blocks marks missing outer closing brace" {
     ;
     const expected = [_][]const u8{"a.zig"};
 
-    var managed_blocks = try findManagedBlocks(allocator, source);
-    defer deinitManagedBlocks(allocator, &managed_blocks);
+    const managed_blocks = try findManagedBlocks(allocator, source);
     try std.testing.expectEqual(1, managed_blocks.items.len);
     try std.testing.expect(managed_blocks.items[0].malformed);
     try std.testing.expect(!managed_blocks.items[0].custom_logic);
@@ -883,7 +844,7 @@ test "find managed blocks marks missing outer closing brace" {
 }
 
 test "find managed blocks marks import before if wrapper as malformed" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    _ = @import("a.zig");
@@ -893,15 +854,14 @@ test "find managed blocks marks import before if wrapper as malformed" {
         \\
     ;
 
-    var managed_blocks = try findManagedBlocks(allocator, source);
-    defer deinitManagedBlocks(allocator, &managed_blocks);
+    const managed_blocks = try findManagedBlocks(allocator, source);
     try std.testing.expectEqual(1, managed_blocks.items.len);
     try std.testing.expect(managed_blocks.items[0].malformed);
     try std.testing.expect(!managed_blocks.items[0].custom_logic);
 }
 
 test "managed block parser marks extra content after outer brace as malformed" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    if (@import("builtin").is_test) {
@@ -917,7 +877,7 @@ test "managed block parser marks extra content after outer brace as malformed" {
 }
 
 test "check reports custom logic in managed block" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    if (@import("builtin").is_test) {
@@ -939,7 +899,7 @@ test "check reports custom logic in managed block" {
 }
 
 test "per-import skip keeps check scoped to remaining imports" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    if (@import("builtin").is_test) {
@@ -950,14 +910,12 @@ test "per-import skip keeps check scoped to remaining imports" {
         \\
     ;
 
-    var skipped = try skippedTestInclusionImports(allocator, source);
-    defer skipped.deinit(allocator);
+    const skipped = try skippedTestInclusionImports(allocator, source);
     try std.testing.expectEqual(1, skipped.items.len);
     try std.testing.expectEqualStrings("b.zig", skipped.items[0]);
 
     const expected_raw = [_][]const u8{ "a.zig", "b.zig" };
-    var expected = try filteredExpectedImports(allocator, &expected_raw, skipped.items);
-    defer expected.deinit(allocator);
+    const expected = try filteredExpectedImports(allocator, &expected_raw, skipped.items);
     try std.testing.expectEqual(1, expected.items.len);
     try std.testing.expectEqualStrings("a.zig", expected.items[0]);
 
@@ -965,7 +923,7 @@ test "per-import skip keeps check scoped to remaining imports" {
 }
 
 test "check reports missing managed block" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const expected = [_][]const u8{"a.zig"};
     try expectCheckDiagnostics(
         allocator,
@@ -977,10 +935,9 @@ test "check reports missing managed block" {
 }
 
 test "check reports extra managed block" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const imports = [_][]const u8{"a.zig"};
     const source = try canonicalTestBlock(allocator, &imports, &.{}, .replace);
-    defer allocator.free(source);
 
     try expectCheckDiagnostics(
         allocator,
@@ -992,7 +949,7 @@ test "check reports extra managed block" {
 }
 
 test "check reports extra managed block when multiple are present" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    if (@import("builtin").is_test) {
@@ -1019,7 +976,7 @@ test "check reports extra managed block when multiple are present" {
 }
 
 test "check reports obsolete block" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    _ = std.testing.refAllDecls(@This());
@@ -1037,7 +994,7 @@ test "check reports obsolete block" {
 }
 
 test "check reports malformed managed block" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    _ = @import("a.zig");
@@ -1057,7 +1014,7 @@ test "check reports malformed managed block" {
 }
 
 test "check reports unsorted imports" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    if (@import("builtin").is_test) {
@@ -1079,7 +1036,7 @@ test "check reports unsorted imports" {
 }
 
 test "check reports missing and extra imports" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    if (@import("builtin").is_test) {
@@ -1104,7 +1061,7 @@ test "check reports missing and extra imports" {
 }
 
 test "fix skips files with multiple managed blocks" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    if (@import("builtin").is_test) {
@@ -1120,14 +1077,10 @@ test "fix skips files with multiple managed blocks" {
         \\
     ;
     const path = try allocator.dupe(u8, "lib/lib.zig");
-    errdefer allocator.free(path);
     const source_z = try allocator.dupeZ(u8, source);
-    errdefer allocator.free(source_z);
-    var ast = try std.zig.Ast.parse(allocator, source_z, .zig);
-    errdefer ast.deinit(allocator);
+    const ast = try std.zig.Ast.parse(allocator, source_z, .zig);
 
-    var files: core.SourceFiles = .{ .allocator = allocator, .items = .empty };
-    defer files.deinit();
+    var files: core.SourceFiles = .{ .items = .empty };
     try files.items.append(allocator, .{
         .path = path,
         .source = source_z,
@@ -1135,10 +1088,9 @@ test "fix skips files with multiple managed blocks" {
     });
 
     var ctx: core.Context = .{
-        .allocator = allocator,
+        .arena = allocator,
         .config = .{ .mode = .fix },
     };
-    defer ctx.deinit();
 
     try lintDir(&ctx, "lib/lib.zig", "lib", "lib", &.{ "lib/lib.zig", "lib/a.zig" }, &files);
 
@@ -1152,7 +1104,7 @@ test "fix skips files with multiple managed blocks" {
 }
 
 test "fix preserves blank lines around managed block" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\const std = @import("std");
         \\
@@ -1179,14 +1131,10 @@ test "fix preserves blank lines around managed block" {
         \\
     ;
     const path = try allocator.dupe(u8, "lib/lib.zig");
-    errdefer allocator.free(path);
     const source_z = try allocator.dupeZ(u8, source);
-    errdefer allocator.free(source_z);
-    var ast = try std.zig.Ast.parse(allocator, source_z, .zig);
-    errdefer ast.deinit(allocator);
+    const ast = try std.zig.Ast.parse(allocator, source_z, .zig);
 
-    var files: core.SourceFiles = .{ .allocator = allocator, .items = .empty };
-    defer files.deinit();
+    var files: core.SourceFiles = .{ .items = .empty };
     try files.items.append(allocator, .{
         .path = path,
         .source = source_z,
@@ -1194,10 +1142,9 @@ test "fix preserves blank lines around managed block" {
     });
 
     var ctx: core.Context = .{
-        .allocator = allocator,
+        .arena = allocator,
         .config = .{ .mode = .fix },
     };
-    defer ctx.deinit();
 
     try lintDir(&ctx, "lib/lib.zig", "lib", "lib", &.{ "lib/lib.zig", "lib/a.zig" }, &files);
 
@@ -1207,7 +1154,7 @@ test "fix preserves blank lines around managed block" {
 }
 
 test "canonical block emits skip comments" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\comptime {
         \\    if (@import("builtin").is_test) {
@@ -1216,14 +1163,12 @@ test "canonical block emits skip comments" {
         \\}
         \\
     ;
-    var skipped = try skippedTestInclusionImports(allocator, source);
-    defer skipped.deinit(allocator);
+    const skipped = try skippedTestInclusionImports(allocator, source);
     try std.testing.expectEqual(1, skipped.items.len);
     try std.testing.expectEqualStrings("b.zig", skipped.items[0]);
     const expected_raw = [_][]const u8{ "a.zig", "b.zig" };
 
     const block = try canonicalTestBlock(allocator, &expected_raw, skipped.items, .replace);
-    defer allocator.free(block);
     try std.testing.expect(std.mem.indexOf(u8, block, "@import(\"a.zig\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, block, "@import(\"b.zig\")") == null);
     try std.testing.expect(

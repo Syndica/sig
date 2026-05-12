@@ -39,9 +39,8 @@ pub fn lint(ctx: *core.Context, file: *core.SourceFile) !void {
     switch (ctx.config.mode) {
         .check => {
             var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-            defer candidates.deinit(ctx.allocator);
             try findAndSortUnusedDeclarations(
-                ctx.allocator,
+                ctx.arena,
                 file.source,
                 &file.ast,
                 &candidates,
@@ -51,9 +50,8 @@ pub fn lint(ctx: *core.Context, file: *core.SourceFile) !void {
         .fix => {
             while (true) {
                 var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-                defer candidates.deinit(ctx.allocator);
                 try findAndSortUnusedDeclarations(
-                    ctx.allocator,
+                    ctx.arena,
                     file.source,
                     &file.ast,
                     &candidates,
@@ -62,14 +60,14 @@ pub fn lint(ctx: *core.Context, file: *core.SourceFile) !void {
                     break;
                 }
                 const fixed = try applySortedDeclarationRemovals(
-                    ctx.allocator,
+                    ctx.arena,
                     file.source,
                     candidates.items,
                 ) orelse {
                     try addUnusedDeclarationDiagnostics(ctx, file, candidates.items);
                     break;
                 };
-                try file.replaceSource(ctx.allocator, fixed, "unused_declarations");
+                try file.replaceSource(ctx.arena, fixed, "unused_declarations");
             }
         },
     }
@@ -107,13 +105,12 @@ fn unfixableMessage(reason: UnfixableReason) []const u8 {
 }
 
 fn findAndSortUnusedDeclarations(
-    allocator: Allocator,
+    arena: Allocator,
     source: []const u8,
     ast: *const std.zig.Ast,
     candidates: *std.ArrayList(DeclarationCandidate),
 ) !void {
-    var identifier_counts = try collectIdentifierCounts(allocator, ast);
-    defer identifier_counts.deinit();
+    var identifier_counts = try collectIdentifierCounts(arena, ast);
 
     var node_index: usize = 0;
     while (node_index < ast.nodes.len) : (node_index += 1) {
@@ -132,7 +129,7 @@ fn findAndSortUnusedDeclarations(
         )) continue;
 
         const loc = core.lineColumn(source, ast.tokenStart(decl.name_token));
-        try candidates.append(allocator, .{
+        try candidates.append(arena, .{
             .line = loc.line,
             .column = loc.column,
             .removal = declarationRemoval(source, ast, decl.first_token, decl.last_token),
@@ -267,11 +264,10 @@ fn sortDeclarationCandidates(candidates: []DeclarationCandidate) void {
 }
 
 fn collectIdentifierCounts(
-    allocator: Allocator,
+    arena: Allocator,
     ast: *const std.zig.Ast,
 ) !std.StringHashMap(usize) {
-    var counts = std.StringHashMap(usize).init(allocator);
-    errdefer counts.deinit();
+    var counts = std.StringHashMap(usize).init(arena);
 
     var token: std.zig.Ast.TokenIndex = 0;
     while (token < ast.tokens.len) : (token += 1) {
@@ -307,12 +303,11 @@ fn identifierUsedOutsideDecl(
 
 /// Applies declaration removals to source. Note the removals must be sorted.
 fn applySortedDeclarationRemovals(
-    allocator: Allocator,
+    arena: Allocator,
     source: []const u8,
     candidates: []const DeclarationCandidate,
 ) !?[:0]u8 {
     var edits: std.ArrayList(core.Edit) = .empty;
-    defer edits.deinit(allocator);
     var cursor: usize = 0;
     for (candidates) |candidate| {
         const range = switch (candidate.removal) {
@@ -320,7 +315,7 @@ fn applySortedDeclarationRemovals(
             .blocked => continue,
         };
         if (range.start < cursor) continue;
-        try edits.append(allocator, .{
+        try edits.append(arena, .{
             .start = range.start,
             .end = range.end,
             .replacement = "",
@@ -328,7 +323,7 @@ fn applySortedDeclarationRemovals(
         cursor = range.end;
     }
     if (edits.items.len == 0) return null;
-    return try core.applySortedEdits(allocator, source, edits.items);
+    return try core.applySortedEdits(arena, source, edits.items);
 }
 
 fn findUnusedDeclarationsInSource(
@@ -337,13 +332,12 @@ fn findUnusedDeclarationsInSource(
     candidates: *std.ArrayList(DeclarationCandidate),
 ) !void {
     var ast = try std.zig.Ast.parse(allocator, source, .zig);
-    defer ast.deinit(allocator);
     if (ast.errors.len != 0) return error.ParseError;
     try findAndSortUnusedDeclarations(allocator, source, &ast, candidates);
 }
 
 test "detects unused declarations through token usage" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\const used = @import("used.zig");
         \\const unused = @import("unused.zig");
@@ -354,7 +348,6 @@ test "detects unused declarations through token usage" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(3, candidates.items.len);
     try std.testing.expectEqual(2, candidates.items[0].line);
@@ -364,13 +357,12 @@ test "detects unused declarations through token usage" {
 }
 
 test "reports parse errors" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\const broken = ;
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try std.testing.expectError(
         error.ParseError,
         findUnusedDeclarationsInSource(allocator, source, &candidates),
@@ -378,7 +370,7 @@ test "reports parse errors" {
 }
 
 test "detects unused const var and fn declarations" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\var mutable = @import("mutable.zig");
         \\const number = 1;
@@ -387,7 +379,6 @@ test "detects unused const var and fn declarations" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(4, candidates.items.len);
     try std.testing.expectEqual(1, candidates.items[0].line);
@@ -397,7 +388,7 @@ test "detects unused const var and fn declarations" {
 }
 
 test "keeps used private functions and public declarations" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\fn used() void {}
         \\fn unused() void {}
@@ -409,14 +400,13 @@ test "keeps used private functions and public declarations" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
     try std.testing.expectEqual(2, candidates.items[0].line);
 }
 
 test "detects nested unused declarations in private containers" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\const S = struct {
         \\    const used = 1;
@@ -432,7 +422,6 @@ test "detects nested unused declarations in private containers" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(3, candidates.items.len);
     try std.testing.expectEqual(3, candidates.items[0].line);
@@ -441,7 +430,7 @@ test "detects nested unused declarations in private containers" {
 }
 
 test "detects private members in public containers" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\pub const S = struct {
         \\    const unused = 1;
@@ -451,7 +440,6 @@ test "detects private members in public containers" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(3, candidates.items.len);
     try std.testing.expectEqual(2, candidates.items[0].line);
@@ -460,7 +448,7 @@ test "detects private members in public containers" {
 }
 
 test "ignores container fields" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\const S = struct {
         \\    field: u32,
@@ -469,14 +457,13 @@ test "ignores container fields" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
     try std.testing.expectEqual(1, candidates.items[0].line);
 }
 
 test "allows unused declarations with lint comment" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\// lint: allow_unused
         \\const allowed = 1;
@@ -487,27 +474,25 @@ test "allows unused declarations with lint comment" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(0, candidates.items.len);
 }
 
 test "lint comment match is exact" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\// TODO: later add // lint: allow_unused here
         \\const still_unused = 1;
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
     try std.testing.expectEqual(2, candidates.items[0].line);
 }
 
 test "detects unused field-chain aliases" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\const std = @import("std");
         \\const fmt = std.fmt;
@@ -517,7 +502,6 @@ test "detects unused field-chain aliases" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(4, candidates.items.len);
     try std.testing.expectEqual(2, candidates.items[0].line);
@@ -527,7 +511,7 @@ test "detects unused field-chain aliases" {
 }
 
 test "detects unused transitive aliases" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\const std = @import("std");
         \\const fmt = std.fmt;
@@ -535,14 +519,13 @@ test "detects unused transitive aliases" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
     try std.testing.expectEqual(3, candidates.items[0].line);
 }
 
 test "detects unused out-of-order aliases" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\const Writer = fmt.Writer;
         \\const fmt = std.fmt;
@@ -550,14 +533,13 @@ test "detects unused out-of-order aliases" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
     try std.testing.expectEqual(1, candidates.items[0].line);
 }
 
 test "detects unused call declarations" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\const std = @import("std");
         \\const T = std.BoundedArray(u8, 10);
@@ -565,7 +547,6 @@ test "detects unused call declarations" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(2, candidates.items.len);
     try std.testing.expectEqual(2, candidates.items[0].line);
@@ -573,7 +554,7 @@ test "detects unused call declarations" {
 }
 
 test "fix removes cascading aliases" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -586,16 +567,13 @@ test "fix removes cascading aliases" {
     ;
     try tmp.dir.writeFile(.{ .sub_path = "unused_declarations_fix.zig", .data = source });
     const path = try tmp.dir.realpathAlloc(allocator, "unused_declarations_fix.zig");
-    defer allocator.free(path);
 
     var ctx = core.Context{
-        .allocator = allocator,
+        .arena = allocator,
         .config = .{ .mode = .fix },
     };
-    defer ctx.deinit();
 
     var file = try core.SourceFile.readAndParse(allocator, path);
-    defer file.deinit(allocator);
 
     try lint(&ctx, &file);
 
@@ -604,18 +582,16 @@ test "fix removes cascading aliases" {
     try std.testing.expectEqual(0, file.ast.errors.len);
 
     const unchanged = try std.fs.cwd().readFileAlloc(allocator, path, core.max_source_file_size);
-    defer allocator.free(unchanged);
     try std.testing.expectEqualStrings(source, unchanged);
 
     try file.writeIfChanged();
 
     const fixed = try std.fs.cwd().readFileAlloc(allocator, path, core.max_source_file_size);
-    defer allocator.free(fixed);
     try std.testing.expectEqualStrings("", fixed);
 }
 
 test "fix removes clean nested declarations" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\const S = struct {
         \\    const unused = 1;
@@ -632,17 +608,15 @@ test "fix removes clean nested declarations" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
     try std.testing.expectEqual(.range, std.meta.activeTag(candidates.items[0].removal));
     const fixed = (try applySortedDeclarationRemovals(allocator, source, candidates.items)).?;
-    defer allocator.free(fixed);
     try std.testing.expectEqualStrings(expected, fixed);
 }
 
 test "fix removes unused functions" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\fn unused() void {
         \\    const x = 1;
@@ -656,17 +630,15 @@ test "fix removes unused functions" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
     try std.testing.expectEqual(.range, std.meta.activeTag(candidates.items[0].removal));
     const fixed = (try applySortedDeclarationRemovals(allocator, source, candidates.items)).?;
-    defer allocator.free(fixed);
     try std.testing.expectEqualStrings(expected, fixed);
 }
 
 test "fix removes multiline imports" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\const unused =
         \\    @import("unused.zig");
@@ -678,24 +650,21 @@ test "fix removes multiline imports" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
     try std.testing.expectEqual(.range, std.meta.activeTag(candidates.items[0].removal));
     const fixed = (try applySortedDeclarationRemovals(allocator, source, candidates.items)).?;
-    defer allocator.free(fixed);
     try std.testing.expectEqualStrings(expected, fixed);
 }
 
 test "fix skips compact nested declarations" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\const S = struct { const unused = 1; pub const kept = 2; };
         \\pub const x = S.kept;
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
     try std.testing.expectEqual(.blocked, std.meta.activeTag(candidates.items[0].removal));
@@ -704,11 +673,10 @@ test "fix skips compact nested declarations" {
 }
 
 test "fix removes unused single line container before blocked nested declarations" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source = "const S = struct { const a = 1; const b = 2; };\n";
 
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(3, candidates.items.len);
     try std.testing.expectEqual(.range, std.meta.activeTag(candidates.items[0].removal));
@@ -716,19 +684,17 @@ test "fix removes unused single line container before blocked nested declaration
     try std.testing.expectEqual(.blocked, std.meta.activeTag(candidates.items[2].removal));
 
     const fixed = (try applySortedDeclarationRemovals(allocator, source, candidates.items)).?;
-    defer allocator.free(fixed);
     try std.testing.expectEqualStrings("", fixed);
 }
 
 test "fix skips declarations with preceding comment" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\// keep this note
         \\const unused = 1;
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
     try std.testing.expectEqual(.blocked, std.meta.activeTag(candidates.items[0].removal));
@@ -737,23 +703,18 @@ test "fix skips declarations with preceding comment" {
 }
 
 test "fix reports declarations it cannot remove" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\// keep this note
         \\const unused = 1;
         \\
     ;
     const path = try allocator.dupe(u8, "lib/example.zig");
-    errdefer allocator.free(path);
     const source_z = try allocator.dupeZ(u8, source);
-    errdefer allocator.free(source_z);
-    var ast = try std.zig.Ast.parse(allocator, source_z, .zig);
-    errdefer ast.deinit(allocator);
+    const ast = try std.zig.Ast.parse(allocator, source_z, .zig);
     var file: core.SourceFile = .{ .path = path, .source = source_z, .ast = ast };
-    defer file.deinit(allocator);
 
-    var ctx: core.Context = .{ .allocator = allocator, .config = .{ .mode = .fix } };
-    defer ctx.deinit();
+    var ctx: core.Context = .{ .arena = allocator, .config = .{ .mode = .fix } };
 
     try lint(&ctx, &file);
 
@@ -766,19 +727,17 @@ test "fix reports declarations it cannot remove" {
 }
 
 test "removes declaration at eof without trailing newline" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source = "const unused = @import(\"unused.zig\");";
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(1, candidates.items.len);
     const fixed = (try applySortedDeclarationRemovals(allocator, source, candidates.items)).?;
-    defer allocator.free(fixed);
     try std.testing.expectEqualStrings("", fixed);
 }
 
 test "removes multiple unused declarations" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\const unused_a = @import("a.zig");
         \\const unused_b = @import("b.zig");
@@ -792,16 +751,14 @@ test "removes multiple unused declarations" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(2, candidates.items.len);
     const fixed = (try applySortedDeclarationRemovals(allocator, source, candidates.items)).?;
-    defer allocator.free(fixed);
     try std.testing.expectEqualStrings(expected, fixed);
 }
 
 test "keeps public declarations" {
-    const allocator = std.testing.allocator;
+    const allocator = std.heap.page_allocator;
     const source =
         \\const std = @import("std");
         \\pub const fmt = std.fmt;
@@ -809,7 +766,6 @@ test "keeps public declarations" {
         \\
     ;
     var candidates: std.ArrayList(DeclarationCandidate) = .empty;
-    defer candidates.deinit(allocator);
     try findUnusedDeclarationsInSource(allocator, source, &candidates);
     try std.testing.expectEqual(0, candidates.items.len);
 }
