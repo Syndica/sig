@@ -375,10 +375,15 @@ pub fn replayBatch(
             .static_instruction_limit,
             svm_gateway.params.slot,
         );
+        const instruction_accounts_limit = svm_gateway.params.feature_set.active(
+            .limit_instruction_accounts,
+            svm_gateway.params.slot,
+        );
         const hash, const compute_budget_details = switch (preprocessTransaction(
             transaction.transaction,
             .run_sig_verify,
             instruction_limit,
+            instruction_accounts_limit,
         )) {
             .ok => |res| res,
             .err => |err| return .{ .failure = err },
