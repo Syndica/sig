@@ -44,7 +44,6 @@ pub fn preprocessTransaction(
 
     const static_instruction_limit = feature_set.active(.static_instruction_limit, slot);
     const instruction_accounts_limit = feature_set.active(.limit_instruction_accounts, slot);
-    const require_static_nonce_account = feature_set.active(.require_static_nonce_account, slot);
 
     txn.validate() catch return .{ .err = .SanitizeFailure };
 
@@ -70,19 +69,6 @@ pub fn preprocessTransaction(
             if (instr.account_indexes.len > MAX_ACCOUNTS_PER_INSTRUCTION) {
                 return .{ .err = .SanitizeFailure };
             }
-        }
-    }
-
-    // SIMD-0242: a nonce transaction (one whose first instruction is
-    // SystemInstruction::AdvanceNonceAccount) must reference its nonce account
-    // statically. The nonce account index, which is the first account index of
-    // that instruction, must be < the number of static account keys.
-    if (require_static_nonce_account and isAdvanceNonceTransaction(&txn.msg)) {
-        const inst = txn.msg.instructions[0];
-        if (inst.account_indexes.len == 0 or
-            inst.account_indexes[0] >= txn.msg.account_keys.len)
-        {
-            return .{ .err = .SanitizeFailure };
         }
     }
 
@@ -112,18 +98,6 @@ pub fn preprocessTransaction(
     } };
 }
 
-/// Returns true if the message's first instruction is
-/// `SystemInstruction::AdvanceNonceAccount`, the marker for a nonce transaction.
-/// Mirrors the equivalent check on resolved transactions in `getDurableNonce`.
-pub fn isAdvanceNonceTransaction(msg: *const Message) bool {
-    if (msg.instructions.len == 0) return false;
-    const inst = msg.instructions[0];
-    if (inst.program_index >= msg.account_keys.len) return false;
-    if (!msg.account_keys[inst.program_index].equals(&sig.runtime.program.system.ID)) return false;
-    if (inst.data.len < 4) return false;
-    return std.mem.eql(u8, inst.data[0..4], &.{ 4, 0, 0, 0 });
-}
-
 test preprocessTransaction {
     const allocator = std.testing.allocator;
 
@@ -141,9 +115,6 @@ test preprocessTransaction {
 
     var with_instruction_accounts_limit: FeatureSet = .ALL_DISABLED;
     with_instruction_accounts_limit.setSlot(.limit_instruction_accounts, 0);
-
-    var with_require_static_nonce_account: FeatureSet = .ALL_DISABLED;
-    with_require_static_nonce_account.setSlot(.require_static_nonce_account, 0);
 
     { // Verify succeeds
         const txn = try Transaction.initRandom(allocator, random, null);
@@ -374,252 +345,5 @@ test preprocessTransaction {
                 0,
             )),
         );
-    }
-
-    { // SIMD-0242: nonce transaction with statically-included nonce account is accepted
-        // when the gate is on (account_indexes[0] < account_keys.len).
-        const advance_nonce_data = [_]u8{ 4, 0, 0, 0 };
-        const account_indexes = [_]u8{ 2, 0, 0 }; // nonce, recent_blockhashes (mock), authority
-        const txn = Transaction{
-            .signatures = &.{Signature.ZEROES},
-            .version = .legacy,
-            .msg = .{
-                .signature_count = 1,
-                .readonly_signed_count = 0,
-                .readonly_unsigned_count = 1,
-                .account_keys = &.{
-                    Pubkey.ZEROES,
-                    sig.runtime.program.system.ID,
-                    Pubkey.initRandom(random),
-                },
-                .recent_blockhash = Hash.ZEROES,
-                .instructions = &.{.{
-                    .program_index = 1,
-                    .account_indexes = &account_indexes,
-                    .data = &advance_nonce_data,
-                }},
-                .address_lookups = &.{},
-            },
-        };
-
-        try std.testing.expectEqual(
-            .ok,
-            std.meta.activeTag(preprocessTransaction(
-                txn,
-                .skip_sig_verify,
-                &with_require_static_nonce_account,
-                0,
-            )),
-        );
-    }
-
-    { // SIMD-0242: nonce transaction with ALT-resolved nonce account is rejected when
-        // the gate is on, and accepted when off (account_indexes[0] >= account_keys.len).
-        const advance_nonce_data = [_]u8{ 4, 0, 0, 0 };
-        // Two static account keys + one writable ALT slot → max_account_index = 2.
-        // account_indexes[0] = 2 references the ALT-resolved account (not static).
-        const account_indexes = [_]u8{ 2, 0, 0 };
-        const writable_indexes = [_]u8{0};
-        const txn = Transaction{
-            .signatures = &.{Signature.ZEROES},
-            .version = .v0,
-            .msg = .{
-                .signature_count = 1,
-                .readonly_signed_count = 0,
-                .readonly_unsigned_count = 1,
-                .account_keys = &.{ Pubkey.ZEROES, sig.runtime.program.system.ID },
-                .recent_blockhash = Hash.ZEROES,
-                .instructions = &.{.{
-                    .program_index = 1,
-                    .account_indexes = &account_indexes,
-                    .data = &advance_nonce_data,
-                }},
-                .address_lookups = &.{.{
-                    .table_address = Pubkey.initRandom(random),
-                    .writable_indexes = &writable_indexes,
-                    .readonly_indexes = &.{},
-                }},
-            },
-        };
-
-        // Gate on: rejected.
-        try std.testing.expectEqual(
-            TransactionError.SanitizeFailure,
-            preprocessTransaction(
-                txn,
-                .skip_sig_verify,
-                &with_require_static_nonce_account,
-                0,
-            ).err,
-        );
-        // Gate off: accepted.
-        try std.testing.expectEqual(
-            .ok,
-            std.meta.activeTag(preprocessTransaction(txn, .skip_sig_verify, &disabled, 0)),
-        );
-    }
-
-    { // SIMD-0242: non-nonce transaction is unaffected by the gate (data prefix is
-        // not [4,0,0,0], so isAdvanceNonceTransaction returns false even if other
-        // markers match).
-        const txn = Transaction{
-            .signatures = &.{Signature.ZEROES},
-            .version = .legacy,
-            .msg = .{
-                .signature_count = 1,
-                .readonly_signed_count = 0,
-                .readonly_unsigned_count = 1,
-                .account_keys = &.{ Pubkey.ZEROES, compute_budget.ID },
-                .recent_blockhash = Hash.ZEROES,
-                .instructions = &.{
-                    try compute_budget.testCreateComputeBudgetInstruction(
-                        allocator,
-                        1,
-                        .{ .set_compute_unit_limit = 1_000_000 },
-                    ),
-                },
-                .address_lookups = &.{},
-            },
-        };
-        defer for (txn.msg.instructions) |instr| allocator.free(instr.data);
-
-        try std.testing.expectEqual(
-            .ok,
-            std.meta.activeTag(preprocessTransaction(
-                txn,
-                .skip_sig_verify,
-                &with_require_static_nonce_account,
-                0,
-            )),
-        );
-    }
-
-    { // SIMD-0242: a nonce-shaped tx with empty account_indexes is rejected (the
-        // guard prevents an out-of-bounds read; the tx is invalid anyway because
-        // AdvanceNonceAccount needs accounts).
-        const advance_nonce_data = [_]u8{ 4, 0, 0, 0 };
-        const txn = Transaction{
-            .signatures = &.{Signature.ZEROES},
-            .version = .legacy,
-            .msg = .{
-                .signature_count = 1,
-                .readonly_signed_count = 0,
-                .readonly_unsigned_count = 1,
-                .account_keys = &.{ Pubkey.ZEROES, sig.runtime.program.system.ID },
-                .recent_blockhash = Hash.ZEROES,
-                .instructions = &.{.{
-                    .program_index = 1,
-                    .account_indexes = &.{},
-                    .data = &advance_nonce_data,
-                }},
-                .address_lookups = &.{},
-            },
-        };
-
-        try std.testing.expectEqual(
-            TransactionError.SanitizeFailure,
-            preprocessTransaction(
-                txn,
-                .skip_sig_verify,
-                &with_require_static_nonce_account,
-                0,
-            ).err,
-        );
-    }
-}
-
-test isAdvanceNonceTransaction {
-    const Pubkey = sig.core.Pubkey;
-    const Instruction = sig.core.transaction.Instruction;
-
-    const system_id = sig.runtime.program.system.ID;
-    const advance_nonce_data = [_]u8{ 4, 0, 0, 0 };
-
-    // Helper to construct a Message with one instruction, parameterized.
-    const buildMsg = struct {
-        fn f(
-            account_keys: []const Pubkey,
-            instructions: []const Instruction,
-        ) Message {
-            return .{
-                .signature_count = 1,
-                .readonly_signed_count = 0,
-                .readonly_unsigned_count = 1,
-                .account_keys = account_keys,
-                .recent_blockhash = Hash.ZEROES,
-                .instructions = instructions,
-                .address_lookups = &.{},
-            };
-        }
-    }.f;
-
-    { // empty instructions: false
-        const msg = buildMsg(&.{ Pubkey.ZEROES, system_id }, &.{});
-        try std.testing.expect(!isAdvanceNonceTransaction(&msg));
-    }
-
-    { // program_index out of bounds: false
-        const inst: Instruction = .{
-            .program_index = 9,
-            .account_indexes = &.{0},
-            .data = &advance_nonce_data,
-        };
-        const msg = buildMsg(&.{ Pubkey.ZEROES, system_id }, &.{inst});
-        try std.testing.expect(!isAdvanceNonceTransaction(&msg));
-    }
-
-    { // program is not system: false (system is Pubkey.ZEROES, so use a non-zero pubkey)
-        var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-        const non_system = Pubkey.initRandom(prng.random());
-        const inst: Instruction = .{
-            .program_index = 1,
-            .account_indexes = &.{0},
-            .data = &advance_nonce_data,
-        };
-        const msg = buildMsg(&.{ Pubkey.ZEROES, non_system }, &.{inst});
-        try std.testing.expect(!isAdvanceNonceTransaction(&msg));
-    }
-
-    { // data length < 4: false
-        const short_data = [_]u8{ 4, 0, 0 };
-        const inst: Instruction = .{
-            .program_index = 1,
-            .account_indexes = &.{0},
-            .data = &short_data,
-        };
-        const msg = buildMsg(&.{ Pubkey.ZEROES, system_id }, &.{inst});
-        try std.testing.expect(!isAdvanceNonceTransaction(&msg));
-    }
-
-    { // wrong tag (a different SystemInstruction discriminant): false
-        const transfer_data = [_]u8{ 2, 0, 0, 0 }; // SystemInstruction::Transfer
-        const inst: Instruction = .{
-            .program_index = 1,
-            .account_indexes = &.{0},
-            .data = &transfer_data,
-        };
-        const msg = buildMsg(&.{ Pubkey.ZEROES, system_id }, &.{inst});
-        try std.testing.expect(!isAdvanceNonceTransaction(&msg));
-    }
-
-    { // happy path: true
-        const inst: Instruction = .{
-            .program_index = 1,
-            .account_indexes = &.{ 0, 1 },
-            .data = &advance_nonce_data,
-        };
-        const msg = buildMsg(&.{ Pubkey.ZEROES, system_id }, &.{inst});
-        try std.testing.expect(isAdvanceNonceTransaction(&msg));
-    }
-
-    { // happy path with extra bytes after the discriminant: still true
-        const data_with_extra = [_]u8{ 4, 0, 0, 0, 0xFF, 0xFF };
-        const inst: Instruction = .{
-            .program_index = 1,
-            .account_indexes = &.{0},
-            .data = &data_with_extra,
-        };
-        const msg = buildMsg(&.{ Pubkey.ZEROES, system_id }, &.{inst});
-        try std.testing.expect(isAdvanceNonceTransaction(&msg));
     }
 }
