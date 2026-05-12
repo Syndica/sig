@@ -14,9 +14,9 @@ const Sha256 = std.crypto.hash.sha2.Sha256;
 const has_sha_ni = builtin.cpu.arch == .x86_64 and
     std.Target.x86.featureSetHasAll(builtin.cpu.features, &.{ .sha, .avx });
 comptime {
-    if (builtin.cpu.arch == .x86_64 and !has_sha_ni and !build_options.disable_sha) @compileError(
+    if (builtin.cpu.arch == .x86_64 and !has_sha_ni and !build_options.allow_no_sha) @compileError(
         "Target lacks the x86 SHA extension required for the fast hashRepeated path. " ++
-            "Re-build with -Ddisable-sha=true to opt in to the slower AVX software fallback.",
+            "Re-build with -Dallow-no-sha=true to opt in to the slower AVX software fallback.",
     );
 }
 

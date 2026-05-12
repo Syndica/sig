@@ -22,10 +22,11 @@ const has_avx512 = builtin.cpu.arch == .x86_64 and
     std.Target.x86.featureSetHas(builtin.cpu.features, .avx512ifma) and
     std.Target.x86.featureSetHas(builtin.cpu.features, .avx512vl);
 comptime {
-    if (builtin.cpu.arch == .x86_64 and !has_avx512 and !build_options.disable_avx512) @compileError(
-        "Target lacks AVX-512 (avx512ifma + avx512vl) required for the fast ed25519 path. " ++
-            "Re-build with -Ddisable-avx512=true to opt in to the slower generic fallback.",
-    );
+    if (builtin.cpu.arch == .x86_64 and !has_avx512 and !build_options.allow_no_avx512)
+        @compileError(
+            "Target lacks AVX-512 (avx512ifma + avx512vl) required for the fast ed25519 path. " ++
+                "Re-build with -Dallow-no-avx512=true to opt in to the slower generic fallback.",
+        );
 }
 pub const use_avx125 = has_avx512 and builtin.zig_backend == .stage2_llvm;
 
