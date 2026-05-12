@@ -167,6 +167,15 @@ pub const Hash = extern struct {
 
     /// `input` and `out` arguments may alias.
     pub fn hashRepeated(input: *const Hash, out: *Hash, count: usize) void {
+        hashRepeatedImpl(has_sha_ni, input, out, count);
+    }
+
+    inline fn hashRepeatedImpl(
+        comptime use_sha_ni: bool,
+        input: *const Hash,
+        out: *Hash,
+        count: usize,
+    ) void {
         const V = @Vector(4, u32);
 
         const iv = [8]u32{
@@ -212,7 +221,7 @@ pub const Hash = extern struct {
             @byteSwap(@as(V, @bitCast(input.data[16..32].*))),
         };
 
-        if (comptime has_sha_ni) {
+        if (comptime use_sha_ni) {
             var first: [4]V = .{ state[0], state[1] } ++ pad_vec;
             const feba: V = comptime .{ iv[5], iv[4], iv[1], iv[0] };
             const hgdc: V = comptime .{ iv[7], iv[6], iv[3], iv[2] };
@@ -816,14 +825,28 @@ test "hashRepeated matches std Sha256 reference" {
         var expected: Hash = input;
         for (0..count) |_| Sha256.hash(&expected.data, &expected.data, .{});
 
-        // non-aliased
-        var actual: Hash = undefined;
-        Hash.hashRepeated(&input, &actual, count);
-        try std.testing.expectEqual(expected, actual);
+        {
+            // non-aliased
+            var actual: Hash = undefined;
+            Hash.hashRepeatedImpl(false, &input, &actual, count);
+            try std.testing.expectEqual(expected, actual);
 
-        // aliased (input == out)
-        var aliased: Hash = input;
-        Hash.hashRepeated(&aliased, &aliased, count);
-        try std.testing.expectEqual(expected, aliased);
+            // aliased (input == out)
+            var aliased: Hash = input;
+            Hash.hashRepeatedImpl(false, &aliased, &aliased, count);
+            try std.testing.expectEqual(expected, aliased);
+        }
+
+        if (has_sha_ni) {
+            // non-aliased
+            var actual: Hash = undefined;
+            Hash.hashRepeatedImpl(true, &input, &actual, count);
+            try std.testing.expectEqual(expected, actual);
+
+            // aliased (input == out)
+            var aliased: Hash = input;
+            Hash.hashRepeatedImpl(true, &aliased, &aliased, count);
+            try std.testing.expectEqual(expected, aliased);
+        }
     }
 }
