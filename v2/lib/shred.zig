@@ -106,8 +106,8 @@ pub const Shred = extern struct {
     };
 
     /// NOTE: Legacy Code and Data shreds are defined like this, which isn't compatible with the
-    ///       layout of our packed struct. To get around this .isSupported() **must** return true
-    ///       before using any of the other methods.
+    ///       layout of our packed struct. To get around this .hasSupportedVariant() **must** return
+    ///       true casting to a `Shred` and using any of the other methods.
     ///
     /// pub enum ShredType {
     ///     Data = 0b1010_0101,
@@ -116,28 +116,16 @@ pub const Shred = extern struct {
     ///
     pub const Variant = packed struct(u8) {
         merkle_count: u4,
-        kind: enum(u4) {
-            // all supported kinds
+        kind: Kind,
+
+        const Kind = enum(u4) {
             merkle_code_chained = 0x6,
             merkle_code_chained_resigned = 0x7,
             merkle_data_chained = 0x9,
             merkle_data_chained_resigned = 0xB,
-            _,
-        },
-
-        // [firedancer] https://github.com/firedancer-io/firedancer/blob/9f7770af997a1443e7903113fc03ca1ce3b0ad73/src/ballet/shred/fd_shred.c#L16
-        // Legacy (non-merkle), and non-chained shreds are deprecated
-        // https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0313-drop-unchained-merkle-shreds.md
-        fn isSupported(self: Variant) bool {
-            return switch (self.kind) {
-                _ => false,
-                else => true,
-            };
-        }
+        };
 
         fn headerSize(self: Variant) u8 {
-            std.debug.assert(self.isSupported());
-
             return @as(u8, @offsetOf(Shred, "code_or_data")) + if (self.isData())
                 @as(u8, @sizeOf(DataHeader))
             else
@@ -148,7 +136,6 @@ pub const Shred = extern struct {
             return switch (self.kind) {
                 .merkle_data_chained_resigned, .merkle_code_chained_resigned => true,
                 .merkle_data_chained, .merkle_code_chained => false,
-                _ => unreachable, // unsupported variant
             };
         }
 
@@ -156,7 +143,6 @@ pub const Shred = extern struct {
             return switch (self.kind) {
                 .merkle_data_chained, .merkle_data_chained_resigned => true,
                 .merkle_code_chained, .merkle_code_chained_resigned => false,
-                _ => unreachable, // unsupported variant
             };
         }
 
@@ -165,8 +151,6 @@ pub const Shred = extern struct {
         }
 
         fn merkleSize(self: Variant) u16 {
-            std.debug.assert(self.isSupported());
-
             return @as(u16, self.merkle_count) * merkle_node_size;
         }
 
@@ -183,7 +167,6 @@ pub const Shred = extern struct {
                     .merkle_code_chained_resigned => .merkle_data_chained_resigned,
                     .merkle_data_chained => .merkle_code_chained,
                     .merkle_data_chained_resigned => .merkle_code_chained_resigned,
-                    _ => unreachable, // unsupported variant
                 },
             };
         }
@@ -204,9 +187,9 @@ pub const Shred = extern struct {
     /// Makes sure that the *layout* of the Shred is valid.
     pub fn fromPacketChecked(packet: *const Packet) !*const Shred {
         if (packet.len < min_header_size) return error.PacketUnderMinHeaderSize;
+        if (!Shred.hasSupportedVariant(&packet.data)) return error.UnsupportedVariant;
 
         const shred: *const Shred = @ptrCast(packet);
-        if (!shred.variant.isSupported()) return error.UnsupportedVariant;
 
         const header_size: u16 = shred.variant.headerSize();
         if (packet.len < header_size) return error.PacketUnderHeaderSize;
@@ -274,7 +257,17 @@ pub const Shred = extern struct {
         return shred;
     }
 
+    // [firedancer] https://github.com/firedancer-io/firedancer/blob/9f7770af997a1443e7903113fc03ca1ce3b0ad73/src/ballet/shred/fd_shred.c#L16
+    // Legacy (non-merkle), and non-chained shreds are deprecated
+    // https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0313-drop-unchained-merkle-shreds.md
+    pub fn hasSupportedVariant(buffer: *const Packet.Buffer) bool {
+        const BareVariant = packed struct(u8) { merkle_count: u4, kind: u4 };
+        const bare_variant: BareVariant = @bitCast(buffer[@offsetOf(Shred, "variant")..][0]);
+        return std.enums.fromInt(Variant.Kind, bare_variant.kind) != null;
+    }
+
     pub fn fromBufferUnchecked(buffer: *const Packet.Buffer) *const Shred {
+        std.debug.assert(Shred.hasSupportedVariant(buffer));
         return @ptrCast(buffer);
     }
 
