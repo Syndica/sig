@@ -14,7 +14,7 @@ const has_sha_ni = builtin.cpu.arch == .x86_64 and
 comptime {
     if (builtin.cpu.arch == .x86_64 and !has_sha_ni and !build_options.allow_no_sha) @compileError(
         "Target lacks the x86 SHA extension required for the fast hashRepeated path. " ++
-            "Re-build with -Dallow-no-sha=true to opt in to the slower AVX software fallback.",
+            "Re-build with -Dallow-no-sha to opt in to the slower AVX software fallback.",
     );
 }
 
