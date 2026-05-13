@@ -1,2 +1,1 @@
 elf_loader/fixtures/4e2f68c8ac30a03c2f8ba24de272bd7eaef748291b1a859b57bf00ce07a68bf1.fix
-instr/fixtures/bpf-loader-v3/280e40b7cf03fbce22ec28d92ad9e0fbfe2f4452_550480.fix
