@@ -30,82 +30,64 @@ pub fn main() !void {
     // Run the tests
     var total_passed: usize = 0;
     var total_failed: usize = 0;
-    var total_skipped: usize = 0;
     const stat = try std.fs.cwd().statFile(args[1]);
 
     if (stat.kind == .directory) {
-        // Discover leaf directories containing .fix files
-        var group_dirs: std.ArrayList([]const u8) = .empty;
+        const stats = try exec.execDir(allocator, &lib, args[1]);
+
+        // Group results by dirname relative to input path
+        const input_prefix = args[1];
+        var group_passed: std.StringArrayHashMapUnmanaged(usize) = .empty;
+        var group_failed: std.StringArrayHashMapUnmanaged(usize) = .empty;
         defer {
-            for (group_dirs.items) |p| allocator.free(p);
-            group_dirs.deinit(allocator);
+            group_passed.deinit(allocator);
+            group_failed.deinit(allocator);
         }
-        {
-            var dir = try std.fs.cwd().openDir(args[1], .{ .iterate = true });
-            defer dir.close();
-            var walker = try dir.walk(allocator);
-            defer walker.deinit();
-            var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
-            defer {
-                for (seen.keys()) |k| allocator.free(k);
-                seen.deinit(allocator);
-            }
-            while (try walker.next()) |entry| {
-                if (entry.kind != .file) continue;
-                if (!std.mem.eql(u8, std.fs.path.extension(entry.path), ".fix")) continue;
-                // Get the directory portion of this entry's relative path
-                const dir_part = std.fs.path.dirname(entry.path) orelse "";
-                const group_rel = if (dir_part.len > 0) dir_part else ".";
-                const gop = try seen.getOrPut(allocator, try allocator.dupe(u8, group_rel));
-                if (!gop.found_existing) {
-                    const full_path = try std.fs.path.join(allocator, &.{ args[1], group_rel });
-                    try group_dirs.append(allocator, full_path);
-                }
+
+        for (stats.fix_paths, stats.results) |fix_path, result| {
+            const rel = relativeTo(fix_path, input_prefix);
+            const dir_part = std.fs.path.dirname(rel) orelse ".";
+            const passed_gop = try group_passed.getOrPut(allocator, dir_part);
+            if (!passed_gop.found_existing) passed_gop.value_ptr.* = 0;
+            const failed_gop = try group_failed.getOrPut(allocator, dir_part);
+            if (!failed_gop.found_existing) failed_gop.value_ptr.* = 0;
+            switch (result) {
+                .pass => passed_gop.value_ptr.* += 1,
+                else => failed_gop.value_ptr.* += 1,
             }
         }
 
-        // Sort for deterministic order
-        std.mem.sort([]const u8, group_dirs.items, {}, struct {
+        // Sort keys for deterministic output
+        const keys = group_passed.keys();
+        const sorted_keys = try allocator.alloc([]const u8, keys.len);
+        defer allocator.free(sorted_keys);
+        @memcpy(sorted_keys, keys);
+        std.mem.sort([]const u8, sorted_keys, {}, struct {
             fn cmp(_: void, a: []const u8, b: []const u8) bool {
                 return std.mem.order(u8, a, b) == .lt;
             }
         }.cmp);
 
-        // Find max name length for alignment (use relative path for display)
-        const input_prefix = args[1];
+        // Find max name length for alignment
         var max_name_len: usize = 0;
-        for (group_dirs.items) |gd| {
-            const rel = relativeTo(gd, input_prefix);
-            max_name_len = @max(max_name_len, rel.len);
+        for (sorted_keys) |key| {
+            max_name_len = @max(max_name_len, key.len);
         }
 
-        // Run each group and print immediately
+        // Print per-group results
         std.debug.print("\n", .{});
-        for (group_dirs.items) |group_path| {
-            const display_name = relativeTo(group_path, input_prefix);
-            const stats = exec.execDir(allocator, &lib, group_path) catch |e| {
-                std.debug.print("{s}: error: {}\n", .{ display_name, e });
-                continue;
-            };
-            var passed: usize = 0;
-            var failed: usize = 0;
-            var skipped: usize = 0;
-            for (stats.results) |result| switch (result) {
-                .pass => passed += 1,
-                .missing_entrypoint => skipped += 1,
-                else => failed += 1,
-            };
-            printRow(display_name, max_name_len, passed, failed, skipped);
+        for (sorted_keys) |key| {
+            const passed = group_passed.get(key) orelse 0;
+            const failed = group_failed.get(key) orelse 0;
+            printRow(key, max_name_len, passed, failed);
             total_passed += passed;
             total_failed += failed;
-            total_skipped += skipped;
         }
     } else {
         const out_buf = try allocator.alloc(u8, exec.output_buffer_size);
         defer allocator.free(out_buf);
         switch (try exec.execFixture(allocator, &lib, args[1], out_buf)) {
             .pass => total_passed = 1,
-            .missing_entrypoint => total_skipped = 1,
             else => total_failed = 1,
         }
     }
@@ -116,10 +98,8 @@ pub fn main() !void {
         \\Summary:
         \\        Passed:  {d}
         \\        Failed:  {d}
-        \\        Skipped: {d}
         \\
-        \\
-    , .{ total_passed, total_failed, total_skipped });
+    , .{ total_passed, total_failed });
 
     if (total_failed > 0) std.posix.exit(1);
 }
@@ -136,14 +116,12 @@ fn printRow(
     name_width: usize,
     passed: usize,
     failed: usize,
-    skipped: usize,
 ) void {
     const stderr = std.fs.File.stderr().deprecatedWriter();
     stderr.print("{s}", .{name}) catch {};
     stderr.writeByteNTimes(' ', name_width - name.len + 1) catch {};
-    stderr.print("│ Pass {d: >5} │ Fail {d: >5} │ Skip {d: >5}\n", .{
+    stderr.print("│ Pass {d: >5} │ Fail {d: >5}\n", .{
         passed,
         failed,
-        skipped,
     }) catch {};
 }
