@@ -177,12 +177,13 @@
         .name = "libsecp256k1_fail_on_bad_count",
         .pubkey = "8aXvSuopd1PUj7UhehfXJRg6619RHp8ZvwTyyJHdUYsj",
         .description = "fail libsecp256k1_verify if count appears wrong",
-        .status = .unsupported,
+        .status = .hardcoded,
         .note =
-        \\\ TODO: Low Priority 
-        \\\ Look into the future plan for this feature, why not revert it? 
-        \\\ Replaced by `libsecp256k1_fail_on_bad_count2`.
-        \\\ Not implemented in any client.
+        \\ TODO: Low Priority
+        \\ Inactive on all clusters.
+        \\ Hardcoded for compatibility.
+        \\ Marked as hardcoded for fuzzing in solfuzz-agave and firedancer.
+        \\ Why not remove this from hardcoded features for fuzzing and mark reverted?  
         ,
     },
     .{
@@ -344,7 +345,7 @@
     .{
         .name = "cap_accounts_data_len",
         .pubkey = "capRxUrBjNkkCpjrJxPGfPaWijB7q3JoDfsWXAnt46r",
-        .description = "TODO: Add description",
+        .description = "",
         .status = .reverted,
     },
     .{
@@ -380,7 +381,7 @@
     .{
         .name = "stake_redelegate_instruction",
         .pubkey = "2KKG3C6RBnxQo9jVVrbzsoSh41TDXLK7gBc9gduyxSzW",
-        .description = "TODO: Add description",
+        .description = "",
         .status = .reverted,
     },
     .{
@@ -545,17 +546,22 @@
         .description = "Raise minimum stake delegation to 1.0 SOL #24357",
         .status = .unsupported,
         .note =
-        \\\ TODO: Low Priority
-        \\\ Look into the future plan for this feature, as it has been staged for a long time.
-        \\\ Noted in agave as a 'feature proposal feature id'. 
-        \\\ Not referenced in any client.
+        \\ TODO: Low Priority
+        \\ Inactive on all clusters.
+        \\ Noted in agave as a 'feature proposal feature id'.
+        \\ Why not remove or mark reverted? What does a 'feature proposal feature id' mean? 
         ,
     },
     .{
         .name = "stake_minimum_delegation_for_rewards",
         .pubkey = "G6ANXD6ptCSyNd9znZm7j4dEczAJCfx7Cy43oBx3rKHJ",
-        .description = "TODO: Add description",
+        .description = "Stakes must be at least the minimum delegation to earn rewards",
         .status = .supported,
+        .note =
+        \\ TODO: Low Priority
+        \\ This feature has never been activated and there is not plan for activation.
+        \\ Why not remove tor mark reverted? 
+        ,
     },
     .{
         .name = "add_set_compute_unit_price_ix",
@@ -632,7 +638,7 @@
     .{
         .name = "cap_accounts_data_size_per_block",
         .pubkey = "qywiJyZmqTKspFg2LeuUHqcA5nNvBgobqb9UprywS9N",
-        .description = "TODO: Add description",
+        .description = "",
         .status = .reverted,
     },
     .{
@@ -818,13 +824,13 @@
     .{
         .name = "drop_merkle_shreds",
         .pubkey = "84zy5N23Q9vTZuLc9h1HWUtyM9yCFV2SCmyP9W9C3yHZ",
-        .description = "TODO: Add description",
+        .description = "",
         .status = .reverted,
     },
     .{
         .name = "keep_merkle_shreds",
         .pubkey = "HyNQzc7TMNmRhpVHXqDGjpsHzeQie82mDQXSF9hj7nAH",
-        .description = "TODO: Add description",
+        .description = "",
         .status = .reverted,
     },
     .{
@@ -845,9 +851,8 @@
         .description = "add big_mod_exp syscall #28503",
         .status = .unsupported,
         .note =
-        \\\ TODO: Medium Priority
-        \\\ Look into the future plan for this feature, as it has been staged for a long time.
-        \\\ Implemented in agave, but not firedancer.
+        \\ TODO: Low Priority
+        \\ Not scheduled for activation.
         ,
     },
     .{
@@ -901,7 +906,7 @@
     .{
         .name = "bpf_account_data_direct_mapping",
         .pubkey = "AjX3A4Nv2rzUuATEUWLP4rrBaBropyUnHxEvFDj1dKbx",
-        .description = "TODO: Add description",
+        .description = "",
         .status = .reverted,
     },
     .{
@@ -931,7 +936,7 @@
     .{
         .name = "include_loaded_accounts_data_size_in_fee_calculation",
         .pubkey = "EaQpmC6GtRssaZ3PCUM5YksGqUdMLeZ46BQXYtHYakDS",
-        .description = "TODO: Add description",
+        .description = "",
         .status = .reverted,
     },
     .{
@@ -1003,8 +1008,12 @@
     .{
         .name = "remaining_compute_units_syscall_enabled",
         .pubkey = "5TuppMutoyzhUSfuYdhgzD47F92GL1g89KpCZQKqedxP",
-        .description = "TODO: Add description",
+        .description = "enable the remaining_compute_units syscall",
         .status = .supported,
+        .note =
+        \\ TODO: Low Priority
+        \\ Remove implementation and mark reverted
+        ,
     },
     .{
         .name = "enable_loader_v4",
@@ -1033,7 +1042,7 @@
     .{
         .name = "programify_feature_gate_program",
         .pubkey = "8GdovDzVwWU5edz2G697bbB7GZjrUc6aQZLWyNNAtHdg",
-        .description = "TODO: Add description",
+        .description = "",
         .status = .reverted,
     },
     .{
@@ -1078,9 +1087,8 @@
         .description = "enable Zk Token proof program transfer with fee",
         .status = .unsupported,
         .note =
-        \\\ TODO: Low Priority
-        \\\ Look into the future plan for this feature, as it has been staged for a long time.
-        \\\ Not implemented in any client.
+        \\ TODO: Low Priority
+        \\ Not scheduled for activation.
         ,
     },
     .{
@@ -1128,7 +1136,7 @@
     .{
         .name = "deprecate_executable_meta_update_in_bpf_loader",
         .pubkey = "k6uR1J9VtKJnTukBV2Eo15BEy434MBg8bT6hHQgmU8v",
-        .description = "TODO: Add description",
+        .description = "",
         .status = .reverted,
     },
     .{
@@ -1137,9 +1145,8 @@
         .description = "Enable zk token proof program to read proof from accounts instead of instruction data #34750",
         .status = .unsupported,
         .note =
-        \\\ TODO: Low Priority
-        \\\ Look into the future plan for this feature, as it has been staged for a long time.
-        \\\ Not implemented in any client.
+        \\ TODO: Low Priority
+        \\ Not scheduled for activation.
         ,
     },
     .{
@@ -1201,11 +1208,6 @@
         .pubkey = "chaie9S2zVfuxJKNRGkyTDokLwWxx6kD2ZLsqQHaDD8",
         .description = "generate duplicate proofs for chained merkle root conflicts",
         .status = .supported,
-        .note =
-        \\\ TODO: Low Priority
-        \\\ Consider cleanup.
-        \\\ Not referenced in agave or firedancer.
-        ,
     },
     .{
         .name = "simplify_alt_bn128_syscall_error_codes",
@@ -1264,11 +1266,12 @@
     .{
         .name = "disable_sbpf_v0_execution",
         .pubkey = "XTestFeature1111111111111111111111111111111",
-        .description = "TODO: Add description",
+        .description = "SIMD-0161: Disables execution of SBPFv0 programs",
         .status = .supported,
         .note =
-        \\\ TODO: Medium Priority
-        \\\ Look into feature key difference between clients.
+        \\ TODO: Low Priority
+        \\ Why is this keyed differently in firedancer and agave?
+        \\ Current key synced with firedancer.
         ,
     },
     .{
@@ -1292,8 +1295,13 @@
     .{
         .name = "enable_sbpf_v3_deployment_and_execution",
         .pubkey = "5cC3foj77CWun58pC51ebHFUWavHWKarWyR5UUik7dnC",
-        .description = "TODO: Add description",
-        .status = .supported,
+        .description = "SIMD-0178, SIMD-0189 and SIMD-0377: Enable deployment and execution of SBPFv3 programs",
+        .status = .unsupported,
+        .note =
+        \\ TODO: High priority
+        \\ Pending devnet activation.
+        \\ Implement SIMD-0178, SIMD-0189 and SIMD-0377: Enable deployment and execution of SBPFv3
+        ,
     },
     .{
         .name = "migrate_feature_gate_program_to_core_bpf",
@@ -1346,7 +1354,7 @@
     .{
         .name = "lift_cpi_caller_restriction",
         .pubkey = "HcW8ZjBezYYgvcbxNJwqv1t484Y2556qJsfNDWvJGZRH",
-        .description = "TODO: Add description",
+        .description = "",
         .status = .reverted,
     },
     .{
@@ -1391,9 +1399,9 @@
         .description = "SIMD-0286: Raise block limit to 100M",
         .status = .unsupported,
         .note =
-        \\\ TODO: Medium Priority
-        \\\ Requires the cost tracker for correct implementation.
-        \\\ Implemented in agave and firedancer.
+        \\ TODO: Low Priority
+        \\ Not scheduled for activation.
+        \\ Requires the cost tracker for correct implementation.
         ,
     },
     .{
@@ -1432,20 +1440,21 @@
         .description = "Verify retransmitter signature #1840",
         .status = .unsupported,
         .note =
-        \\\ TODO: Medium Priority
-        \\\ Implement or justify why not at this time.
-        \\\ Implemented in agave, but not firedancer.
+        \\ TODO: Low Priority
+        \\ Not scheduled for activation.
         ,
     },
     .{
         .name = "enable_turbine_extended_fanout_experiments",
         .pubkey = "turbRpTzBzDU6PJmWvRTbcJXXGxUs19CvQamUrRD9bN",
         .description = "enable turbine extended fanout experiments #",
-        .status = .unsupported,
+        .status = .hardcoded,
         .note =
-        \\\ TODO: Low Priority
-        \\\ Look into the future plan for this feature.
-        \\\ Not implemented in any client.
+        \\ TODO: Low Priority
+        \\ Inactive on all clusters.
+        \\ Hardcoded for compatibility.
+        \\ Marked as hardcoded for fuzzing in solfuzz-agave, but not in firedancer.
+        \\ Why not remove this from hardcoded features for fuzzing and mark reverted? 
         ,
     },
     .{
@@ -1454,9 +1463,8 @@
         .description = "vote only on retransmitter signed fec sets",
         .status = .unsupported,
         .note =
-        \\\ TODO: Low Priority
-        \\\ Look into the future plan for this feature.
-        \\\ Not implemented in any client.
+        \\ TODO: Low Priority
+        \\ Not scheduled for activation.
         ,
     },
     .{
@@ -1474,7 +1482,7 @@
     .{
         .name = "reenable_zk_elgamal_proof_program",
         .pubkey = "zkexuyPRdyTVbZqEAREueqL2xvvoBhRgth9xGSc1tMN",
-        .description = "TODO: Add description",
+        .description = "Re-enables zk-elgamal-proof program",
         .status = .supported,
     },
     .{
@@ -1507,10 +1515,8 @@
         .description = "SIMD-0204: Slashable event verification",
         .status = .unsupported,
         .note =
-        \\\ TODO: Low priority. 
-        \\\ Look into the future plan for this feature.
-        \\\ Failure will occur on the activation boundary, but restart will be possible.
-        \\\ Implemented in both agave and firedancer.
+        \\ TODO: Low priority. 
+        \\ Not scheduled for activation.
         ,
     },
     .{
@@ -1522,29 +1528,32 @@
     .{
         .name = "syscall_parameter_address_restrictions",
         .pubkey = "EDGMC5kxFxGk4ixsNkGt8bW7QL5hDMXnbwaZvYMwNfzF",
-        .description = "TODO: Add description",
+        .description = "SIMD-0459: Syscall Parameter Address Restrictions",
         .status = .unsupported,
         .note =
-        \\\ TODO: High Priority. 
-        \\\ Implement or justify why not at this time. 
-        \\\ Implemented in both agave and firedancer.
+        \\ TODO: High Priority 
+        \\ Pending devnet activation.
         ,
     },
     .{
         .name = "virtual_address_space_adjustments",
         .pubkey = "7VgiehxNxu53KdxgLspGQY8myE6f7UokaWa4jsGcaSz",
-        .description = "TODO: Add description",
-        .status = .supported,
+        .description = "SIMD-0460: Virtual Address Space Adjustments",
+        .status = .unsupported,
         .note =
-        \\\ TODO: Medium Priority.
-        \\\ Check implementation, this was ported from 'stricter_abi_and_runtime_constraints' and
-        \\\ needs a once over to ensure correctness in regions not currently hit by fuzzing.
+        \\ TODO: High Priority 
+        \\ Pending testnet activation.
+        \\ Implementation has been complete for some time, it is being temporarily reverted to unsupported to 
+        \\ because it needs to be audited and reactivated on octane. It is currently not hardcoded for fuzzing in 
+        \\ firedancer or agave so can be switched off to restrict fuzzing in octane until audit and local fuzzing is
+        \\ completed. The current implementation was ported from our previous implementation of 'stricter_abi_and_runtime_constraints' and
+        \\ needs a once over to ensure correctness.
         ,
     },
     .{
         .name = "account_data_direct_mapping",
         .pubkey = "CR3dVN2Yoo95Y96kLSTaziWDAQT2MNEpiWh5cqVq2pNE",
-        .description = "TODO: Add description",
+        .description = "enable account data direct mapping",
         .status = .supported,
     },
     .{
@@ -1628,12 +1637,12 @@
     .{
         .name = "bls_pubkey_management_in_vote_account",
         .pubkey = "AnAP9zPV4KL7czAPQbFhpDKV2tx7g4UGNbK9wvXwjaRo",
-        .description = "TODO: Add description",
+        .description = "SIMD-0387: BLS Pubkey Management in Vote Account",
         .status = .unsupported,
         .note =
-        \\\ TODO: High Priority.
-        \\\ Implement or justify why not at this time.
-        \\\ Implemented in both agave and firedancer.
+        \\ TODO: Low Priority
+        \\ Not currently scheduled for activation.
+        \\ Implement as part of alpenglow in v2.
         ,
     },
     .{
@@ -1645,56 +1654,52 @@
     .{
         .name = "remove_simple_vote_from_cost_model",
         .pubkey = "2GCrNXbzmt4xrwdcKS2RdsLzsgu4V5zHAemW57pcHT6a",
-        .description = "TODO: Add description",
+        .description = "stop use static SimpleVote transaction cost, issue #10227",
         .status = .supported,
         .note =
-        \\\ TODO: Medium Priority.
-        \\\ Check implementation.
-        \\\ At the surface level our implementation appears insufficient.
+        \\ TODO: High Priority
+        \\ Scheduled for mainnet activation.
+        \\ Review implementation with a focus on areas not hit by fuzzing.
         ,
     },
     .{
         .name = "limit_instruction_accounts",
         .pubkey = "6aHuNsUmwSzCEMjrBzBCYaxHAyAcQBjVES92JigHBDuC",
-        .description = "TODO: Add description",
+        .description = "SIMD-0406: Maximum instruction accounts",
         .status = .unsupported,
         .note =
-        \\\ TODO: High Priority.
-        \\\ Implement or justify why not at this time.
-        \\\ Implemented in both agave and firedancer.
+        \\ TODO: Medium Priority
+        \\ Not scheduled for activation.
+        \\ Run local fuzzing on implementation before marking as supported.
         ,
     },
     .{
         .name = "validator_admission_ticket",
         .pubkey = "VAT9huvhPjRN9cyrPytq9rwvEJ3J4ADtjdncgZRyANJ",
-        .description = "TODO: Add description",
+        .description = "SIMD-0357: Alpenglow VAT implementation",
         .status = .unsupported,
         .note =
-        \\\ TODO: High Priority.
-        \\\ Implement or justify why not at this time.
-        \\\ Implemented in both agave and firedancer.
+        \\ TODO: Low Priority.
+        \\ Not scheduled for activation.
+        \\ Implement as part of alpenglow in v2.
         ,
     },
     .{
         .name = "discard_unexpected_data_complete_shreds",
         .pubkey = "dcomRRWHXP1FVWPqi9Mm4oxJhF4ehC795SvAtUdA9os",
-        .description = "TODO: Add description",
+        .description = "SIMD-0337: Markers for Alpenglow Fast Leader Handover, DATA_COMPLETE_SHRED placement rules",
         .status = .unsupported,
         .note =
-        \\\ TODO: High Priority.
-        \\\ Implement or justify why not at this time.
-        \\\ Implemented in both agave and firedancer.
+        \\ TODO: Low Priority.
+        \\ Not scheduled for activation.
+        \\ Implement as part of alpenglow in v2.
         ,
     },
     .{
         .name = "create_account_allow_prefund",
         .pubkey = "6sPDzwyARRExKH52LECxcGoqziH8G7SZofwuxi8Ja331",
-        .description = "TODO: Add description",
+        .description = "SIMD-0312: Enable CreateAccountAllowPrefund system program instruction",
         .status = .supported,
-        .note =
-        \\\ TODO: Medium Priority.
-        \\\ Check implementation.
-        ,
     },
     .{
         .name = "replace_spl_token_with_p_token",
@@ -1705,36 +1710,33 @@
     .{
         .name = "delay_commission_updates",
         .pubkey = "76dHtohc2s5dR3ahJyBxs7eJJVipFkaPdih9CLgTTb4B",
-        .description = "TODO: Add description",
+        .description = "SIMD-0249: Delay Commission Updates",
         .status = .supported,
         .note =
-        \\\ TODO: High Priority.
-        \\\ Check implementation.
-        \\\ Only branchees in vote program execute are implemented, while 
-        \\\ agave and firedancer branch in multiple other locations as well.
-        \\\ We must ensure correctness in areas not currently hit by fuzzing.
+        \\ TODO: High Priority.
+        \\ Scheduled for mainnet activation.
+        \\ Review implementation with a focus on areas not hit by fuzzing.
         ,
     },
     .{
         .name = "validate_chained_block_id",
         .pubkey = "vcmrbYbiMVKaq1snKP6eCacNDcr6qZvpCNUjmk6gxvZ",
-        .description = "TODO: Add description",
+        .description = "SIMD-0340: Validate chained block ID",
         .status = .unsupported,
         .note =
-        \\\ TODO: Medium Priority.
-        \\\ Implement or justify why not at this time.
-        \\\ Implemented in agave, but not firedancer.
+        \\ TODO: High Priority.
+        \\ Pending mainnet activation.
         ,
     },
     .{
         .name = "upgrade_bpf_stake_program_to_v5",
         .pubkey = "STk5Xj8hdAx3sTzmtJ3QysKkq6X2A3yj73JtxttiRyk",
-        .description = "TODO: Add description",
+        .description = "SIMD-0490: Upgrade BPF Stake Program to v5.0.0",
         .status = .supported,
         .note =
-        \\\ TODO: High Priority.
-        \\\ Check implementation.
-        \\\ There is a single reference which is likely incorrect.
+        \\ TODO: High Priority.
+        \\ Review implementation.
+        \\ Scheduled for mainnet activation.
         ,
     },
     .{
@@ -1743,9 +1745,8 @@
         .description = "TODO: Add description",
         .status = .unsupported,
         .note =
-        \\\ TODO: High Priority.
-        \\\ Implement or justify why not at this time.
-        \\\ Implemented in both agave and firedancer
+        \\ TODO: Low Priority.
+        \\ Not scheduled for activation.
         ,
     },
     .{
