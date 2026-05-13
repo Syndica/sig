@@ -243,7 +243,7 @@ pub const DownloadRace = struct {
 
 // TODO: can be unified with ProbeConn in some way, combine all state.
 pub const DownloadConn = struct {
-    /// Similar to ProvbeConn's gen. Used to prevent a late-arriving CQE for this DownloadConn when
+    /// Similar to `ProbeConn`'s gen. Used to prevent a late-arriving CQE for this DownloadConn when
     /// the original peer's download was abandoned from overwritting the new peer it's now representing (i.e generations don't match).
     gen: u16,
     /// Current lifecycle in the snapshot download for this particular peer.
@@ -299,7 +299,7 @@ pub const DownloadConn = struct {
         recv_len: u16,
         /// Start of the HTTP body bytes in `recv_buf`.
         extra_body_start: u16,
-        /// End of the HTTP body bytes in `recv_buf`.
+        /// Number of extra HTTP body bytes already buffered in `recv_buf`.
         extra_body_len: u16,
     };
 
@@ -423,7 +423,11 @@ pub const DownloadConn = struct {
         return &active.phase.reading_headers;
     }
 
-    fn enterWritingExtra(self: *DownloadConn, body_start: u16, extra_len: u16) *DownloadWritingExtra {
+    fn enterWritingExtra(
+        self: *DownloadConn,
+        body_start: u16,
+        extra_len: u16,
+    ) *DownloadWritingExtra {
         const active = &self.lifecycle.active;
         switch (active.phase) {
             .reading_headers => |state| {
@@ -464,7 +468,11 @@ pub const DownloadConn = struct {
             .writing_extra,
             .waiting_readable,
             .splicing_out,
-            => active.phase = .{ .splicing_in = .{ .op = undefined } },
+            => active.phase = .{
+                .splicing_in = .{
+                    .op = undefined,
+                },
+            },
             .splicing_in => {},
             else => unreachable,
         }
@@ -634,6 +642,7 @@ pub const Metrics = struct {
     io_uring_timeouts_total: tel.Counter,
     io_uring_cqe_batch_fulls_total: tel.Counter,
 
+    // TODO: likely remove these, mostly used for debugging.
     snapshot_io_latency_probe_connect: tel.Histogram,
     snapshot_io_latency_probe_send: tel.Histogram,
     snapshot_io_latency_probe_recv: tel.Histogram,
@@ -682,7 +691,10 @@ pub const Metrics = struct {
         var config: tel.metric.FieldsConfig(Metrics) = .{};
         for (@typeInfo(Metrics).@"struct".fields) |field| {
             if (field.type == tel.Histogram) {
-                @field(config, field.name) = .{ .id_override = null, .upper_bounds = IO_LATENCY_BOUNDS };
+                @field(config, field.name) = .{
+                    .id_override = null,
+                    .upper_bounds = IO_LATENCY_BOUNDS,
+                };
             }
         }
         break :blk config;
@@ -831,14 +843,20 @@ pub const Downloader = struct {
                 self.metrics.snapshot_sources_new.increment(1);
 
                 self.startProbe(key, gop.value_ptr) catch |err| {
-                    self.logger.warn().logf("failed to start probe from={f} err={}", .{ source.from, err });
+                    self.logger.warn().logf(
+                        "failed to start probe from={f} err={}",
+                        .{ source.from, err },
+                    );
                 };
             } else if (!gop.value_ptr.eql(value)) {
                 gop.value_ptr.* = value;
 
                 // when a peer's slot/hash changes, start a new probe.
                 self.startProbe(key, gop.value_ptr) catch |err| {
-                    self.logger.warn().logf("failed to start probe from={f} err={}", .{ source.from, err });
+                    self.logger.warn().logf(
+                        "failed to start probe from={f} err={}",
+                        .{ source.from, err },
+                    );
                 };
 
                 self.logger.debug().logf(
@@ -916,11 +934,17 @@ pub const Downloader = struct {
         std.debug.assert(data.index < self.probe_conns.len);
         const probe = &self.probe_conns[data.index];
         if (probe.isUnused()) {
-            self.logger.warn().logf("stale cqe for unused probe slot op={s} idx={d}", .{ @tagName(data.op), data.index });
+            self.logger.warn().logf(
+                "stale cqe for unused probe slot op={s} idx={d}",
+                .{ @tagName(data.op), data.index },
+            );
             return null;
         }
         if (probe.gen != data.gen) {
-            self.logger.warn().logf("stale probe cqe op={s} idx={d}", .{ @tagName(data.op), data.index });
+            self.logger.warn().logf(
+                "stale probe cqe op={s} idx={d}",
+                .{ @tagName(data.op), data.index },
+            );
             return null;
         }
         return probe;
@@ -1099,7 +1123,10 @@ pub const Downloader = struct {
         const probe = self.getProbeForCqe(data) orelse return;
         const active = probe.activePtr() orelse return;
         if (probe.lifecycle.active.phase != .connecting) {
-            self.logger.warn().logf("unexpected connect cqe from={f} phase={s}", .{ active.from, probe.phaseName() });
+            self.logger.warn().logf(
+                "unexpected connect cqe from={f} phase={s}",
+                .{ active.from, probe.phaseName() },
+            );
             return;
         }
         const connecting = &probe.lifecycle.active.phase.connecting;
@@ -1111,7 +1138,10 @@ pub const Downloader = struct {
             return;
         }
         if (cqe.err() != .SUCCESS) {
-            self.logger.debug().logf("probe connect failed from={f} err={s}", .{ active.from, @tagName(cqe.err()) });
+            self.logger.debug().logf(
+                "probe connect failed from={f} err={s}",
+                .{ active.from, @tagName(cqe.err()) },
+            );
             self.finishProbe(data.index, .failed);
             self.probeNextPending();
             return;
@@ -1132,7 +1162,10 @@ pub const Downloader = struct {
         const probe = self.getProbeForCqe(data) orelse return;
         const active = probe.activePtr() orelse return;
         if (probe.lifecycle.active.phase != .sending) {
-            self.logger.warn().logf("unexpected send cqe from={f} phase={s}", .{ active.from, probe.phaseName() });
+            self.logger.warn().logf(
+                "unexpected send cqe from={f} phase={s}",
+                .{ active.from, probe.phaseName() },
+            );
             return;
         }
         const sending = &probe.lifecycle.active.phase.sending;
@@ -1144,7 +1177,10 @@ pub const Downloader = struct {
             return;
         }
         if (cqe.err() != .SUCCESS) {
-            self.logger.debug().logf("probe send failed from={f} err={s}", .{ active.from, @tagName(cqe.err()) });
+            self.logger.debug().logf(
+                "probe send failed from={f} err={s}",
+                .{ active.from, @tagName(cqe.err()) },
+            );
             self.finishProbe(data.index, .failed);
             self.probeNextPending();
             return;
@@ -1177,7 +1213,10 @@ pub const Downloader = struct {
         const probe = self.getProbeForCqe(data) orelse return;
         const active = probe.activePtr() orelse return;
         if (probe.lifecycle.active.phase != .receiving) {
-            self.logger.warn().logf("unexpected recv cqe from={f} phase={s}", .{ active.from, probe.phaseName() });
+            self.logger.warn().logf(
+                "unexpected recv cqe from={f} phase={s}",
+                .{ active.from, probe.phaseName() },
+            );
             return;
         }
         const receiving = &probe.lifecycle.active.phase.receiving;
@@ -1189,7 +1228,10 @@ pub const Downloader = struct {
             return;
         }
         if (cqe.err() != .SUCCESS) {
-            self.logger.warn().logf("probe recv failed from={f} err={s}", .{ active.from, @tagName(cqe.err()) });
+            self.logger.warn().logf(
+                "probe recv failed from={f} err={s}",
+                .{ active.from, @tagName(cqe.err()) },
+            );
             self.finishProbe(data.index, .failed);
             self.probeNextPending();
             return;
@@ -1227,7 +1269,10 @@ pub const Downloader = struct {
         const status_line = response[0..status_end];
         const ok = std.mem.indexOf(u8, status_line, "200") != null;
         if (!ok) {
-            self.logger.warn().logf("probe recv bad status from={f} status={s}", .{ active.from, status_line });
+            self.logger.warn().logf(
+                "probe recv bad status from={f} status={s}",
+                .{ active.from, status_line },
+            );
             self.finishProbe(data.index, .failed);
             self.probeNextPending();
             return;
@@ -1250,7 +1295,15 @@ pub const Downloader = struct {
             }
         }
 
-        self.logger.debug().logf("probe succeeded from={f} addr={f} latency={d}ms content_len={d}", .{ active.from, active.addr, latency_ms, content_len });
+        self.logger.debug().logf(
+            "probe succeeded from={f} addr={f} latency={d}ms content_len={d}",
+            .{
+                active.from,
+                active.addr,
+                latency_ms,
+                content_len,
+            },
+        );
 
         // Finish out the probe before moving peer info onto download phase.
         const candidate = DownloadCandidate{
@@ -1314,14 +1367,21 @@ pub const Downloader = struct {
         for (keys, values) |*addr, *peer| {
             if (peer.probe_status == .pending) {
                 self.startProbe(addr.*, peer) catch |err| {
-                    self.logger.warn().logf("failed to start pending probe from={f} err={}", .{ peer.from, err });
+                    self.logger.warn().logf(
+                        "failed to start pending probe from={f} err={}",
+                        .{ peer.from, err },
+                    );
                 };
                 return;
             }
         }
     }
 
-    fn handleDownloadTimeout(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadTimeout(
+        self: *Downloader,
+        data: UserData,
+        cqe: std.os.linux.io_uring_cqe,
+    ) void {
         std.debug.assert(data.index < self.download_conns.len);
         const conn = &self.download_conns[data.index];
 
@@ -1348,9 +1408,14 @@ pub const Downloader = struct {
                 });
             },
             else => {
-                self.logger.warn().logf("unexpected download timeout err from={f} err={s} res={d}", .{
-                    active.from, @tagName(cqe.err()), cqe.res,
-                });
+                self.logger.warn().logf(
+                    "unexpected download timeout err from={f} err={s} res={d}",
+                    .{
+                        active.from,
+                        @tagName(cqe.err()),
+                        cqe.res,
+                    },
+                );
             },
         }
     }
@@ -1360,22 +1425,35 @@ pub const Downloader = struct {
         const conn = &self.download_conns[data.index];
         if (conn.isUnused()) {
             // TODO: likely remove these logs due to noise.
-            self.logger.debug().logf("stale cqe for unused download slot op={s} idx={d}", .{ @tagName(data.op), data.index });
+            self.logger.debug().logf(
+                "stale cqe for unused download slot op={s} idx={d}",
+                .{ @tagName(data.op), data.index },
+            );
             return null;
         }
         if (conn.gen != data.gen) {
             // TODO: likely remove these logs due to noise.
-            self.logger.debug().logf("stale download cqe op={s} idx={d}", .{ @tagName(data.op), data.index });
+            self.logger.debug().logf(
+                "stale download cqe op={s} idx={d}",
+                .{ @tagName(data.op), data.index },
+            );
             return null;
         }
         return conn;
     }
 
-    fn handleDownloadConnect(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadConnect(
+        self: *Downloader,
+        data: UserData,
+        cqe: std.os.linux.io_uring_cqe,
+    ) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         const active = conn.activePtr() orelse return;
         if (conn.lifecycle.active.phase != .connecting) {
-            self.logger.warn().logf("unexpected download connect cqe from={f} phase={s}", .{ active.from, conn.phaseName() });
+            self.logger.warn().logf(
+                "unexpected download connect cqe from={f} phase={s}",
+                .{ active.from, conn.phaseName() },
+            );
             return;
         }
         const connecting = &conn.lifecycle.active.phase.connecting;
@@ -1386,7 +1464,10 @@ pub const Downloader = struct {
             return;
         }
         if (cqe.err() != .SUCCESS) {
-            self.logger.warn().logf("download connect failed from={f} err={s}", .{ active.from, @tagName(cqe.err()) });
+            self.logger.warn().logf(
+                "download connect failed from={f} err={s}",
+                .{ active.from, @tagName(cqe.err()) },
+            );
             self.finishDownload(data.index, .failed);
             self.startPendingRacers();
             return;
@@ -1405,11 +1486,18 @@ pub const Downloader = struct {
         };
     }
 
-    fn handleDownloadSend(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadSend(
+        self: *Downloader,
+        data: UserData,
+        cqe: std.os.linux.io_uring_cqe,
+    ) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         const active = conn.activePtr() orelse return;
         if (conn.lifecycle.active.phase != .sending) {
-            self.logger.warn().logf("unexpected download send cqe from={f} phase={s}", .{ active.from, conn.phaseName() });
+            self.logger.warn().logf(
+                "unexpected download send cqe from={f} phase={s}",
+                .{ active.from, conn.phaseName() },
+            );
             return;
         }
         const sending = &conn.lifecycle.active.phase.sending;
@@ -1420,7 +1508,10 @@ pub const Downloader = struct {
             return;
         }
         if (cqe.err() != .SUCCESS) {
-            self.logger.warn().logf("download send failed from={f} err={s}", .{ active.from, @tagName(cqe.err()) });
+            self.logger.warn().logf(
+                "download send failed from={f} err={s}",
+                .{ active.from, @tagName(cqe.err()) },
+            );
             self.finishDownload(data.index, .failed);
             self.startPendingRacers();
             return;
@@ -1450,11 +1541,18 @@ pub const Downloader = struct {
         };
     }
 
-    fn handleDownloadRecvHeaders(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadRecvHeaders(
+        self: *Downloader,
+        data: UserData,
+        cqe: std.os.linux.io_uring_cqe,
+    ) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         const active = conn.activePtr() orelse return;
         if (conn.lifecycle.active.phase != .reading_headers) {
-            self.logger.warn().logf("unexpected download recv_headers cqe from={f} phase={s}", .{ active.from, conn.phaseName() });
+            self.logger.warn().logf(
+                "unexpected download recv_headers cqe from={f} phase={s}",
+                .{ active.from, conn.phaseName() },
+            );
             return;
         }
         const reading_headers = &conn.lifecycle.active.phase.reading_headers;
@@ -1465,7 +1563,10 @@ pub const Downloader = struct {
             return;
         }
         if (cqe.err() != .SUCCESS) {
-            self.logger.warn().logf("download recv_headers failed from={f} err={s}", .{ active.from, @tagName(cqe.err()) });
+            self.logger.warn().logf(
+                "download recv_headers failed from={f} err={s}",
+                .{ active.from, @tagName(cqe.err()) },
+            );
             self.finishDownload(data.index, .failed);
             self.startPendingRacers();
             return;
@@ -1504,7 +1605,10 @@ pub const Downloader = struct {
         const status_end = std.mem.indexOf(u8, response[0..header_end], "\r\n") orelse header_end;
         const status_line = response[0..status_end];
         if (std.mem.indexOf(u8, status_line, "200") == null) {
-            self.logger.warn().logf("download bad status from={f} status={s}", .{ active.from, status_line });
+            self.logger.warn().logf(
+                "download bad status from={f} status={s}",
+                .{ active.from, status_line },
+            );
             self.finishDownload(data.index, .failed);
             self.startPendingRacers();
             return;
@@ -1512,15 +1616,19 @@ pub const Downloader = struct {
 
         // Parse and verify Content-Length matches the race target.
         const content_len = parseContentLength(response[0 .. header_end + 4]) orelse {
-            self.logger.warn().logf("download missing/zero content-length from={f}", .{active.from});
+            self.logger.warn().logf(
+                "download missing/zero content-length from={f}",
+                .{active.from},
+            );
             self.finishDownload(data.index, .failed);
             self.startPendingRacers();
             return;
         };
         if (content_len != active.content_len) {
-            self.logger.warn().logf("download content-length mismatch from={f} got={d} expected={d}", .{
-                active.from, content_len, active.content_len,
-            });
+            self.logger.warn().logf(
+                "download content-length mismatch from={f} got={d} expected={d}",
+                .{ active.from, content_len, active.content_len },
+            );
             self.finishDownload(data.index, .failed);
             self.startPendingRacers();
             return;
@@ -1554,17 +1662,27 @@ pub const Downloader = struct {
         }
     }
 
-    fn handleDownloadWriteExtra(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadWriteExtra(
+        self: *Downloader,
+        data: UserData,
+        cqe: std.os.linux.io_uring_cqe,
+    ) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         const active = conn.activePtr() orelse return;
         if (conn.lifecycle.active.phase != .writing_extra) {
-            self.logger.warn().logf("unexpected download write_extra cqe from={f} phase={s}", .{ active.from, conn.phaseName() });
+            self.logger.warn().logf(
+                "unexpected download write_extra cqe from={f} phase={s}",
+                .{ active.from, conn.phaseName() },
+            );
             return;
         }
         const writing_extra = &conn.lifecycle.active.phase.writing_extra;
 
         if (cqe.err() != .SUCCESS) {
-            self.logger.warn().logf("download write_extra failed from={f} err={s}", .{ active.from, @tagName(cqe.err()) });
+            self.logger.warn().logf(
+                "download write_extra failed from={f} err={s}",
+                .{ active.from, @tagName(cqe.err()) },
+            );
             self.finishDownload(data.index, .failed);
             self.startPendingRacers();
             return;
@@ -1606,11 +1724,18 @@ pub const Downloader = struct {
         };
     }
 
-    fn handleDownloadPollIn(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadPollIn(
+        self: *Downloader,
+        data: UserData,
+        cqe: std.os.linux.io_uring_cqe,
+    ) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         const active = conn.activePtr() orelse return;
         if (conn.lifecycle.active.phase != .waiting_readable) {
-            self.logger.warn().logf("unexpected download poll_in cqe from={f} phase={s}", .{ active.from, conn.phaseName() });
+            self.logger.warn().logf(
+                "unexpected download poll_in cqe from={f} phase={s}",
+                .{ active.from, conn.phaseName() },
+            );
             return;
         }
         const waiting_readable = &conn.lifecycle.active.phase.waiting_readable;
@@ -1621,7 +1746,10 @@ pub const Downloader = struct {
             return;
         }
         if (cqe.err() != .SUCCESS) {
-            self.logger.warn().logf("download poll_in failed from={f} err={s}", .{ active.from, @tagName(cqe.err()) });
+            self.logger.warn().logf(
+                "download poll_in failed from={f} err={s}",
+                .{ active.from, @tagName(cqe.err()) },
+            );
             self.finishDownload(data.index, .failed);
             self.startPendingRacers();
             return;
@@ -1640,11 +1768,18 @@ pub const Downloader = struct {
         };
     }
 
-    fn handleDownloadSpliceIn(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadSpliceIn(
+        self: *Downloader,
+        data: UserData,
+        cqe: std.os.linux.io_uring_cqe,
+    ) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         const active = conn.activePtr() orelse return;
         if (conn.lifecycle.active.phase != .splicing_in) {
-            self.logger.warn().logf("unexpected download splice_in cqe from={f} phase={s}", .{ active.from, conn.phaseName() });
+            self.logger.warn().logf(
+                "unexpected download splice_in cqe from={f} phase={s}",
+                .{ active.from, conn.phaseName() },
+            );
             return;
         }
         const splicing_in = &conn.lifecycle.active.phase.splicing_in;
@@ -1662,7 +1797,10 @@ pub const Downloader = struct {
             return;
         }
         if (cqe.err() != .SUCCESS) {
-            self.logger.warn().logf("download splice_in failed from={f} err={s}", .{ active.from, @tagName(cqe.err()) });
+            self.logger.warn().logf(
+                "download splice_in failed from={f} err={s}",
+                .{ active.from, @tagName(cqe.err()) },
+            );
             self.finishDownload(data.index, .failed);
             self.startPendingRacers();
             return;
@@ -1692,17 +1830,27 @@ pub const Downloader = struct {
         };
     }
 
-    fn handleDownloadSpliceOut(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
+    fn handleDownloadSpliceOut(
+        self: *Downloader,
+        data: UserData,
+        cqe: std.os.linux.io_uring_cqe,
+    ) void {
         const conn = self.getDownloadForCqe(data) orelse return;
         const active = conn.activePtr() orelse return;
         if (conn.lifecycle.active.phase != .splicing_out) {
-            self.logger.warn().logf("unexpected download splice_out cqe from={f} phase={s}", .{ active.from, conn.phaseName() });
+            self.logger.warn().logf(
+                "unexpected download splice_out cqe from={f} phase={s}",
+                .{ active.from, conn.phaseName() },
+            );
             return;
         }
         const splicing_out = &conn.lifecycle.active.phase.splicing_out;
 
         if (cqe.err() != .SUCCESS) {
-            self.logger.warn().logf("download splice_out failed from={f} err={s}", .{ active.from, @tagName(cqe.err()) });
+            self.logger.warn().logf(
+                "download splice_out failed from={f} err={s}",
+                .{ active.from, @tagName(cqe.err()) },
+            );
             self.finishDownload(data.index, .failed);
             self.startPendingRacers();
             return;
@@ -1759,7 +1907,10 @@ pub const Downloader = struct {
         const conn = self.getDownloadForCqe(data) orelse return;
         const active = conn.activePtr() orelse return;
         if (conn.lifecycle.active.phase != .fsyncing) {
-            self.logger.warn().logf("unexpected download fsync cqe from={f} phase={s}", .{ active.from, conn.phaseName() });
+            self.logger.warn().logf(
+                "unexpected download fsync cqe from={f} phase={s}",
+                .{ active.from, conn.phaseName() },
+            );
             return;
         }
         const fsyncing = &conn.lifecycle.active.phase.fsyncing;
@@ -1772,7 +1923,10 @@ pub const Downloader = struct {
         // with retry/re-download (local storage issue). So cancel all other running downloads as well as with winner's.
         // TODO: should we consider EINTR for retry?
         if (cqe.err() != .SUCCESS) {
-            self.logger.err().logf("download fsync failed from={f} err={s}", .{ active.from, @tagName(cqe.err()) });
+            self.logger.err().logf(
+                "download fsync failed from={f} err={s}",
+                .{ active.from, @tagName(cqe.err()) },
+            );
             race.phase = .failed;
             self.finishOtherDownloads(data.index);
             self.finishDownload(data.index, .failed);
@@ -1790,14 +1944,32 @@ pub const Downloader = struct {
         var tmp_buf: [std.fs.max_path_bytes:0]u8 = undefined;
         var final_buf: [std.fs.max_path_bytes:0]u8 = undefined;
 
-        const tmp_path = formatTempSnapshotPath(&tmp_buf, self.snapshot_dir, race.slot, race.hash, data.index, conn.gen);
+        const tmp_path = formatTempSnapshotPath(
+            &tmp_buf,
+            self.snapshot_dir,
+            race.slot,
+            race.hash,
+            data.index,
+            conn.gen,
+        );
         tmp_buf[tmp_path.len] = 0;
 
-        const final_path = formatFinalSnapshotPath(&final_buf, self.snapshot_dir, race.slot, race.hash);
+        const final_path = formatFinalSnapshotPath(
+            &final_buf,
+            self.snapshot_dir,
+            race.slot,
+            race.hash,
+        );
         final_buf[final_path.len] = 0;
 
-        std.posix.rename(tmp_buf[0..tmp_path.len :0], final_buf[0..final_path.len :0]) catch |err| {
-            self.logger.err().logf("download rename failed after fsync+close from={f} err={s}", .{ active.from, @errorName(err) });
+        std.posix.rename(
+            tmp_buf[0..tmp_path.len :0],
+            final_buf[0..final_path.len :0],
+        ) catch |err| {
+            self.logger.err().logf(
+                "download rename failed after fsync+close from={f} err={s}",
+                .{ active.from, @errorName(err) },
+            );
             race.phase = .failed;
             self.finishOtherDownloads(data.index);
             self.finishDownload(data.index, .failed);
@@ -2001,6 +2173,7 @@ pub const Downloader = struct {
         reading_headers.op = LinkedTimeoutOp.init(offset);
     }
 
+    /// handles HTTP edge case where the header recv can read past `\r\n\r\n` and already consume some snapshot body bytes into recv_buf.
     fn queueDownloadWriteExtra(self: *Downloader, data: UserData, written: u16) !void {
         const conn = &self.download_conns[data.index];
         const active = conn.activePtr() orelse unreachable;
@@ -2012,12 +2185,17 @@ pub const Downloader = struct {
 
         const sqe = try self.reserveSqe();
 
+        std.debug.assert(written <= writing_extra.extra_body_len);
+
         const buf_start = writing_extra.extra_body_start + written;
-        std.debug.assert(buf_start + (writing_extra.extra_body_len - written) <= writing_extra.recv_len);
+        const buf_end = writing_extra.extra_body_start + writing_extra.extra_body_len;
+
+        std.debug.assert(buf_start <= buf_end);
+        std.debug.assert(buf_end <= writing_extra.recv_len);
 
         sqe.prep_write(
             active.file_fd,
-            writing_extra.recv_buf[buf_start .. writing_extra.extra_body_start + writing_extra.extra_body_len],
+            writing_extra.recv_buf[buf_start..buf_end],
             active.bytes_written + written,
         );
         sqe.user_data = write_data.encode();
@@ -2143,7 +2321,14 @@ pub const Downloader = struct {
         // TODO: We create the temp path here, but don't store it anywhere. So need to recreate it again when the winner is declared. kinda cringe.
         conn.gen +%= 1;
         var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
-        const tmp_path = formatTempSnapshotPath(&path_buf, self.snapshot_dir, race.slot, race.hash, dl_index, conn.gen);
+        const tmp_path = formatTempSnapshotPath(
+            &path_buf,
+            self.snapshot_dir,
+            race.slot,
+            race.hash,
+            dl_index,
+            conn.gen,
+        );
         path_buf[tmp_path.len] = 0;
         const file_fd = try std.posix.openat(
             std.posix.AT.FDCWD,
@@ -2300,7 +2485,14 @@ fn parseContentLength(response: []const u8) ?u64 {
 
 /// Formats a temp download path:
 ///   {snapshot_dir}/snapshot-{slot}-{hash}.tar.zst.tmp.{index}.{gen}
-fn formatTempSnapshotPath(buf: []u8, snapshot_dir: []const u8, slot: Slot, hash: Hash, index: u8, gen: u16) []const u8 {
+fn formatTempSnapshotPath(
+    buf: []u8,
+    snapshot_dir: []const u8,
+    slot: Slot,
+    hash: Hash,
+    index: u8,
+    gen: u16,
+) []const u8 {
     var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
     const hash_str = hash.base58String(&hash_buf);
     return std.fmt.bufPrint(buf, "{s}/snapshot-{d}-{s}.tar.zst.tmp.{d}.{d}", .{

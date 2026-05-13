@@ -48,7 +48,12 @@ pub fn GossipNode(comptime Effects: type) type {
         }
 
         /// Sends snapshot sources from gossip to snapshot service
-        pub fn reportSnapshotSource(self: Effects, addr: std.net.Address, slot: Slot, hash: Hash) void {
+        pub fn reportSnapshotSource(
+            self: Effects,
+            addr: std.net.Address,
+            slot: Slot,
+            hash: Hash,
+        ) void {
             _ = .{ self, addr, slot, hash };
             return undefined;
         }
@@ -1000,13 +1005,22 @@ pub fn GossipNode(comptime Effects: type) type {
                     .duplicate_shred => {}, // TODO: send to shred/consensus service
                     .snapshot_hashes => |sh_data| {
                         const sh = sh_data.full;
-                        if (self.table.getPtr(.{ .from = key.from, .index = 0, .tag = .contact_info })) |v| {
+                        if (self.table.getPtr(.{
+                            .from = key.from,
+                            .index = 0,
+                            .tag = .contact_info,
+                        })) |v| {
                             var alloc_buf: [16 * 1024]u8 = undefined;
                             var fba = std.heap.FixedBufferAllocator.init(&alloc_buf);
                             var reader = std.Io.Reader.fixed(v.value[0..v.size]);
                             const ci_val = try bincode.read(&fba, &reader, GossipValue);
                             if (ci_val.data.contact_info.socket_map.get(.rpc)) |rpc_addr| {
-                                self.config.effects.reportSnapshotSource(key.from, rpc_addr, sh.slot, sh.hash);
+                                self.config.effects.reportSnapshotSource(
+                                    key.from,
+                                    rpc_addr,
+                                    sh.slot,
+                                    sh.hash,
+                                );
                             }
                         }
                     }, // TODO: send to snapshot service
@@ -1027,13 +1041,22 @@ pub fn GossipNode(comptime Effects: type) type {
                         // TODO: if ci.socket_map.get(.tpu_vote): send to consensus service
                         // TODO: if ci.socket_map.get(.rpc): send to snapshot service
                         if (ci.socket_map.get(.rpc)) |rpc_addr| {
-                            if (self.table.getPtr(.{ .from = key.from, .index = 0, .tag = .snapshot_hashes })) |v| {
+                            if (self.table.getPtr(.{
+                                .from = key.from,
+                                .index = 0,
+                                .tag = .snapshot_hashes,
+                            })) |v| {
                                 var alloc_buf: [16 * 1024]u8 = undefined;
                                 var fba = std.heap.FixedBufferAllocator.init(&alloc_buf);
                                 var reader = std.Io.Reader.fixed(v.value[0..v.size]);
                                 const sh_val = try bincode.read(&fba, &reader, GossipValue);
                                 const sh = sh_val.data.snapshot_hashes.full;
-                                self.config.effects.reportSnapshotSource(key.from, rpc_addr, sh.slot, sh.hash);
+                                self.config.effects.reportSnapshotSource(
+                                    key.from,
+                                    rpc_addr,
+                                    sh.slot,
+                                    sh.hash,
+                                );
                             }
                         }
                     },
