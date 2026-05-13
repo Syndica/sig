@@ -98,25 +98,53 @@ pub const BenchmarkSigVerify = struct {
 pub const BenchmarkPohHash = struct {
     pub const min_iterations = 5;
     pub const max_iterations = 1_000;
-    pub const name = "crypto.poh(25m hashes)";
+    pub const name = "crypto.poh";
 
-    const num_hashes = 25_000_000;
+    pub const BenchmarkInputs = struct {
+        count: usize,
+        name: []const u8,
+    };
 
-    pub fn repeat() !sig.time.Duration {
+    pub const inputs = [_]BenchmarkInputs{
+        .{ .count = 1, .name = "1 hash" },
+        .{ .count = 10, .name = "10 hashes" },
+        .{ .count = 100, .name = "100 hashes" },
+        .{ .count = 1_000, .name = "1k hashes" },
+        .{ .count = 10_000, .name = "10k hashes" },
+        .{ .count = 100_000, .name = "100k hashes" },
+        .{ .count = 1_000_000, .name = "1m hashes" },
+        .{ .count = 25_000_000, .name = "25m hashes" },
+    };
+
+    pub fn repeat(args: BenchmarkInputs) !sig.time.Duration {
         var input_hash: Hash = .ZEROES;
         var start = sig.time.Timer.start();
-        Hash.hashRepeated(&input_hash, &input_hash, num_hashes);
+        Hash.hashRepeated(&input_hash, &input_hash, args.count);
         std.mem.doNotOptimizeAway(&input_hash);
-        return start.read().div(num_hashes);
+        const elapsed = start.read().div(args.count);
+
+        var expected: Hash = .ZEROES;
+        for (0..args.count) |_| {
+            Sha256.hash(&expected.data, &expected.data, .{});
+        }
+        if (!std.mem.eql(u8, &input_hash.data, &expected.data)) return error.HashMismatch;
+
+        return elapsed;
     }
 
-    pub fn normal() !sig.time.Duration {
+    pub fn normal(args: BenchmarkInputs) !sig.time.Duration {
         var input_hash: Hash = .ZEROES;
         var start = sig.time.Timer.start();
-        for (0..num_hashes) |_| {
+        for (0..args.count) |_| {
             Sha256.hash(&input_hash.data, &input_hash.data, .{});
         }
         std.mem.doNotOptimizeAway(&input_hash);
-        return start.read().div(num_hashes);
+        const elapsed = start.read().div(args.count);
+
+        var expected: Hash = .ZEROES;
+        Hash.hashRepeated(&expected, &expected, args.count);
+        if (!std.mem.eql(u8, &input_hash.data, &expected.data)) return error.HashMismatch;
+
+        return elapsed;
     }
 };

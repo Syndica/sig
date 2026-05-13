@@ -43,6 +43,7 @@ pub fn redeemRewards(
     point_value: *const PointValue,
     stake_history: *const StakeHistory,
     new_rate_activation_epoch: ?Epoch,
+    commission_override: ?u8,
 ) !RedeemRewardResult {
     const calculated_stake_rewards = try calculateStakeRewards(
         epoch,
@@ -51,6 +52,7 @@ pub fn redeemRewards(
         vote_state,
         stake_history,
         new_rate_activation_epoch,
+        commission_override,
     ) orelse return error.NoCreditsToRedeem;
 
     stake.credits_observed = calculated_stake_rewards.new_credits_observed;
@@ -69,6 +71,7 @@ pub fn calculateStakeRewards(
     vote_state: *const VoteState,
     stake_history: *const StakeHistory,
     new_rate_activation_epoch: ?Epoch,
+    commission_override: ?u8,
 ) !?CalculatedStakeRewards {
     const calculated_stake_points = calculateStakePointsAndCredits(
         stake,
@@ -102,7 +105,8 @@ pub fn calculateStakeRewards(
         return null;
     }
 
-    const commission_split = commissionSplit(vote_state.commission(), rewards);
+    const comm = commission_override orelse vote_state.commission();
+    const commission_split = commissionSplit(comm, rewards);
 
     if (commission_split.leakedLamports()) {
         return null;
@@ -326,6 +330,7 @@ test redeemRewards {
             &.{ .rewards = 1_000_000_000, .points = 1 },
             &StakeHistory.INIT,
             null,
+            null,
         );
         try std.testing.expectError(error.NoCreditsToRedeem, rewards);
     }
@@ -340,6 +345,7 @@ test redeemRewards {
             &vote_state,
             &.{ .rewards = 1, .points = 1 },
             &StakeHistory.INIT,
+            null,
             null,
         );
         try std.testing.expectEqual(
@@ -374,6 +380,7 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
+            null,
         ),
     );
 
@@ -393,6 +400,7 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
+            null,
         ),
     );
 
@@ -410,6 +418,7 @@ test calculateStakeRewards {
             &.{ .rewards = 1, .points = 1 },
             &vote_state,
             &StakeHistory.INIT,
+            null,
             null,
         ),
     );
@@ -430,6 +439,7 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
+            null,
         ),
     );
 
@@ -447,6 +457,7 @@ test calculateStakeRewards {
             &.{ .rewards = 2, .points = 2 },
             &vote_state,
             &StakeHistory.INIT,
+            null,
             null,
         ),
     );
@@ -466,6 +477,7 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
+            null,
         ),
     );
 
@@ -479,6 +491,7 @@ test calculateStakeRewards {
             &.{ .rewards = 4, .points = 4 },
             &vote_state,
             &StakeHistory.INIT,
+            null,
             null,
         ),
     );
@@ -495,6 +508,7 @@ test calculateStakeRewards {
             &.{ .rewards = 0, .points = 4 },
             &vote_state,
             &StakeHistory.INIT,
+            null,
             null,
         ),
     );
@@ -513,6 +527,7 @@ test calculateStakeRewards {
             &.{ .rewards = 0, .points = 4 },
             &vote_state,
             &StakeHistory.INIT,
+            null,
             null,
         ),
     );
@@ -580,6 +595,7 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
+            null,
         ),
     );
 
@@ -598,6 +614,7 @@ test calculateStakeRewards {
             &.{ .rewards = 1, .points = 1 },
             &vote_state,
             &StakeHistory.INIT,
+            null,
             null,
         ),
     );
