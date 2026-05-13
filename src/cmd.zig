@@ -477,7 +477,7 @@ const Cmd = struct {
         .kind = .named,
         .name_override = "replay-threads",
         .alias = .none,
-        .default_value = 4,
+        .default_value = 8,
         .config = {},
         .help = "Number of threads to use in the replay thread pool. " ++
             "Set to 1 for fully synchronous execution of replay.",
