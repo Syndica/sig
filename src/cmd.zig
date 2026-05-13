@@ -1336,8 +1336,8 @@ const Cmd = struct {
                             \\PoH SHA-256 chain (verifyPoh-style) over them, then prints how long
                             \\the hashing took. The hash impl is selected at compile time:
                             \\
-                            \\  -Dcpu=znver4      uses SHA-NI inline asm
-                            \\  -Dcpu=znver4-sha  falls back to std.crypto.hash.sha2.Sha256
+                            \\  -Dcpu=native+sha+avx            uses SHA-NI inline asm
+                            \\  -Dcpu=native-sha -Dallow-no-sha falls back to the AVX vector impl
                             \\
                             \\Build twice with the two flags to compare latency.
                             ,
@@ -3058,7 +3058,8 @@ fn ledgerTool(
 /// chosen at compile time:
 ///   - if SHA + AVX2 are in the target features, `Hash.hashRepeated` runs
 ///     SHA-NI inline asm
-///   - otherwise it falls back to `std.crypto.hash.sha2.Sha256.hash`
+///   - otherwise it falls back to a custom AVX vector message-schedule +
+///     scalar compression impl (not stdlib's Sha256)
 fn benchPoh(
     allocator: std.mem.Allocator,
     logger: Logger,
@@ -3075,7 +3076,7 @@ fn benchPoh(
         builtin.cpu.features,
         &.{ .sha, .avx2 },
     );
-    const impl_label = if (sha_ni_available) "SHA-NI" else "software (Sha256.hash)";
+    const impl_label = if (sha_ni_available) "SHA-NI" else "software (AVX vector)";
 
     try stdout.print("PoH bench: slots [{d}, {d}], impl={s}\n", .{
         start_slot,
