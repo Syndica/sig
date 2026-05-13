@@ -1158,7 +1158,7 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                                 const data = if (account_data_direct_mapping)
                                     callee_account.account.data
                                 else
-                                    region.hostSlice(state).?[0..callee_account.account.data.len];
+                                    @constCast(region.constSlice())[0..callee_account.account.data.len];
 
                                 region.* = .init(state, data, region.vm_addr_start);
                             },
@@ -2351,6 +2351,210 @@ fn testCpiCommon(comptime AccountType: type) !void {
 
         try invokeSigned(AccountType)(ctx.tc, &memory_map, &registers);
     }
+}
+
+// Regression test for the post-CPI region upgrade panic at cpi.zig:1161
+// ("attempt to use null value"). Reproduces the conditions documented in
+// cpi-region-upgrade-bug.html using the caller pubkey and CPI shape from
+// the transaction in testnet block 407,910,980:
+//
+//   https://explorer.solana.com/block/407910980?cluster=testnet
+//
+//   Caller program: Priority6weCZ5HwDn29NxLFpb7TDp2iLZ6XKc5e8d3
+//   Real CPI in that tx: system_program::CreateAccount {
+//                            lamports = 2_115_840,
+//                            space    = 176,
+//                            owner    = Priority6weCZ5HwDn29NxLFpb7TDp2iLZ6XKc5e8d3
+//                        }
+//
+// At that slot on testnet:
+//   - `virtual_address_space_adjustments` is active (since slot 407,900,256).
+//   - `account_data_direct_mapping` does not exist (not activated).
+//
+// That (vasa=on, dm=off) cell is what triggers the panic at cpi.zig:1161:
+// the inner CPI flips the account's owner from system_program to the caller
+// (Priority6we…), which promotes the post-CPI region from `.constant` to
+// `.mutable` — and unwraps a null in the pre-fix `region.hostSlice(.mutable).?`.
+//
+// To keep the test self-contained, we drive the same owner-flip path with
+// `system_program::Assign` (single account, no PDA-signed second account)
+// rather than CreateAccount (two accounts, one PDA-signed). Both reach the
+// same upgrade loop with the same predicate; the panic site is identical.
+//
+// Pre-fix: panics inside `invokeSigned` at cpi.zig:1161.
+// Post-fix: `invokeSigned` returns successfully and the region tag has been
+// upgraded to `.mutable`.
+test "invokeSigned: post-CPI region upgrade — testnet block 407910980" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    // Real caller pubkey from the transaction in testnet block 407,910,980.
+    const caller_program_id: Pubkey = .parse("Priority6weCZ5HwDn29NxLFpb7TDp2iLZ6XKc5e8d3");
+    // Stand-in for the new account (real one is Gz4fwu1vz5BpL6X2zTgWN2hFSZY2dCDdvMwWEuxCUpfN,
+    // a PDA whose seeds we'd need to derive to actually invoke_signed).
+    const account_key = Pubkey.initRandom(random);
+
+    // The account being assigned has empty data so it's zeroed (required by
+    // setOwner) and owned by system_program (so the CPI's setOwner check
+    // `account.owner == context.program_id` passes).
+    const cache, const tc_initial = try testing.createTransactionContext(allocator, random, .{
+        .accounts = &.{
+            .{
+                .pubkey = account_key,
+                .owner = system_program.ID,
+                .lamports = 1_000,
+                .data = &.{},
+            },
+            .{
+                .pubkey = caller_program_id,
+                .owner = bpf_loader_program.v2.ID,
+                .executable = true,
+            },
+            .{
+                .pubkey = system_program.ID,
+                .owner = ids.NATIVE_LOADER_ID,
+                .executable = true,
+            },
+        },
+        .compute_meter = std.math.maxInt(u64),
+    });
+    const tc = try allocator.create(TransactionContext);
+    tc.* = tc_initial;
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        allocator.destroy(tc);
+        sig.runtime.testing.deinitAccountMap(cache, allocator);
+    }
+
+    // (vasa=on, dm=off) — the testnet feature state at slot 407,910,980.
+    const feature_set: *sig.core.FeatureSet = @constCast(tc.feature_set);
+    feature_set.setSlot(.virtual_address_space_adjustments, tc.slot);
+
+    try sig.runtime.executor.pushInstruction(tc, try testing.createInstructionInfo(
+        tc,
+        caller_program_id,
+        "",
+        &.{
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
+        },
+    ));
+    defer {
+        const cur = tc.getCurrentInstructionContext() catch unreachable;
+        cur.deinit(allocator);
+    }
+
+    // Before the CPI: account is owned by system_program, not by the caller,
+    // so from the caller's perspective checkDataIsMutable is non-null. This
+    // is what tells the serializer to tag the region `.constant`.
+    {
+        const ic = try tc.getCurrentInstructionContext();
+        var ba = try ic.borrowInstructionAccount(0);
+        defer ba.release();
+        try std.testing.expect(ba.checkDataIsMutable() != null);
+    }
+
+    // CPI: system_program::Assign { owner = caller_program_id }. Same owner-flip
+    // shape as the real CreateAccount in the testnet transaction.
+    const AccountInfoType = AccountInfoRust;
+    const cpi_data = try sig.bincode.writeAlloc(
+        allocator,
+        system_program.Instruction{ .assign = .{ .owner = caller_program_id } },
+        .{},
+    );
+    defer allocator.free(cpi_data);
+    const cpi_accounts = [_]InstructionAccount{.{
+        .pubkey = account_key,
+        .is_signer = true,
+        .is_writable = true,
+    }};
+
+    const instruction_addr = memory.HEAP_START;
+    const instruction_buffer = try intoStableInstruction(
+        allocator,
+        AccountInfoType,
+        instruction_addr,
+        cpi_data,
+        system_program.ID,
+        &cpi_accounts,
+    );
+    defer allocator.free(instruction_buffer);
+
+    // INPUT_START layout: a 1-byte `.mutable` placeholder region at
+    // MM_INPUT_START followed by a `.constant` region holding the account
+    // data. The placeholder satisfies getSerializedData()'s
+    // `translateSlice(.mutable, MM_INPUT_START, 1, false)` workaround.
+    const placeholder_len = 1;
+    const account_data_addr = memory.INPUT_START + placeholder_len;
+    const input_buffer = try allocator.alloc(u8, placeholder_len);
+    defer allocator.free(input_buffer);
+    input_buffer[0] = 0;
+
+    const account_info_addr = std.mem.alignForward(
+        u64,
+        instruction_addr + instruction_buffer.len,
+        BPF_ALIGN_OF_U128,
+    );
+    const account_for_info: TestAccount = .{
+        .index = 0,
+        .key = account_key,
+        .owner = system_program.ID,
+        .lamports = 1_000,
+        .data = &.{},
+        .rent_epoch = 0,
+        .is_signer = true,
+        .is_writable = true,
+        .executable = false,
+    };
+    const account_info_buffer, const serialized_metadata = try account_for_info.intoAccountInfo(
+        allocator,
+        AccountInfoType,
+        account_info_addr,
+        account_data_addr,
+    );
+    defer allocator.free(account_info_buffer);
+
+    tc.serialized_accounts.appendAssumeCapacity(serialized_metadata);
+
+    var memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.constant, &.{}, memory.RODATA_START),
+            memory.Region.init(.mutable, &.{}, memory.STACK_START),
+            memory.Region.init(.constant, instruction_buffer, instruction_addr),
+            memory.Region.init(.mutable, account_info_buffer, account_info_addr),
+            memory.Region.init(.mutable, input_buffer, memory.INPUT_START),
+            // `.constant` — the tag that triggers the bug at the post-CPI upgrade.
+            memory.Region.init(.constant, &.{}, account_data_addr),
+        },
+        .v2,
+        .{ .aligned_memory_mapping = false },
+    );
+    defer memory_map.deinit(allocator);
+
+    var registers = RegisterMap.initFill(0);
+    registers.set(.r1, instruction_addr);
+    registers.set(.r2, account_info_addr);
+    registers.set(.r3, 1);
+    registers.set(.r4, 0);
+    registers.set(.r5, 0);
+
+    // Pre-fix: panics at cpi.zig:1161 ("attempt to use null value")
+    // when the post-CPI upgrade tries `region.hostSlice(.mutable).?` on
+    // the `.constant` region.
+    // Post-fix: returns successfully.
+    try invokeSigned(AccountInfoType)(tc, &memory_map, &registers);
+
+    {
+        const ic = try tc.getCurrentInstructionContext();
+        var ba = try ic.borrowInstructionAccount(0);
+        defer ba.release();
+        try std.testing.expect(ba.account.owner.equals(&caller_program_id));
+        try std.testing.expect(ba.checkDataIsMutable() == null);
+    }
+    const upgraded = try memory_map.findRegion(account_data_addr);
+    try std.testing.expect(upgraded.host_memory == .mutable);
 }
 
 test isV3InstructionBlacklisted {
