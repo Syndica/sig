@@ -56,8 +56,9 @@ pub fn build(b: *Build) !void {
         bool,
         "allow-no-avx512",
         "Opt in to a slower generic ed25519 path when the target lacks AVX-512 " ++
-            "(avx512ifma + avx512vl). Without this flag, building for an x86_64 target without " ++
-            "these features is a compile-time error so the performance hit is not silently accepted.",
+            "(avx512ifma + avx512vl). Without this flag, building for an x86_64 " ++
+            "target without these features is a compile-time error so the performance hit is " ++
+            "not silently accepted.",
     ) orelse false;
 
     const build_options = b.addOptions();
