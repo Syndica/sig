@@ -1158,7 +1158,7 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                                 const data = if (account_data_direct_mapping)
                                     callee_account.account.data
                                 else
-                                    @constCast(region.constSlice())[0..callee_account.account.data.len];
+                                    caller_account.serialized_data;
 
                                 region.* = .init(state, data, region.vm_addr_start);
                             },
