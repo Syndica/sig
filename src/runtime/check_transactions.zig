@@ -403,11 +403,11 @@ fn checkLoadAndAdvanceMessageNonceAccount(
 
     const address, const nonce_account, const nonce_data =
         try loadMessageNonceAccount(
-        allocator,
-        transaction,
-        account_reader,
-        require_static_nonce_account,
-    ) orelse return null;
+            allocator,
+            transaction,
+            account_reader,
+            require_static_nonce_account,
+        ) orelse return null;
 
     const previous_lamports_per_signature = nonce_data.lamports_per_signature;
     const next_nonce_state = NonceVersions{
