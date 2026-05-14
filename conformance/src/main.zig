@@ -28,10 +28,9 @@ pub fn main() !void {
     defer if (lib == .dyn) lib.dyn.close();
 
     // Run the tests
-    var total_passed: usize = 0;
-    var total_failed: usize = 0;
+    var passed_count: usize = 0;
+    var failed_count: usize = 0;
     const stat = try std.fs.cwd().statFile(args[1]);
-
     if (stat.kind == .directory) {
         const stats = try exec.execDir(allocator, &lib, args[1]);
 
@@ -53,7 +52,10 @@ pub fn main() !void {
             if (!failed_gop.found_existing) failed_gop.value_ptr.* = 0;
             switch (result) {
                 .pass => passed_gop.value_ptr.* += 1,
-                else => failed_gop.value_ptr.* += 1,
+                else => {
+                    std.debug.print("\t{s}: {}\n", .{ fix_path, result });
+                    failed_gop.value_ptr.* += 1;
+                },
             }
         }
 
@@ -80,15 +82,18 @@ pub fn main() !void {
             const passed = group_passed.get(key) orelse 0;
             const failed = group_failed.get(key) orelse 0;
             printRow(key, max_name_len, passed, failed);
-            total_passed += passed;
-            total_failed += failed;
+            passed_count += passed;
+            failed_count += failed;
         }
     } else {
         const out_buf = try allocator.alloc(u8, exec.output_buffer_size);
         defer allocator.free(out_buf);
         switch (try exec.execFixture(allocator, &lib, args[1], out_buf)) {
-            .pass => total_passed = 1,
-            else => total_failed = 1,
+            .pass => passed_count = 1,
+            else => |r| {
+                std.debug.print("{s}: {}\n", .{ args[1], r });
+                failed_count = 1;
+            },
         }
     }
 
@@ -99,9 +104,9 @@ pub fn main() !void {
         \\        Passed:  {d}
         \\        Failed:  {d}
         \\
-    , .{ total_passed, total_failed });
+    , .{ passed_count, failed_count });
 
-    if (total_failed > 0) std.posix.exit(1);
+    if (failed_count > 0) std.posix.exit(1);
 }
 
 fn relativeTo(path: []const u8, prefix: []const u8) []const u8 {
