@@ -1539,7 +1539,7 @@
         .name = "virtual_address_space_adjustments",
         .pubkey = "7VgiehxNxu53KdxgLspGQY8myE6f7UokaWa4jsGcaSz",
         .description = "SIMD-0460: Virtual Address Space Adjustments",
-        .status = .unsupported,
+        .status = .supported,
         .note =
         \\ TODO: High Priority 
         \\ Pending testnet activation.

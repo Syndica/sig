@@ -100,6 +100,11 @@ pub const Serializer = struct {
     pub fn writeAccount(
         self: *Serializer,
         account: *const BorrowedAccount,
+        /// Transaction-context account index, tagged onto the resulting
+        /// account-data region as access_violation_handler_payload when
+        /// SIMD-0460 is active. The handler uses this index to borrow the
+        /// account from the transaction context's accounts list.
+        index_in_transaction: u16,
     ) (error{OutOfMemory} || InstructionError)!u64 {
         if (!self.virtual_address_space_adjustments) {
             const addr = self.vaddr +| self.buffer.items.len;
@@ -140,6 +145,15 @@ pub const Serializer = struct {
 
         if (address_space > 0) {
             const state = getAccountDataRegionMemoryState(account);
+            // SIMD-0460: only writable+owned accounts get a handler payload —
+            // the handler grows them on write; readonly account accesses past
+            // their data length just produce an access violation that the
+            // loader maps to AccountDataTooSmall / ReadonlyDataModified.
+            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/serialization.rs#L28-L34
+            const payload: ?u16 = if (account.checkDataIsMutable() == null)
+                index_in_transaction
+            else
+                null;
             if (!self.account_data_direct_mapping) {
                 try self.pushRegion(state == .mutable);
                 const region = &self.regions.items[self.regions.items.len - 1];
@@ -149,11 +163,14 @@ pub const Serializer = struct {
                     .mutable => region.host_memory.mutable.len = new_len,
                     .constant => region.host_memory.constant.len = new_len,
                 }
+                region.access_violation_handler_payload = payload;
             } else {
-                try self.regions.append(self.allocator, switch (state) {
+                var region = switch (state) {
                     .mutable => Region.init(.mutable, try account.mutableAccountData(), self.vaddr),
                     .constant => Region.init(.constant, account.constAccountData(), self.vaddr),
-                });
+                };
+                region.access_violation_handler_payload = payload;
+                try self.regions.append(self.allocator, region);
                 self.vaddr += address_space;
             }
         }
@@ -258,8 +275,11 @@ pub fn serializeParameters(
         } else {
             const account = try ic.borrowInstructionAccount(@intCast(index_in_instruction));
             defer account.release();
+            // SIMD-0460: store index_in_transaction so the serializer can tag
+            // the resulting account-data region for the access-violation handler,
+            // which uses index_in_transaction to look up the account.
             accounts.appendAssumeCapacity(.{ .account = .{
-                @intCast(index_in_instruction),
+                @intCast(account_meta.index_in_transaction),
                 account,
             } });
         }
@@ -341,7 +361,7 @@ fn serializeParametersUnaligned(
     for (accounts) |account| {
         switch (account) {
             .account => |index_and_account| {
-                _, const borrowed_account = index_and_account;
+                const index_in_transaction, const borrowed_account = index_and_account;
 
                 _ = serializer.write(u8, std.math.maxInt(u8));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_signer));
@@ -357,7 +377,10 @@ fn serializeParametersUnaligned(
                     u64,
                     std.mem.nativeToLittle(u64, borrowed_account.constAccountData().len),
                 );
-                const vm_data_addr = try serializer.writeAccount(&borrowed_account);
+                const vm_data_addr = try serializer.writeAccount(
+                    &borrowed_account,
+                    index_in_transaction,
+                );
                 const vm_owner_addr = serializer.writeBytes(&borrowed_account.account.owner.data);
 
                 _ = serializer.write(u8, @intFromBool(borrowed_account.account.executable));
@@ -469,7 +492,7 @@ fn serializeParametersAligned(
     for (accounts) |account| {
         switch (account) {
             .account => |index_and_borrowed_account| {
-                _, const borrowed_account = index_and_borrowed_account;
+                const index_in_transaction, const borrowed_account = index_and_borrowed_account;
                 _ = serializer.write(u8, std.math.maxInt(u8)); // NON_DUP_MARKER
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_signer));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_writable));
@@ -487,7 +510,10 @@ fn serializeParametersAligned(
                     u64,
                     std.mem.nativeToLittle(u64, borrowed_account.constAccountData().len),
                 );
-                const vm_data_addr = try serializer.writeAccount(&borrowed_account);
+                const vm_data_addr = try serializer.writeAccount(
+                    &borrowed_account,
+                    index_in_transaction,
+                );
 
                 const rent_epoch: u64 = if (mask_out_rent_epoch_in_vm_serialization)
                     std.math.maxInt(u64)

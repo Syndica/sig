@@ -938,6 +938,12 @@ pub const Config = struct {
     aligned_memory_mapping: bool = true,
     /// Enables gaps in VM address space between the stack frames
     enable_stack_frame_gaps: bool = true,
+    /// SIMD-0460: when set, multi-byte loads/stores must be wholly within a
+    /// single memory region (no cross-region byte-split fallback), and the
+    /// memory map invokes the access-violation handler on translation failure
+    /// (see MemoryMap.setAccessViolationHandler) to support direct-mapping
+    /// auto-extension of writable+owned account regions.
+    stricter_abi_and_runtime_constraints: bool = false,
 
     // The range of allowed SBPF versions
     minimum_version: sbpf.Version = .v0,
