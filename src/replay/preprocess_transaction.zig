@@ -4,8 +4,10 @@ const tracy = @import("tracy");
 
 const compute_budget = sig.runtime.program.compute_budget;
 
+const FeatureSet = sig.core.FeatureSet;
 const Hash = sig.core.Hash;
 const Message = sig.core.transaction.Message;
+const Slot = sig.core.Slot;
 const Transaction = sig.core.transaction.Transaction;
 
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
@@ -34,11 +36,14 @@ const MAX_ACCOUNTS_PER_INSTRUCTION = sig.runtime.transaction_context.MAX_ACCOUNT
 pub fn preprocessTransaction(
     txn: Transaction,
     sig_verify: SigVerifyOption,
-    static_instruction_limit: bool,
-    instruction_accounts_limit: bool,
+    feature_set: *const FeatureSet,
+    slot: Slot,
 ) PreprocessTransactionResult {
     var zone = tracy.Zone.init(@src(), .{ .name = "preprocessTransaction" });
     defer zone.deinit();
+
+    const static_instruction_limit = feature_set.active(.static_instruction_limit, slot);
+    const instruction_accounts_limit = feature_set.active(.limit_instruction_accounts, slot);
 
     txn.validate() catch return .{ .err = .SanitizeFailure };
 
@@ -103,17 +108,25 @@ test preprocessTransaction {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
+    const disabled: FeatureSet = .ALL_DISABLED;
+
+    var with_static_instruction_limit: FeatureSet = .ALL_DISABLED;
+    with_static_instruction_limit.setSlot(.static_instruction_limit, 0);
+
+    var with_instruction_accounts_limit: FeatureSet = .ALL_DISABLED;
+    with_instruction_accounts_limit.setSlot(.limit_instruction_accounts, 0);
+
     { // Verify succeeds
         const txn = try Transaction.initRandom(allocator, random, null);
         defer txn.deinit(allocator);
 
         try std.testing.expectEqual(
             .ok,
-            std.meta.activeTag(preprocessTransaction(txn, .run_sig_verify, false, false)),
+            std.meta.activeTag(preprocessTransaction(txn, .run_sig_verify, &disabled, 0)),
         );
         try std.testing.expectEqual(
             .ok,
-            std.meta.activeTag(preprocessTransaction(txn, .skip_sig_verify, false, false)),
+            std.meta.activeTag(preprocessTransaction(txn, .skip_sig_verify, &disabled, 0)),
         );
     }
 
@@ -140,7 +153,7 @@ test preprocessTransaction {
             },
         };
 
-        const err = preprocessTransaction(txn, .skip_sig_verify, false, false).err;
+        const err = preprocessTransaction(txn, .skip_sig_verify, &disabled, 0).err;
         try std.testing.expectEqual(TransactionError.SanitizeFailure, err);
     }
 
@@ -159,7 +172,7 @@ test preprocessTransaction {
             },
         };
 
-        const err = preprocessTransaction(txn, .skip_sig_verify, false, false).err;
+        const err = preprocessTransaction(txn, .skip_sig_verify, &disabled, 0).err;
         try std.testing.expectEqual(TransactionError.SanitizeFailure, err);
     }
 
@@ -185,7 +198,7 @@ test preprocessTransaction {
         };
         defer for (txn.msg.instructions) |instr| allocator.free(instr.data);
 
-        _, const details = preprocessTransaction(txn, .skip_sig_verify, false, false).ok;
+        _, const details = preprocessTransaction(txn, .skip_sig_verify, &disabled, 0).ok;
         const compute_limits = compute_budget.sanitize(details, &.ALL_DISABLED, 0).ok;
         try std.testing.expectEqual(1_000_000, compute_limits.compute_unit_limit);
     }
@@ -217,7 +230,7 @@ test preprocessTransaction {
         };
         defer for (txn.msg.instructions) |instr| allocator.free(instr.data);
 
-        const err = preprocessTransaction(txn, .skip_sig_verify, false, false).err;
+        const err = preprocessTransaction(txn, .skip_sig_verify, &disabled, 0).err;
         try std.testing.expectEqual(TransactionError{ .DuplicateInstruction = 1 }, err);
     }
 
@@ -246,7 +259,12 @@ test preprocessTransaction {
             },
         };
 
-        const err = preprocessTransaction(txn, .run_sig_verify, true, false).err;
+        const err = preprocessTransaction(
+            txn,
+            .run_sig_verify,
+            &with_static_instruction_limit,
+            0,
+        ).err;
         try std.testing.expectEqual(.SanitizeFailure, err);
     }
 
@@ -277,14 +295,19 @@ test preprocessTransaction {
 
         // Skip sig verify — Agave's equivalent test (try_create) only runs sanitization.
         // With limit enabled, 256 accounts should fail.
-        const err = preprocessTransaction(txn, .skip_sig_verify, false, true).err;
+        const err = preprocessTransaction(
+            txn,
+            .skip_sig_verify,
+            &with_instruction_accounts_limit,
+            0,
+        ).err;
         try std.testing.expectEqual(.SanitizeFailure, err);
 
         // With limit disabled, 256 accounts should pass sanitization.
         try std.testing.expectEqual(
             .ok,
             std.meta.activeTag(
-                preprocessTransaction(txn, .skip_sig_verify, false, false),
+                preprocessTransaction(txn, .skip_sig_verify, &disabled, 0),
             ),
         );
     }
@@ -315,7 +338,12 @@ test preprocessTransaction {
         // With limit enabled, exactly 255 accounts should pass.
         try std.testing.expectEqual(
             .ok,
-            std.meta.activeTag(preprocessTransaction(txn, .skip_sig_verify, false, true)),
+            std.meta.activeTag(preprocessTransaction(
+                txn,
+                .skip_sig_verify,
+                &with_instruction_accounts_limit,
+                0,
+            )),
         );
     }
 }
