@@ -11,6 +11,7 @@ const IoUring = std.os.linux.IoUring;
 const SnapshotSourceRing = lib.snapshot.SnapshotSourceRing;
 const KnownValidators = lib.snapshot.SnapshotConfig.KnownValidators;
 
+const IO_URING_ENTRIES = 256;
 const MAX_DRAIN: u8 = 64;
 const GOSSIP_DRAIN_INTERVAL: std.os.linux.kernel_timespec = .{ .sec = 0, .nsec = 100_000_000 };
 
@@ -527,9 +528,16 @@ const ExistingSnapshot = struct {
     }
 };
 
-const CompletedSnapshot = struct {
+const CompletedDownload = struct {
+    path_buf: [std.fs.max_path_bytes]u8,
+    path_len: usize,
+
     slot: Slot,
     hash: Hash,
+
+    pub fn path(self: *const CompletedDownload) []const u8 {
+        return self.path_buf[0..self.path_len];
+    }
 };
 
 const DownloadFailureReason = enum {
@@ -539,7 +547,7 @@ const DownloadFailureReason = enum {
 
 pub const DownloadResult = union(enum) {
     already_exists: ExistingSnapshot,
-    downloaded: CompletedSnapshot,
+    downloaded: CompletedDownload,
     failed: DownloadFailureReason,
 };
 
@@ -710,8 +718,8 @@ pub const DedupeMap = std.array_hash_map.ArrayHashMapUnmanaged(
 
 pub const Downloader = struct {
     ring: IoUring,
-    gossip_iter: *SnapshotSourceRing.Iterator(.reader),
-    dedupe_map: *DedupeMap,
+    gossip_iter: SnapshotSourceRing.Iterator(.reader),
+    dedupe_map: DedupeMap,
     dedupe_alloc: std.mem.Allocator,
     known_validators: KnownValidators,
 
@@ -727,6 +735,33 @@ pub const Downloader = struct {
 
     metrics: Metrics,
     logger: tel.Logger("snapshot"),
+
+    pub fn init(
+        gossip_to_snapshot: *SnapshotSourceRing,
+        dedupe_alloc: std.mem.Allocator,
+        known_validators: KnownValidators,
+        snapshot_dir: []const u8,
+        metrics: Metrics,
+        logger: tel.Logger("snapshot"),
+    ) !Downloader {
+        return .{
+            .ring = try IoUring.init(IO_URING_ENTRIES, 0),
+            .gossip_iter = gossip_to_snapshot.get(.reader),
+            .dedupe_map = DedupeMap{},
+            .dedupe_alloc = dedupe_alloc,
+            .known_validators = known_validators,
+            .probe_conns = .{ProbeConn.empty()} ** MAX_CONCURRENT_PROBES,
+            .active_probes = 0,
+            .timeout_pending = false,
+            .download_conns = .{DownloadConn.empty()} ** MAX_DOWNLOAD_RACERS,
+            .active_downloads = 0,
+            .download_race = DownloadRace.empty(),
+            .snapshot_dir = snapshot_dir,
+            .run_result = null,
+            .metrics = metrics,
+            .logger = logger,
+        };
+    }
 
     pub fn deinit(self: *Downloader) void {
         for (0..self.probe_conns.len) |i| {
@@ -1983,7 +2018,12 @@ pub const Downloader = struct {
         self.logger.info().logf("download complete slot={d} path={s}", .{ race.slot, final_path });
         self.finishDownload(data.index, .succeeded);
 
-        self.run_result = .{ .downloaded = .{ .slot = race.slot, .hash = race.hash } };
+        self.run_result = .{ .downloaded = .{
+            .slot = race.slot,
+            .hash = race.hash,
+            .path_buf = final_buf,
+            .path_len = final_path.len
+        } };
     }
 
     fn offerDownloadCandidate(
