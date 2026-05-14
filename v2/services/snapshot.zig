@@ -5,16 +5,10 @@ const tel = lib.telemetry;
 
 const download = lib.snapshot.download;
 
-const IoUring = std.os.linux.IoUring;
-
 const SnapshotSourceRing = lib.snapshot.SnapshotSourceRing;
 const Metrics = download.Metrics;
 const DownloadResult = download.DownloadResult;
-const ProbeConn = download.ProbeConn;
-const DownloadConn = download.DownloadConn;
 const Downloader = download.Downloader;
-const DownloadRace = download.DownloadRace;
-const DedupeMap = download.DedupeMap;
 
 var dedupe_map_buf: [512 * 1024]u8 = @splat(0);
 

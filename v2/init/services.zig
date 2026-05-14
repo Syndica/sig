@@ -263,7 +263,8 @@ pub const Region = union(enum) {
 
                 if (cfg.known_validators.len == 0) {
                     std.log.err(
-                        "known_validators must not be empty. Specify validator pubkeys, or \"*\" to opt in to untrusted snapshot sources.",
+                        "known_validators must not be empty. Specify validator pubkeys, or \"*\" " ++
+                            "to opt in to untrusted snapshot sources.",
                         .{},
                     );
                     return error.NoKnownValidators;
@@ -283,7 +284,8 @@ pub const Region = union(enum) {
                 if (has_wildcard) {
                     if (cfg.known_validators.len > 1) {
                         std.log.warn(
-                            "known_validators contains \"*\" alongside other entries; \"*\" wins, ignoring the rest.",
+                            "known_validators contains \"*\" alongside other entries; \"*\" wins" ++
+                                "ignoring the rest.",
                             .{},
                         );
                     }
@@ -293,9 +295,15 @@ pub const Region = union(enum) {
                 } else {
                     data.known_validators_allow_all = false;
                     data.known_validators_len = @intCast(cfg.known_validators.len);
-                    for (cfg.known_validators, data.known_validators_buffer[0..cfg.known_validators.len]) |pkstr, *pkptr| {
+                    for (
+                        cfg.known_validators,
+                        data.known_validators_buffer[0..cfg.known_validators.len],
+                    ) |pkstr, *pkptr| {
                         pkptr.* = lib.solana.Pubkey.parseRuntime(pkstr) catch |err| {
-                            std.log.err("invalid known_validator entry '{s}': {s}", .{ pkstr, @errorName(err) });
+                            std.log.err(
+                                "invalid known_validator entry '{s}': {s}",
+                                .{ pkstr, @errorName(err) },
+                            );
                             return err;
                         };
                     }
