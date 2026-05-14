@@ -47,9 +47,11 @@ pub const Config = struct {
                 "command line nor as a dependency argument.",
         ) orelse false;
 
+        const optimize = b.standardOptimizeOption(.{});
+
         var self: Config = .{
             .target = b.standardTargetOptions(.{}),
-            .optimize = b.standardOptimizeOption(.{}),
+            .optimize = optimize,
             .filters = filters,
             .enable_tsan = b.option(
                 bool,
@@ -133,7 +135,7 @@ pub const Config = struct {
                 "Opt in to a slower software fallback when the target lacks the x86 SHA " ++
                     "extension. Without this flag, building for a target without SHA-NI is a " ++
                     "compile-time error so the performance hit is not silently accepted.",
-            ) orelse false,
+            ) orelse (optimize == .Debug),
             .allow_no_avx512 = b.option(
                 bool,
                 "allow-no-avx512",
@@ -141,7 +143,7 @@ pub const Config = struct {
                     "(avx512ifma + avx512vl). Without this flag, building for an x86_64 target " ++
                     "without these features is a compile-time error so the performance hit is " ++
                     "not silently accepted.",
-            ) orelse false,
+            ) orelse (optimize == .Debug),
             .version = s: {
                 const maybe_version_string = b.option(
                     []const u8,
