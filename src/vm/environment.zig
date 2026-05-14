@@ -67,18 +67,20 @@ pub const Environment = struct {
                 .v0;
         std.debug.assert(@intFromEnum(min_sbpf_version) <= @intFromEnum(max_sbpf_version));
 
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/syscalls/src/lib.rs#L319
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/syscalls/src/lib.rs#L319
+        const virtual_address_space_adjustments = feature_set.active(
+            .virtual_address_space_adjustments,
+            slot,
+        );
         return .{
             .max_call_depth = compute_budget.max_call_depth,
             .stack_frame_size = compute_budget.stack_frame_size,
-            .enable_stack_frame_gaps = true,
+            // SIMD-0460: Disable stack frame gaps with virtual_address_space_adjustments.
+            .enable_stack_frame_gaps = !virtual_address_space_adjustments,
             .enable_instruction_meter = true,
             .reject_broken_elfs = reject_deployment_of_broken_elfs,
             .optimize_rodata = false,
-            .aligned_memory_mapping = !feature_set.active(
-                .virtual_address_space_adjustments,
-                slot,
-            ),
+            .aligned_memory_mapping = !virtual_address_space_adjustments,
             .minimum_version = min_sbpf_version,
             .maximum_version = max_sbpf_version,
         };

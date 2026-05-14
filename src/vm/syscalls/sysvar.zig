@@ -40,13 +40,13 @@ fn getSyscall(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMa
                 return SyscallError.UnalignedPointer;
             }
 
-            // SIMD-0219: The destination address of all sysvar related syscalls
+            // SIMD-0459: The destination address of all sysvar related syscalls
             // must be on the stack or heap, meaning their virtual address is
             // inside `0x200000000..0x400000000`.
             // (bytecode/rodata regions below 0x200000000 are always readonly
             // so mutable translation to addresses below that will result in an AccessViolation anyways).
             if (value_addr >= memory.INPUT_START and
-                tc.feature_set.active(.virtual_address_space_adjustments, tc.slot))
+                tc.feature_set.active(.syscall_parameter_address_restrictions, tc.slot))
             {
                 return SyscallError.InvalidPointer;
             }
@@ -92,13 +92,13 @@ pub fn getSysvar(
     const mem_cost = @max(tc.compute_budget.mem_op_base_cost, buf_cost);
     try tc.consumeCompute(tc.compute_budget.sysvar_base_cost +| id_cost +| mem_cost);
 
-    // SIMD-0219: The destination address of all sysvar related syscalls
+    // SIMD-0459: The destination address of all sysvar related syscalls
     // must be on the stack or heap, meaning their virtual address is
     // inside `0x200000000..0x400000000`.
     // (bytecode/rodata regions below 0x200000000 are always readonly
     // so mutable translation to addresses below that will result in an AccessViolation anyways).
     if (value_addr >= memory.INPUT_START and
-        tc.feature_set.active(.virtual_address_space_adjustments, tc.slot))
+        tc.feature_set.active(.syscall_parameter_address_restrictions, tc.slot))
     {
         return SyscallError.InvalidPointer;
     }
@@ -506,7 +506,7 @@ test getSysvar {
         );
     }
 
-    // SIMD-0219: value_addr >= INPUT_START with virtual_address_space_adjustments returns InvalidPointer
+    // SIMD-0459: value_addr >= INPUT_START with syscall_parameter_address_restrictions returns InvalidPointer
     {
         var cache_strict, var tc_strict = try testing.createTransactionContext(
             allocator,
@@ -514,7 +514,9 @@ test getSysvar {
             .{
                 .accounts = &.{},
                 .compute_meter = std.math.maxInt(u64),
-                .feature_set = &.{.{ .feature = .virtual_address_space_adjustments, .slot = 0 }},
+                .feature_set = &.{
+                    .{ .feature = .syscall_parameter_address_restrictions, .slot = 0 },
+                },
                 .slot = 0,
                 .sysvar_cache = .{
                     .clock = src.clock,
