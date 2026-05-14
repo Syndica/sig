@@ -39,5 +39,11 @@
                 .{ .name = .telemetry, .access = .rw },
             },
         },
+        .{
+            .name = .accounts_db,
+            .regions = .{
+                .{ .name = .telemetry, .access = .rw },
+            },
+        },
     },
 }
