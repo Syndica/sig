@@ -47,18 +47,18 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
     rw.tel.signalReady();
 
-    const folder_path = ro.config.folder_buffer[0..ro.config.folder_len];
+    const snapshot_dir = ro.config.folder_buffer[0..ro.config.folder_len];
     const known_validators = ro.config.knownValidators();
 
     const result: DownloadResult = result: {
-        std.fs.cwd().makeDir(folder_path) catch |err| switch (err) {
+        std.fs.cwd().makeDir(snapshot_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => |e| return e,
         };
 
-        logger.info().logf("snapshot path {s}", .{folder_path});
+        logger.info().logf("snapshot path {s}", .{snapshot_dir});
 
-        if (try download.findExistingSnapshot(folder_path)) |existing| {
+        if (try download.findExistingSnapshot(snapshot_dir)) |existing| {
             break :result .{ .already_exists = existing };
         }
 
@@ -66,7 +66,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         var dedupe_map = DedupeMap{};
         var gossip_iter = rw.gossip_to_snapshot.get(.reader);
 
-        // TODO: create a .init for Downloader and move all this crap into lib/snapshot/download.zig
+        // TODO: create a .init for Downloader and move all this crap into lib/snapshot/download.zig?
         var downloader = Downloader{
             .ring = try IoUring.init(256, 0),
             .gossip_iter = &gossip_iter,
@@ -79,7 +79,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             .download_conns = .{DownloadConn.empty()} ** download.MAX_DOWNLOAD_RACERS,
             .active_downloads = 0,
             .download_race = DownloadRace.empty(),
-            .snapshot_dir = folder_path,
+            .snapshot_dir = snapshot_dir,
             .run_result = null,
             .metrics = metrics,
             .logger = logger,
