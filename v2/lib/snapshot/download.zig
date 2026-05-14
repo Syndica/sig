@@ -2018,12 +2018,14 @@ pub const Downloader = struct {
         self.logger.info().logf("download complete slot={d} path={s}", .{ race.slot, final_path });
         self.finishDownload(data.index, .succeeded);
 
-        self.run_result = .{ .downloaded = .{
-            .slot = race.slot,
-            .hash = race.hash,
-            .path_buf = final_buf,
-            .path_len = final_path.len
-        } };
+        self.run_result = .{
+            .downloaded = .{
+                .slot = race.slot,
+                .hash = race.hash,
+                .path_buf = final_buf,
+                .path_len = final_path.len,
+            },
+        };
     }
 
     fn offerDownloadCandidate(
