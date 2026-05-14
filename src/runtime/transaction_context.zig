@@ -34,6 +34,15 @@ pub const MAX_INSTRUCTION_TRACE_LENGTH = 64;
 // https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/execution_budget.rs#L8
 pub const MAX_INSTRUCTION_STACK_DEPTH = 5;
 
+/// SIMD-0460: information captured by the SBPF memory map's access-violation
+/// handler so the bpf_loader post-execution path can remap a generic
+/// `AccessViolation` into a specific account-related `InstructionError`.
+pub const AccessViolationInfo = struct {
+    access_type: vm.memory.MemoryState,
+    vm_addr: u64,
+    len: u64,
+};
+
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L136
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L192
 pub const TransactionContext = struct {
@@ -96,6 +105,18 @@ pub const TransactionContext = struct {
     /// If an error other than an InstructionError occurs during execution its value will
     /// be set here and InstructionError.Custom will be returned
     custom_error: ?u32 = null,
+
+    /// SIMD-0460: when the SBPF VM raises an `AccessViolation`, the access-
+    /// violation handler records the access here so the bpf_loader's
+    /// post-execution error path can remap it to a more specific
+    /// `InstructionError` per SIMD-0460:
+    ///   - read past current account length → `AccountDataTooSmall`
+    ///   - write to readonly account         → `ReadonlyDataModified`
+    ///   - write to non-owned account        → `ExternalAccountDataModified`
+    ///   - write past account growth budget  → `InvalidRealloc`
+    /// Cleared at the start of each bpf program invocation.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/programs/bpf_loader/src/lib.rs#L1583-L1646
+    last_access_violation: ?AccessViolationInfo = null,
 
     log_collector: ?LogCollector = null,
     rent: Rent,

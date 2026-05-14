@@ -555,6 +555,11 @@ fn updateCalleeAccount(
 const TranslatedAccounts = std14.BoundedArray(TranslatedAccount, InstructionInfo.MAX_ACCOUNT_METAS);
 const TranslatedAccount = struct {
     index_in_caller: u16,
+    /// SIMD-0460: used by update_caller_account_region to (re)tag the
+    /// caller's account-data region with the correct access-violation
+    /// handler payload after CPI, mirroring Agave's
+    /// modify_memory_region_of_account.
+    index_in_transaction: u16,
     caller_account: CallerAccount,
     update_caller_account_region: bool,
     update_caller_account_info: bool,
@@ -718,6 +723,7 @@ fn translateAccounts(
 
         accounts.appendAssumeCapacity(.{
             .index_in_caller = index_in_caller,
+            .index_in_transaction = meta.index_in_transaction,
             .caller_account = caller_account,
             .update_caller_account_region = meta.is_writable or update_caller,
             .update_caller_account_info = meta.is_writable,
@@ -1161,6 +1167,15 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                                     caller_account.serialized_data;
 
                                 region.* = .init(state, data, region.vm_addr_start);
+                                // SIMD-0460: re-derive the access-violation
+                                // handler payload from the callee's current
+                                // mutability state, mirroring Agave's
+                                // modify_memory_region_of_account. CPI can
+                                // change an account's writability (e.g.,
+                                // assign), so the payload may need to flip.
+                                // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/serialization.rs#L28-L34
+                                region.access_violation_handler_payload =
+                                    if (mutable) translated.index_in_transaction else null;
                             },
                         }
                     }

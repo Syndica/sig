@@ -21,6 +21,32 @@ pub const AccessError = error{ StackAccessViolation, AccessViolation };
 pub const RegionError = AccessError || error{InvalidMemoryRegion};
 pub const InitError = error{InvalidMemoryRegion};
 
+/// SIMD-0460: callback executed when a memory access misses its region.
+///
+/// The handler may mutate `region` in place to extend its host buffer / length
+/// and re-permit the access; if after the call `region.translate(...)` still
+/// fails, an `AccessViolation` is generated. It may also be used as a hook to
+/// record the failing access for later remapping to a specific
+/// `InstructionError` (read past account length → `AccountDataTooSmall`,
+/// write past account growth budget → `InvalidRealloc`, etc.).
+///
+/// `address_space_reserved_for_account` is the distance from this region's
+/// start to the next region's start (i.e. how far the region is allowed to
+/// grow).
+///
+/// [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/memory_region.rs#L30
+pub const AccessViolationHandler = struct {
+    ctx: *anyopaque,
+    call: *const fn (
+        ctx: *anyopaque,
+        region: *Region,
+        address_space_reserved_for_account: u64,
+        access_type: MemoryState,
+        vm_addr: u64,
+        len: u64,
+    ) void,
+};
+
 // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L731
 pub const MemoryMap = union(enum) {
     aligned: AlignedMemoryMap,
@@ -42,6 +68,21 @@ pub const MemoryMap = union(enum) {
         switch (self.*) {
             .aligned => |aligned| aligned.deinit(allocator),
             .unaligned => |unaligned| unaligned.deinit(allocator),
+        }
+    }
+
+    /// SIMD-0460: install the access-violation handler used for direct-mapping
+    /// auto-extension of writable+owned account regions and for recording the
+    /// failing access for post-execution `InstructionError` remapping.
+    ///
+    /// Only the unaligned map (used under SIMD-0460) consults the handler.
+    /// Setting it on an aligned map is a no-op — pre-SIMD-0460 paths neither
+    /// auto-extend nor need the remap (the serialization buffer pre-reserves
+    /// `MAX_PERMITTED_DATA_INCREASE`, so writes within budget never miss).
+    pub fn setAccessViolationHandler(self: *MemoryMap, handler: AccessViolationHandler) void {
+        switch (self.*) {
+            .aligned => {},
+            .unaligned => |*unaligned| unaligned.access_violation_handler = handler,
         }
     }
 
@@ -225,6 +266,12 @@ pub const Region = struct {
     vm_addr_start: u64,
     vm_gap_shift: std.math.Log2Int(u64),
     vm_addr_end: u64,
+    /// SIMD-0460: user-defined payload (instruction account index) passed to
+    /// the access-violation handler when this region triggers a violation.
+    /// Set by the serialization / CPI paths for account-data regions; null
+    /// for non-account regions (bytecode, stack, heap, scratch).
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/memory_region.rs#L56
+    access_violation_handler_payload: ?u16 = null,
 
     pub fn init(comptime state: MemoryState, slice: state.Slice(), vm_addr: u64) Region {
         return initGapped(state, slice, vm_addr, 0);
@@ -248,6 +295,16 @@ pub const Region = struct {
             .vm_addr_end = vm_addr +| (slice.len * @as(u64, if (is_gapped) 2 else 1)),
             .vm_gap_shift = @intCast(vm_gap_shift),
         };
+    }
+
+    /// Returns a copy of this region with `access_violation_handler_payload`
+    /// set. Used by the serialization / CPI paths to tag account-data regions
+    /// with the instruction-account index that the access-violation handler
+    /// uses to look up the account.
+    pub fn withPayload(self: Region, payload: u16) Region {
+        var copy = self;
+        copy.access_violation_handler_payload = payload;
+        return copy;
     }
 
     /// Get the underlying host slice of memory.
@@ -421,6 +478,13 @@ const UnalignedMemoryMap = struct {
     region_addresses: []u64,
     version: sbpf.Version,
     config: exe.Config,
+    /// SIMD-0460: optional access-violation handler. When set and a multi-byte
+    /// translate fails on the fast path, the handler is invoked with a pointer
+    /// to the failing region. The handler may grow the region (for writable
+    /// account-data regions) and/or record the failing access for later error
+    /// remapping. If the access still doesn't fit after the call, the normal
+    /// access violation is generated.
+    access_violation_handler: ?AccessViolationHandler = null,
 
     // CoW callback
     //cow_cb: ?MemoryCowCallback,
@@ -518,6 +582,38 @@ const UnalignedMemoryMap = struct {
             &self.regions[index - 1];
     }
 
+    /// SIMD-0460: distance from this region's start to the next region's
+    /// start (in virtual address space). Equivalent to Agave's "max_len"
+    /// passed to the AccessViolationHandler — the upper bound on how far
+    /// this region may grow.
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/memory_region.rs#L514-L518
+    fn addressSpaceReservedFor(self: *const UnalignedMemoryMap, region: *const Region) u64 {
+        var next: u64 = std.math.maxInt(u64);
+        for (self.regions) |reg| {
+            if (reg.vm_addr_start > region.vm_addr_start and reg.vm_addr_start < next) {
+                next = reg.vm_addr_start;
+            }
+        }
+        return next -| region.vm_addr_start;
+    }
+
+    /// SIMD-0460: invoke the access-violation handler (if any) for a region
+    /// that just failed translation, then retry the translation. Returns the
+    /// slice if the handler grew the region enough to satisfy the access,
+    /// null otherwise.
+    fn tryHandlerThenTranslate(
+        self: *const UnalignedMemoryMap,
+        comptime state: MemoryState,
+        region: *Region,
+        vm_addr: u64,
+        len: u64,
+    ) ?state.Slice() {
+        const handler = self.access_violation_handler orelse return null;
+        const max_len = self.addressSpaceReservedFor(region);
+        handler.call(handler.ctx, region, max_len, state, vm_addr, len);
+        return region.translate(state, vm_addr, len);
+    }
+
     fn store(
         self: *const UnalignedMemoryMap,
         comptime T: type,
@@ -534,6 +630,20 @@ const UnalignedMemoryMap = struct {
             std.mem.writeInt(T, slice[0..@sizeOf(T)], value, .little);
             return;
         }
+
+        // SIMD-0460: invoke the access-violation handler (if installed) to
+        // potentially grow the region. If it succeeds, the (re)translated
+        // slice is valid; otherwise fall through to the pre-SIMD-0460
+        // byte-level cross-region fallback (when not stricter) or to the
+        // access violation (when stricter).
+        if (self.tryHandlerThenTranslate(.mutable, region, vm_addr, @sizeOf(T))) |slice| {
+            std.mem.writeInt(T, slice[0..@sizeOf(T)], value, .little);
+            return;
+        }
+
+        // SIMD-0460: cross-region splits are access violations. The byte-level
+        // fallback below is pre-SIMD-0460 behavior.
+        if (self.config.stricter_abi_and_runtime_constraints) return err;
 
         var current_addr = vm_addr;
         var src: []const u8 = std.mem.asBytes(&value);
@@ -568,6 +678,15 @@ const UnalignedMemoryMap = struct {
             // fast path
             return std.mem.readInt(T, slice[0..@sizeOf(T)], .little);
         }
+
+        // SIMD-0460: see note in store() above.
+        if (self.tryHandlerThenTranslate(.constant, region, vm_addr, @sizeOf(T))) |slice| {
+            return std.mem.readInt(T, slice[0..@sizeOf(T)], .little);
+        }
+
+        // SIMD-0460: cross-region splits are access violations. The byte-level
+        // fallback below is pre-SIMD-0460 behavior.
+        if (self.config.stricter_abi_and_runtime_constraints) return err;
 
         var dest: [@sizeOf(T)]u8 = undefined;
         var ptr: []u8 = &dest;
@@ -606,8 +725,21 @@ const UnalignedMemoryMap = struct {
         vm_addr: u64,
         len: u64,
     ) AccessError!state.Slice() {
-        return reg.translate(state, vm_addr, len) orelse
-            return accessViolation(vm_addr, self.version, self.config);
+        if (reg.translate(state, vm_addr, len)) |slice| return slice;
+        // SIMD-0460: try the access-violation handler. We pass the original
+        // region pointer (not the local copy) so the handler can mutate the
+        // map's region in place; the eytzinger index remains valid because
+        // the handler only grows `vm_addr_end` / refreshes `host_memory`
+        // without changing `vm_addr_start`.
+        if (self.access_violation_handler != null) {
+            // Re-find by start address to get a stable pointer into self.regions.
+            if (self.findRegion(reg.vm_addr_start)) |region_ptr| {
+                if (self.tryHandlerThenTranslate(state, region_ptr, vm_addr, len)) |slice| {
+                    return slice;
+                }
+            } else |_| {}
+        }
+        return accessViolation(vm_addr, self.version, self.config);
     }
 };
 
