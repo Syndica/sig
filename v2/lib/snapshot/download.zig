@@ -207,6 +207,11 @@ const DownloadCandidate = struct {
     started: bool = false,
 };
 
+const DownloadProgressSample = struct {
+    time: std.time.Instant,
+    bytes_written: u64,
+};
+
 pub const DownloadRace = struct {
     phase: enum {
         /// The race hasn't started yet (no candidates have arrived).
@@ -228,6 +233,7 @@ pub const DownloadRace = struct {
     candidate_count: u8,
 
     winner_index: ?u8,
+    progress_sample: ?DownloadProgressSample,
 
     /// NOTE: resets the race phase to .idle
     pub fn empty() DownloadRace {
@@ -238,6 +244,7 @@ pub const DownloadRace = struct {
             .candidates = undefined,
             .candidate_count = 0,
             .winner_index = null,
+            .progress_sample = null,
         };
     }
 };
@@ -851,6 +858,8 @@ pub const Downloader = struct {
             self.timeout_pending = false;
             return;
         }
+
+        self.maybeLogWinnerProgress();
 
         var drained: u8 = 0;
         while (drained < MAX_DRAIN) : (drained += 1) {
@@ -2435,6 +2444,10 @@ pub const Downloader = struct {
 
         self.download_race.phase = .winner_selected;
         self.download_race.winner_index = index;
+        self.download_race.progress_sample = .{
+            .time = std.time.Instant.now() catch unreachable,
+            .bytes_written = active.bytes_written,
+        };
 
         for (&self.download_conns, 0..) |*other, i| {
             if (i == index) continue;
@@ -2444,6 +2457,44 @@ pub const Downloader = struct {
         }
 
         self.logger.info().logf("download winner from={f} addr={f}", .{ active.from, active.addr });
+    }
+
+    fn maybeLogWinnerProgress(self: *Downloader) void {
+        if (self.download_race.phase != .winner_selected) return;
+
+        const winner_index = self.download_race.winner_index orelse return;
+        const active = self.download_conns[winner_index].activePtr() orelse return;
+        if (active.content_len == 0) return;
+
+        const now = std.time.Instant.now() catch unreachable;
+        const sample = self.download_race.progress_sample orelse {
+            self.download_race.progress_sample = .{
+                .time = now,
+                .bytes_written = active.bytes_written,
+            };
+            return;
+        };
+
+        const elapsed_ns = now.since(sample.time);
+        if (elapsed_ns < std.time.ns_per_s) return;
+
+        const delta_bytes = active.bytes_written - sample.bytes_written;
+        const mib_per_s = @as(f64, @floatFromInt(delta_bytes)) *
+            @as(f64, @floatFromInt(std.time.ns_per_s)) /
+            @as(f64, @floatFromInt(elapsed_ns)) /
+            (1024.0 * 1024.0);
+        const percent = @as(f64, @floatFromInt(active.bytes_written)) * 100.0 /
+            @as(f64, @floatFromInt(active.content_len));
+
+        self.logger.info().logf(
+            "download progress from={f} completed={d:.1}% speed={d:.2}MiB/s",
+            .{ active.from, percent, mib_per_s },
+        );
+
+        self.download_race.progress_sample = .{
+            .time = now,
+            .bytes_written = active.bytes_written,
+        };
     }
 
     /// Retires all active download connections except the one at `keep_index`.

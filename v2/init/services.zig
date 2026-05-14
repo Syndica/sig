@@ -284,8 +284,8 @@ pub const Region = union(enum) {
                 if (has_wildcard) {
                     if (cfg.known_validators.len > 1) {
                         std.log.warn(
-                            "known_validators contains \"*\" alongside other entries; \"*\" wins" ++
-                                "ignoring the rest.",
+                            "known_validators contains \"*\" alongside other entries; " ++
+                                "\"*\" takes precedence, ignoring the rest.",
                             .{},
                         );
                     }
