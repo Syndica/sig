@@ -491,6 +491,7 @@ pub fn build(b: *Build) !void {
             .error_tracing = config.error_tracing,
             .sanitize_thread = config.enable_tsan,
         }),
+        .use_llvm = config.use_llvm,
     });
     geyser_reader_exe.root_module.addObject(memcpy);
     geyser_reader_exe.root_module.addImport("sig", sig_mod);
@@ -508,6 +509,7 @@ pub fn build(b: *Build) !void {
             .sanitize_thread = config.enable_tsan,
             .error_tracing = config.error_tracing,
         }),
+        .use_llvm = config.use_llvm,
     });
     vm_exe.root_module.addObject(memcpy);
     vm_exe.root_module.addImport("sig", sig_mod);
