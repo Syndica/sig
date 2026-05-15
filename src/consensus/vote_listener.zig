@@ -361,7 +361,7 @@ pub const VoteCollector = struct {
             ledger: *Ledger,
             gossip_votes: ?*sig.sync.Channel(sig.gossip.data.Vote),
         },
-    ) !?Slot {
+    ) !?ThresholdConfirmedSlot {
         const slot_data_provider = params.slot_data_provider;
         const senders = params.senders;
         const receivers = params.receivers;
@@ -418,12 +418,13 @@ pub const VoteCollector = struct {
             .from(logger),
         );
 
-        var optimistically_confirmed_slot: ?Slot = null;
+        var optimistically_confirmed_slot: ?ThresholdConfirmedSlot = null;
         for (confirmed_slots) |confirmed| {
-            optimistically_confirmed_slot = if (optimistically_confirmed_slot) |current|
-                @max(current, confirmed.slot)
-            else
-                confirmed.slot;
+            if (optimistically_confirmed_slot == null or
+                confirmed.slot > optimistically_confirmed_slot.?.slot)
+            {
+                optimistically_confirmed_slot = confirmed;
+            }
         }
 
         return optimistically_confirmed_slot;

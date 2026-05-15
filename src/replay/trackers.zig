@@ -401,7 +401,7 @@ pub const CommitmentTracker = struct {
         transaction: *CommitmentStakes.Transaction,
     ) void {
         if (slot_update.voted) |s| self.update(.processed, s);
-        if (slot_update.optimistically_confirmed) |s| self.update(.confirmed, s);
+        if (slot_update.optimistically_confirmed) |s| self.update(.confirmed, s.slot);
 
         // Only commit when the visitor actually collected vote data this tick.
         // On ticks with no newly frozen slots, the transaction is empty
@@ -876,7 +876,7 @@ pub const SlotTree = struct {
         return .{
             .root = new_root,
             .voted = self.tip(),
-            .optimistically_confirmed = new_root,
+            .optimistically_confirmed = if (new_root) |r| .{ .slot = r, .hash = .ZEROES } else null,
         };
     }
 

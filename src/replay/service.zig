@@ -266,7 +266,7 @@ pub fn advanceReplay(
 pub const SlotUpdate = struct {
     root: ?Slot,
     voted: ?Slot,
-    optimistically_confirmed: ?Slot,
+    optimistically_confirmed: ?ThresholdConfirmedSlot,
 };
 
 /// Extract StatusCache's sorted root slots so that the accumulator only tracks
@@ -933,6 +933,34 @@ pub fn handleSlotUpdate(
         old_finalized = c.get(.finalized);
     }
 
+    // verify our slot state hash matches the cluster
+    if (slot_update.optimistically_confirmed) |confirmed| blk: {
+        const slot_info = replay_state.slot_tracker.get(confirmed.slot) orelse {
+            replay_state.logger.debug().logf(
+                "confirmed slot {} not found in slot tracker, likely still catching up",
+                .{confirmed.slot},
+            );
+            break :blk;
+        };
+        defer slot_info.release();
+
+        const state_hash = slot_info.state().hash.readCopy() orelse {
+            replay_state.logger.info().logf(
+                "confirmed slot {} hash not found in slot state, " ++
+                    "likely currently replaying that slot",
+                .{confirmed.slot},
+            );
+            break :blk;
+        };
+
+        if (!state_hash.eql(confirmed.hash)) {
+            replay_state.logger.err().logf(
+                "slot state hash mismatch for confirmed slot {}: replay={f} cluster={f}",
+                .{ confirmed.slot, state_hash, confirmed.hash },
+            );
+        }
+    }
+
     // update commitment levels
     if (replay_state.commitments) |*c| {
         c.commit(slot_update, commitment_txn.?);
@@ -1154,7 +1182,7 @@ pub const LogDeduper = struct {
                 .slot_update => |*update| for ([_]?u64{
                     update.root,
                     update.voted,
-                    update.optimistically_confirmed,
+                    if (update.optimistically_confirmed) |oc| oc.slot else null,
                 }) |maybe| hasher.update(std.mem.asBytes(
                     &(if (maybe) |n| n else @as(u64, std.math.maxInt(Slot))),
                 )),
