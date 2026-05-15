@@ -242,7 +242,8 @@ fn handleExecutionResult(
             if (deplete_cu_meter and err_kind != .Syscall)
                 compute_meter.* = 0;
             if (virtual_address_space_adjustments and err == error.AccessViolation)
-                std.debug.print("TODO: Handle AccessViolation: {s}\n", .{@errorName(err)});
+                // std.debug.print("TODO: Handle AccessViolation: {s}\n", .{@errorName(err)});
+                return error.AccessViolation;
             return err;
         },
     }
