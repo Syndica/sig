@@ -1150,7 +1150,7 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
 
                         switch (callee_account.checkDataIsMutable() == null) {
                             inline true, false => |mutable| {
-                                const state: memory.MemoryState = if (mutable)
+                                const state = if (mutable)
                                     .mutable
                                 else
                                     .constant;
@@ -1158,7 +1158,7 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                                 const data = if (account_data_direct_mapping)
                                     callee_account.account.data
                                 else
-                                    region.hostSlice(state).?[0..callee_account.account.data.len];
+                                    region.upgrade(state).?[0..callee_account.account.data.len];
 
                                 region.* = .init(state, data, region.vm_addr_start);
                             },

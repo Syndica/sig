@@ -145,6 +145,16 @@ pub const BorrowedAccount = struct {
         return self.account.data;
     }
 
+    /// This is typically unsafe to use because it grants mutable access to a
+    /// readonly account. This should not be used in programs. It is only for
+    /// rare edge cases where the VM needs to work around the readonly
+    /// constraint, for example when upgrading an account during CPI that is
+    /// actually supposed to be writable but was constrained as readonly for
+    /// only the prior instruction.
+    pub fn uncheckedMutableAccountData(self: *const BorrowedAccount) []u8 {
+        return self.account.data;
+    }
+
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L885
     pub fn setDataLength(
         self: *const BorrowedAccount,

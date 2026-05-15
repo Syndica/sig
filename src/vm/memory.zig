@@ -200,23 +200,26 @@ pub const MemoryState = enum {
             .mutable => []u8,
         };
     }
-
-    fn Many(self: MemoryState) type {
-        return switch (self) {
-            .constant => [*]const u8,
-            .mutable => [*]u8,
-        };
-    }
 };
 
-const HostMemory = union(MemoryState) {
+const HostMemory = union(Tag) {
     mutable: []u8,
     constant: []const u8,
+    constant_upgradeable: []u8,
 
-    fn getSlice(self: HostMemory, comptime state: MemoryState) !state.Slice() {
-        if (self != state) return error.AccessViolation;
-        return @field(self, @tagName(state));
-    }
+    const Tag = enum {
+        mutable,
+        constant,
+        constant_upgradeable,
+
+        fn Slice(self: Tag) type {
+            return switch (self) {
+                .constant => []const u8,
+                .mutable => []u8,
+                .constant_upgradeable => []u8,
+            };
+        }
+    };
 };
 
 // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L54
@@ -226,12 +229,12 @@ pub const Region = struct {
     vm_gap_shift: std.math.Log2Int(u64),
     vm_addr_end: u64,
 
-    pub fn init(comptime state: MemoryState, slice: state.Slice(), vm_addr: u64) Region {
+    pub fn init(comptime state: HostMemory.Tag, slice: state.Slice(), vm_addr: u64) Region {
         return initGapped(state, slice, vm_addr, 0);
     }
 
     pub fn initGapped(
-        comptime state: MemoryState,
+        comptime state: HostMemory.Tag,
         slice: state.Slice(),
         vm_addr: u64,
         vm_gap_size: u64,
@@ -252,10 +255,25 @@ pub const Region = struct {
 
     /// Get the underlying host slice of memory.
     ///
-    /// Returns null if you're trying to get mutable access to a constant region.
+    /// Returns null if you're trying to get mutable access to a constant
+    /// region, even if it's a constant_upgradeable region. Use `upgrade` if you
+    /// need to upgrade constant memory to mutable.
     pub fn hostSlice(self: Region, comptime state: MemoryState) ?state.Slice() {
         return switch (self.host_memory) {
             .constant => |constant| if (state == .mutable) null else constant,
+            .constant_upgradeable => |cu| if (state == .mutable) null else cu,
+            .mutable => |mutable| mutable,
+        };
+    }
+
+    /// Similar to hostSlice except it allows upgrades of constant_upgradeable
+    /// regions to mutable. This is for when the VM needs to upgrade an account
+    /// during CPI that is actually supposed to be writable but was temporarily
+    /// constrained as readonly for the prior instruction.
+    pub fn upgrade(self: Region, comptime state: MemoryState) ?state.Slice() {
+        return switch (self.host_memory) {
+            .constant => |constant| if (state == .mutable) null else constant,
+            .constant_upgradeable => |cu| cu,
             .mutable => |mutable| mutable,
         };
     }
@@ -263,6 +281,7 @@ pub const Region = struct {
     pub fn constSlice(self: Region) []const u8 {
         switch (self.host_memory) {
             .constant => |constant| return constant,
+            .constant_upgradeable => |cu| return cu,
             .mutable => |mutable| return mutable,
         }
     }

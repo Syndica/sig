@@ -152,7 +152,11 @@ pub const Serializer = struct {
             } else {
                 try self.regions.append(self.allocator, switch (state) {
                     .mutable => Region.init(.mutable, try account.mutableAccountData(), self.vaddr),
-                    .constant => Region.init(.constant, account.constAccountData(), self.vaddr),
+                    .constant => Region.init(
+                        .constant_upgradeable,
+                        account.uncheckedMutableAccountData(),
+                        self.vaddr,
+                    ),
                 });
                 self.vaddr += address_space;
             }

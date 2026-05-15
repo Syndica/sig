@@ -538,6 +538,7 @@ pub fn extractInputDataRegions(
                 .is_writable = switch (region.host_memory) {
                     .constant => false,
                     .mutable => true,
+                    .constant_upgradeable => false,
                 },
                 .content = try allocator.dupe(u8, region.constSlice()),
             });
