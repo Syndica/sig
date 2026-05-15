@@ -1161,10 +1161,19 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                                 else
                                     .constant;
 
-                                const data = if (account_data_direct_mapping)
+                                const data: []u8 = if (account_data_direct_mapping)
                                     callee_account.account.data
                                 else
-                                    caller_account.serialized_data;
+                                    switch (region.host_memory) {
+                                        // TODO: Fix this!!
+                                        // After `virtual_address_space_adjustments` memory regions may be switched between writable/non-writable
+                                        // during CPI. Given our current MemoryState and HostMemory couples the writability of a region to the slice type
+                                        // we are unable to promote a constant region to a mutable region. In practice during runtime all region host memory
+                                        // is allocated so constCast should okay however this is not something we should rely on. We need to rework our
+                                        // HostMemory and MemoryState implementation to decouple the writability of a region from the slice type.
+                                        .constant => |slice| @constCast(slice),
+                                        .mutable => |slice| slice,
+                                    }[0..callee_account.account.data.len];
 
                                 region.* = .init(state, data, region.vm_addr_start);
                                 // SIMD-0460: re-derive the access-violation

@@ -943,7 +943,7 @@ pub const Config = struct {
     /// memory map invokes the access-violation handler on translation failure
     /// (see MemoryMap.setAccessViolationHandler) to support direct-mapping
     /// auto-extension of writable+owned account regions.
-    stricter_abi_and_runtime_constraints: bool = false,
+    virtual_address_space_adjustments: bool = false,
 
     // The range of allowed SBPF versions
     minimum_version: sbpf.Version = .v0,
