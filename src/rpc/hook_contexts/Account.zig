@@ -582,10 +582,12 @@ pub fn getTokenAccountsByDelegate(
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2149
     const encoding = config.encoding orelse AccountEncoding.binary;
 
-    const slot = self.commitments.get(commitment);
-    if (config.minContextSlot) |min_slot| {
-        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        self.commitments,
+        commitment,
+        config.minContextSlot,
+    );
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
@@ -774,7 +776,12 @@ pub fn getSupply(
     const commitment = config.commitment orelse .finalized;
     const exclude_accounts = config.excludeNonCirculatingAccountsList;
 
-    const slot = self.commitments.get(commitment);
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        self.commitments,
+        commitment,
+        null,
+    );
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
@@ -841,7 +848,12 @@ pub fn getTokenLargestAccounts(
     const config: GetTokenLargestAccounts.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.commitments.get(commitment);
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        self.commitments,
+        commitment,
+        null,
+    );
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
@@ -961,7 +973,13 @@ pub fn getLargestAccounts(
     const commitment = config.commitment orelse .finalized;
     const sort_results = config.sortResults orelse true;
 
-    const slot = self.commitments.get(commitment);
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        self.commitments,
+        commitment,
+        null,
+    );
+
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
