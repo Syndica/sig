@@ -27,6 +27,8 @@ pub const Config = struct {
     use_llvm: bool,
     error_tracing: ?bool,
     long_tests: bool,
+    allow_no_sha: bool,
+    allow_no_avx512: bool,
     version: std.SemanticVersion,
 
     pub fn fromBuild(b: *Build) !Config {
@@ -45,9 +47,11 @@ pub const Config = struct {
                 "command line nor as a dependency argument.",
         ) orelse false;
 
+        const optimize = b.standardOptimizeOption(.{});
+
         var self: Config = .{
             .target = b.standardTargetOptions(.{}),
-            .optimize = b.standardOptimizeOption(.{}),
+            .optimize = optimize,
             .filters = filters,
             .enable_tsan = b.option(
                 bool,
@@ -125,6 +129,21 @@ pub const Config = struct {
                 "long-tests",
                 "Run extra tests that take a long time, for more exhaustive coverage.",
             ) orelse (filters != null),
+            .allow_no_sha = b.option(
+                bool,
+                "allow-no-sha",
+                "Opt in to a slower software fallback when the target lacks the x86 SHA " ++
+                    "extension. Without this flag, building for a target without SHA-NI is a " ++
+                    "compile-time error so the performance hit is not silently accepted.",
+            ) orelse (optimize == .Debug),
+            .allow_no_avx512 = b.option(
+                bool,
+                "allow-no-avx512",
+                "Opt in to a slower generic ed25519 path when the target lacks AVX-512 " ++
+                    "(avx512ifma + avx512vl). Without this flag, building for an x86_64 target " ++
+                    "without these features is a compile-time error so the performance hit is " ++
+                    "not silently accepted.",
+            ) orelse (optimize == .Debug),
             .version = s: {
                 const maybe_version_string = b.option(
                     []const u8,
@@ -214,6 +233,8 @@ pub fn build(b: *Build) !void {
     build_options.addOption(LedgerDB, "ledger_db", config.ledger_db);
     build_options.addOption(bool, "no_network_tests", config.no_network_tests);
     build_options.addOption(bool, "long_tests", config.long_tests);
+    build_options.addOption(bool, "allow_no_sha", config.allow_no_sha);
+    build_options.addOption(bool, "allow_no_avx512", config.allow_no_avx512);
     build_options.addOption(std.SemanticVersion, "version", config.version);
 
     const sig_step = b.step("sig", "Run the sig executable");

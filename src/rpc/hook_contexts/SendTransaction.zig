@@ -91,10 +91,15 @@ pub fn sendTransaction(
         self.account_store.reader().forSlot(&preflight_slot_ref.constants().ancestors),
     );
 
-    const durable_nonce_info: ?struct { Pubkey, Hash } = if (getDurableNonce(&transaction)) |nonce|
-        .{ nonce, transaction.recent_blockhash }
-    else
-        null;
+    const require_static_nonce_account = preflight_slot_ref.constants().feature_set.active(
+        .require_static_nonce_account,
+        preflight_slot,
+    );
+    const durable_nonce_info: ?struct { Pubkey, Hash } =
+        if (getDurableNonce(&transaction, require_static_nonce_account)) |nonce|
+            .{ nonce, transaction.recent_blockhash }
+        else
+            null;
 
     const last_valid_block_height = blk: {
         const bq, var bq_lg = preflight_slot_ref.state().blockhash_queue.readWithLock();
@@ -421,6 +426,7 @@ fn sanitizeTransaction(
         .accounts = resolved.accounts,
         .compute_budget_instruction_details = compute_budget_instruction_details,
         .num_lookup_tables = tx.msg.address_lookups.len,
+        .num_static_account_keys = @intCast(tx.msg.account_keys.len),
         .is_simple_vote_transaction = false,
     };
 }
@@ -1301,6 +1307,7 @@ test "simulateRuntimeTransaction: returns error for blockhash-not-found" {
         .accounts = accounts,
         .compute_budget_instruction_details = .{},
         .num_lookup_tables = 0,
+        .num_static_account_keys = 1,
         .is_simple_vote_transaction = false,
     };
 

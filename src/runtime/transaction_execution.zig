@@ -69,6 +69,10 @@ pub const RuntimeTransaction = struct {
     accounts: std.MultiArrayList(AccountMeta) = .{},
     compute_budget_instruction_details: ComputeBudgetInstructionDetails = .{},
     num_lookup_tables: u64,
+    /// Count of statically-included account keys (the message's `account_keys`),
+    /// excluding any accounts loaded from address-lookup tables. Equal to
+    /// `accounts.len - <ALT-loaded count>` and used to enforce SIMD-0242.
+    num_static_account_keys: u16,
     is_simple_vote_transaction: bool,
 };
 
@@ -218,6 +222,7 @@ pub fn loadAndExecuteTransaction(
         env.max_age,
         &env.next_durable_nonce,
         env.next_lamports_per_signature,
+        env.feature_set.active(.require_static_nonce_account, env.slot),
     )) {
         .ok => |x| x,
         .err => |e| return .{ .err = e },
@@ -745,8 +750,8 @@ test "preprocessTransaction: invalid compute budget instruction" {
     const result = sig.replay.preprocess_transaction.preprocessTransaction(
         transaction,
         .skip_sig_verify,
-        false,
-        false,
+        &.ALL_DISABLED,
+        0,
     );
 
     try std.testing.expectEqual(
@@ -829,6 +834,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         }},
         .accounts = accounts,
         .num_lookup_tables = 0,
+        .num_static_account_keys = @intCast(accounts.len),
         .is_simple_vote_transaction = false,
     };
 
