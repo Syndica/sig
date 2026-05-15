@@ -16,13 +16,13 @@ pub fn build(b: *Build) void {
         "allow-no-sha",
         "Forwarded to the sig dependency. Opt in to a slower software fallback when the " ++
             "target lacks the x86 SHA extension.",
-    ) orelse false;
+    ) orelse (optimize == .Debug);
     const allow_no_avx512 = b.option(
         bool,
         "allow-no-avx512",
         "Forwarded to the sig dependency. Opt in to a slower generic ed25519 path when the " ++
             "target lacks AVX-512.",
-    ) orelse false;
+    ) orelse (optimize == .Debug);
 
     const build_options = b.addOptions();
     build_options.addOption(bool, "include_sig", include_sig);
