@@ -85,7 +85,7 @@ pub const Environment = struct {
             .reject_broken_elfs = reject_deployment_of_broken_elfs,
             .optimize_rodata = false,
             .aligned_memory_mapping = !virtual_address_space_adjustments,
-            .stricter_abi_and_runtime_constraints = virtual_address_space_adjustments,
+            .virtual_address_space_adjustments = virtual_address_space_adjustments,
             .minimum_version = min_sbpf_version,
             .maximum_version = max_sbpf_version,
         };

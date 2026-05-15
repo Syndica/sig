@@ -623,7 +623,6 @@ const UnalignedMemoryMap = struct {
         const err = accessViolation(vm_addr, self.version, self.config);
 
         var region = try self.findRegion(vm_addr);
-        if (region.host_memory != .mutable) return err;
 
         if (region.translate(.mutable, vm_addr, @sizeOf(T))) |slice| {
             // fast path
@@ -643,7 +642,7 @@ const UnalignedMemoryMap = struct {
 
         // SIMD-0460: cross-region splits are access violations. The byte-level
         // fallback below is pre-SIMD-0460 behavior.
-        if (self.config.stricter_abi_and_runtime_constraints) return err;
+        if (self.config.virtual_address_space_adjustments) return err;
 
         var current_addr = vm_addr;
         var src: []const u8 = std.mem.asBytes(&value);
@@ -686,7 +685,7 @@ const UnalignedMemoryMap = struct {
 
         // SIMD-0460: cross-region splits are access violations. The byte-level
         // fallback below is pre-SIMD-0460 behavior.
-        if (self.config.stricter_abi_and_runtime_constraints) return err;
+        if (self.config.virtual_address_space_adjustments) return err;
 
         var dest: [@sizeOf(T)]u8 = undefined;
         var ptr: []u8 = &dest;
