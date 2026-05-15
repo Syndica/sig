@@ -615,6 +615,7 @@ fn emptyTxWithKeys(allocator: Allocator, keys: []const Pubkey) !RuntimeTransacti
         .instructions = &.{},
         .accounts = accounts,
         .num_lookup_tables = 0,
+        .num_static_account_keys = @intCast(keys.len),
         .is_simple_vote_transaction = false,
     };
 }
@@ -631,6 +632,7 @@ test "loadTransactionAccounts empty transaction" {
         .recent_blockhash = Hash.ZEROES,
         .signature_count = 0,
         .num_lookup_tables = 0,
+        .num_static_account_keys = 0,
         .is_simple_vote_transaction = false,
     };
 
@@ -677,6 +679,7 @@ test "loadTransactionAccounts sysvar instruction" {
         .signature_count = 0,
         .accounts = accounts,
         .num_lookup_tables = 0,
+        .num_static_account_keys = @intCast(accounts.len),
         .is_simple_vote_transaction = false,
     };
 
@@ -1040,6 +1043,7 @@ test "constructInstructionsAccount" {
         .signature_count = 1,
         .accounts = accounts,
         .num_lookup_tables = 0,
+        .num_static_account_keys = @intCast(accounts.len),
         .is_simple_vote_transaction = false,
     };
 
