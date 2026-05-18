@@ -64,7 +64,6 @@ pub const ServiceId = topology.ServiceId;
 pub const SharedRegion = topology.SharedRegion;
 pub const toSharedRegions = topology.toSharedRegions;
 pub const ServiceInstance = topology.ServiceInstance;
-const getRequiredRegions = topology.getRequiredRegions;
 
 pub const Region = union(enum) {
     gossip_config: struct {
@@ -231,7 +230,7 @@ pub fn telemetryServiceCount(comptime services: []const ServiceInstance) u32 {
         const service = instance.service;
         if (service == .telemetry) continue;
 
-        for (getRequiredRegions(service)) |region| {
+        for (topology.getRequiredRegions(service)) |region| {
             if (region.region == .telemetry) {
                 count += 1;
                 break;
@@ -240,117 +239,6 @@ pub fn telemetryServiceCount(comptime services: []const ServiceInstance) u32 {
     }
 
     return count;
-}
-
-const Map = std.AutoArrayHashMapUnmanaged(ServiceInstance, MapEntry);
-
-const MapEntry = std.ArrayListUnmanaged(LookupResult);
-
-const LookupResult = struct {
-    n: usize, // for supporting multiple regions of the same kind
-    shared: SharedRegion,
-    rw: bool,
-    memfd: memfd.RW,
-};
-
-/// Pairs services up with their respective required regions and their rw/ro permission
-fn serviceMap(
-    allocator: std.mem.Allocator,
-    comptime services: []const ServiceInstance,
-    regions: []const SharedRegion,
-    region_memfds: []const memfd.RW,
-) !Map {
-    // check all regions reference existing services
-    for (regions) |region| {
-        for (region.shares) |share| {
-            const found_service: bool = for (services) |instance| {
-                const matching =
-                    instance.service == share.instance.service and
-                    instance.n == share.instance.n;
-
-                if (matching) break true;
-            } else false;
-
-            if (!found_service)
-                std.debug.panic("Shared region {f} with unknown service {}\n", .{ region, share });
-        }
-    }
-
-    var map: Map = .empty;
-    errdefer map.deinit(allocator);
-
-    // check all service instances request regions which are shared with them
-    inline for (services) |instance| {
-        for (getRequiredRegions(instance.service)) |required_region| {
-            const found_region: LookupResult = blk: for (
-                regions,
-                region_memfds,
-                0..,
-            ) |shared_region, region_memfd, n| {
-                if (shared_region.region != required_region.region) continue;
-
-                for (shared_region.shares) |share| {
-                    if (instance.service == share.instance.service and
-                        instance.n == share.instance.n)
-                    {
-                        const result: LookupResult = .{
-                            .n = n,
-                            .shared = shared_region,
-                            .rw = required_region.rw,
-                            .memfd = region_memfd,
-                        };
-
-                        var exists = false;
-                        if (map.getPtr(instance)) |entry| {
-                            for (entry.items) |existing_result| {
-                                if (std.meta.eql(existing_result, result)) {
-                                    exists = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        std.debug.assert(region_memfd.size == shared_region.region.size());
-                        if (!exists) break :blk result;
-                    }
-                }
-            } else std.debug.panic(
-                "Service instance {f} requested {} region which was not shared with it",
-                .{ instance, required_region },
-            );
-
-            const entry = try map.getOrPut(allocator, instance);
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
-            try entry.value_ptr.append(allocator, found_region);
-        }
-    }
-
-    return map;
-}
-
-/// Context created by the service initializer, used to report thread exit or crash and wake the
-/// main thread. Services receive it as opaque data and must not inspect it.
-const ThreadExitContext = struct {
-    finished_idx: *std.atomic.Value(u16),
-    reset_event: *std.Thread.ResetEvent,
-};
-
-fn getFaultHandler(service: ServiceId) sigaction_fn {
-    return switch (service) {
-        inline else => |s| @extern(
-            sigaction_fn,
-            .{ .name = "svc_fault_handler_" ++ @tagName(s) },
-        ),
-    };
-}
-
-pub fn getEntrypoint(service: ServiceId) ServiceEntrypoint {
-    return switch (service) {
-        inline else => |s| @extern(
-            ServiceEntrypoint,
-            .{ .name = "svc_main_" ++ @tagName(s) },
-        ),
-    };
 }
 
 /// Create and initialize memfds for each shared memory region (map it, initialize it, and then unmap it).
@@ -400,6 +288,47 @@ fn createExitMemfds(
     }
 }
 
+/// Mmap in our memfds, and putting the regions in a type-erased extern struct
+fn resolveArgs(
+    exit: memfd.RW,
+    stderr: std.fs.File,
+    regions: []const topology.ServiceMapLookupResult,
+) !lib.ipc.ResolvedArgs {
+    var args: lib.ipc.ResolvedArgs = .{
+        .stderr = stderr.handle,
+        .exit = (try exit.mmap(null)).ptr,
+
+        .rw = @splat(null),
+        .rw_len = @splat(0),
+        .ro = @splat(null),
+        .ro_len = @splat(0),
+
+        .thread_crash_ctx = null,
+        .thread_crash_fn = null,
+        .service_idx = std.math.maxInt(u16),
+    };
+
+    var i_rw: u8 = 0;
+    var i_ro: u8 = 0;
+
+    for (regions) |region| {
+        std.debug.assert(region.shared.region.size() == region.memfd.size);
+
+        if (region.rw) {
+            args.rw[i_rw] = (try region.memfd.mmap(region.shared.requested_location)).ptr;
+            args.rw_len[i_rw] = region.shared.region.size();
+            i_rw += 1;
+        } else {
+            const ro_memfd = try memfd.RO.fromRW(region.memfd);
+            args.ro[i_ro] = (try ro_memfd.mmap(region.shared.requested_location)).ptr;
+            args.ro_len[i_ro] = region.shared.region.size();
+            i_ro += 1;
+        }
+    }
+
+    return args;
+}
+
 /// Initialises the shared memory regions with their parameters, then securely starts up services.
 /// Blocks until the first service has exited, before dumping out traces.
 pub fn spawnAndWait(
@@ -413,7 +342,7 @@ pub fn spawnAndWait(
     var exit_memfds: [services.len]memfd.RW = undefined;
     try createExitMemfds(services, &exit_memfds);
 
-    var map = try serviceMap(allocator, services, regions, region_memfds);
+    var map = try topology.serviceMap(allocator, services, regions, region_memfds);
     defer {
         for (map.values()) |*value| value.deinit(allocator);
         map.deinit(allocator);
@@ -472,7 +401,7 @@ fn spawnService(
     service_instance: ServiceInstance,
     exit: memfd.RW,
     stderr: std.fs.File,
-    regions: []const LookupResult,
+    regions: []const topology.ServiceMapLookupResult,
 ) !i32 {
     const parent_pid = std.os.linux.getpid();
 
@@ -499,7 +428,7 @@ fn spawnService(
     // register fault handlers
     {
         const act: *const std.os.linux.Sigaction = &.{
-            .handler = .{ .sigaction = getFaultHandler(service_instance.service) },
+            .handler = .{ .sigaction = topology.getFaultHandler(service_instance.service) },
             .mask = std.os.linux.sigemptyset(),
             .flags = (std.posix.SA.SIGINFO | std.posix.SA.RESTART | std.posix.SA.RESETHAND),
         };
@@ -561,49 +490,8 @@ fn spawnService(
         }
     }
 
-    getEntrypoint(service_instance.service)(resolved_args);
+    topology.getEntrypoint(service_instance.service)(resolved_args);
     std.process.exit(255);
-}
-
-/// Mmap in our memfds, and putting the regions in a type-erased extern struct
-fn resolveArgs(
-    exit: memfd.RW,
-    stderr: std.fs.File,
-    regions: []const LookupResult,
-) !lib.ipc.ResolvedArgs {
-    var args: lib.ipc.ResolvedArgs = .{
-        .stderr = stderr.handle,
-        .exit = (try exit.mmap(null)).ptr,
-
-        .rw = @splat(null),
-        .rw_len = @splat(0),
-        .ro = @splat(null),
-        .ro_len = @splat(0),
-
-        .thread_crash_ctx = null,
-        .thread_crash_fn = null,
-        .service_idx = std.math.maxInt(u16),
-    };
-
-    var i_rw: u8 = 0;
-    var i_ro: u8 = 0;
-
-    for (regions) |region| {
-        std.debug.assert(region.shared.region.size() == region.memfd.size);
-
-        if (region.rw) {
-            args.rw[i_rw] = (try region.memfd.mmap(region.shared.requested_location)).ptr;
-            args.rw_len[i_rw] = region.shared.region.size();
-            i_rw += 1;
-        } else {
-            const ro_memfd = try memfd.RO.fromRW(region.memfd);
-            args.ro[i_ro] = (try ro_memfd.mmap(region.shared.requested_location)).ptr;
-            args.ro_len[i_ro] = region.shared.region.size();
-            i_ro += 1;
-        }
-    }
-
-    return args;
 }
 
 /// Prevents VMAs from being later modified
@@ -692,7 +580,7 @@ pub fn spawnAndWaitNoSandbox(
     var exit_memfds: [services.len]memfd.RW = undefined;
     try createExitMemfds(services, &exit_memfds);
 
-    var map = try serviceMap(allocator, services, regions, region_memfds);
+    var map = try topology.serviceMap(allocator, services, regions, region_memfds);
     defer {
         for (map.values()) |*value| value.deinit(allocator);
         map.deinit(allocator);
@@ -727,6 +615,13 @@ pub fn spawnAndWaitNoSandbox(
     dumpOnExit(@ptrCast(try exit_memfds[exited_idx].mmap(null)), services[exited_idx], 0, 0);
 }
 
+/// Context created by the service initializer, used to report thread exit or crash and wake the
+/// main thread. Services receive it as opaque data and must not inspect it.
+const ThreadExitContext = struct {
+    finished_idx: *std.atomic.Value(u16),
+    reset_event: *std.Thread.ResetEvent,
+};
+
 fn signalThreadExit(service_idx: u16, ctx: *const ThreadExitContext) void {
     ctx.finished_idx.store(service_idx, .seq_cst);
     ctx.reset_event.set();
@@ -758,7 +653,7 @@ fn spawnServiceNoSandbox(
     service_instance: ServiceInstance,
     exit: memfd.RW,
     stderr: std.fs.File,
-    regions: []const LookupResult,
+    regions: []const topology.ServiceMapLookupResult,
     service_idx: u16,
     thread_exit_ctx: *const ThreadExitContext,
 ) !std.Thread {
@@ -771,7 +666,7 @@ fn spawnServiceNoSandbox(
         .{},
         threadEntry,
         .{
-            getEntrypoint(service_instance.service),
+            topology.getEntrypoint(service_instance.service),
             service_instance.service,
             resolved_args,
             service_idx,

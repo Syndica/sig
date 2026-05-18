@@ -1,4 +1,9 @@
 const std = @import("std");
+const lib = @import("lib.zig");
+
+const linux = std.os.linux;
+const sigaction_fn = linux.Sigaction.sigaction_fn;
+const ServiceEntrypoint = lib.ipc.ServiceFn;
 
 const TopologySchema = @This();
 services: []const ServiceSchema,
@@ -298,6 +303,117 @@ pub fn Bind(
                 }
                 return required;
             }
+        }
+
+        // -- Service Externs -- //
+
+        pub fn getFaultHandler(service: bound.ServiceId) sigaction_fn {
+            return switch (service) {
+                inline else => |s| @extern(
+                    sigaction_fn,
+                    .{ .name = "svc_fault_handler_" ++ @tagName(s) },
+                ),
+            };
+        }
+
+        pub fn getEntrypoint(service: bound.ServiceId) ServiceEntrypoint {
+            return switch (service) {
+                inline else => |s| @extern(
+                    ServiceEntrypoint,
+                    .{ .name = "svc_main_" ++ @tagName(s) },
+                ),
+            };
+        }
+
+        // -- Service Map -- //
+
+        pub const ServiceMap = std.AutoArrayHashMapUnmanaged(ServiceInstance, ServiceMapEntry);
+
+        pub const ServiceMapEntry = std.ArrayListUnmanaged(ServiceMapLookupResult);
+
+        pub const ServiceMapLookupResult = struct {
+            n: usize, // for supporting multiple regions of the same kind
+            shared: SharedRegion,
+            rw: bool,
+            memfd: lib.linux.memfd.RW,
+        };
+
+        /// Pairs services up with their respective required regions and their rw/ro permission
+        pub fn serviceMap(
+            allocator: std.mem.Allocator,
+            comptime services: []const ServiceInstance,
+            regions: []const SharedRegion,
+            region_memfds: []const lib.linux.memfd.RW,
+        ) std.mem.Allocator.Error!ServiceMap {
+            // check all regions reference existing services
+            for (regions) |region| {
+                for (region.shares) |share| {
+                    const found_service: bool = for (services) |instance| {
+                        const matching =
+                            instance.service == share.instance.service and
+                            instance.n == share.instance.n;
+
+                        if (matching) break true;
+                    } else false;
+
+                    if (!found_service)
+                        std.debug.panic(
+                            "Shared region {f} with unknown service {}\n",
+                            .{ region, share },
+                        );
+                }
+            }
+
+            var map: ServiceMap = .empty;
+            errdefer map.deinit(allocator);
+
+            // check all service instances request regions which are shared with them
+            inline for (services) |instance| {
+                for (getRequiredRegions(instance.service)) |required_region| {
+                    const found_region: ServiceMapLookupResult = blk: for (
+                        regions,
+                        region_memfds,
+                        0..,
+                    ) |shared_region, region_memfd, n| {
+                        if (shared_region.region != required_region.region) continue;
+
+                        for (shared_region.shares) |share| {
+                            if (instance.service == share.instance.service and
+                                instance.n == share.instance.n)
+                            {
+                                const result: ServiceMapLookupResult = .{
+                                    .n = n,
+                                    .shared = shared_region,
+                                    .rw = required_region.rw,
+                                    .memfd = region_memfd,
+                                };
+
+                                var exists = false;
+                                if (map.getPtr(instance)) |entry| {
+                                    for (entry.items) |existing_result| {
+                                        if (std.meta.eql(existing_result, result)) {
+                                            exists = true;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                std.debug.assert(region_memfd.size == shared_region.region.size());
+                                if (!exists) break :blk result;
+                            }
+                        }
+                    } else std.debug.panic(
+                        "Service instance {f} requested {} region which was not shared with it",
+                        .{ instance, required_region },
+                    );
+
+                    const entry = try map.getOrPut(allocator, instance);
+                    if (!entry.found_existing) entry.value_ptr.* = .empty;
+                    try entry.value_ptr.append(allocator, found_region);
+                }
+            }
+
+            return map;
         }
     };
 }
