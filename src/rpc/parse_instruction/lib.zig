@@ -803,8 +803,31 @@ fn parseVoteInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "authorizeChecked" });
         },
-        // TODO: .updateCommissionCollector for SIMD-0232
+        ._reserved_initialize_account_v2 => return error.ParseError,
         // TODO: .updateComissionBps for SIMD-0291
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/transaction-status/src/parse_vote.rs#L292
+        .update_commission_collector => |kind| {
+            try checkNumVoteAccounts(instruction.accounts, 3);
+            var info = ObjectMap.init(arena);
+            try info.put("voteAccount", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("newCollector", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("withdrawAuthority", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(instruction.accounts[2])).?,
+            ));
+            try info.put("commissionKind", .{ .string = switch (kind) {
+                .inflation_rewards => "InflationRewards",
+                .block_revenue => "BlockRevenue",
+            } });
+            try result.put("info", .{ .object = info });
+            try result.put("type", .{ .string = "updateCommissionCollector" });
+        },
     }
 
     return .{ .object = result };
@@ -7057,4 +7080,169 @@ test "readCOptionPubkey: Some but insufficient data for pubkey" {
     std.mem.writeInt(u32, data[0..4], 1, .little); // tag = Some
     // Only 4 more bytes, need 32
     try std.testing.expectError(error.DeserializationFailed, readCOptionPubkey(&data, 0));
+}
+
+// ── SIMD-0232: UpdateCommissionCollector RPC parse tests ────────
+// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/transaction-status/src/parse_vote.rs#L1140
+
+test "parse_vote update_commission_collector inflation_rewards" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
+    const allocator = arena.allocator();
+
+    const vote_id = sig.runtime.program.vote.ID;
+    const vote_pubkey = Pubkey{ .data = [_]u8{1} ** 32 };
+    const new_collector_pubkey = Pubkey{ .data = [_]u8{2} ** 32 };
+    const withdrawer_pubkey = Pubkey{ .data = [_]u8{3} ** 32 };
+    const static_keys = [_]Pubkey{
+        vote_pubkey,
+        new_collector_pubkey,
+        withdrawer_pubkey,
+        vote_id,
+    };
+    const account_keys = AccountKeys.init(&static_keys, null);
+
+    // Bincode: u32(17) = UpdateCommissionCollector,
+    //          u32(0)  = CommissionKind::InflationRewards
+    var data: [8]u8 = undefined;
+    std.mem.writeInt(u32, data[0..4], 17, .little);
+    std.mem.writeInt(u32, data[4..8], 0, .little);
+
+    const instruction = sig.ledger.transaction_status.CompiledInstruction{
+        .program_id_index = 3,
+        .accounts = &.{ 0, 1, 2 },
+        .data = &data,
+    };
+
+    const result = try parseInstruction(
+        allocator,
+        vote_id,
+        instruction,
+        &account_keys,
+        null,
+    );
+
+    switch (result) {
+        .parsed => |p| switch (p.*) {
+            .parsed => |pi| {
+                try std.testing.expectEqualStrings("vote", pi.program);
+                const obj = pi.parsed.object;
+                const type_val = obj.get("type").?;
+                try std.testing.expectEqualStrings(
+                    "updateCommissionCollector",
+                    type_val.string,
+                );
+                const info = obj.get("info").?.object;
+                try std.testing.expectEqualStrings(
+                    vote_pubkey.base58String().constSlice(),
+                    info.get("voteAccount").?.string,
+                );
+                try std.testing.expectEqualStrings(
+                    new_collector_pubkey.base58String().constSlice(),
+                    info.get("newCollector").?.string,
+                );
+                try std.testing.expectEqualStrings(
+                    withdrawer_pubkey.base58String().constSlice(),
+                    info.get("withdrawAuthority").?.string,
+                );
+                try std.testing.expectEqualStrings(
+                    "InflationRewards",
+                    info.get("commissionKind").?.string,
+                );
+            },
+            .partially_decoded => return error.UnexpectedResult,
+        },
+        .compiled => return error.UnexpectedResult,
+    }
+}
+
+test "parse_vote update_commission_collector block_revenue" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
+    const allocator = arena.allocator();
+
+    const vote_id = sig.runtime.program.vote.ID;
+    const vote_pubkey = Pubkey{ .data = [_]u8{1} ** 32 };
+    const new_collector_pubkey = Pubkey{ .data = [_]u8{2} ** 32 };
+    const withdrawer_pubkey = Pubkey{ .data = [_]u8{3} ** 32 };
+    const static_keys = [_]Pubkey{
+        vote_pubkey,
+        new_collector_pubkey,
+        withdrawer_pubkey,
+        vote_id,
+    };
+    const account_keys = AccountKeys.init(&static_keys, null);
+
+    // Bincode: u32(17) = UpdateCommissionCollector,
+    //          u32(1)  = CommissionKind::BlockRevenue
+    var data: [8]u8 = undefined;
+    std.mem.writeInt(u32, data[0..4], 17, .little);
+    std.mem.writeInt(u32, data[4..8], 1, .little);
+
+    const instruction = sig.ledger.transaction_status.CompiledInstruction{
+        .program_id_index = 3,
+        .accounts = &.{ 0, 1, 2 },
+        .data = &data,
+    };
+
+    const result = try parseInstruction(
+        allocator,
+        vote_id,
+        instruction,
+        &account_keys,
+        null,
+    );
+
+    switch (result) {
+        .parsed => |p| switch (p.*) {
+            .parsed => |pi| {
+                const info = pi.parsed.object
+                    .get("info").?.object;
+                try std.testing.expectEqualStrings(
+                    "BlockRevenue",
+                    info.get("commissionKind").?.string,
+                );
+            },
+            .partially_decoded => return error.UnexpectedResult,
+        },
+        .compiled => return error.UnexpectedResult,
+    }
+}
+
+test "parse_vote update_commission_collector too few accounts" {
+    // [agave] Agave test asserts error when accounts < 3.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer _ = arena.reset(.free_all);
+    const allocator = arena.allocator();
+
+    const vote_id = sig.runtime.program.vote.ID;
+    const vote_pubkey = Pubkey{ .data = [_]u8{1} ** 32 };
+    const new_collector_pubkey = Pubkey{ .data = [_]u8{2} ** 32 };
+    const static_keys = [_]Pubkey{
+        vote_pubkey,
+        new_collector_pubkey,
+        vote_id,
+    };
+    const account_keys = AccountKeys.init(&static_keys, null);
+
+    var data: [8]u8 = undefined;
+    std.mem.writeInt(u32, data[0..4], 17, .little);
+    std.mem.writeInt(u32, data[4..8], 0, .little);
+
+    // Only 2 accounts, need 3
+    const instruction = sig.ledger.transaction_status.CompiledInstruction{
+        .program_id_index = 2,
+        .accounts = &.{ 0, 1 },
+        .data = &data,
+    };
+
+    const result = parseInstruction(
+        allocator,
+        vote_id,
+        instruction,
+        &account_keys,
+        null,
+    );
+
+    try std.testing.expectError(error.NotEnoughVoteAccounts, result);
 }
