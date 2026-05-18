@@ -1021,12 +1021,6 @@ pub const Downloader = struct {
         };
     }
 
-    fn reserveSqe(self: *Downloader) !*std.os.linux.io_uring_sqe {
-        const capacity: u32 = @intCast(self.ring.sq.sqes.len);
-        if (capacity - self.ring.sq_ready() < 1) return error.SubmissionQueueFull;
-        return self.ring.get_sqe() catch unreachable;
-    }
-
     /// Enqueues a pair of SQEs to connect and perform the tcp handshake along with a timeout.
     fn queueProbeConnectWithTimeout(
         self: *Downloader,
@@ -2234,7 +2228,7 @@ pub const Downloader = struct {
         write_data.op = .download_write_extra;
         write_data.offset = written;
 
-        const sqe = try self.reserveSqe();
+        const sqe = try self.ring.get_sqe();
 
         std.debug.assert(written <= writing_extra.extra_body_len);
 
@@ -2313,7 +2307,7 @@ pub const Downloader = struct {
 
         std.debug.assert(active.pipe_pending > 0);
 
-        const sqe = try self.reserveSqe();
+        const sqe = try self.ring.get_sqe();
 
         var splice_ud = UserData.init(.download_splice_out, index, conn.gen);
         splice_ud.offset = active.op_seq;
@@ -2330,7 +2324,7 @@ pub const Downloader = struct {
         const active = conn.activePtr() orelse unreachable;
         const fsyncing = conn.enterFsyncing();
 
-        const sqe = try self.reserveSqe();
+        const sqe = try self.ring.get_sqe();
 
         var fsync_data = UserData.init(.download_fsync, index, conn.gen);
         fsync_data.offset = active.op_seq;
