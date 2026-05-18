@@ -4554,6 +4554,438 @@ test handleExecutionResult {
     // metadata from `TransactionContext.last_access_violation`).
 }
 
+// SIMD-0460: covers `AccessViolationHandlerCtx.handle` — the function the SBPF
+// VM calls when an access misses, which both records metadata for post-execution
+// error remapping and (for writes within budget) auto-grows the account-data
+// region. Exercises each early-return guard plus the successful-grow path under
+// both direct- and non-direct-mapping.
+test "AccessViolationHandlerCtx.handle" {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const account_data_size: usize = 100;
+    const initial_data = try allocator.alloc(u8, account_data_size);
+    defer allocator.free(initial_data);
+    @memset(initial_data, 0xab);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const data_account_key = Pubkey.initRandom(prng.random());
+
+    const cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+        .accounts = &.{
+            .{ .pubkey = data_account_key, .data = initial_data, .owner = program_id },
+            .{ .pubkey = program_id, .owner = sig.runtime.ids.NATIVE_LOADER_ID },
+        },
+    });
+    defer {
+        testing.deinitTransactionContext(allocator, &tc);
+        testing.deinitAccountMap(cache, allocator);
+    }
+
+    // Non-direct-mapping host buffer: serializer pre-reserves MAX_PERMITTED_DATA_INCREASE
+    // bytes of zero-padding past the account payload, so the handler can extend
+    // the region's host slice into that padding without reallocating.
+    const region_buffer_size: usize =
+        account_data_size + bpf_serialize.MAX_PERMITTED_DATA_INCREASE;
+    const region_buffer = try allocator.alloc(u8, region_buffer_size);
+    defer allocator.free(region_buffer);
+    @memset(region_buffer, 0);
+
+    const vm_start: u64 = 0x4_0000_0000;
+
+    var ctx: AccessViolationHandlerCtx = .{
+        .tc = &tc,
+        .allocator = allocator,
+        .direct_mapping = false,
+    };
+
+    // Constant (read) access: record the violation, never grow.
+    {
+        var region = vm.memory.Region.init(
+            .mutable,
+            region_buffer[0..account_data_size],
+            vm_start,
+        );
+        region.access_violation_handler_payload = 0;
+        const old_end = region.vm_addr_end;
+        tc.last_access_violation = null;
+
+        AccessViolationHandlerCtx.handle(
+            @ptrCast(&ctx),
+            &region,
+            region_buffer_size,
+            .constant,
+            vm_start + 50,
+            100,
+        );
+
+        try std.testing.expectEqualDeep(
+            sig.runtime.transaction_context.AccessViolationInfo{
+                .access_type = .constant,
+                .vm_addr = vm_start + 50,
+                .len = 100,
+            },
+            tc.last_access_violation,
+        );
+        try std.testing.expectEqual(old_end, region.vm_addr_end);
+        try std.testing.expectEqual(account_data_size, tc.accounts[0].account.data.len);
+        try std.testing.expectEqual(@as(i64, 0), tc.accounts_resize_delta);
+    }
+
+    // Mutable access on a non-account region (payload == null): record only.
+    {
+        var region = vm.memory.Region.init(
+            .mutable,
+            region_buffer[0..account_data_size],
+            vm_start,
+        );
+        const old_end = region.vm_addr_end;
+        tc.last_access_violation = null;
+
+        AccessViolationHandlerCtx.handle(
+            @ptrCast(&ctx),
+            &region,
+            region_buffer_size,
+            .mutable,
+            vm_start + 150,
+            10,
+        );
+
+        try std.testing.expect(tc.last_access_violation != null);
+        try std.testing.expectEqual(old_end, region.vm_addr_end);
+        try std.testing.expectEqual(account_data_size, tc.accounts[0].account.data.len);
+        try std.testing.expectEqual(@as(i64, 0), tc.accounts_resize_delta);
+    }
+
+    // Access exceeds the account's reserved address space: record only.
+    {
+        var region = vm.memory.Region.init(
+            .mutable,
+            region_buffer[0..account_data_size],
+            vm_start,
+        );
+        region.access_violation_handler_payload = 0;
+        const old_end = region.vm_addr_end;
+        tc.last_access_violation = null;
+
+        AccessViolationHandlerCtx.handle(
+            @ptrCast(&ctx),
+            &region,
+            150, // reserved
+            .mutable,
+            vm_start + 200,
+            10,
+        );
+
+        try std.testing.expect(tc.last_access_violation != null);
+        try std.testing.expectEqual(old_end, region.vm_addr_end);
+        try std.testing.expectEqual(account_data_size, tc.accounts[0].account.data.len);
+        try std.testing.expectEqual(@as(i64, 0), tc.accounts_resize_delta);
+    }
+
+    // Mutable access inside the current data length: record only (nothing to grow).
+    {
+        var region = vm.memory.Region.init(
+            .mutable,
+            region_buffer[0..account_data_size],
+            vm_start,
+        );
+        region.access_violation_handler_payload = 0;
+        const old_end = region.vm_addr_end;
+        tc.last_access_violation = null;
+
+        AccessViolationHandlerCtx.handle(
+            @ptrCast(&ctx),
+            &region,
+            region_buffer_size,
+            .mutable,
+            vm_start + 50,
+            10,
+        );
+
+        try std.testing.expect(tc.last_access_violation != null);
+        try std.testing.expectEqual(old_end, region.vm_addr_end);
+        try std.testing.expectEqual(account_data_size, tc.accounts[0].account.data.len);
+        try std.testing.expectEqual(@as(i64, 0), tc.accounts_resize_delta);
+    }
+
+    // Non-direct-mapping grow path: account is resized, resize_delta accumulates,
+    // and the region's host slice is extended in place into the pre-reserved pad.
+    {
+        var region = vm.memory.Region.init(
+            .mutable,
+            region_buffer[0..account_data_size],
+            vm_start,
+        );
+        region.access_violation_handler_payload = 0;
+        const original_buffer_ptr = region.host_memory.mutable.ptr;
+        tc.last_access_violation = null;
+        tc.accounts_resize_delta = 0;
+
+        AccessViolationHandlerCtx.handle(
+            @ptrCast(&ctx),
+            &region,
+            region_buffer_size,
+            .mutable,
+            vm_start + 150,
+            10,
+        );
+
+        // new_len = min(reserved, min(MAX_DATA, old_len + remaining_growth))
+        //         = min(region_buffer_size, min(MAX_DATA, ~20MiB)) = region_buffer_size.
+        const expected_new_len: usize = region_buffer_size;
+
+        try std.testing.expect(tc.last_access_violation != null);
+        try std.testing.expectEqual(expected_new_len, tc.accounts[0].account.data.len);
+        try std.testing.expectEqual(
+            @as(i64, @intCast(expected_new_len - account_data_size)),
+            tc.accounts_resize_delta,
+        );
+        try std.testing.expectEqual(vm_start + expected_new_len, region.vm_addr_end);
+        try std.testing.expectEqual(expected_new_len, region.host_memory.mutable.len);
+        // Non-direct-mapping must not move host_memory.ptr — the serialization
+        // buffer it points into is what the VM sees, and moving it would
+        // invalidate the VM's mapping.
+        try std.testing.expectEqual(original_buffer_ptr, region.host_memory.mutable.ptr);
+    }
+
+    // Reset for next case.
+    try tc.accounts[0].account.resize(allocator, account_data_size);
+    tc.accounts_resize_delta = 0;
+
+    // Resize budget exhausted: remaining_growth = 0 → new_len capped at old_len,
+    // which doesn't cover the access → leave the region untouched.
+    {
+        var region = vm.memory.Region.init(
+            .mutable,
+            region_buffer[0..account_data_size],
+            vm_start,
+        );
+        region.access_violation_handler_payload = 0;
+        const old_end = region.vm_addr_end;
+        tc.last_access_violation = null;
+        tc.accounts_resize_delta =
+            sig.runtime.program.system.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
+
+        AccessViolationHandlerCtx.handle(
+            @ptrCast(&ctx),
+            &region,
+            region_buffer_size,
+            .mutable,
+            vm_start + 150,
+            10,
+        );
+
+        try std.testing.expect(tc.last_access_violation != null);
+        try std.testing.expectEqual(old_end, region.vm_addr_end);
+        try std.testing.expectEqual(account_data_size, tc.accounts[0].account.data.len);
+        // resize_delta must not be touched when no resize happens.
+        try std.testing.expectEqual(
+            sig.runtime.program.system.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION,
+            tc.accounts_resize_delta,
+        );
+    }
+
+    // Direct-mapping grow path: region.host_memory is re-derived from
+    // account.data (which may have moved due to the realloc).
+    {
+        tc.accounts_resize_delta = 0;
+        ctx.direct_mapping = true;
+        var region = vm.memory.Region.init(.mutable, tc.accounts[0].account.data, vm_start);
+        region.access_violation_handler_payload = 0;
+        tc.last_access_violation = null;
+
+        AccessViolationHandlerCtx.handle(
+            @ptrCast(&ctx),
+            &region,
+            region_buffer_size,
+            .mutable,
+            vm_start + 150,
+            10,
+        );
+
+        try std.testing.expectEqual(
+            tc.accounts[0].account.data.len,
+            region.host_memory.mutable.len,
+        );
+        try std.testing.expectEqual(
+            tc.accounts[0].account.data.ptr,
+            region.host_memory.mutable.ptr,
+        );
+        try std.testing.expectEqual(
+            vm_start + tc.accounts[0].account.data.len,
+            region.vm_addr_end,
+        );
+    }
+}
+
+// SIMD-0460: covers `remapAccessViolation` — converts a generic
+// `AccessViolation` (raised by the VM after the access-violation handler
+// declined to grow) into the specific account-related `InstructionError` the
+// bpf_loader reports. Each case sets `tc.last_access_violation` and asserts the
+// returned error.
+test remapAccessViolation {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const data_account_key = Pubkey.initRandom(prng.random());
+
+    const data_len: u64 = 100;
+    const initial_data = try allocator.alloc(u8, data_len);
+    defer allocator.free(initial_data);
+    @memset(initial_data, 0xab);
+
+    const cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+        .accounts = &.{
+            .{ .pubkey = data_account_key, .data = initial_data, .owner = program_id },
+            .{ .pubkey = program_id, .owner = sig.runtime.ids.NATIVE_LOADER_ID },
+        },
+    });
+    defer {
+        testing.deinitTransactionContext(allocator, &tc);
+        testing.deinitAccountMap(cache, allocator);
+    }
+
+    var info = try testing.createInstructionInfo(
+        &tc,
+        program_id,
+        @as([]const u8, &.{}),
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+        },
+    );
+    defer info.deinit(allocator);
+
+    try sig.runtime.executor.pushInstruction(&tc, info);
+    const ic = try tc.getCurrentInstructionContext();
+
+    const vm_data_addr: u64 = 0x4_0000_0000;
+    const reserved_with_pad: u64 = data_len + bpf_serialize.MAX_PERMITTED_DATA_INCREASE;
+
+    tc.serialized_accounts = .{};
+    tc.serialized_accounts.appendAssumeCapacity(.{
+        .original_data_len = data_len,
+        .vm_data_addr = vm_data_addr,
+        .vm_key_addr = 0,
+        .vm_lamports_addr = 0,
+        .vm_owner_addr = 0,
+    });
+
+    // No recorded violation → no remap.
+    tc.last_access_violation = null;
+    try std.testing.expectEqual(
+        @as(?InstructionError, null),
+        remapAccessViolation(ic, false),
+    );
+
+    // Access falls outside every account region → no remap.
+    tc.last_access_violation = .{
+        .access_type = .mutable,
+        .vm_addr = vm_data_addr + reserved_with_pad + 10,
+        .len = 4,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, null),
+        remapAccessViolation(ic, false),
+    );
+
+    // Write within reserved range but past current data length, on a
+    // writable+owned account → InvalidRealloc (the handler refused to grow).
+    tc.last_access_violation = .{
+        .access_type = .mutable,
+        .vm_addr = vm_data_addr + data_len + 4,
+        .len = 1,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, InstructionError.InvalidRealloc),
+        remapAccessViolation(ic, false),
+    );
+
+    // Write inside current data length, writable+owned → no remap
+    // (AccessViolation in this region was not due to account semantics).
+    tc.last_access_violation = .{
+        .access_type = .mutable,
+        .vm_addr = vm_data_addr + 4,
+        .len = 1,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, null),
+        remapAccessViolation(ic, false),
+    );
+
+    // Read past readonly account data → AccountDataTooSmall.
+    ic.ixn_info.account_metas.items[0].is_writable = false;
+    tc.last_access_violation = .{
+        .access_type = .constant,
+        .vm_addr = vm_data_addr + data_len + 4,
+        .len = 1,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, InstructionError.AccountDataTooSmall),
+        remapAccessViolation(ic, false),
+    );
+
+    // Write to a readonly account → ReadonlyDataModified.
+    tc.last_access_violation = .{
+        .access_type = .mutable,
+        .vm_addr = vm_data_addr + 4,
+        .len = 1,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, InstructionError.ReadonlyDataModified),
+        remapAccessViolation(ic, false),
+    );
+    ic.ixn_info.account_metas.items[0].is_writable = true;
+
+    // Write to a writable account that isn't owned by the executing program
+    // → ExternalAccountDataModified.
+    const saved_owner = tc.accounts[0].account.owner;
+    tc.accounts[0].account.owner = Pubkey.ZEROES;
+    tc.last_access_violation = .{
+        .access_type = .mutable,
+        .vm_addr = vm_data_addr + 4,
+        .len = 1,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, InstructionError.ExternalAccountDataModified),
+        remapAccessViolation(ic, false),
+    );
+    tc.accounts[0].account.owner = saved_owner;
+
+    // Read past a writable account's data → InvalidRealloc (per SIMD-0460
+    // a read that overshoots a writable account is also treated as a failed
+    // grow attempt, not a "too small" condition).
+    tc.last_access_violation = .{
+        .access_type = .constant,
+        .vm_addr = vm_data_addr + data_len + 4,
+        .len = 1,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, InstructionError.InvalidRealloc),
+        remapAccessViolation(ic, false),
+    );
+
+    // Loader-v1 reserves no growth pad, so an access at vm_data_addr+data_len
+    // falls *outside* the v1 reserved range and is not remapped — even though
+    // the same access *would* be remapped under any other loader.
+    tc.last_access_violation = .{
+        .access_type = .mutable,
+        .vm_addr = vm_data_addr + data_len,
+        .len = 1,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, null),
+        remapAccessViolation(ic, true),
+    );
+    try std.testing.expectEqual(
+        @as(?InstructionError, InstructionError.InvalidRealloc),
+        remapAccessViolation(ic, false),
+    );
+}
+
 // Regression test: executeV4Retract must use tc.programs_allocator (the persistent GPA)
 // for ProgramMap.fetchPut, not `allocator` (the per-batch arena passed as the first param).
 //

@@ -1082,3 +1082,204 @@ fn concatRegions(allocator: std.mem.Allocator, regions: []Region) ![]u8 {
     }
     return memory;
 }
+
+// SIMD-0460: covers the access_violation_handler_payload tagging in
+// writeAccount, and the index_in_instruction → index_in_transaction switch
+// in serializeParameters. Verifies that under
+// `virtual_address_space_adjustments`:
+//   - writable+owned account-data regions are tagged with the account's
+//     *transaction* index (not its instruction index), so the access-violation
+//     handler can look the account up in `tc.accounts`.
+//   - readonly account regions carry a null payload (the handler must not
+//     try to grow them; the bpf_loader maps the violation to
+//     AccountDataTooSmall / ReadonlyDataModified instead).
+//   - writable-but-not-owned account regions also carry a null payload —
+//     ExternalAccountDataModified is reported, not InvalidRealloc.
+//
+// Exercises both loader variants (v1 unaligned, v3 aligned) and both
+// direct-mapping modes.
+test "writeAccount tags account-data regions with index_in_transaction" {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const cases = [_]struct { Pubkey, bool }{
+        // (loader_id, direct_mapping)
+        .{ program.bpf_loader.v1.ID, false }, // unaligned, non-direct
+        .{ program.bpf_loader.v1.ID, true }, //  unaligned, direct
+        .{ program.bpf_loader.v3.ID, false }, // aligned,   non-direct
+        .{ program.bpf_loader.v3.ID, true }, //  aligned,   direct
+    };
+
+    for (cases) |case| {
+        const loader_id, const direct_mapping = case;
+
+        const program_id = Pubkey.initRandom(prng.random());
+        const other_owner = Pubkey.initRandom(prng.random());
+
+        const cache, var tc = try testing.createTransactionContext(
+            allocator,
+            prng.random(),
+            .{
+                .accounts = &.{
+                    // tx[0]: the executing program.
+                    .{ .pubkey = program_id, .owner = loader_id, .executable = true },
+                    // tx[1]: readonly, owned by the program.
+                    .{
+                        .pubkey = Pubkey.initRandom(prng.random()),
+                        .data = &.{ 0xAA, 0xAA, 0xAA, 0xAA },
+                        .owner = program_id,
+                    },
+                    // tx[2]: writable but owned by someone else.
+                    .{
+                        .pubkey = Pubkey.initRandom(prng.random()),
+                        .data = &.{ 0xBB, 0xBB, 0xBB, 0xBB },
+                        .owner = other_owner,
+                    },
+                    // tx[3]: writable, owned by the program — the only one
+                    // that should receive a non-null payload.
+                    .{
+                        .pubkey = Pubkey.initRandom(prng.random()),
+                        .data = &.{ 0xCC, 0xCC, 0xCC, 0xCC },
+                        .owner = program_id,
+                    },
+                },
+            },
+        );
+        defer {
+            testing.deinitTransactionContext(allocator, &tc);
+            testing.deinitAccountMap(cache, allocator);
+        }
+
+        // Instruction account order intentionally differs from transaction
+        // order — this is what proves the payload is index_in_transaction,
+        // not index_in_instruction.
+        var info = try testing.createInstructionInfo(
+            &tc,
+            program_id,
+            @as([]const u8, &.{}),
+            &.{
+                // ix[0] → tx[3] writable+owned
+                .{ .index_in_transaction = 3, .is_signer = false, .is_writable = true },
+                // ix[1] → tx[1] readonly (owned)
+                .{ .index_in_transaction = 1, .is_signer = false, .is_writable = false },
+                // ix[2] → tx[2] writable but not owned
+                .{ .index_in_transaction = 2, .is_signer = false, .is_writable = true },
+            },
+        );
+        defer info.deinit(allocator);
+
+        try sig.runtime.executor.pushInstruction(&tc, info);
+        const ic = try tc.getCurrentInstructionContext();
+
+        var serialized = try serializeParameters(
+            allocator,
+            ic,
+            direct_mapping,
+            true, // virtual_address_space_adjustments
+            false, // mask_out_rent_epoch_in_vm_serialization
+        );
+        defer serialized.deinit(allocator);
+
+        // For each instruction-account, the corresponding account-data
+        // region (if any) has vm_addr_start == meta.vm_data_addr. Look it
+        // up and check the payload.
+        const expected = [_]struct { idx_in_instruction: usize, payload: ?u16 }{
+            .{ .idx_in_instruction = 0, .payload = 3 }, // writable+owned → tx index
+            .{ .idx_in_instruction = 1, .payload = null }, // readonly
+            .{ .idx_in_instruction = 2, .payload = null }, // not owned
+        };
+
+        for (expected) |e| {
+            const meta = serialized.account_metas.get(e.idx_in_instruction);
+            const region = for (serialized.regions.items) |*r| {
+                if (r.vm_addr_start == meta.vm_data_addr) break r;
+            } else return error.AccountRegionNotFound;
+            try std.testing.expectEqual(e.payload, region.access_violation_handler_payload);
+        }
+
+        // Also verify: payloads are only ever populated for regions that
+        // correspond to an account in the instruction. Header/instruction-data
+        // regions must remain null so the handler never grows them.
+        var account_region_starts: [3]u64 = .{
+            serialized.account_metas.get(0).vm_data_addr,
+            serialized.account_metas.get(1).vm_data_addr,
+            serialized.account_metas.get(2).vm_data_addr,
+        };
+        for (serialized.regions.items) |r| {
+            const is_account_region = std.mem.indexOfScalar(
+                u64,
+                &account_region_starts,
+                r.vm_addr_start,
+            ) != null;
+            if (!is_account_region) {
+                try std.testing.expectEqual(
+                    @as(?u16, null),
+                    r.access_violation_handler_payload,
+                );
+            }
+        }
+    }
+}
+
+// When virtual_address_space_adjustments is OFF, writeAccount takes an early
+// return that doesn't produce per-account regions, so no payload is ever set.
+// Locks in that the payload tagging only kicks in under SIMD-0460.
+test "writeAccount does not tag regions when virtual_address_space_adjustments is off" {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const cache, var tc = try testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = program_id,
+                    .owner = program.bpf_loader.v3.ID,
+                    .executable = true,
+                },
+                .{
+                    .pubkey = Pubkey.initRandom(prng.random()),
+                    .data = &.{ 1, 2, 3, 4 },
+                    .owner = program_id,
+                },
+            },
+        },
+    );
+    defer {
+        testing.deinitTransactionContext(allocator, &tc);
+        testing.deinitAccountMap(cache, allocator);
+    }
+
+    var info = try testing.createInstructionInfo(
+        &tc,
+        program_id,
+        @as([]const u8, &.{}),
+        &.{
+            .{ .index_in_transaction = 1, .is_signer = false, .is_writable = true },
+        },
+    );
+    defer info.deinit(allocator);
+
+    try sig.runtime.executor.pushInstruction(&tc, info);
+    const ic = try tc.getCurrentInstructionContext();
+
+    var serialized = try serializeParameters(
+        allocator,
+        ic,
+        false, // direct_mapping
+        false, // virtual_address_space_adjustments = OFF
+        false,
+    );
+    defer serialized.deinit(allocator);
+
+    for (serialized.regions.items) |r| {
+        try std.testing.expectEqual(
+            @as(?u16, null),
+            r.access_violation_handler_payload,
+        );
+    }
+}
