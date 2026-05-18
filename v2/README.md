@@ -59,12 +59,6 @@ Run lint unit tests:
 zig build lint-test
 ```
 
-Lint exit codes:
-
-- `0`: no diagnostics
-- `1`: diagnostics found
-- `2`: CLI or internal linter error
-
 # Adding a New Service
 
 v2 runs each service as an isolated process. Services cannot allocate memory or open files at runtime. 
