@@ -34,8 +34,6 @@ const Config = struct {
     telemetry: Telemetry,
     snapshot: Snapshot,
 
-    known_validators: [][]const u8,
-
     const SandboxingMode = enum { sandboxed, threaded };
 
     const Gossip = struct {
@@ -53,6 +51,7 @@ const Config = struct {
 
     const Snapshot = struct {
         folder: []const u8,
+        known_validators: [][]const u8,
     };
 
     pub fn format(self: Config, writer: *std.Io.Writer) !void {
@@ -152,7 +151,7 @@ pub fn main() !void {
         .snapshot_config = .{
             .folder_path = config.snapshot.folder,
             .cluster = config.cluster,
-            .known_validators = config.known_validators,
+            .known_validators = config.snapshot.known_validators,
         },
 
         .gossip_to_snapshot = {},
