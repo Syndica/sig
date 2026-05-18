@@ -346,16 +346,20 @@ const AccessViolationHandlerCtx = struct {
         const account, const guard = tc_account.writeWithLock() orelse return;
         defer guard.release();
 
-        const old_len: u64 = account.data.len;
         const max_growth =
             sig.runtime.program.system.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
-        const remaining_growth_signed = max_growth -| ctx.tc.accounts_resize_delta;
-        const remaining_growth: u64 = if (remaining_growth_signed > 0)
-            @intCast(remaining_growth_signed)
-        else
-            0;
+        const remaining_growth: u64 = @intCast(@max(
+            0,
+            max_growth -| ctx.tc.accounts_resize_delta,
+        ));
 
-        if (requested_length > old_len) {
+        // Gate on the region's currently-visible length (agave's `region.len`)
+        // rather than `account.data.len` — the slice's `.len` is what the VM
+        // sees. `constSlice` reads the length regardless of mutability so this
+        // stays correct if CoW later produces a `.constant` payload-tagged
+        // region (see serialize.zig `getAccountDataRegionMemoryState` TODO).
+        if (requested_length > region.constSlice().len) {
+            const old_len: u64 = account.data.len;
             const new_len_u64 = @min(
                 address_space_reserved_for_account,
                 @min(
