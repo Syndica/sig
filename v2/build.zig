@@ -38,7 +38,7 @@ pub fn build(b: *Build) !void {
         "Opt in to a slower software fallback when the target lacks the x86 SHA extension. " ++
             "Without this flag, building for a target without SHA-NI is a compile-time error " ++
             "so the performance hit is not silently accepted.",
-    ) orelse false;
+    ) orelse (optimize == .Debug);
 
     const allow_no_avx512 = b.option(
         bool,
@@ -46,7 +46,7 @@ pub fn build(b: *Build) !void {
         "Opt in to a slower generic ed25519 path when the target lacks AVX-512 " ++
             "(avx512ifma + avx512vl). Without this flag, building for an x86_64 target without " ++
             "these features is a compile-time error so the performance hit is not silently accepted.",
-    ) orelse false;
+    ) orelse (optimize == .Debug);
 
     const build_options = b.addOptions();
     build_options.addOption(bool, "allow_no_sha", allow_no_sha);
