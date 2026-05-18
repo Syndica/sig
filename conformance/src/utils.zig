@@ -321,13 +321,11 @@ pub fn createSysvarCache(
     }
 
     sysvar_cache.last_restart_slot = try cloneSysvarData(allocator, ctx, sysvar.LastRestartSlot.ID);
-    if (std.meta.isError(sysvar_cache.get(sysvar.LastRestartSlot))) {
-        sysvar_cache.last_restart_slot = try sysvar.serialize(
-            allocator,
-            sysvar.LastRestartSlot{
-                .last_restart_slot = 5000,
-            },
-        );
+    if (sysvar_cache.last_restart_slot) |lrs| {
+        if (std.meta.isError(sysvar_cache.get(sysvar.LastRestartSlot))) {
+            allocator.free(lrs);
+            sysvar_cache.last_restart_slot = null;
+        }
     }
 
     if (sysvar_cache.slot_hashes == null) {
