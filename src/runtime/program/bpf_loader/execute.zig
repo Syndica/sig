@@ -302,7 +302,7 @@ fn handleExecutionResult(
 ///      and zero-extends the account data — matching SIMD-0460's
 ///      "extend the account with zeros to the maximum allowed" rule.
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/transaction-context/src/lib.rs#L416-L485
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/transaction.rs#L519-L543
 const AccessViolationHandlerCtx = struct {
     tc: *TransactionContext,
     allocator: std.mem.Allocator,
@@ -373,18 +373,11 @@ const AccessViolationHandlerCtx = struct {
             ctx.tc.accounts_resize_delta +|=
                 @as(i64, @intCast(new_len)) -| @as(i64, @intCast(old_len));
 
-            // Refresh the region to expose the new data length to the VM.
-            //
-            // - Direct-mapping: `host_memory` points at `account.data` itself,
-            //   which may have been reallocated by `resize`, so re-derive it.
-            // - Non-direct-mapping: `host_memory` points into the
-            //   serialization buffer, which pre-allocated
-            //   `MAX_PERMITTED_DATA_INCREASE` zero bytes after the account
-            //   payload. Extending the slice into that padding is safe and
-            //   matches the buffer's contents (zeros = zero-extension).
-            if (ctx.direct_mapping) {
-                region.host_memory = .{ .mutable = account.data };
-            } else {
+            // Non-direct-mapping: extend the slice into the
+            // `MAX_PERMITTED_DATA_INCREASE` zeros pre-allocated after the
+            // account payload during serialization. Direct-mapping is
+            // re-anchored below, mirroring agave's CoW/writable block.
+            if (!ctx.direct_mapping) {
                 const ptr = region.host_memory.mutable.ptr;
                 region.host_memory = .{ .mutable = ptr[0..new_len] };
             }
@@ -392,6 +385,12 @@ const AccessViolationHandlerCtx = struct {
             // The originally failing access can now succeed on retry, so the
             // recorded metadata is stale for post-execution remapping.
             if (ctx.tc.last_access_violation) |*av| av.handled = true;
+        }
+
+        // Direct-mapping: re-anchor `host_memory` to `account.data`.
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/transaction.rs#L541-L543
+        if (ctx.direct_mapping) {
+            region.host_memory = .{ .mutable = account.data };
         }
     }
 };
