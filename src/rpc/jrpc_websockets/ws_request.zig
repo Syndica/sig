@@ -459,6 +459,26 @@ test "parse programSubscribe with tokenAccountState filter" {
     );
 }
 
+test "parse programSubscribe with raw memcmp bytes" {
+    const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
+    try testParseRequest(
+        .{},
+        \\{"jsonrpc":"2.0","id":8,"method":"programSubscribe","params":["vinesvinesvinesvinesvinesvinesvinesvinesvin",{"filters":[{"memcmp":{"offset":42,"bytes":[0,1,2,3],"encoding":"bytes"}}]}]}
+    ,
+        .{
+            .id = .{ .int = 8 },
+            .method = .{ .programSubscribe = .{
+                .program_id = test_pubkey,
+                .config = .{
+                    .filters = &.{
+                        .{ .memcmp = .{ .offset = 42, .bytes = &.{ 0, 1, 2, 3 } } },
+                    },
+                },
+            } },
+        },
+    );
+}
+
 test "parse programSubscribe invalid memcmp encoding" {
     try std.testing.expectError(
         error.LengthMismatch,
