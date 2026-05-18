@@ -129,13 +129,15 @@ pub const Memcmp = struct {
             };
         };
 
-        // [agave] MemcmpEncodedBytes deserializes by the JSON shape of `bytes`:
-        // strings use the selected encoding, while arrays are raw bytes and ignore encoding.
+        // [agave] Shape-based parsing: string bytes are encoded, array bytes are raw.
         // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L80-L119
         const decoded: []const u8 = switch (bytes_val) {
             .string => |bytes_str| switch (encoding) {
+                // [agave] String + `encoding: "bytes"` deserializes to Base58.
+                // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L108-L113
                 .base58, .bytes => blk: {
-                    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L27-L37
+                    // [agave] Base58 variants use the base58 encoded-length cap.
+                    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L27-L37
                     if (bytes_str.len > MAX_DATA_BASE58_SIZE) return error.LengthMismatch;
                     const max_decoded_len = base58.decodedMaxSize(bytes_str.len);
                     const buf = try allocator.alloc(u8, max_decoded_len);
@@ -177,6 +179,16 @@ pub const Memcmp = struct {
             .offset = offset,
             .bytes = decoded,
         };
+    }
+
+    // NOTE: Canonicalizes decoded memcmp bytes as base58 for JSON roundtrip tests.
+    pub fn jsonStringify(self: Memcmp, jw: anytype) @TypeOf(jw.*).Error!void {
+        var encoded_buf: [base58.encodedMaxSize(MAX_DATA_SIZE)]u8 = undefined;
+        const encoded_len = BASE58_ENDEC.encode(&encoded_buf, self.bytes);
+        try jw.write(.{
+            .offset = self.offset,
+            .bytes = encoded_buf[0..encoded_len],
+        });
     }
 };
 

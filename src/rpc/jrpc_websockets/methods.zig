@@ -1,9 +1,9 @@
 const std = @import("std");
-const base58 = @import("base58");
 const sig = @import("../../sig.zig");
 
 const Allocator = std.mem.Allocator;
 const ParseOptions = std.json.ParseOptions;
+const rpc_filters = sig.rpc.filters;
 
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
@@ -13,9 +13,6 @@ pub const AccountEncoding = sig.rpc.account_codec.AccountEncoding;
 pub const TransactionEncoding = sig.rpc.methods.common.TransactionEncoding;
 pub const DataSlice = sig.rpc.account_codec.DataSlice;
 pub const TransactionDetails = sig.rpc.methods.common.TransactionDetails;
-
-pub const MAX_PROGRAM_FILTERS: usize = 4;
-const MAX_MEMCMP_BYTES = sig.rpc.filters.MAX_DATA_SIZE;
 
 pub const LogsFilter = union(enum) {
     all,
@@ -180,39 +177,8 @@ pub const ProgramSubscribe = struct {
     program_id: Pubkey,
     config: ?Config = null,
 
-    pub const Memcmp = struct {
-        offset: usize,
-        bytes: []const u8,
-
-        pub fn jsonParseFromValue(
-            allocator: Allocator,
-            source: std.json.Value,
-            options: ParseOptions,
-        ) std.json.ParseFromValueError!Memcmp {
-            const parsed = try sig.rpc.filters.Memcmp.jsonParseFromValue(allocator, source, options);
-            return .{
-                .offset = parsed.offset,
-                .bytes = parsed.bytes,
-            };
-        }
-
-        pub fn jsonStringify(self: Memcmp, jw: anytype) @TypeOf(jw.*).Error!void {
-            var encoded_buf: [base58.encodedMaxSize(MAX_MEMCMP_BYTES)]u8 = undefined;
-            const encoded_len = base58.Table.BITCOIN.encode(&encoded_buf, self.bytes);
-            try jw.write(.{
-                .offset = self.offset,
-                .bytes = encoded_buf[0..encoded_len],
-            });
-        }
-    };
-
-    pub const Filter = union(enum) {
-        dataSize: u64,
-        memcmp: Memcmp,
-        /// Undocumented in the official Solana RPC filter criteria docs.
-        /// Filters for accounts owned by a token program whose data parses as a token account.
-        tokenAccountState: void,
-    };
+    pub const Memcmp = rpc_filters.Memcmp;
+    pub const Filter = rpc_filters.RpcFilterType;
 
     pub const Config = struct {
         commitment: ?Commitment = null,
@@ -222,13 +188,11 @@ pub const ProgramSubscribe = struct {
         dataSlice: ?DataSlice = null,
     };
 
-    pub fn validateParams(self: *const ProgramSubscribe) error{TooManyFilters}!void {
+    pub fn validateParams(
+        self: *const ProgramSubscribe,
+    ) error{ TooManyFilters, MemcmpBytesTooLarge }!void {
         const config = self.config orelse return;
-        if (config.filters) |filters| {
-            if (filters.len > MAX_PROGRAM_FILTERS) {
-                return error.TooManyFilters;
-            }
-        }
+        try rpc_filters.verifyFilters(config.filters orelse &.{});
     }
 
     pub fn jsonStringify(self: ProgramSubscribe, jw: anytype) @TypeOf(jw.*).Error!void {
