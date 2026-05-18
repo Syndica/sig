@@ -129,9 +129,14 @@ pub const Memcmp = struct {
             };
         };
 
+        // [agave] MemcmpEncodedBytes deserializes by the JSON shape of `bytes`:
+        // strings use the selected encoding, while arrays are raw bytes and ignore encoding.
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L80-L119
         const decoded: []const u8 = switch (bytes_val) {
             .string => |bytes_str| switch (encoding) {
                 .base58, .bytes => blk: {
+                    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L27-L37
+                    if (bytes_str.len > MAX_DATA_BASE58_SIZE) return error.LengthMismatch;
                     const max_decoded_len = base58.decodedMaxSize(bytes_str.len);
                     const buf = try allocator.alloc(u8, max_decoded_len);
                     defer allocator.free(buf);
@@ -140,6 +145,8 @@ pub const Memcmp = struct {
                     break :blk try allocator.dupe(u8, buf[0..decoded_len]);
                 },
                 .base64 => blk: {
+                    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L38-L48
+                    if (bytes_str.len > MAX_DATA_BASE64_SIZE) return error.LengthMismatch;
                     const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(bytes_str) catch
                         return error.InvalidCharacter;
                     const result = try allocator.alloc(u8, decoded_len);
@@ -151,6 +158,8 @@ pub const Memcmp = struct {
                 },
             },
             .array => |bytes_array| blk: {
+                // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L49-L54
+                if (bytes_array.items.len > MAX_DATA_SIZE) return error.LengthMismatch;
                 const result = try allocator.alloc(u8, bytes_array.items.len);
                 errdefer allocator.free(result);
                 for (bytes_array.items, result) |byte_val, *byte| {
@@ -586,34 +595,159 @@ test "rpc.filters" {
         );
     }
 
-    // parse: memcmp rejects invalid raw byte array values
+    // parse: memcmp rejects encoded strings above Agave's pre-decode caps
     {
         const allocator = testing.allocator;
-        const json_str =
-            \\{"memcmp": {"offset": 0, "bytes": [256], "encoding": "bytes"}}
-        ;
-        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
-        defer parsed.deinit();
 
+        const oversized_base58 = "1" ** (MAX_DATA_BASE58_SIZE + 1);
+        const base58_json = std.fmt.comptimePrint(
+            \\{{"memcmp": {{"offset": 0, "bytes": "{s}"}}}}
+        , .{oversized_base58});
+        const parsed_base58 = try std.json.parseFromSlice(
+            std.json.Value,
+            allocator,
+            base58_json,
+            .{},
+        );
+        defer parsed_base58.deinit();
         try testing.expectError(
-            error.Overflow,
-            RpcFilterType.jsonParseFromValue(allocator, parsed.value, .{}),
+            error.LengthMismatch,
+            RpcFilterType.jsonParseFromValue(
+                allocator,
+                parsed_base58.value,
+                .{},
+            ),
+        );
+
+        const oversized_base64 = "A" ** (MAX_DATA_BASE64_SIZE + 1);
+        const base64_json = std.fmt.comptimePrint(
+            \\{{"memcmp": {{"offset": 0, "bytes": "{s}", "encoding": "base64"}}}}
+        , .{oversized_base64});
+        const parsed_base64 = try std.json.parseFromSlice(
+            std.json.Value,
+            allocator,
+            base64_json,
+            .{},
+        );
+        defer parsed_base64.deinit();
+        try testing.expectError(
+            error.LengthMismatch,
+            RpcFilterType.jsonParseFromValue(
+                allocator,
+                parsed_base64.value,
+                .{},
+            ),
         );
     }
 
-    // parse: memcmp rejects unknown encoding
+    // parse: memcmp rejects invalid raw byte array values
     {
         const allocator = testing.allocator;
-        const json_str =
-            \\{"memcmp": {"offset": 0, "bytes": "abc", "encoding": "base32"}}
-        ;
-        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
-        defer parsed.deinit();
+
+        { // value above u8 max
+            const json_str =
+                \\{"memcmp": {"offset": 0, "bytes": [256], "encoding": "bytes"}}
+            ;
+            const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+            defer parsed.deinit();
+            try testing.expectError(
+                error.Overflow,
+                RpcFilterType.jsonParseFromValue(allocator, parsed.value, .{}),
+            );
+        }
+
+        { // negative value
+            const json_str =
+                \\{"memcmp": {"offset": 0, "bytes": [-1], "encoding": "bytes"}}
+            ;
+            const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+            defer parsed.deinit();
+            try testing.expectError(
+                error.Overflow,
+                RpcFilterType.jsonParseFromValue(allocator, parsed.value, .{}),
+            );
+        }
+
+        { // float value
+            const json_str =
+                \\{"memcmp": {"offset": 0, "bytes": [1.5], "encoding": "bytes"}}
+            ;
+            const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+            defer parsed.deinit();
+            try testing.expectError(
+                error.UnexpectedToken,
+                RpcFilterType.jsonParseFromValue(allocator, parsed.value, .{}),
+            );
+        }
+
+        { // string value
+            const json_str =
+                \\{"memcmp": {"offset": 0, "bytes": ["1"], "encoding": "bytes"}}
+            ;
+            const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+            defer parsed.deinit();
+            try testing.expectError(
+                error.UnexpectedToken,
+                RpcFilterType.jsonParseFromValue(allocator, parsed.value, .{}),
+            );
+        }
+
+        const oversized_json = std.fmt.comptimePrint(
+            \\{{"memcmp": {{"offset": 0, "bytes": [{s}0], "encoding": "bytes"}}}}
+        , .{"0," ** MAX_DATA_SIZE});
+        const parsed_oversized = try std.json.parseFromSlice(
+            std.json.Value,
+            allocator,
+            oversized_json,
+            .{},
+        );
+        defer parsed_oversized.deinit();
 
         try testing.expectError(
-            error.UnexpectedToken,
-            RpcFilterType.jsonParseFromValue(allocator, parsed.value, .{}),
+            error.LengthMismatch,
+            RpcFilterType.jsonParseFromValue(allocator, parsed_oversized.value, .{}),
         );
+    }
+
+    // parse: memcmp rejects unsupported encodings
+    {
+        const allocator = testing.allocator;
+
+        { // unknown string encoding
+            const json_str =
+                \\{"memcmp": {"offset": 0, "bytes": "abc", "encoding": "base32"}}
+            ;
+            const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+            defer parsed.deinit();
+            try testing.expectError(
+                error.UnexpectedToken,
+                RpcFilterType.jsonParseFromValue(allocator, parsed.value, .{}),
+            );
+        }
+
+        { // deprecated binary encoding
+            const json_str =
+                \\{"memcmp": {"offset": 0, "bytes": "ZiCa", "encoding": "binary"}}
+            ;
+            const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+            defer parsed.deinit();
+            try testing.expectError(
+                error.UnexpectedToken,
+                RpcFilterType.jsonParseFromValue(allocator, parsed.value, .{}),
+            );
+        }
+
+        { // unknown encoding with raw bytes
+            const json_str =
+                \\{"memcmp": {"offset": 0, "bytes": [0, 1], "encoding": "hex"}}
+            ;
+            const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+            defer parsed.deinit();
+            try testing.expectError(
+                error.UnexpectedToken,
+                RpcFilterType.jsonParseFromValue(allocator, parsed.value, .{}),
+            );
+        }
     }
 
     // parse: memcmp missing offset

@@ -15,7 +15,7 @@ pub const DataSlice = sig.rpc.account_codec.DataSlice;
 pub const TransactionDetails = sig.rpc.methods.common.TransactionDetails;
 
 pub const MAX_PROGRAM_FILTERS: usize = 4;
-const MAX_MEMCMP_BYTES = 128;
+const MAX_MEMCMP_BYTES = sig.rpc.filters.MAX_DATA_SIZE;
 
 pub const LogsFilter = union(enum) {
     all,
@@ -184,41 +184,15 @@ pub const ProgramSubscribe = struct {
         offset: usize,
         bytes: []const u8,
 
-        pub const BytesEncoding = enum { base58, base64, bytes };
-
         pub fn jsonParseFromValue(
             allocator: Allocator,
             source: std.json.Value,
-            _: ParseOptions,
+            options: ParseOptions,
         ) std.json.ParseFromValueError!Memcmp {
-            if (source != .object) return error.UnexpectedToken;
-            const obj = source.object;
-
-            const offset: usize = blk: {
-                const val = obj.get("offset") orelse return error.MissingField;
-                break :blk switch (val) {
-                    .integer => |i| std.math.cast(usize, i) orelse return error.Overflow,
-                    else => return error.UnexpectedToken,
-                };
-            };
-            const bytes_val = obj.get("bytes") orelse return error.MissingField;
-            const enc: BytesEncoding = blk: {
-                const val = obj.get("encoding") orelse break :blk .base58;
-                break :blk switch (val) {
-                    .null => .base58,
-                    .string => |s| {
-                        if (std.mem.eql(u8, s, "base58")) break :blk .base58;
-                        if (std.mem.eql(u8, s, "base64")) break :blk .base64;
-                        if (std.mem.eql(u8, s, "bytes")) break :blk .bytes;
-                        return error.UnexpectedToken;
-                    },
-                    else => return error.UnexpectedToken,
-                };
-            };
-
+            const parsed = try sig.rpc.filters.Memcmp.jsonParseFromValue(allocator, source, options);
             return .{
-                .offset = offset,
-                .bytes = try decodeFilterBytes(allocator, bytes_val, enc),
+                .offset = parsed.offset,
+                .bytes = parsed.bytes,
             };
         }
 
@@ -261,63 +235,6 @@ pub const ProgramSubscribe = struct {
         return writeParamsArray(jw, self.program_id, self.config);
     }
 };
-
-fn decodeFilterBytes(
-    allocator: Allocator,
-    bytes_val: std.json.Value,
-    encoding: ProgramSubscribe.Memcmp.BytesEncoding,
-) (Allocator.Error || error{
-    InvalidCharacter,
-    LengthMismatch,
-    Overflow,
-    UnexpectedToken,
-})![]const u8 {
-    return switch (bytes_val) {
-        .string => |encoded| switch (encoding) {
-            .base58, .bytes => blk: {
-                var decoded_tmp = try allocator.alloc(u8, base58.decodedMaxSize(encoded.len));
-                defer allocator.free(decoded_tmp);
-
-                const decoded_len = base58.Table.BITCOIN.decode(decoded_tmp, encoded) catch {
-                    return error.InvalidCharacter;
-                };
-                if (decoded_len > MAX_MEMCMP_BYTES) {
-                    return error.LengthMismatch;
-                }
-                break :blk try allocator.dupe(u8, decoded_tmp[0..decoded_len]);
-            },
-            .base64 => blk: {
-                const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(encoded) catch {
-                    return error.InvalidCharacter;
-                };
-                if (decoded_len > MAX_MEMCMP_BYTES) {
-                    return error.LengthMismatch;
-                }
-                const decoded = try allocator.alloc(u8, decoded_len);
-                errdefer allocator.free(decoded);
-                std.base64.standard.Decoder.decode(decoded, encoded) catch {
-                    return error.InvalidCharacter;
-                };
-                break :blk decoded;
-            },
-        },
-        .array => |array| blk: {
-            if (array.items.len > MAX_MEMCMP_BYTES) {
-                return error.LengthMismatch;
-            }
-            const decoded = try allocator.alloc(u8, array.items.len);
-            errdefer allocator.free(decoded);
-            for (array.items, decoded) |byte_val, *byte| {
-                byte.* = switch (byte_val) {
-                    .integer => |i| std.math.cast(u8, i) orelse return error.Overflow,
-                    else => return error.UnexpectedToken,
-                };
-            }
-            break :blk decoded;
-        },
-        else => error.UnexpectedToken,
-    };
-}
 
 pub const Unsubscribe = struct {
     sub_id: u64,
@@ -443,19 +360,71 @@ test "ProgramSubscribe.Filter parse" {
     , .{ .tokenAccountState = {} });
 }
 
-test "ProgramSubscribe.Filter parse invalid memcmp encoding" {
-    try expectParseError(ProgramSubscribe.Filter,
-        \\{"memcmp":{"offset":0,"bytes":"YWJj","encoding":"hex"}}
-    , error.UnexpectedToken);
-}
+test "ProgramSubscribe.Filter parse invalid memcmp" {
+    { // unknown string encoding
+        try expectParseError(ProgramSubscribe.Filter,
+            \\{"memcmp":{"offset":0,"bytes":"YWJj","encoding":"hex"}}
+        , error.UnexpectedToken);
+    }
 
-test "ProgramSubscribe.Filter parse invalid memcmp bytes" {
-    try expectParseError(ProgramSubscribe.Filter,
-        \\{"memcmp":{"offset":0,"bytes":"!!!","encoding":"base64"}}
-    , error.InvalidCharacter);
-    try expectParseError(ProgramSubscribe.Filter,
-        \\{"memcmp":{"offset":0,"bytes":[256],"encoding":"bytes"}}
-    , error.Overflow);
+    { // deprecated binary encoding
+        try expectParseError(ProgramSubscribe.Filter,
+            \\{"memcmp":{"offset":0,"bytes":"YWJj","encoding":"binary"}}
+        , error.UnexpectedToken);
+    }
+
+    { // unknown encoding with raw bytes
+        try expectParseError(ProgramSubscribe.Filter,
+            \\{"memcmp":{"offset":0,"bytes":[0,1],"encoding":"hex"}}
+        , error.UnexpectedToken);
+    }
+
+    { // invalid base64 bytes
+        try expectParseError(ProgramSubscribe.Filter,
+            \\{"memcmp":{"offset":0,"bytes":"!!!","encoding":"base64"}}
+        , error.InvalidCharacter);
+    }
+
+    { // value above u8 max
+        try expectParseError(ProgramSubscribe.Filter,
+            \\{"memcmp":{"offset":0,"bytes":[256],"encoding":"bytes"}}
+        , error.Overflow);
+    }
+
+    { // negative value
+        try expectParseError(ProgramSubscribe.Filter,
+            \\{"memcmp":{"offset":0,"bytes":[-1],"encoding":"bytes"}}
+        , error.Overflow);
+    }
+
+    { // float value
+        try expectParseError(ProgramSubscribe.Filter,
+            \\{"memcmp":{"offset":0,"bytes":[1.5],"encoding":"bytes"}}
+        , error.UnexpectedToken);
+    }
+
+    { // string value
+        try expectParseError(ProgramSubscribe.Filter,
+            \\{"memcmp":{"offset":0,"bytes":["1"],"encoding":"bytes"}}
+        , error.UnexpectedToken);
+    }
+
+    const oversized_base58 = "1" ** (sig.rpc.filters.MAX_DATA_BASE58_SIZE + 1);
+    const base58_json = std.fmt.comptimePrint(
+        \\{{"memcmp":{{"offset":0,"bytes":"{s}"}}}}
+    , .{oversized_base58});
+    try expectParseError(ProgramSubscribe.Filter, base58_json, error.LengthMismatch);
+
+    const oversized_base64 = "A" ** (sig.rpc.filters.MAX_DATA_BASE64_SIZE + 1);
+    const base64_json = std.fmt.comptimePrint(
+        \\{{"memcmp":{{"offset":0,"bytes":"{s}","encoding":"base64"}}}}
+    , .{oversized_base64});
+    try expectParseError(ProgramSubscribe.Filter, base64_json, error.LengthMismatch);
+
+    const oversized_raw_json = std.fmt.comptimePrint(
+        \\{{"memcmp":{{"offset":0,"bytes":[{s}0],"encoding":"bytes"}}}}
+    , .{"0," ** sig.rpc.filters.MAX_DATA_SIZE});
+    try expectParseError(ProgramSubscribe.Filter, oversized_raw_json, error.LengthMismatch);
 }
 
 test "ProgramSubscribe.Filter roundtrip" {
