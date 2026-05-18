@@ -762,7 +762,7 @@ pub const Downloader = struct {
             .timeout_pending = false,
             .download_conns = @splat(.empty()),
             .active_downloads = 0,
-            .download_race = DownloadRace.empty(),
+            .download_race = .empty(),
             .snapshot_dir = snapshot_dir,
             .run_result = null,
             .metrics = metrics,
@@ -1392,7 +1392,7 @@ pub const Downloader = struct {
 
         std.posix.close(active.fd);
         const old_gen = probe.gen;
-        self.probe_conns[probe_index] = ProbeConn.empty();
+        self.probe_conns[probe_index] = .empty();
         self.probe_conns[probe_index].gen = old_gen;
         self.active_probes -= 1;
 
@@ -2060,12 +2060,12 @@ pub const Downloader = struct {
             if (same_target) return;
 
             // Different target, reset for a new race (.empty() sets phase to .idle).
-            self.download_race = DownloadRace.empty();
+            self.download_race = .empty();
         }
 
         // The case where we haven't started the race.
         if (self.download_race.phase == .idle) {
-            self.download_race = DownloadRace.empty();
+            self.download_race = .empty();
             self.download_race.phase = .racing;
             self.download_race.slot = slot;
             self.download_race.hash = hash;
@@ -2542,7 +2542,7 @@ pub const Downloader = struct {
 
         const old_gen = conn.gen;
         // TODO: add an emptyWithGen() or reset()
-        self.download_conns[index] = DownloadConn.empty();
+        self.download_conns[index] = .empty();
         self.download_conns[index].gen = old_gen;
 
         std.debug.assert(self.active_downloads > 0);
