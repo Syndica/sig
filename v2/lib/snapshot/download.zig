@@ -12,8 +12,6 @@ const SnapshotSourceRing = lib.snapshot.SnapshotSourceRing;
 const KnownValidators = lib.snapshot.SnapshotConfig.KnownValidators;
 
 const IO_URING_ENTRIES = 256;
-const MAX_DRAIN: u8 = 64;
-const GOSSIP_DRAIN_INTERVAL: std.os.linux.kernel_timespec = .{ .sec = 0, .nsec = 100_000_000 };
 
 pub const MAX_CONCURRENT_PROBES: u8 = 16;
 const PROBE_TIMEOUT_SECS: i64 = 3;
@@ -560,8 +558,6 @@ pub const DownloadResult = union(enum) {
 
 // TODO: Can be smaller than u8.
 const Op = enum(u8) {
-    gossip_drain_timeout,
-
     probe_connect,
     probe_send,
     probe_recv,
@@ -672,7 +668,6 @@ pub const Metrics = struct {
 
     fn getHistogram(self: *const Metrics, op: Op) *const tel.Histogram {
         return switch (op) {
-            .gossip_drain_timeout => unreachable,
             .probe_connect => &self.snapshot_io_latency_probe_connect,
             .probe_send => &self.snapshot_io_latency_probe_send,
             .probe_recv => &self.snapshot_io_latency_probe_recv,
@@ -732,7 +727,6 @@ pub const Downloader = struct {
 
     probe_conns: [MAX_CONCURRENT_PROBES]ProbeConn,
     active_probes: u8,
-    timeout_pending: bool,
 
     download_conns: [MAX_DOWNLOAD_RACERS]DownloadConn,
     active_downloads: u8,
@@ -759,7 +753,6 @@ pub const Downloader = struct {
             .known_validators = known_validators,
             .probe_conns = @splat(.empty()),
             .active_probes = 0,
-            .timeout_pending = false,
             .download_conns = @splat(.empty()),
             .active_downloads = 0,
             .download_race = .empty(),
@@ -789,11 +782,10 @@ pub const Downloader = struct {
     pub fn run(self: *Downloader) !DownloadResult {
         var cqes: [256]std.os.linux.io_uring_cqe = undefined;
 
-        // drain messages from gossip service immediately. This also submits the first timeout for drain interval.
-        try self.handleGossipDrainTimeout();
-
         while (true) {
-            _ = try self.ring.submit_and_wait(1);
+            try self.drainGossip();
+
+            _ = try self.ring.submit_and_wait(0);
             const n = try self.ring.copy_cqes(&cqes, 0);
             if (n == cqes.len) {
                 self.metrics.io_uring_cqe_batch_fulls_total.increment(1);
@@ -827,10 +819,6 @@ pub const Downloader = struct {
 
                 // Otherwise, an operation has completed, handle state changes.
                 switch (data.op) {
-                    .gossip_drain_timeout => {
-                        self.timeout_pending = false;
-                        try self.handleGossipDrainTimeout();
-                    },
                     .probe_connect => self.handleProbeConnect(data, cqe),
                     .probe_send => self.handleProbeSend(data, cqe),
                     .probe_recv => self.handleProbeRecv(data, cqe),
@@ -853,17 +841,15 @@ pub const Downloader = struct {
         }
     }
 
-    fn handleGossipDrainTimeout(self: *Downloader) !void {
-        if (self.download_race.phase == .completed) {
-            self.timeout_pending = false;
-            return;
-        }
+    fn drainGossip(self: *Downloader) !void {
+        if (self.download_race.phase == .completed) return;
 
         self.maybeLogWinnerProgress();
 
-        var drained: u8 = 0;
-        while (drained < MAX_DRAIN) : (drained += 1) {
+        var drained = false;
+        while (true) {
             const source = self.gossip_iter.next() orelse break;
+            drained = true;
             self.metrics.snapshot_sources_received.increment(1);
 
             // Check and skip non-whitelisted known validators.
@@ -915,17 +901,7 @@ pub const Downloader = struct {
                 self.metrics.snapshot_sources_deduped.increment(1);
             }
         }
-        if (drained > 0) self.gossip_iter.markUsed();
-
-        if (!self.timeout_pending) {
-            _ = try self.ring.timeout(
-                UserData.init(.gossip_drain_timeout, 0, 0).encode(),
-                &GOSSIP_DRAIN_INTERVAL,
-                0,
-                0,
-            );
-            self.timeout_pending = true;
-        }
+        if (drained) self.gossip_iter.markUsed();
     }
 
     fn startProbe(self: *Downloader, addr: Address, peer: *PeerState) !void {
