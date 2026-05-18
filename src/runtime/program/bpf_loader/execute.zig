@@ -292,7 +292,9 @@ fn handleExecutionResult(
 ///   1. Records the failing access (`access_type`, `vm_addr`, `len`) on
 ///      `tc.last_access_violation` so the post-execution path can remap a
 ///      generic `AccessViolation` to a specific account-related
-///      `InstructionError`.
+///      `InstructionError`. Sig keeps this metadata explicitly, unlike Agave,
+///      so handled accesses must be marked and ignored later to avoid stale
+///      remapping.
 ///   2. For *writes* to a writable+owned account region whose payload is set,
 ///      attempts to grow the region (up to the account's reserved address
 ///      space, `MAX_PERMITTED_DATA_LENGTH`, and the remaining
@@ -316,11 +318,14 @@ const AccessViolationHandlerCtx = struct {
     ) void {
         const ctx: *AccessViolationHandlerCtx = @ptrCast(@alignCast(ctx_raw));
 
-        // Step 1: record for post-execution remapping (always).
+        // Step 1: record for post-execution remapping (always). If the
+        // handler later grows the region enough to satisfy this access, the
+        // record is marked `handled` so remapAccessViolation can ignore it.
         ctx.tc.last_access_violation = .{
             .access_type = access_type,
             .vm_addr = vm_addr,
             .len = len,
+            .handled = false,
         };
 
         // Step 2: auto-grow logic. Only writable+owned account-data regions
@@ -384,6 +389,9 @@ const AccessViolationHandlerCtx = struct {
                 region.host_memory = .{ .mutable = ptr[0..new_len] };
             }
             region.vm_addr_end = region.vm_addr_start +| @as(u64, new_len);
+            // The originally failing access can now succeed on retry, so the
+            // recorded metadata is stale for post-execution remapping.
+            if (ctx.tc.last_access_violation) |*av| av.handled = true;
         }
     }
 };
@@ -400,6 +408,10 @@ fn remapAccessViolation(
     is_loader_v1: bool,
 ) ?InstructionError {
     const av = ic.tc.last_access_violation orelse return null;
+    // Sig stores the last attempted access explicitly. If the handler already
+    // repaired it by growing the region, skip remapping so stale metadata does
+    // not misclassify a later real access violation.
+    if (av.handled) return null;
 
     const account_metas = ic.tc.serialized_accounts.constSlice();
     for (account_metas, 0..) |meta, index_in_instruction| {
@@ -4984,6 +4996,91 @@ test remapAccessViolation {
         @as(?InstructionError, InstructionError.InvalidRealloc),
         remapAccessViolation(ic, false),
     );
+}
+
+test "remapAccessViolation ignores stale metadata from handled growth" {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const account_data = [_]u8{ 1, 2, 3, 4 };
+    const vm_data_addr = sig.vm.memory.INPUT_START + 0x80;
+
+    const cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+        .accounts = &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .owner = program_id,
+                .data = &account_data,
+            },
+            .{
+                .pubkey = program_id,
+                .owner = ids.NATIVE_LOADER_ID,
+            },
+        },
+    });
+    defer {
+        testing.deinitTransactionContext(allocator, &tc);
+        sig.runtime.testing.deinitAccountMap(cache, allocator);
+    }
+
+    var info = try testing.createInstructionInfo(
+        &tc,
+        program_id,
+        &.{},
+        &.{
+            .{ .index_in_transaction = 0, .is_writable = true },
+        },
+    );
+    defer info.deinit(allocator);
+
+    try sig.runtime.executor.pushInstruction(&tc, info);
+    const ic = try tc.getCurrentInstructionContext();
+
+    tc.serialized_accounts.appendAssumeCapacity(.{
+        .original_data_len = account_data.len,
+        .vm_data_addr = vm_data_addr,
+        .vm_key_addr = 0,
+        .vm_lamports_addr = 0,
+        .vm_owner_addr = 0,
+    });
+
+    const initial_data = blk: {
+        var account = try ic.borrowInstructionAccount(0);
+        defer account.release();
+        break :blk try allocator.dupe(u8, account.account.data);
+    };
+    defer allocator.free(initial_data);
+
+    var region = vm.memory.Region.init(.mutable, initial_data, vm_data_addr).withPayload(0);
+    var avh_ctx: AccessViolationHandlerCtx = .{
+        .tc = &tc,
+        .allocator = allocator,
+        .direct_mapping = true,
+    };
+
+    AccessViolationHandlerCtx.handle(
+        @ptrCast(&avh_ctx),
+        &region,
+        account_data.len + 4,
+        .mutable,
+        vm_data_addr + account_data.len,
+        4,
+    );
+
+    {
+        var account = try ic.borrowInstructionAccount(0);
+        defer account.release();
+
+        try std.testing.expectEqual(account_data.len + 4, account.constAccountData().len);
+        try std.testing.expect(tc.last_access_violation != null);
+
+        try account.setDataLength(allocator, &tc.accounts_resize_delta, account_data.len);
+        try std.testing.expectEqual(account_data.len, account.constAccountData().len);
+    }
+
+    try std.testing.expectEqual(null, remapAccessViolation(ic, false));
 }
 
 // Regression test: executeV4Retract must use tc.programs_allocator (the persistent GPA)
