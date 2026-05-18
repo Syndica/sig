@@ -107,7 +107,7 @@ pub fn main() !void {
     var reader_buf: [4096]u8 = undefined;
     var reader = schedule_file.reader(&reader_buf);
 
-    const service_instances: []const services.ServiceInstance = &.{
+    const service_instances: []const services.topology.ServiceInstance = &.{
         .{ .service = .shred_receiver },
         .{ .service = .net },
         .{ .service = .gossip },
@@ -116,7 +116,7 @@ pub fn main() !void {
         .{ .service = .telemetry },
     };
 
-    const shared_regions = services.toSharedRegions(.{
+    const shared_regions = services.topology.toSharedRegions(.{
         // gossip constants
         .gossip_config = .{
             .cluster_info = gossip_cluster_info,

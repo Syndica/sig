@@ -20,7 +20,6 @@ const tel = lib.telemetry;
 const ServiceEntrypoint = lib.ipc.ServiceFn;
 
 const linux = std.os.linux;
-const sigaction_fn = linux.Sigaction.sigaction_fn;
 const memfd = lib.linux.memfd;
 const E = linux.E;
 const e = E.init;
@@ -29,7 +28,7 @@ const topology_schema: lib.TopologySchema = .{
     .services = @import("./services.zon"),
 };
 
-const topology = topology_schema.Bind(Region, .init(.{
+pub const topology = topology_schema.Bind(Region, .init(.{
     .gossip_config = .initOne(.@"gossip:config"),
     .shred_recv_config = .initOne(.@"shred_receiver:config"),
     .snapshot_config = .initOne(.@"snapshot:config"),
@@ -59,11 +58,6 @@ const topology = topology_schema.Bind(Region, .init(.{
         .@"snapshot:telemetry",
     }),
 }));
-
-pub const ServiceId = topology.ServiceId;
-pub const SharedRegion = topology.SharedRegion;
-pub const toSharedRegions = topology.toSharedRegions;
-pub const ServiceInstance = topology.ServiceInstance;
 
 pub const Region = union(enum) {
     gossip_config: struct {
@@ -223,7 +217,7 @@ pub const Region = union(enum) {
     }
 };
 
-pub fn telemetryServiceCount(comptime services: []const ServiceInstance) u32 {
+pub fn telemetryServiceCount(comptime services: []const topology.ServiceInstance) u32 {
     var count: u32 = 0;
 
     inline for (services) |instance| {
@@ -245,7 +239,7 @@ pub fn telemetryServiceCount(comptime services: []const ServiceInstance) u32 {
 /// We must unmap to avoid sharing regions with services that don't need them.
 fn createAndInitSharedRegionMemfds(
     gpa: std.mem.Allocator,
-    regions: []const SharedRegion,
+    regions: []const topology.SharedRegion,
 ) ![]const memfd.RW {
     const region_memfds: []memfd.RW = try gpa.alloc(memfd.RW, regions.len);
     errdefer gpa.free(region_memfds);
@@ -273,7 +267,7 @@ fn createAndInitSharedRegionMemfds(
 // Creates a memfd for every service, to be used for storing a lib.ipc.Exit value, which is used
 // for reporting traces+errors back to the main process.
 fn createExitMemfds(
-    comptime services: []const ServiceInstance,
+    comptime services: []const topology.ServiceInstance,
     exit_memfds: *[services.len]memfd.RW,
 ) !void {
     @memset(exit_memfds, .empty);
@@ -333,8 +327,8 @@ fn resolveArgs(
 /// Blocks until the first service has exited, before dumping out traces.
 pub fn spawnAndWait(
     allocator: std.mem.Allocator,
-    comptime services: []const ServiceInstance,
-    regions: []const SharedRegion,
+    comptime services: []const topology.ServiceInstance,
+    regions: []const topology.SharedRegion,
 ) !void {
     const region_memfds = try createAndInitSharedRegionMemfds(allocator, regions);
     defer allocator.free(region_memfds);
@@ -398,7 +392,7 @@ pub fn spawnAndWait(
 }
 
 fn spawnService(
-    service_instance: ServiceInstance,
+    service_instance: topology.ServiceInstance,
     exit: memfd.RW,
     stderr: std.fs.File,
     regions: []const topology.ServiceMapLookupResult,
@@ -523,7 +517,7 @@ fn closeAllFdsExceptStderr(maybe_stderr: ?linux.fd_t) void {
 
 fn dumpOnExit(
     meta: *lib.ipc.Exit,
-    service_instance: ServiceInstance,
+    service_instance: topology.ServiceInstance,
     pid: i32,
     status: u32,
 ) void {
@@ -571,8 +565,8 @@ fn dumpOnExit(
 
 pub fn spawnAndWaitNoSandbox(
     allocator: std.mem.Allocator,
-    comptime services: []const ServiceInstance,
-    regions: []const SharedRegion,
+    comptime services: []const topology.ServiceInstance,
+    regions: []const topology.SharedRegion,
 ) !void {
     const region_memfds = try createAndInitSharedRegionMemfds(allocator, regions);
     defer allocator.free(region_memfds);
@@ -636,7 +630,7 @@ fn signalThreadCrash(ctx: ?*const anyopaque, service_idx: u16) callconv(.c) void
 
 fn threadEntry(
     entry_point: ServiceEntrypoint,
-    service: ServiceId,
+    service: topology.ServiceId,
     args: lib.ipc.ResolvedArgs,
     service_idx: u16,
     thread_exit_ctx: *const ThreadExitContext,
@@ -650,7 +644,7 @@ fn threadEntry(
 }
 
 fn spawnServiceNoSandbox(
-    service_instance: ServiceInstance,
+    service_instance: topology.ServiceInstance,
     exit: memfd.RW,
     stderr: std.fs.File,
     regions: []const topology.ServiceMapLookupResult,
