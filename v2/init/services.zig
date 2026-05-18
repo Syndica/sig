@@ -258,7 +258,7 @@ fn serviceMap(
     allocator: std.mem.Allocator,
     comptime services: []const ServiceInstance,
     regions: []const SharedRegion,
-    region_memfds: []memfd.RW,
+    region_memfds: []const memfd.RW,
 ) !Map {
     // check all regions reference existing services
     for (regions) |region| {
@@ -353,6 +353,53 @@ pub fn getEntrypoint(service: ServiceId) ServiceEntrypoint {
     };
 }
 
+/// Create and initialize memfds for each shared memory region (map it, initialize it, and then unmap it).
+/// We must unmap to avoid sharing regions with services that don't need them.
+fn createAndInitSharedRegionMemfds(
+    gpa: std.mem.Allocator,
+    regions: []const SharedRegion,
+) ![]const memfd.RW {
+    const region_memfds: []memfd.RW = try gpa.alloc(memfd.RW, regions.len);
+    errdefer gpa.free(region_memfds);
+    @memset(region_memfds, .empty);
+
+    for (region_memfds, regions) |*region_memfd, shared_region| {
+        // This name should be visible from a debugger, but serves no other purpose.
+        var fmt_buf: [4096]u8 = undefined;
+        const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{shared_region});
+
+        region_memfd.* = try .init(.{
+            .name = name,
+            .size = shared_region.region.size(),
+        });
+
+        const buf = try region_memfd.mmap(shared_region.requested_location);
+        defer std.posix.munmap(buf);
+        try shared_region.region.init(buf);
+        std.log.info("Initialised: {f}", .{shared_region});
+    }
+
+    return region_memfds;
+}
+
+// Creates a memfd for every service, to be used for storing a lib.ipc.Exit value, which is used
+// for reporting traces+errors back to the main process.
+fn createExitMemfds(
+    comptime services: []const ServiceInstance,
+    exit_memfds: *[services.len]memfd.RW,
+) !void {
+    @memset(exit_memfds, .empty);
+    inline for (exit_memfds, services) |*exit_memfd, service_instance| {
+        exit_memfd.* = try .init(.{
+            .name = std.fmt.comptimePrint(
+                "exit_{s}_{}",
+                .{ @tagName(service_instance.service), service_instance.n },
+            ),
+            .size = @sizeOf(lib.ipc.Exit),
+        });
+    }
+}
+
 /// Initialises the shared memory regions with their parameters, then securely starts up services.
 /// Blocks until the first service has exited, before dumping out traces.
 pub fn spawnAndWait(
@@ -360,52 +407,11 @@ pub fn spawnAndWait(
     comptime services: []const ServiceInstance,
     regions: []const SharedRegion,
 ) !void {
-    // Create memfds for each shared memory region
-    const region_memfds: []memfd.RW = try allocator.alloc(memfd.RW, regions.len);
+    const region_memfds = try createAndInitSharedRegionMemfds(allocator, regions);
     defer allocator.free(region_memfds);
-    {
-        @memset(region_memfds, .empty);
 
-        for (region_memfds, regions) |*region_memfd, shared_region| {
-            // Providing a name - this name should be visible from a debugger, but serves no other
-            // purpose.
-            var fmt_buf: [4096]u8 = undefined;
-            const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{shared_region});
-
-            region_memfd.* = try .init(.{
-                .name = name,
-                .size = shared_region.region.size(),
-            });
-        }
-    }
-
-    // Creates a memfd for every service, to be used for storing a lib.Exit value, which is used
-    // for reporting traces+errors back to the main process.
-    const exit_memfds: []memfd.RW = try allocator.alloc(memfd.RW, services.len);
-    defer allocator.free(exit_memfds);
-    {
-        @memset(exit_memfds, .empty);
-
-        inline for (exit_memfds, services) |*exit_memfd, service_instance| {
-            exit_memfd.* = try .init(.{
-                .name = std.fmt.comptimePrint(
-                    "exit_{s}_{}",
-                    .{ @tagName(service_instance.service), service_instance.n },
-                ),
-                .size = @sizeOf(lib.ipc.Exit),
-            });
-        }
-    }
-
-    // Creates a mapping for each memfd region, initialising them, and unmapping them. We must unmap
-    // to avoid sharing regions with services that don't need them.
-    for (regions, region_memfds) |shared_region, region_memfd| {
-        const buf = try region_memfd.mmap(shared_region.requested_location);
-        defer std.posix.munmap(buf);
-        try shared_region.region.init(buf);
-
-        std.log.info("Initialised: {f}", .{shared_region});
-    }
+    var exit_memfds: [services.len]memfd.RW = undefined;
+    try createExitMemfds(services, &exit_memfds);
 
     var map = try serviceMap(allocator, services, regions, region_memfds);
     defer {
@@ -680,51 +686,11 @@ pub fn spawnAndWaitNoSandbox(
     comptime services: []const ServiceInstance,
     regions: []const SharedRegion,
 ) !void {
-    // Create memfds for each shared memory region
-    const region_memfds: []memfd.RW = try allocator.alloc(memfd.RW, regions.len);
+    const region_memfds = try createAndInitSharedRegionMemfds(allocator, regions);
     defer allocator.free(region_memfds);
-    {
-        @memset(region_memfds, .empty);
 
-        for (region_memfds, regions) |*region_memfd, shared_region| {
-            // Providing a name - this name should be visible from a debugger, but serves no other
-            // purpose.
-            var fmt_buf: [4096]u8 = undefined;
-            const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{shared_region});
-
-            region_memfd.* = try .init(.{
-                .name = name,
-                .size = shared_region.region.size(),
-            });
-        }
-    }
-
-    // Creates a memfd for every service, to be used for storing a lib.ipc.Exit value, which is used
-    // for reporting traces+errors back to the main process.
-    const exit_memfds: []memfd.RW = try allocator.alloc(memfd.RW, services.len);
-    defer allocator.free(exit_memfds);
-    {
-        @memset(exit_memfds, .empty);
-
-        inline for (exit_memfds, services) |*exit_memfd, service_instance| {
-            exit_memfd.* = try .init(.{
-                .name = std.fmt.comptimePrint(
-                    "exit_{s}_{}",
-                    .{ @tagName(service_instance.service), service_instance.n },
-                ),
-                .size = @sizeOf(lib.ipc.Exit),
-            });
-        }
-    }
-
-    // Creates a mapping for each memfd region, initialising them, and unmapping them.
-    for (regions, region_memfds) |shared_region, region_memfd| {
-        const buf = try region_memfd.mmap(shared_region.requested_location);
-        defer std.posix.munmap(buf);
-        try shared_region.region.init(buf);
-
-        std.log.info("Initialised: {f}", .{shared_region});
-    }
+    var exit_memfds: [services.len]memfd.RW = undefined;
+    try createExitMemfds(services, &exit_memfds);
 
     var map = try serviceMap(allocator, services, regions, region_memfds);
     defer {
