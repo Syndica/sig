@@ -12,16 +12,21 @@ pub const ExecError = @typeInfo(
 
 pub fn execFixture(
     allocator: Allocator,
+    report_allocator: ?Allocator,
     lib: *Library,
     input_path: []const u8,
     out_buf: []u8,
+    failure: ?*?ResultDetail,
 ) !TestResult {
     const data = try std.fs.cwd().readFileAlloc(allocator, input_path, std.math.maxInt(usize));
     defer allocator.free(data);
 
     const fixture = try parseFixture(data);
 
-    const entrypoint = try lib.get(allocator, fixture.entrypoint) orelse return .missing_entrypoint;
+    const entrypoint = try lib.get(allocator, fixture.entrypoint) orelse {
+        if (failure) |detail| detail.* = try toResultDetail(report_allocator.?, fixture, null);
+        return .missing_entrypoint;
+    };
 
     var out_sz: u64 = @intCast(out_buf.len);
     const status = entrypoint(
@@ -30,21 +35,197 @@ pub fn execFixture(
         fixture.input.ptr,
         @intCast(fixture.input.len),
     );
-    if (status == 0) return .bad_status;
+    if (status == 0) {
+        if (failure) |detail| detail.* = try toResultDetail(report_allocator.?, fixture, null);
+        return .bad_status;
+    }
     if (out_sz > out_buf.len) return error.OutputBufferTooSmall;
 
     const actual = out_buf[0..@intCast(out_sz)];
 
     const expected = fixture.expected;
-    return if (std.mem.eql(u8, actual, expected)) .pass else .mismatch;
+    if (failure) |detail| detail.* = try toResultDetail(report_allocator.?, fixture, actual);
+    if (std.mem.eql(u8, actual, expected)) return .pass;
+    return .mismatch;
+}
+
+const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
+
+const protobuf = @import("protobuf");
+
+pub const ResultDetail = union(IoCategory) {
+    elf_loader: Fields(.elf_loader),
+    instr: Fields(.instr),
+    syscall: Fields(.syscall),
+    txn: Fields(.txn),
+    unknown: Fields(.unknown),
+
+    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
+        return switch (self.*) {
+            inline else => |value| writeJson(value, jws, null) catch error.WriteFailed,
+        };
+    }
+
+    fn Fields(comptime cat: IoCategory) type {
+        const types = cat.types();
+        return struct {
+            harness: []const u8,
+            // input: types.Input,
+            expected: types.Output,
+            actual: ?types.Output,
+
+            pub const _desc_table = .{
+                .harness = protobuf.fd(1, .{ .scalar = .string }),
+                .expected = protobuf.fd(1, .{ .scalar = .bytes }),
+                .actual = protobuf.fd(2, .{ .scalar = .bytes }),
+            };
+        };
+    }
+};
+
+pub const IoCategory = enum {
+    elf_loader,
+    instr,
+    syscall,
+    txn,
+    unknown,
+
+    pub fn types(comptime self: IoCategory) struct { Input: type, Output: type } {
+        return switch (self) {
+            .elf_loader => .{ .Input = pb.ELFLoaderCtx, .Output = pb.ELFLoaderEffects },
+            .instr => .{ .Input = pb.InstrContext, .Output = pb.InstrEffects },
+            .syscall => .{ .Input = pb.SyscallContext, .Output = pb.SyscallEffects },
+            .txn => .{ .Input = pb.TxnContext, .Output = pb.TxnResult },
+            .unknown => .{ .Input = []const u8, .Output = []const u8 },
+        };
+    }
+};
+
+fn toResultDetail(allocator: Allocator, fixture: Fixture, actual: ?[]const u8) !ResultDetail {
+    return if (std.mem.eql(u8, "sol_compat_instr_execute_v1", fixture.entrypoint))
+        toResultDetailTyped(.instr, allocator, fixture, actual)
+    else if (std.mem.eql(u8, "sol_compat_vm_interp_v1", fixture.entrypoint))
+        toResultDetailTyped(.syscall, allocator, fixture, actual)
+    else if (std.mem.eql(u8, "sol_compat_vm_cpi_syscall_v1", fixture.entrypoint))
+        toResultDetailTyped(.syscall, allocator, fixture, actual)
+    else if (std.mem.eql(u8, "sol_compat_vm_syscall_execute_v1", fixture.entrypoint))
+        toResultDetailTyped(.syscall, allocator, fixture, actual)
+    else if (std.mem.eql(u8, "sol_compat_elf_loader_v1", fixture.entrypoint))
+        toResultDetailTyped(.elf_loader, allocator, fixture, actual)
+    else if (std.mem.eql(u8, "sol_compat_txn_execute_v1", fixture.entrypoint))
+        toResultDetailTyped(.txn, allocator, fixture, actual)
+    else
+        .{
+            .unknown = .{
+                .harness = try allocator.dupe(u8, fixture.entrypoint),
+                // .input = try allocator.dupe(u8, fixture.input),
+                .expected = try allocator.dupe(u8, fixture.expected),
+                .actual = if (actual) |bytes| try allocator.dupe(u8, bytes) else null,
+            },
+        };
+}
+
+fn toResultDetailTyped(
+    comptime harness: IoCategory,
+    allocator: Allocator,
+    fixture: Fixture,
+    actual: ?[]const u8,
+) !ResultDetail {
+    const types = harness.types();
+    var input_reader = std.Io.Reader.fixed(fixture.input);
+    var expected_reader = std.Io.Reader.fixed(fixture.expected);
+
+    var input_typed = try types.Input.decode(&input_reader, allocator);
+    errdefer input_typed.deinit(allocator);
+
+    var expected_typed = try types.Output.decode(&expected_reader, allocator);
+    errdefer expected_typed.deinit(allocator);
+
+    var actual_typed: ?types.Output = null;
+    if (actual) |bytes| {
+        var actual_reader = std.Io.Reader.fixed(bytes);
+        actual_typed = try types.Output.decode(&actual_reader, allocator);
+    }
+    errdefer if (actual_typed) |*value| value.deinit(allocator);
+
+    const harness_name = try allocator.dupe(u8, fixture.entrypoint);
+
+    return @unionInit(ResultDetail, @tagName(harness), .{
+        .harness = harness_name,
+        // .input = input_typed,
+        .expected = expected_typed,
+        .actual = actual_typed,
+    });
+}
+
+pub fn writeJson(v: anytype, jws: anytype, comptime ftype: ?protobuf.FieldType) !void {
+    const T = @TypeOf(v);
+    if (T == []const u8) {
+        if (ftype.?.scalar == .string) {
+            try jws.write(v);
+        } else if (v.len <= 512) {
+            try jws.beginWriteRaw();
+            defer jws.endWriteRaw();
+            try jws.writer.writeByte('"');
+            try std.base64.standard.Encoder.encodeWriter(jws.writer, v);
+            try jws.writer.writeByte('"');
+        } else {
+            var hash: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(v, &hash, .{});
+            const hash_hex = std.fmt.bytesToHex(hash, .lower);
+            var buf: [128]u8 = @splat(0);
+            const s = try std.fmt.bufPrint(&buf, "len: {d}, sha256: {s}", .{ v.len, hash_hex });
+            try jws.beginWriteRaw();
+            defer jws.endWriteRaw();
+            try std.json.Stringify.encodeJsonString(s, jws.options, jws.writer);
+        }
+    } else switch (@typeInfo(T)) {
+        .optional => if (v) |value| try writeJson(value, jws, ftype) else try jws.write(v),
+        .@"struct" => |s| {
+            try jws.beginObject();
+            inline for (s.fields) |field| {
+                const value = @field(v, field.name);
+                try jws.objectField(field.name);
+                if (@typeInfo(field.type) == .@"struct" and
+                    @hasField(field.type, "items") and @hasField(field.type, "capacity"))
+                {
+                    try jws.beginArray();
+                    for (value.items) |*account| try writeJson(account.*, jws, null);
+                    try jws.endArray();
+                } else try writeJson(value, jws, @field(T._desc_table, field.name).ftype);
+            }
+            try jws.endObject();
+        },
+
+        else => try jws.write(v),
+    }
+}
+
+test "asd" {
+    var buf: [1024]u8 = @splat(0);
+    try std.base64.standard.Decoder.decode(&buf, "abbreviated=");
+    std.debug.print("{any}", .{buf[0..22]});
+    // const x = try std.base64.standard.Encoder.encodeWriter(jws.writer, value);
 }
 
 pub const DirectoryRunStats = struct {
     fix_paths: []const []const u8,
     results: []const TestResult,
+    details: ?[]?ResultDetail = null,
+
+    pub fn deinit(self: *DirectoryRunStats, allocator: Allocator) void {
+        for (self.fix_paths) |input_path| allocator.free(input_path);
+        allocator.free(self.fix_paths);
+        allocator.free(self.results);
+    }
 };
 
-pub fn execDir(allocator: Allocator, lib: *Library, input_dir_path: []const u8) !DirectoryRunStats {
+pub fn execDir(
+    allocator: Allocator,
+    report_allocator: ?Allocator,
+    lib: *Library,
+    input_dir_path: []const u8,
+) !DirectoryRunStats {
     var fix_paths: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (fix_paths.items) |input_path| allocator.free(input_path);
@@ -80,6 +261,12 @@ pub fn execDir(allocator: Allocator, lib: *Library, input_dir_path: []const u8) 
     const results = try allocator.alloc(TestResult, fix_paths.items.len);
     errdefer allocator.free(results);
 
+    const details = if (report_allocator) |failure_allocator|
+        try failure_allocator.alloc(?ResultDetail, fix_paths.items.len)
+    else
+        null;
+    if (details) |failure_details| @memset(failure_details, null);
+
     const base_chunk_size = fix_paths.items.len / thread_count;
     const remainder = fix_paths.items.len % thread_count;
     var start_index: usize = 0;
@@ -88,9 +275,11 @@ pub fn execDir(allocator: Allocator, lib: *Library, input_dir_path: []const u8) 
         const end_index = start_index + base_chunk_size + @intFromBool(i < remainder);
         thread.* = try std.Thread.spawn(.{}, execMany, .{
             allocator,
+            report_allocator,
             lib,
             fix_paths.items[start_index..end_index],
             results[start_index..end_index],
+            if (details) |failure_details| failure_details[start_index..end_index] else null,
             &errors[i],
         });
         start_index = end_index;
@@ -102,14 +291,17 @@ pub fn execDir(allocator: Allocator, lib: *Library, input_dir_path: []const u8) 
     return .{
         .fix_paths = try fix_paths.toOwnedSlice(allocator),
         .results = results,
+        .details = details,
     };
 }
 
 fn execMany(
     allocator: Allocator,
+    report_allocator: ?Allocator,
     lib: *Library,
     fix_paths: []const []const u8,
     results: []TestResult,
+    details: ?[]?ResultDetail,
     err: *?ExecError,
 ) void {
     var arena: std.heap.ArenaAllocator = .init(allocator);
@@ -118,9 +310,16 @@ fn execMany(
     const out_buf = allocator.alloc(u8, output_buffer_size) catch @panic("oom");
     defer allocator.free(out_buf);
 
-    for (fix_paths, results) |input, *result_entry| {
+    for (fix_paths, results, 0..) |input, *result_entry, i| {
         defer _ = arena.reset(.retain_capacity);
-        result_entry.* = execFixture(arena.allocator(), lib, input, out_buf) catch |e| {
+        result_entry.* = execFixture(
+            arena.allocator(),
+            report_allocator,
+            lib,
+            input,
+            out_buf,
+            if (details) |failure_details| &failure_details[i] else null,
+        ) catch |e| {
             err.* = e;
             return;
         };

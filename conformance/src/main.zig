@@ -4,6 +4,8 @@ const build_options = @import("build-options");
 const solfuzz_sig = @import("lib.zig");
 const exec = @import("exec.zig");
 
+const report_buffer_size: usize = 1024 * 1024 * 1024;
+
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
 
@@ -11,14 +13,30 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    if (args.len != 2 and args.len != 3) {
-        std.debug.print("usage: exec <fix-file-or-dir> [target-path]\n", .{});
-        std.posix.exit(2);
+    var failure_report_dir: ?[]const u8 = null;
+    var positional: [2][]const u8 = undefined;
+    var positional_count: usize = 0;
+
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--failure-report-dir")) {
+            i += 1;
+            if (i >= args.len) usage();
+            failure_report_dir = args[i];
+        } else {
+            if (positional_count == positional.len) usage();
+            positional[positional_count] = args[i];
+            positional_count += 1;
+        }
     }
+    if (positional_count < 1) usage();
+
+    const input_path = positional[0];
+    const target_path = if (positional_count == 2) positional[1] else null;
 
     // Get the library to test
-    var lib: exec.Library = if (args.len == 3) .{
-        .dyn = try .open(args[2]),
+    var lib: exec.Library = if (target_path) |path| .{
+        .dyn = try .open(path),
     } else if (build_options.include_sig) .{
         .map = &solfuzz_sig.entrypoints,
     } else {
@@ -27,15 +45,27 @@ pub fn main() !void {
     };
     defer if (lib == .dyn) lib.dyn.close();
 
+    // var report_buffer: ?[]u8 = null;
+    // defer if (report_buffer) |buffer| allocator.free(buffer);
+    // var report_fba: std.heap.FixedBufferAllocator = undefined;
+    // const report_allocator = if (failure_report_dir != null) blk: {
+    //     const buffer = try allocator.alloc(u8, report_buffer_size);
+    //     report_buffer = buffer;
+    //     report_fba = std.heap.FixedBufferAllocator.init(buffer);
+    //     break :blk report_fba.threadSafeAllocator();
+    // } else null;
+    const report_allocator = std.heap.c_allocator;
+
     // Run the tests
     var passed_count: usize = 0;
     var failed_count: usize = 0;
-    const stat = try std.fs.cwd().statFile(args[1]);
+    const stat = try std.fs.cwd().statFile(input_path);
     if (stat.kind == .directory) {
-        const stats = try exec.execDir(allocator, &lib, args[1]);
+        var stats = try exec.execDir(allocator, report_allocator, &lib, input_path);
+        defer stats.deinit(allocator);
 
         // Group results by dirname relative to input path
-        const input_prefix = args[1];
+        const input_prefix = input_path;
         var group_passed: std.StringArrayHashMapUnmanaged(usize) = .empty;
         var group_failed: std.StringArrayHashMapUnmanaged(usize) = .empty;
         defer {
@@ -85,15 +115,36 @@ pub fn main() !void {
             passed_count += passed;
             failed_count += failed;
         }
+
+        if (failure_report_dir) |output_dir| {
+            if (stats.details) |details| try writeFailureReports(output_dir, details);
+        }
     } else {
         const out_buf = try allocator.alloc(u8, exec.output_buffer_size);
         defer allocator.free(out_buf);
-        switch (try exec.execFixture(allocator, &lib, args[1], out_buf)) {
+
+        var detail: ?exec.ResultDetail = null;
+
+        switch (try exec.execFixture(
+            allocator,
+            report_allocator,
+            &lib,
+            input_path,
+            out_buf,
+            if (failure_report_dir != null) &detail else null,
+        )) {
             .pass => passed_count = 1,
             else => |r| {
-                std.debug.print("{s}: {}\n", .{ args[1], r });
+                std.debug.print("{s}: {}\n", .{ input_path, r });
                 failed_count = 1;
             },
+        }
+
+        if (failure_report_dir) |output_dir| {
+            if (detail != null) {
+                const details = [_]?exec.ResultDetail{detail.?};
+                try writeFailureReports(output_dir, &details);
+            }
         }
     }
 
@@ -107,6 +158,11 @@ pub fn main() !void {
     , .{ passed_count, failed_count });
 
     if (failed_count > 0) std.posix.exit(1);
+}
+
+fn usage() noreturn {
+    std.debug.print("usage: exec [--failure-report-dir <dir>] <fix-file-or-dir> [target-path]\n", .{});
+    std.posix.exit(2);
 }
 
 fn relativeTo(path: []const u8, prefix: []const u8) []const u8 {
@@ -129,4 +185,21 @@ fn printRow(
         passed,
         failed,
     }) catch {};
+}
+
+pub fn writeFailureReports(
+    output_dir_path: []const u8,
+    details: []const ?exec.ResultDetail,
+) !void {
+    try std.fs.cwd().makePath(output_dir_path);
+    var output_dir = try std.fs.cwd().openDir(output_dir_path, .{});
+    defer output_dir.close();
+
+    const file = try output_dir.createFile("failures.json", .{});
+    defer file.close();
+    var buf: [4096]u8 = undefined;
+    var writer = file.writer(&buf);
+    try std.json.Stringify.value(details, .{ .whitespace = .indent_4 }, &writer.interface);
+    // try std.zon.stringify.serializeArbitraryDepth(details, .{ .whitespace = true }, &writer.interface);
+    try writer.interface.flush();
 }

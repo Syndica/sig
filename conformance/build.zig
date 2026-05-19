@@ -91,7 +91,10 @@ pub fn build(b: *Build) void {
             .imports = if (include_sig)
                 &common_imports
             else
-                &.{.{ .name = "build-options", .module = build_options.createModule() }},
+                &.{
+                    .{ .name = "protobuf", .module = pb_mod },
+                    .{ .name = "build-options", .module = build_options.createModule() },
+                },
         }),
     });
     exe.linkLibC();
