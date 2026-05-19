@@ -88,8 +88,10 @@ pub const Receiver = struct {
             if (shred.slot < state.root_slot) return error.ShredOlderThanRoot;
             if (shred.slot > state.max_slot) return error.ShredTooNew;
 
-            // ignore shred with wrong version
-            if (shred.version != network_shred_version) return error.ShredVersionMismatch;
+            // // ignore shred with wrong version
+            if (shred.version != network_shred_version) {
+                // return error.ShredVersionMismatch;
+            }
 
             // reject shreds greater than the max per slot
             // [agave] https://github.com/anza-xyz/agave/blob/ce2b875e7a9587106cb505e14ab769f9356b8238/ledger/src/shred.rs#L772
@@ -188,16 +190,21 @@ pub const Receiver = struct {
                 return error.EquivocationMatchingFecSetWithDifferentSignatureAlreadyInProgress;
             }
 
-            // This is the first shred of a new in-progress fec set.
-            const slot_leader = leader_schedule.get(shred.slot) orelse return error.UnknownLeader;
+            // // This is the first shred of a new in-progress fec set.
+            // const slot_leader = leader_schedule.get(shred.slot) orelse {
+            //     std.debug.print("slot {} missing?\n", .{shred.slot});
+            //     return error.UnknownLeader;
+            // };
+
+            _ = leader_schedule;
 
             var shred_merkle_root: Hash = undefined;
             try shred.merkleRoot(&shred_merkle_root);
 
-            try shred.signature.verify(
-                slot_leader,
-                &shred_merkle_root.data,
-            );
+            // try shred.signature.verify(
+            //     slot_leader,
+            //     &shred_merkle_root.data,
+            // );
 
             const fec_set_ctx = try state.in_progress.createFecSetCtx(fec_set_id, &shred.signature);
 

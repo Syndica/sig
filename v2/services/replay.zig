@@ -135,6 +135,8 @@ fn attachParent(
     const orphan_map_ctx: MerkleForest.OrphanContext = .{ .map = &forest.orphan_map };
 
     const parent = forest.map.getAdapted(&node.chained_merkle_root, map_ctx) orelse {
+        zone.text("parent not found");
+
         // No parent found, insert current node into orphan map (keyed by its parent's merkle-root)
         // NOTE: it's probably a good idea to preemptively send repair requests for the parent here.
 
@@ -171,6 +173,8 @@ fn attachParent(
 
     if (!parent.id.mayFollowWith(&node.id)) {
         @branchHint(.cold); // this would be malicious behaviour, chaining in an invalid order
+        zone.text("mayFollowWith check failed");
+
         return null; // parent found, but fec set ids don't align
     }
 
@@ -492,6 +496,8 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
     var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
 
+    var first_slot: ?Slot = null; // this is a hack, remove it!
+
     task: switch (@as(enum { exec_response, fec_set, idle }, .idle)) {
         .idle => {
             if (exec_response_receiver.peek() != null) continue :task .exec_response;
@@ -529,9 +535,7 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
 
             exec_state.n_transactions_completed += 1;
 
-            if (exec_state.all_transactions_requested and
-                exec_state.n_transactions_completed == exec_state.n_transactions_requested)
-            {
+            if (exec_state.finished()) {
                 std.log.info(
                     "Slot {} ({}) complete! ({}/{})",
                     .{
@@ -553,12 +557,51 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
                 deshredded_iter.next() orelse unreachable;
             defer deshredded_iter.markUsed();
 
-            const inserted = (try insertFecSet(deshredded_fec_set, &forest, rw.block_pool)) orelse
+            const inserted = (try insertFecSet(deshredded_fec_set, &forest, rw.block_pool)) orelse {
+                zone.text("already found");
                 continue :task .idle;
+            };
+
+            // awful hack, treating first received fec set as our root
+            if (first_slot == null) {
+                std.debug.print("inserting first {f}\n", .{inserted});
+                std.debug.assert(first_slot == null);
+                first_slot = inserted.id.slot;
+
+                const rooted_slot = first_slot.? - 1;
+
+                std.debug.assert(inserted.block_ref == .null);
+
+                const rooted_block = try rw.block_pool.create();
+                const first_block = try rw.block_pool.create();
+                rooted_block.* = .{
+                    .slot = rooted_slot,
+                    .child = rw.block_pool.ptrToIndex(first_block),
+                };
+                first_block.* = .{
+                    .slot = first_slot.?,
+                    .parent = rw.block_pool.ptrToIndex(rooted_block),
+                };
+
+                exec_states[rw.block_pool.ptrToIndex(rooted_block).index().?] = .{
+                    .n_transactions_requested = 0,
+                    .n_transactions_completed = 0,
+                    .all_transactions_requested = true,
+                };
+
+                std.debug.assert(exec_states[rw.block_pool.ptrToIndex(rooted_block).index().?].?.finished());
+
+                inserted.block_ref = rw.block_pool.ptrToIndex(first_block);
+
+                std.debug.print("inserted first {f}\n", .{inserted});
+            }
 
             // NOTE: Currently we're doing nothing if we can't find a path from the inserted node to
             //       the root. We could deserialise early for prefetching.
-            if (inserted.block_ref == .null) continue :task .idle;
+            if (inserted.block_ref == .null) {
+                zone.text("null blockref");
+                continue :task .idle;
+            }
 
             try maybeContinueBlockExec(
                 inserted,
@@ -571,97 +614,6 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
             );
 
             continue :task .idle;
-
-            // const inserted_node = try map_tree.put(rw.block_pool, deshredded_fec_set) orelse
-            //     continue :task .idle; // null => node already known, nothing to do here
-
-            // if (inserted_node.block_ref == .null) {
-            //     const null_zone = tracy.Zone.init(
-            //         @src(),
-            //         .{ .name = "received fec set (block_id=null)" },
-            //     );
-            //     defer null_zone.deinit();
-            //     // blockrefs are assigned from the 0th fecset, and carried forward. If the newly
-            //     // inserted node isn't attached to a 0th fecset, we won't be able to execute it until it
-            //     // is.
-
-            //     // NOTE: we *could* do some PoH and sig verify tasks early here, but it seems like there
-            //     // isn't actually an advantage, as a validator executing transactions will have plenty
-            //     // of "gaps" in exec thread pool usage, and these tasks only have to be finished before
-            //     // we finish the block as a whole.
-
-            //     // TODO: with that being said, we could probably benefit from prefetching accounts here.
-            //     continue :task .idle;
-            // }
-
-            // // assert that we've got a chain of fec sets back to the 0th fec set
-            // const fec_0: *const MerkleNode = node: {
-            //     var maybe_node: ?*MerkleNode = inserted_node;
-            //     while (maybe_node) |node| : (maybe_node = map_tree.pool.indexToOptPtr(
-            //         node.parent,
-            //     )) {
-            //         std.debug.assert(node.parent != .null or node.id.fec_set_idx == 0);
-            //         if (node.id.fec_set_idx == 0) break :node node;
-            //     }
-            //     unreachable;
-            // };
-
-            // const block_deserial_state: *BlockDeserialState = blk: {
-            //     const state: *?BlockDeserialState =
-            //         &deserial_states[inserted_node.block_ref.index().?];
-            //     if (state.* == null) state.* = .init(fec_0);
-            //     break :blk &state.*.?;
-            // };
-
-            // zone.value(inserted_node.block_ref.index().?);
-            // zone.value(rw.block_pool.indexToConstPtr(inserted_node.block_ref).slot);
-
-            // // Read transactions until we can't anymore, sending to exec as we go
-            // while (true) {
-            //     defer deserial_fba.reset();
-
-            //     const tx_ref = try rw.replay_transaction_pool.createId();
-            //     // TODO: this is a major leak risk, should use comptime errdefer unreachable
-
-            //     const tx_buf: *[1232]u8 = rw.replay_transaction_pool.indexToPtr(tx_ref);
-
-            //     const tx = try block_deserial_state.nextTransaction(
-            //         &deserial_fba,
-            //         &map_tree.pool,
-            //         tx_buf,
-            //     ) orelse break;
-            //     tracy.plot(u16, "transaction size", @intCast(tx.len));
-
-            //     const exec_state: *BlockExecState = &exec_states[inserted_node.block_ref.index().?];
-
-            //     // index within the block
-            //     const tx_index: u32 = exec_state.n_transactions_requested;
-            //     exec_state.n_transactions_requested += 1;
-
-            //     zone.value(tx_index);
-
-            //     // send task to exec
-            //     {
-            //         const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse
-            //             @panic("no space");
-            //         defer exec_request_sender.markUsed();
-            //         request.* = .{
-            //             .task_id = tx_index,
-            //             .request_kind = .transaction_execution,
-            //             .data = .{
-            //                 .transaction_execution = .{
-            //                     .block_idx = inserted_node.block_ref,
-            //                     .tx_idx = tx_ref,
-            //                 },
-            //             },
-            //         };
-            //     }
-            // }
-            // if (inserted_node.slot_complete) {
-            //     const exec_state: *BlockExecState = &exec_states[inserted_node.block_ref.index().?];
-            //     exec_state.all_transactions_requested = true;
-            // }
-
         },
     }
 }
@@ -913,212 +865,6 @@ const BlockExecState = struct {
     }
 };
 
-// const BlockTree = struct {
-//     block_pool: *BlockPool,
-
-//     /// The latest block that has been rooted by consensus
-//     /// This node may have parents if other subsystems are still holding references to previous
-//     /// slots.
-//     /// For example, accountsdb may want to hold onto data for blocks for a while longer before it
-//     /// flushes to disk.
-//     /// Such subsystems may want to hold onto their own root?
-//     consensus_rooted_block: BlockRef,
-
-//     const BlockPool = replay.BlockPool;
-//     const Node = replay.Node;
-
-//     /// NOTE: this is what we use for referencing blocks. This is equivalent to the block's index
-//     /// our block mem pool. If you want what Agave calls the "Block ID", this is the merkle root of
-//     ///  the last fec set.
-//     const BlockRef = replay.BlockRef;
-//     const NodeTree = Tree(Node, struct {
-//         pool: *BlockPool,
-
-//         const Ctx = @This();
-
-//         fn buf(ctx: Ctx) []Node {
-//             return @ptrCast(ctx.pool.buf()[0..BlockPool.capacity]);
-//         }
-
-//         pub fn parentOf(ctx: Ctx, node: *Node) ?*Node {
-//             return &ctx.buf()[node.parent.index() orelse return null];
-//         }
-//         pub fn childOf(ctx: Ctx, node: *Node) ?*Node {
-//             return &ctx.buf()[node.child.index() orelse return null];
-//         }
-//         pub fn siblingOf(ctx: Ctx, node: *Node) ?*Node {
-//             return &ctx.buf()[node.sibling.index() orelse return null];
-//         }
-
-//         pub fn setParent(ctx: Ctx, node: *Node, parent: ?*Node) void {
-//             node.parent = if (parent) |p| ctx.pool.ptrToIndex(p) else .null;
-//         }
-//         pub fn setChild(ctx: Ctx, node: *Node, child: ?*Node) void {
-//             node.child = if (child) |c| ctx.pool.ptrToIndex(c) else .null;
-//         }
-//         pub fn setSibling(ctx: Ctx, node: *Node, sibling: ?*Node) void {
-//             node.sibling = if (sibling) |s| ctx.pool.ptrToIndex(s) else .null;
-//         }
-//     });
-
-//     // You must get the root slot's last fec set's merkle root as this is used to identify blocks.
-//     // Currently, this is (very annoyingly) not part of the snapshot. This means we must repair the
-//     // snapshot slot in order to properly identify it.
-//     // SIMD-0333 `Serialize Block ID in Bank into Snapshot` fixes this problem.
-//     fn init(
-//         block_pool: *BlockPool,
-//         root_slot: Slot,
-//         root_slot_last_fec_set_merkle_root: *const Hash,
-//     ) !BlockTree {
-//         const root_node = try block_pool.create();
-
-//         root_node.* = .{
-//             .slot = root_slot,
-//             .last_fecset_received = true,
-//             .first_fecset_chained_merkle_root = undefined, // we don't need this
-//             .last_fecset_merkle_root = root_slot_last_fec_set_merkle_root.*,
-//         };
-
-//         return .{
-//             .block_pool = block_pool,
-//             .consensus_rooted_block = block_pool.ptrToIndex(root_node),
-//         };
-//     }
-
-//     fn findUnrootedParent(
-//         self: *const BlockTree,
-//         parent_slot: Slot,
-//         parent_last_fecset_merkle_root: *const Hash,
-//     ) ?*Node {
-//         const root_node: *Node = self.block_pool.indexToPtr(self.consensus_rooted_block);
-
-//         return self.findUnrootedParentRecursive(
-//             root_node,
-//             parent_slot,
-//             parent_last_fecset_merkle_root,
-//         );
-//     }
-
-//     fn findUnrootedParentRecursive(
-//         self: *const BlockTree,
-//         node: *Node,
-//         parent_slot: Slot,
-//         parent_last_fecset_merkle_root: *const Hash,
-//     ) ?*Node {
-//         // assuming for now we don't want to assign blockids until we have at least *received*
-//         // all of the parent
-//         if (node.slot == parent_slot and
-//             node.last_fecset_received and
-//             node.last_fecset_merkle_root.eql(parent_last_fecset_merkle_root))
-//             return node;
-
-//         // if the node's slot is >= the parent's slot, we can skip the child traversal, as children
-//         // always have increasing slots
-//         if (parent_slot > node.slot and node.child != .null) {
-//             const child_node: *Node = self.block_pool.indexToPtr(node.child);
-//             if (findUnrootedParentRecursive(
-//                 self,
-//                 child_node,
-//                 parent_slot,
-//                 parent_last_fecset_merkle_root,
-//             )) |found| return found;
-//         }
-
-//         // NOTE: siblings can have greater, equal, or lesser slot numbers than the current node, as
-//         // siblings are nodes which have chained off the same parent node, which does not imply
-//         // ordering.
-//         if (node.sibling != .null) {
-//             const sibling_node: *Node = self.block_pool.indexToPtr(node.sibling);
-//             if (findUnrootedParentRecursive(
-//                 self,
-//                 sibling_node,
-//                 parent_slot,
-//                 parent_last_fecset_merkle_root,
-//             )) |found| return found;
-//         }
-
-//         return null;
-//     }
-
-//     /// Should be called when
-//     ///  a) A new chain of fec sets "reaches" back to its parent slot. In the most basic case, this
-//     ///     should happen with all (valid) first fec sets.
-//     ///  b) A conflicting fec set is found.
-//     ///
-//     /// Attempts to find parent
-//     /// Tries to allocate new block ID
-//     /// Links parent and child
-//     ///
-//     fn tryAllocNewBlockId(
-//         self: *BlockTree,
-//         parent_slot: Slot,
-//         new_slot: Slot,
-//         // i.e. the last merke root of its parent
-//         first_fecset_chained_merkle_root: *const Hash,
-//     ) !?BlockRef {
-//         std.debug.assert(new_slot > parent_slot);
-
-//         const parent: *Node = self.findUnrootedParent(
-//             parent_slot,
-//             first_fecset_chained_merkle_root,
-//         ) orelse {
-//             std.log.warn(
-//                 \\ Failed to find parent block {}:{f}, is this block missing?
-//                 \\ NOTE: parent blocks cannot be found unless they have received all their fecsets.
-//             ,
-//                 .{ parent_slot, first_fecset_chained_merkle_root },
-//             );
-//             return null;
-//         };
-
-//         const new_child = try self.block_pool.create();
-//         errdefer self.block_pool.destroy(new_child);
-
-//         new_child.* = .{
-//             .slot = new_slot,
-//             .last_fecset_received = false,
-//             .first_fecset_chained_merkle_root = first_fecset_chained_merkle_root.*,
-//             .last_fecset_merkle_root = undefined, // only set once the last fecset is received
-//         };
-
-//         NodeTree.linkOrphaned(.{ .pool = self.block_pool }, .tail, parent, new_child);
-
-//         return self.block_pool.ptrToIndex(new_child);
-//     }
-
-//     /// Asserts node is already linked to parent
-//     /// Assumes node is that of a block which has received all fec sets
-//     fn markBlockFullyReceived(
-//         self: *const BlockTree,
-//         block: BlockRef,
-//         last_fecset_merkle_root: *const Hash,
-//     ) void {
-//         const node: *Node = self.block_pool.indexToPtr(block);
-
-//         std.debug.assert(node.parent != .null);
-//         node.last_fecset_received = true;
-//         node.last_fecset_merkle_root = last_fecset_merkle_root.*;
-//     }
-// };
-
-// test "Basic blocktree" {
-//     const root_hash: Hash = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
-
-//     var block_pool_buf: [replay.BlockPool.size()]u8 align(@alignOf(replay.BlockPool)) = undefined;
-//     var block_pool: *replay.BlockPool = @ptrCast(&block_pool_buf);
-//     block_pool.init();
-
-//     var blocks: BlockTree = try .init(block_pool, 0, &root_hash);
-
-//     const slot_1_block = (try blocks.tryAllocNewBlockId(0, 1, &root_hash)).?;
-//     const slot_1_hash: Hash = .parse("2GyMeUytf6fcsfNP2QQ6F5e5qwAUoMtKUbnH6QU6bTNm");
-//     blocks.markBlockFullyReceived(slot_1_block, &slot_1_hash);
-
-//     const slot_2_block = (try blocks.tryAllocNewBlockId(1, 2, &slot_1_hash)).?;
-//     const slot_2_hash: Hash = .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd");
-//     blocks.markBlockFullyReceived(slot_2_block, &slot_2_hash);
-// }
-
 /// Represents a deshredded FEC set.
 ///
 /// Used as a hashmap value, and a tree node (these are the same memory)
@@ -1172,6 +918,7 @@ const MerkleNode = extern struct {
             \\     parent: {}, child: {}, sibling: {}
             \\     root: {f}, chained_root: {f}
             \\     data_complete: {}, slot_complete: {}
+            \\     block_ref: {}
             \\ }}
             \\
         , .{
@@ -1184,6 +931,7 @@ const MerkleNode = extern struct {
             node.chained_merkle_root,
             node.data_complete,
             node.slot_complete,
+            node.block_ref,
         });
     }
 };
@@ -1206,7 +954,7 @@ const MerkleForest = struct {
     // chained-merkle-hash -> node
     orphan_map: OrphanMap,
 
-    const capacity = 2048;
+    const capacity = 4096;
 
     // keyed by merkle root
     const OrphanMap = std.ArrayHashMapUnmanaged(void, *MerkleNode, OrphanContext, true);
@@ -1298,186 +1046,6 @@ const MerkleForest = struct {
         self.orphan_map.deinit(allocator);
     }
 
-    // TODO: eviction
-    // TODO: remove orphans from orphan_map once parented
-    /// Returns the newly inserted node, null => node already known (this is not an error).
-    /// This function is responsible for linking together fec sets, including across slots, and
-    /// allocating BlockRefs.
-    fn put(
-        self: *MerkleForest,
-        block_pool: *replay.BlockPool,
-        new_fec_set: *const lib.shred.DeshreddedFecSet,
-    ) !?*MerkleNode {
-        const zone = tracy.Zone.init(@src(), .{ .name = "MerkleForest.put" });
-        defer zone.deinit();
-
-        const map_ctx: MerkleContext = .{ .map = &self.map };
-        const orphan_map_ctx: OrphanContext = .{ .map = &self.orphan_map };
-
-        self.assertCounts();
-        defer self.assertCounts();
-
-        const map_result = self.map.getOrPutAssumeCapacityAdapted(
-            &new_fec_set.merkle_root,
-            map_ctx,
-        );
-        if (map_result.found_existing) return .node_already_known;
-
-        const new_node = try self.pool.create();
-        map_result.value_ptr.* = new_node;
-
-        const new_node_is_first_in_slot = new_fec_set.id.fec_set_idx == 0;
-
-        new_node.* = .{
-            .merkle_root = new_fec_set.merkle_root,
-            .chained_merkle_root = new_fec_set.chained_merkle_root,
-            .id = new_fec_set.id,
-            .data_complete = new_fec_set.data_complete,
-            .slot_complete = new_fec_set.slot_complete,
-
-            .block_ref = if (new_node_is_first_in_slot) ref: {
-                const block_ref = try block_pool.createId();
-                block_pool.indexToPtr(block_ref).* = .{
-                    // NOTE: we chain to the parent below
-                    .slot = new_fec_set.id.slot,
-                };
-                break :ref block_ref;
-            } else .null,
-
-            .payload_len = new_fec_set.payload_len,
-            .payload_buf = new_fec_set.payload_buf,
-        };
-
-        std.debug.assert((new_node.block_ref != .null) == (new_node.id.fec_set_idx == 0));
-
-        var must_wait_for_parent: bool = false;
-        if (self.map.getAdapted(&new_fec_set.chained_merkle_root, map_ctx)) |parent| {
-            // we found the parent of our new node
-
-            // TODO: maybe overbearing assert (malicious leader?)
-            std.debug.assert(new_node.id.order(&parent.id) == .gt);
-
-            // parent node already has a child =>
-            const equivocated_insert: bool = parent.child != .null;
-            if (!equivocated_insert) {
-                @branchHint(.likely); // no equivocation
-
-                if (!new_node_is_first_in_slot) {
-                    // Our new node isn't the first in its slot, and we have found its parent.
-                    // As the parent doesn't have a child yet, the node should inherit the BlockRef
-                    // of its parent.
-                    std.debug.assert(new_node.block_ref == .null);
-
-                    // TODO: maybe overbearing assert (malicious leader?)
-                    std.debug.assert(new_node.id.slot == parent.id.slot);
-                    std.debug.assert(new_node.id.fec_set_idx == parent.id.fec_set_idx + 32);
-
-                    new_node.block_ref = parent.block_ref;
-                } else {
-                    // Node is the first in its slot, and we've already given it a BlockRef of its
-                    // own.
-                    // Let's connect this fec set to the previous slot.
-
-                    std.debug.assert(new_node.block_ref != .null);
-                    if (parent.block_ref != .null) {
-                        const parent_block = block_pool.indexToPtr(parent.block_ref);
-                        const new_block = block_pool.indexToPtr(new_node.block_ref);
-                        std.debug.assert(new_block.parent == .null);
-
-                        parent_block.child = new_node.block_ref;
-                        new_block.parent = parent.block_ref;
-
-                        // TODO: maybe overbearing assert (malicious leader?)
-                        std.debug.assert(new_node.id.slot > parent.id.slot);
-                    }
-                }
-            } else {
-                // This node's parent already has a child. This means the leader produced multiple
-                // conflicting fec sets.
-                // TODO: report this and special case the handling in the caller
-                std.log.err(
-                    "Equivocation detected! Fec set {f} has multiple children\n",
-                    .{@as(*const MerkleNode, parent)},
-                );
-                new_node.block_ref = ref: {
-                    const block_ref = try block_pool.createId();
-                    block_pool.indexToPtr(block_ref).* = .{
-                        // TODO: chain this BlockRef to the parent
-
-                        .slot = new_fec_set.id.slot,
-                    };
-                    break :ref block_ref;
-                };
-                std.debug.assert(new_node.block_ref != .null);
-                std.debug.assert(new_node.block_ref != parent.block_ref);
-                @panic("Equivocation not yet properly handled, abort");
-            }
-
-            NodeTree.linkOrphaned(.{ .pool = self.pool }, .tail, parent, new_node);
-
-            if (equivocated_insert) {
-                // If we insert equivocated, we should allocate a new blockref. In the case of
-                // equivocation we will "choose" the one that came first by convention - the chosen
-                // fec set will be at the head of the sibling list, i.e. the direct child of the
-                // parent.
-                std.debug.assert(self.pool.indexToPtr(parent.child).block_ref != new_node.block_ref);
-            }
-        } else {
-            // We don't have this fec set's parent yet, and it should have one.
-            //
-            // The chained merkle root of a node is the node's parent; nodes encode enough
-            // information to find their parent, but not their child.
-            //
-            // We insert this parent-less node into this map, such that if the parent comes later,
-            // it can find its child, only knowing the merkle root of itself.
-            //
-
-            const orphan_map_result = self.orphan_map.getOrPutAssumeCapacityAdapted(
-                &new_fec_set.chained_merkle_root,
-                orphan_map_ctx,
-            );
-
-            if (orphan_map_result.found_existing) {
-                std.log.warn(
-                    "Equivocation detected! Orphaned Nodes {f} and {f} want the same parent {f}",
-                    .{ orphan_map_result.value_ptr.*, new_node, &new_fec_set.chained_merkle_root },
-                );
-                NodeTree.linkNewOrphanedSibling(
-                    .{ .pool = self.pool },
-                    orphan_map_result.value_ptr.*,
-                    new_node,
-                );
-
-                // Block IDs are allocated by the 0th fec set, and propogated to their children.
-                // Orphans don't have parents, and aren't the 0th fec set.
-                std.debug.assert(orphan_map_result.value_ptr.*.block_ref == .null);
-                std.debug.assert(new_node.block_ref == .null);
-            } else {
-                orphan_map_result.value_ptr.* = new_node;
-            }
-
-            must_wait_for_parent = true;
-        }
-
-        if (self.orphan_map.getAdapted(&new_fec_set.merkle_root, orphan_map_ctx)) |child| {
-            NodeTree.linkOrphaned(.{ .pool = self.pool }, .tail, new_node, child);
-
-            // propogate our block_ref to the children
-            if (new_node.block_ref != .null) {
-                var child_node: ?*MerkleNode = child;
-
-                while (child_node) |c_n| : (child_node = NodeTree.childOf(
-                    .{ .pool = self.pool },
-                    c_n,
-                )) {
-                    c_n.block_ref = new_node.block_ref;
-                }
-            }
-        }
-
-        return new_node;
-    }
-
     fn assertCounts(self: *const MerkleForest) void {
         std.debug.assert(self.orphan_map.count() <= self.map.count());
         tracy.plot(u32, "Merkle forest fec sets", @intCast(self.map.count()));
@@ -1538,85 +1106,85 @@ test "MerkleForest tree put" {
     // try std.testing.expectEqual(.chain_complete, try tree.put(&c));
 }
 
-test "MerkleForest fec set completion out of order" {
-    const allocator = std.testing.allocator;
+// test "MerkleForest fec set completion out of order" {
+//     const allocator = std.testing.allocator;
 
-    var forest = try MerkleForest.init(allocator);
-    defer forest.deinit(allocator);
+//     var forest = try MerkleForest.init(allocator);
+//     defer forest.deinit(allocator);
 
-    // a <- b <- c <- d, inserted in order: a, c, b, d
-    const a_hash: Hash = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
-    const b_hash: Hash = .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd");
-    const c_hash: Hash = .parse("2GyMeUytf6fcsfNP2QQ6F5e5qwAUoMtKUbnH6QU6bTNm");
-    const d_hash: Hash = .parse("Cg37799xhTFEGyqXSEekbVbiCZKQAjzc6CQC75Hk91S9");
+//     // a <- b <- c <- d, inserted in order: a, c, b, d
+//     const a_hash: Hash = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
+//     const b_hash: Hash = .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd");
+//     const c_hash: Hash = .parse("2GyMeUytf6fcsfNP2QQ6F5e5qwAUoMtKUbnH6QU6bTNm");
+//     const d_hash: Hash = .parse("Cg37799xhTFEGyqXSEekbVbiCZKQAjzc6CQC75Hk91S9");
 
-    var block_pool_buf: [replay.BlockPool.size()]u8 align(@alignOf(replay.BlockPool)) = undefined;
-    const block_pool: *replay.BlockPool = @ptrCast(&block_pool_buf);
-    block_pool.init();
+//     var block_pool_buf: [replay.BlockPool.size()]u8 align(@alignOf(replay.BlockPool)) = undefined;
+//     const block_pool: *replay.BlockPool = @ptrCast(&block_pool_buf);
+//     block_pool.init();
 
-    const a_result = try forest.put(block_pool, &.{
-        .merkle_root = a_hash,
-        .chained_merkle_root = .parse("DWCWjQciWoWDzJKwqUZ1ntKqTyXtLVt4C8aL7biBJZ4z"), // prev slot
-        .id = .{ .slot = 409284941, .fec_set_idx = 0 },
-        .slot_complete = false,
+//     const a_result = try forest.put(block_pool, &.{
+//         .merkle_root = a_hash,
+//         .chained_merkle_root = .parse("DWCWjQciWoWDzJKwqUZ1ntKqTyXtLVt4C8aL7biBJZ4z"), // prev slot
+//         .id = .{ .slot = 409284941, .fec_set_idx = 0 },
+//         .slot_complete = false,
 
-        .data_complete = true,
-        .payload_len = undefined,
-        .payload_buf = undefined,
-    });
+//         .data_complete = true,
+//         .payload_len = undefined,
+//         .payload_buf = undefined,
+//     });
 
-    try std.testing.expect(a_result.?.block_ref != .null);
+//     try std.testing.expect(a_result.?.block_ref != .null);
 
-    const c_result = try forest.put(block_pool, &.{
-        .merkle_root = c_hash,
-        .chained_merkle_root = b_hash,
-        .id = .{ .slot = 409284941, .fec_set_idx = 64 },
-        .slot_complete = false,
+//     const c_result = try forest.put(block_pool, &.{
+//         .merkle_root = c_hash,
+//         .chained_merkle_root = b_hash,
+//         .id = .{ .slot = 409284941, .fec_set_idx = 64 },
+//         .slot_complete = false,
 
-        .data_complete = true,
-        .payload_len = undefined,
-        .payload_buf = undefined,
-    });
+//         .data_complete = true,
+//         .payload_len = undefined,
+//         .payload_buf = undefined,
+//     });
 
-    try std.testing.expect(c_result.?.block_ref == .null);
+//     try std.testing.expect(c_result.?.block_ref == .null);
 
-    const b_result = try forest.put(block_pool, &.{
-        .merkle_root = b_hash,
-        .chained_merkle_root = a_hash,
-        .id = .{ .slot = 409284941, .fec_set_idx = 32 },
-        .slot_complete = false,
+//     const b_result = try forest.put(block_pool, &.{
+//         .merkle_root = b_hash,
+//         .chained_merkle_root = a_hash,
+//         .id = .{ .slot = 409284941, .fec_set_idx = 32 },
+//         .slot_complete = false,
 
-        .data_complete = true,
-        .payload_len = undefined,
-        .payload_buf = undefined,
-    });
+//         .data_complete = true,
+//         .payload_len = undefined,
+//         .payload_buf = undefined,
+//     });
 
-    try std.testing.expect(b_result.?.block_ref != .null);
-    try std.testing.expect(c_result.?.block_ref != .null);
+//     try std.testing.expect(b_result.?.block_ref != .null);
+//     try std.testing.expect(c_result.?.block_ref != .null);
 
-    const d_result = try forest.put(block_pool, &.{
-        .merkle_root = d_hash,
-        .chained_merkle_root = c_hash,
-        .id = .{ .slot = 409284941, .fec_set_idx = 96 },
-        .slot_complete = true,
+//     const d_result = try forest.put(block_pool, &.{
+//         .merkle_root = d_hash,
+//         .chained_merkle_root = c_hash,
+//         .id = .{ .slot = 409284941, .fec_set_idx = 96 },
+//         .slot_complete = true,
 
-        .data_complete = true,
-        .payload_len = undefined,
-        .payload_buf = undefined,
-    });
+//         .data_complete = true,
+//         .payload_len = undefined,
+//         .payload_buf = undefined,
+//     });
 
-    try std.testing.expect(d_result.?.block_ref != .null);
+//     try std.testing.expect(d_result.?.block_ref != .null);
 
-    const d_1_result = try forest.put(block_pool, &.{
-        .merkle_root = d_hash,
-        .chained_merkle_root = c_hash,
-        .id = .{ .slot = 409284941, .fec_set_idx = 96 },
-        .slot_complete = true,
+//     const d_1_result = try forest.put(block_pool, &.{
+//         .merkle_root = d_hash,
+//         .chained_merkle_root = c_hash,
+//         .id = .{ .slot = 409284941, .fec_set_idx = 96 },
+//         .slot_complete = true,
 
-        .data_complete = true,
-        .payload_len = undefined,
-        .payload_buf = undefined,
-    });
+//         .data_complete = true,
+//         .payload_len = undefined,
+//         .payload_buf = undefined,
+//     });
 
-    try std.testing.expect(d_1_result == null);
-}
+//     try std.testing.expect(d_1_result == null);
+// }

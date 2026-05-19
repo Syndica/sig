@@ -53,12 +53,23 @@ pub const FecSetId = extern struct {
     // Some basic sanity checks to ensure that the child fec set may actually follow the parent
     // fec set. This should only be used to throw out relations, not to create them.
     pub fn mayFollowWith(parent: *const FecSetId, child: *const FecSetId) bool {
-        if (parent.slot > child.slot) return false;
+        const zone = tracy.Zone.init(@src(), .{ .name = "mayFollowWith" });
+        defer zone.deinit();
+
+        if (parent.slot > child.slot) {
+            zone.text("parent.slot > child.slot");
+            return false;
+        }
         const slot_diff = child.slot - parent.slot;
+
+        zone.value(slot_diff);
 
         switch (slot_diff) {
             0 => {
-                if (child.fec_set_idx > parent.fec_set_idx) return false;
+                if (child.fec_set_idx < parent.fec_set_idx) {
+                    zone.text("child.fec_set_idx > parent.fec_set_idx");
+                    return false;
+                }
                 const idx_diff = child.fec_set_idx - parent.fec_set_idx;
                 return idx_diff == 32;
             },
