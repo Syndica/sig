@@ -50,6 +50,11 @@ pub fn SharedPool(Item: type, cap: usize) type {
             pub fn fromInt(int: IdInt) ItemId {
                 return @enumFromInt(int);
             }
+
+            pub fn ptr(self: ItemId, pool: *PoolSelf) ?*Item {
+                if (self == .null) return null;
+                return pool.indexToPtr(self);
+            }
         };
 
         pub fn size() usize {
@@ -193,6 +198,11 @@ pub fn Pool(Item: type, IdInt: type) type {
 
             pub fn fromInt(int: IdInt) ItemId {
                 return @enumFromInt(int);
+            }
+
+            pub fn ptr(self: ItemId, pool: *PoolSelf) ?*Item {
+                if (self == .null) return null;
+                return pool.indexToPtr(self);
             }
         };
 

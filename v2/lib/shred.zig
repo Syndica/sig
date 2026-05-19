@@ -49,6 +49,25 @@ pub const FecSetId = extern struct {
         std.debug.assert(a.fec_set_idx == b.fec_set_idx);
         return .eq;
     }
+
+    // Some basic sanity checks to ensure that the child fec set may actually follow the parent
+    // fec set. This should only be used to throw out relations, not to create them.
+    pub fn mayFollowWith(parent: *const FecSetId, child: *const FecSetId) bool {
+        if (parent.slot > child.slot) return false;
+        const slot_diff = child.slot - parent.slot;
+
+        switch (slot_diff) {
+            0 => {
+                if (child.fec_set_idx > parent.fec_set_idx) return false;
+                const idx_diff = child.fec_set_idx - parent.fec_set_idx;
+                return idx_diff == 32;
+            },
+            1 => {
+                return child.fec_set_idx == 0;
+            },
+            else => return false,
+        }
+    }
 };
 
 /// Represents a reconstructed fec set, with its recovered payload.
