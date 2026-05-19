@@ -16,19 +16,19 @@ nix develop .#agave    # if you also want to run the test vectors against agave
 Run all tests against sig:
 
 ```bash
-zig build run env/test-vectors   # block tests will fail, this is expected.
+zig build run -- env/test-vectors   # block tests will fail, this is expected.
 ```
 
 Run one test against sig:
 
 ```bash
-zig build run env/test-vectors/txn/fixtures/0a3ba0c45b67c887fd2f5b7a9c07f277bf3f8bfe_2212177.fix
+zig build run -- env/test-vectors/txn/fixtures/0a3ba0c45b67c887fd2f5b7a9c07f277bf3f8bfe_2212177.fix
 ```
 
 Test against arbitrary static libs:
 
 ```bash
-zig build run -Dno-sig <fixture-file-or-dir> <path-to-static-lib>
+zig build run -Dno-sig -- <fixture-file-or-dir> <path-to-static-lib>
 ```
 
 `no-sig` is optional. If you plan to dynamically link a `.so` file, this option speeds up compilation and reduces the binary size.

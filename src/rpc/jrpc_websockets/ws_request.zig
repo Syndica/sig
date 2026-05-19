@@ -459,6 +459,26 @@ test "parse programSubscribe with tokenAccountState filter" {
     );
 }
 
+test "parse programSubscribe with raw memcmp bytes" {
+    const test_pubkey: sig.core.Pubkey = .parse("vinesvinesvinesvinesvinesvinesvinesvinesvin");
+    try testParseRequest(
+        .{},
+        \\{"jsonrpc":"2.0","id":8,"method":"programSubscribe","params":["vinesvinesvinesvinesvinesvinesvinesvinesvin",{"filters":[{"memcmp":{"offset":42,"bytes":[0,1,2,3],"encoding":"bytes"}}]}]}
+    ,
+        .{
+            .id = .{ .int = 8 },
+            .method = .{ .programSubscribe = .{
+                .program_id = test_pubkey,
+                .config = .{
+                    .filters = &.{
+                        .{ .memcmp = .{ .offset = 42, .bytes = &.{ 0, 1, 2, 3 } } },
+                    },
+                },
+            } },
+        },
+    );
+}
+
 test "parse programSubscribe invalid memcmp encoding" {
     try std.testing.expectError(
         error.LengthMismatch,
@@ -700,6 +720,21 @@ test "validate rejects programSubscribe with too many filters" {
     };
 
     try std.testing.expectError(error.InvalidParams, req.method.validate());
+}
+
+test "validate rejects programSubscribe with oversized decoded memcmp bytes" {
+    const bytes = [_]u8{0} ** (sig.rpc.filters.MAX_DATA_SIZE + 1);
+    var encoded: [std.base64.standard.Encoder.calcSize(bytes.len)]u8 = undefined;
+    const oversized_base64 = std.base64.standard.Encoder.encode(&encoded, &bytes);
+    const json_str = try std.fmt.allocPrint(std.testing.allocator,
+        \\{{"jsonrpc":"2.0","id":1,"method":"programSubscribe","params":["vinesvinesvinesvinesvinesvinesvinesvinesvin",{{"filters":[{{"memcmp":{{"offset":0,"bytes":"{s}","encoding":"base64"}}}}]}}]}}
+    , .{oversized_base64});
+    defer std.testing.allocator.free(json_str);
+
+    const parsed = try std.json.parseFromSlice(WsRequest, std.testing.allocator, json_str, .{});
+    defer parsed.deinit();
+
+    try std.testing.expectError(error.InvalidParams, parsed.value.method.validate());
 }
 
 test "validate rejects blockSubscribe with processed commitment" {

@@ -1066,6 +1066,13 @@ pub const VoteState = union(enum(u32)) {
         };
     }
 
+    pub fn inflationRewardsCollectorMut(self: *VoteState) ?*Pubkey {
+        return switch (self.*) {
+            .v3 => null,
+            .v4 => |*s| &s.inflation_rewards_collector,
+        };
+    }
+
     // ── Delegating methods (same interface on both V3 and V4) ────────
 
     pub fn isUninitialized(self: VoteState) bool {
