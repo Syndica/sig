@@ -314,9 +314,11 @@ pub fn createSysvarCache(
     sysvar_cache.epoch_rewards = try cloneSysvarData(allocator, ctx, sysvar.EpochRewards.ID);
     sysvar_cache.rent = try cloneSysvarData(allocator, ctx, sysvar.Rent.ID);
     if (std.meta.isError(sysvar_cache.get(sysvar.Rent))) {
-        sysvar_cache.rent = try sysvar.serialize(
+        sysvar_cache.last_restart_slot = try sysvar.serialize(
             allocator,
-            sysvar.Rent.INIT,
+            sysvar.LastRestartSlot{
+                .last_restart_slot = 5000,
+            },
         );
     }
 
