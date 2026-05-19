@@ -109,6 +109,15 @@ pub fn isKnownFeatureId(id: u64) bool {
     } else return false;
 }
 
+/// Checks if the provided `id` corresponds to a known feature with status `unsupported`.
+pub fn isUnsuppored(id: u64) bool {
+    for (all_features) |feature| {
+        if (feature.id() == id) {
+            return feature.status == .unsupported;
+        }
+    } else return false;
+}
+
 /// Represents the set of currently enabled feature flags.
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/feature-set/src/lib.rs#L1188

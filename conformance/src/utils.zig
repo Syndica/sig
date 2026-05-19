@@ -183,6 +183,10 @@ pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
     var feature_set: FeatureSet = .ALL_DISABLED;
     for (pb_features.features.items) |id| {
         // only way for `setSlotId` to fail is if the `id` doesn't exist in runtime features.
+        if (sig.core.features.isUnsuppored(id)) std.debug.panic(
+            "fixture contains unsupported feature: 0x{x}",
+            .{id},
+        );
         feature_set.setSlotId(id, 0) catch if (!sig.core.features.isKnownFeatureId(id)) {
             std.debug.print("unknown feature id: 0x{x}\n", .{id});
         };
