@@ -800,7 +800,7 @@ const Elf64 = struct {
                     const sh_dynsym = self.shdrs[dynsymtab];
                     const symbol_table = std.mem.bytesAsSlice(
                         elf.Elf64_Sym,
-                        bytes[sh_dynsym.sh_offset..][0..sh_dynsym.sh_size],
+                        try safeSlice(bytes, sh_dynsym.sh_offset, sh_dynsym.sh_size),
                     );
 
                     const addr_slice = try safeSlice(bytes, imm_offset, 4);
@@ -878,7 +878,7 @@ const Elf64 = struct {
                     const sh_dynsym = self.shdrs[dynsymtab];
                     const symbol_table = std.mem.bytesAsSlice(
                         elf.Elf64_Sym,
-                        bytes[sh_dynsym.sh_offset..][0..sh_dynsym.sh_size],
+                        try safeSlice(bytes, sh_dynsym.sh_offset, sh_dynsym.sh_size),
                     );
 
                     if (reloc.r_sym() >= symbol_table.len) return error.UnknownSymbol;
