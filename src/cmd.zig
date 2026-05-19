@@ -1899,6 +1899,10 @@ fn validator(
             allocator,
             sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
         );
+
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.HealthChecker{
+            .commitments = &replay_service_state.replay_state.commitments.?,
+        });
     }
 
     const replay_thread = try replay_service_state.spawnService(
@@ -2450,6 +2454,10 @@ fn replayOffline(
             allocator,
             sig.rpc.hook_contexts.PrioritizationFeeHookContext{ .cache = &prioritization_fee_cache },
         );
+
+        try app_base.rpc_hooks.set(allocator, sig.rpc.hook_contexts.HealthChecker{
+            .commitments = &replay_service_state.replay_state.commitments.?,
+        });
     }
 
     const replay_thread = try replay_service_state.spawnService(
