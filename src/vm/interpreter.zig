@@ -792,37 +792,85 @@ pub const Vm = struct {
         }
     };
 
-    /// SIMD-0178, SIMD-0179, SIMD-0189
+    /// SIMD-0178, SIMD-0179, SIMD-0189, SIMD-0377
     const v3 = struct {
+        // SIMD-0377: 22 JMP32 opcodes. Six of them have unique enum tags
+        // (jeq32_*, jgt32_*, jlt32_*); the remaining sixteen share their opcode
+        // byte with deprecated pqr instructions and are reached via the aliases
+        // declared in `OpCode` (e.g. `jge32_imm = .uhmul64_imm`).
+        const jmp32_opcodes = [_]OpCode{
+            .jeq32_imm,        .jeq32_reg,
+            .jgt32_imm,        .jgt32_reg,
+            .jlt32_imm,        .jlt32_reg,
+            OpCode.jge32_imm,  OpCode.jge32_reg,
+            OpCode.jle32_imm,  OpCode.jle32_reg,
+            OpCode.jset32_imm, OpCode.jset32_reg,
+            OpCode.jne32_imm,  OpCode.jne32_reg,
+            OpCode.jsgt32_imm, OpCode.jsgt32_reg,
+            OpCode.jsge32_imm, OpCode.jsge32_reg,
+            OpCode.jslt32_imm, OpCode.jslt32_reg,
+            OpCode.jsle32_imm, OpCode.jsle32_reg,
+        };
+
         const table = table: {
             var array = v2.table;
+            // First overlay any explicit decls declared in this `v3` struct
+            // whose name matches an `OpCode` field/alias.
             for (@typeInfo(v3).@"struct".decls) |field| {
+                if (!@hasField(OpCode, field.name)) continue;
                 array[@intFromEnum(@field(OpCode, field.name))] = @field(v3, field.name);
             }
+            // SIMD-0377: install JMP32 dispatch entries. These overwrite the
+            // pqr handlers installed by v2.
+            for (jmp32_opcodes) |op| {
+                array[@intFromEnum(op)] = &struct {
+                    fn run(vm: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+                        return branch32(vm, op, inst, pc);
+                    }
+                }.run;
+            }
+            // SIMD-0178: opcode 0x95 (exit_or_syscall) means `exit` in v3 — fall
+            // through to v0.exit_or_syscall. The interpreter no longer dispatches
+            // syscalls through this opcode; static syscalls use call_imm with
+            // src=0 (see below).
+            array[@intFromEnum(OpCode.exit_or_syscall)] = v0.exit_or_syscall;
             break :table array;
         };
 
+        /// SIMD-0178: static syscalls.
+        /// - `src == 0`: syscall dispatch via the loader, indexed by `inst.imm`.
+        /// - `src == 1`: internal PC-relative function call to `pc + imm + 1`.
+        /// - anything else: unsupported.
         pub fn call_imm(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
-            const target_pc = sbpf.Version.computeTargetPc(.v3, pc, inst);
-            try self.pushCallFrame();
-            self.registers.set(.pc, target_pc);
-        }
-
-        pub fn exit_or_syscall(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
-            if (self.loader.get(inst.imm)) |entry| {
-                try self.dispatchSyscall(entry);
-                self.registers.set(.pc, pc + 1);
-            } else {
-                @panic("TODO: detect invalid syscall in verifier");
+            switch (@intFromEnum(inst.src)) {
+                0 => {
+                    const entry = self.loader.get(inst.imm) orelse
+                        return error.UnsupportedInstruction;
+                    try self.dispatchSyscall(entry);
+                    self.registers.set(.pc, pc + 1);
+                },
+                1 => {
+                    // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/interpreter.rs#L555-L562
+                    // Agave's runtime only checks `is_pc_in_program(target_pc)`;
+                    // the function-start-marker invariant is the verifier's job.
+                    const target_pc = sbpf.Version.computeTargetPc(.v3, pc, inst);
+                    const instructions = self.executable.instructions;
+                    if (target_pc >= instructions.len) return error.CallOutsideTextSegment;
+                    try self.pushCallFrame();
+                    self.registers.set(.pc, target_pc);
+                },
+                else => return error.UnsupportedInstruction,
             }
         }
 
+        /// SIMD-0178: `return` opcode is the only way to leave a function in v3.
         pub fn @"return"(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
             return @call(.always_inline, v0.exit_or_syscall, .{ self, inst, pc });
         }
 
+        /// SIMD-0377: callx target register lives in `inst.dst` for v3.
         pub fn call_reg(self: *Vm, inst: Instruction, _: u64) DispatchError!void {
-            const target_pc = self.registers.getPtrConst(inst.src).*;
+            const target_pc = self.registers.getPtrConst(inst.dst).*;
             try self.pushCallFrame();
 
             // [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/interpreter.rs#L513
@@ -833,6 +881,55 @@ pub const Vm = struct {
                 return error.UnsupportedInstruction;
             }
             self.registers.set(.pc, next_pc);
+        }
+
+        /// SIMD-0377: 32-bit conditional jump. Identical to `v0.branch`, but
+        /// the comparison is done on the low 32 bits of dst/src/imm.
+        ///
+        /// Sixteen of the 22 JMP32 opcodes share their byte with deprecated pqr
+        /// instructions, so the switch below dispatches on the *aliased* pqr
+        /// enum tag (e.g. `jge32_imm` is the same value as `uhmul64_imm`).
+        inline fn branch32(
+            self: *Vm,
+            comptime opcode: OpCode,
+            inst: Instruction,
+            pc: u64,
+        ) DispatchError!void {
+            const target_pc: u64 = @intCast(@as(i64, @intCast(pc + 1)) + inst.off);
+
+            const lhs: u32 = @truncate(self.registers.getPtrConst(inst.dst).*);
+            const rhs: u32 = if (opcode.isReg())
+                @truncate(self.registers.getPtrConst(inst.src).*)
+            else
+                inst.imm;
+            const lhs_signed: i32 = @bitCast(lhs);
+            const rhs_signed: i32 = @bitCast(rhs);
+
+            const predicate: bool = switch (opcode) {
+                // zig fmt: off
+                .jeq32_imm,  .jeq32_reg  => lhs == rhs,
+                .jgt32_imm,  .jgt32_reg  => lhs >  rhs,
+                .jlt32_imm,  .jlt32_reg  => lhs <  rhs,
+                // jge32 ≡ uhmul64
+                .uhmul64_imm, .uhmul64_reg => lhs >= rhs,
+                // jle32 ≡ shmul64
+                .shmul64_imm, .shmul64_reg => lhs <= rhs,
+                // jne32 ≡ udiv64
+                .udiv64_imm,  .udiv64_reg  => lhs != rhs,
+                // jset32 ≡ udiv32
+                .udiv32_imm,  .udiv32_reg  => (lhs & rhs) != 0,
+                // jsgt32 ≡ urem32
+                .urem32_imm,  .urem32_reg  => lhs_signed >  rhs_signed,
+                // jsge32 ≡ urem64
+                .urem64_imm,  .urem64_reg  => lhs_signed >= rhs_signed,
+                // jslt32 ≡ sdiv32
+                .sdiv32_imm,  .sdiv32_reg  => lhs_signed <  rhs_signed,
+                // jsle32 ≡ sdiv64
+                .sdiv64_imm,  .sdiv64_reg  => lhs_signed <= rhs_signed,
+                // zig fmt: on
+                else => comptime unreachable,
+            };
+            self.registers.set(.pc, if (predicate) target_pc else pc + 1);
         }
     };
 
@@ -861,8 +958,15 @@ pub const Vm = struct {
             return error.CallDepthExceeded;
         }
 
+        // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/interpreter.rs#L143-L147
+        // Mirror agave's two-flag pattern: outer guard rules out v1+ (which use
+        // dynamic stack frames), inner guard scales by 2 only on v0 with gaps
+        // enabled. `enableStackFrameGaps()` is v0-only and is therefore
+        // logically equivalent to `!enableDynamicStackFrames()` here, but using
+        // it spells out the SIMD-0166 invariant.
         if (!self.executable.version.enableDynamicStackFrames()) {
-            const scale: u64 = if (self.executable.config.enable_stack_frame_gaps) 2 else 1;
+            const scale: u64 = if (self.executable.version.enableStackFrameGaps() and
+                self.executable.config.enable_stack_frame_gaps) 2 else 1;
             const stack_frame_size = self.executable.config.stack_frame_size * scale;
             self.registers.getPtr(.r10).* += stack_frame_size;
         }

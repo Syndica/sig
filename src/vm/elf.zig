@@ -77,11 +77,12 @@ pub fn load(
     loader: *const SyscallMap,
     config: Config,
 ) LoadError!Executable {
+    // Read the SBPF Version from the elf bytes
     // It's important we read *only* the bytes, 48..52, since if the program
     // is exactly 52 bytes long, we could read and return UnsupportedSBPFVersion
     // before we return OutOfBounds.
     if (bytes.len < 48 + @sizeOf(u32)) return error.OutOfBounds;
-    const version: sbpf.Version = switch (std.mem.readInt(u32, bytes[48..][0..4], .little)) {
+    const sbpf_version: sbpf.Version = switch (std.mem.readInt(u32, bytes[48..][0..4], .little)) {
         0 => .v0,
         1 => .v1,
         2 => .v2,
@@ -90,16 +91,14 @@ pub fn load(
     };
 
     // Ensure that the sbpf version we find is within the range that's enabled.
-    if (@intFromEnum(version) < @intFromEnum(config.minimum_version) or
-        @intFromEnum(version) > @intFromEnum(config.maximum_version))
-    {
+    if (@intFromEnum(sbpf_version) < @intFromEnum(config.minimum_version) or
+        @intFromEnum(sbpf_version) > @intFromEnum(config.maximum_version))
         return error.UnsupportedSBPFVersion;
-    }
 
-    return if (version.enableStricterVerification())
-        try parseStrict(allocator, bytes, version, config)
+    return if (sbpf_version.enableStricterVerification())
+        try parseStrict(allocator, bytes, sbpf_version, config)
     else
-        try parseLenient(allocator, bytes, config, loader, version);
+        try parseLenient(allocator, bytes, config, loader, sbpf_version);
 }
 
 fn parseStrict(
@@ -111,14 +110,12 @@ fn parseStrict(
     if (bytes.len < @sizeOf(elf.Elf64_Ehdr)) return error.OutOfBounds;
     const header: elf.Elf64_Ehdr = @bitCast(bytes[0..@sizeOf(elf.Elf64_Ehdr)].*);
 
-    // A list of the first 4 expected program headers.
-    // Since this is a stricter parsing scheme, we need them to match exactly.
-    const expected_phdrs: [4]struct { u32, u64 } = .{
-        .{ elf.PF_X, memory.BYTECODE_START }, // byte code
-        .{ elf.PF_R, memory.RODATA_START }, // read only data
-        .{ elf.PF_R | elf.PF_W, memory.STACK_START }, // stack
-        .{ elf.PF_R | elf.PF_W, memory.HEAP_START }, // heap
-    };
+    // SIMD-0189: in v3 the ELF must have at most 2 PT_LOAD program headers:
+    //   index 0: rodata, PF_R, at vaddr MM_RODATA_START (0)
+    //   index 1: bytecode, PF_X, at vaddr MM_BYTECODE_START (0x1_0000_0000)
+    // The rodata header may be omitted; in that case the bytecode header is at index 0.
+    const RoEntry: struct { u32, u64 } = .{ elf.PF_R, memory.RODATA_START };
+    const TextEntry: struct { u32, u64 } = .{ elf.PF_X, memory.BYTECODE_START };
 
     const ident: ElfIdent = @bitCast(header.e_ident);
     const phdr_table_end = (@sizeOf(elf.Elf64_Phdr) *| header.e_phnum) +| @sizeOf(elf.Elf64_Ehdr);
@@ -129,17 +126,18 @@ fn parseStrict(
         ident.osabi != elf.OSABI.NONE or
         ident.abiversion != 0x00 or
         !std.mem.allEqual(u8, &ident.padding, 0) or
-        @intFromEnum(header.e_machine) != sbpf.EM_SBPF or
-        header.e_type != .DYN or
+        @intFromEnum(header.e_machine) != @intFromEnum(elf.EM.BPF) or
+        // SIMD-0189: `e_type` is not checked.
         header.e_version != 1 or
         header.e_phoff != @sizeOf(elf.Elf64_Ehdr) or
         header.e_ehsize != @sizeOf(elf.Elf64_Ehdr) or
         header.e_phentsize != @sizeOf(elf.Elf64_Phdr) or
-        header.e_phnum < expected_phdrs.len or
-        phdr_table_end >= bytes.len or
-        header.e_shentsize != @sizeOf(elf.Elf64_Shdr) or
-        header.e_shstrndx >= header.e_shnum)
-    {
+        header.e_phnum < 1 or
+        phdr_table_end > bytes.len
+            // SIMD-0189: `e_shoff`, `e_shnum`, `e_shentsize`, `e_shstrndx` are
+            // not checked — section headers are ignored so arbitrary metadata
+            // can continue to be encoded there.
+    ) {
         return error.InvalidFileHeader;
     }
 
@@ -147,28 +145,47 @@ fn parseStrict(
         elf.Elf64_Phdr,
         bytes[@sizeOf(elf.Elf64_Ehdr)..phdr_table_end],
     );
-    for (expected_phdrs, phdrs[0..expected_phdrs.len]) |entry, phdr| {
+
+    // Determine whether the first PT_LOAD is the optional rodata header.
+    // If phdrs[0].p_flags != PF_R, we skip the rodata entry and treat
+    // phdrs[0] as the bytecode header.
+    const skip_rodata = phdrs[0].p_flags != RoEntry[0];
+    var expected_buf: [2]struct { u32, u64 } = .{ RoEntry, TextEntry };
+    const expected: []const struct { u32, u64 } = if (skip_rodata)
+        expected_buf[1..2]
+    else
+        expected_buf[0..2];
+
+    // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/elf.rs#L470-L472
+    // Only the rodata-present case can fail here: when `skip_rodata` is true
+    // we already enforced `e_phnum >= 1` in the header check above, and when
+    // it is false `expected.len == 2` so this is the same invariant.
+    if (!skip_rodata and header.e_phnum < 2) {
+        return error.InvalidFileHeader;
+    }
+
+    var expected_offset: u64 = phdr_table_end;
+    for (expected, phdrs[0..expected.len]) |entry, phdr| {
         const p_flags, const p_vaddr = entry;
-        // For writable sections, (those with the PF_W bit set), we expect their
-        // value for p_filesz to be zero.
-        const p_filesz = if (p_flags & elf.PF_W != 0) 0 else phdr.p_memsz;
 
         if (phdr.p_type != elf.PT_LOAD or
             phdr.p_flags != p_flags or
-            phdr.p_offset < phdr_table_end or
+            phdr.p_offset != expected_offset or
             phdr.p_offset >= bytes.len or
             phdr.p_offset % 8 != 0 or
             phdr.p_vaddr != p_vaddr or
             phdr.p_paddr != p_vaddr or
-            phdr.p_filesz != p_filesz or
+            phdr.p_filesz != phdr.p_memsz or
             phdr.p_filesz > bytes.len -| phdr.p_offset or
-            phdr.p_memsz >= memory.RODATA_START // larger than one region
+            phdr.p_filesz % 8 != 0 or
+            phdr.p_memsz >= memory.BYTECODE_START // larger than one region
         ) {
             return error.InvalidProgramHeader;
         }
+        expected_offset = expected_offset +| phdr.p_filesz;
     }
 
-    const bytecode_header = phdrs[0];
+    const bytecode_header = phdrs[expected.len - 1];
     const vm_range_start = bytecode_header.p_vaddr;
     const vm_range_end = bytecode_header.p_vaddr +% bytecode_header.p_memsz;
     const entry_chk = header.e_entry +% 7;
@@ -179,15 +196,20 @@ fn parseStrict(
     }
 
     const entry_pc = (header.e_entry -| bytecode_header.p_vaddr) / 8;
-    const entry_inst: sbpf.Instruction = @bitCast(bytes[bytecode_header.p_offset..][0..8].*);
-    if (!entry_inst.isFunctionStartMarker()) {
-        return error.InvalidFileHeader;
-    }
+    // Agave's `load_with_strict_parser` does NOT require the entry
+    // instruction to be a function-start marker — only the call-target
+    // verifier does. SIMD-0189 only constrains `e_entry` to be within the
+    // bytecode segment and 8-byte aligned (checked above).
 
     var function_registry: Registry = .{};
     errdefer function_registry.deinit(allocator);
 
-    const rodata_header = phdrs[1];
+    const ro_offset: u64, const ro_start: u64, const ro_end: u64 = if (skip_rodata)
+        .{ memory.RODATA_START, phdr_table_end, phdr_table_end }
+    else blk: {
+        const rh = phdrs[0];
+        break :blk .{ memory.RODATA_START, rh.p_offset, rh.p_offset +| rh.p_filesz };
+    };
 
     return .{
         .bytes = bytes,
@@ -195,9 +217,9 @@ fn parseStrict(
         .entry_pc = entry_pc,
         .from_asm = false,
         .ro_section = .{ .borrowed = .{
-            .offset = rodata_header.p_vaddr,
-            .start = rodata_header.p_offset,
-            .end = rodata_header.p_offset +| rodata_header.p_filesz,
+            .offset = ro_offset,
+            .start = ro_start,
+            .end = ro_end,
         } },
         .text_vaddr = vm_range_start,
         .config = config,
@@ -235,7 +257,7 @@ fn parseLenient(
     const text_shdr = try parsed.validate();
 
     // [agave] https://github.com/anza-xyz/sbpf/blob/v0.12.2/src/elf.rs#L620-L638
-    const text_section_vaddr = text_shdr.sh_addr +| memory.RODATA_START;
+    const text_section_vaddr = text_shdr.sh_addr +| memory.BYTECODE_START;
     const vaddr_end = text_section_vaddr;
 
     // [agave] https://github.com/anza-xyz/sbpf/blob/v0.12.2/src/elf.rs#L632-L638
@@ -810,8 +832,8 @@ const Elf64 = struct {
                     const symbol = symbol_table[reloc.r_sym()];
 
                     var addr = symbol.st_value +| ref_addr;
-                    if (addr < memory.RODATA_START) {
-                        addr +|= memory.RODATA_START;
+                    if (addr < memory.BYTECODE_START) {
+                        addr +|= memory.BYTECODE_START;
                     }
 
                     // This is a LDDW instruction, which takes up the space of two regular instructions.
@@ -848,8 +870,8 @@ const Elf64 = struct {
                         // Combine both halfs to get the full 64-bit address.
                         var addr = (@as(u64, va_high) << 32) | va_low;
                         if (addr == 0) return error.InvalidVirtualAddress;
-                        if (addr < memory.RODATA_START) {
-                            addr +|= memory.RODATA_START;
+                        if (addr < memory.BYTECODE_START) {
+                            addr +|= memory.BYTECODE_START;
                         }
 
                         {
@@ -866,7 +888,7 @@ const Elf64 = struct {
                             break :address std.mem.readInt(u32, slice[0..4], .little);
                         };
                         const slice = try safeSlice(bytes, r_offset, @sizeOf(u64));
-                        std.mem.writeInt(u64, slice[0..8], address +| memory.RODATA_START, .little);
+                        std.mem.writeInt(u64, slice[0..8], address +| memory.BYTECODE_START, .little);
                     }
                 },
                 .@"32" => {
@@ -984,7 +1006,7 @@ const Elf64 = struct {
             if (!invalid_offsets and shdr.sh_addr != shdr.sh_offset) {
                 invalid_offsets = true;
             }
-            const vaddr_end = shdr.sh_addr +| memory.RODATA_START;
+            const vaddr_end = shdr.sh_addr +| memory.BYTECODE_START;
             // [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/elf.rs#L801
             if ((config.reject_broken_elfs and invalid_offsets) or vaddr_end > memory.STACK_START) {
                 return error.OutOfBounds;
@@ -1008,10 +1030,10 @@ const Elf64 = struct {
         const can_borrow = !invalid_offsets and
             last_ro_section +| 1 -| first_ro_section == ro_sections;
         const ro_section: Section = if (config.optimize_rodata and can_borrow) ro: {
-            const addr_offset = if (lowest_addr >= memory.RODATA_START)
+            const addr_offset = if (lowest_addr >= memory.BYTECODE_START)
                 lowest_addr
             else
-                lowest_addr +| memory.RODATA_START;
+                lowest_addr +| memory.BYTECODE_START;
 
             break :ro .{ .borrowed = .{
                 .offset = addr_offset,
@@ -1037,10 +1059,10 @@ const Elf64 = struct {
                 const buf_offset_start = section_addr -| lowest_addr;
                 @memcpy(ro_section[buf_offset_start..][0..slice.len], slice);
             }
-            const addr_offset = if (lowest_addr >= memory.RODATA_START)
+            const addr_offset = if (lowest_addr >= memory.BYTECODE_START)
                 lowest_addr
             else
-                lowest_addr +| memory.RODATA_START;
+                lowest_addr +| memory.BYTECODE_START;
             break :ro .{ .owned = .{ .offset = addr_offset, .data = ro_section } };
         };
 

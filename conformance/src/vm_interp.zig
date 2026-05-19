@@ -175,7 +175,10 @@ fn executeVmTest(
             .end = rodata.len,
         } },
         .from_asm = false,
-        .text_vaddr = if (sbpf_version.enableLowerBytecodeVaddr())
+        // SIMD-0189: v3 places .text at MM_BYTECODE_START (0x1_0000_0000) and
+        // .rodata at MM_RODATA_START (0). v0/v1/v2 keep .text at vaddr 0 and
+        // append .rodata at MM_BYTECODE_START via the bytecode region.
+        .text_vaddr = if (sbpf_version.enableLowerRodataVaddr())
             memory.BYTECODE_START
         else
             memory.RODATA_START,

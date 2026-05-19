@@ -188,6 +188,10 @@ pub const keccak256 = hashSyscall(struct {
 });
 
 test poseidon {
+    // The instruction count reflects the v3 ELF built with platform-tools
+    // LLVM 20 + static syscalls (SIMD-0178). Static syscalls dispatch from
+    // `call_imm src=0` without a runtime hash lookup, so the program runs in
+    // far fewer instructions than the legacy hash-based path.
     try sig.vm.tests.testElfWithSyscalls(
         .{},
         sig.ELF_DATA_DIR ++ "poseidon_test.so",
@@ -196,7 +200,7 @@ test poseidon {
             .sol_log_,
             .sol_panic_,
         },
-        .{ 0, 48583 },
+        .{ 0, 283 },
     );
 }
 
@@ -285,17 +289,17 @@ test sha256 {
         sha256,
         // zig fmt: off
         &.{
-            memory.Region.init(.constant, std.mem.sliceAsBytes(&bytes_to_hash), memory.RODATA_START),
+            memory.Region.init(.constant, std.mem.sliceAsBytes(&bytes_to_hash), memory.BYTECODE_START),
             memory.Region.init(.mutable,  &hash_result,                         memory.STACK_START),
             memory.Region.init(.constant, bytes1,                               bytes_to_hash[0].ptr),
             memory.Region.init(.constant, bytes2,                               bytes_to_hash[1].ptr),
         },
         &.{
-            .{ .{ memory.RODATA_START,     2, memory.STACK_START,     0, 0 }, 0 },
-            .{ .{ memory.RODATA_START - 1, 2, memory.STACK_START,     0, 0 }, error.AccessViolation },
-            .{ .{ memory.RODATA_START,     3, memory.STACK_START,     0, 0 }, error.AccessViolation }, 
-            .{ .{ memory.RODATA_START,     2, memory.STACK_START - 1, 0, 0 }, error.AccessViolation }, 
-            .{ .{ memory.RODATA_START,     2, memory.STACK_START,     0, 0 }, error.ComputationalBudgetExceeded },
+            .{ .{ memory.BYTECODE_START,     2, memory.STACK_START,     0, 0 }, 0 },
+            .{ .{ memory.BYTECODE_START - 1, 2, memory.STACK_START,     0, 0 }, error.AccessViolation },
+            .{ .{ memory.BYTECODE_START,     3, memory.STACK_START,     0, 0 }, error.AccessViolation }, 
+            .{ .{ memory.BYTECODE_START,     2, memory.STACK_START - 1, 0, 0 }, error.AccessViolation }, 
+            .{ .{ memory.BYTECODE_START,     2, memory.STACK_START,     0, 0 }, error.ComputationalBudgetExceeded },
         },
         // zig fmt: on
         struct {

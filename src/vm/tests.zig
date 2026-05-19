@@ -210,7 +210,9 @@ test "alu32 logic" {
 }
 
 test "alu32 arithmetic" {
-    try testAsm(.{},
+    // SIMD-0377 (v3) reuses opcode class 0x06 for JMP32, so `udiv32` and other
+    // PQR arithmetic only exist on v2 and below. Pin to v2 to exercise PQR.
+    try testAsm(.{ .maximum_version = .v2 },
         \\entrypoint:
         \\  add64 r10, 0
         \\  mov32 r0, 0
@@ -2452,7 +2454,7 @@ test "BPF_64_64 sbpfv0" {
     try testElf(
         .{ .maximum_version = .v0 },
         sig.ELF_DATA_DIR ++ "reloc_64_64_sbpfv0.so",
-        .{ memory.RODATA_START + 0x120, 2 },
+        .{ memory.BYTECODE_START + 0x120, 2 },
     );
 }
 
@@ -2471,12 +2473,15 @@ test "BPF_64_RELATIVE data sbpv0" {
     try testElf(
         .{ .maximum_version = .v0 },
         sig.ELF_DATA_DIR ++ "reloc_64_relative_data_sbpfv0.so",
-        .{ memory.RODATA_START + 0x140, 2 },
+        .{ memory.BYTECODE_START + 0x140, 2 },
     );
 }
 
 test "BPF_64_RELATIVE data" {
-    // 2: 0000000100000008     8 OBJECT  LOCAL  DEFAULT     2 reloc_64_relative_data.DATA
+    // SIMD-0189: v3 rodata now lives at vaddr 0 (slot 0), not at the bytecode
+    // region. A R_BPF_64_RELATIVE reloc against a data symbol at rodata offset
+    // 0x8 therefore resolves to `RODATA_START + 0x8` rather than
+    // `BYTECODE_START + 0x8` as it did under the pre-SIMD-0189 Sig layout.
     try testElf(
         .{},
         sig.ELF_DATA_DIR ++ "reloc_64_relative_data.so",
@@ -2488,7 +2493,7 @@ test "BPF_64_RELATIVE sbpv0" {
     try testElf(
         .{ .maximum_version = .v0 },
         sig.ELF_DATA_DIR ++ "reloc_64_relative_sbpfv0.so",
-        .{ memory.RODATA_START + 0x138, 2 },
+        .{ memory.BYTECODE_START + 0x138, 2 },
     );
 }
 
@@ -2518,11 +2523,14 @@ test "syscall reloc 64_32" {
 }
 
 test "static syscall" {
+    // SIMD-0178: static syscalls dispatch directly from `call_imm src=0`
+    // without a runtime hash lookup, so the v3 ELF executes far fewer
+    // instructions than the legacy hash-based path did.
     try testElfWithSyscalls(
         .{},
         sig.ELF_DATA_DIR ++ "syscall_static.so",
         &.{.sol_log_},
-        .{ 0, 107 },
+        .{ 0, 5 },
     );
 }
 
@@ -2633,7 +2641,9 @@ fn testVerifyWithSyscalls(
 }
 
 test "verifier div by zero immediate" {
-    try testVerify(.{},
+    // SIMD-0377: in v3 the udiv32 opcode byte is reused for jset32; the
+    // div-by-zero check only applies to v2.
+    try testVerify(.{ .maximum_version = .v2 },
         \\entrypoint:
         \\  add64 r10, 0
         \\  mov32 r0, 1
@@ -2788,14 +2798,17 @@ test "invalid exit" {
 }
 
 test "unknown syscall" {
+    // SIMD-0178: in v3 syscalls are dispatched via call_imm (opc 0x85) with src=0.
+    // Matches agave: the verifier accepts any CALL_IMM; an unknown syscall key
+    // is detected at runtime as UnsupportedInstruction.
     try testVerifyTextBytes(
         .{},
         &.{
             0x07, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // add64 r10, 0
-            0x95, 0x00, 0x00, 0x00, 0xBD, 0x59, 0x75, 0x20, // syscall sol_log_
+            0x85, 0x00, 0x00, 0x00, 0xBD, 0x59, 0x75, 0x20, // call_imm (syscall sol_log_)
             0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // return
         },
-        error.InvalidSyscall,
+        {},
     );
 }
 
@@ -2804,7 +2817,7 @@ test "known syscall" {
         .{},
         &.{
             0x07, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // add64 r10, 0
-            0x95, 0x00, 0x00, 0x00, 0xBD, 0x59, 0x75, 0x20, // syscall sol_log_
+            0x85, 0x00, 0x00, 0x00, 0xBD, 0x59, 0x75, 0x20, // call_imm (syscall sol_log_)
             0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // return
         },
         &.{.sol_log_},
@@ -2930,18 +2943,19 @@ test "sdiv disabled" {
 }
 
 test "return instruction" {
+    // SIMD-0178: in v3 opcode 0x95 is `exit` and is a valid program terminator.
     inline for (.{ .v1, .v3 }) |sbpf_version| {
         try testVerifyTextBytes(
             .{ .maximum_version = sbpf_version },
             &.{
                 0x07, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // add64 r10, 0
                 0xbf, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, // mov64 r0, 2
-                0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // exit (v1), syscall (v2)
+                0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // exit (v1+v3)
                 0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // return
             },
             switch (sbpf_version) {
-                .v1 => error.UnknownOpCode,
-                .v3 => error.InvalidSyscall,
+                .v1 => error.UnknownOpCode, // `return` not valid in v1
+                .v3 => {}, // `exit` followed by `return` — both valid
                 else => unreachable,
             },
         );

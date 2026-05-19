@@ -5,10 +5,14 @@ const exe = @import("executable.zig");
 
 const SyscallError = sig.vm.SyscallError;
 
-/// Virtual address of the bytecode region (in SBPFv3)
-pub const BYTECODE_START: u64 = 0x000000000;
-/// Virtual address of the readonly data region (also contains the bytecode until SBPFv3)
-pub const RODATA_START: u64 = 0x100000000;
+/// Virtual address of the readonly data region.
+/// In SBPF v3 (SIMD-0189) the rodata section lives in its own region at vaddr 0.
+/// For v0-v2 there is no separate rodata region; rodata lives inside the bytecode
+/// region at `BYTECODE_START` (legacy "rodata region" address).
+pub const RODATA_START: u64 = 0x000000000;
+/// Virtual address of the bytecode region. This is also where rodata lives in
+/// v0-v2 (rodata and bytecode share a region in legacy versions).
+pub const BYTECODE_START: u64 = 0x100000000;
 /// Virtual address of the stack region
 pub const STACK_START: u64 = 0x200000000;
 /// Virtual address of the heap region
@@ -371,6 +375,11 @@ pub const Region = struct {
 
 // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L551
 pub const AlignedMemoryMap = struct {
+    /// Slot-indexed: `regions[slot]` is the region whose vm_addr_start is at
+    /// `slot << VIRTUAL_ADDRESS_BITS`. Slots without a caller-provided region
+    /// are filled with an empty placeholder so direct indexing works in
+    /// `findRegion` (matches Agave's `AlignedMemoryMapping`, where every
+    /// virtual-address slot is occupied — bytecode is region 1).
     regions: []Region,
     version: sbpf.Version,
     config: exe.Config,
@@ -381,13 +390,49 @@ pub const AlignedMemoryMap = struct {
         version: sbpf.Version,
         config: exe.Config,
     ) (error{OutOfMemory} || InitError)!AlignedMemoryMap {
-        for (regions, 1..) |reg, index| {
-            if (reg.vm_addr_start >> VIRTUAL_ADDRESS_BITS != index) {
-                return error.InvalidMemoryRegion;
+        // Determine the highest slot used and validate the slot order.
+        //
+        // A "slot" is `vm_addr_start >> VIRTUAL_ADDRESS_BITS` — i.e. the upper
+        // 32 bits of the start address. Agave validates `vm_addr >> 32 ==
+        // index` only; it does NOT require the lower 32 bits to be zero. This
+        // matters for v0/v1/v2 programs whose rodata region sits at
+        // `lowest_addr + MM_BYTECODE_START` (e.g. `0x1_0000_0250`) — inside
+        // slot 1 but not aligned to the slot boundary. Rejecting unaligned
+        // starts would break backwards-compatible execution of on-chain
+        // programs deployed before SIMD-0189.
+        //
+        // Sig callers may also omit regions for unused slots (e.g. v<3
+        // programs do not pass a bytecode region in the memory map, and tests
+        // may skip slot 0). Empty placeholders are inserted below so that
+        // `findRegion` can index by slot directly. Region order must still be
+        // strictly increasing by slot.
+        var max_slot: u64 = 0;
+        var prev_slot: ?u64 = null;
+        for (regions) |reg| {
+            const slot = reg.vm_addr_start >> VIRTUAL_ADDRESS_BITS;
+            if (prev_slot) |p| {
+                if (slot <= p) return error.InvalidMemoryRegion;
             }
+            prev_slot = slot;
+            if (slot > max_slot) max_slot = slot;
+        }
+
+        const empty_region: Region = .{
+            .vm_addr_start = 0,
+            .vm_addr_end = 0,
+            .vm_gap_shift = 0,
+            .host_memory = .{ .constant = "" },
+        };
+
+        const slots = if (regions.len == 0) 0 else max_slot + 1;
+        const dense = try allocator.alloc(Region, slots);
+        @memset(dense, empty_region);
+        for (regions) |reg| {
+            const slot = reg.vm_addr_start >> VIRTUAL_ADDRESS_BITS;
+            dense[slot] = reg;
         }
         return .{
-            .regions = try allocator.dupe(Region, regions),
+            .regions = dense,
             .version = version,
             .config = config,
         };
@@ -401,8 +446,8 @@ pub const AlignedMemoryMap = struct {
         const err = accessViolation(vm_addr, self.version, self.config);
 
         const index = vm_addr >> VIRTUAL_ADDRESS_BITS;
-        if (index == 0 or index > self.regions.len) return err;
-        const reg = &self.regions[index - 1];
+        if (index >= self.regions.len) return err;
+        const reg = &self.regions[index];
         if (vm_addr >= reg.vm_addr_start and vm_addr < reg.vm_addr_end) {
             return reg;
         }
@@ -845,7 +890,7 @@ test "aligned region" {
     var m = try MemoryMap.init(
         allocator,
         &.{
-            Region.init(.mutable, &program_mem, RODATA_START),
+            Region.init(.mutable, &program_mem, BYTECODE_START),
             Region.init(.constant, &stack_mem, STACK_START),
         },
         .v2,
@@ -853,10 +898,10 @@ test "aligned region" {
     );
     defer m.deinit(allocator);
 
-    try expectError(error.AccessViolation, m.region(.constant, RODATA_START - 1));
-    try expectEqual(&program_mem, (try m.region(.constant, RODATA_START)).hostSlice(.constant));
-    try expectEqual(&program_mem, (try m.region(.constant, RODATA_START + 3)).hostSlice(.constant));
-    try expectError(error.AccessViolation, m.region(.constant, RODATA_START + 4));
+    try expectError(error.AccessViolation, m.region(.constant, BYTECODE_START - 1));
+    try expectEqual(&program_mem, (try m.region(.constant, BYTECODE_START)).hostSlice(.constant));
+    try expectEqual(&program_mem, (try m.region(.constant, BYTECODE_START + 3)).hostSlice(.constant));
+    try expectError(error.AccessViolation, m.region(.constant, BYTECODE_START + 4));
     try expectEqual(error.AccessViolation, m.region(.mutable, STACK_START));
     try expectEqual(&stack_mem, (try m.region(.constant, STACK_START)).hostSlice(.constant));
     try expectEqual(&stack_mem, (try m.region(.constant, STACK_START + 3)).hostSlice(.constant));
