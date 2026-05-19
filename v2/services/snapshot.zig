@@ -40,14 +40,12 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     const known_validators = ro.config.knownValidators();
 
     const result: DownloadResult = result: {
-        std.fs.cwd().makeDir(snapshot_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => |e| return e,
-        };
+        var snapshot_dir_handle = try std.fs.cwd().makeOpenPath(snapshot_dir, .{ .iterate = true });
+        defer snapshot_dir_handle.close();
 
         logger.info().logf("snapshot path {s}", .{snapshot_dir});
 
-        if (try download.findExistingSnapshot(snapshot_dir)) |existing| {
+        if (try download.findExistingSnapshot(snapshot_dir_handle)) |existing| {
             break :result .{ .already_exists = existing };
         }
 
@@ -56,7 +54,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             rw.gossip_to_snapshot,
             dedupe_fba.allocator(),
             known_validators,
-            snapshot_dir,
+            snapshot_dir_handle,
             metrics,
             logger,
         );
@@ -72,10 +70,16 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             });
         },
         .downloaded => |snapshot| {
+            var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const path = std.fmt.bufPrint(
+                &path_buf,
+                "{f}",
+                .{std.fs.path.fmtJoin(&.{ snapshot_dir, snapshot.name() })},
+            ) catch unreachable;
             logger.info().logf("snapshot download completed slot={d} hash={f} path={s}", .{
                 snapshot.slot,
                 snapshot.hash,
-                snapshot.path(),
+                path,
             });
         },
         .failed => |reason| {

@@ -302,8 +302,8 @@ pub const bpf = struct {
             allowSyscall(@intFromEnum(syscalls.mkdirat)) ++
             allowSyscall(@intFromEnum(syscalls.lseek)) ++
             allowSyscall(@intFromEnum(syscalls.pipe2)) ++
-            allowSyscall(@intFromEnum(syscalls.rename)) ++
-            allowSyscall(@intFromEnum(syscalls.unlink)) ++
+            allowSyscall(@intFromEnum(syscalls.renameat)) ++
+            allowSyscall(@intFromEnum(syscalls.unlinkat)) ++
             //
             syscall_fd_filters ++
             fall_through;

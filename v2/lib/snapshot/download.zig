@@ -534,14 +534,14 @@ const ExistingSnapshot = struct {
 };
 
 const CompletedDownload = struct {
-    path_buf: [std.fs.max_path_bytes]u8,
-    path_len: usize,
+    name_buf: [std.fs.max_path_bytes]u8,
+    name_len: usize,
 
     slot: Slot,
     hash: Hash,
 
-    pub fn path(self: *const CompletedDownload) []const u8 {
-        return self.path_buf[0..self.path_len];
+    pub fn name(self: *const CompletedDownload) []const u8 {
+        return self.name_buf[0..self.name_len];
     }
 };
 
@@ -731,7 +731,7 @@ pub const Downloader = struct {
     download_conns: [MAX_DOWNLOAD_RACERS]DownloadConn,
     active_downloads: u8,
     download_race: DownloadRace,
-    snapshot_dir: []const u8,
+    snapshot_dir: std.fs.Dir,
     run_result: ?DownloadResult,
 
     metrics: Metrics,
@@ -741,7 +741,7 @@ pub const Downloader = struct {
         gossip_to_snapshot: *SnapshotSourceRing,
         dedupe_alloc: std.mem.Allocator,
         known_validators: KnownValidators,
-        snapshot_dir: []const u8,
+        snapshot_dir: std.fs.Dir,
         metrics: Metrics,
         logger: tel.Logger("snapshot"),
     ) !Downloader {
@@ -1955,31 +1955,24 @@ pub const Downloader = struct {
         active.file_fd = -1;
 
         // Rename temp file to final path.
-        var tmp_buf: [std.fs.max_path_bytes:0]u8 = undefined;
-        var final_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+        var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var final_buf: [std.fs.max_path_bytes]u8 = undefined;
 
-        const tmp_path = formatTempSnapshotPath(
+        const tmp_name = formatTempSnapshotName(
             &tmp_buf,
-            self.snapshot_dir,
             race.slot,
             race.hash,
             data.index,
             conn.gen,
         );
-        tmp_buf[tmp_path.len] = 0;
 
-        const final_path = formatFinalSnapshotPath(
+        const final_name = formatFinalSnapshotName(
             &final_buf,
-            self.snapshot_dir,
             race.slot,
             race.hash,
         );
-        final_buf[final_path.len] = 0;
 
-        std.posix.rename(
-            tmp_buf[0..tmp_path.len :0],
-            final_buf[0..final_path.len :0],
-        ) catch |err| {
+        self.snapshot_dir.rename(tmp_name, final_name) catch |err| {
             self.logger.err().logf(
                 "download rename failed after fsync+close from={f} err={s}",
                 .{ active.from, @errorName(err) },
@@ -1994,15 +1987,15 @@ pub const Downloader = struct {
         race.phase = .completed;
         self.finishOtherDownloads(data.index);
 
-        self.logger.info().logf("download complete slot={d} path={s}", .{ race.slot, final_path });
+        self.logger.info().logf("download complete slot={d} name={s}", .{ race.slot, final_name });
         self.finishDownload(data.index, .succeeded);
 
         self.run_result = .{
             .downloaded = .{
                 .slot = race.slot,
                 .hash = race.hash,
-                .path_buf = final_buf,
-                .path_len = final_path.len,
+                .name_buf = final_buf,
+                .name_len = final_name.len,
             },
         };
     }
@@ -2339,29 +2332,18 @@ pub const Downloader = struct {
 
         // Create temp file
         // TODO: can prob be moved into io_uring.
-        // TODO: We create the temp path here, but don't store it anywhere. So need to recreate it again when the winner is declared. kinda cringe.
         conn.gen +%= 1;
-        var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
-        const tmp_path = formatTempSnapshotPath(
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const tmp_name = formatTempSnapshotName(
             &path_buf,
-            self.snapshot_dir,
             race.slot,
             race.hash,
             dl_index,
             conn.gen,
         );
-        path_buf[tmp_path.len] = 0;
-        const file_fd = try std.posix.openat(
-            std.posix.AT.FDCWD,
-            path_buf[0..tmp_path.len :0],
-            .{
-                .ACCMODE = .WRONLY,
-                .CREAT = true,
-                .TRUNC = true,
-            },
-            0o644,
-        );
-        errdefer std.posix.close(file_fd);
+        const file = try self.snapshot_dir.createFile(tmp_name, .{ .mode = 0o644 });
+        errdefer file.close();
+        const file_fd = file.handle;
 
         conn.lifecycle = .{ .active = .{
             .state = .{
@@ -2496,18 +2478,15 @@ pub const Downloader = struct {
 
         // If this download was cancelled/failed delete its temp file.
         if (result != .succeeded) {
-            var tmp_buf: [std.fs.max_path_bytes:0]u8 = undefined;
-            // TODO: we gotta store this bruh.
-            const tmp_path = formatTempSnapshotPath(
+            var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const tmp_name = formatTempSnapshotName(
                 &tmp_buf,
-                self.snapshot_dir,
                 self.download_race.slot,
                 self.download_race.hash,
                 index,
                 conn.gen,
             );
-            tmp_buf[tmp_path.len] = 0;
-            std.posix.unlink(tmp_buf[0..tmp_path.len :0]) catch {};
+            self.snapshot_dir.deleteFile(tmp_name) catch {};
         }
 
         const old_gen = conn.gen;
@@ -2546,11 +2525,10 @@ fn parseContentLength(response: []const u8) ?u64 {
     return null;
 }
 
-/// Formats a temp download path:
-///   {snapshot_dir}/snapshot-{slot}-{hash}.tar.zst.tmp.{index}.{gen}
-fn formatTempSnapshotPath(
+/// Formats a temp download file name:
+///   snapshot-{slot}-{hash}.tar.zst.tmp.{index}.{gen}
+fn formatTempSnapshotName(
     buf: []u8,
-    snapshot_dir: []const u8,
     slot: Slot,
     hash: Hash,
     index: u8,
@@ -2558,18 +2536,18 @@ fn formatTempSnapshotPath(
 ) []const u8 {
     var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
     const hash_str = hash.base58String(&hash_buf);
-    return std.fmt.bufPrint(buf, "{s}/snapshot-{d}-{s}.tar.zst.tmp.{d}.{d}", .{
-        snapshot_dir, slot, hash_str, index, gen,
+    return std.fmt.bufPrint(buf, "snapshot-{d}-{s}.tar.zst.tmp.{d}.{d}", .{
+        slot, hash_str, index, gen,
     }) catch unreachable;
 }
 
-/// Formats the final snapshot path:
-///   {snapshot_dir}/snapshot-{slot}-{hash}.tar.zst
-fn formatFinalSnapshotPath(buf: []u8, snapshot_dir: []const u8, slot: Slot, hash: Hash) []const u8 {
+/// Formats the final snapshot file name:
+///   snapshot-{slot}-{hash}.tar.zst
+fn formatFinalSnapshotName(buf: []u8, slot: Slot, hash: Hash) []const u8 {
     var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
     const hash_str = hash.base58String(&hash_buf);
-    return std.fmt.bufPrint(buf, "{s}/snapshot-{d}-{s}.tar.zst", .{
-        snapshot_dir, slot, hash_str,
+    return std.fmt.bufPrint(buf, "snapshot-{d}-{s}.tar.zst", .{
+        slot, hash_str,
     }) catch unreachable;
 }
 
@@ -2581,11 +2559,8 @@ fn isFinalSnapshotFilename(file_name: []const u8) bool {
 
 /// Scans the snapshot directory for an existing finalized snapshot file.
 /// TODO: check how old the snapshot is on disk before skipping.
-pub fn findExistingSnapshot(snapshot_dir: []const u8) !?ExistingSnapshot {
-    var dir = try std.fs.cwd().openDir(snapshot_dir, .{ .iterate = true });
-    defer dir.close();
-
-    var iter = dir.iterate();
+pub fn findExistingSnapshot(snapshot_dir: std.fs.Dir) !?ExistingSnapshot {
+    var iter = snapshot_dir.iterate();
     while (try iter.next()) |entry| {
         if (entry.kind != .file) continue;
         if (!isFinalSnapshotFilename(entry.name)) continue;
