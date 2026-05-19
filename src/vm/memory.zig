@@ -21,7 +21,33 @@ pub const AccessError = error{ StackAccessViolation, AccessViolation };
 pub const RegionError = AccessError || error{InvalidMemoryRegion};
 pub const InitError = error{InvalidMemoryRegion};
 
-// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L731
+/// SIMD-0460: callback executed when a memory access misses its region.
+///
+/// The handler may mutate `region` in place to extend its host buffer / length
+/// and re-permit the access; if after the call `region.translate(...)` still
+/// fails, an `AccessViolation` is generated. It may also be used as a hook to
+/// record the failing access for later remapping to a specific
+/// `InstructionError` (read past account length → `AccountDataTooSmall`,
+/// write past account growth budget → `InvalidRealloc`, etc.).
+///
+/// `address_space_reserved_for_account` is the distance from this region's
+/// start to the next region's start (i.e. how far the region is allowed to
+/// grow).
+///
+/// [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/memory_region.rs#L30
+pub const AccessViolationHandler = struct {
+    ctx: *anyopaque,
+    call: *const fn (
+        ctx: *anyopaque,
+        region: *Region,
+        address_space_reserved_for_account: u64,
+        access_type: MemoryState,
+        vm_addr: u64,
+        len: u64,
+    ) void,
+};
+
+// [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/memory_region.rs#L45
 pub const MemoryMap = union(enum) {
     aligned: AlignedMemoryMap,
     unaligned: UnalignedMemoryMap,
@@ -42,6 +68,21 @@ pub const MemoryMap = union(enum) {
         switch (self.*) {
             .aligned => |aligned| aligned.deinit(allocator),
             .unaligned => |unaligned| unaligned.deinit(allocator),
+        }
+    }
+
+    /// SIMD-0460: install the access-violation handler used for direct-mapping
+    /// auto-extension of writable+owned account regions and for recording the
+    /// failing access for post-execution `InstructionError` remapping.
+    ///
+    /// Only the unaligned map (used under SIMD-0460) consults the handler.
+    /// Setting it on an aligned map is a no-op — pre-SIMD-0460 paths neither
+    /// auto-extend nor need the remap (the serialization buffer pre-reserves
+    /// `MAX_PERMITTED_DATA_INCREASE`, so writes within budget never miss).
+    pub fn setAccessViolationHandler(self: *MemoryMap, handler: AccessViolationHandler) void {
+        switch (self.*) {
+            .aligned => {},
+            .unaligned => |*unaligned| unaligned.access_violation_handler = handler,
         }
     }
 
@@ -225,6 +266,12 @@ pub const Region = struct {
     vm_addr_start: u64,
     vm_gap_shift: std.math.Log2Int(u64),
     vm_addr_end: u64,
+    /// SIMD-0460: user-defined payload (instruction account index) passed to
+    /// the access-violation handler when this region triggers a violation.
+    /// Set by the serialization / CPI paths for account-data regions; null
+    /// for non-account regions (bytecode, stack, heap, scratch).
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/memory_region.rs#L57
+    access_violation_handler_payload: ?u16 = null,
 
     pub fn init(comptime state: MemoryState, slice: state.Slice(), vm_addr: u64) Region {
         return initGapped(state, slice, vm_addr, 0);
@@ -248,6 +295,16 @@ pub const Region = struct {
             .vm_addr_end = vm_addr +| (slice.len * @as(u64, if (is_gapped) 2 else 1)),
             .vm_gap_shift = @intCast(vm_gap_shift),
         };
+    }
+
+    /// Returns a copy of this region with `access_violation_handler_payload`
+    /// set. Used by the serialization / CPI paths to tag account-data regions
+    /// with the instruction-account index that the access-violation handler
+    /// uses to look up the account.
+    pub fn withPayload(self: Region, payload: u16) Region {
+        var copy = self;
+        copy.access_violation_handler_payload = payload;
+        return copy;
     }
 
     /// Get the underlying host slice of memory.
@@ -421,6 +478,13 @@ const UnalignedMemoryMap = struct {
     region_addresses: []u64,
     version: sbpf.Version,
     config: exe.Config,
+    /// SIMD-0460: optional access-violation handler. When set and a multi-byte
+    /// translate fails on the fast path, the handler is invoked with a pointer
+    /// to the failing region. The handler may grow the region (for writable
+    /// account-data regions) and/or record the failing access for later error
+    /// remapping. If the access still doesn't fit after the call, the normal
+    /// access violation is generated.
+    access_violation_handler: ?AccessViolationHandler = null,
 
     // CoW callback
     //cow_cb: ?MemoryCowCallback,
@@ -518,6 +582,38 @@ const UnalignedMemoryMap = struct {
             &self.regions[index - 1];
     }
 
+    /// SIMD-0460: distance from this region's start to the next region's
+    /// start (in virtual address space). Equivalent to Agave's "max_len"
+    /// passed to the AccessViolationHandler — the upper bound on how far
+    /// this region may grow.
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/memory_region.rs#L514-L518
+    fn addressSpaceReservedFor(self: *const UnalignedMemoryMap, region: *const Region) u64 {
+        var next: u64 = std.math.maxInt(u64);
+        for (self.regions) |reg| {
+            if (reg.vm_addr_start > region.vm_addr_start and reg.vm_addr_start < next) {
+                next = reg.vm_addr_start;
+            }
+        }
+        return next -| region.vm_addr_start;
+    }
+
+    /// SIMD-0460: invoke the access-violation handler (if any) for a region
+    /// that just failed translation, then retry the translation. Returns the
+    /// slice if the handler grew the region enough to satisfy the access,
+    /// null otherwise.
+    fn tryHandlerThenTranslate(
+        self: *const UnalignedMemoryMap,
+        comptime state: MemoryState,
+        region: *Region,
+        vm_addr: u64,
+        len: u64,
+    ) ?state.Slice() {
+        const handler = self.access_violation_handler orelse return null;
+        const max_len = self.addressSpaceReservedFor(region);
+        handler.call(handler.ctx, region, max_len, state, vm_addr, len);
+        return region.translate(state, vm_addr, len);
+    }
+
     fn store(
         self: *const UnalignedMemoryMap,
         comptime T: type,
@@ -527,13 +623,26 @@ const UnalignedMemoryMap = struct {
         const err = accessViolation(vm_addr, self.version, self.config);
 
         var region = try self.findRegion(vm_addr);
-        if (region.host_memory != .mutable) return err;
 
         if (region.translate(.mutable, vm_addr, @sizeOf(T))) |slice| {
             // fast path
             std.mem.writeInt(T, slice[0..@sizeOf(T)], value, .little);
             return;
         }
+
+        // SIMD-0460: invoke the access-violation handler (if installed) to
+        // potentially grow the region. If it succeeds, the (re)translated
+        // slice is valid; otherwise fall through to the pre-SIMD-0460
+        // byte-level cross-region fallback (when not stricter) or to the
+        // access violation (when stricter).
+        if (self.tryHandlerThenTranslate(.mutable, region, vm_addr, @sizeOf(T))) |slice| {
+            std.mem.writeInt(T, slice[0..@sizeOf(T)], value, .little);
+            return;
+        }
+
+        // SIMD-0460: cross-region splits are access violations. The byte-level
+        // fallback below is pre-SIMD-0460 behavior.
+        if (self.config.virtual_address_space_adjustments) return err;
 
         var current_addr = vm_addr;
         var src: []const u8 = std.mem.asBytes(&value);
@@ -568,6 +677,15 @@ const UnalignedMemoryMap = struct {
             // fast path
             return std.mem.readInt(T, slice[0..@sizeOf(T)], .little);
         }
+
+        // SIMD-0460: see note in store() above.
+        if (self.tryHandlerThenTranslate(.constant, region, vm_addr, @sizeOf(T))) |slice| {
+            return std.mem.readInt(T, slice[0..@sizeOf(T)], .little);
+        }
+
+        // SIMD-0460: cross-region splits are access violations. The byte-level
+        // fallback below is pre-SIMD-0460 behavior.
+        if (self.config.virtual_address_space_adjustments) return err;
 
         var dest: [@sizeOf(T)]u8 = undefined;
         var ptr: []u8 = &dest;
@@ -606,8 +724,21 @@ const UnalignedMemoryMap = struct {
         vm_addr: u64,
         len: u64,
     ) AccessError!state.Slice() {
-        return reg.translate(state, vm_addr, len) orelse
-            return accessViolation(vm_addr, self.version, self.config);
+        if (reg.translate(state, vm_addr, len)) |slice| return slice;
+        // SIMD-0460: try the access-violation handler. We pass the original
+        // region pointer (not the local copy) so the handler can mutate the
+        // map's region in place; the eytzinger index remains valid because
+        // the handler only grows `vm_addr_end` / refreshes `host_memory`
+        // without changing `vm_addr_start`.
+        if (self.access_violation_handler != null) {
+            // Re-find by start address to get a stable pointer into self.regions.
+            if (self.findRegion(reg.vm_addr_start)) |region_ptr| {
+                if (self.tryHandlerThenTranslate(state, region_ptr, vm_addr, len)) |slice| {
+                    return slice;
+                }
+            } else |_| {}
+        }
+        return accessViolation(vm_addr, self.version, self.config);
     }
 };
 
@@ -953,4 +1084,351 @@ test "unaligned memory map slow paths" {
 
     try m.store(u16, INPUT_START, 0xEEFF);
     try expectEqual(0xEEFF, try m.load(u16, INPUT_START));
+}
+
+// SIMD-0460 tests below cover the access-violation handler plumbing introduced
+// for direct-mapping auto-extension of writable+owned account regions.
+
+test "Region withPayload" {
+    var buf: [4]u8 = .{ 1, 2, 3, 4 };
+    const region = Region.init(.mutable, &buf, INPUT_START);
+    try expectEqual(@as(?u16, null), region.access_violation_handler_payload);
+
+    const tagged = region.withPayload(7);
+    try expectEqual(@as(?u16, 7), tagged.access_violation_handler_payload);
+
+    // `withPayload` returns a copy — the original must be untouched.
+    try expectEqual(@as(?u16, null), region.access_violation_handler_payload);
+    // Address/size fields are preserved.
+    try expectEqual(region.vm_addr_start, tagged.vm_addr_start);
+    try expectEqual(region.vm_addr_end, tagged.vm_addr_end);
+    try expectEqual(region.vm_gap_shift, tagged.vm_gap_shift);
+}
+
+test "setAccessViolationHandler is a no-op on aligned memory maps" {
+    const allocator = std.testing.allocator;
+    var buf: [4]u8 = .{0xFF} ** 4;
+
+    // The aligned map enforces that region N starts at (N << VIRTUAL_ADDRESS_BITS),
+    // so a single-region map must place the region at RODATA_START.
+    var map = try MemoryMap.init(
+        allocator,
+        &.{Region.init(.mutable, &buf, RODATA_START)},
+        .v2,
+        .{ .aligned_memory_mapping = true },
+    );
+    defer map.deinit(allocator);
+
+    const Handler = struct {
+        var called: bool = false;
+        fn handle(
+            _: *anyopaque,
+            _: *Region,
+            _: u64,
+            _: MemoryState,
+            _: u64,
+            _: u64,
+        ) void {
+            called = true;
+        }
+    };
+    Handler.called = false;
+    var dummy_ctx: u8 = 0;
+    map.setAccessViolationHandler(.{ .ctx = @ptrCast(&dummy_ctx), .call = Handler.handle });
+
+    // An access that misses the region must not invoke the handler under
+    // the aligned map — pre-SIMD-0460 code paths never consult it.
+    _ = map.load(u32, RODATA_START + 100) catch {};
+    _ = map.store(u32, RODATA_START + 100, 0) catch {};
+    try std.testing.expect(!Handler.called);
+}
+
+// Exercises the full handler path on store():
+//   1. fast-path hit (handler not called)
+//   2. fast-path miss → handler grows the region → retry succeeds
+//   3. fast-path miss → handler doesn't grow → AccessViolation
+// Also verifies that handler.max_len equals the address-space-reserved-for
+// computation: distance to the next region's start (or maxInt - start for the
+// last region).
+test "AccessViolationHandler grows region on store miss" {
+    const allocator = std.testing.allocator;
+
+    // Two adjacent regions with a gap (next region starts at INPUT_START + 64).
+    const gap: u64 = 64;
+    var ext_buf: [16]u8 = @splat(0);
+    var mem1: [4]u8 = .{0xFF} ** 4;
+    var mem2: [4]u8 = .{0xEE} ** 4;
+
+    var map = try MemoryMap.init(
+        allocator,
+        &.{
+            Region.init(.mutable, &mem1, INPUT_START),
+            Region.init(.mutable, &mem2, INPUT_START + gap),
+        },
+        .v2,
+        .{ .aligned_memory_mapping = false, .virtual_address_space_adjustments = true },
+    );
+    defer map.deinit(allocator);
+
+    const Handler = struct {
+        var call_count: usize = 0;
+        var last_max_len: u64 = 0;
+        var last_vm_addr: u64 = 0;
+        var last_access_type: MemoryState = .constant;
+        var grow: bool = true;
+        var ext_ptr: ?*[16]u8 = null;
+
+        fn handle(
+            _: *anyopaque,
+            region: *Region,
+            max_len: u64,
+            access_type: MemoryState,
+            vm_addr: u64,
+            _: u64,
+        ) void {
+            call_count += 1;
+            last_max_len = max_len;
+            last_vm_addr = vm_addr;
+            last_access_type = access_type;
+
+            if (!grow) return;
+            // Re-point the region at our larger backing buffer and grow its
+            // vm_addr_end to cover it. The replacement slice must start at the
+            // same vm_addr_start (and remain mutable for mutable accesses).
+            const ext = ext_ptr.?;
+            region.host_memory = .{ .mutable = ext };
+            region.vm_addr_end = region.vm_addr_start +| ext.len;
+        }
+    };
+    Handler.call_count = 0;
+    Handler.ext_ptr = &ext_buf;
+    Handler.grow = true;
+    var dummy_ctx: u8 = 0;
+    map.setAccessViolationHandler(.{ .ctx = @ptrCast(&dummy_ctx), .call = Handler.handle });
+
+    // Fast-path hit: write fully inside mem1 → handler must not be called.
+    try map.store(u32, INPUT_START, 0x11223344);
+    try expectEqual(@as(usize, 0), Handler.call_count);
+    try expectEqual(@as(u32, 0x11223344), std.mem.readInt(u32, &mem1, .little));
+
+    // Miss: write past mem1's end but inside its reserved range → handler
+    // grows the region → retry succeeds.
+    try map.store(u32, INPUT_START + 8, 0xAABBCCDD);
+    try expectEqual(@as(usize, 1), Handler.call_count);
+    try expectEqual(MemoryState.mutable, Handler.last_access_type);
+    try expectEqual(@as(u64, INPUT_START + 8), Handler.last_vm_addr);
+    // max_len = next region start (INPUT_START + gap) - INPUT_START = gap.
+    try expectEqual(gap, Handler.last_max_len);
+    try expectEqual(@as(u32, 0xAABBCCDD), std.mem.readInt(u32, ext_buf[8..12], .little));
+
+    // Handler declines to grow → AccessViolation. Reset region so the test
+    // is independent of the previous one's growth.
+    var map2 = try MemoryMap.init(
+        allocator,
+        &.{Region.init(.mutable, &mem1, INPUT_START)},
+        .v2,
+        .{ .aligned_memory_mapping = false, .virtual_address_space_adjustments = true },
+    );
+    defer map2.deinit(allocator);
+    Handler.call_count = 0;
+    Handler.grow = false;
+    map2.setAccessViolationHandler(
+        .{ .ctx = @ptrCast(&dummy_ctx), .call = Handler.handle },
+    );
+    try expectError(error.AccessViolation, map2.store(u32, INPUT_START + 8, 0));
+    try expectEqual(@as(usize, 1), Handler.call_count);
+    // Last region in the map → max_len reaches to maxInt(u64) from region start.
+    try expectEqual(std.math.maxInt(u64) - INPUT_START, Handler.last_max_len);
+}
+
+test "AccessViolationHandler grows region on load miss" {
+    const allocator = std.testing.allocator;
+
+    var ext_buf: [16]u8 = .{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
+    var mem1: [4]u8 = .{ 0xAA, 0xBB, 0xCC, 0xDD };
+
+    var map = try MemoryMap.init(
+        allocator,
+        &.{Region.init(.mutable, &mem1, INPUT_START)},
+        .v2,
+        .{ .aligned_memory_mapping = false, .virtual_address_space_adjustments = true },
+    );
+    defer map.deinit(allocator);
+
+    const Handler = struct {
+        var call_count: usize = 0;
+        var last_access_type: MemoryState = .mutable;
+        var ext_ptr: ?*[16]u8 = null;
+
+        fn handle(
+            _: *anyopaque,
+            region: *Region,
+            _: u64,
+            access_type: MemoryState,
+            _: u64,
+            _: u64,
+        ) void {
+            call_count += 1;
+            last_access_type = access_type;
+            const ext = ext_ptr.?;
+            region.host_memory = .{ .mutable = ext };
+            region.vm_addr_end = region.vm_addr_start +| ext.len;
+        }
+    };
+    Handler.call_count = 0;
+    Handler.ext_ptr = &ext_buf;
+    var dummy_ctx: u8 = 0;
+    map.setAccessViolationHandler(.{ .ctx = @ptrCast(&dummy_ctx), .call = Handler.handle });
+
+    // Fast-path read: no handler call.
+    try expectEqual(@as(u32, 0xDDCCBBAA), try map.load(u32, INPUT_START));
+    try expectEqual(@as(usize, 0), Handler.call_count);
+
+    // Miss: read past mem1's end → handler grows → retry succeeds.
+    // Handler is invoked with `.constant` for reads (this is the signal used
+    // by `remapAccessViolation` to distinguish AccountDataTooSmall from
+    // InvalidRealloc — see runtime/program/bpf_loader/execute.zig).
+    const read = try map.load(u32, INPUT_START + 8);
+    try expectEqual(@as(usize, 1), Handler.call_count);
+    try expectEqual(MemoryState.constant, Handler.last_access_type);
+    try expectEqual(std.mem.readInt(u32, ext_buf[8..12], .little), read);
+}
+
+// Without the handler, virtual_address_space_adjustments=true forbids the
+// pre-SIMD-0460 byte-level cross-region fallback that store/load otherwise use.
+// This locks in the SIMD-0460 rule: multi-byte accesses must be wholly within
+// a single region.
+test "virtual_address_space_adjustments disables cross-region byte fallback" {
+    const allocator = std.testing.allocator;
+
+    {
+        var mem1: [3]u8 = .{0xFF} ** 3;
+        var mem2: [5]u8 = .{0xFF} ** 5;
+
+        const map = try MemoryMap.init(
+            allocator,
+            &.{
+                Region.init(.mutable, &mem1, INPUT_START),
+                Region.init(.mutable, &mem2, INPUT_START + 3),
+            },
+            .v2,
+            .{ .aligned_memory_mapping = false, .virtual_address_space_adjustments = true },
+        );
+        defer map.deinit(allocator);
+
+        // u32 at INPUT_START spans mem1 (3B) + mem2 (1B) → cross-region.
+        // With virtual_address_space_adjustments=true and no handler, this is
+        // an AccessViolation; the byte-level fallback path must be skipped.
+        try expectError(error.AccessViolation, map.store(u32, INPUT_START, 0x11223344));
+        try expectError(error.AccessViolation, map.load(u32, INPUT_START));
+    }
+
+    // Mirror of the existing slow-path test: with virtual_address_space_adjustments=false,
+    // the same cross-region access succeeds via the byte-level fallback.
+    {
+        var mem1: [3]u8 = .{0xFF} ** 3;
+        var mem2: [5]u8 = .{0xFF} ** 5;
+
+        const map = try MemoryMap.init(
+            allocator,
+            &.{
+                Region.init(.mutable, &mem1, INPUT_START),
+                Region.init(.mutable, &mem2, INPUT_START + 3),
+            },
+            .v2,
+            .{ .aligned_memory_mapping = false, .virtual_address_space_adjustments = false },
+        );
+        defer map.deinit(allocator);
+
+        try map.store(u32, INPUT_START, 0x11223344);
+        try expectEqual(@as(u32, 0x11223344), try map.load(u32, INPUT_START));
+    }
+}
+
+// vmap() / mapRegion() goes through the handler too: a translation that misses
+// the bounds gets one retry after the handler runs.
+test "AccessViolationHandler grows region on vmap miss" {
+    const allocator = std.testing.allocator;
+
+    var ext_buf: [32]u8 = @splat(0);
+    var mem1: [4]u8 = .{0xFF} ** 4;
+
+    var map = try MemoryMap.init(
+        allocator,
+        &.{Region.init(.mutable, &mem1, INPUT_START)},
+        .v2,
+        .{ .aligned_memory_mapping = false, .virtual_address_space_adjustments = true },
+    );
+    defer map.deinit(allocator);
+
+    const Handler = struct {
+        var call_count: usize = 0;
+        var ext_ptr: ?*[32]u8 = null;
+        fn handle(
+            _: *anyopaque,
+            region: *Region,
+            _: u64,
+            _: MemoryState,
+            _: u64,
+            _: u64,
+        ) void {
+            call_count += 1;
+            const ext = ext_ptr.?;
+            region.host_memory = .{ .mutable = ext };
+            region.vm_addr_end = region.vm_addr_start +| ext.len;
+        }
+    };
+    Handler.call_count = 0;
+    Handler.ext_ptr = &ext_buf;
+    var dummy_ctx: u8 = 0;
+    map.setAccessViolationHandler(.{ .ctx = @ptrCast(&dummy_ctx), .call = Handler.handle });
+
+    // vmap covering bytes that extend past the original region must succeed
+    // after the handler grows it.
+    const slice = try map.vmap(.mutable, INPUT_START + 4, 8);
+    try expectEqual(@as(usize, 1), Handler.call_count);
+    try expectEqual(@as(usize, 8), slice.len);
+    try expectEqual(ext_buf[4..12].ptr, slice.ptr);
+}
+
+// vmap() must still report AccessViolation when no handler is installed (or
+// the handler declines to grow), guarding against a regression where the
+// handler integration accidentally suppresses errors.
+test "vmap returns AccessViolation when handler declines to grow" {
+    const allocator = std.testing.allocator;
+    var mem1: [4]u8 = .{0xFF} ** 4;
+
+    var map = try MemoryMap.init(
+        allocator,
+        &.{Region.init(.mutable, &mem1, INPUT_START)},
+        .v2,
+        .{ .aligned_memory_mapping = false, .virtual_address_space_adjustments = true },
+    );
+    defer map.deinit(allocator);
+
+    // No handler installed → access past region is an AccessViolation.
+    try expectError(error.AccessViolation, map.vmap(.mutable, INPUT_START + 4, 4));
+
+    const Noop = struct {
+        var called: bool = false;
+        fn handle(
+            _: *anyopaque,
+            _: *Region,
+            _: u64,
+            _: MemoryState,
+            _: u64,
+            _: u64,
+        ) void {
+            called = true;
+        }
+    };
+    Noop.called = false;
+    var dummy_ctx: u8 = 0;
+    map.setAccessViolationHandler(.{ .ctx = @ptrCast(&dummy_ctx), .call = Noop.handle });
+
+    // Handler runs but doesn't grow → still AccessViolation, but the handler
+    // was given a chance (important: this is where the bpf_loader records
+    // `last_access_violation` for error remapping).
+    try expectError(error.AccessViolation, map.vmap(.mutable, INPUT_START + 4, 4));
+    try std.testing.expect(Noop.called);
 }
