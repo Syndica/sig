@@ -785,23 +785,50 @@ const Elf64 = struct {
             }
         }
 
+        // [agave] Agave uses .get(offset..offset+size).ok_or(ElfError::ValueOutOfBounds)?
+        // for all relocation/symbol table slicing — bounds-checked, no panics.
+        const rel_slice = try safeSlice(bytes, self.dt_rel_off, self.dt_rel_sz);
         const relocations = std.mem.bytesAsSlice(
             elf.Elf64_Rel,
-            bytes[self.dt_rel_off..][0..self.dt_rel_sz],
+            rel_slice,
         );
+
+        // [agave] In Agave, the Elf64 parser is created from `unrelocated_elf_bytes` — a
+        // separate immutable copy of the ELF. Relocations mutate a different buffer
+        // (`elf_bytes`), so `elf.dynamic_symbol_table()` and `elf.dynamic_symbol_name()`
+        // always read pristine, unrelocated data. In sig we only have one buffer, so we
+        // snapshot the dynsym and dynstr sections before the relocation loop to match.
+        const dynsym_snapshot: ?[]elf.Elf64_Sym = if (self.dynsymtab) |idx| blk: {
+            const sh = self.shdrs[idx];
+            const src = try safeSlice(bytes, sh.sh_offset, sh.sh_size);
+            const num_syms = sh.sh_size / @sizeOf(elf.Elf64_Sym);
+            const snap = try allocator.alloc(elf.Elf64_Sym, @intCast(num_syms));
+            const snap_bytes = std.mem.sliceAsBytes(snap);
+            @memcpy(snap_bytes, src);
+            break :blk snap;
+        } else null;
+        defer if (dynsym_snapshot) |s| allocator.free(s);
+
+        const dynstr_snapshot = if (self.dynstr) |idx| blk: {
+            const sh = self.shdrs[idx];
+            const src = try safeSlice(bytes, sh.sh_offset, sh.sh_size);
+            const snap = try allocator.alloc(u8, @intCast(sh.sh_size));
+            @memcpy(snap, src);
+            break :blk snap;
+        } else null;
+        defer if (dynstr_snapshot) |s| allocator.free(s);
+
         for (relocations) |reloc| {
             const r_offset = reloc.r_offset;
 
             switch (@as(elf.R_X86_64, @enumFromInt(reloc.r_type()))) {
+                // [agave] https://github.com/firedancer-io/sbpf/blob/sbpf-v0.14.4-patches/src/elf.rs#L207
+                // R_X86_64_NONE => Some(BpfRelocationType::R_Bpf_None) — no-op, skip.
+                .NONE => {},
                 .@"64" => {
                     const imm_offset = r_offset +| 4;
 
-                    const dynsymtab = self.dynsymtab orelse return error.UnknownSymbol;
-                    const sh_dynsym = self.shdrs[dynsymtab];
-                    const symbol_table = std.mem.bytesAsSlice(
-                        elf.Elf64_Sym,
-                        bytes[sh_dynsym.sh_offset..][0..sh_dynsym.sh_size],
-                    );
+                    const symbol_table = dynsym_snapshot orelse return error.UnknownSymbol;
 
                     const addr_slice = try safeSlice(bytes, imm_offset, 4);
                     const ref_addr = std.mem.readInt(u32, addr_slice[0..4], .little);
@@ -874,24 +901,20 @@ const Elf64 = struct {
                     // Hash the symbol name with Murmur and ammend the instruction's imm field.
                     const imm_offset = r_offset +| 4;
 
-                    const dynsymtab = self.dynsymtab orelse return error.UnknownSymbol;
-                    const sh_dynsym = self.shdrs[dynsymtab];
-                    const symbol_table = std.mem.bytesAsSlice(
-                        elf.Elf64_Sym,
-                        bytes[sh_dynsym.sh_offset..][0..sh_dynsym.sh_size],
-                    );
+                    const symbol_table = dynsym_snapshot orelse return error.UnknownSymbol;
 
                     if (reloc.r_sym() >= symbol_table.len) return error.UnknownSymbol;
                     const symbol = symbol_table[reloc.r_sym()];
 
-                    const dynstrtab = self.dynstr orelse return error.UnknownSymbol;
-                    const dynstr = self.shdrs[dynstrtab];
-                    const name = getStringInSection(
-                        bytes,
-                        dynstr,
-                        symbol.st_name,
-                        SYMBOL_NAME_LENGTH_MAXIMUM,
-                    ) catch return error.UnknownSymbol;
+                    const dynstr_snap = dynstr_snapshot orelse return error.UnknownSymbol;
+                    const name = name: {
+                        const start: usize = @intCast(symbol.st_name);
+                        if (start >= dynstr_snap.len) break :name error.UnknownSymbol;
+                        const end = @min(dynstr_snap.len, start + SYMBOL_NAME_LENGTH_MAXIMUM);
+                        const search = dynstr_snap[start..end];
+                        const idx = std.mem.indexOfScalar(u8, search, 0) orelse break :name error.UnknownSymbol;
+                        break :name @as([:0]const u8, @ptrCast(search[0..idx]));
+                    } catch return error.UnknownSymbol;
 
                     // If the symbol is defined and a function, this is a BPF-to-BPF call.
                     if (symbol.st_type() == elf.STT_FUNC and symbol.st_value != 0) {
