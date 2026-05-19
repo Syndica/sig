@@ -481,12 +481,15 @@ fn simulateRuntimeTransaction(
     // to the account store — the preflight slot may be finalized/rooted,
     // and writing to a rooted slot would fail with CannotWriteRootedSlot.
     const environment = try svm_gateway.environment();
+    const account_reader_adapter = sig.runtime.SlotAccountReaderAdapter{
+        .reader = svm_gateway.params.account_store.reader(),
+    };
     const processed_transaction =
         switch (try sig.runtime.transaction_execution.loadAndExecuteTransaction(
             arena,
             arena,
             &transaction,
-            svm_gateway.params.account_store.reader(),
+            account_reader_adapter.accountReader(),
             &environment,
             &.{ .log = true, .log_messages_byte_limit = null },
             &svm_gateway.state.programs,

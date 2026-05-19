@@ -16,7 +16,7 @@ const RENT_EXEMPT_RENT_EPOCH = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH;
 const CollectedInfo = sig.core.rent_collector.CollectedInfo;
 const AccountMeta = sig.core.instruction.InstructionAccount;
 
-const SlotAccountReader = sig.accounts_db.SlotAccountReader;
+const AccountReader = runtime.execution_interfaces.AccountReader;
 const AccountSharedData = runtime.AccountSharedData;
 const ComputeBudgetLimits = runtime.program.compute_budget.ComputeBudgetLimits;
 const RuntimeTransaction = runtime.transaction_execution.RuntimeTransaction;
@@ -97,20 +97,11 @@ pub const PreparedAccount = struct {
     rent_collected: u64,
 };
 
-pub const AccountLoadError = error{ OutOfMemory, AccountsDBError };
-
-/// Wraps calls to AccountsDB and convert all errors except OutOfMemory into AccountsDBError.
-pub fn wrapDB(item: anytype) AccountLoadError!@typeInfo(@TypeOf(item)).error_union.payload {
-    const ItemError = @typeInfo(@TypeOf(item)).error_union.error_set;
-    return item catch |err| switch (@as(AccountLoadError || ItemError, err)) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => error.AccountsDBError,
-    };
-}
+pub const AccountLoadError = runtime.execution_interfaces.AccountLoadError;
 
 /// Loads all the accounts for a transaction and reports account loading errors.
 pub fn loadTransactionAccounts(
-    map: SlotAccountReader,
+    account_reader: AccountReader,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     rent_collector: *const RentCollector,
@@ -124,7 +115,7 @@ pub fn loadTransactionAccounts(
 
     const result = if (feature_set.active(.formalize_loaded_transaction_data_size, slot))
         loadTransactionAccountsSimd186(
-            map,
+            account_reader,
             allocator,
             transaction,
             rent_collector,
@@ -135,7 +126,7 @@ pub fn loadTransactionAccounts(
         )
     else
         loadTransactionAccountsOld(
-            map,
+            account_reader,
             allocator,
             transaction,
             rent_collector,
@@ -165,7 +156,7 @@ const InternalLoadError = AccountLoadError || error{
 };
 
 fn loadTransactionAccountsSimd186(
-    map: SlotAccountReader,
+    account_reader: AccountReader,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     rent_collector: *const RentCollector,
@@ -194,7 +185,7 @@ fn loadTransactionAccountsSimd186(
     const accounts = transaction.accounts.slice();
     for (accounts.items(.pubkey), 0..) |account_key, i| {
         const prepared = if (i == 0) fee_payer else try loadTransactionAccount(
-            map,
+            account_reader,
             allocator,
             transaction,
             rent_collector,
@@ -240,11 +231,11 @@ fn loadTransactionAccountsSimd186(
                 }
                 if (additional_loaded_accounts.contains(programdata_address)) break :cont;
                 // ...and the programdata account exists (if it doesn't, it is *not* a load failure)...
-                if (try wrapDB(map.get(allocator, programdata_address))) |programdata_account| {
+                if (try account_reader.get(allocator, programdata_address)) |programdata_account| {
                     defer programdata_account.deinit(allocator);
                     // ...count programdata toward this transaction's total size.
                     try loaded.increase(
-                        TRANSACTION_ACCOUNT_BASE_SIZE +| programdata_account.data.len(),
+                        TRANSACTION_ACCOUNT_BASE_SIZE +| programdata_account.data.len,
                         compute_budget_limits.loaded_accounts_bytes,
                     );
                     additional_loaded_accounts.putAssumeCapacity(programdata_address, {});
@@ -261,7 +252,7 @@ fn loadTransactionAccountsSimd186(
     for (transaction.instructions) |instr| {
         const program_id = &instr.program_meta.pubkey;
         const program_account = try loadAccount(
-            map,
+            account_reader,
             allocator,
             transaction,
             program_id,
@@ -288,7 +279,7 @@ fn loadTransactionAccountsSimd186(
 }
 
 fn loadTransactionAccountsOld(
-    map: SlotAccountReader,
+    account_reader: AccountReader,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     rent_collector: *const RentCollector,
@@ -308,7 +299,7 @@ fn loadTransactionAccountsOld(
     const accounts = transaction.accounts.slice();
     for (accounts.items(.pubkey), 0..) |account_key, i| {
         const prepared = if (i == 0) fee_payer else try loadTransactionAccount(
-            map,
+            account_reader,
             allocator,
             transaction,
             rent_collector,
@@ -350,7 +341,7 @@ fn loadTransactionAccountsOld(
     for (transaction.instructions) |instr| {
         if (instr.program_meta.pubkey.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
         const program_account = try loadAccount(
-            map,
+            account_reader,
             allocator,
             transaction,
             &instr.program_meta.pubkey,
@@ -364,7 +355,7 @@ fn loadTransactionAccountsOld(
         if (validated_loaders.contains(owner_id)) continue; // only load + count owners once
 
         const owner_account = try loadAccount(
-            map,
+            account_reader,
             allocator,
             transaction,
             &owner_id,
@@ -387,7 +378,7 @@ fn loadTransactionAccountsOld(
 }
 
 fn loadTransactionAccount(
-    map: SlotAccountReader,
+    account_reader: AccountReader,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     rent_collector: *const RentCollector,
@@ -412,7 +403,7 @@ fn loadTransactionAccount(
     }
 
     var account = try loadAccount(
-        map,
+        account_reader,
         allocator,
         transaction,
         key,
@@ -430,16 +421,8 @@ fn loadTransactionAccount(
     };
     errdefer account.account.deinit(allocator);
 
-    var account_shared_data = AccountSharedData{
-        .lamports = account.account.lamports,
-        .data = try account.account.data.toOwned(allocator),
-        .owner = account.account.owner,
-        .executable = account.account.executable,
-        .rent_epoch = account.account.rent_epoch,
-    };
-
     const rent_collected = collectRentFromAccount(
-        &account_shared_data,
+        &account.account,
         key,
         feature_set,
         slot,
@@ -447,7 +430,7 @@ fn loadTransactionAccount(
     );
 
     return .{
-        .account = account_shared_data,
+        .account = account.account,
         .loaded_size = account.loaded_size,
         .rent_collected = rent_collected.rent_amount,
     };
@@ -455,13 +438,13 @@ fn loadTransactionAccount(
 
 /// null return => account is now dead
 fn loadAccount(
-    map: SlotAccountReader,
+    account_reader: AccountReader,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     key: *const Pubkey,
     formalized_loaded_data_size: bool,
 ) InternalLoadError!?struct {
-    account: Account,
+    account: AccountSharedData,
     loaded_size: usize,
     rent_collected: u64,
 } {
@@ -470,10 +453,17 @@ fn loadAccount(
     else
         0;
 
-    const account = if (key.equals(&runtime.sysvar.instruction.ID)) account: {
+    const account: AccountSharedData = if (key.equals(&runtime.sysvar.instruction.ID)) account: {
         @branchHint(.unlikely);
-        break :account try constructInstructionsAccount(allocator, transaction);
-    } else try wrapDB(map.get(allocator, key.*)) orelse return null;
+        const instruction_account = try constructInstructionsAccount(allocator, transaction);
+        break :account .{
+            .data = instruction_account.data.owned_allocation,
+            .owner = instruction_account.owner,
+            .lamports = instruction_account.lamports,
+            .executable = instruction_account.executable,
+            .rent_epoch = instruction_account.rent_epoch,
+        };
+    } else try account_reader.get(allocator, key.*) orelse return null;
 
     if (account.lamports == 0) {
         account.deinit(allocator);
@@ -482,7 +472,7 @@ fn loadAccount(
 
     return .{
         .account = account,
-        .loaded_size = base_account_size +| account.data.len(),
+        .loaded_size = base_account_size +| account.data.len,
         .rent_collected = 0,
     };
 }
@@ -637,7 +627,9 @@ test "loadTransactionAccounts empty transaction" {
     };
 
     const tx_accounts = try loadTransactionAccountsOld(
-        .{ .account_map = &accountsdb },
+        (sig.runtime.SlotAccountReaderAdapter{
+            .reader = .{ .account_map = &accountsdb },
+        }).accountReader(),
         allocator,
         &empty_tx,
         &env.rent_collector,
@@ -684,7 +676,9 @@ test "loadTransactionAccounts sysvar instruction" {
     };
 
     const tx_accounts = try loadTransactionAccountsOld(
-        .{ .account_map = &accountsdb },
+        (sig.runtime.SlotAccountReaderAdapter{
+            .reader = .{ .account_map = &accountsdb },
+        }).accountReader(),
         allocator,
         &tx,
         &env.rent_collector,
@@ -830,7 +824,9 @@ test "load accounts rent paid" {
     };
 
     const loaded_accounts = try loadTransactionAccountsOld(
-        .{ .account_map = &accountsdb },
+        (sig.runtime.SlotAccountReaderAdapter{
+            .reader = .{ .account_map = &accountsdb },
+        }).accountReader(),
         allocator,
         &tx,
         &env.rent_collector,
@@ -984,7 +980,9 @@ test "load accounts with simd 186 and loaderv3 program" {
     };
 
     const loaded_accounts = try loadTransactionAccountsSimd186(
-        .{ .account_map = &accountsdb },
+        (sig.runtime.SlotAccountReaderAdapter{
+            .reader = .{ .account_map = &accountsdb },
+        }).accountReader(),
         allocator,
         &tx,
         &env.rent_collector,
@@ -1082,7 +1080,9 @@ test "loadAccount allocations" {
             defer tx.accounts.deinit(allocator);
 
             const account = try loadAccount(
-                .{ .account_map = &accountsdb },
+                (sig.runtime.SlotAccountReaderAdapter{
+                    .reader = .{ .account_map = &accountsdb },
+                }).accountReader(),
                 allocator,
                 &tx,
                 &NATIVE_LOADER_ID,
@@ -1124,7 +1124,9 @@ test "load tx too large" {
     defer tx.accounts.deinit(allocator);
 
     const loaded_accounts_result = loadTransactionAccountsOld(
-        .{ .account_map = &accountsdb },
+        (sig.runtime.SlotAccountReaderAdapter{
+            .reader = .{ .account_map = &accountsdb },
+        }).accountReader(),
         allocator,
         &tx,
         &env.rent_collector,
@@ -1238,7 +1240,9 @@ test "dont double count program owner account data size" {
     };
 
     const loaded_accounts = try loadTransactionAccountsOld(
-        .{ .account_map = &accountsdb },
+        (sig.runtime.SlotAccountReaderAdapter{
+            .reader = .{ .account_map = &accountsdb },
+        }).accountReader(),
         allocator,
         &tx,
         &env.rent_collector,
@@ -1272,7 +1276,9 @@ test "load, create new account" {
     defer tx.accounts.deinit(allocator);
 
     const loaded_accounts = try loadTransactionAccountsOld(
-        .{ .account_map = &accountsdb },
+        (sig.runtime.SlotAccountReaderAdapter{
+            .reader = .{ .account_map = &accountsdb },
+        }).accountReader(),
         allocator,
         &tx,
         &env.rent_collector,
@@ -1329,7 +1335,9 @@ test "invalid program owner owner" {
     };
 
     const loaded_accounts_result = loadTransactionAccountsOld(
-        .{ .account_map = &accountsdb },
+        (sig.runtime.SlotAccountReaderAdapter{
+            .reader = .{ .account_map = &accountsdb },
+        }).accountReader(),
         allocator,
         &tx,
         &env.rent_collector,
@@ -1375,7 +1383,9 @@ test "missing program owner account" {
     };
 
     const loaded_accounts_result = loadTransactionAccountsOld(
-        .{ .account_map = &accountsdb },
+        (sig.runtime.SlotAccountReaderAdapter{
+            .reader = .{ .account_map = &accountsdb },
+        }).accountReader(),
         allocator,
         &tx,
         &env.rent_collector,
@@ -1418,7 +1428,9 @@ test "deallocate account" {
 
     // load with the account being dead
     const loaded_accounts = try loadTransactionAccountsOld(
-        .{ .account_map = &accountsdb },
+        (sig.runtime.SlotAccountReaderAdapter{
+            .reader = .{ .account_map = &accountsdb },
+        }).accountReader(),
         allocator,
         &tx,
         &env.rent_collector,
@@ -1496,7 +1508,9 @@ test "load v3 program" {
     };
 
     const loaded_accounts = try loadTransactionAccountsOld(
-        .{ .account_map = &accountsdb },
+        (sig.runtime.SlotAccountReaderAdapter{
+            .reader = .{ .account_map = &accountsdb },
+        }).accountReader(),
         allocator,
         &tx,
         &env.rent_collector,

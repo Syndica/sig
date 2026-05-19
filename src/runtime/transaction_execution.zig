@@ -21,7 +21,7 @@ const StatusCache = sig.core.StatusCache;
 const Slot = sig.core.Slot;
 const RentState = sig.core.RentCollector.RentState;
 
-const SlotAccountReader = sig.accounts_db.SlotAccountReader;
+const AccountReader = sig.runtime.execution_interfaces.AccountReader;
 
 const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const FeatureSet = sig.core.FeatureSet;
@@ -181,7 +181,7 @@ pub fn loadAndExecuteTransaction(
     programs_allocator: std.mem.Allocator,
     tmp_allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
-    account_reader: SlotAccountReader,
+    account_reader: AccountReader,
     env: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
     program_map: *ProgramMap,
@@ -935,7 +935,9 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             allocator,
             allocator,
             &transaction,
-            .{ .account_shared_data_map = &account_map },
+            (sig.runtime.SlotAccountReaderAdapter{
+                .reader = .{ .account_shared_data_map = &account_map },
+            }).accountReader(),
             &environment,
             &config,
             &program_map,
@@ -980,7 +982,9 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             allocator,
             allocator,
             &transaction,
-            .{ .account_shared_data_map = &account_map },
+            (sig.runtime.SlotAccountReaderAdapter{
+                .reader = .{ .account_shared_data_map = &account_map },
+            }).accountReader(),
             &environment,
             &config,
             &program_map,

@@ -35,11 +35,14 @@ pub fn executeTransaction(
 
     const environment = try svm_gateway.environment();
 
+    const account_reader_adapter = sig.runtime.SlotAccountReaderAdapter{
+        .reader = svm_gateway.params.account_store.reader(),
+    };
     const result = try sig.runtime.transaction_execution.loadAndExecuteTransaction(
         programs_allocator,
         tmp_allocator,
         transaction,
-        svm_gateway.params.account_store.reader(),
+        account_reader_adapter.accountReader(),
         &environment,
         &.{ .log = true, .log_messages_byte_limit = null },
         &svm_gateway.state.programs,
