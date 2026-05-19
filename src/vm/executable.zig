@@ -77,15 +77,15 @@ pub const Executable = struct {
             .function_registry = registry.*,
             .entry_pc = entry_pc,
             .ro_section = .{ .borrowed = .{
-                .offset = memory.RODATA_START,
+                .offset = if (version.enableLowerRodataVaddr())
+                    memory.RODATA_START
+                else
+                    memory.BYTECODE_START,
                 .start = 0,
                 .end = source.len,
             } },
             .from_asm = from_asm,
-            .text_vaddr = if (version.enableLowerBytecodeVaddr())
-                memory.BYTECODE_START
-            else
-                memory.RODATA_START,
+            .text_vaddr = memory.BYTECODE_START,
         };
     }
 
@@ -110,45 +110,20 @@ pub const Executable = struct {
     };
 
     /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/verifier.rs#L227
-    pub fn verify(
-        self: *const Executable,
-        loader: *const SyscallMap,
-    ) VerifierError!void {
+    pub fn verify(self: *const Executable) VerifierError!void {
         const zone = tracy.Zone.init(@src(), .{ .name = "Executable.Verify" });
         defer zone.deinit();
 
         const version = self.version;
         const instructions = self.instructions;
-        // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/verifier.rs#L94-L96
+
         if (self.text_section_len % 8 != 0) return error.ProgramLengthNotMultiple;
         if (instructions.len == 0) return error.NoProgram;
 
-        var function_start: u64 = 0;
-        var function_end: u64 = instructions.len;
         var pc: u64 = 0;
-
-        if (version.enableStricterVerification() and !instructions[pc].isFunctionStartMarker()) {
-            return error.InvalidFunction;
-        }
         while (pc + 1 <= instructions.len) : (pc += 1) {
             const inst = instructions[pc];
             var store: bool = false;
-
-            if (version.enableStricterVerification() and inst.isFunctionStartMarker()) {
-                function_start = pc;
-                function_end = pc +| 1;
-
-                while (function_end < instructions.len and
-                    !instructions[function_end].isFunctionStartMarker())
-                {
-                    function_end +|= 1;
-                }
-
-                switch (instructions[function_end -| 1].opcode) {
-                    .ja, .@"return" => {},
-                    else => return error.InvalidFunction,
-                }
-            }
 
             switch (inst.opcode) {
                 .add64_reg,
@@ -182,7 +157,7 @@ pub const Executable = struct {
                 .arsh64_reg,
                 => {}, // nothing to verify
 
-                .add64_imm => if (version.enableDynamicStackFrames() and inst.dst == .r10) {
+                .add64_imm => if (version.manualStackFrameBump() and inst.dst == .r10) {
                     if (!std.mem.isAligned(inst.imm, 64)) return error.UnalignedImmediate;
                 },
 
@@ -231,34 +206,63 @@ pub const Executable = struct {
                     if (inst.imm == 0) return error.DivisionByZero;
                 },
 
-                .udiv32_reg,
-                .udiv64_reg,
-                .sdiv32_reg,
-                .sdiv64_reg,
+                // SIMD-0377: in v3 these bytes are JMP32 register-form jumps
+                // (e.g. .uhmul64_reg == .jge32_reg). For older versions they
+                // are PQR arithmetic, available only when `enablePqr()`.
+                .udiv32_reg, // jset32_reg in v3
+                .udiv64_reg, // jne32_reg  in v3
+                .sdiv32_reg, // jslt32_reg in v3
+                .sdiv64_reg, // jsle32_reg in v3
+                .uhmul64_imm, // jge32_imm  in v3
+                .uhmul64_reg, // jge32_reg  in v3
+                .shmul64_imm, // jle32_imm  in v3
+                .shmul64_reg, // jle32_reg  in v3
+                .urem32_reg, // jsgt32_reg in v3
+                .urem64_reg, // jsge32_reg in v3
+                => if (version.enableJmp32()) {
+                    try validateJumpTarget(pc, inst.off, instructions);
+                } else if (!version.enablePqr()) return error.UnknownOpCode,
+
+                // PQR ops that have no JMP32 alias — always pure arithmetic.
                 .lmul32_imm,
                 .lmul32_reg,
                 .lmul64_imm,
                 .lmul64_reg,
-                .uhmul64_imm,
-                .uhmul64_reg,
-                .shmul64_imm,
-                .shmul64_reg,
-                .urem32_reg,
-                .urem64_reg,
                 .srem32_reg,
                 .srem64_reg,
                 => if (!version.enablePqr()) return error.UnknownOpCode,
 
-                .udiv32_imm,
-                .udiv64_imm,
-                .sdiv32_imm,
-                .sdiv64_imm,
-                .urem32_imm,
-                .urem64_imm,
+                // SIMD-0377: in v3 these bytes are JMP32 immediate-form jumps.
+                .udiv32_imm, // jset32_imm in v3
+                .udiv64_imm, // jne32_imm  in v3
+                .sdiv32_imm, // jslt32_imm in v3
+                .sdiv64_imm, // jsle32_imm in v3
+                .urem32_imm, // jsgt32_imm in v3
+                .urem64_imm, // jsge32_imm in v3
+                => if (version.enableJmp32()) {
+                    try validateJumpTarget(pc, inst.off, instructions);
+                } else if (version.enablePqr()) {
+                    if (inst.imm == 0) return error.DivisionByZero;
+                } else return error.UnknownOpCode,
+
+                // PQR _imm ops with no JMP32 alias.
                 .srem32_imm,
                 .srem64_imm,
                 => if (version.enablePqr()) {
                     if (inst.imm == 0) return error.DivisionByZero;
+                } else return error.UnknownOpCode,
+
+                // SIMD-0377: the six JMP32 opcodes whose byte values do not
+                // collide with any pre-existing instruction get their own enum
+                // tags and are validated here.
+                .jeq32_imm,
+                .jeq32_reg,
+                .jgt32_imm,
+                .jgt32_reg,
+                .jlt32_imm,
+                .jlt32_reg,
+                => if (version.enableJmp32()) {
+                    try validateJumpTarget(pc, inst.off, instructions);
                 } else return error.UnknownOpCode,
 
                 .hor64_imm => if (!version.disableLddw()) return error.UnknownOpCode,
@@ -296,21 +300,7 @@ pub const Executable = struct {
                 .jsle_reg,
                 .jslt_imm,
                 .jslt_reg,
-                => {
-                    const destination = @as(i64, @bitCast(pc)) + 1 + inst.off;
-
-                    if (destination < 0 or
-                        destination < function_start or
-                        destination >= function_end)
-                    {
-                        return error.JumpOutOfCode;
-                    }
-
-                    const dest_inst = instructions[@bitCast(destination)];
-                    if (@intFromEnum(dest_inst.opcode) == 0) {
-                        return error.JumpToMiddleOfLddw;
-                    }
-                },
+                => try validateJumpTarget(pc, inst.off, instructions),
 
                 .ld_b_reg,
                 .ld_h_reg,
@@ -345,27 +335,33 @@ pub const Executable = struct {
                     if (@intFromEnum(next_instruction.opcode) != 0) return error.IncompleteLddw;
                 } else return error.UnknownOpCode,
 
-                .call_imm => if (version.enableStaticSyscalls()) {
-                    const target_pc = version.computeTargetPc(pc, inst);
-                    if (target_pc >= instructions.len or
-                        !instructions[target_pc].isFunctionStartMarker())
-                    {
-                        return error.InvalidFunction;
-                    }
-                },
+                // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/verifier.rs#L401
+                // Agave's verifier accepts any CALL_IMM and defers all checks
+                // (src in {0,1}, syscall existence, internal target validity)
+                // to the interpreter, which raises `UnsupportedInstruction`
+                // / `CallOutsideTextSegment` at runtime. We match that to keep
+                // verifier rejection semantics consistent across clients.
+                .call_imm => {},
                 .call_reg => {
-                    const reg = if (version.callRegUsesSrcReg())
+                    // SIMD-0377: in v3 the target register lives in `dst`; in v2
+                    // it lives in `src`; older versions use `imm`.
+                    const reg = if (version.callxUsesSrcReg())
                         inst.src
+                    else if (version.callxUsesDstReg())
+                        inst.dst
                     else
                         std.meta.intToEnum(Register, inst.imm) catch
                             return error.InvalidRegister;
                     if (@intFromEnum(reg) >= 10) return error.InvalidRegister;
                 },
 
-                .@"return" => if (!version.enableStaticSyscalls()) return error.UnknownOpCode,
-                .exit_or_syscall => if (version.enableStaticSyscalls()) {
-                    if (loader.get(inst.imm) == null) return error.InvalidSyscall;
-                },
+                // SIMD-0178: in v3 opcode 0x95 only means `exit`; syscalls are
+                // dispatched through `call_imm` with src=0 (validated above).
+                // The companion SIMD-0178 `RETURN` opcode (0x9d) is not
+                // implemented by any released `anza-xyz/sbpf` version, so we
+                // let the catch-all reject it as `UnknownOpCode` like Agave.
+                // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/verifier.rs#L403
+                .exit_or_syscall => {},
 
                 else => return error.UnknownOpCode,
             }
@@ -391,6 +387,17 @@ pub const Executable = struct {
             .borrowed => |b| .{ b.offset, self.bytes[b.start..b.end] },
         };
         return memory.Region.init(.constant, ro_data, offset);
+    }
+
+    fn validateJumpTarget(
+        cur_pc: u64,
+        off: i16,
+        insts: []align(1) const Instruction,
+    ) VerifierError!void {
+        const destination = @as(i64, @bitCast(cur_pc)) + 1 + off;
+        if (destination < 0 or destination >= insts.len) return error.JumpOutOfCode;
+        const dest_inst = insts[@bitCast(destination)];
+        if (@intFromEnum(dest_inst.opcode) == 0) return error.JumpToMiddleOfLddw;
     }
 };
 
@@ -505,25 +512,24 @@ pub const Assembler = struct {
 
                     const instruction: Instruction = switch (bind.inst) {
                         .alu_binary => inst: {
-                            const is_register = operands[1] == .register;
-                            if (is_register) {
-                                break :inst .{
-                                    .opcode = @enumFromInt(bind.opc | Instruction.x),
-                                    .dst = operands[0].register,
-                                    .src = operands[1].register,
-                                    .off = 0,
-                                    .imm = 0,
-                                };
-                            }
-                            if (operands[0].register == .r10) {
-                                if (!version.enableDynamicStackFrames()) break :inst .{
-                                    .opcode = .or64_imm,
-                                    .dst = @enumFromInt(0),
-                                    .src = @enumFromInt(0),
-                                    .off = 0,
-                                    .imm = 0,
-                                };
-                            }
+                            if (operands[0] == .register and operands[1] == .register) break :inst .{
+                                .opcode = @enumFromInt(bind.opc | Instruction.x),
+                                .dst = operands[0].register,
+                                .src = operands[1].register,
+                                .off = 0,
+                                .imm = 0,
+                            };
+
+                            if (operands[0].register == .r10 and
+                                bind.opc == Instruction.alu64 | Instruction.add and
+                                !version.manualStackFrameBump()) break :inst .{
+                                .opcode = .or64_imm,
+                                .dst = .r0,
+                                .src = .r0,
+                                .off = 0,
+                                .imm = 0,
+                            };
+
                             break :inst .{
                                 .opcode = @enumFromInt(bind.opc | Instruction.k),
                                 .dst = operands[0].register,
@@ -540,11 +546,7 @@ pub const Assembler = struct {
                             .imm = 0,
                         },
                         .no_operand => .{
-                            .opcode = switch (version) {
-                                .v0, .v1, .v2 => .exit_or_syscall,
-                                .v3 => .@"return",
-                                else => unreachable,
-                            },
+                            .opcode = @enumFromInt(bind.opc),
                             .dst = .r0,
                             .src = .r0,
                             .off = 0,
@@ -690,7 +692,15 @@ pub const Assembler = struct {
                                 };
                             }
                         },
-                        .call_reg => if (version.callRegUsesSrcReg()) .{
+                        // SIMD-0377: in v3 the target register lives in `dst`; in
+                        // v2 it lives in `src`; older versions encode it in `imm`.
+                        .call_reg => if (version.callxUsesDstReg()) .{
+                            .opcode = @enumFromInt(bind.opc),
+                            .dst = operands[0].register,
+                            .src = .r0,
+                            .off = 0,
+                            .imm = 0,
+                        } else if (version.callxUsesSrcReg()) .{
                             .opcode = @enumFromInt(bind.opc),
                             .dst = .r0,
                             .src = operands[0].register,
@@ -934,6 +944,15 @@ pub const Config = struct {
     reject_broken_elfs: bool = false,
     /// Avoid copying read only sections when possible
     optimize_rodata: bool = true,
+    /// Allow a memory region at slot zero in the aligned memory mapping.
+    /// Gated by `enable_sbpf_v3_deployment_and_execution` (SIMD-0189) at
+    /// runtime: when true, callers may supply a region whose `vm_addr_start`
+    /// is in slot 0 (e.g. the v3 rodata region at vaddr 0), and slot-0
+    /// accesses can resolve to that region. When false, slot 0 is
+    /// unconditionally an access-violation and callers must not pass a
+    /// slot-0 region.
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/bce8eed8df53595afb8770531cf4ca938e449cf7/src/vm.rs#L142
+    allow_memory_region_zero: bool = true,
     /// Use aligned memory mapping
     aligned_memory_mapping: bool = true,
     /// Enables gaps in VM address space between the stack frames

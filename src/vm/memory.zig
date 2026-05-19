@@ -5,10 +5,14 @@ const exe = @import("executable.zig");
 
 const SyscallError = sig.vm.SyscallError;
 
-/// Virtual address of the bytecode region (in SBPFv3)
-pub const BYTECODE_START: u64 = 0x000000000;
-/// Virtual address of the readonly data region (also contains the bytecode until SBPFv3)
-pub const RODATA_START: u64 = 0x100000000;
+/// Virtual address of the readonly data region.
+/// In SBPF v3 (SIMD-0189) the rodata section lives in its own region at vaddr 0.
+/// For v0-v2 there is no separate rodata region; rodata lives inside the bytecode
+/// region at `BYTECODE_START` (legacy "rodata region" address).
+pub const RODATA_START: u64 = 0x000000000;
+/// Virtual address of the bytecode region. This is also where rodata lives in
+/// v0-v2 (rodata and bytecode share a region in legacy versions).
+pub const BYTECODE_START: u64 = 0x100000000;
 /// Virtual address of the stack region
 pub const STACK_START: u64 = 0x200000000;
 /// Virtual address of the heap region
@@ -371,23 +375,76 @@ pub const Region = struct {
 
 // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L551
 pub const AlignedMemoryMap = struct {
+    /// Slot-indexed: `regions[slot]` is the region whose vm_addr_start is at
+    /// `slot << VIRTUAL_ADDRESS_BITS`. Slots without a caller-provided region
+    /// are filled with an empty placeholder so direct indexing works in
+    /// `findRegion` (matches Agave's `AlignedMemoryMapping`, where every
+    /// virtual-address slot is occupied — bytecode is region 1).
+    ///
+    /// Slot 0 is reserved when `config.allow_memory_region_zero` is false
+    /// (pre-SIMD-0189): callers must not supply a slot-0 region and any
+    /// slot-0 access returns AccessViolation unconditionally.
     regions: []Region,
     version: sbpf.Version,
     config: exe.Config,
 
+    /// Input contract (diverges from sbpf's `AlignedMemoryMapping::initialize`,
+    /// which sorts internally — sig pushes the contract to the caller and
+    /// asserts here):
+    ///   - `regions` must be sorted by `vm_addr_start` ascending. Strict
+    ///     monotonicity is enforced (`slot[i] > slot[i-1]`).
+    ///   - Pre-v3 (`config.allow_memory_region_zero == false`): regions must
+    ///     densely cover slots `1..=regions.len()` with no gaps and no
+    ///     slot-0 entry. This mirrors sbpf's pre-v3 path, which pushes an
+    ///     implicit slot-0 placeholder and then enforces `slot[i] == i`.
+    ///   - v3 (`config.allow_memory_region_zero == true`): gaps are
+    ///     permitted; missing slots are backfilled with empty placeholders.
+    ///     A caller-supplied slot-0 region is allowed.
     fn init(
         allocator: std.mem.Allocator,
         regions: []const Region,
         version: sbpf.Version,
         config: exe.Config,
     ) (error{OutOfMemory} || InitError)!AlignedMemoryMap {
-        for (regions, 1..) |reg, index| {
-            if (reg.vm_addr_start >> VIRTUAL_ADDRESS_BITS != index) {
+        var max_slot: u64 = 0;
+        var prev_slot: ?u64 = null;
+        for (regions, 0..) |reg, i| {
+            const slot = reg.vm_addr_start >> VIRTUAL_ADDRESS_BITS;
+            // SIMD-0189 gate: pre-v3, slot 0 is reserved as an empty
+            // placeholder and callers must not supply a region there.
+            if (!config.allow_memory_region_zero and slot == 0) {
                 return error.InvalidMemoryRegion;
             }
+            // Pre-v3 strict gap check: regions must densely cover slots
+            // 1..=regions.len() with no gaps, matching sbpf pre-v3
+            // `initialize()`'s `slot[i] == i` check after pushing the
+            // implicit slot-0 placeholder.
+            if (!config.allow_memory_region_zero and slot != i + 1) {
+                return error.InvalidMemoryRegion;
+            }
+            if (prev_slot) |p| {
+                if (slot <= p) return error.InvalidMemoryRegion;
+            }
+            prev_slot = slot;
+            if (slot > max_slot) max_slot = slot;
+        }
+
+        const empty_region: Region = .{
+            .vm_addr_start = 0,
+            .vm_addr_end = 0,
+            .vm_gap_shift = 0,
+            .host_memory = .{ .constant = "" },
+        };
+
+        const slots = if (regions.len == 0) 0 else max_slot + 1;
+        const dense = try allocator.alloc(Region, slots);
+        @memset(dense, empty_region);
+        for (regions) |reg| {
+            const slot = reg.vm_addr_start >> VIRTUAL_ADDRESS_BITS;
+            dense[slot] = reg;
         }
         return .{
-            .regions = try allocator.dupe(Region, regions),
+            .regions = dense,
             .version = version,
             .config = config,
         };
@@ -401,8 +458,11 @@ pub const AlignedMemoryMap = struct {
         const err = accessViolation(vm_addr, self.version, self.config);
 
         const index = vm_addr >> VIRTUAL_ADDRESS_BITS;
-        if (index == 0 or index > self.regions.len) return err;
-        const reg = &self.regions[index - 1];
+        if (index >= self.regions.len) return err;
+        // SIMD-0189 gate: pre-v3, slot 0 always misses regardless of what
+        // the dense placeholder array contains.
+        if (index == 0 and !self.config.allow_memory_region_zero) return err;
+        const reg = &self.regions[index];
         if (vm_addr >= reg.vm_addr_start and vm_addr < reg.vm_addr_end) {
             return reg;
         }
@@ -464,7 +524,7 @@ fn accessViolation(
         @intCast(config.stack_frame_size),
     ) catch 0;
 
-    return if (!version.enableDynamicStackFrames() and
+    return if (!version.manualStackFrameBump() and
         stack_frame_idx >= -1 and stack_frame_idx <= config.max_call_depth)
         error.StackAccessViolation
     else
@@ -845,7 +905,7 @@ test "aligned region" {
     var m = try MemoryMap.init(
         allocator,
         &.{
-            Region.init(.mutable, &program_mem, RODATA_START),
+            Region.init(.mutable, &program_mem, BYTECODE_START),
             Region.init(.constant, &stack_mem, STACK_START),
         },
         .v2,
@@ -853,10 +913,10 @@ test "aligned region" {
     );
     defer m.deinit(allocator);
 
-    try expectError(error.AccessViolation, m.region(.constant, RODATA_START - 1));
-    try expectEqual(&program_mem, (try m.region(.constant, RODATA_START)).hostSlice(.constant));
-    try expectEqual(&program_mem, (try m.region(.constant, RODATA_START + 3)).hostSlice(.constant));
-    try expectError(error.AccessViolation, m.region(.constant, RODATA_START + 4));
+    try expectError(error.AccessViolation, m.region(.constant, BYTECODE_START - 1));
+    try expectEqual(&program_mem, (try m.region(.constant, BYTECODE_START)).hostSlice(.constant));
+    try expectEqual(&program_mem, (try m.region(.constant, BYTECODE_START + 3)).hostSlice(.constant));
+    try expectError(error.AccessViolation, m.region(.constant, BYTECODE_START + 4));
     try expectEqual(error.AccessViolation, m.region(.mutable, STACK_START));
     try expectEqual(&stack_mem, (try m.region(.constant, STACK_START)).hostSlice(.constant));
     try expectEqual(&stack_mem, (try m.region(.constant, STACK_START + 3)).hostSlice(.constant));
