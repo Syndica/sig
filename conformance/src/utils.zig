@@ -424,10 +424,29 @@ pub fn createInstrEffects(
     tc: *const TransactionContext,
     result: ?InstructionError,
 ) !pb.InstrEffects {
+    const modified_accounts = try modifiedAccounts(allocator, tc);
+
+    // Match Agave's direct_mapping_handle_cu_exhaustion behavior:
+    // When virtual_address_space_adjustments is active and execution failed
+    // with CU meter exhausted, account data regions cannot be reliably compared,
+    // so clear them.
+    // See: https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.0.0-beta.6/src/utils/mod.rs#L135-L146
+    //      https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.0.0-beta.6/src/instr.rs#L763-L768
+    const virtual_address_space_adjustments = tc.feature_set.active(
+        .virtual_address_space_adjustments,
+        tc.slot,
+    );
+    if (virtual_address_space_adjustments and tc.compute_meter == 0 and result != null) {
+        for (modified_accounts.items) |*acc| {
+            allocator.free(acc.data);
+            acc.data = &.{};
+        }
+    }
+
     return pb.InstrEffects{
         .result = if (result) |err| intFromInstructionError(err) else 0,
         .custom_err = tc.custom_error orelse 0,
-        .modified_accounts = try modifiedAccounts(allocator, tc),
+        .modified_accounts = modified_accounts,
         .cu_avail = tc.compute_meter,
         .return_data = try allocator.dupe(u8, tc.return_data.data.constSlice()),
     };
