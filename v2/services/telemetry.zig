@@ -57,8 +57,33 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         });
     }
 
+    var filters_buffer: [4096]api.log.Filter = undefined;
+    const filters: []const api.log.Filter = filters: {
+        var filters: std.ArrayList(api.log.Filter) = .initBuffer(&filters_buffer);
+        var fbr: std.Io.Reader = .fixed(region.getSlices().log_filters_encoded);
+        while (fbr.bufferedLen() != 0) {
+            const header = try fbr.takeStruct(api.log.Filter.Header, api.endian);
+            const filter = header.getFilterFromFixedReader(&fbr) orelse {
+                return error.InvalidFilterHeader;
+            };
+            try filters.appendBounded(filter);
+        }
+        std.sort.block(api.log.Filter, filters.items, {}, api.log.Filter.sortLessThanInverted);
+        if (filters.items.len == 0 or !filters.getLast().isLevelOnly()) {
+            std.log.err(
+                "Missing default log level; there must be at least one level-only log level.",
+                .{},
+            );
+            return error.MissingDefaultLogLevel;
+        }
+        break :filters filters.items;
+    };
+
     const listen_addr: std.net.Address = .initIp4(.{ 0, 0, 0, 0 }, region.info.port);
-    var server = try listen_addr.listen(.{ .force_nonblocking = true });
+    var server = try listen_addr.listen(.{
+        .force_nonblocking = true,
+        .reuse_address = true,
+    });
     defer server.deinit();
 
     try setRecvTimeOut(server.stream.handle, .{ .sec = 1, .usec = 0 });
@@ -78,6 +103,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
                     .output = stderr,
                     .service_name = log_stream.name.slice(),
                     .log_messages_buffer = log_stream.swap_buffer.swap(),
+                    .filters = filters,
                 });
             }
             try stderr.flush();
