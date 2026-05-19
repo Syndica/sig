@@ -247,11 +247,6 @@ pub const Region = union(enum) {
                 const data: *lib.shred.DeshredRing = @ptrCast(buf);
                 data.init();
             },
-            .deshredded_out => {
-                std.debug.assert(buf.len == @sizeOf(lib.shred.DeshredRing));
-                const data: *lib.shred.DeshredRing = @ptrCast(buf);
-                data.init();
-            },
         };
     }
 };
