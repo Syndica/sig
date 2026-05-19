@@ -810,6 +810,13 @@ fn DedupeMapType(comptime capacity: usize) type {
             entry: *Entry,
         };
 
+        pub fn empty() Map {
+            return .{
+                .entries = @splat(.empty()),
+                .len = 0,
+            };
+        }
+
         fn firstBucket(key: Address) usize {
             const hash = ADDRESS_CONTEXT.hash(key);
             return @intCast(hash & @as(u64, BUCKET_COUNT - 1));
@@ -906,7 +913,7 @@ pub const Downloader = struct {
         return .{
             .ring = try IoUring.init(IO_URING_ENTRIES, 0),
             .gossip_iter = gossip_to_snapshot.get(.reader),
-            .dedupe_map = DedupeMap{},
+            .dedupe_map = .empty(),
             .known_validators = known_validators,
             .probe_conns = @splat(.empty()),
             .active_probes = 0,
@@ -2737,7 +2744,7 @@ test "snapshot.download: DedupeMap" {
     try testing.expectEqual(@as(usize, 16), TestDedupeMap.BUCKET_COUNT);
 
     {
-        var map = TestDedupeMap{};
+        var map = TestDedupeMap.empty();
         const addr = testAddress(8001);
         const gop = map.getOrPut(addr, testPeer(1, .pending));
         try testing.expect(!gop.found_existing);
@@ -2749,7 +2756,7 @@ test "snapshot.download: DedupeMap" {
     }
 
     {
-        var map = TestDedupeMap{};
+        var map = TestDedupeMap.empty();
         const addr = testAddress(8002);
         const first = map.getOrPut(addr, testPeer(2, .failed));
 
@@ -2760,7 +2767,7 @@ test "snapshot.download: DedupeMap" {
     }
 
     {
-        var map = TestDedupeMap{};
+        var map = TestDedupeMap.empty();
         const a = testAddress(8003);
         const b = testAddress(8004);
         const c = testAddress(8005);
@@ -2783,7 +2790,7 @@ test "snapshot.download: DedupeMap" {
     }
 
     {
-        var map = TestDedupeMap{};
+        var map = TestDedupeMap.empty();
         _ = map.getOrPut(testAddress(8006), testPeer(6, .failed));
         _ = map.getOrPut(testAddress(8007), testPeer(7, .succeeded));
         _ = map.getOrPut(testAddress(8008), testPeer(8, .pending));
@@ -2794,7 +2801,7 @@ test "snapshot.download: DedupeMap" {
     }
 
     {
-        var map = TestDedupeMap{};
+        var map = TestDedupeMap.empty();
         for (0..8) |i| {
             const addr = testAddress(@intCast(8100 + i));
             _ = map.getOrPut(addr, testPeer(@intCast(i), .failed));
@@ -2814,7 +2821,7 @@ test "snapshot.download: DedupeMap" {
     }
 
     {
-        var map = TestDedupeMap{};
+        var map = TestDedupeMap.empty();
         const addr = testAddress(8200);
         _ = map.getOrPut(addr, testPeer(10, .pending));
         map.clear();
@@ -2825,7 +2832,7 @@ test "snapshot.download: DedupeMap" {
     }
 
     {
-        var map = TestDedupeMap{};
+        var map = TestDedupeMap.empty();
         const addr = testAddress(8300);
         const peer = PeerState{
             .from = Pubkey.ZEROES,
