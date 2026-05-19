@@ -10,6 +10,12 @@ const InstructionAccount = sig.core.instruction.InstructionAccount;
 
 const SEED_FIELD_CONFIG = sig.runtime.program.SEED_FIELD_CONFIG;
 
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L25
+pub const CommissionKind = enum(u8) {
+    inflation_rewards = 0,
+    block_revenue = 1,
+};
+
 pub const InitializeAccount = struct {
     node_pubkey: Pubkey,
     /// The vote authority keypair signs vote transactions. Can be the same as the identity account.
@@ -445,6 +451,28 @@ pub const Instruction = union(enum(u32)) {
     ///   1. `[SIGNER]` Vote authority
     tower_sync_switch: TowerSyncSwitch,
 
+    /// Initialize a vote account (V2)
+    ///
+    /// Convergence instruction for SIMD-0185, SIMD-0387, SIMD-0291,
+    /// SIMD-0232, SIMD-0123. Requires all feature gates active.
+    /// TODO: implement when dependencies (SIMD-0387, SIMD-0291,
+    /// SIMD-0123) are in sig.
+    ///
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_processor.rs#L307-L324
+    _reserved_initialize_account_v2: void,
+
+    /// Update the commission collector for the vote account (SIMD-0232)
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to be updated with the new collector public key
+    ///   1. `[WRITE]` New collector account. Must be set to the vote account or
+    ///      a system program owned account. Must be writable to ensure the
+    ///      account is not reserved.
+    ///   2. `[SIGNER]` Vote account withdraw authority
+    ///
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L202
+    update_commission_collector: CommissionKind,
+
     pub fn deinit(self: Instruction, allocator: std.mem.Allocator) void {
         switch (self) {
             .initialize_account,
@@ -452,6 +480,8 @@ pub const Instruction = union(enum(u32)) {
             .withdraw,
             .update_validator_identity,
             .update_commission,
+            ._reserved_initialize_account_v2,
+            .update_commission_collector,
             .authorize_checked,
             => {},
 
