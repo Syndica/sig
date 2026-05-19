@@ -125,7 +125,7 @@ pub const TransactionContext = struct {
     /// When `handled` is true, the recorded access was repaired by the
     /// access-violation handler and must not be used for remapping.
     /// Cleared at the start of each bpf program invocation.
-    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/programs/bpf_loader/src/lib.rs#L1583-L1646
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0/program-runtime/src/vm.rs#L322-L385
     last_access_violation: ?AccessViolationInfo = null,
 
     log_collector: ?LogCollector = null,

@@ -76,7 +76,7 @@ pub const Environment = struct {
             slot,
         );
 
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/syscalls/src/lib.rs#L319
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0/syscalls/src/lib.rs#L331
         return .{
             .max_call_depth = compute_budget.max_call_depth,
             .stack_frame_size = compute_budget.stack_frame_size,

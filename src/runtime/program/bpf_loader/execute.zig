@@ -179,7 +179,7 @@ fn executeBpfProgram(
         // SIMD-0460: install the access-violation handler so the VM auto-grows
         // writable+owned account regions on writes within budget, and so we
         // capture failing-access metadata for post-execution error remapping.
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/programs/bpf_loader/src/lib.rs#L354-L362
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0/program-runtime/src/vm.rs#L111-L119
         if (virtual_address_space_adjustments) {
             ic.tc.last_access_violation = null;
             state.vm.memory_map.setAccessViolationHandler(.{
@@ -405,7 +405,7 @@ const AccessViolationHandlerCtx = struct {
 /// violation does not correspond to an account region (in which case the
 /// caller keeps the original `AccessViolation`).
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/programs/bpf_loader/src/lib.rs#L1583-L1646
+/// [agave] https://github.com/anza-xyz/agave/blob/v4/program-runtime/src/vm.rs#L318-L381
 fn remapAccessViolation(
     ic: *InstructionContext,
     is_loader_v1: bool,

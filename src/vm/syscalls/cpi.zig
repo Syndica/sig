@@ -1182,7 +1182,7 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                                 // modify_memory_region_of_account. CPI can
                                 // change an account's writability (e.g.,
                                 // assign), so the payload may need to flip.
-                                // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/serialization.rs#L28-L34
+                                // [agave] https://github.com/anza-xyz/agave/blob/v4.0/program-runtime/src/serialization.rs#L28-L34
                                 region.access_violation_handler_payload =
                                     if (mutable) translated.index_in_transaction else null;
                             },

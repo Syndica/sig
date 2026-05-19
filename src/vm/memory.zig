@@ -34,7 +34,7 @@ pub const InitError = error{InvalidMemoryRegion};
 /// start to the next region's start (i.e. how far the region is allowed to
 /// grow).
 ///
-/// [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/memory_region.rs#L30
+/// [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/memory_region.rs#L30
 pub const AccessViolationHandler = struct {
     ctx: *anyopaque,
     call: *const fn (
@@ -47,7 +47,7 @@ pub const AccessViolationHandler = struct {
     ) void,
 };
 
-// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L731
+// [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/memory_region.rs#L45
 pub const MemoryMap = union(enum) {
     aligned: AlignedMemoryMap,
     unaligned: UnalignedMemoryMap,
@@ -270,7 +270,7 @@ pub const Region = struct {
     /// the access-violation handler when this region triggers a violation.
     /// Set by the serialization / CPI paths for account-data regions; null
     /// for non-account regions (bytecode, stack, heap, scratch).
-    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/memory_region.rs#L56
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/memory_region.rs#L57
     access_violation_handler_payload: ?u16 = null,
 
     pub fn init(comptime state: MemoryState, slice: state.Slice(), vm_addr: u64) Region {

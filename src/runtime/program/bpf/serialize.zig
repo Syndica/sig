@@ -149,7 +149,7 @@ pub const Serializer = struct {
             // the handler grows them on write; readonly account accesses past
             // their data length just produce an access violation that the
             // loader maps to AccountDataTooSmall / ReadonlyDataModified.
-            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/serialization.rs#L28-L34
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.0/program-runtime/src/serialization.rs#L28-L34
             const payload: ?u16 = if (account.checkDataIsMutable() == null)
                 index_in_transaction
             else
