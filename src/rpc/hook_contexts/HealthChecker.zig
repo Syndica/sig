@@ -2,6 +2,8 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 const methods = @import("../methods.zig");
 
+const CommitmentTracker = sig.replay.trackers.CommitmentTracker;
+
 // Maximum allowed slot distance before node is considered unhealthy.
 // See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L158
 const DELINQUENT_VALIDATOR_SLOT_DISTANCE: u64 = 128;
@@ -46,4 +48,38 @@ pub fn getHealth(
         const num_slots_behind = latest_confirmed_slot -| latest_processed_slot;
         return .{ .behind = num_slots_behind };
     }
+}
+
+test "getHealth returns unknown when processed slot is unknown" {
+    var commitments = CommitmentTracker.init(std.testing.allocator, 0);
+    defer commitments.deinit(std.testing.allocator);
+    commitments.confirmed.store(10, .monotonic);
+    const result = try getHealth(.{ .commitments = &commitments }, std.testing.allocator, .{});
+    try std.testing.expect(result.eql(.unknown));
+}
+
+test "getHealth returns unknown when confirmed slot is unknown" {
+    var commitments = CommitmentTracker.init(std.testing.allocator, 0);
+    defer commitments.deinit(std.testing.allocator);
+    commitments.processed.store(10, .monotonic);
+    const result = try getHealth(.{ .commitments = &commitments }, std.testing.allocator, .{});
+    try std.testing.expect(result.eql(.unknown));
+}
+
+test "getHealth returns ok when processed slot is within delinquent distance" {
+    var commitments = CommitmentTracker.init(std.testing.allocator, 0);
+    defer commitments.deinit(std.testing.allocator);
+    commitments.processed.store(72, .monotonic);
+    commitments.confirmed.store(200, .monotonic);
+    const result = try getHealth(.{ .commitments = &commitments }, std.testing.allocator, .{});
+    try std.testing.expect(result.eql(.ok));
+}
+
+test "getHealth returns behind when processed slot is outside delinquent distance" {
+    var commitments = CommitmentTracker.init(std.testing.allocator, 0);
+    defer commitments.deinit(std.testing.allocator);
+    commitments.processed.store(71, .monotonic);
+    commitments.confirmed.store(200, .monotonic);
+    const result = try getHealth(.{ .commitments = &commitments }, std.testing.allocator, .{});
+    try std.testing.expect(result.eql(.{ .behind = 129 }));
 }

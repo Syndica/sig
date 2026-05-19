@@ -854,6 +854,34 @@ test sendTransaction {
         try std.testing.expect(result == .preflight_failure);
         try std.testing.expectEqual(TransactionError.SignatureFailure, result.preflight_failure.err);
     }
+
+    { // Preflight health check returns unknown.
+        var encode_buf_64: [std.base64.standard.Encoder.calcSize(tx_bytes.len)]u8 = undefined;
+        const encoded_64 = std.base64.standard.Encoder.encode(&encode_buf_64, &tx_bytes);
+        const result = try ctx.sendTransaction(arena, .{
+            .transaction = encoded_64,
+            .config = .{ .encoding = .base64 },
+        });
+        try std.testing.expect(result == .node_unhealthy);
+        try std.testing.expectEqual(null, result.node_unhealthy);
+    }
+
+    { // Preflight health check returns behind.
+        commitments.processed.store(71, .monotonic);
+        commitments.confirmed.store(200, .monotonic);
+
+        var encode_buf_64: [std.base64.standard.Encoder.calcSize(tx_bytes.len)]u8 = undefined;
+        const encoded_64 = std.base64.standard.Encoder.encode(&encode_buf_64, &tx_bytes);
+        const result = try ctx.sendTransaction(arena, .{
+            .transaction = encoded_64,
+            .config = .{ .encoding = .base64 },
+        });
+        try std.testing.expect(result == .node_unhealthy);
+        try std.testing.expectEqual(129, result.node_unhealthy);
+
+        commitments.processed.store(0, .monotonic);
+        commitments.confirmed.store(0, .monotonic);
+    }
 }
 
 test simulateTransaction {
