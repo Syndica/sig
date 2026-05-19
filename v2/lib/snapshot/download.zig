@@ -200,6 +200,8 @@ pub const PeerState = struct {
 const DownloadCandidate = struct {
     addr: Address,
     from: Pubkey,
+    slot: Slot,
+    hash: Hash,
     latency_ms: u32,
     content_len: u64,
     started: bool = false,
@@ -224,9 +226,6 @@ pub const DownloadRace = struct {
         failed,
     },
 
-    slot: Slot,
-    hash: Hash,
-
     candidates: [MAX_DOWNLOAD_CANDIDATES]DownloadCandidate,
     candidate_count: u8,
 
@@ -237,8 +236,6 @@ pub const DownloadRace = struct {
     pub fn empty() DownloadRace {
         return .{
             .phase = .idle,
-            .slot = 0,
-            .hash = Hash.ZEROES,
             .candidates = undefined,
             .candidate_count = 0,
             .winner_index = null,
@@ -347,6 +344,10 @@ pub const DownloadConn = struct {
         net_addr: std.net.Address,
         /// The expected total size of the snapshot for this racer (from its probe HEAD response).
         content_len: u64,
+        /// Snapshot slot this racer is downloading.
+        slot: Slot,
+        /// Snapshot hash this racer is downloading.
+        hash: Hash,
         /// The number of snapshot body bytes written to this peer's temp file.
         bytes_written: u64,
         /// The number of bytes moved from the socket into the pipe that still need to be flushed to this peer's temp file.
@@ -1323,15 +1324,15 @@ pub const Downloader = struct {
         const candidate = DownloadCandidate{
             .addr = active.addr,
             .from = active.from,
+            .slot = active.slot,
+            .hash = active.hash,
             .latency_ms = latency_ms,
             .content_len = content_len,
         };
-        const slot = active.slot;
-        const hash = active.hash;
 
         self.finishProbe(data.index, .succeeded);
 
-        self.offerDownloadCandidate(candidate, slot, hash);
+        self.offerDownloadCandidate(candidate);
         self.probeNextPending();
     }
 
@@ -1960,16 +1961,16 @@ pub const Downloader = struct {
 
         const tmp_name = formatTempSnapshotName(
             &tmp_buf,
-            race.slot,
-            race.hash,
+            active.slot,
+            active.hash,
             data.index,
             conn.gen,
         );
 
         const final_name = formatFinalSnapshotName(
             &final_buf,
-            race.slot,
-            race.hash,
+            active.slot,
+            active.hash,
         );
 
         self.snapshot_dir.rename(tmp_name, final_name) catch |err| {
@@ -1987,56 +1988,37 @@ pub const Downloader = struct {
         race.phase = .completed;
         self.finishOtherDownloads(data.index);
 
-        self.logger.info().logf("download complete slot={d} name={s}", .{ race.slot, final_name });
+        const completed_slot = active.slot;
+        const completed_hash = active.hash;
+
+        self.logger.info().logf(
+            "download complete slot={d} name={s}",
+            .{ completed_slot, final_name },
+        );
         self.finishDownload(data.index, .succeeded);
 
         self.run_result = .{
             .downloaded = .{
-                .slot = race.slot,
-                .hash = race.hash,
+                .slot = completed_slot,
+                .hash = completed_hash,
                 .name_buf = final_buf,
                 .name_len = final_name.len,
             },
         };
     }
 
-    fn offerDownloadCandidate(
-        self: *Downloader,
-        candidate: DownloadCandidate,
-        slot: Slot,
-        hash: Hash,
-    ) void {
+    fn offerDownloadCandidate(self: *Downloader, candidate: DownloadCandidate) void {
         if (self.download_race.phase == .completed or
             self.download_race.phase == .winner_selected)
         {
             return;
         }
 
-        // Handles the case where the race for the previous target snapshot (slot + hash)
-        // failed, and we must restart the race with a new slot + hash.
-        if (self.download_race.phase == .failed) {
-            // Only accept a candidate that difers from the failed race target.
-            // Accepting the same target would restart the same doomed race.
-            const same_target = self.download_race.slot == slot and
-                std.meta.eql(self.download_race.hash, hash);
-
-            if (same_target) return;
-
-            // Different target, reset for a new race (.empty() sets phase to .idle).
-            self.download_race = .empty();
-        }
-
         // The case where we haven't started the race.
         if (self.download_race.phase == .idle) {
             self.download_race = .empty();
             self.download_race.phase = .racing;
-            self.download_race.slot = slot;
-            self.download_race.hash = hash;
         }
-
-        // Only accept candidates matching the current race target.
-        if (self.download_race.slot != slot) return;
-        if (!std.meta.eql(self.download_race.hash, hash)) return;
 
         self.insertDownloadCandidateSorted(candidate);
         self.startPendingRacers();
@@ -2045,7 +2027,7 @@ pub const Downloader = struct {
     fn insertDownloadCandidateSorted(self: *Downloader, candidate: DownloadCandidate) void {
         const race = &self.download_race;
 
-        // Reject duplicate address.
+        // Keep one queued/active candidate per RPC address.
         for (race.candidates[0..race.candidate_count]) |*existing| {
             if (std.meta.eql(existing.addr, candidate.addr)) return;
         }
@@ -2137,11 +2119,11 @@ pub const Downloader = struct {
             std.debug.assert(offset == 0);
 
             var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
-            const hash_str = self.download_race.hash.base58String(&hash_buf);
+            const hash_str = active.hash.base58String(&hash_buf);
             const send_len = std.fmt.bufPrint(
                 &sending.send_buf,
                 "GET /snapshot-{d}-{s}.tar.zst HTTP/1.1\r\nHost: {f}\r\nConnection: close\r\n\r\n",
-                .{ self.download_race.slot, hash_str, active.net_addr },
+                .{ active.slot, hash_str, active.net_addr },
             ) catch unreachable;
             sending.send_len = @intCast(send_len.len);
         }
@@ -2306,7 +2288,6 @@ pub const Downloader = struct {
 
     fn startDownloadRacer(self: *Downloader, candidate_index: u8) !void {
         const candidate = &self.download_race.candidates[candidate_index];
-        const race = &self.download_race;
 
         // Find a free download conn.
         const dl_index: u8, const conn = for (&self.download_conns, 0..) |*c, i| {
@@ -2336,8 +2317,8 @@ pub const Downloader = struct {
         var path_buf: [std.fs.max_path_bytes]u8 = undefined;
         const tmp_name = formatTempSnapshotName(
             &path_buf,
-            race.slot,
-            race.hash,
+            candidate.slot,
+            candidate.hash,
             dl_index,
             conn.gen,
         );
@@ -2355,6 +2336,8 @@ pub const Downloader = struct {
                 .from = candidate.from,
                 .net_addr = net_addr,
                 .content_len = candidate.content_len,
+                .slot = candidate.slot,
+                .hash = candidate.hash,
                 .bytes_written = 0,
                 .pipe_pending = 0,
                 .op_seq = 0,
@@ -2481,8 +2464,8 @@ pub const Downloader = struct {
             var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
             const tmp_name = formatTempSnapshotName(
                 &tmp_buf,
-                self.download_race.slot,
-                self.download_race.hash,
+                active.slot,
+                active.hash,
                 index,
                 conn.gen,
             );
