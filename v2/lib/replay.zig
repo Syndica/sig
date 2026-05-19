@@ -28,10 +28,13 @@ pub const Node = extern struct {
 
 pub const ExecReqResponse = extern struct {
     // submission queue
-    request_ring: ipc.Ring(256, ExecRequest),
+    request_ring: RequestRing,
 
     // completion queue
-    response_ring: ipc.Ring(256, ExecResponse),
+    response_ring: ResponseRing,
+
+    pub const RequestRing = ipc.Ring(256, ExecRequest);
+    pub const ResponseRing = ipc.Ring(256, ExecResponse);
 };
 
 pub const RequestKind = enum(u8) {
