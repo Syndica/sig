@@ -4,8 +4,10 @@ const sig = @import("../sig.zig");
 const Pubkey = sig.core.Pubkey;
 const Transaction = sig.core.Transaction;
 const GeyserWriter = sig.geyser.GeyserWriter;
+const PumpfunResolvedAccountMapV1 = sig.geyser.core.PumpfunResolvedAccountMapV1;
 const TradeEventV1 = sig.geyser.core.TradeEventV1;
 const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;
+const ResolvedTransaction = sig.replay.resolve_lookup.ResolvedTransaction;
 
 const PUMPFUN_PROGRAM = Pubkey.parseRuntime("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P") catch unreachable;
 
@@ -64,5 +66,54 @@ pub fn parseTransaction(
         };
 
         gw.writePayloadToPipe(.{ .TradeEventV1 = event }) catch {};
+    }
+}
+
+/// Emit the exact resolved account surface for Pump.fun instructions after replay
+/// has expanded address lookup tables from local state.
+pub fn emitResolvedAccountMap(
+    tx: *const ResolvedTransaction,
+    slot: u64,
+    geyser_writer: ?*GeyserWriter,
+) void {
+    const gw = geyser_writer orelse return;
+
+    for (tx.transaction.msg.instructions, 0..) |instr, instruction_index| {
+        if (instr.program_index >= tx.transaction.msg.account_keys.len) continue;
+        const program_id = &tx.transaction.msg.account_keys[instr.program_index];
+        if (!program_id.equals(&PUMPFUN_PROGRAM)) continue;
+
+        const data = instr.data;
+        if (data.len < 8) continue;
+
+        const disc = data[0..8];
+        if (!std.mem.eql(u8, disc, &BUY_DISCRIMINATOR) and
+            !std.mem.eql(u8, disc, &SELL_DISCRIMINATOR))
+        {
+            continue;
+        }
+
+        const tx_signature = if (tx.transaction.signatures.len > 0)
+            tx.transaction.signatures[0].toBytes()
+        else
+            [_]u8{0} ** 64;
+
+        const event = PumpfunResolvedAccountMapV1{
+            .event_version = 1,
+            .slot = slot,
+            .tx_signature = tx_signature,
+            .instruction_index = @as(u16, @intCast(instruction_index)),
+            .instruction_discriminator = disc[0..8].*,
+            .static_account_key_count = @as(u16, @intCast(tx.transaction.msg.account_keys.len)),
+            .address_lookup_count = @as(u16, @intCast(tx.transaction.msg.address_lookups.len)),
+            .resolved_account_count = @as(u16, @intCast(tx.accounts.len)),
+            .instruction_account_count = @as(u16, @intCast(instr.account_indexes.len)),
+            .resolved_account_pubkeys = tx.accounts.items(.pubkey),
+            .resolved_account_is_signer = tx.accounts.items(.is_signer),
+            .resolved_account_is_writable = tx.accounts.items(.is_writable),
+            .instruction_account_indexes = instr.account_indexes,
+        };
+
+        gw.writePayloadToPipe(.{ .PumpfunResolvedAccountMapV1 = event }) catch {};
     }
 }

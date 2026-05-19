@@ -354,6 +354,11 @@ pub fn replayBatch(
             svm_gateway.params.slot,
             committer.geyser_writer,
         );
+        pumpfun_parser.emitResolvedAccountMap(
+            &transaction,
+            svm_gateway.params.slot,
+            committer.geyser_writer,
+        );
 
         switch (try executeTransaction(
             persistent_allocator,

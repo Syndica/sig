@@ -263,6 +263,7 @@ pub fn csvDump(allocator: std.mem.Allocator, config: Cmd.Csv) !void {
             .TradeEventV1 => {},
             .PumpSwapPoolCreatedV1 => {},
             .PumpSwapTradeV1 => {},
+            .PumpfunResolvedAccountMapV1 => {},
         }
 
         // compute how much memory we need for the rows

@@ -38,12 +38,22 @@ pub const AccountPayload = struct {
 };
 
 // TODO: https://github.com/Syndica/sig/pull/209#discussion_r1719858112
-pub const VersionedAccountPayload = union(enum(u8)) {
+pub const VersionedAccountPayloadTag = enum(u8) {
+    AccountPayloadV1 = 0,
+    EndOfSnapshotLoading = 1,
+    TradeEventV1 = 2,
+    PumpSwapPoolCreatedV1 = 3,
+    PumpSwapTradeV1 = 4,
+    PumpfunResolvedAccountMapV1 = 6,
+};
+
+pub const VersionedAccountPayload = union(VersionedAccountPayloadTag) {
     AccountPayloadV1: AccountPayloadV1,
     EndOfSnapshotLoading: void,
     TradeEventV1: TradeEventV1,
     PumpSwapPoolCreatedV1: PumpSwapPoolCreatedV1,
     PumpSwapTradeV1: PumpSwapTradeV1,
+    PumpfunResolvedAccountMapV1: PumpfunResolvedAccountMapV1,
 
     const Self = @This();
 
@@ -54,6 +64,7 @@ pub const VersionedAccountPayload = union(enum(u8)) {
             .TradeEventV1 => {},
             .PumpSwapPoolCreatedV1 => {},
             .PumpSwapTradeV1 => {},
+            .PumpfunResolvedAccountMapV1 => {},
         }
     }
 };
@@ -90,6 +101,28 @@ pub const PumpSwapTradeV1 = struct {
     user: [32]u8,
     base_amount: u64,
     direction: u8, // 0=buy, 1=sell
+};
+
+/// Fully resolved Pump.fun account surface emitted from replay after address
+/// lookup tables have been expanded from local state.
+///
+/// This is the payload that can answer exact closure questions. Unlike the
+/// shred-side audit, these arrays include lookup-loaded pubkeys and the final
+/// signer/writable flags the runtime will execute with.
+pub const PumpfunResolvedAccountMapV1 = struct {
+    event_version: u8,
+    slot: u64,
+    tx_signature: [64]u8,
+    instruction_index: u16,
+    instruction_discriminator: [8]u8,
+    static_account_key_count: u16,
+    address_lookup_count: u16,
+    resolved_account_count: u16,
+    instruction_account_count: u16,
+    resolved_account_pubkeys: []const Pubkey,
+    resolved_account_is_signer: []const bool,
+    resolved_account_is_writable: []const bool,
+    instruction_account_indexes: []const u8,
 };
 
 pub const AccountPayloadV1 = struct {
