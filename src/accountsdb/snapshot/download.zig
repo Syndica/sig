@@ -24,6 +24,7 @@ const parallelUnpackZstdTarBall = sig.accounts_db.snapshot.parallelUnpackZstdTar
 
 // NOTE: this also represents the interval at which progress updates are issued
 const DOWNLOAD_WARMUP_TIME = sig.time.Duration.fromSecs(20);
+const SNAPSHOT_CANDIDATE_LOG_LIMIT = 16;
 
 const BYTE_PER_KIB = 1024;
 const BYTE_PER_MIB = 1024 * BYTE_PER_KIB;
@@ -232,6 +233,30 @@ fn downloadInfo(
     return .{ uri, snapshot_file_name, url };
 }
 
+fn peerSnapshotSlot(peer: PeerSnapshotHash) Slot {
+    return if (peer.inc_snapshot) |inc_snapshot|
+        inc_snapshot.slot
+    else
+        peer.full_snapshot.slot;
+}
+
+fn peerDownloadLessThan(_: void, lhs: PeerSnapshotHash, rhs: PeerSnapshotHash) bool {
+    const lhs_slot = peerSnapshotSlot(lhs);
+    const rhs_slot = peerSnapshotSlot(rhs);
+    if (lhs_slot != rhs_slot) return lhs_slot > rhs_slot;
+
+    // Stable tie-breaker: keep direct RPC peers before peers without usable RPC metadata.
+    const lhs_rpc_port = if (lhs.contact_info.rpc_addr) |rpc_addr|
+        rpc_addr.getPort()
+    else
+        std.math.maxInt(u16);
+    const rhs_rpc_port = if (rhs.contact_info.rpc_addr) |rpc_addr|
+        rpc_addr.getPort()
+    else
+        std.math.maxInt(u16);
+    return lhs_rpc_port < rhs_rpc_port;
+}
+
 fn downloadSnapshotWithRetry(
     tmp_allocator: std.mem.Allocator,
     logger: Logger,
@@ -292,9 +317,20 @@ fn downloadSnapshotWithRetry(
             break :blk peers;
         };
 
-        // TODO: To download quickly, we should probably:
-        // 1) try to rank peers, and try "best" first (e.g. order by latency)
-        // 2) configure timeouts to be lower
+        std.mem.sort(PeerSnapshotHash, peers, {}, peerDownloadLessThan);
+        for (peers[0..@min(peers.len, SNAPSHOT_CANDIDATE_LOG_LIMIT)], 0..) |peer, candidate_index| {
+            const uri, _, const url = try downloadInfo(
+                allocator,
+                mode,
+                peer,
+                full_snapshot_slot,
+            ) orelse continue;
+            defer allocator.free(url);
+            logger.info().logf(
+                "ranked snapshot candidate #{d}: slot={} rpc={f} url={f}",
+                .{ candidate_index + 1, peerSnapshotSlot(peer), uri, uri },
+            );
+        }
 
         // try to download from all eligible peers
         downloads: for (peers) |peer| {
@@ -458,7 +494,7 @@ fn downloadFile(
     var total_bytes_read: u64 = 0;
     var lap_timer = sig.time.Timer.start();
     var full_timer = sig.time.Timer.start();
-    var checked_speed = false;
+    var last_lap_total_bytes_read: u64 = 0;
 
     var transfer_buffer: [4096]u8 = undefined;
     var body_reader = response.reader(&transfer_buffer);
@@ -477,42 +513,46 @@ fn downloadFile(
         const elapsed_since_prev_lap = lap_timer.read();
         if (elapsed_since_prev_lap.asNanos() <= DOWNLOAD_WARMUP_TIME.asNanos()) continue;
         // reset at the end of the iteration, after the update, right before the next read & write.
-        defer lap_timer.reset();
+        defer {
+            lap_timer.reset();
+            last_lap_total_bytes_read = total_bytes_read;
+        }
 
         const elapsed_secs = elapsed_since_start.asSecs();
         if (elapsed_secs == 0) continue; // avoid division by zero
+        const lap_elapsed_secs = elapsed_since_prev_lap.asSecs();
+        if (lap_elapsed_secs == 0) continue; // avoid division by zero
 
         const total_bytes_left = download_size - total_bytes_read;
         const time_left_ns = total_bytes_left * (elapsed_since_start.asNanos() / total_bytes_read);
+        const bytes_since_prev_lap = total_bytes_read - last_lap_total_bytes_read;
+        const lap_bytes_per_second = bytes_since_prev_lap / lap_elapsed_secs;
         logger.info().logf(
-            "[download progress]: {d}% done ({Bi}/s - {Bi}/{Bi}) (time left: {D})",
+            "[download progress]: {d}% done ({Bi}/s avg, {Bi}/s lap - {Bi}/{Bi}) (time left: {D})",
             .{
                 total_bytes_read * 100 / download_size,
                 total_bytes_read / elapsed_secs,
+                lap_bytes_per_second,
                 total_bytes_read,
                 download_size,
                 time_left_ns,
             },
         );
 
-        if (checked_speed) continue;
-        checked_speed = true;
-
         const min_bytes_per_second = BYTE_PER_MIB * (maybe_min_mib_per_second orelse continue);
-        const actual_bytes_per_second = total_bytes_read / elapsed_secs;
 
-        if (actual_bytes_per_second < min_bytes_per_second) {
+        if (lap_bytes_per_second < min_bytes_per_second) {
             // not fast enough => abort
             logger.info().logf(
                 "[download progress]: speed is too slow ({Bi}/s) -- disconnecting",
-                .{actual_bytes_per_second},
+                .{lap_bytes_per_second},
             );
             return error.TooSlow;
         }
 
         logger.info().logf(
             "[download progress]: speed is ok ({} bytes/s) -- maintaining",
-            .{actual_bytes_per_second},
+            .{lap_bytes_per_second},
         );
     }
 
