@@ -12,6 +12,7 @@ const SnapshotSourceRing = lib.snapshot.SnapshotSourceRing;
 const KnownValidators = lib.snapshot.SnapshotConfig.KnownValidators;
 
 const IO_URING_ENTRIES = 256;
+const MAX_DEDUPE_PEERS = 4096;
 
 pub const MAX_CONCURRENT_PROBES: u8 = 16;
 const PROBE_TIMEOUT_SECS: i64 = 3;
@@ -178,7 +179,7 @@ pub const ProbeConn = struct {
     }
 };
 
-const ProbeStatus = enum(u8) {
+const ProbeStatus = enum(u2) {
     pending,
     in_flight,
     succeeded,
@@ -712,18 +713,175 @@ pub const Metrics = struct {
     };
 };
 
-pub const DedupeMap = std.array_hash_map.ArrayHashMapUnmanaged(
-    Address,
-    PeerState,
-    std.array_hash_map.AutoContext(Address),
-    true,
-);
+pub const DedupeMap = DedupeMapType(MAX_DEDUPE_PEERS);
+
+fn DedupeMapType(comptime capacity: usize) type {
+    comptime {
+        std.debug.assert(capacity > 0);
+        std.debug.assert(std.math.isPowerOfTwo(capacity));
+        std.debug.assert(capacity <= std.math.maxInt(u16));
+    }
+
+    return struct {
+        entries: [BUCKET_COUNT]Entry = @splat(.empty()),
+        len: u16 = 0,
+
+        const Map = @This();
+        const BUCKET_COUNT = capacity * 2;
+        // Gossip contact info rejects unspecified RPC addresses, so zero IP marks an empty bucket.
+        const EMPTY_IP: [16]u8 = @splat(0);
+        const ADDRESS_CONTEXT = std.hash_map.AutoContext(Address){};
+
+        const Meta = packed struct(u32) {
+            is_v6: bool,
+            probe_status: ProbeStatus,
+            latency_ms: u29,
+        };
+
+        const Entry = extern struct {
+            slot: Slot,
+            from: Pubkey,
+            hash: Hash,
+            ip: [16]u8,
+            meta: Meta,
+            port: u16,
+
+            fn empty() Entry {
+                return .{
+                    .slot = 0,
+                    .from = Pubkey.ZEROES,
+                    .hash = Hash.ZEROES,
+                    .ip = EMPTY_IP,
+                    .meta = .{
+                        .is_v6 = false,
+                        .probe_status = .pending,
+                        .latency_ms = 0,
+                    },
+                    .port = 0,
+                };
+            }
+
+            fn init(addr: Address, peer: PeerState) Entry {
+                return .{
+                    .slot = peer.slot,
+                    .from = peer.from,
+                    .hash = peer.hash,
+                    .ip = addr.ip,
+                    .meta = .{
+                        .is_v6 = addr.is_v6,
+                        .probe_status = peer.probe_status,
+                        .latency_ms = std.math.lossyCast(u29, peer.latency_ms),
+                    },
+                    .port = addr.port,
+                };
+            }
+
+            fn isEmpty(self: *const Entry) bool {
+                return std.meta.eql(self.ip, EMPTY_IP);
+            }
+
+            fn address(self: *const Entry) Address {
+                return .{
+                    .is_v6 = self.meta.is_v6,
+                    .ip = self.ip,
+                    .port = self.port,
+                };
+            }
+
+            fn eqlPeer(self: *const Entry, peer: PeerState) bool {
+                return self.slot == peer.slot and std.meta.eql(self.hash, peer.hash);
+            }
+        };
+
+        const FindBucketResult = packed struct(u32) {
+            state: enum(u1) { found, empty },
+            bucket: u31,
+        };
+
+        const GetOrPutResult = struct {
+            found_existing: bool,
+            // Only use within the current event-loop turn. `clear()` invalidates map entry pointers.
+            entry: *Entry,
+        };
+
+        const Pending = struct {
+            addr: Address,
+            // Only use within the current event-loop turn. SQEs must copy needed state, not store this pointer.
+            entry: *Entry,
+        };
+
+        fn firstBucket(key: Address) usize {
+            const hash = ADDRESS_CONTEXT.hash(key);
+            return @intCast(hash & @as(u64, BUCKET_COUNT - 1));
+        }
+
+        fn findBucket(self: *Map, key: Address) FindBucketResult {
+            var bucket = firstBucket(key);
+            while (true) {
+                const entry = &self.entries[bucket];
+                if (entry.isEmpty()) return .{ .state = .empty, .bucket = @intCast(bucket) };
+                if (ADDRESS_CONTEXT.eql(entry.address(), key)) {
+                    return .{ .state = .found, .bucket = @intCast(bucket) };
+                }
+                bucket = (bucket + 1) & (BUCKET_COUNT - 1);
+            }
+        }
+
+        pub fn getPtr(self: *Map, key: Address) ?*Entry {
+            const result = self.findBucket(key);
+            return switch (result.state) {
+                .found => &self.entries[result.bucket],
+                .empty => null,
+            };
+        }
+
+        pub fn getOrPut(self: *Map, key: Address, peer: PeerState) GetOrPutResult {
+            if (self.len == capacity) self.clear();
+
+            const result = self.findBucket(key);
+            return switch (result.state) {
+                .found => .{
+                    .found_existing = true,
+                    .entry = &self.entries[result.bucket],
+                },
+                .empty => self.insertAt(result.bucket, key, peer),
+            };
+        }
+
+        pub fn nextPending(self: *Map) ?Pending {
+            for (&self.entries) |*entry| {
+                if (entry.isEmpty()) continue;
+                if (entry.meta.probe_status != .pending) continue;
+                return .{
+                    .addr = entry.address(),
+                    .entry = entry,
+                };
+            }
+            return null;
+        }
+
+        pub fn clear(self: *Map) void {
+            self.entries = @splat(.empty());
+            self.len = 0;
+        }
+
+        fn insertAt(self: *Map, bucket: usize, key: Address, peer: PeerState) GetOrPutResult {
+            const entry = &self.entries[bucket];
+            std.debug.assert(entry.isEmpty());
+            entry.* = .init(key, peer);
+            self.len += 1;
+            return .{
+                .found_existing = false,
+                .entry = entry,
+            };
+        }
+    };
+}
 
 pub const Downloader = struct {
     ring: IoUring,
     gossip_iter: SnapshotSourceRing.Iterator(.reader),
     dedupe_map: DedupeMap,
-    dedupe_alloc: std.mem.Allocator,
     known_validators: KnownValidators,
 
     probe_conns: [MAX_CONCURRENT_PROBES]ProbeConn,
@@ -740,7 +898,6 @@ pub const Downloader = struct {
 
     pub fn init(
         gossip_to_snapshot: *SnapshotSourceRing,
-        dedupe_alloc: std.mem.Allocator,
         known_validators: KnownValidators,
         snapshot_dir: std.fs.Dir,
         metrics: Metrics,
@@ -750,7 +907,6 @@ pub const Downloader = struct {
             .ring = try IoUring.init(IO_URING_ENTRIES, 0),
             .gossip_iter = gossip_to_snapshot.get(.reader),
             .dedupe_map = DedupeMap{},
-            .dedupe_alloc = dedupe_alloc,
             .known_validators = known_validators,
             .probe_conns = @splat(.empty()),
             .active_probes = 0,
@@ -867,23 +1023,21 @@ pub const Downloader = struct {
                 .latency_ms = 0,
             };
 
-            const gop = try self.dedupe_map.getOrPut(self.dedupe_alloc, key);
+            const gop = self.dedupe_map.getOrPut(key, value);
             if (!gop.found_existing) {
-                gop.value_ptr.* = value;
-
                 self.metrics.snapshot_sources_new.increment(1);
 
-                self.startProbe(key, gop.value_ptr) catch |err| {
+                self.startProbe(key, gop.entry) catch |err| {
                     self.logger.warn().logf(
                         "failed to start probe from={f} err={}",
                         .{ source.from, err },
                     );
                 };
-            } else if (!gop.value_ptr.eql(value)) {
-                gop.value_ptr.* = value;
+            } else if (!gop.entry.eqlPeer(value)) {
+                gop.entry.* = .init(key, value);
 
                 // when a peer's slot/hash changes, start a new probe.
-                self.startProbe(key, gop.value_ptr) catch |err| {
+                self.startProbe(key, gop.entry) catch |err| {
                     self.logger.warn().logf(
                         "failed to start probe from={f} err={}",
                         .{ source.from, err },
@@ -905,7 +1059,7 @@ pub const Downloader = struct {
         if (drained) self.gossip_iter.markUsed();
     }
 
-    fn startProbe(self: *Downloader, addr: Address, peer: *PeerState) !void {
+    fn startProbe(self: *Downloader, addr: Address, peer: *DedupeMap.Entry) !void {
         if (self.download_race.phase == .completed) return;
         if (self.active_probes >= MAX_CONCURRENT_PROBES) return;
 
@@ -946,7 +1100,7 @@ pub const Downloader = struct {
             return err;
         };
 
-        peer.probe_status = .in_flight;
+        peer.meta.probe_status = .in_flight;
         self.active_probes += 1;
         self.metrics.snapshot_probes_started.increment(1);
     }
@@ -1306,7 +1460,7 @@ pub const Downloader = struct {
         const latency_ms: u32 = @intCast(elapsed_ns / std.time.ns_per_ms);
         if (self.dedupe_map.getPtr(active.addr)) |peer| {
             if (peer.slot == active.slot and std.meta.eql(peer.hash, active.hash)) {
-                peer.latency_ms = latency_ms;
+                peer.meta.latency_ms = std.math.lossyCast(u29, latency_ms);
             }
         }
 
@@ -1353,7 +1507,7 @@ pub const Downloader = struct {
             // NOTE: We gaurd the update here since gossip can update peer in dedupe map while io_uring was completing this probe.
             // If it was updated underneath us, don't update things here since another/newer probe was alread issued to io_uring.
             if (peer.slot == active.slot and std.meta.eql(peer.hash, active.hash)) {
-                peer.probe_status = switch (result) {
+                peer.meta.probe_status = switch (result) {
                     .succeeded => .succeeded,
                     .failed => .failed,
                     .sq_full => .pending,
@@ -1377,19 +1531,13 @@ pub const Downloader = struct {
     fn probeNextPending(self: *Downloader) void {
         if (self.download_race.phase == .completed) return;
 
-        const keys = self.dedupe_map.keys();
-        const values = self.dedupe_map.values();
-        for (keys, values) |*addr, *peer| {
-            if (peer.probe_status == .pending) {
-                self.startProbe(addr.*, peer) catch |err| {
-                    self.logger.warn().logf(
-                        "failed to start pending probe from={f} err={}",
-                        .{ peer.from, err },
-                    );
-                };
-                return;
-            }
-        }
+        const pending = self.dedupe_map.nextPending() orelse return;
+        self.startProbe(pending.addr, pending.entry) catch |err| {
+            self.logger.warn().logf(
+                "failed to start pending probe from={f} err={}",
+                .{ pending.entry.from, err },
+            );
+        };
     }
 
     fn handleDownloadTimeout(
@@ -2557,4 +2705,140 @@ pub fn findExistingSnapshot(snapshot_dir: std.fs.Dir) !?ExistingSnapshot {
     }
 
     return null;
+}
+
+test "snapshot.download: DedupeMap" {
+    const testing = std.testing;
+    const TestDedupeMap = DedupeMapType(8);
+
+    const testAddress = struct {
+        fn run(port: u16) Address {
+            return .{
+                .is_v6 = false,
+                .ip = .{127} ++ @as([15]u8, @splat(0)),
+                .port = port,
+            };
+        }
+    }.run;
+
+    const testPeer = struct {
+        fn run(slot: Slot, status: ProbeStatus) PeerState {
+            return .{
+                .from = Pubkey.ZEROES,
+                .slot = slot,
+                .hash = Hash.ZEROES,
+                .probe_status = status,
+                .latency_ms = 0,
+            };
+        }
+    }.run;
+
+    try testing.expectEqual(@as(usize, 96), @sizeOf(TestDedupeMap.Entry));
+    try testing.expectEqual(@as(usize, 16), TestDedupeMap.BUCKET_COUNT);
+
+    {
+        var map = TestDedupeMap{};
+        const addr = testAddress(8001);
+        const gop = map.getOrPut(addr, testPeer(1, .pending));
+        try testing.expect(!gop.found_existing);
+
+        const entry = map.getPtr(addr) orelse return error.TestExpectedEqual;
+        try testing.expectEqual(addr, entry.address());
+        try testing.expectEqual(@as(Slot, 1), entry.slot);
+        try testing.expectEqual(ProbeStatus.pending, entry.meta.probe_status);
+    }
+
+    {
+        var map = TestDedupeMap{};
+        const addr = testAddress(8002);
+        const first = map.getOrPut(addr, testPeer(2, .failed));
+
+        const second = map.getOrPut(addr, testPeer(9, .pending));
+        try testing.expect(second.found_existing);
+        try testing.expectEqual(first.entry, second.entry);
+        try testing.expectEqual(ProbeStatus.failed, second.entry.meta.probe_status);
+    }
+
+    {
+        var map = TestDedupeMap{};
+        const a = testAddress(8003);
+        const b = testAddress(8004);
+        const c = testAddress(8005);
+        _ = map.getOrPut(a, testPeer(3, .succeeded));
+        _ = map.getOrPut(b, testPeer(4, .failed));
+        _ = map.getOrPut(c, testPeer(5, .pending));
+
+        try testing.expectEqual(
+            @as(Slot, 3),
+            (map.getPtr(a) orelse return error.TestExpectedEqual).slot,
+        );
+        try testing.expectEqual(
+            @as(Slot, 4),
+            (map.getPtr(b) orelse return error.TestExpectedEqual).slot,
+        );
+        try testing.expectEqual(
+            @as(Slot, 5),
+            (map.getPtr(c) orelse return error.TestExpectedEqual).slot,
+        );
+    }
+
+    {
+        var map = TestDedupeMap{};
+        _ = map.getOrPut(testAddress(8006), testPeer(6, .failed));
+        _ = map.getOrPut(testAddress(8007), testPeer(7, .succeeded));
+        _ = map.getOrPut(testAddress(8008), testPeer(8, .pending));
+
+        const pending = map.nextPending() orelse return error.TestExpectedEqual;
+        try testing.expectEqual(testAddress(8008), pending.addr);
+        try testing.expectEqual(@as(Slot, 8), pending.entry.slot);
+    }
+
+    {
+        var map = TestDedupeMap{};
+        for (0..8) |i| {
+            const addr = testAddress(@intCast(8100 + i));
+            _ = map.getOrPut(addr, testPeer(@intCast(i), .failed));
+        }
+        try testing.expectEqual(@as(u16, 8), map.len);
+
+        const replacement_addr = testAddress(9000);
+        const replacement = map.getOrPut(replacement_addr, testPeer(9000, .pending));
+        try testing.expect(!replacement.found_existing);
+
+        try testing.expectEqual(@as(u16, 1), map.len);
+        try testing.expect(map.getPtr(testAddress(8100)) == null);
+        try testing.expectEqual(
+            @as(Slot, 9000),
+            (map.getPtr(replacement_addr) orelse return error.TestExpectedEqual).slot,
+        );
+    }
+
+    {
+        var map = TestDedupeMap{};
+        const addr = testAddress(8200);
+        _ = map.getOrPut(addr, testPeer(10, .pending));
+        map.clear();
+
+        try testing.expectEqual(@as(u16, 0), map.len);
+        try testing.expect(map.getPtr(addr) == null);
+        try testing.expect(map.nextPending() == null);
+    }
+
+    {
+        var map = TestDedupeMap{};
+        const addr = testAddress(8300);
+        const peer = PeerState{
+            .from = Pubkey.ZEROES,
+            .slot = 11,
+            .hash = Hash.ZEROES,
+            .probe_status = .in_flight,
+            .latency_ms = std.math.maxInt(u29),
+        };
+        const entry = map.getOrPut(addr, peer).entry;
+
+        try testing.expectEqual(@as(Slot, 11), entry.slot);
+        try testing.expectEqual(ProbeStatus.in_flight, entry.meta.probe_status);
+        try testing.expectEqual(@as(u32, std.math.maxInt(u29)), entry.meta.latency_ms);
+        try testing.expect(entry.eqlPeer(peer));
+    }
 }

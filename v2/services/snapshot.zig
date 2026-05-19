@@ -10,8 +10,6 @@ const Metrics = download.Metrics;
 const DownloadResult = download.DownloadResult;
 const Downloader = download.Downloader;
 
-var dedupe_map_buf: [512 * 1024]u8 = @splat(0);
-
 comptime {
     _ = start;
 }
@@ -49,10 +47,8 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             break :result .{ .already_exists = existing };
         }
 
-        var dedupe_fba = std.heap.FixedBufferAllocator.init(&dedupe_map_buf);
         var downloader = try Downloader.init(
             rw.gossip_to_snapshot,
-            dedupe_fba.allocator(),
             known_validators,
             snapshot_dir_handle,
             metrics,
