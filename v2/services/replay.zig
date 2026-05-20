@@ -93,7 +93,6 @@ const Slot = lib.solana.Slot;
 const Shred = lib.shred.Shred;
 const FecSetId = lib.shred.FecSetId;
 
-const Tree = lib.collections.LCRSTree;
 const Pool = lib.collections.Pool;
 
 comptime {
@@ -565,7 +564,7 @@ fn maybeContinueBlockExec(
                 // Find the fec_set_idx=0 node by walking up the parent chain
                 var root = node;
                 while (root.id.fec_set_idx != 0) {
-                    root = MerkleForest.NodeTree.parentOf(.{ .pool = forest_pool.* }, root) orelse
+                    root = root.parent.ptr(forest_pool) orelse
                         // The current node has a BlockRef, therefore it must be possible to reach
                         // an ancestor with idx=0
                         unreachable;
@@ -722,10 +721,8 @@ const BlockDeserialState = struct {
         interface: std.Io.Reader,
 
         fn advance(self: *Reader) error{EndOfStream}!void {
-            const child: *const MerkleNode = MerkleForest.NodeTree.childOf(
-                .{ .pool = self.merkle_pool.* },
-                self.deserial_state.pos_node,
-            ) orelse return error.EndOfStream;
+            const child = self.deserial_state.pos_node.child.constPtr(self.merkle_pool) orelse
+                return error.EndOfStream;
 
             std.debug.assert(child.block_ref != .null);
             std.debug.assert(child.parent != .null);
@@ -821,10 +818,9 @@ const BlockDeserialState = struct {
     ) usize {
         if (before.pos_node == after.pos_node) return after.pos_offset - before.pos_offset;
 
-        const after_parent: *const MerkleNode = MerkleForest.NodeTree.parentOf(
-            .{ .pool = merkle_pool.* },
-            after.pos_node,
-        ) orelse unreachable;
+        const after_parent: *const MerkleNode = after.pos_node.parent.constPtr(merkle_pool) orelse
+            unreachable;
+
         std.debug.assert(after_parent == before.pos_node);
 
         const before_bytes_read = before.pos_node.payload_len - before.pos_offset;
@@ -1046,36 +1042,6 @@ const MerkleForest = struct {
     const MerkleMap = std.ArrayHashMapUnmanaged(void, *MerkleNode, MerkleContext, true);
 
     const NodePool = Pool(MerkleNode, u32);
-
-    const NodeTree = Tree(MerkleNode, struct {
-        pool: NodePool,
-
-        const Ctx = @This();
-
-        fn buf(ctx: Ctx) []MerkleNode {
-            return @ptrCast(ctx.pool.buf[0..ctx.pool.len]);
-        }
-
-        pub fn parentOf(ctx: Ctx, node: *const MerkleNode) ?*MerkleNode {
-            return &ctx.buf()[node.parent.index() orelse return null];
-        }
-        pub fn childOf(ctx: Ctx, node: *const MerkleNode) ?*MerkleNode {
-            return &ctx.buf()[node.child.index() orelse return null];
-        }
-        pub fn siblingOf(ctx: Ctx, node: *const MerkleNode) ?*MerkleNode {
-            return &ctx.buf()[node.sibling.index() orelse return null];
-        }
-
-        pub fn setParent(ctx: Ctx, node: *MerkleNode, parent: ?*MerkleNode) void {
-            node.parent = if (parent) |p| ctx.pool.ptrToIndex(p) else .null;
-        }
-        pub fn setChild(ctx: Ctx, node: *MerkleNode, child: ?*MerkleNode) void {
-            node.child = if (child) |c| ctx.pool.ptrToIndex(c) else .null;
-        }
-        pub fn setSibling(ctx: Ctx, node: *MerkleNode, sibling: ?*MerkleNode) void {
-            node.sibling = if (sibling) |s| ctx.pool.ptrToIndex(s) else .null;
-        }
-    });
 
     const MerkleContext = struct {
         map: *const MerkleMap,

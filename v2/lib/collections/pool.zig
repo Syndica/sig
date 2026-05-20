@@ -209,6 +209,11 @@ pub fn Pool(Item: type, IdInt: type) type {
                 if (self == .null) return null;
                 return pool.indexToPtr(self);
             }
+
+            pub fn constPtr(self: ItemId, pool: *const PoolSelf) ?*const Item {
+                if (self == .null) return null;
+                return pool.indexToPtr(self);
+            }
         };
 
         pub fn init(item_buf: []Item) PoolSelf {
