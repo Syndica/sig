@@ -2,6 +2,7 @@ const std = @import("std");
 const tracy = @import("tracy");
 const lib = @import("../lib.zig");
 const reed_sol = @import("reed_solomon.zig");
+const build_options = @import("build-options");
 
 const solana = lib.solana;
 const net = lib.net;
@@ -90,7 +91,7 @@ pub const Receiver = struct {
 
             // ignore shred with wrong version
             if (shred.version != network_shred_version) {
-                return error.ShredVersionMismatch;
+                if (!build_options.debug_skip_shred_checks) return error.ShredVersionMismatch;
             }
 
             // reject shreds greater than the max per slot
@@ -191,18 +192,30 @@ pub const Receiver = struct {
             }
 
             // This is the first shred of a new in-progress fec set.
-            const slot_leader = leader_schedule.get(shred.slot) orelse {
-                std.debug.print("slot {} missing?\n", .{shred.slot});
-                return error.UnknownLeader;
+
+            // The shred's merkle root must be calculated unconditionally.
+            const shred_merkle_root: Hash = blk: {
+                var shred_merkle_root: Hash = undefined;
+
+                if (!build_options.debug_skip_shred_checks) {
+                    const slot_leader = leader_schedule.get(shred.slot) orelse {
+                        std.debug.print("slot {} missing?\n", .{shred.slot});
+                        return error.UnknownLeader;
+                    };
+
+                    try shred.merkleRoot(&shred_merkle_root);
+
+                    try shred.signature.verify(
+                        slot_leader,
+                        &shred_merkle_root.data,
+                    );
+                } else {
+                    // debug purposes only
+                    try shred.merkleRoot(&shred_merkle_root);
+                }
+
+                break :blk shred_merkle_root;
             };
-
-            var shred_merkle_root: Hash = undefined;
-            try shred.merkleRoot(&shred_merkle_root);
-
-            try shred.signature.verify(
-                slot_leader,
-                &shred_merkle_root.data,
-            );
 
             const fec_set_ctx = try state.in_progress.createFecSetCtx(fec_set_id, &shred.signature);
 
@@ -436,7 +449,7 @@ pub const FecSetCtx = extern struct {
                     base_variant;
             }
 
-            erasure_buf.* = @constCast(shred.erasureFragment().?);
+            erasure_buf.* = shred.erasureFragment().?;
         }
 
         for (erasure_buffers[32..64], &self.code_shreds_buf, 0..) |*erasure_buf, *code_shred, i| {
@@ -450,7 +463,7 @@ pub const FecSetCtx = extern struct {
                     base_variant;
             }
 
-            erasure_buf.* = @constCast(shred.erasureFragment().?);
+            erasure_buf.* = shred.erasureFragment().?;
         }
 
         var bitset: std.StaticBitSet(64) = .{

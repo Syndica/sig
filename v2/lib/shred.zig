@@ -66,7 +66,7 @@ pub const FecSetId = extern struct {
         switch (slot_diff) {
             0 => {
                 if (child.fec_set_idx < parent.fec_set_idx) {
-                    zone.text("child.fec_set_idx > parent.fec_set_idx");
+                    zone.text("child.fec_set_idx < parent.fec_set_idx");
                     return false;
                 }
                 const idx_diff = child.fec_set_idx - parent.fec_set_idx;
@@ -317,8 +317,16 @@ pub const Shred = extern struct {
 
     // This is combined with fragments from other shreds in the erasure set to
     // reconstruct a collection of entries.
-    pub fn erasureFragment(shred: *const Shred) ?[]const u8 {
-        const buffer: *const Packet.Buffer = @ptrCast(shred);
+    pub fn erasureFragment(shred: anytype) if (@TypeOf(shred) == *const Shred)
+        ?[]const u8
+    else
+        ?[]u8 {
+        const Ptr_Buffer = if (@TypeOf(shred) == *const Shred)
+            *const Packet.Buffer
+        else
+            *Packet.Buffer;
+
+        const buffer: Ptr_Buffer = @ptrCast(shred);
         const header_size = shred.variant.headerSize();
         if (header_size == 0) unreachable; // we should have gotten rid of this shred earlier?
 
