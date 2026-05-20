@@ -384,6 +384,7 @@ const Elf64 = struct {
             ident.class != elf.ELFCLASS64 or
             ident.data != elf.ELFDATA2LSB or
             ident.version != 1 or
+            header.e_version != 1 or
             header.e_ehsize != @sizeOf(elf.Elf64_Ehdr) or
             header.e_phentsize != @sizeOf(elf.Elf64_Phdr) or
             header.e_shentsize != @sizeOf(elf.Elf64_Shdr) or
@@ -1198,4 +1199,26 @@ test "add all symbols during relocate" {
     var loader: SyscallMap = .ALL_DISABLED;
     var parsed = try load(allocator, bytes, &loader, .{ .maximum_version = .v0 });
     defer parsed.deinit(allocator);
+}
+
+test "lenient parse rejects nonstandard e_version" {
+    const allocator = std.testing.allocator;
+    const input_file = try std.fs.cwd().openFile(
+        sig.ELF_DATA_DIR ++ "relative_call_sbpfv0.so",
+        .{},
+    );
+    defer input_file.close();
+    const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
+    defer allocator.free(bytes);
+
+    // e_version is a u32 at offset 20 in Elf64_Ehdr. Agave's lenient parser
+    // rejects e_version != EV_CURRENT (1); previously sig's only checked
+    // e_ident.ei_version and silently accepted malformed values here.
+    @as(*align(1) u32, @ptrCast(bytes[20..][0..4])).* = 0x00010001;
+
+    var loader: SyscallMap = .ALL_DISABLED;
+    try std.testing.expectError(
+        error.InvalidFileHeader,
+        load(allocator, bytes, &loader, .{ .maximum_version = .v0 }),
+    );
 }
