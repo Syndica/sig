@@ -27,7 +27,9 @@ pub const builtin_program_costs = program.builtin_program_costs;
 
 pub const BorrowedAccount = borrowed_account.BorrowedAccount;
 pub const AccountReader = execution_interfaces.AccountReader;
+pub const StatusChecker = execution_interfaces.StatusChecker;
 pub const SlotAccountReaderAdapter = execution_adapters.SlotAccountReaderAdapter;
+pub const StatusCacheStatusCheckerAdapter = execution_adapters.StatusCacheStatusCheckerAdapter;
 pub const BorrowedAccountContext = borrowed_account.BorrowedAccountContext;
 pub const InstructionContext = instruction_context.InstructionContext;
 pub const InstructionInfo = instruction_info.InstructionInfo;

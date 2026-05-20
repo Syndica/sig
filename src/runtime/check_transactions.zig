@@ -9,7 +9,6 @@ const Account = sig.core.Account;
 const AccountReader = sig.runtime.execution_interfaces.AccountReader;
 
 const Hash = sig.core.Hash;
-const Ancestors = sig.core.Ancestors;
 const BlockhashQueue = sig.core.BlockhashQueue;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
@@ -34,19 +33,6 @@ const deinitAccountMap = sig.runtime.testing.deinitAccountMap;
 const AccountLoadError = sig.runtime.execution_interfaces.AccountLoadError;
 
 const NONCED_TX_MARKER_IX_INDEX = 0;
-
-/// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L186
-pub fn checkStatusCache(
-    msg_hash: *const Hash,
-    recent_blockhash: *const Hash,
-    ancestors: *const Ancestors,
-    status_cache: *sig.core.StatusCache,
-) ?TransactionError {
-    return switch (status_cache.getStatus(&msg_hash.data, recent_blockhash, ancestors)) {
-        .pending => null,
-        .failed, .succeeded => .AlreadyProcessed,
-    };
-}
 
 /// Requires full transaction to find nonce account in the event that the transactions recent blockhash
 /// is not in the blockhash queue within the max age. Also worth noting that Agave returns a CheckTransactionDetails
@@ -550,44 +536,6 @@ pub fn getDurableNonce(
         nonce_meta.index_in_transaction >= transaction.num_static_account_keys)
         return null;
     return account_keys[nonce_meta.index_in_transaction];
-}
-
-test checkStatusCache {
-    const allocator = std.testing.allocator;
-
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-
-    var ancestors = Ancestors{};
-    defer ancestors.deinit(allocator);
-
-    var status_cache: sig.core.StatusCache = .DEFAULT;
-    defer status_cache.deinit(allocator);
-
-    const msg_hash = Hash.init("msg hash");
-    const recent_blockhash = Hash.init("recent blockhash");
-
-    try std.testing.expectEqual(
-        null,
-        checkStatusCache(
-            &msg_hash,
-            &recent_blockhash,
-            &ancestors,
-            &status_cache,
-        ),
-    );
-
-    try ancestors.ancestors.put(allocator, 0, {});
-    try status_cache.insert(allocator, prng.random(), &recent_blockhash, &msg_hash.data, 0, null);
-
-    try std.testing.expectEqual(
-        .AlreadyProcessed,
-        checkStatusCache(
-            &msg_hash,
-            &recent_blockhash,
-            &ancestors,
-            &status_cache,
-        ),
-    );
 }
 
 test "checkAge: recent blockhash" {

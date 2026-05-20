@@ -10,18 +10,17 @@ const compute_budget_program = sig.runtime.program.compute_budget;
 const cost_model = sig.runtime.cost_model;
 const vm = sig.vm;
 
-const Ancestors = sig.core.Ancestors;
 const BlockhashQueue = sig.core.BlockhashQueue;
 const EpochStakes = sig.core.EpochStakes;
 const Hash = sig.core.Hash;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
-const StatusCache = sig.core.StatusCache;
 const Slot = sig.core.Slot;
 const RentState = sig.core.RentCollector.RentState;
 
 const AccountReader = sig.runtime.execution_interfaces.AccountReader;
+const StatusChecker = sig.runtime.execution_interfaces.StatusChecker;
 
 const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const FeatureSet = sig.core.FeatureSet;
@@ -77,9 +76,8 @@ pub const RuntimeTransaction = struct {
 };
 
 pub const TransactionExecutionEnvironment = struct {
-    ancestors: *const Ancestors,
     feature_set: *const FeatureSet,
-    status_cache: *StatusCache,
+    status_checker: StatusChecker,
     sysvar_cache: *const SysvarCache,
     rent_collector: *const RentCollector,
     blockhash_queue: *const BlockhashQueue,
@@ -230,11 +228,9 @@ pub fn loadAndExecuteTransaction(
     var nonce_account_is_owned = true;
     defer if (nonce_account_is_owned) if (maybe_nonce_info) |n| tmp_allocator.free(n.account.data);
 
-    if (sig.runtime.check_transactions.checkStatusCache(
+    if (env.status_checker.check(
         &transaction.msg_hash,
         &transaction.recent_blockhash,
-        env.ancestors,
-        env.status_cache,
     )) |err| return .{ .err = err };
 
     nonce_account_is_owned = false;
@@ -878,13 +874,22 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         },
     );
 
-    var ancestors: Ancestors = .{};
-    defer ancestors.deinit(allocator);
-
     const feature_set: FeatureSet = .ALL_ENABLED_AT_GENESIS;
 
-    var status_cache: StatusCache = .DEFAULT;
-    defer status_cache.deinit(allocator);
+    const PassingStatusChecker = struct {
+        fn check(
+            _: *const anyopaque,
+            _: *const Hash,
+            _: *const Hash,
+        ) ?TransactionError {
+            return null;
+        }
+    };
+    const status_checker_context = PassingStatusChecker{};
+    const status_checker = StatusChecker{
+        .ctx = &status_checker_context,
+        .checkFn = PassingStatusChecker.check,
+    };
 
     const sysvar_cache: SysvarCache = .{};
     defer sysvar_cache.deinit(allocator);
@@ -902,9 +907,8 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     defer epoch_stakes.deinit(allocator);
 
     const environment = TransactionExecutionEnvironment{
-        .ancestors = &ancestors,
         .feature_set = &feature_set,
-        .status_cache = &status_cache,
+        .status_checker = status_checker,
         .sysvar_cache = &sysvar_cache,
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,
