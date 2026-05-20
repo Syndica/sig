@@ -1,5 +1,5 @@
 const std = @import("std");
-const start = @import("start");
+const start = @import("start_service");
 const lib = @import("lib");
 const tel = lib.telemetry;
 

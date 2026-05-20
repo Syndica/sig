@@ -17,8 +17,8 @@
         .{
             .name = .net,
             .regions = .{
-                .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .net_to_gossip, .access = .rw },
+                .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .telemetry, .access = .rw },
             },
         },
