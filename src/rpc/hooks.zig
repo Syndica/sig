@@ -141,8 +141,12 @@ pub const Hooks = struct {
                 .message = "Encoded binary (base 58) data should be less than 128 bytes, " ++
                     "please use Base64 encoding.",
             },
+            error.InvalidParams => .{
+                .code = .invalid_params,
+                .message = "Invalid params",
+            },
             else => .{
-                .code = @enumFromInt(@intFromError(err)),
+                .code = @enumFromInt(-32600),
                 .message = @errorName(err),
             },
         };
