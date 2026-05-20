@@ -61,21 +61,16 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
     switch (result) {
         .already_exists => |existing| {
-            logger.info().logf("snapshot already exists, skipping download name={s}", .{
-                existing.name(),
+            logger.info().logf("snapshot already exists, skipping download name={f}", .{
+                existing,
             });
         },
         .downloaded => |snapshot| {
-            var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-            const path = std.fmt.bufPrint(
-                &path_buf,
-                "{f}",
-                .{std.fs.path.fmtJoin(&.{ snapshot_dir, snapshot.name() })},
-            ) catch unreachable;
-            logger.info().logf("snapshot download completed slot={d} hash={f} path={s}", .{
+            logger.info().logf("snapshot download completed slot={d} hash={f} path={s}/{f}", .{
                 snapshot.slot,
                 snapshot.hash,
-                path,
+                snapshot_dir,
+                snapshot,
             });
         },
         .failed => |reason| {

@@ -34,7 +34,8 @@ const StartDownloadRacerError =
     QueueSqeError ||
     std.posix.SocketError ||
     std.posix.PipeError ||
-    std.fs.File.OpenError;
+    std.fs.File.OpenError ||
+    std.fmt.BufPrintError;
 
 const LinkedTimeoutOp = struct {
     /// set when a linked timeout fired, but we are still waiting for the
@@ -544,35 +545,42 @@ const RacerResult = enum {
     cancelled,
 };
 
-const ExistingSnapshot = struct {
-    name_buf: [std.fs.max_path_bytes]u8,
-    name_len: usize,
-
-    pub fn name(self: *const ExistingSnapshot) []const u8 {
-        return self.name_buf[0..self.name_len];
-    }
-};
-
-const CompletedDownload = struct {
-    name_buf: [std.fs.max_path_bytes]u8,
-    name_len: usize,
-
+const FinalSnapshot = struct {
     slot: Slot,
     hash: Hash,
 
-    pub fn name(self: *const CompletedDownload) []const u8 {
-        return self.name_buf[0..self.name_len];
+    pub fn format(self: FinalSnapshot, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        return writer.print("snapshot-{d}-{f}.tar.zst", .{ self.slot, self.hash });
+    }
+
+    fn name(self: FinalSnapshot, buf: []u8) std.fmt.BufPrintError![]const u8 {
+        return std.fmt.bufPrint(buf, "{f}", .{self});
+    }
+};
+
+const TempSnapshot = struct {
+    snapshot: FinalSnapshot,
+    index: u8,
+    gen: u16,
+
+    pub fn format(self: TempSnapshot, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        return writer.print("{f}.tmp.{d}.{d}", .{ self.snapshot, self.index, self.gen });
+    }
+
+    fn name(self: TempSnapshot, buf: []u8) std.fmt.BufPrintError![]const u8 {
+        return std.fmt.bufPrint(buf, "{f}", .{self});
     }
 };
 
 const DownloadFailureReason = enum {
+    path_format_failed,
     fsync_failed,
     rename_failed,
 };
 
 pub const DownloadResult = union(enum) {
-    already_exists: ExistingSnapshot,
-    downloaded: CompletedDownload,
+    already_exists: FinalSnapshot,
+    downloaded: FinalSnapshot,
     failed: DownloadFailureReason,
 };
 
@@ -2137,19 +2145,34 @@ pub const Downloader = struct {
         var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
         var final_buf: [std.fs.max_path_bytes]u8 = undefined;
 
-        const tmp_name = formatTempSnapshotName(
-            &tmp_buf,
-            state.slot,
-            state.hash,
-            data.index,
-            conn.gen,
-        );
+        const final_snapshot: FinalSnapshot = .{ .slot = state.slot, .hash = state.hash };
+        const tmp_name = (TempSnapshot{
+            .snapshot = final_snapshot,
+            .index = data.index,
+            .gen = conn.gen,
+        }).name(&tmp_buf) catch |err| {
+            self.logger.err().logf(
+                "download temp path format failed from={f} err={s}",
+                .{ state.from, @errorName(err) },
+            );
+            race.phase = .failed;
+            self.finishOtherDownloads(data.index);
+            self.finishDownload(data.index, .failed);
+            self.run_result = .{ .failed = .path_format_failed };
+            return;
+        };
 
-        const final_name = formatFinalSnapshotName(
-            &final_buf,
-            state.slot,
-            state.hash,
-        );
+        const final_name = final_snapshot.name(&final_buf) catch |err| {
+            self.logger.err().logf(
+                "download final path format failed from={f} err={s}",
+                .{ state.from, @errorName(err) },
+            );
+            race.phase = .failed;
+            self.finishOtherDownloads(data.index);
+            self.finishDownload(data.index, .failed);
+            self.run_result = .{ .failed = .path_format_failed };
+            return;
+        };
 
         self.snapshot_dir.rename(tmp_name, final_name) catch |err| {
             self.logger.err().logf(
@@ -2166,22 +2189,14 @@ pub const Downloader = struct {
         race.phase = .completed;
         self.finishOtherDownloads(data.index);
 
-        const completed_slot = state.slot;
-        const completed_hash = state.hash;
-
         self.logger.info().logf(
             "download complete slot={d} name={s}",
-            .{ completed_slot, final_name },
+            .{ final_snapshot.slot, final_name },
         );
         self.finishDownload(data.index, .succeeded);
 
         self.run_result = .{
-            .downloaded = .{
-                .slot = completed_slot,
-                .hash = completed_hash,
-                .name_buf = final_buf,
-                .name_len = final_name.len,
-            },
+            .downloaded = final_snapshot,
         };
     }
 
@@ -2503,13 +2518,11 @@ pub const Downloader = struct {
         // TODO: can prob be moved into io_uring.
         conn.gen +%= 1;
         var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const tmp_name = formatTempSnapshotName(
-            &path_buf,
-            candidate.slot,
-            candidate.hash,
-            dl_index,
-            conn.gen,
-        );
+        const tmp_name = try (TempSnapshot{
+            .snapshot = .{ .slot = candidate.slot, .hash = candidate.hash },
+            .index = dl_index,
+            .gen = conn.gen,
+        }).name(&path_buf);
         const file = try self.snapshot_dir.createFile(tmp_name, .{ .mode = 0o644 });
         errdefer file.close();
         const file_fd = file.handle;
@@ -2653,13 +2666,11 @@ pub const Downloader = struct {
         // If this download was cancelled/failed delete its temp file.
         if (result != .succeeded) {
             var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
-            const tmp_name = formatTempSnapshotName(
-                &tmp_buf,
-                state.slot,
-                state.hash,
-                index,
-                conn.gen,
-            );
+            const tmp_name = (TempSnapshot{
+                .snapshot = .{ .slot = state.slot, .hash = state.hash },
+                .index = index,
+                .gen = conn.gen,
+            }).name(&tmp_buf) catch return;
             self.snapshot_dir.deleteFile(tmp_name) catch {};
         }
 
@@ -2697,52 +2708,31 @@ fn parseContentLength(response: []const u8) ?u64 {
     return null;
 }
 
-/// Formats a temp download file name:
-///   snapshot-{slot}-{hash}.tar.zst.tmp.{index}.{gen}
-fn formatTempSnapshotName(
-    buf: []u8,
-    slot: Slot,
-    hash: Hash,
-    index: u8,
-    gen: u16,
-) []const u8 {
-    var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
-    const hash_str = hash.base58String(&hash_buf);
-    return std.fmt.bufPrint(buf, "snapshot-{d}-{s}.tar.zst.tmp.{d}.{d}", .{
-        slot, hash_str, index, gen,
-    }) catch unreachable;
-}
-
-/// Formats the final snapshot file name:
-///   snapshot-{slot}-{hash}.tar.zst
-fn formatFinalSnapshotName(buf: []u8, slot: Slot, hash: Hash) []const u8 {
-    var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
-    const hash_str = hash.base58String(&hash_buf);
-    return std.fmt.bufPrint(buf, "snapshot-{d}-{s}.tar.zst", .{
-        slot, hash_str,
-    }) catch unreachable;
-}
-
 fn isFinalSnapshotFilename(file_name: []const u8) bool {
     return std.mem.startsWith(u8, file_name, "snapshot-") and
         std.mem.endsWith(u8, file_name, ".tar.zst") and
         std.mem.indexOf(u8, file_name, ".tmp.") == null;
 }
 
+fn parseFinalSnapshotFilename(file_name: []const u8) ?FinalSnapshot {
+    if (!isFinalSnapshotFilename(file_name)) return null;
+
+    const prefix = "snapshot-";
+    const suffix = ".tar.zst";
+    const body = file_name[prefix.len .. file_name.len - suffix.len];
+    const split = std.mem.indexOfScalar(u8, body, '-') orelse return null;
+    const slot = std.fmt.parseInt(Slot, body[0..split], 10) catch return null;
+    const hash = Hash.parseRuntime(body[split + 1 ..]) catch return null;
+    return .{ .slot = slot, .hash = hash };
+}
+
 /// Scans the snapshot directory for an existing finalized snapshot file.
 /// TODO: check how old the snapshot is on disk before skipping.
-pub fn findExistingSnapshot(snapshot_dir: std.fs.Dir) !?ExistingSnapshot {
+pub fn findExistingSnapshot(snapshot_dir: std.fs.Dir) !?FinalSnapshot {
     var iter = snapshot_dir.iterate();
     while (try iter.next()) |entry| {
         if (entry.kind != .file) continue;
-        if (!isFinalSnapshotFilename(entry.name)) continue;
-
-        var existing: ExistingSnapshot = undefined;
-        const n = @min(entry.name.len, existing.name_buf.len);
-        @memcpy(existing.name_buf[0..n], entry.name[0..n]);
-        existing.name_len = n;
-
-        return existing;
+        if (parseFinalSnapshotFilename(entry.name)) |snapshot| return snapshot;
     }
 
     return null;
