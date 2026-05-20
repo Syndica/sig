@@ -1353,3 +1353,35 @@ test "simulateRuntimeTransaction: returns error for blockhash-not-found" {
     try std.testing.expectEqual(@as(u64, 0), result.units_consumed);
     try std.testing.expectEqual(@as(usize, 0), result.logs.len);
 }
+
+test "getSimulatedAccount: oversized account + base58 propagates Base58DataTooLarge" {
+    // [agave] simulateTransaction's per-account encoder is `getSimulatedAccount`. When the
+    // post-simulation account exceeds 128 bytes and base58 encoding is requested, it must
+    // propagate `error.Base58DataTooLarge` so the shared `Hooks.set` mapper in rpc/hooks.zig
+    // can translate it to JSON-RPC -32600 with the Agave-conformant message. The wire-format
+    // mapping itself is covered by the Base58DataTooLarge tests in hook_contexts/Account.zig.
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/lib.rs#L44-L47
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const address = comptime Pubkey.parse("11111111111111111111111111111111");
+
+    var oversized_data: [sig.rpc.account_codec.MAX_BASE58_INPUT_LEN + 1]u8 = @splat(0xAB);
+    var post_simulation_accounts: ProcessedTransaction.Writes = .{};
+    post_simulation_accounts.appendAssumeCapacity(.{
+        .pubkey = address,
+        .account = .{
+            .lamports = 1,
+            .data = &oversized_data,
+            .owner = Pubkey.ZEROES,
+            .executable = false,
+            .rent_epoch = 0,
+        },
+    });
+
+    try std.testing.expectError(
+        error.Base58DataTooLarge,
+        getSimulatedAccount(arena, address, .base58, post_simulation_accounts, .noop),
+    );
+}
