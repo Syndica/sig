@@ -430,7 +430,10 @@ pub const FecSetCtx = extern struct {
 
             // set variant for unused buffers so we can get the erasure fragment offset+size
             if (!self.data_shreds_received.isSet(i)) {
-                shred.variant = if (base_variant.isCode()) base_variant.swapType() else base_variant;
+                shred.variant = if (base_variant.isCode())
+                    base_variant.swapType()
+                else
+                    base_variant;
             }
 
             erasure_buf.* = @constCast(shred.erasureFragment().?);
@@ -441,7 +444,10 @@ pub const FecSetCtx = extern struct {
 
             // set variant for unused buffers so we can get the erasure fragment offset+size
             if (!self.code_shreds_received.isSet(i)) {
-                shred.variant = if (base_variant.isData()) base_variant.swapType() else base_variant;
+                shred.variant = if (base_variant.isData())
+                    base_variant.swapType()
+                else
+                    base_variant;
             }
 
             erasure_buf.* = @constCast(shred.erasureFragment().?);

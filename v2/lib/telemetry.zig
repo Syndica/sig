@@ -314,7 +314,6 @@ pub fn Logger(comptime scope_str: []const u8) type {
                 ) void {
                     tracy.print("{s}: " ++ fmt_str, .{@tagName(self.level)} ++ args);
 
-                    if (@intFromEnum(self.level) > @intFromEnum(self.logger.max_level)) return;
                     const message: log.Message = .{
                         .epoch_millis = clock.wallclock(.ms),
                         .scope = scope,

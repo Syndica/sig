@@ -1,6 +1,7 @@
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("solana/bincode.zig");
+        _ = @import("solana/bincode_2.zig");
         _ = @import("solana/cluster.zig");
         _ = @import("solana/epoch_schedule.zig");
         _ = @import("solana/features.zig");
@@ -9,6 +10,7 @@ comptime {
         _ = @import("solana/leader_schedule.zig");
         _ = @import("solana/pubkey.zig");
         _ = @import("solana/signature.zig");
+        _ = @import("solana/transaction.zig");
         _ = @import("solana/snapshot.zig");
     }
 }
