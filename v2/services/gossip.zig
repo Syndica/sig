@@ -105,7 +105,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     sockets.set(.gossip, ro.config.cluster_info.public_ip.withPort(rw.net_pair.port));
     sockets.set(.tvu, ro.config.cluster_info.public_ip.withPort(ro.config.turbine_recv_port));
 
-    var now: u64 = @intCast(std.time.milliTimestamp());
+    var now = lib.clock.wallclock(.ms);
     var fba = std.heap.FixedBufferAllocator.init(&scratch_memory);
     var gossip = try GossipNode(Effects).init(&fba, now, .{
         .effects = effects,
@@ -116,7 +116,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
     var it = rw.net_pair.recv.get(.reader);
     while (true) {
-        now = @intCast(std.time.milliTimestamp());
+        now = lib.clock.wallclock(.ms);
         try gossip.poll(.from(logger), now);
 
         const packet = it.next() orelse continue;
