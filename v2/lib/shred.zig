@@ -28,7 +28,7 @@ pub const RecvConfig = extern struct {
     shred_version: u16,
 };
 
-pub const DeshredRing = Ring(256, DeshreddedFecSet);
+pub const DeshredRing = Ring(1024, DeshreddedFecSet);
 
 /// NOTE: these are not necessarily unique IDs - under equivocation there may be multiple FEC sets
 ///       of the same FecSetId.

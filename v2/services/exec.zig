@@ -52,6 +52,10 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             .transaction_execution => {
                 const data = &request.data.transaction_execution;
 
+                const slot = data.block_idx.constPtr(ro.block_pool).?.slot;
+                zone.value(slot);
+                tracy.plot(u48, "exec slot", @intCast(slot));
+
                 var reader =
                     std.io.Reader.fixed(ro.replay_transaction_pool.indexToConstPtr(data.tx_idx));
 
