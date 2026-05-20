@@ -29,13 +29,13 @@ const DOWNLOAD_TIMEOUT_SECS: i64 = 3;
 const DOWNLOAD_TIMEOUT: std.os.linux.kernel_timespec = .{ .sec = DOWNLOAD_TIMEOUT_SECS, .nsec = 0 };
 
 const QueueSqeError = error{SubmissionQueueFull};
-const StartProbeError = QueueSqeError || std.posix.SocketError;
-const StartDownloadRacerError =
-    QueueSqeError ||
-    std.posix.SocketError ||
-    std.posix.PipeError ||
-    std.fs.File.OpenError ||
-    std.fmt.BufPrintError;
+const StartProbeError = QueueSqeError || error{SocketOpenFailed};
+const StartDownloadRacerError = QueueSqeError || error{
+    SocketOpenFailed,
+    PipeOpenFailed,
+    PathFormatFailed,
+    FileOpenFailed,
+};
 
 const LinkedTimeoutOp = struct {
     /// set when a linked timeout fired, but we are still waiting for the
@@ -100,7 +100,7 @@ pub const ProbeConn = struct {
         /// stores the http HEAD request pre-formatted to check
         send_buf: [256]u8,
         /// length of the formatted HTTP HEAD request.
-        send_len: u8,
+        send_len: std.math.IntFittingRange(0, 256),
     };
 
     const ProbeReceiving = struct {
@@ -303,7 +303,7 @@ pub const DownloadConn = struct {
         /// Used to store the GET request string for this peer.
         send_buf: [256]u8,
         /// The length of the GET request's payload.
-        send_len: u8,
+        send_len: std.math.IntFittingRange(0, 256),
     };
 
     const DownloadReadingHeaders = struct {
@@ -1102,11 +1102,11 @@ pub const Downloader = struct {
 
         // create tcp socket
         const net_addr = addr.toNetAddress();
-        const fd = try std.posix.socket(
+        const fd = std.posix.socket(
             net_addr.any.family,
             std.posix.SOCK.STREAM | std.posix.SOCK.NONBLOCK,
             0,
-        );
+        ) catch return error.SocketOpenFailed;
         errdefer std.posix.close(fd);
 
         probe.gen +%= 1;
@@ -2499,16 +2499,16 @@ pub const Downloader = struct {
 
         // Create nonblocking TCP socket.
         const net_addr = candidate.addr.toNetAddress();
-        const fd = try std.posix.socket(
+        const fd = std.posix.socket(
             net_addr.any.family,
             std.posix.SOCK.STREAM | std.posix.SOCK.NONBLOCK,
             0,
-        );
+        ) catch return error.SocketOpenFailed;
         errdefer std.posix.close(fd);
 
         // Create pipe for splice.
         // TODO: Do we want to size the pipe?
-        const pipe_fds = try std.posix.pipe2(.{ .NONBLOCK = true });
+        const pipe_fds = std.posix.pipe2(.{ .NONBLOCK = true }) catch return error.PipeOpenFailed;
         errdefer {
             std.posix.close(pipe_fds[0]);
             std.posix.close(pipe_fds[1]);
@@ -2518,19 +2518,22 @@ pub const Downloader = struct {
         // TODO: can prob be moved into io_uring.
         conn.gen +%= 1;
         var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const tmp_name = try (TempSnapshot{
+        const tmp_name = (TempSnapshot{
             .snapshot = .{ .slot = candidate.slot, .hash = candidate.hash },
             .index = dl_index,
             .gen = conn.gen,
-        }).name(&path_buf);
-        const file = try self.snapshot_dir.createFile(tmp_name, .{ .mode = 0o644 });
+        }).name(&path_buf) catch return error.PathFormatFailed;
+
+        const file = self.snapshot_dir.createFile(
+            tmp_name,
+            .{ .mode = 0o644 },
+        ) catch return error.FileOpenFailed;
         errdefer file.close();
-        const file_fd = file.handle;
 
         conn.lifecycle = .{ .active = .{
             .state = .{
                 .fd = fd,
-                .file_fd = file_fd,
+                .file_fd = file.handle,
                 .pipe_rd = pipe_fds[0],
                 .pipe_wr = pipe_fds[1],
                 .addr = candidate.addr,
