@@ -11,6 +11,8 @@ const IoUring = std.os.linux.IoUring;
 const SnapshotSourceRing = lib.snapshot.SnapshotSourceRing;
 const KnownValidators = lib.snapshot.SnapshotConfig.KnownValidators;
 
+const AddressContext = std.hash_map.AutoContext(Address);
+
 const IO_URING_ENTRIES = 256;
 const MAX_DEDUPE_PEERS = 4096;
 
@@ -125,7 +127,7 @@ pub const ProbeConn = struct {
     fn phaseName(self: *const ProbeConn) []const u8 {
         return switch (self.lifecycle) {
             .unused => "unused",
-            .active => |active| @tagName(std.meta.activeTag(active.phase)),
+            .active => |active| @tagName(active.phase),
         };
     }
 
@@ -194,7 +196,7 @@ pub const PeerState = struct {
     latency_ms: u32,
 
     pub fn eql(self: PeerState, other: PeerState) bool {
-        return self.slot == other.slot and std.meta.eql(self.hash, other.hash);
+        return self.slot == other.slot and self.hash.eql(&other.hash);
     }
 };
 
@@ -373,7 +375,7 @@ pub const DownloadConn = struct {
     fn phaseName(self: *const DownloadConn) []const u8 {
         return switch (self.lifecycle) {
             .unused => "unused",
-            .active => |active| @tagName(std.meta.activeTag(active.phase)),
+            .active => |active| @tagName(active.phase),
         };
     }
 
@@ -558,8 +560,7 @@ pub const DownloadResult = union(enum) {
     failed: DownloadFailureReason,
 };
 
-// TODO: Can be smaller than u8.
-const Op = enum(u8) {
+const Op = enum(u4) {
     probe_connect,
     probe_send,
     probe_recv,
@@ -573,23 +574,23 @@ const Op = enum(u8) {
     download_splice_out,
     download_fsync,
 
-    fn expectedProbePhase(self: Op) ?std.meta.Tag(ProbeConn.ProbePhase) {
+    fn matchesProbePhase(self: Op, phase: ProbeConn.ProbePhase) bool {
         return switch (self) {
-            .probe_connect => .connecting,
-            .probe_send => .sending,
-            .probe_recv => .receiving,
-            else => null,
+            .probe_connect => phase == .connecting,
+            .probe_send => phase == .sending,
+            .probe_recv => phase == .receiving,
+            else => false,
         };
     }
 
-    fn expectedDownloadPhase(self: Op) ?std.meta.Tag(DownloadConn.DownloadPhase) {
+    fn matchesDownloadPhase(self: Op, phase: DownloadConn.DownloadPhase) bool {
         return switch (self) {
-            .download_connect => .connecting,
-            .download_send => .sending,
-            .download_recv_headers => .reading_headers,
-            .download_poll_in => .waiting_readable,
-            .download_splice_in => .splicing_in,
-            else => null,
+            .download_connect => phase == .connecting,
+            .download_send => phase == .sending,
+            .download_recv_headers => phase == .reading_headers,
+            .download_poll_in => phase == .waiting_readable,
+            .download_splice_in => phase == .splicing_in,
+            else => false,
         };
     }
 };
@@ -606,7 +607,7 @@ const UserData = packed struct(u64) {
     gen: u16,
     /// true when this cqe is from a linked timeout sqe (not the primary op).
     is_timeout: bool,
-    _reserved: u15,
+    _reserved: u19,
 
     pub fn init(op: Op, index: u8, gen: u16) UserData {
         return .{
@@ -777,7 +778,7 @@ fn DedupeMapType(comptime capacity: usize) type {
             }
 
             fn isEmpty(self: *const Entry) bool {
-                return std.meta.eql(self.ip, EMPTY_IP);
+                return std.mem.eql(u8, &self.ip, &EMPTY_IP);
             }
 
             fn address(self: *const Entry) Address {
@@ -789,7 +790,7 @@ fn DedupeMapType(comptime capacity: usize) type {
             }
 
             fn eqlPeer(self: *const Entry, peer: PeerState) bool {
-                return self.slot == peer.slot and std.meta.eql(self.hash, peer.hash);
+                return self.slot == peer.slot and self.hash.eql(&peer.hash);
             }
         };
 
@@ -1270,8 +1271,7 @@ pub const Downloader = struct {
         // then this timeout is stale. Just ignore it.
         if (probe.isUnused() or probe.gen != data.gen) return;
 
-        const expected_phase = data.op.expectedProbePhase() orelse unreachable;
-        if (std.meta.activeTag(probe.lifecycle.active.phase) != expected_phase) return;
+        if (!data.op.matchesProbePhase(probe.lifecycle.active.phase)) return;
 
         const active = probe.activePtr() orelse return;
         const timed_op = probe.timedOpPtr() orelse return;
@@ -1367,7 +1367,7 @@ pub const Downloader = struct {
         // Track send progress across partial completions via user_data offset.
         std.debug.assert(cqe.res > 0);
         std.debug.assert(cqe.res <= sending.send_len - data.offset);
-        const new_offset = data.offset + @as(u16, @intCast(cqe.res));
+        const new_offset: u16 = @intCast(data.offset + cqe.res);
 
         // The previous send was partial, queue up another and return.
         if (new_offset < sending.send_len) {
@@ -1422,7 +1422,7 @@ pub const Downloader = struct {
         self.onOpComplete(.probe_recv, receiving.op.op_start_time);
 
         // Track recv progress across partial completions via user_data offset.
-        const new_offset = data.offset + @as(u16, @intCast(cqe.res));
+        const new_offset: u16 = @intCast(data.offset + cqe.res);
         const response = receiving.recv_buf[0..new_offset];
 
         // Check for end of HTTP headers.
@@ -1466,7 +1466,7 @@ pub const Downloader = struct {
         const elapsed_ns = (std.time.Instant.now() catch unreachable).since(active.start_time);
         const latency_ms: u32 = @intCast(elapsed_ns / std.time.ns_per_ms);
         if (self.dedupe_map.getPtr(active.addr)) |peer| {
-            if (peer.slot == active.slot and std.meta.eql(peer.hash, active.hash)) {
+            if (peer.slot == active.slot and peer.hash.eql(&active.hash)) {
                 peer.meta.latency_ms = std.math.lossyCast(u29, latency_ms);
             }
         }
@@ -1513,7 +1513,7 @@ pub const Downloader = struct {
         if (self.dedupe_map.getPtr(active.addr)) |peer| {
             // NOTE: We gaurd the update here since gossip can update peer in dedupe map while io_uring was completing this probe.
             // If it was updated underneath us, don't update things here since another/newer probe was alread issued to io_uring.
-            if (peer.slot == active.slot and std.meta.eql(peer.hash, active.hash)) {
+            if (peer.slot == active.slot and peer.hash.eql(&active.hash)) {
                 peer.meta.probe_status = switch (result) {
                     .succeeded => .succeeded,
                     .failed => .failed,
@@ -1561,8 +1561,7 @@ pub const Downloader = struct {
             .unused => return,
             .active => |*active| active,
         };
-        const expected_phase = data.op.expectedDownloadPhase() orelse unreachable;
-        if (std.meta.activeTag(active_download.phase) != expected_phase) return;
+        if (!data.op.matchesDownloadPhase(active_download.phase)) return;
 
         const active = &active_download.state;
         const op = conn.linkedTimeoutOpPtr() orelse return;
@@ -1691,7 +1690,7 @@ pub const Downloader = struct {
 
         std.debug.assert(cqe.res > 0);
         std.debug.assert(cqe.res <= sending.send_len - data.offset);
-        const new_offset = data.offset + @as(u16, @intCast(cqe.res));
+        const new_offset: u16 = @intCast(data.offset + cqe.res);
 
         if (new_offset < sending.send_len) {
             self.queueDownloadSendWithTimeout(data, new_offset) catch {
@@ -1752,7 +1751,7 @@ pub const Downloader = struct {
 
         std.debug.assert(cqe.res > 0);
         std.debug.assert(cqe.res <= reading_headers.recv_buf.len - data.offset);
-        const new_offset = data.offset + @as(u16, @intCast(cqe.res));
+        const new_offset: u16 = @intCast(data.offset + cqe.res);
         const response = reading_headers.recv_buf[0..new_offset];
 
         // Check for end of HTTP headers.
@@ -1862,7 +1861,7 @@ pub const Downloader = struct {
 
         std.debug.assert(cqe.res > 0);
         std.debug.assert(cqe.res <= writing_extra.extra_body_len - data.offset);
-        const new_written = data.offset + @as(u16, @intCast(cqe.res));
+        const new_written: u16 = @intCast(data.offset + cqe.res);
 
         if (self.shouldCancelDownload(data.index)) {
             self.finishDownload(data.index, .cancelled);
@@ -2184,7 +2183,7 @@ pub const Downloader = struct {
 
         // Keep one queued/active candidate per RPC address.
         for (race.candidates[0..race.candidate_count]) |*existing| {
-            if (std.meta.eql(existing.addr, candidate.addr)) return;
+            if (AddressContext.eql(.{}, existing.addr, candidate.addr)) return;
         }
 
         // Full, so we reject the new candidate
