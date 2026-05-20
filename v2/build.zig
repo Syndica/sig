@@ -66,9 +66,17 @@ pub fn build(b: *Build) !void {
             "not silently accepted.",
     ) orelse (optimize == .Debug);
 
+    const debug_skip_shred_checks = b.option(
+        bool,
+        "debug-skip-shred-checks",
+        "Debug purposes only. Skips sig verify and ignores shred version mismatches.",
+    ) orelse false;
+
     const build_options = b.addOptions();
     build_options.addOption(bool, "allow_no_sha", allow_no_sha);
     build_options.addOption(bool, "allow_no_avx512", allow_no_avx512);
+    build_options.addOption(bool, "debug_skip_shred_checks", debug_skip_shred_checks);
+
     const build_options_mod = build_options.createModule();
 
     const install_step = b.getInstallStep();
