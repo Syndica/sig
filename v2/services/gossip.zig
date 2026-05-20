@@ -24,8 +24,8 @@ pub const std_options = start.options;
 
 pub const ReadWrite = struct {
     net_pair: *Pair,
-    tel: *tel.Region,
     gossip_to_snapshot: *lib.snapshot.SnapshotSourceRing,
+    tel: *tel.Region,
 };
 
 pub const ReadOnly = struct {

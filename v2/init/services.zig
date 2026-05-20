@@ -192,26 +192,27 @@ pub const Region = union(enum) {
         shred_version: u16,
     },
 
-    telemetry: tel.Region.InitParams,
     deshredded_out,
 
     snapshot_config: struct {
         folder_path: []const u8,
         cluster: lib.solana.Cluster,
-        known_validators: [][]const u8,
+        known_validators: []const []const u8,
     },
 
     snapshot_source_ring: void,
+
+    telemetry: tel.Region.InitParams,
 
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(lib.net.Pair),
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
-            .telemetry => |params| params.info().regionSize(),
             .deshredded_out => @sizeOf(lib.shred.DeshredRing),
             .snapshot_config => @sizeOf(lib.snapshot.SnapshotConfig),
             .snapshot_source_ring => @sizeOf(lib.snapshot.SnapshotSourceRing),
+            .telemetry => |params| params.info().regionSize(),
         };
     }
 
@@ -244,13 +245,6 @@ pub const Region = union(enum) {
                     cfg.schedule_string,
                 );
                 data.shred_version = cfg.shred_version;
-            },
-
-            .telemetry => |params| {
-                std.debug.assert(buf.len == params.info().regionSize());
-                const data: *tel.Region = @ptrCast(buf);
-
-                data.init(params);
             },
             .deshredded_out => {
                 std.debug.assert(buf.len == @sizeOf(lib.shred.DeshredRing));
@@ -313,6 +307,12 @@ pub const Region = union(enum) {
                 std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotSourceRing));
                 const data: *lib.snapshot.SnapshotSourceRing = @ptrCast(buf);
                 data.init();
+            },
+            .telemetry => |params| {
+                std.debug.assert(buf.len == params.info().regionSize());
+                const data: *tel.Region = @ptrCast(buf);
+
+                data.init(params);
             },
         };
     }

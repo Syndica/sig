@@ -24,8 +24,8 @@ pub const ReadOnly = struct {
 };
 
 pub const ReadWrite = struct {
-    tel: *tel.Region,
     gossip_to_snapshot: *SnapshotSourceRing,
+    tel: *tel.Region,
 };
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {

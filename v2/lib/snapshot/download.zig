@@ -14,11 +14,11 @@ const KnownValidators = lib.snapshot.SnapshotConfig.KnownValidators;
 const IO_URING_ENTRIES = 256;
 const MAX_DEDUPE_PEERS = 4096;
 
-pub const MAX_CONCURRENT_PROBES: u8 = 16;
+const MAX_CONCURRENT_PROBES: u8 = 16;
 const PROBE_TIMEOUT_SECS: i64 = 3;
 const PROBE_TIMEOUT: std.os.linux.kernel_timespec = .{ .sec = PROBE_TIMEOUT_SECS, .nsec = 0 };
 
-pub const MAX_DOWNLOAD_RACERS: u8 = 16;
+const MAX_DOWNLOAD_RACERS: u8 = 16;
 const MAX_DOWNLOAD_CANDIDATES: u8 = 64;
 const DOWNLOAD_RACE_THRESHOLD_PCT: u64 = 10;
 const SPLICE_CHUNK: u32 = 1 * 1024 * 1024;
@@ -928,14 +928,14 @@ pub const Downloader = struct {
     }
 
     pub fn deinit(self: *Downloader) void {
-        for (0..self.probe_conns.len) |i| {
-            if (!self.probe_conns[i].isUnused()) {
+        for (&self.probe_conns, 0..) |*probe_conn, i| {
+            if (!probe_conn.isUnused()) {
                 self.finishProbe(@intCast(i), .failed);
             }
         }
 
-        for (0..self.download_conns.len) |i| {
-            if (!self.download_conns[i].isUnused()) {
+        for (&self.download_conns, 0..) |*download_conn, i| {
+            if (!download_conn.isUnused()) {
                 self.finishDownload(@intCast(i), .cancelled);
             }
         }
@@ -956,7 +956,7 @@ pub const Downloader = struct {
             }
 
             for (cqes[0..n]) |cqe| {
-                // A previoud cqe in this copied batch may have set the final result. Stop before
+                // A previous cqe in this copied batch may have set the final result. Stop before
                 // handling any more completions.
                 if (self.run_result) |result| return result;
 

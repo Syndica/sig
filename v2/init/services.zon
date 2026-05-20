@@ -6,11 +6,12 @@
         .net_to_gossip = .net_pair,
         .gossip_config = .gossip_config,
 
-        .telemetry = .telemetry,
-
         .deshredded_out = .deshredded_out,
+
         .gossip_to_snapshot = .snapshot_source_ring,
         .snapshot_config = .snapshot_config,
+
+        .telemetry = .telemetry,
     },
     .services = .{
         .{
@@ -26,8 +27,8 @@
             .regions = .{
                 .{ .name = .net_to_gossip, .access = .rw },
                 .{ .name = .gossip_config, .access = .readonly },
-                .{ .name = .telemetry, .access = .rw },
                 .{ .name = .gossip_to_snapshot, .access = .rw },
+                .{ .name = .telemetry, .access = .rw },
             },
         },
         .{
@@ -55,8 +56,8 @@
             .name = .snapshot,
             .regions = .{
                 .{ .name = .snapshot_config, .access = .readonly },
-                .{ .name = .telemetry, .access = .rw },
                 .{ .name = .gossip_to_snapshot, .access = .rw },
+                .{ .name = .telemetry, .access = .rw },
             },
         },
     },
