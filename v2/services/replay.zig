@@ -443,6 +443,8 @@ fn maybeContinueBlockExec(
         exec_state.n_transactions_requested += 1;
 
         // send task to exec
+        // NOTE: in the future this should be "sent" to the transaction scheduler, not to exec
+        // directly
         {
             const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse
                 @panic("no space");
@@ -460,8 +462,13 @@ fn maybeContinueBlockExec(
         }
     }
 
-    if (!node.slot_complete) return;
-    exec_state.all_transactions_requested = true;
+    // If the deserialiser has reached the last node in the block, we have requested all of the
+    // transactions inside.
+    if (block_deserial_state.pos_node.slot_complete) {
+        // start_of_batch should be false if we have finished deserialising.
+        std.debug.assert(!block_deserial_state.start_of_batch);
+        exec_state.all_transactions_requested = true;
+    }
 
     // try to exec children
     var maybe_child = node.child.ptr(forest_pool);
@@ -557,6 +564,9 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
                 deshredded_iter.next() orelse unreachable;
             defer deshredded_iter.markUsed();
 
+            zone.value(deshredded_fec_set.id.slot);
+            zone.value(deshredded_fec_set.id.fec_set_idx);
+
             const inserted = (try insertFecSet(deshredded_fec_set, &forest, rw.block_pool)) orelse {
                 zone.text("already found");
                 continue :task .idle;
@@ -627,6 +637,9 @@ const BlockDeserialState = struct {
 
     next_read: NextRead,
 
+    // set to false when there's no entries left
+    start_of_batch: bool,
+
     const NextRead = enum { n_entries, num_hashes, hash, n_transactions, transaction };
 
     const Reader = struct {
@@ -634,7 +647,6 @@ const BlockDeserialState = struct {
         merkle_pool: *const MerkleForest.NodePool,
         interface: std.Io.Reader,
 
-        // TODO: do not advance to other blockrefs!
         fn advance(self: *Reader) error{EndOfStream}!void {
             const child: *const MerkleNode = MerkleForest.NodeTree.childOf(
                 .{ .pool = self.merkle_pool.* },
@@ -643,6 +655,9 @@ const BlockDeserialState = struct {
 
             std.debug.assert(child.block_ref != .null);
             std.debug.assert(child.parent != .null);
+
+            // do not advance to other blockrefs!
+            if (child.block_ref != self.deserial_state.pos_node.block_ref) return error.EndOfStream;
 
             self.deserial_state.pos_node = child;
             self.deserial_state.pos_offset = 0;
@@ -703,6 +718,8 @@ const BlockDeserialState = struct {
             .n_entries_left = null,
 
             .next_read = .n_entries,
+
+            .start_of_batch = true,
         };
     }
 
@@ -760,7 +777,19 @@ const BlockDeserialState = struct {
                 self.* = backup;
                 return null;
             },
-            else => |e| return e,
+            else => |e| {
+                std.debug.print(
+                    "state before failure: pos_node: {*}, pos_offset: {}, n_transactions_left: {?}, n_entries_left: {?}, next_read: {}\n",
+                    .{ backup.pos_node, backup.pos_offset, backup.n_transactions_left, backup.n_entries_left, backup.next_read },
+                );
+
+                std.debug.print(
+                    "state after failure: pos_node: {*}, pos_offset: {}, n_transactions_left: {?}, n_entries_left: {?}, next_read: {}\n",
+                    .{ self.pos_node, self.pos_offset, self.n_transactions_left, self.n_entries_left, self.next_read },
+                );
+
+                return e;
+            },
         };
     }
 
@@ -776,6 +805,12 @@ const BlockDeserialState = struct {
         loopback: switch (self.next_read) {
             // start of microblock
             .n_entries => {
+                if (!self.start_of_batch) {
+                    self.pos_offset = self.pos_node.payload_len;
+                    try reader.advance();
+                    self.start_of_batch = true;
+                }
+
                 self.n_entries_left = try bincode_2.read(fba, &reader.interface, u64);
                 if (self.n_entries_left.? == 0) {
                     self.next_read = .n_entries;
@@ -804,6 +839,7 @@ const BlockDeserialState = struct {
                     self.n_entries_left.? -= 1;
                     if (self.n_entries_left.? == 0) {
                         self.next_read = .n_entries;
+                        self.start_of_batch = false;
                         return null; // advance to next?
                     }
 
@@ -818,6 +854,7 @@ const BlockDeserialState = struct {
                     self.n_entries_left.? -= 1;
                     if (self.n_entries_left.? == 0) {
                         self.next_read = .n_entries;
+                        self.start_of_batch = false;
                         return null; // advance to next?
                     }
 
