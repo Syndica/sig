@@ -88,12 +88,6 @@ pub fn getAccountInfo(
         .value = null,
     };
 
-    // TODO: [agave conformance] When base58 encoding is requested and account data exceeds
-    // 128 bytes, Agave returns JSON-RPC error code -32600 (InvalidRequest) with the message:
-    // "Encoded binary (base 58) data should be less than 128 bytes, please use Base64 encoding."
-    // Currently, `error.Base58DataTooLarge` propagates to hooks.zig's generic error mapper,
-    // which produces a non-deterministic positive error code via `@intFromError` and the raw
-    // error name as the message.
     const data = try account_codec.encodeAccount(
         arena,
         params.pubkey,
