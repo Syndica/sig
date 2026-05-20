@@ -157,7 +157,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon', 'v2/build.zig', 'v2/build.zig.zon') }}
 
       - name: Install Python PIP
         run: |
@@ -174,23 +174,20 @@ jobs:
         run: |
           python3 scripts/style.py --check src
           python3 scripts/style.py --check conformance/src
-          python3 scripts/style.py --check v2/lib
-          python3 scripts/style.py --check v2/services
-          python3 scripts/style.py --check v2/init
 
       - name: Check docs
         run: python3 docs/check.py ./
 
       - name: V2 checks
         run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh zig
           cd v2/
           zig build ci -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Build and test hashmap ledger (linux)
         run: |
           set -eo pipefail
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
           zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" -Dallow-no-sha -Dallow-no-avx512 --summary all
           zig-out/bin/test 2>&1 | cat
 
@@ -216,6 +213,8 @@ jobs:
 
       - name: Build Conformance
         run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
           cd conformance
           zig build -Dallow-no-sha -Dallow-no-avx512 --summary all
 

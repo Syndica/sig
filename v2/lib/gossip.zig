@@ -3,6 +3,12 @@ const lib = @import("lib.zig");
 
 pub const bincode = @import("gossip/bincode.zig");
 pub const GossipNode = @import("gossip/node.zig").GossipNode;
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("gossip/bincode.zig");
+        _ = @import("gossip/node.zig");
+    }
+}
 
 const Signature = lib.solana.Signature;
 const Pubkey = lib.solana.Pubkey;

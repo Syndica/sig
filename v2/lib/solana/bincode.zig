@@ -443,16 +443,18 @@ test compact_u16 {
         &.{ 0x80, 0x80, 0x06 },
     };
 
+    const compact_u16_args: bk.Config = .{ .endian = .big, .int = .fixint };
+
     // decode
     for (good_cases) |case| {
         var reader = std.io.Reader.fixed(case.encoded);
-        const value = try compact_u16.decode(&reader, null, .{ .endian = .big, .int = .fixint }, {});
+        const value = try compact_u16.decode(&reader, null, compact_u16_args, {});
         try std.testing.expectEqual(case.value, value);
     }
     for (bad_cases) |case| {
         errdefer std.debug.print("decoding `{X}` should have failed\n", .{case});
         var reader = std.io.Reader.fixed(case);
-        const value = compact_u16.decode(&reader, null, .{ .endian = .big, .int = .fixint }, {});
+        const value = compact_u16.decode(&reader, null, compact_u16_args, {});
         try std.testing.expectError(error.DecodeFailed, value);
     }
 
@@ -460,7 +462,7 @@ test compact_u16 {
     for (good_cases) |case| {
         var out_buf: [3]u8 = undefined;
         var writer = std.io.Writer.fixed(&out_buf);
-        try compact_u16.encode(&writer, .{ .endian = .big, .int = .fixint }, &case.value, {});
+        try compact_u16.encode(&writer, compact_u16_args, &case.value, {});
         try std.testing.expectEqualSlices(u8, writer.buffered(), case.encoded);
     }
 }
