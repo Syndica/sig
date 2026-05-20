@@ -1083,7 +1083,7 @@ const Elf64 = struct {
 };
 
 fn safeSlice(base: anytype, start: u64, len: u64) error{OutOfBounds}!@TypeOf(base) {
-    if (start >= base.len) return error.OutOfBounds;
+    if (start > base.len) return error.OutOfBounds;
     const end = add(u64, start, len) catch return error.OutOfBounds;
     if (end > base.len) return error.OutOfBounds;
     return base[start..][0..len];
