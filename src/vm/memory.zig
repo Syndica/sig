@@ -5,6 +5,10 @@ const exe = @import("executable.zig");
 
 const SyscallError = sig.vm.SyscallError;
 
+/// Upper half of a pointer is the region index, lower half the virtual address inside that region.
+pub const VIRTUAL_ADDRESS_BITS = 32;
+/// Size of a memory region
+pub const REGION_SIZE: u64 = 0x100000000;
 /// Virtual address of the readonly data region.
 /// In SBPF v3 (SIMD-0189) the rodata section lives in its own region at vaddr 0.
 /// For v0-v2 there is no separate rodata region; rodata lives inside the bytecode
@@ -19,7 +23,6 @@ pub const STACK_START: u64 = 0x200000000;
 pub const HEAP_START: u64 = 0x300000000;
 /// Virtual address of the input region
 pub const INPUT_START: u64 = 0x400000000;
-pub const VIRTUAL_ADDRESS_BITS = 32;
 
 pub const AccessError = error{ StackAccessViolation, AccessViolation };
 pub const RegionError = AccessError || error{InvalidMemoryRegion};
@@ -915,7 +918,10 @@ test "aligned region" {
 
     try expectError(error.AccessViolation, m.region(.constant, BYTECODE_START - 1));
     try expectEqual(&program_mem, (try m.region(.constant, BYTECODE_START)).hostSlice(.constant));
-    try expectEqual(&program_mem, (try m.region(.constant, BYTECODE_START + 3)).hostSlice(.constant));
+    try expectEqual(
+        &program_mem,
+        (try m.region(.constant, BYTECODE_START + 3)).hostSlice(.constant),
+    );
     try expectError(error.AccessViolation, m.region(.constant, BYTECODE_START + 4));
     try expectEqual(error.AccessViolation, m.region(.mutable, STACK_START));
     try expectEqual(&stack_mem, (try m.region(.constant, STACK_START)).hostSlice(.constant));
