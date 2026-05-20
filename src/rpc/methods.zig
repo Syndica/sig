@@ -2194,6 +2194,36 @@ pub const RpcHealthStatus = union(enum) {
             },
         }
     }
+
+    /// Custom JSON deserialization. Inverse of `jsonStringify`.
+    pub fn jsonParse(
+        allocator: std.mem.Allocator,
+        /// * `std.json.Scanner`
+        /// * `std.json.Reader(...)`
+        source: anytype,
+        options: std.json.ParseOptions,
+    ) std.json.ParseError(@TypeOf(source.*))!RpcHealthStatus {
+        const value = try std.json.Value.jsonParse(allocator, source, options);
+        switch (value) {
+            .string => |s| {
+                if (std.mem.eql(u8, s, "ok")) return .ok;
+                if (std.mem.eql(u8, s, "unknown")) return .unknown;
+                return error.UnexpectedToken;
+            },
+            .object => {
+                const parsed = try std.json.parseFromValue(
+                    struct { status: []const u8, numSlotsBehind: u64 },
+                    allocator,
+                    value,
+                    options,
+                );
+                if (!std.mem.eql(u8, parsed.value.status, "behind"))
+                    return error.UnexpectedToken;
+                return .{ .behind = parsed.value.numSlotsBehind };
+            },
+            else => return error.UnexpectedToken,
+        }
+    }
 };
 
 fn JsonSkippable(comptime T: type) type {

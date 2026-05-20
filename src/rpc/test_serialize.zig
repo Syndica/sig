@@ -25,6 +25,7 @@ const GetEpochSchedule = methods.GetEpochSchedule;
 const GetFirstAvailableBlock = methods.GetFirstAvailableBlock;
 const GetFeeForMessage = methods.GetFeeForMessage;
 const GetGenesisHash = methods.GetGenesisHash;
+const GetHealth = methods.GetHealth;
 const GetInflationGovernor = methods.GetInflationGovernor;
 const GetInflationRate = methods.GetInflationRate;
 const GetHighestSnapshotSlot = methods.GetHighestSnapshotSlot;
@@ -515,7 +516,21 @@ test GetGenesisHash {
     );
 }
 
-// TODO: test getHealth()
+test GetHealth {
+    try testRequest(.getHealth, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getHealth","params":[]}
+    );
+    try testResponse(GetHealth, .{ .result = .ok },
+        \\{"jsonrpc":"2.0","result":"ok","id":1}
+    );
+    try testResponse(GetHealth, .{ .result = .unknown },
+        \\{"jsonrpc":"2.0","result":"unknown","id":1}
+    );
+    try testResponse(GetHealth, .{ .result = .{ .behind = 42 } },
+        \\{"jsonrpc":"2.0","result":{"status":"behind","numSlotsBehind":42},"id":1}
+    );
+}
+
 test GetHighestSnapshotSlot {
     try testRequest(.getHighestSnapshotSlot, .{},
         \\{"jsonrpc":"2.0","id":1,"method":"getHighestSnapshotSlot","params":[]}
