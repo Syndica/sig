@@ -133,6 +133,10 @@ fn ebpfErrToCode(err: elf.LoadError) u32 {
         error.InvalidAlignment,
         error.StringTooLong,
         error.InvalidDynamicSectionTable,
+        error.NoSectionNameStringTable,
+        error.InvalidRelocationTable,
+        error.NoStringTable,
+        error.InvalidString,
         => 1,
         error.EntrypointOutOfBounds => 2,
         error.InvalidEntrypoint => 3,
@@ -156,6 +160,7 @@ fn ebpfErrToCode(err: elf.LoadError) u32 {
         error.OutOfBounds => 21,
         error.UnsupportedSBPFVersion => 22,
         error.InvalidProgramHeader => 23,
+        error.OutOfMemory => 21, // internal failure, map to ValueOutOfBounds
         else => unreachable,
     };
 }

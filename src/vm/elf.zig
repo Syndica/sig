@@ -122,6 +122,7 @@ fn parseStrict(
 
     const ident: ElfIdent = @bitCast(header.e_ident);
     const phdr_table_end = (@sizeOf(elf.Elf64_Phdr) *| header.e_phnum) +| @sizeOf(elf.Elf64_Ehdr);
+
     if (!std.mem.eql(u8, ident.magic[0..4], elf.MAGIC) or
         ident.class != elf.ELFCLASS64 or
         ident.data != elf.ELFDATA2LSB or
@@ -129,16 +130,18 @@ fn parseStrict(
         ident.osabi != elf.OSABI.NONE or
         ident.abiversion != 0x00 or
         !std.mem.allEqual(u8, &ident.padding, 0) or
-        @intFromEnum(header.e_machine) != sbpf.EM_SBPF or
-        header.e_type != .DYN or
+        // [agave] https://github.com/anza-xyz/sbpf/blob/v0.12.2/src/elf.rs#L440
+        // Agave checks EM_BPF (247) in strict path, not EM_SBPF (263)
+        header.e_machine != elf.EM.BPF or
+        // [agave] e_type is NOT checked in strict path (commented out)
+        // header.e_type != .DYN or
         header.e_version != 1 or
         header.e_phoff != @sizeOf(elf.Elf64_Ehdr) or
         header.e_ehsize != @sizeOf(elf.Elf64_Ehdr) or
         header.e_phentsize != @sizeOf(elf.Elf64_Phdr) or
         header.e_phnum < expected_phdrs.len or
-        phdr_table_end >= bytes.len or
-        header.e_shentsize != @sizeOf(elf.Elf64_Shdr) or
-        header.e_shstrndx >= header.e_shnum)
+        phdr_table_end >= bytes.len)
+        // [agave] e_shentsize, e_shnum, e_shstrndx are NOT checked in strict path
     {
         return error.InvalidFileHeader;
     }
@@ -756,8 +759,12 @@ const Elf64 = struct {
         loader: *const SyscallMap,
         config: Config,
     ) LoadError!void {
-        const text_section = self.shdrs[self.text_section.?];
+         const text_section = self.shdrs[self.text_section.?];
         const text_range = Range.get(text_section);
+        // [agave] https://github.com/anza-xyz/sbpf/blob/v0.12.2/src/elf_parser/mod.rs#L96-L98
+        // vm_range uses sh_addr (virtual address) regardless of section type.
+        // Used for R_BPF_64_32 symbol.st_value checks which are virtual addresses.
+        const text_vm_range = Range{ .lo = text_section.sh_addr, .hi = text_section.sh_addr +| text_section.sh_size };
         const text_bytes = bytes[text_range.lo..text_range.hi];
 
         const instruction_count = (text_range.hi - text_range.lo) / 8;
@@ -785,19 +792,21 @@ const Elf64 = struct {
             }
         }
 
+        // DEBUG: hash text after call_imm fixup
         // [agave] Agave uses .get(offset..offset+size).ok_or(ElfError::ValueOutOfBounds)?
         // for all relocation/symbol table slicing — bounds-checked, no panics.
-        const rel_slice = try safeSlice(bytes, self.dt_rel_off, self.dt_rel_sz);
-        const relocations = std.mem.bytesAsSlice(
-            elf.Elf64_Rel,
-            rel_slice,
-        );
-
         // [agave] In Agave, the Elf64 parser is created from `unrelocated_elf_bytes` — a
         // separate immutable copy of the ELF. Relocations mutate a different buffer
-        // (`elf_bytes`), so `elf.dynamic_symbol_table()` and `elf.dynamic_symbol_name()`
-        // always read pristine, unrelocated data. In sig we only have one buffer, so we
-        // snapshot the dynsym and dynstr sections before the relocation loop to match.
+        // (`elf_bytes`), so `elf.dynamic_relocations_table()`, `elf.dynamic_symbol_table()`,
+        // and `elf.dynamic_symbol_name()` always read pristine, unrelocated data. In sig we
+        // only have one buffer, so we snapshot the relocation table, dynsym, and dynstr
+        // sections before the relocation loop to match.
+        const rel_src = try safeSlice(bytes, self.dt_rel_off, self.dt_rel_sz);
+        const num_rels = self.dt_rel_sz / @sizeOf(elf.Elf64_Rel);
+        const relocations = try allocator.alloc(elf.Elf64_Rel, @intCast(num_rels));
+        defer allocator.free(relocations);
+        @memcpy(std.mem.sliceAsBytes(relocations), rel_src);
+
         const dynsym_snapshot: ?[]elf.Elf64_Sym = if (self.dynsymtab) |idx| blk: {
             const sh = self.shdrs[idx];
             const src = try safeSlice(bytes, sh.sh_offset, sh.sh_size);
@@ -917,8 +926,9 @@ const Elf64 = struct {
                     } catch return error.UnknownSymbol;
 
                     // If the symbol is defined and a function, this is a BPF-to-BPF call.
+                    // [agave] uses text_section.vm_range() (sh_addr based) for this check
                     if (symbol.st_type() == elf.STT_FUNC and symbol.st_value != 0) {
-                        if (!text_range.contains(symbol.st_value)) {
+                        if (!text_vm_range.contains(symbol.st_value)) {
                             return error.OutOfBounds;
                         }
                         const target_pc = (symbol.st_value -| text_section.sh_addr) / 8;
