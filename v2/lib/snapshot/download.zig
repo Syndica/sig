@@ -99,7 +99,7 @@ pub const ProbeConn = struct {
         /// stores the http HEAD request pre-formatted to check
         send_buf: [256]u8,
         /// length of the formatted HTTP HEAD request.
-        send_len: u16,
+        send_len: u8,
     };
 
     const ProbeReceiving = struct {
@@ -302,7 +302,7 @@ pub const DownloadConn = struct {
         /// Used to store the GET request string for this peer.
         send_buf: [256]u8,
         /// The length of the GET request's payload.
-        send_len: u16,
+        send_len: u8,
     };
 
     const DownloadReadingHeaders = struct {
@@ -1530,12 +1530,12 @@ pub const Downloader = struct {
 
     fn finishProbe(self: *Downloader, probe_index: u8, result: ProbeResult) void {
         const probe = &self.probe_conns[probe_index];
-        // If this fn gets called on a probe that's .unused, then return immidiately.
+        // If this fn gets called on a probe that's .unused, then return immediately.
         const active = probe.activePtr() orelse return;
         const state = &active.state;
         if (self.dedupe_map.getPtr(state.addr)) |peer| {
-            // NOTE: We gaurd the update here since gossip can update peer in dedupe map while io_uring was completing this probe.
-            // If it was updated underneath us, don't update things here since another/newer probe was alread issued to io_uring.
+            // NOTE: We guard the update here since gossip can update peer in dedupe map while io_uring was completing this probe.
+            // If it was updated underneath us, don't update things here since another/newer probe was already issued to io_uring.
             if (peer.slot == state.slot and peer.hash.eql(&state.hash)) {
                 peer.meta.probe_status = switch (result) {
                     .succeeded => .succeeded,
@@ -1547,8 +1547,8 @@ pub const Downloader = struct {
 
         std.posix.close(state.fd);
         const old_gen = probe.gen;
-        self.probe_conns[probe_index] = .empty();
-        self.probe_conns[probe_index].gen = old_gen;
+        probe.* = .empty();
+        probe.gen = old_gen;
         self.active_probes -= 1;
 
         switch (result) {
