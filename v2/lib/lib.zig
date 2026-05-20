@@ -28,17 +28,4 @@ pub const collections = @import("collections.zig");
 pub const snapshot = @import("snapshot.zig");
 pub const telemetry = @import("telemetry.zig");
 
-comptime {
-    _ = net;
-    _ = clock;
-    _ = crypto;
-    _ = solana;
-    _ = shred;
-    _ = gossip;
-    _ = ipc;
-    _ = linux;
-    _ = snapshot;
-    _ = telemetry;
-}
-
 pub const test_data_dir = "../data/test-data/";
