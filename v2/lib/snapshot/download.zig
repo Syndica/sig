@@ -28,6 +28,14 @@ const NO_OFFSET: u64 = std.math.maxInt(u64);
 const DOWNLOAD_TIMEOUT_SECS: i64 = 3;
 const DOWNLOAD_TIMEOUT: std.os.linux.kernel_timespec = .{ .sec = DOWNLOAD_TIMEOUT_SECS, .nsec = 0 };
 
+const QueueSqeError = error{SubmissionQueueFull};
+const StartProbeError = QueueSqeError || std.posix.SocketError;
+const StartDownloadRacerError =
+    QueueSqeError ||
+    std.posix.SocketError ||
+    std.posix.PipeError ||
+    std.fs.File.OpenError;
+
 const LinkedTimeoutOp = struct {
     /// set when a linked timeout fired, but we are still waiting for the
     /// primary op's cqe before freeing/reusing the slot.
@@ -90,7 +98,7 @@ pub const ProbeConn = struct {
         op: LinkedTimeoutOp,
         /// stores the http HEAD request pre-formatted to check
         send_buf: [256]u8,
-        /// lenfth of the formatted HTTP HEAD request.
+        /// length of the formatted HTTP HEAD request.
         send_len: u16,
     };
 
@@ -1075,7 +1083,7 @@ pub const Downloader = struct {
         if (drained) self.gossip_iter.markUsed();
     }
 
-    fn startProbe(self: *Downloader, addr: Address, peer: *DedupeMap.Entry) !void {
+    fn startProbe(self: *Downloader, addr: Address, peer: *DedupeMap.Entry) StartProbeError!void {
         if (self.download_race.phase == .completed) return;
         if (self.active_probes >= MAX_CONCURRENT_PROBES) return;
 
@@ -1149,7 +1157,7 @@ pub const Downloader = struct {
 
     /// Reserves the two sqes needed for a primary op + linked timeout.
     /// NOTE: assumes SnapshotService is the only producer (thread) mutating the ring.
-    fn reserveLinkedSqes(self: *Downloader) !LinkedSqes {
+    fn reserveLinkedSqes(self: *Downloader) QueueSqeError!LinkedSqes {
         // NOTE: it is safe to get capacity this way due to single event producing thread.
         const capacity: u32 = @intCast(self.ring.sq.sqes.len);
         const ready = self.ring.sq_ready();
@@ -1163,17 +1171,19 @@ pub const Downloader = struct {
         // NOTE: we checked capacity first, and we're producing using a single thread,
         // so get_sqe failing below should not occur.
         return .{
-            .primary = self.ring.get_sqe() catch unreachable,
-            .timeout = self.ring.get_sqe() catch unreachable,
+            .primary = self.ring.get_sqe() catch @panic("submission queue unexpectedly full"),
+            .timeout = self.ring.get_sqe() catch @panic("submission queue unexpectedly full"),
         };
     }
+
+    // Queue helpers are called only while their connection slot is active and in the expected phase.
 
     /// Enqueues a pair of SQEs to connect and perform the tcp handshake along with a timeout.
     fn queueProbeConnectWithTimeout(
         self: *Downloader,
         index: u8,
         fd: std.posix.fd_t,
-    ) !void {
+    ) QueueSqeError!void {
         const probe = &self.probe_conns[index];
         const active = probe.activePtr() orelse unreachable;
         const connecting = &probe.lifecycle.active.phase.connecting;
@@ -1200,7 +1210,7 @@ pub const Downloader = struct {
         data: UserData,
         /// used to track partial completions.
         offset: u16,
-    ) !void {
+    ) QueueSqeError!void {
         const probe = &self.probe_conns[data.index];
 
         var send_data = data;
@@ -1245,7 +1255,7 @@ pub const Downloader = struct {
         data: UserData,
         /// used to track partial completions.
         offset: u16,
-    ) !void {
+    ) QueueSqeError!void {
         const probe = &self.probe_conns[data.index];
 
         var recv_data = data;
@@ -2217,10 +2227,11 @@ pub const Downloader = struct {
             const candidate_index = self.nextUnstartedCandidate() orelse return;
 
             self.startDownloadRacer(candidate_index) catch |err| {
+                const candidate = &self.download_race.candidates[candidate_index];
                 self.logger.warn().logf("failed to start download racer from={f} err={}", .{
-                    self.download_race.candidates[candidate_index].from, err,
+                    candidate.from, err,
                 });
-                self.download_race.candidates[candidate_index].started = true;
+                candidate.started = true;
                 continue;
             };
         }
@@ -2239,7 +2250,7 @@ pub const Downloader = struct {
         self: *Downloader,
         index: u8,
         fd: std.posix.fd_t,
-    ) !void {
+    ) QueueSqeError!void {
         const conn = &self.download_conns[index];
         const active = conn.activePtr() orelse unreachable;
         const connecting = &conn.lifecycle.active.phase.connecting;
@@ -2263,7 +2274,7 @@ pub const Downloader = struct {
         self: *Downloader,
         data: UserData,
         offset: u16,
-    ) !void {
+    ) QueueSqeError!void {
         const conn = &self.download_conns[data.index];
         const needs_request = conn.lifecycle.active.phase == .connecting;
         const active = conn.activePtr() orelse unreachable;
@@ -2306,7 +2317,7 @@ pub const Downloader = struct {
         self: *Downloader,
         data: UserData,
         offset: u16,
-    ) !void {
+    ) QueueSqeError!void {
         const conn = &self.download_conns[data.index];
         const active = conn.activePtr() orelse unreachable;
         const reading_headers = conn.enterReadingHeaders();
@@ -2332,7 +2343,7 @@ pub const Downloader = struct {
     }
 
     /// handles HTTP edge case where the header recv can read past `\r\n\r\n` and already consume some snapshot body bytes into recv_buf.
-    fn queueDownloadWriteExtra(self: *Downloader, data: UserData, written: u16) !void {
+    fn queueDownloadWriteExtra(self: *Downloader, data: UserData, written: u16) QueueSqeError!void {
         const conn = &self.download_conns[data.index];
         const active = conn.activePtr() orelse unreachable;
         const writing_extra = &conn.lifecycle.active.phase.writing_extra;
@@ -2359,7 +2370,7 @@ pub const Downloader = struct {
         sqe.user_data = write_data.encode();
     }
 
-    fn queueDownloadSpliceInWithTimeout(self: *Downloader, index: u8) !void {
+    fn queueDownloadSpliceInWithTimeout(self: *Downloader, index: u8) QueueSqeError!void {
         const conn = &self.download_conns[index];
         const active = conn.activePtr() orelse unreachable;
         const splicing_in = conn.enterSplicingIn();
@@ -2387,7 +2398,7 @@ pub const Downloader = struct {
         splicing_in.op = LinkedTimeoutOp.initOffset(splice_data.offset);
     }
 
-    fn queueDownloadPollInWithTimeout(self: *Downloader, index: u8) !void {
+    fn queueDownloadPollInWithTimeout(self: *Downloader, index: u8) QueueSqeError!void {
         const conn = &self.download_conns[index];
         const active = conn.activePtr() orelse unreachable;
         const waiting_readable = conn.enterWaitingReadable();
@@ -2411,7 +2422,7 @@ pub const Downloader = struct {
         waiting_readable.op = LinkedTimeoutOp.initOffset(poll_data.offset);
     }
 
-    fn queueDownloadSpliceOut(self: *Downloader, index: u8) !void {
+    fn queueDownloadSpliceOut(self: *Downloader, index: u8) QueueSqeError!void {
         const conn = &self.download_conns[index];
         const active = conn.activePtr() orelse unreachable;
         _ = conn.enterSplicingOut();
@@ -2428,7 +2439,7 @@ pub const Downloader = struct {
         sqe.user_data = splice_ud.encode();
     }
 
-    fn queueDownloadFsync(self: *Downloader, index: u8) !void {
+    fn queueDownloadFsync(self: *Downloader, index: u8) QueueSqeError!void {
         const conn = &self.download_conns[index];
         const active = conn.activePtr() orelse unreachable;
         _ = conn.enterFsyncing();
@@ -2442,7 +2453,7 @@ pub const Downloader = struct {
         sqe.user_data = fsync_data.encode();
     }
 
-    fn startDownloadRacer(self: *Downloader, candidate_index: u8) !void {
+    fn startDownloadRacer(self: *Downloader, candidate_index: u8) StartDownloadRacerError!void {
         const candidate = &self.download_race.candidates[candidate_index];
 
         // Find a free download conn.
