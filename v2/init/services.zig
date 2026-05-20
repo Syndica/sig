@@ -658,6 +658,9 @@ fn dumpOnExit(
     pid: i32,
     status: u32,
 ) void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "dumpOnExit" });
+    defer zone.deinit();
+
     if (meta.panicMsg()) |panic_msg| {
         std.log.err(
             "Service `{f}` (pid: {}) panicked with message: {s}",
@@ -781,11 +784,12 @@ pub fn spawnAndWaitNoSandbox(
         std.debug.print("spawned {f}\n", .{service_instance});
     }
 
-    const waiting_zone = tracy.Zone.init(@src(), .{ .name = "waiting on exit" });
-    defer waiting_zone.deinit();
-
     // Wait for first service to exit
-    reset_event.wait();
+    {
+        const waiting_zone = tracy.Zone.init(@src(), .{ .name = "waiting on exit" });
+        defer waiting_zone.deinit();
+        reset_event.wait();
+    }
 
     const exited_idx = finished_service_idx.load(.seq_cst);
     std.debug.assert(exited_idx != std.math.maxInt(u16));
