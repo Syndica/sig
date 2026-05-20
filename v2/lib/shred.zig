@@ -5,7 +5,11 @@ const ipc = @import("ipc.zig");
 const net = @import("net.zig");
 
 comptime {
-    _ = std.testing.refAllDecls(@This());
+    if (@import("builtin").is_test) {
+        _ = @import("shred/receiver.zig");
+        _ = @import("shred/reed_solomon.zig");
+        _ = @import("shred/reed_solomon_table.zig");
+    }
 }
 
 pub const reed_solomon_table = @import("shred/reed_solomon_table.zig");
@@ -59,7 +63,7 @@ pub const DeshreddedFecSet = extern struct {
     // TODO: this should be sent separately, ideally in a mem pool.
     payload_buf: [32 * Shred.data_payload_max]u8,
 
-    fn payload(self: *const DeshreddedFecSet) []const u8 {
+    pub fn payload(self: *const DeshreddedFecSet) []const u8 {
         return self.payload_buf[0..self.payload_len];
     }
 };
@@ -369,7 +373,7 @@ pub const Shred = extern struct {
     // Added by the node who retransmitted the shred to us over Turbine.
     // This is only used for the shreds in the final erasure set of the slot.
     // Only safe on pre-checked packets.
-    fn retransmitterSignature(packet: *const Shred) ?[]const u8 {
+    pub fn retransmitterSignature(packet: *const Shred) ?[]const u8 {
         const shred = fromBufferUnchecked(packet);
         _ = shred;
         @panic("unimplemented");

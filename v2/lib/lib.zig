@@ -1,7 +1,6 @@
-const std = @import("std");
-
 comptime {
     if (@import("builtin").is_test) {
+        _ = @import("collections.zig");
         _ = @import("crypto.zig");
         _ = @import("gossip.zig");
         _ = @import("ipc.zig");
@@ -34,10 +33,6 @@ comptime {
     _ = ipc;
     _ = linux;
     _ = telemetry;
-}
-
-comptime {
-    _ = std.testing.refAllDecls(@This());
 }
 
 pub const test_data_dir = "../data/test-data/";

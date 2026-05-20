@@ -1,5 +1,6 @@
 comptime {
     if (@import("builtin").is_test) {
+        _ = @import("solana/bincode.zig");
         _ = @import("solana/cluster.zig");
         _ = @import("solana/hash.zig");
         _ = @import("solana/leader_schedule.zig");
