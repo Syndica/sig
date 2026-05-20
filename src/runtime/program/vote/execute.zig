@@ -1127,6 +1127,31 @@ fn getVoteStateChecked(
     target_version: VoteVersion,
     check_initialized: bool,
 ) (error{OutOfMemory} || InstructionError)!VoteState {
+    // Peek the leading u32 variant tag before attempting a full bincode decode,
+    // mirroring agave's `VoteStateV3::deserialize_into_ptr` (V3 path) and
+    // `VoteStateVersions::deserialize` (V4 path) in solana-vote-interface 5.0.0.
+    // Both helpers shortcut on variant 0 with version-specific errors rather
+    // than letting bincode propagate a generic InvalidAccountData on a short
+    // or zero-tagged buffer.
+    const data = vote_account.constAccountData();
+    if (data.len < @sizeOf(u32)) {
+        return InstructionError.InvalidAccountData;
+    }
+    const variant = std.mem.readInt(u32, data[0..@sizeOf(u32)], .little);
+    if (variant == 0) {
+        return switch (target_version) {
+            // V3 path: agave's VoteStateV3::deserialize_into_ptr rejects
+            // variant 0 with InvalidAccountData (V0_23_5 is unsupported in
+            // SBPF context).
+            // [agave] https://github.com/anza-xyz/solana-sdk/blob/ddbf3430b08eb375de695328ae298dd61c2e1471/vote-interface/src/state/vote_state_v3.rs#L159
+            .v3 => InstructionError.InvalidAccountData,
+            // V4 path: agave's VoteStateVersions::deserialize repurposed
+            // variant 0 to mean Uninitialized after SIMD-0185.
+            // [agave] https://github.com/anza-xyz/solana-sdk/blob/ddbf3430b08eb375de695328ae298dd61c2e1471/vote-interface/src/state/vote_state_versions.rs#L155
+            .v4 => InstructionError.UninitializedAccount,
+        };
+    }
+
     var versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
@@ -1137,12 +1162,6 @@ fn getVoteStateChecked(
 
     switch (target_version) {
         .v3 => {
-            // V0_23_5 is no longer supported. agave's
-            // VoteStateV3::deserialize_into_ptr returns InvalidAccountData for variant 0
-            // when compiled for target_os = "solana".
-            if (versioned_state == .v0_23_5) {
-                return InstructionError.InvalidAccountData;
-            }
             // Existing flow before v4 feature gate activation:
             // Deserialize as VoteStateVersions (converting during deserialization).
             // Some callsites deserialize without checking initialization status.
@@ -1152,9 +1171,8 @@ fn getVoteStateChecked(
         },
         .v4 => {
             // New flow after v4 feature gate activation:
-            // V4 path rejects V0_23_5 at deserialization in agave;
-            // check explicitly here. Always checks uninitialized.
-            if (versioned_state == .v0_23_5 or versioned_state.isUninitialized()) {
+            // Always checks uninitialized.
+            if (versioned_state.isUninitialized()) {
                 return InstructionError.UninitializedAccount;
             }
         },
@@ -6746,5 +6764,120 @@ test "update_commission_collector not writable" {
     try std.testing.expectError(
         InstructionError.InvalidArgument,
         result,
+    );
+}
+
+// Regression: authorize against a vote account whose data is shorter than a
+// valid VoteStateVersions encoding and whose leading u32 variant tag is 0
+// (the discontinued V0_23_5 / Uninitialized slot per SIMD-0185).
+//
+// Both target versions must shortcut on the tag rather than letting bincode
+// surface a generic InvalidAccountData from the truncated body, matching
+// solana-vote-interface 5.0.0:
+//   - V3 path -> InvalidAccountData
+//     [agave] https://github.com/anza-xyz/solana-sdk/blob/ddbf3430b08eb375de695328ae298dd61c2e1471/vote-interface/src/state/vote_state_v3.rs#L159
+//   - V4 path -> UninitializedAccount
+//     [agave] https://github.com/anza-xyz/solana-sdk/blob/ddbf3430b08eb375de695328ae298dd61c2e1471/vote-interface/src/state/vote_state_versions.rs#L155
+test "vote_program: authorize zero-tag short data returns InvalidAccountData (v3 target)" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const vote_account = Pubkey.initRandom(prng.random());
+    const authority = Pubkey.initRandom(prng.random());
+    const new_authority = Pubkey.initRandom(prng.random());
+
+    // 40 bytes of zeros: leading u32 tag is 0 and body is too short to
+    // bincode-decode as any VoteStateVersions variant.
+    var short_zero_data = [_]u8{0} ** 40;
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidAccountData,
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .authorize = .{
+                .new_authority = new_authority,
+                .vote_authorize = VoteAuthorize.voter,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = short_zero_data[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authority },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            .feature_set = &.{}, // vote_state_v4 NOT active -> V3 target
+        },
+        .{},
+    );
+}
+
+test "vote_program: authorize zero-tag short data returns UninitializedAccount (v4 target)" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const vote_account = Pubkey.initRandom(prng.random());
+    const authority = Pubkey.initRandom(prng.random());
+    const new_authority = Pubkey.initRandom(prng.random());
+
+    // 40 bytes of zeros: leading u32 tag is 0 and body is too short to
+    // bincode-decode as any VoteStateVersions variant.
+    var short_zero_data = [_]u8{0} ** 40;
+
+    try testing.expectProgramExecuteError(
+        InstructionError.UninitializedAccount,
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .authorize = .{
+                .new_authority = new_authority,
+                .vote_authorize = VoteAuthorize.voter,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = short_zero_data[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authority },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+            },
+        },
+        .{},
     );
 }
