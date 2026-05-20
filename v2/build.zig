@@ -224,17 +224,17 @@ pub fn build(b: *Build) !void {
     }
 
     // generates unified docs for all modules
-    // TODO: `zig build docs` should probably disable installing/building sig binaries
+    // NOTE: have to specify `-Dno-bin` & `-Dno-run` in order to
+    // avoid needing to run codegen for the sig binaries.
     {
         const gen_docs_run = b.addRunArtifact(
             b.addExecutable(.{
-                .name = "sig-init",
+                .name = "gen-docs-entry",
                 .root_module = b.createModule(.{
-                    .target = target,
+                    .target = b.graph.host,
                     .optimize = .Debug,
                     .root_source_file = b.path("scripts/gen_docs_entry.zig"),
                 }),
-                .use_llvm = false,
             }),
         );
 
