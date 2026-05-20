@@ -1,3 +1,15 @@
+//! This is the root process, in charge of initialising and spawning all services.
+//!
+//! Responsibilities:
+//!  - Parsing config
+//!  - Creation of shared memory regions
+//!  - Initialising shared data structures / passing through config
+//!  - Creating sandboxed processes (unsandboxed single-process also supported for e.g. profiling)
+//!  - Waiting for first service failure, and shutdown
+//!
+//! See `services` for how this works.
+//!
+
 const std = @import("std");
 
 comptime {
@@ -33,6 +45,7 @@ const Config = struct {
 
     const Telemetry = struct {
         port: u16,
+        log_level: tel.log.Level,
     };
 };
 
@@ -41,19 +54,14 @@ pub fn main() !void {
     defer _ = dba_state.deinit();
     const allocator = dba_state.allocator();
 
-    const config: Config, //
-    const log_level: tel.log.Level //
-    = cfg: {
+    var log_filters: std.Io.Writer.Allocating = .init(allocator);
+    defer log_filters.deinit();
+
+    const config: Config = cfg: {
         var args = std.process.args();
         _ = args.next();
         const cfg_path = args.next() orelse return error.ConfigPathMissing;
-        const log_level = level: {
-            const str = args.next() orelse "info";
-            break :level std.meta.stringToEnum(tel.log.Level, str) orelse {
-                std.log.err("Invalid log level '{s}'", .{str});
-                return error.InvalidLogLevel;
-            };
-        };
+        const log_filters_str_opt = args.next();
 
         const cfg_file = try std.fs.cwd().openFile(cfg_path, .{});
         defer cfg_file.close();
@@ -68,7 +76,14 @@ pub fn main() !void {
             std.log.err("{f}", .{diag});
             return err;
         };
-        break :cfg .{ config, log_level };
+
+        try tel.log.Filter.parseListAndWriteBinary(
+            &log_filters.writer,
+            config.telemetry.log_level,
+            log_filters_str_opt orelse "",
+        );
+
+        break :cfg config;
     };
     defer std.zon.parse.free(allocator, config);
 
@@ -87,6 +102,7 @@ pub fn main() !void {
         .{ .service = .net },
         .{ .service = .gossip },
         .{ .service = .telemetry },
+        .{ .service = .replay },
     };
 
     const shared_regions = services.toSharedRegions(.{
@@ -110,7 +126,7 @@ pub fn main() !void {
 
         .telemetry = .{
             .port = config.telemetry.port,
-            .max_log_level = log_level,
+            .log_filters_encoded = log_filters.written(),
             .service_count = service_instances.len - 1,
 
             .id_mem_len = 4096 * 16,
@@ -118,6 +134,9 @@ pub fn main() !void {
 
             .histogram_data_len = 4096 * 3,
         },
+
+        // shred receiver -> replay
+        .deshredded_out = {},
     });
 
     switch (config.sandboxing_mode) {

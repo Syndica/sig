@@ -11,5 +11,6 @@
     },
     .telemetry = .{
         .port = 12345,
+        .log_level = .info,
     },
 }

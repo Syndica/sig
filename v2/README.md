@@ -1,37 +1,18 @@
+# Generated Docs
+
+1. Run `zig build docs`
+
+2. Serve it with a HTTP server, e.g. `python -m http.server -b 127.0.0.1 8000 -d zig-out/docs`
+
 # Running Shred Receive
 
-1. Advertise yourself on gossip. This can be done with starting up v1 gossip, with a patch to 
-advertise a turbine receive port.
-
-```diff
---- a/src/cmd.zig
-+++ b/src/cmd.zig
-@@ -1058,13 +1058,16 @@ fn gossip(
-         app_base.shutdown();
-         app_base.deinit();
-     }
- 
-     const gossip_service = try startGossip(
-         allocator,
-         gossip_value_allocator,
-         cfg,
-         &app_base,
--        &.{},
-+        &.{.{ .tag = .turbine_recv, .port = 8002 }},
-         .{},
-     );
-     defer {
-```
-
-`sig gossip -c testnet`
-
-2. Use Agave to create a leader schedule text file, e.g.
+1. Use Agave to create a leader schedule text file, e.g.
 
 `solana leader-schedule > schedule.txt`
 
-3. Start up v2
+2. Start up v2
 
-`zig build run -- config/testnet.zig.zon `
+`zig build run -- config/testnet.zig.zon`
 
 # Running with tracy
 
