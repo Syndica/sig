@@ -6,6 +6,7 @@ comptime {
         _ = @import("collections.zig");
         _ = @import("crypto.zig");
         _ = @import("fio.zig");
+        _ = @import("exec.zig");
         _ = @import("gossip.zig");
         _ = @import("ipc.zig");
         _ = @import("linux.zig");

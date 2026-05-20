@@ -994,17 +994,6 @@ const MerkleNode = extern struct {
         return node.payload_buf[0..node.payload_len];
     }
 
-    /// Returns null if we can't yet know
-    fn dataStart(node: *MerkleNode, pool: MerkleForest.NodePool) ?bool {
-        if (node.id.fec_set_idx == 0) return true;
-
-        const parent: *MerkleNode = MerkleForest.NodeTree.parentOf(.{ .pool = pool }, node) orelse
-            return null;
-
-        // the parent's data is completed => the current node's data is starting
-        return parent.data_complete;
-    }
-
     pub fn format(node: *const MerkleNode, writer: *std.io.Writer) !void {
         try writer.print(
             \\ {{

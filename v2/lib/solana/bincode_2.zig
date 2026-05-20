@@ -1,10 +1,6 @@
 const std = @import("std");
-const tracy = @import("tracy");
 
 pub fn read(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader, comptime T: type) !T {
-    // const zone: ?tracy.Zone = if (T == u8) null else .init(@src(), .{ .name = std.fmt.comptimePrint("bincode.read({s})", .{@typeName(T)}) });
-    // defer if (zone) |z| z.deinit();
-
     switch (@typeInfo(T)) {
         inline .int, .float, .array => |info| {
             if (@typeInfo(T) == .array)
@@ -47,10 +43,6 @@ pub fn read(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader, comptim
     }
 }
 
-// const zone = tracy.Zone.init(@src(), .{ .name = "ShortU16.bincodeRead" });
-// defer zone.deinit();
-// zone.value(val);
-
 const ShortU16 = struct {
     value: u16,
 
@@ -69,31 +61,6 @@ const ShortU16 = struct {
     }
 };
 
-// pub fn VarInt(comptime T: type) type {
-//     return struct {
-//         value: T,
-
-//         const bits = @bitSizeOf(T);
-//         const Oversized = std.meta.Int(.unsigned, ((bits + 6) / 7) * 7);
-
-//         pub fn bincodeRead(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader) !@This() {
-//             var value: Oversized = 0;
-//             var i: u8 = 0;
-//             while (true) {
-//                 const b = try read(fba, reader, u8);
-//                 if (i < bits) {
-//                     value |= @as(Oversized, b & 0x7f) << @intCast(i);
-//                 }
-//                 if (b & 0x80 == 0) {
-//                     const x: T = @truncate(value);
-//                     std.log.info("varint: {}", .{x});
-//                     return .{ .value = x };
-//                 }
-//                 i += 7;
-//             }
-//         }
-//     };
-// }
 pub fn Vec(comptime T: type) type {
     return struct {
         items: []const T,

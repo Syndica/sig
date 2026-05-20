@@ -26,8 +26,6 @@ pub const ReadWrite = struct {
     exec_req_response: *lib.replay.ExecReqResponse,
 };
 
-var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
-
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     var request_reader = rw.exec_req_response.request_ring.get(.reader);
     var response_writer = rw.exec_req_response.response_ring.get(.writer);

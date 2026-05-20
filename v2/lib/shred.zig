@@ -8,7 +8,6 @@ comptime {
     if (@import("builtin").is_test) {
         _ = @import("shred/receiver.zig");
         _ = @import("shred/reed_solomon.zig");
-        _ = @import("shred/reed_solomon_table.zig");
     }
 }
 
@@ -369,7 +368,8 @@ pub const Shred = extern struct {
         std.debug.assert(shred.variant.isData());
         const buffer: *const Packet.Buffer = @ptrCast(shred);
 
-        return buffer[@offsetOf(Shred, "code_or_data") + @sizeOf(DataHeader) .. shred.code_or_data.data.size];
+        return buffer[@offsetOf(Shred, "code_or_data") +
+            @sizeOf(DataHeader) .. shred.code_or_data.data.size];
     }
 
     pub fn chainedMerkleRoot(shred: *const Shred) *const Hash {
@@ -390,7 +390,8 @@ pub const Shred = extern struct {
     // does not include: retransmit signature + proof nodes
     // [firedancer] https://github.com/firedancer-io/firedancer/blob/9f7770af997a1443e7903113fc03ca1ce3b0ad73/src/ballet/shred/fd_shred.c#L109
     fn merkleProtected(shred: *const Shred) []const u8 {
-        const erasure_protected_size = 1115 + @offsetOf(Shred, "code_or_data") + @sizeOf(DataHeader) -
+        const erasure_protected_size = 1115 + @offsetOf(Shred, "code_or_data") +
+            @sizeOf(DataHeader) -
             Signature.SIZE -
             shred.variant.merkleSize() -
             @as(usize, merkle_root_size) -
@@ -408,7 +409,10 @@ pub const Shred = extern struct {
         else
             code_merkle_protected_size;
 
-        return @as(*const Packet.Buffer, @ptrCast(shred))[Signature.SIZE..][0..merkle_protected_size];
+        return @as(
+            *const Packet.Buffer,
+            @ptrCast(shred),
+        )[Signature.SIZE..][0..merkle_protected_size];
     }
 
     // Added by the node who retransmitted the shred to us over Turbine.

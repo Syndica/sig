@@ -20,22 +20,15 @@ pub fn read(fba: *std.heap.FixedBufferAllocator, reader: *std.Io.Reader, comptim
             const tag = try reader.takeInt(info.tag_type, .little);
             return try std.meta.intToEnum(T, tag);
         },
-        .@"union" => |info| {
-            if (@hasDecl(T, read_func_overload))
-                return @field(T, read_func_overload)(fba, reader);
-
-            switch (try read(fba, reader, info.tag_type.?)) {
-                inline else => |tag| {
-                    const Variant = @FieldType(T, @tagName(tag));
-                    const value = if (Variant == void) {} else try read(fba, reader, Variant);
-                    return @unionInit(T, @tagName(tag), value);
-                },
-            }
+        .@"union" => |info| switch (try read(fba, reader, info.tag_type.?)) {
+            inline else => |tag| {
+                const Variant = @TypeOf(@field(@as(T, undefined), @tagName(tag)));
+                return @unionInit(T, @tagName(tag), try read(fba, reader, Variant));
+            },
         },
         .@"struct" => |info| {
             if (@hasDecl(T, read_func_overload))
                 return @field(T, read_func_overload)(fba, reader);
-
             var value: T = undefined;
             inline for (info.fields) |f| @field(value, f.name) = try read(fba, reader, f.type);
             return value;
@@ -59,17 +52,11 @@ pub fn write(writer: *std.Io.Writer, value: anytype) !void {
             try writer.writeAll(std.mem.asBytes(&value));
         },
         .@"enum" => try write(writer, @intFromEnum(value)),
-        .@"union" => {
-            if (@hasDecl(T, write_func_overload))
-                return @field(T, write_func_overload)(&value, writer);
-
-            switch (std.meta.activeTag(value)) {
-                inline else => |tag| {
-                    try write(writer, tag);
-                    if (@FieldType(T, @tagName(tag)) != void)
-                        try write(writer, @field(value, @tagName(tag)));
-                },
-            }
+        .@"union" => switch (std.meta.activeTag(value)) {
+            inline else => |tag| {
+                try write(writer, tag);
+                try write(writer, @field(value, @tagName(tag)));
+            },
         },
         .@"struct" => |info| {
             if (@hasDecl(T, write_func_overload))
