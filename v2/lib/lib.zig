@@ -12,6 +12,7 @@ pub const gossip = @import("gossip.zig");
 pub const ipc = @import("ipc.zig");
 pub const linux = @import("linux.zig");
 pub const util = @import("util.zig");
+pub const collections = @import("collections.zig");
 pub const telemetry = @import("telemetry.zig");
 
 comptime {
@@ -23,6 +24,10 @@ comptime {
     _ = ipc;
     _ = linux;
     _ = telemetry;
+}
+
+comptime {
+    _ = std.testing.refAllDecls(@This());
 }
 
 pub const test_data_dir = "../data/test-data/";

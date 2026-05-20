@@ -192,14 +192,16 @@ pub const Region = union(enum) {
         shred_version: u16,
     },
 
-    telemetry: tel.Region.Info,
+    telemetry: tel.Region.InitParams,
+    deshredded_out,
 
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(lib.net.Pair),
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
-            .telemetry => |cfg| cfg.regionSize(),
+            .telemetry => |params| params.info().regionSize(),
+            .deshredded_out => @sizeOf(lib.shred.DeshredRing),
         };
     }
 
@@ -234,11 +236,16 @@ pub const Region = union(enum) {
                 data.shred_version = cfg.shred_version;
             },
 
-            .telemetry => |info| {
-                std.debug.assert(buf.len == info.regionSize());
+            .telemetry => |params| {
+                std.debug.assert(buf.len == params.info().regionSize());
                 const data: *tel.Region = @ptrCast(buf);
 
-                data.init(info);
+                data.init(params);
+            },
+            .deshredded_out => {
+                std.debug.assert(buf.len == @sizeOf(lib.shred.DeshredRing));
+                const data: *lib.shred.DeshredRing = @ptrCast(buf);
+                data.init();
             },
         };
     }

@@ -1541,16 +1541,7 @@
         .name = "virtual_address_space_adjustments",
         .pubkey = "7VgiehxNxu53KdxgLspGQY8myE6f7UokaWa4jsGcaSz",
         .description = "SIMD-0460: Virtual Address Space Adjustments",
-        .status = .unsupported,
-        .note =
-        \\ TODO: High Priority 
-        \\ Pending testnet activation.
-        \\ Implementation has been complete for some time, it is being temporarily reverted to unsupported to 
-        \\ because it needs to be audited and reactivated on octane. It is currently not hardcoded for fuzzing in 
-        \\ firedancer or agave so can be switched off to restrict fuzzing in octane until audit and local fuzzing is
-        \\ completed. The current implementation was ported from our previous implementation of 'stricter_abi_and_runtime_constraints' and
-        \\ needs a once over to ensure correctness.
-        ,
+        .status = .supported,
     },
     .{
         .name = "account_data_direct_mapping",
@@ -1779,6 +1770,12 @@
         .name = "set_lamports_per_byte_to_696",
         .pubkey = "mZdnRh9T2EbDNvqKjkCR3bvo5c816tJaojtE9Xs7iuY",
         .description = "SIMD-0437-5: Set lamports per byte to 696",
+        .status = .supported,
+    },
+    .{
+        .name = "custom_commission_collector",
+        .pubkey = "CustomCommissionCo11ector111111111111111111",
+        .description = "SIMD-0232: Custom Commission Collector Account",
         .status = .supported,
     },
 }

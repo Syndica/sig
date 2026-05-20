@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   build_check_macos:
-    runs-on: macos-26
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,7 +37,7 @@ jobs:
         run: zig build -Denable-tsan=false --summary all -Dno-run -Dno-bin
 
   test_macos:
-    runs-on: macos-26
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,7 +59,7 @@ jobs:
           zig-out/bin/test 2>&1 | cat
 
   test_macos_hashmap_ledger:
-    runs-on: macos-26
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -82,7 +82,7 @@ jobs:
           zig-out/bin/test 2>&1 | cat
 
   test_webzockets_macos:
-    runs-on: macos-26
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
