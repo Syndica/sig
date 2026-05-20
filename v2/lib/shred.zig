@@ -73,10 +73,10 @@ pub const FecSetId = extern struct {
                 const idx_diff = child.fec_set_idx - parent.fec_set_idx;
                 return idx_diff == 32;
             },
-            1 => {
+            // typically this will be 1, but may be more under forking / skipped slots
+            else => {
                 return child.fec_set_idx == 0;
             },
-            else => return false,
         }
     }
 };
