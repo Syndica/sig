@@ -142,6 +142,7 @@ fn executeCreateAccount(
         space,
         owner,
         ic.ixn_info.account_metas.items[1].pubkey,
+        null,
     );
 }
 
@@ -176,6 +177,7 @@ fn executeCreateAccountWithSeed(
         space,
         owner,
         base,
+        base,
     );
 }
 
@@ -204,7 +206,7 @@ fn executeCreateAccountAllowPrefund(
         var account = try ic.borrowInstructionAccount(0);
         defer account.release();
 
-        try allocate(allocator, ic, &account, space, account.pubkey);
+        try allocate(allocator, ic, &account, space, account.pubkey, null);
         try assign(ic, &account, owner, account.pubkey);
     }
 
@@ -429,7 +431,7 @@ fn executeAllocate(
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
 
-    try allocate(allocator, ic, &account, space, account.pubkey);
+    try allocate(allocator, ic, &account, space, account.pubkey, null);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L506-L523
@@ -458,7 +460,7 @@ fn executeAllocateWithSeed(
         "Create: address {f} does not match derived address {f}",
     );
 
-    try allocate(allocator, ic, &account, space, base);
+    try allocate(allocator, ic, &account, space, base, base);
     try assign(ic, &account, owner, base);
 }
 
@@ -499,6 +501,7 @@ fn createAccount(
     space: u64,
     owner: Pubkey,
     authority: Pubkey,
+    base: ?Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
     var zone = tracy.Zone.init(@src(), .{ .name = "createAccount" });
     defer zone.deinit();
@@ -508,15 +511,22 @@ fn createAccount(
         defer account.release();
 
         if (account.account.lamports > 0) {
-            try ic.tc.log(
-                "Create Account: account {f} already in use",
-                .{account.pubkey},
-            );
+            if (base) |b| {
+                try ic.tc.log(
+                    "Create Account: account Address {{ address: {f}, base: Some({f}) }} already in use",
+                    .{ account.pubkey, b },
+                );
+            } else {
+                try ic.tc.log(
+                    "Create Account: account Address {{ address: {f}, base: None }} already in use",
+                    .{account.pubkey},
+                );
+            }
             ic.tc.custom_error = @intFromEnum(SystemProgramError.AccountAlreadyInUse);
             return InstructionError.Custom;
         }
 
-        try allocate(allocator, ic, &account, space, authority);
+        try allocate(allocator, ic, &account, space, authority, base);
         try assign(ic, &account, owner, authority);
     }
 
@@ -848,6 +858,7 @@ fn allocate(
     account: *BorrowedAccount,
     space: u64,
     authority: Pubkey,
+    base: ?Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (!ic.ixn_info.isPubkeySigner(authority)) {
         try ic.tc.log("Allocate: 'base' account {f} must sign", .{account.pubkey});
@@ -855,7 +866,11 @@ fn allocate(
     }
 
     if (account.constAccountData().len > 0 or !account.account.owner.equals(&system_program.ID)) {
-        try ic.tc.log("Allocate: account {f} already in use", .{account.pubkey});
+        if (base) |b| {
+            try ic.tc.log("Allocate: account Address {{ address: {f}, base: Some({f}) }} already in use", .{ account.pubkey, b });
+        } else {
+            try ic.tc.log("Allocate: account Address {{ address: {f}, base: None }} already in use", .{account.pubkey});
+        }
         ic.tc.custom_error = @intFromEnum(SystemProgramError.AccountAlreadyInUse);
         return InstructionError.Custom;
     }
