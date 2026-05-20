@@ -278,8 +278,12 @@ fn parseLenient(
     for (parsed.shdrs, 0..) |s, i| shdrs_snapshot[i] = s;
     const unrelocated_bytes = try allocator.dupe(u8, bytes);
     defer allocator.free(unrelocated_bytes);
-    try parsed.relocate(allocator, bytes, unrelocated_bytes, &function_registry, loader, config);
+    // Swap to the snapshot *before* relocate() runs so that any reads of
+    // `self.shdrs[..]` during relocation (e.g. resolving the .dynstr section
+    // header for R_X86_64_32) see pristine values, not bytes that prior
+    // relocations may have overwritten.
     parsed.shdrs = shdrs_snapshot;
+    try parsed.relocate(allocator, bytes, unrelocated_bytes, &function_registry, loader, config);
 
     // [agave] https://github.com/anza-xyz/sbpf/blob/v0.12.2/src/elf.rs#L649-L653
     const offset = parsed.header.e_entry -| text_shdr.sh_addr;
