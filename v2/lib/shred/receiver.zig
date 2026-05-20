@@ -190,21 +190,19 @@ pub const Receiver = struct {
                 return error.EquivocationMatchingFecSetWithDifferentSignatureAlreadyInProgress;
             }
 
-            // // This is the first shred of a new in-progress fec set.
-            // const slot_leader = leader_schedule.get(shred.slot) orelse {
-            //     std.debug.print("slot {} missing?\n", .{shred.slot});
-            //     return error.UnknownLeader;
-            // };
-
-            _ = leader_schedule;
+            // This is the first shred of a new in-progress fec set.
+            const slot_leader = leader_schedule.get(shred.slot) orelse {
+                std.debug.print("slot {} missing?\n", .{shred.slot});
+                return error.UnknownLeader;
+            };
 
             var shred_merkle_root: Hash = undefined;
             try shred.merkleRoot(&shred_merkle_root);
 
-            // try shred.signature.verify(
-            //     slot_leader,
-            //     &shred_merkle_root.data,
-            // );
+            try shred.signature.verify(
+                slot_leader,
+                &shred_merkle_root.data,
+            );
 
             const fec_set_ctx = try state.in_progress.createFecSetCtx(fec_set_id, &shred.signature);
 
