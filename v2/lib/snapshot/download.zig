@@ -1176,8 +1176,6 @@ pub const Downloader = struct {
         };
     }
 
-    // Queue helpers are called only while their connection slot is active and in the expected phase.
-
     /// Enqueues a pair of SQEs to connect and perform the tcp handshake along with a timeout.
     fn queueProbeConnectWithTimeout(
         self: *Downloader,
@@ -1185,6 +1183,7 @@ pub const Downloader = struct {
         fd: std.posix.fd_t,
     ) QueueSqeError!void {
         const probe = &self.probe_conns[index];
+        // NOTE: startProbe sets this slot active before queueing connect; CQE handlers cannot retire it until we return to the event loop.
         const active = probe.activePtr() orelse unreachable;
         const connecting = &probe.lifecycle.active.phase.connecting;
 
@@ -1219,6 +1218,7 @@ pub const Downloader = struct {
 
         const timeout_data = send_data.timeout();
 
+        // NOTE: callers either just connected or are handling a current-generation send CQE; queueing cannot retire the slot.
         const active = probe.activePtr() orelse unreachable;
         const needs_request = probe.lifecycle.active.phase == .connecting;
         const sending = probe.enterSending();
@@ -1264,6 +1264,7 @@ pub const Downloader = struct {
 
         const timeout_data = recv_data.timeout();
 
+        // NOTE: callers either just finished sending or are handling a current-generation recv CQE; queueing cannot retire the slot.
         const active = probe.activePtr() orelse unreachable;
         const receiving = probe.enterReceiving();
         std.debug.assert(offset <= receiving.recv_buf.len);
@@ -2252,6 +2253,7 @@ pub const Downloader = struct {
         fd: std.posix.fd_t,
     ) QueueSqeError!void {
         const conn = &self.download_conns[index];
+        // NOTE: startDownloadRacer sets this slot active before queueing connect; CQE handlers cannot retire it until we return to the event loop.
         const active = conn.activePtr() orelse unreachable;
         const connecting = &conn.lifecycle.active.phase.connecting;
 
@@ -2277,6 +2279,7 @@ pub const Downloader = struct {
     ) QueueSqeError!void {
         const conn = &self.download_conns[data.index];
         const needs_request = conn.lifecycle.active.phase == .connecting;
+        // NOTE: callers either just connected or are handling a current-generation send CQE; queueing cannot retire the slot.
         const active = conn.activePtr() orelse unreachable;
         const sending = conn.enterSending();
 
@@ -2319,6 +2322,7 @@ pub const Downloader = struct {
         offset: u16,
     ) QueueSqeError!void {
         const conn = &self.download_conns[data.index];
+        // NOTE: callers either just finished sending or are handling a current-generation header recv CQE; queueing cannot retire the slot.
         const active = conn.activePtr() orelse unreachable;
         const reading_headers = conn.enterReadingHeaders();
 
@@ -2345,6 +2349,7 @@ pub const Downloader = struct {
     /// handles HTTP edge case where the header recv can read past `\r\n\r\n` and already consume some snapshot body bytes into recv_buf.
     fn queueDownloadWriteExtra(self: *Downloader, data: UserData, written: u16) QueueSqeError!void {
         const conn = &self.download_conns[data.index];
+        // NOTE: callers either just transitioned to writing_extra or are handling its current-generation CQE; queueing cannot retire the slot.
         const active = conn.activePtr() orelse unreachable;
         const writing_extra = &conn.lifecycle.active.phase.writing_extra;
 
@@ -2372,6 +2377,7 @@ pub const Downloader = struct {
 
     fn queueDownloadSpliceInWithTimeout(self: *Downloader, index: u8) QueueSqeError!void {
         const conn = &self.download_conns[index];
+        // NOTE: callers either just transitioned to splicing_in or are handling an adjacent current-generation CQE; queueing cannot retire the slot.
         const active = conn.activePtr() orelse unreachable;
         const splicing_in = conn.enterSplicingIn();
 
@@ -2400,6 +2406,7 @@ pub const Downloader = struct {
 
     fn queueDownloadPollInWithTimeout(self: *Downloader, index: u8) QueueSqeError!void {
         const conn = &self.download_conns[index];
+        // NOTE: callers reach this from a current-generation splice_in CQE; queueing cannot retire the slot.
         const active = conn.activePtr() orelse unreachable;
         const waiting_readable = conn.enterWaitingReadable();
 
@@ -2424,6 +2431,7 @@ pub const Downloader = struct {
 
     fn queueDownloadSpliceOut(self: *Downloader, index: u8) QueueSqeError!void {
         const conn = &self.download_conns[index];
+        // NOTE: callers reach this while the current-generation download has pipe bytes pending; queueing cannot retire the slot.
         const active = conn.activePtr() orelse unreachable;
         _ = conn.enterSplicingOut();
 
@@ -2441,6 +2449,7 @@ pub const Downloader = struct {
 
     fn queueDownloadFsync(self: *Downloader, index: u8) QueueSqeError!void {
         const conn = &self.download_conns[index];
+        // NOTE: callers reach this after a current-generation splice_out CQE completes the download; queueing cannot retire the slot.
         const active = conn.activePtr() orelse unreachable;
         _ = conn.enterFsyncing();
 
