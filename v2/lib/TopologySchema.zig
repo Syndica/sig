@@ -1,9 +1,22 @@
+//! Defines how our services communicate, and how they're started up.
+//!
+//! This code is reponsible for:
+//! - Defining services and their needed shared memory regions
+//! - Initialising shared memory regions
+//! - Starting up services and securing them down
+//! - Dumping stack traces + errors on service exit
+
 const std = @import("std");
 const lib = @import("lib.zig");
+const tracy = @import("tracy");
 
 const linux = std.os.linux;
-const sigaction_fn = linux.Sigaction.sigaction_fn;
+const E = linux.E;
+const e = E.init;
+const SigactionFn = linux.Sigaction.sigaction_fn;
 const ServiceEntrypoint = lib.ipc.ServiceFn;
+
+const memfd = lib.linux.memfd;
 
 const TopologySchema = @This();
 services: []const ServiceSchema,
@@ -75,15 +88,28 @@ pub fn Bind(
     comptime topo: TopologySchema,
     /// A tagged union of all the intended shared region bindings.
     /// The associated payload should be the type that will be used to initialize the region.
+    /// Expected methods:
+    /// ```zig
+    /// /// returns the required mapped size of the region.
+    /// fn size(r: Region) usize;
+    ///
+    /// /// asserts `buf.len == r.size()`, and initializes `buf` as a region as described by the union payload.
+    /// fn init(r: Region, buf: []align(std.heap.page_size_min) u8) E!void;
+    /// ```
     comptime Region: type,
     /// Defines the equivalences between regions across all services, unifying them under one binding (the `Region` tag name).
-    comptime bindings_map: topo.RegionBindingsMap(@typeInfo(Region).@"union".tag_type.?),
+    comptime bindings_map_init: topo.RegionBindingsMap(@typeInfo(Region).@"union".tag_type.?),
 ) type {
     return struct {
         const bound = @This();
 
         pub const RegionTag = @typeInfo(Region).@"union".tag_type.?;
         pub const BindingsMap = topo.RegionBindingsMap(RegionTag);
+        pub const bindings_map = bindings_map_init;
+
+        fn regionSize(r: Region) usize {
+            return r.size();
+        }
 
         comptime {
             if (topo.validateBindingsMap(RegionTag, bindings_map)) |result| switch (result) {
@@ -178,6 +204,32 @@ pub fn Bind(
                 try w.print("{s}_{}", .{ @tagName(self.service), self.n });
             }
         };
+
+        /// Returns the total number of spawned services will be sharing the specified `region`.
+        /// This accounts for the maximum instance index (the `n` field).
+        pub fn countRegionShares(
+            region: RegionTag,
+            services: []const ServiceInstance,
+        ) usize {
+            var service_counts: std.EnumArray(bound.ServiceId, u8) = .initFill(0);
+
+            const region_bindings = bindings_map.get(region);
+            var iter = region_bindings.iterator();
+            for (0..region_bindings.count()) |_| {
+                const service_region_id: bound.ServiceRegionId = iter.next().?;
+                const info = getServiceRegionIdInfo(service_region_id);
+                for (services) |instance| {
+                    if (info == instance.service) {
+                        const max_count_ptr = service_counts.getPtr(instance.service);
+                        max_count_ptr.* = @max(max_count_ptr.*, instance.n + 1);
+                    }
+                }
+            }
+            if (iter.next() != null) unreachable;
+
+            const vec: @Vector(service_counts.values.len, usize) = service_counts.values;
+            return @reduce(.Add, vec);
+        }
 
         pub const Share = struct {
             instance: ServiceInstance,
@@ -307,10 +359,10 @@ pub fn Bind(
 
         // -- Service Externs -- //
 
-        pub fn getFaultHandler(service: bound.ServiceId) sigaction_fn {
+        pub fn getFaultHandler(service: bound.ServiceId) SigactionFn {
             return switch (service) {
                 inline else => |s| @extern(
-                    sigaction_fn,
+                    SigactionFn,
                     .{ .name = "svc_fault_handler_" ++ @tagName(s) },
                 ),
             };
@@ -398,7 +450,9 @@ pub fn Bind(
                                     }
                                 }
 
-                                std.debug.assert(region_memfd.size == shared_region.region.size());
+                                std.debug.assert(
+                                    region_memfd.size == regionSize(shared_region.region),
+                                );
                                 if (!exists) break :blk result;
                             }
                         }
@@ -414,6 +468,476 @@ pub fn Bind(
             }
 
             return map;
+        }
+
+        // -- Memory Mapped fds -- //
+
+        /// Mmap in our memfds, putting the regions in a type-erased extern struct.
+        pub fn resolveArgs(
+            params: struct {
+                exit: memfd.RW,
+                stderr: std.fs.File,
+                regions: []const ServiceMapLookupResult,
+            },
+        ) !lib.ipc.ResolvedArgs {
+            std.debug.assert(params.exit.size == @sizeOf(lib.ipc.Exit));
+            var args: lib.ipc.ResolvedArgs = .{
+                .stderr = params.stderr.handle,
+                .exit = @ptrCast((try params.exit.mmap(null)).ptr),
+
+                .rw = @splat(null),
+                .rw_len = @splat(0),
+                .ro = @splat(null),
+                .ro_len = @splat(0),
+
+                .thread_crash_ctx = null,
+                .thread_crash_fn = null,
+                .service_idx = std.math.maxInt(u16),
+            };
+
+            var i_rw: u8 = 0;
+            var i_ro: u8 = 0;
+
+            for (params.regions) |region| {
+                const region_size = regionSize(region.shared.region);
+                if (region_size != region.memfd.size) {
+                    std.debug.panic(
+                        "region {s}[{d}] expected to have size {Bi}, but memfd has size {Bi}.",
+                        .{
+                            @tagName(region.shared.region), region.n,
+                            region_size,                    region.memfd.size,
+                        },
+                    );
+                }
+
+                if (region.rw) {
+                    args.rw[i_rw] = (try region.memfd.mmap(region.shared.requested_location)).ptr;
+                    args.rw_len[i_rw] = region_size;
+                    i_rw += 1;
+                } else {
+                    const ro_memfd = try memfd.RO.fromRW(region.memfd);
+                    args.ro[i_ro] = (try ro_memfd.mmap(region.shared.requested_location)).ptr;
+                    args.ro_len[i_ro] = region_size;
+                    i_ro += 1;
+                }
+            }
+
+            return args;
+        }
+
+        /// Create and initialize memfds for each shared memory region (map it, initialize it, and then unmap it).
+        /// We must unmap to avoid sharing regions with services that don't need them.
+        fn createAndInitSharedRegionMemfds(
+            gpa: std.mem.Allocator,
+            regions: []const SharedRegion,
+        ) ![]const memfd.RW {
+            const region_memfds: []memfd.RW = try gpa.alloc(memfd.RW, regions.len);
+            errdefer gpa.free(region_memfds);
+            @memset(region_memfds, .empty);
+
+            for (region_memfds, regions) |*region_memfd, shared_region| {
+                // This name should be visible from a debugger, but serves no other purpose.
+                var fmt_buf: [4096]u8 = undefined;
+                const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{shared_region});
+
+                region_memfd.* = try .init(.{
+                    .name = name,
+                    .size = shared_region.region.size(),
+                });
+
+                const buf = try region_memfd.mmap(shared_region.requested_location);
+                defer std.posix.munmap(buf);
+                try shared_region.region.init(buf);
+                std.log.info("Initialised: {f}", .{shared_region});
+            }
+
+            return region_memfds;
+        }
+
+        // Creates a memfd for every service, to be used for storing a lib.ipc.Exit value, which is used
+        // for reporting traces+errors back to the main process.
+        fn createExitMemfds(
+            comptime services: []const ServiceInstance,
+            exit_memfds: *[services.len]memfd.RW,
+        ) !void {
+            @memset(exit_memfds, .empty);
+            inline for (exit_memfds, services) |*exit_memfd, service_instance| {
+                exit_memfd.* = try .init(.{
+                    .name = std.fmt.comptimePrint(
+                        "exit_{s}_{}",
+                        .{ @tagName(service_instance.service), service_instance.n },
+                    ),
+                    .size = @sizeOf(lib.ipc.Exit),
+                });
+            }
+        }
+
+        // -- Service Spawning -- //
+
+        /// Initialises the shared memory regions with their parameters, then securely starts up services.
+        /// Blocks until the first service has exited, before dumping out traces.
+        pub fn spawnAndWait(
+            allocator: std.mem.Allocator,
+            comptime services: []const ServiceInstance,
+            regions: []const SharedRegion,
+        ) !void {
+            const region_memfds = try createAndInitSharedRegionMemfds(allocator, regions);
+            defer allocator.free(region_memfds);
+
+            var exit_memfds: [services.len]memfd.RW = undefined;
+            try createExitMemfds(services, &exit_memfds);
+
+            var map = try serviceMap(allocator, services, regions, region_memfds);
+            defer {
+                for (map.values()) |*value| value.deinit(allocator);
+                map.deinit(allocator);
+            }
+
+            const ExitMeta = struct {
+                pid: i32,
+                exit: ?*lib.ipc.Exit,
+            };
+
+            var exit_meta: std.MultiArrayList(ExitMeta) = .{};
+            defer exit_meta.deinit(allocator);
+            try exit_meta.ensureUnusedCapacity(allocator, services.len);
+
+            // Start up all services, storing their pids
+            inline for (services, exit_memfds) |service_instance, exit| {
+                const child_pid = try spawnService(
+                    service_instance,
+                    exit,
+                    std.fs.File.stderr(),
+                    map.get(service_instance).?.items,
+                );
+
+                try exit_meta.append(allocator, .{ .pid = child_pid, .exit = null });
+            }
+
+            // We only mmap the exit regions after spawning the child processes, as we don't want them
+            // mapped in children
+            for (exit_meta.items(.exit), exit_memfds) |*exit, exit_fd| {
+                exit.* = @ptrCast(try exit_fd.mmap(null));
+            }
+
+            // Wait for the first child to exit
+            var status: u32 = 0;
+            const exited_pid: i32 = pid: {
+                const ret: usize = linux.waitpid(-1, &status, 0);
+                std.debug.assert(e(ret) == .SUCCESS);
+                break :pid @intCast(ret);
+            };
+
+            const exited_service_idx = std.mem.indexOfScalar(
+                i32,
+                exit_meta.items(.pid),
+                exited_pid,
+            ) orelse std.debug.panic("Unknown child pid {} exited\n", .{exited_pid});
+
+            dumpOnExit(
+                exit_meta.items(.exit)[exited_service_idx].?,
+                services[exited_service_idx],
+                exited_pid,
+                status,
+            );
+        }
+
+        fn spawnService(
+            service_instance: ServiceInstance,
+            exit: memfd.RW,
+            stderr: std.fs.File,
+            regions: []const ServiceMapLookupResult,
+        ) !i32 {
+            const parent_pid = std.os.linux.getpid();
+
+            const maybe_child_pid = lib.linux.clone3.clone3(&.{
+                .flags = .{
+                    // NOTE: all FDs currently open will remain open in the child
+                    // There is no way around this, except
+                    // 1) Immediately closing all FDs in the child
+                    // 2) Making sure all FDs were created with CLOEXEC, and using exec in the child
+                },
+                .exit_signal = std.os.linux.SIG.CHLD,
+            });
+
+            if (maybe_child_pid) |child_pid| {
+                // parent code
+                std.log.info("Starting Service `{f}`, pid: {}", .{ service_instance, child_pid });
+                return child_pid;
+            }
+
+            switch (service_instance.service) {
+                inline else => |svc| tracy.setThreadName("svc: " ++ @tagName(svc)),
+            }
+
+            // register fault handlers
+            {
+                const act: *const std.os.linux.Sigaction = &.{
+                    .handler = .{ .sigaction = getFaultHandler(service_instance.service) },
+                    .mask = std.os.linux.sigemptyset(),
+                    .flags = (std.posix.SA.SIGINFO | std.posix.SA.RESTART | std.posix.SA.RESETHAND),
+                };
+
+                const SIG = linux.SIG;
+                // standard signals in std.debug.updateSegfaultHandler
+                if (e(std.os.linux.sigaction(SIG.SEGV, act, null)) != .SUCCESS) @panic("wtf");
+                if (e(std.os.linux.sigaction(SIG.ILL, act, null)) != .SUCCESS) @panic("wtf");
+                if (e(std.os.linux.sigaction(SIG.BUS, act, null)) != .SUCCESS) @panic("wtf");
+                if (e(std.os.linux.sigaction(SIG.FPE, act, null)) != .SUCCESS) @panic("wtf");
+
+                // catch seccomp too
+                if (e(std.os.linux.sigaction(SIG.SYS, act, null)) != .SUCCESS) @panic("wtf");
+            }
+
+            // Make sure that the services die when the parent exits
+            {
+                const ret = linux.prctl(
+                    @intFromEnum(linux.PR.SET_PDEATHSIG),
+                    linux.SIG.KILL,
+                    0,
+                    0,
+                    0,
+                );
+                if (e(ret) != .SUCCESS) std.debug.panic("prctl failed with: {}\n", .{e(ret)});
+
+                // NOTE: this check does not work if we spawn each service into a new pid namespace, as
+                // getppid will return 0 (including when the parent is dead).
+                const parent_pid_now = std.os.linux.getppid();
+                if (parent_pid != parent_pid_now) {
+                    // The parent died. In case this happened before we set SET_PDEATHSIG, let's exit
+                    // ourselves.
+                    @branchHint(.cold);
+                    std.debug.panic(
+                        "Parent died, parent pid changed ({}->{})\n",
+                        .{ parent_pid, parent_pid_now },
+                    );
+                }
+            }
+
+            const resolved_args = try resolveArgs(.{
+                .exit = exit,
+                .stderr = stderr,
+                .regions = regions,
+            });
+
+            // mseal our shared VMAs (essentially making sure their mapping can't be tampered with)
+            for (resolved_args.ro, resolved_args.ro_len) |ptr, len| mseal(ptr orelse continue, len);
+            for (resolved_args.rw, resolved_args.rw_len) |ptr, len| mseal(ptr orelse continue, len);
+            mseal(@ptrCast(resolved_args.exit), @sizeOf(lib.ipc.Exit));
+
+            closeAllFdsExceptStderr(stderr.handle);
+
+            // makes it impossible for the service to gain privileges
+            std.debug.assert(try std.posix.prctl(.SET_NO_NEW_PRIVS, .{ 1, 0, 0, 0 }) == 0);
+
+            // install a basic seccomp filter that bans syscalls except write+sleep
+            {
+                const bpf_filters = lib.linux.bpf.printSleepExit(stderr.handle);
+                const program: lib.linux.bpf.sock_fprog = .{
+                    .len = bpf_filters.len,
+                    .sock_filter = &bpf_filters,
+                };
+
+                const ret = linux.seccomp(linux.SECCOMP.SET_MODE_FILTER, 0, &program);
+                const err = e(ret);
+                if (err != .SUCCESS) {
+                    std.debug.panic("seccomp err: {}", .{err});
+                    return;
+                }
+            }
+
+            getEntrypoint(service_instance.service)(resolved_args);
+            std.process.exit(255);
+        }
+
+        /// Prevents VMAs from being later modified
+        fn mseal(address: [*]align(std.heap.page_size_min) const u8, len: usize) void {
+            switch (e(std.os.linux.mseal(address, len, 0))) {
+                .SUCCESS => {},
+                // syscall unsupported (6.12+),
+                // TODO: consider making this required
+                .NOSYS => {},
+                else => |err| std.debug.panic("mseal failed: {}\n", .{err}),
+            }
+        }
+
+        fn closeAllFdsExceptStderr(maybe_stderr: ?linux.fd_t) void {
+            const max_fd = std.math.maxInt(linux.fd_t);
+
+            if (maybe_stderr) |stderr| {
+                // close (0..stderr, stderr+1..=max)
+                if (std.os.linux.syscall3(.close_range, 0, @intCast(stderr -| 1), 0) != 0)
+                    std.debug.panic("close_range failed\n", .{});
+                if (std.os.linux.syscall3(.close_range, @intCast(stderr +| 1), max_fd, 0) != 0)
+                    std.debug.panic("close_range failed\n", .{});
+            } else {
+                // close (0..=max)
+                if (std.os.linux.syscall3(.close_range, 0, max_fd, 0) != 0)
+                    std.debug.panic("close_range failed\n", .{});
+            }
+        }
+
+        fn dumpOnExit(
+            meta: *lib.ipc.Exit,
+            service_instance: ServiceInstance,
+            pid: i32,
+            status: u32,
+        ) void {
+            if (meta.panicMsg()) |panic_msg| {
+                std.log.err(
+                    "Service `{f}` (pid: {}) panicked with message: {s}",
+                    .{ service_instance, pid, panic_msg },
+                );
+            }
+            if (meta.errorName()) |error_string| {
+                std.log.err(
+                    "Service `{f}` (pid: {}) exited with error: {s}",
+                    .{ service_instance, pid, error_string },
+                );
+            }
+            if (meta.faultMsg()) |fault_msg| {
+                std.log.err(
+                    "Service `{f}` (pid: {}) faulted with message: {s}",
+                    .{ service_instance, pid, fault_msg },
+                );
+            }
+
+            if (linux.W.TERMSIG(status) != 0) {
+                std.log.err(
+                    "Service `{f}` (pid: {}) exited from signal {}",
+                    .{ service_instance, pid, linux.W.TERMSIG(status) },
+                );
+            }
+
+            if (meta.errorReturnStackTrace()) |trace| {
+                std.log.err("Error trace:", .{});
+                std.debug.dumpStackTrace(trace);
+            }
+
+            if (meta.stackTrace()) |trace| {
+                std.log.err("Stack trace:", .{});
+                std.debug.dumpStackTrace(trace);
+            }
+
+            if (meta.faultStackTrace()) |trace| {
+                std.log.err("Fault trace:", .{});
+                std.debug.dumpStackTrace(trace);
+            }
+        }
+
+        pub fn spawnAndWaitNoSandbox(
+            allocator: std.mem.Allocator,
+            comptime services: []const ServiceInstance,
+            regions: []const SharedRegion,
+        ) !void {
+            const region_memfds = try createAndInitSharedRegionMemfds(allocator, regions);
+            defer allocator.free(region_memfds);
+
+            var exit_memfds: [services.len]memfd.RW = undefined;
+            try createExitMemfds(services, &exit_memfds);
+
+            var map = try serviceMap(allocator, services, regions, region_memfds);
+            defer {
+                for (map.values()) |*value| value.deinit(allocator);
+                map.deinit(allocator);
+            }
+
+            var reset_event: std.Thread.ResetEvent = .{};
+            var finished_service_idx: std.atomic.Value(u16) = .init(std.math.maxInt(u16));
+
+            const thread_exit_ctx: ThreadExitContext = .{
+                .finished_idx = &finished_service_idx,
+                .reset_event = &reset_event,
+            };
+
+            // Start up all services, storing their pids
+            inline for (services, exit_memfds, 0..) |service_instance, exit, i| {
+                _ = try spawnServiceNoSandbox(
+                    service_instance,
+                    exit,
+                    std.fs.File.stderr(),
+                    map.get(service_instance).?.items,
+                    i,
+                    &thread_exit_ctx,
+                );
+            }
+
+            // Wait for first service to exit
+            reset_event.wait();
+
+            const exited_idx = finished_service_idx.load(.seq_cst);
+            std.debug.assert(exited_idx != std.math.maxInt(u16));
+
+            dumpOnExit(
+                @ptrCast(try exit_memfds[exited_idx].mmap(null)),
+                services[exited_idx],
+                0,
+                0,
+            );
+        }
+
+        /// Context created by the service initializer, used to report thread exit or crash and wake the
+        /// main thread. Services receive it as opaque data and must not inspect it.
+        const ThreadExitContext = struct {
+            finished_idx: *std.atomic.Value(u16),
+            reset_event: *std.Thread.ResetEvent,
+        };
+
+        fn signalThreadExit(service_idx: u16, ctx: *const ThreadExitContext) void {
+            ctx.finished_idx.store(service_idx, .seq_cst);
+            ctx.reset_event.set();
+        }
+
+        // Called by service threads in no-sandbox mode. Uses C calling convention because the function
+        // pointer crosses service/init compilation units.
+        fn signalThreadCrash(ctx: ?*const anyopaque, service_idx: u16) callconv(.c) void {
+            const thread_ctx: *const ThreadExitContext = @ptrCast(@alignCast(ctx orelse return));
+            signalThreadExit(service_idx, thread_ctx);
+        }
+
+        fn threadEntry(
+            entry_point: ServiceEntrypoint,
+            service: bound.ServiceId,
+            args: lib.ipc.ResolvedArgs,
+            service_idx: u16,
+            thread_exit_ctx: *const ThreadExitContext,
+        ) void {
+            switch (service) {
+                inline else => |svc| tracy.setThreadName("svc: " ++ @tagName(svc)),
+            }
+
+            entry_point(args);
+            signalThreadExit(service_idx, thread_exit_ctx);
+        }
+
+        fn spawnServiceNoSandbox(
+            service_instance: ServiceInstance,
+            exit: memfd.RW,
+            stderr: std.fs.File,
+            regions: []const ServiceMapLookupResult,
+            service_idx: u16,
+            thread_exit_ctx: *const ThreadExitContext,
+        ) !std.Thread {
+            var resolved_args = try resolveArgs(.{
+                .exit = exit,
+                .stderr = stderr,
+                .regions = regions,
+            });
+            resolved_args.thread_crash_ctx = thread_exit_ctx;
+            resolved_args.thread_crash_fn = signalThreadCrash;
+            resolved_args.service_idx = service_idx;
+
+            return try std.Thread.spawn(
+                .{},
+                threadEntry,
+                .{
+                    getEntrypoint(service_instance.service),
+                    service_instance.service,
+                    resolved_args,
+                    service_idx,
+                    thread_exit_ctx,
+                },
+            );
         }
     };
 }
