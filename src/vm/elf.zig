@@ -108,20 +108,14 @@ fn parseStrict(
     sbpf_version: sbpf.Version,
     config: Config,
 ) LoadError!Executable {
+    // [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/elf.rs#L415
     if (bytes.len < @sizeOf(elf.Elf64_Ehdr)) return error.OutOfBounds;
     const header: elf.Elf64_Ehdr = @bitCast(bytes[0..@sizeOf(elf.Elf64_Ehdr)].*);
 
-    // A list of the first 4 expected program headers.
-    // Since this is a stricter parsing scheme, we need them to match exactly.
-    const expected_phdrs: [4]struct { u32, u64 } = .{
-        .{ elf.PF_X, memory.BYTECODE_START }, // byte code
-        .{ elf.PF_R, memory.RODATA_START }, // read only data
-        .{ elf.PF_R | elf.PF_W, memory.STACK_START }, // stack
-        .{ elf.PF_R | elf.PF_W, memory.HEAP_START }, // heap
-    };
-
     const ident: ElfIdent = @bitCast(header.e_ident);
     const phdr_table_end = (@sizeOf(elf.Elf64_Phdr) *| header.e_phnum) +| @sizeOf(elf.Elf64_Ehdr);
+    // File header validation — matches agave's strict parser checks.
+    // Notably: e_type, e_shentsize, e_shnum, e_shstrndx are NOT checked.
     if (!std.mem.eql(u8, ident.magic[0..4], elf.MAGIC) or
         ident.class != elf.ELFCLASS64 or
         ident.data != elf.ELFDATA2LSB or
@@ -129,16 +123,13 @@ fn parseStrict(
         ident.osabi != elf.OSABI.NONE or
         ident.abiversion != 0x00 or
         !std.mem.allEqual(u8, &ident.padding, 0) or
-        @intFromEnum(header.e_machine) != sbpf.EM_SBPF or
-        header.e_type != .DYN or
+        @intFromEnum(header.e_machine) != @intFromEnum(elf.EM.BPF) or
         header.e_version != 1 or
         header.e_phoff != @sizeOf(elf.Elf64_Ehdr) or
         header.e_ehsize != @sizeOf(elf.Elf64_Ehdr) or
         header.e_phentsize != @sizeOf(elf.Elf64_Phdr) or
-        header.e_phnum < expected_phdrs.len or
-        phdr_table_end >= bytes.len or
-        header.e_shentsize != @sizeOf(elf.Elf64_Shdr) or
-        header.e_shstrndx >= header.e_shnum)
+        header.e_phnum == 0 or
+        phdr_table_end > bytes.len)
     {
         return error.InvalidFileHeader;
     }
@@ -147,28 +138,52 @@ fn parseStrict(
         elf.Elf64_Phdr,
         bytes[@sizeOf(elf.Elf64_Ehdr)..phdr_table_end],
     );
-    for (expected_phdrs, phdrs[0..expected_phdrs.len]) |entry, phdr| {
+
+    // Expected program headers: rodata (PF_R @ 0) then bytecode (PF_X @ 0x100000000).
+    // The rodata header can be skipped if the first header is already PF_X.
+    // NOTE: sig's memory.BYTECODE_START (0) corresponds to agave's MM_RODATA_START,
+    // and sig's memory.RODATA_START (0x100000000) corresponds to agave's MM_BYTECODE_START.
+    const EXPECTED: [2]struct { u32, u64 } = .{
+        .{ elf.PF_R, memory.BYTECODE_START }, // rodata at 0x0 (agave: MM_RODATA_START)
+        .{ elf.PF_X, memory.RODATA_START }, // bytecode at 0x100000000 (agave: MM_BYTECODE_START)
+    };
+
+    const skip_rodata = (phdrs[0].p_flags != EXPECTED[0][0]);
+    if (!skip_rodata and header.e_phnum < 2) {
+        return error.InvalidFileHeader;
+    }
+
+    const start_idx: usize = if (skip_rodata) 1 else 0;
+    var expected_offset: u64 = phdr_table_end;
+    var phdr_idx: usize = 0;
+    for (EXPECTED[start_idx..]) |entry| {
         const p_flags, const p_vaddr = entry;
-        // For writable sections, (those with the PF_W bit set), we expect their
-        // value for p_filesz to be zero.
-        const p_filesz = if (p_flags & elf.PF_W != 0) 0 else phdr.p_memsz;
+        const phdr = phdrs[phdr_idx];
 
         if (phdr.p_type != elf.PT_LOAD or
             phdr.p_flags != p_flags or
-            phdr.p_offset < phdr_table_end or
+            phdr.p_offset != expected_offset or
             phdr.p_offset >= bytes.len or
             phdr.p_offset % 8 != 0 or
             phdr.p_vaddr != p_vaddr or
             phdr.p_paddr != p_vaddr or
-            phdr.p_filesz != p_filesz or
+            phdr.p_filesz != phdr.p_memsz or
             phdr.p_filesz > bytes.len -| phdr.p_offset or
-            phdr.p_memsz >= memory.RODATA_START // larger than one region
+            phdr.p_filesz % 8 != 0 or
+            phdr.p_memsz >= memory.RODATA_START // larger than one region (MM_REGION_SIZE)
         ) {
             return error.InvalidProgramHeader;
         }
+        expected_offset = expected_offset +| phdr.p_filesz;
+        phdr_idx += 1;
     }
 
-    const bytecode_header = phdrs[0];
+    // Determine ro_section and bytecode_header based on whether rodata was skipped.
+    const ro_section_start: u64 = if (skip_rodata) phdr_table_end else phdrs[0].p_offset;
+    const ro_section_end: u64 = if (skip_rodata) phdr_table_end else (phdrs[0].p_offset +| phdrs[0].p_filesz);
+    const bytecode_header = if (skip_rodata) phdrs[0] else phdrs[1];
+
+    // Entry point validation
     const vm_range_start = bytecode_header.p_vaddr;
     const vm_range_end = bytecode_header.p_vaddr +% bytecode_header.p_memsz;
     const entry_chk = header.e_entry +% 7;
@@ -179,15 +194,9 @@ fn parseStrict(
     }
 
     const entry_pc = (header.e_entry -| bytecode_header.p_vaddr) / 8;
-    const entry_inst: sbpf.Instruction = @bitCast(bytes[bytecode_header.p_offset..][0..8].*);
-    if (!entry_inst.isFunctionStartMarker()) {
-        return error.InvalidFileHeader;
-    }
 
     var function_registry: Registry = .{};
     errdefer function_registry.deinit(allocator);
-
-    const rodata_header = phdrs[1];
 
     return .{
         .bytes = bytes,
@@ -195,11 +204,11 @@ fn parseStrict(
         .entry_pc = entry_pc,
         .from_asm = false,
         .ro_section = .{ .borrowed = .{
-            .offset = rodata_header.p_vaddr,
-            .start = rodata_header.p_offset,
-            .end = rodata_header.p_offset +| rodata_header.p_filesz,
+            .offset = memory.BYTECODE_START, // agave: MM_RODATA_START = 0
+            .start = ro_section_start,
+            .end = ro_section_end,
         } },
-        .text_vaddr = vm_range_start,
+        .text_vaddr = bytecode_header.p_vaddr,
         .config = config,
         .function_registry = function_registry,
         .text_section_len = bytecode_header.p_filesz,

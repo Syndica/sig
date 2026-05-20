@@ -266,7 +266,9 @@ fn loadTransactionAccountsSimd186(
             transaction,
             program_id,
             feature_set.active(.formalize_loaded_transaction_data_size, slot),
-        ) orelse return error.ProgramAccountNotFound;
+        ) orelse {
+            return error.ProgramAccountNotFound;
+        };
         defer program_account.account.deinit(allocator);
 
         const owner_id = &program_account.account.owner;
@@ -355,7 +357,9 @@ fn loadTransactionAccountsOld(
             transaction,
             &instr.program_meta.pubkey,
             feature_set.active(.formalize_loaded_transaction_data_size, slot),
-        ) orelse return error.ProgramAccountNotFound;
+        ) orelse {
+            return error.ProgramAccountNotFound;
+        };
         defer program_account.account.deinit(allocator);
 
         const owner_id = program_account.account.owner;
@@ -369,7 +373,9 @@ fn loadTransactionAccountsOld(
             transaction,
             &owner_id,
             feature_set.active(.formalize_loaded_transaction_data_size, slot),
-        ) orelse return error.ProgramAccountNotFound;
+        ) orelse {
+            return error.ProgramAccountNotFound;
+        };
         defer owner_account.account.deinit(allocator);
 
         if (!owner_account.account.owner.equals(&runtime.ids.NATIVE_LOADER_ID)) {

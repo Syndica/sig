@@ -518,7 +518,7 @@ pub fn executeTransaction(
                         InstructionErrorEnum.fromError(
                             ixn_err,
                             tc.custom_error,
-                            null,
+                            tc.borsh_io_error,
                         ) catch |err| {
                             std.debug.panic("Error conversion failed: error={}", .{err});
                         },

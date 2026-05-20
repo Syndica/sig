@@ -26,37 +26,37 @@ pub const Version = enum(u32) {
         return version.gte(.v1);
     }
 
-    /// Enable SIMD-0174: SBPF arithmetics improvements
+    /// Enable SIMD-0174: SBPF arithmetics improvements (V2 only, not V3+)
     pub fn enablePqr(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0174
     pub fn swapSubRegImmOperands(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0174
     pub fn disableNegation(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0174
     pub fn explicitSignExtensionOfResults(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
 
-    /// Enable SIMD-0173: SBPF instruction encoding improvements
+    /// Enable SIMD-0173: SBPF instruction encoding improvements (V2 only)
     pub fn callRegUsesSrcReg(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0173
     pub fn disableLddw(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     pub fn moveMemoryInstructionClasses(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0173
     pub fn disableLe(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
 
     /// Enable SIMD-0178: SBPF Static Syscalls
@@ -73,6 +73,14 @@ pub const Version = enum(u32) {
     }
     /// ... SIMD-0189
     pub fn enableLowerBytecodeVaddr(version: Version) bool {
+        return version.gte(.v3);
+    }
+    /// Enable SIMD-0377: SBPF 32-bit jump instructions
+    pub fn enableJmp32(version: Version) bool {
+        return version.gte(.v3);
+    }
+    /// ... SIMD-0377
+    pub fn callxUsesDstReg(version: Version) bool {
         return version.gte(.v3);
     }
 
@@ -313,6 +321,19 @@ pub const Instruction = packed struct(u64) {
         /// bpf opcode: `srem64 dst, src` /// `dst %= src`.
         srem64_reg = pqr | b | x | srem,
 
+        /// SIMD-0377 JMP32: `jeq32 dst, imm, +off` /// `pc += off if (dst as u32) == imm`.
+        jeq32_imm = pqr | k | jeq,
+        /// SIMD-0377 JMP32: `jeq32 dst, src, +off` /// `pc += off if (dst as u32) == (src as u32)`.
+        jeq32_reg = pqr | x | jeq,
+        /// SIMD-0377 JMP32: `jgt32 dst, imm, +off` /// `pc += off if (dst as u32) > imm`.
+        jgt32_imm = pqr | k | jgt,
+        /// SIMD-0377 JMP32: `jgt32 dst, src, +off` /// `pc += off if (dst as u32) > (src as u32)`.
+        jgt32_reg = pqr | x | jgt,
+        /// SIMD-0377 JMP32: `jlt32 dst, imm, +off` /// `pc += off if (dst as u32) < imm`.
+        jlt32_imm = pqr | k | jlt,
+        /// SIMD-0377 JMP32: `jlt32 dst, src, +off` /// `pc += off if (dst as u32) < (src as u32)`.
+        jlt32_reg = pqr | x | jlt,
+
         /// bpf opcode: `ja +off` /// `pc += off`.
         ja = jmp | 0x0,
         /// bpf opcode: `jeq dst, imm, +off` /// `pc += off if dst == imm`.
@@ -385,6 +406,25 @@ pub const Instruction = packed struct(u64) {
         pub const st_2b_reg: OpCode = .div64_reg;
         // pub const st_4b_reg: OpCode = .st_4b_reg;
         pub const st_8b_reg: OpCode = .mod64_reg;
+
+        // SIMD-0377 JMP32 aliases for opcodes that overlap with PQR entries.
+        // In V2 these are PQR instructions; in V3+ they are JMP32 instructions.
+        pub const jge32_imm: OpCode = .uhmul64_imm; // 0x36
+        pub const jge32_reg: OpCode = .uhmul64_reg; // 0x3e
+        pub const jset32_imm: OpCode = .udiv32_imm; // 0x46
+        pub const jset32_reg: OpCode = .udiv32_reg; // 0x4e
+        pub const jne32_imm: OpCode = .udiv64_imm; // 0x56
+        pub const jne32_reg: OpCode = .udiv64_reg; // 0x5e
+        pub const jsgt32_imm: OpCode = .urem32_imm; // 0x66
+        pub const jsgt32_reg: OpCode = .urem32_reg; // 0x6e
+        pub const jsge32_imm: OpCode = .urem64_imm; // 0x76
+        pub const jsge32_reg: OpCode = .urem64_reg; // 0x7e
+        pub const jle32_imm: OpCode = .shmul64_imm; // 0xb6
+        pub const jle32_reg: OpCode = .shmul64_reg; // 0xbe
+        pub const jslt32_imm: OpCode = .sdiv32_imm; // 0xc6
+        pub const jslt32_reg: OpCode = .sdiv32_reg; // 0xce
+        pub const jsle32_imm: OpCode = .sdiv64_imm; // 0xd6
+        pub const jsle32_reg: OpCode = .sdiv64_reg; // 0xde
 
         pub inline fn isReg(opcode: OpCode) bool {
             const is_reg_bit: u1 = @truncate(@intFromEnum(opcode) >> 3);

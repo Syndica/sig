@@ -381,16 +381,62 @@ pub const AlignedMemoryMap = struct {
         version: sbpf.Version,
         config: exe.Config,
     ) (error{OutOfMemory} || InitError)!AlignedMemoryMap {
-        for (regions, 1..) |reg, index| {
-            if (reg.vm_addr_start >> VIRTUAL_ADDRESS_BITS != index) {
-                return error.InvalidMemoryRegion;
+        if (version.enableLowerBytecodeVaddr()) {
+            // V3+ (allow_memory_region_zero): sort regions by vm_addr, fill
+            // gaps with empty placeholder regions, use 0-based indexing.
+            // [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/memory_region.rs#L369
+            const sorted = try allocator.dupe(Region, regions);
+            defer allocator.free(sorted);
+            std.sort.pdq(Region, sorted, {}, struct {
+                fn lessThan(_: void, a: Region, b: Region) bool {
+                    return a.vm_addr_start < b.vm_addr_start;
+                }
+            }.lessThan);
+
+            // Determine the highest region index to know the total size.
+            const max_index: usize = if (sorted.len > 0)
+                @intCast(sorted[sorted.len - 1].vm_addr_start >> VIRTUAL_ADDRESS_BITS)
+            else
+                0;
+            const total: usize = max_index + 1;
+            const result_regions = try allocator.alloc(Region, total);
+            errdefer allocator.free(result_regions);
+
+            // Fill all slots with empty read-only placeholders.
+            for (result_regions, 0..) |*r, i| {
+                r.* = .{
+                    .host_memory = .{ .constant = &.{} },
+                    .vm_addr_start = @as(u64, @intCast(i)) << VIRTUAL_ADDRESS_BITS,
+                    .vm_addr_end = @as(u64, @intCast(i)) << VIRTUAL_ADDRESS_BITS,
+                    .vm_gap_shift = @bitSizeOf(u64) - 1,
+                };
             }
+
+            // Place actual regions at their correct indices.
+            for (sorted) |reg| {
+                const idx: usize = @intCast(reg.vm_addr_start >> VIRTUAL_ADDRESS_BITS);
+                if (idx >= total) return error.InvalidMemoryRegion;
+                result_regions[idx] = reg;
+            }
+
+            return .{
+                .regions = result_regions,
+                .version = version,
+                .config = config,
+            };
+        } else {
+            // Pre-V3: existing behavior — expect regions at indices 1, 2, 3, ...
+            for (regions, 1..) |reg, index| {
+                if (reg.vm_addr_start >> VIRTUAL_ADDRESS_BITS != index) {
+                    return error.InvalidMemoryRegion;
+                }
+            }
+            return .{
+                .regions = try allocator.dupe(Region, regions),
+                .version = version,
+                .config = config,
+            };
         }
-        return .{
-            .regions = try allocator.dupe(Region, regions),
-            .version = version,
-            .config = config,
-        };
     }
 
     fn deinit(self: *const AlignedMemoryMap, allocator: std.mem.Allocator) void {
@@ -401,10 +447,20 @@ pub const AlignedMemoryMap = struct {
         const err = accessViolation(vm_addr, self.version, self.config);
 
         const index = vm_addr >> VIRTUAL_ADDRESS_BITS;
-        if (index == 0 or index > self.regions.len) return err;
-        const reg = &self.regions[index - 1];
-        if (vm_addr >= reg.vm_addr_start and vm_addr < reg.vm_addr_end) {
-            return reg;
+        if (self.version.enableLowerBytecodeVaddr()) {
+            // V3+: 0-based indexing, allow index 0.
+            if (index >= self.regions.len) return err;
+            const reg = &self.regions[index];
+            if (vm_addr >= reg.vm_addr_start and vm_addr < reg.vm_addr_end) {
+                return reg;
+            }
+        } else {
+            // Pre-V3: 1-based indexing, reject index 0.
+            if (index == 0 or index > self.regions.len) return err;
+            const reg = &self.regions[index - 1];
+            if (vm_addr >= reg.vm_addr_start and vm_addr < reg.vm_addr_end) {
+                return reg;
+            }
         }
         return err;
     }

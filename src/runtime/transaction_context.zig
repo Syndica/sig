@@ -114,6 +114,11 @@ pub const TransactionContext = struct {
     /// be set here and InstructionError.Custom will be returned
     custom_error: ?u32 = null,
 
+    /// When BorshIoError is returned by a program, the associated message string is
+    /// stored here so it can be included in the InstructionErrorEnum conversion.
+    /// Ownership transfers to the InstructionErrorEnum; do not free from TransactionContext.
+    borsh_io_error: ?[]u8 = null,
+
     /// SIMD-0460: when the SBPF VM raises an `AccessViolation`, the access-
     /// violation handler records the access here so the bpf_loader's
     /// post-execution error path can remap it to a more specific

@@ -129,7 +129,9 @@ fn loadProgram(
         executable_bytes,
         &environment.loader,
         environment.config,
-    ) catch return .failed;
+    ) catch {
+        return .failed;
+    };
 
     executable.verify(&environment.loader) catch {
         executable.deinit(allocator);

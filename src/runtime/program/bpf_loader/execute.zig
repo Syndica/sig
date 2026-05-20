@@ -83,6 +83,9 @@ pub fn execute(
         if (kind != .Instruction) {
             return InstructionError.ProgramFailedToComplete;
         } else {
+            if (err == error.BorshIoError) {
+                ic.tc.borsh_io_error = allocator.dupe(u8, "Unknown") catch null;
+            }
             return sig.vm.instructionErrorFromExecutionError(err);
         }
     };

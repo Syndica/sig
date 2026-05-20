@@ -792,10 +792,13 @@ pub const Vm = struct {
         }
     };
 
-    /// SIMD-0178, SIMD-0179, SIMD-0189
+    /// SIMD-0178, SIMD-0179, SIMD-0189, SIMD-0377
+    /// V3 is NOT a superset of V2. V2 features (PQR, move_memory, disable_lddw,
+    /// sign_extension, swap_sub) are V2-only. V3 starts from V0/V1 and adds its
+    /// own features (static syscalls, JMP32, callx_dst_reg).
     const v3 = struct {
         const table = table: {
-            var array = v2.table;
+            var array = v0.table;
             for (@typeInfo(v3).@"struct".decls) |field| {
                 array[@intFromEnum(@field(OpCode, field.name))] = @field(v3, field.name);
             }
@@ -808,13 +811,10 @@ pub const Vm = struct {
             self.registers.set(.pc, target_pc);
         }
 
+        // In agave V3, EXIT (0x95) is always the exit/return instruction.
+        // Static syscalls are dispatched via CALL_IMM with src=0, not via EXIT.
         pub fn exit_or_syscall(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
-            if (self.loader.get(inst.imm)) |entry| {
-                try self.dispatchSyscall(entry);
-                self.registers.set(.pc, pc + 1);
-            } else {
-                @panic("TODO: detect invalid syscall in verifier");
-            }
+            return @call(.always_inline, v0.exit_or_syscall, .{ self, inst, pc });
         }
 
         pub fn @"return"(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
@@ -833,6 +833,78 @@ pub const Vm = struct {
                 return error.UnsupportedInstruction;
             }
             self.registers.set(.pc, next_pc);
+        }
+
+        // SIMD-0377: JMP32 support — 32-bit conditional branch instructions
+        // These override PQR handlers from V2 since class-6 means JMP32 in V3.
+
+        // JMP32-only opcodes (no PQR equivalent)
+        pub const jeq32_imm: Handle = branch32;
+        pub const jeq32_reg: Handle = branch32;
+        pub const jgt32_imm: Handle = branch32;
+        pub const jgt32_reg: Handle = branch32;
+        pub const jlt32_imm: Handle = branch32;
+        pub const jlt32_reg: Handle = branch32;
+
+        // Dual-purpose opcodes: override PQR with JMP32 for V3
+        pub const uhmul64_imm: Handle = branch32; // = jge32_imm (0x36)
+        pub const uhmul64_reg: Handle = branch32; // = jge32_reg (0x3e)
+        pub const udiv32_imm: Handle = branch32; // = jset32_imm (0x46)
+        pub const udiv32_reg: Handle = branch32; // = jset32_reg (0x4e)
+        pub const udiv64_imm: Handle = branch32; // = jne32_imm (0x56)
+        pub const udiv64_reg: Handle = branch32; // = jne32_reg (0x5e)
+        pub const urem32_imm: Handle = branch32; // = jsgt32_imm (0x66)
+        pub const urem32_reg: Handle = branch32; // = jsgt32_reg (0x6e)
+        pub const urem64_imm: Handle = branch32; // = jsge32_imm (0x76)
+        pub const urem64_reg: Handle = branch32; // = jsge32_reg (0x7e)
+        pub const shmul64_imm: Handle = branch32; // = jle32_imm (0xb6)
+        pub const shmul64_reg: Handle = branch32; // = jle32_reg (0xbe)
+        pub const sdiv32_imm: Handle = branch32; // = jslt32_imm (0xc6)
+        pub const sdiv32_reg: Handle = branch32; // = jslt32_reg (0xce)
+        pub const sdiv64_imm: Handle = branch32; // = jsle32_imm (0xd6)
+        pub const sdiv64_reg: Handle = branch32; // = jsle32_reg (0xde)
+
+        // PQR-only opcodes (no valid JMP32 equivalent) — unsupported in V3
+        pub const lmul32_imm: Handle = v0.unsupported;
+        pub const lmul32_reg: Handle = v0.unsupported;
+        pub const lmul64_imm: Handle = v0.unsupported;
+        pub const lmul64_reg: Handle = v0.unsupported;
+        pub const srem32_imm: Handle = v0.unsupported;
+        pub const srem32_reg: Handle = v0.unsupported;
+        pub const srem64_imm: Handle = v0.unsupported;
+        pub const srem64_reg: Handle = v0.unsupported;
+
+        /// SIMD-0377: JMP32 — 32-bit conditional branch
+        fn branch32(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+            const target_pc: u64 = @intCast(@as(i64, @intCast(pc + 1)) + inst.off);
+            const raw = @intFromEnum(inst.opcode);
+            const is_reg = (raw & 0x08) != 0;
+
+            const lhs: u32 = @truncate(self.registers.getPtrConst(inst.dst).*);
+            const rhs: u32 = @truncate(if (is_reg)
+                self.registers.getPtrConst(inst.src).*
+            else
+                @as(u64, inst.imm));
+
+            const lhs_signed: i32 = @bitCast(lhs);
+            const rhs_signed: i32 = @bitCast(rhs);
+
+            const op: u8 = raw & 0xf0;
+            const predicate: bool = switch (op) {
+                Instruction.jeq => lhs == rhs,
+                Instruction.jgt => lhs > rhs,
+                Instruction.jge => lhs >= rhs,
+                Instruction.jlt => lhs < rhs,
+                Instruction.jle => lhs <= rhs,
+                Instruction.jset => lhs & rhs != 0,
+                Instruction.jne => lhs != rhs,
+                Instruction.jsgt => lhs_signed > rhs_signed,
+                Instruction.jsge => lhs_signed >= rhs_signed,
+                Instruction.jslt => lhs_signed < rhs_signed,
+                Instruction.jsle => lhs_signed <= rhs_signed,
+                else => return error.UnsupportedInstruction,
+            };
+            self.registers.set(.pc, if (predicate) target_pc else pc + 1);
         }
     };
 
