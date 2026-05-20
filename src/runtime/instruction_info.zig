@@ -109,10 +109,17 @@ pub const InstructionInfo = struct {
         self: *const InstructionInfo,
     ) std14.BoundedArray(Pubkey, MAX_ACCOUNT_METAS) {
         var signers = std14.BoundedArray(Pubkey, MAX_ACCOUNT_METAS){};
-        for (self.account_metas.items) |account_meta| {
-            if (account_meta.is_signer) {
-                signers.appendAssumeCapacity(account_meta.pubkey);
+        outer: for (self.account_metas.items) |account_meta| {
+            if (!account_meta.is_signer) continue;
+            // [agave] get_signers collects into a HashSet. account_metas may hold
+            // up to MAX_INSTR_ACCOUNTS (1094) entries with duplicate pubkeys, so
+            // dedupe to keep the result within the distinct-account bound
+            // (MAX_ACCOUNT_METAS) instead of overflowing the BoundedArray.
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/instruction.rs#L253
+            for (signers.constSlice()) |existing| {
+                if (existing.equals(&account_meta.pubkey)) continue :outer;
             }
+            signers.appendAssumeCapacity(account_meta.pubkey);
         }
         return signers;
     }
@@ -160,3 +167,105 @@ pub const InstructionInfo = struct {
             return InstructionError.MissingAccount;
     }
 };
+
+fn pubkeyFromSeed(seed: u8) Pubkey {
+    var data: [Pubkey.SIZE]u8 = @splat(0);
+    data[0] = seed;
+    return .{ .data = data };
+}
+
+test "getSigners collects signer keys and excludes non-signers" {
+    const allocator = std.testing.allocator;
+
+    var account_metas = InstructionInfo.AccountMetas{};
+    defer account_metas.deinit(allocator);
+
+    const signer_a = pubkeyFromSeed(1);
+    const non_signer = pubkeyFromSeed(2);
+    const signer_b = pubkeyFromSeed(3);
+
+    try account_metas.append(allocator, .{
+        .pubkey = signer_a,
+        .index_in_transaction = 0,
+        .is_signer = true,
+        .is_writable = true,
+    });
+    try account_metas.append(allocator, .{
+        .pubkey = non_signer,
+        .index_in_transaction = 1,
+        .is_signer = false,
+        .is_writable = true,
+    });
+    try account_metas.append(allocator, .{
+        .pubkey = signer_b,
+        .index_in_transaction = 2,
+        .is_signer = true,
+        .is_writable = false,
+    });
+
+    const ixn_info: InstructionInfo = .{
+        .program_meta = .{ .pubkey = Pubkey.ZEROES, .index_in_transaction = 0 },
+        .account_metas = account_metas,
+        .dedupe_map = @splat(0xffff),
+        .instruction_data = "",
+        .owned_instruction_data = false,
+    };
+    const signers = ixn_info.getSigners();
+
+    // Tally result occurrences by seed (byte 0): both signers present once,
+    // the non-signer absent.
+    var seen: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0);
+    for (signers.constSlice()) |key| seen[key.data[0]] += 1;
+
+    try std.testing.expectEqual(2, signers.len);
+    try std.testing.expectEqual(1, seen[signer_a.data[0]]);
+    try std.testing.expectEqual(1, seen[signer_b.data[0]]);
+    try std.testing.expectEqual(0, seen[non_signer.data[0]]);
+}
+
+// Regression: the conformance/fuzz harness admits instructions with far more
+// account metas than MAX_ACCOUNT_METAS (agave's harness caps them at
+// MAX_INSTR_ACCOUNTS = 1094). getSigners must dedupe — mirroring agave's
+// `get_signers` HashSet — so the distinct signer set stays within
+// MAX_ACCOUNT_METAS instead of overflowing the BoundedArray. Before the dedupe
+// fix this panicked with "reached unreachable code" on the 257th append.
+test "getSigners dedupes duplicate signers without overflowing" {
+    const allocator = std.testing.allocator;
+
+    var account_metas = InstructionInfo.AccountMetas{};
+    defer account_metas.deinit(allocator);
+
+    // 1094 signer metas (well past MAX_ACCOUNT_METAS) drawn from exactly
+    // MAX_ACCOUNT_METAS distinct pubkeys.
+    const meta_count = 1094;
+    for (0..meta_count) |i| {
+        const seed: u8 = @intCast(i % InstructionInfo.MAX_ACCOUNT_METAS);
+        try account_metas.append(allocator, .{
+            .pubkey = pubkeyFromSeed(seed),
+            .index_in_transaction = 0,
+            .is_signer = true,
+            .is_writable = false,
+        });
+    }
+
+    const ixn_info: InstructionInfo = .{
+        .program_meta = .{ .pubkey = Pubkey.ZEROES, .index_in_transaction = 0 },
+        .account_metas = account_metas,
+        .dedupe_map = @splat(0xffff),
+        .instruction_data = "",
+        .owned_instruction_data = false,
+    };
+    const signers = ixn_info.getSigners();
+
+    // Each distinct pubkey appears exactly once — no overflow, no duplicates.
+    // The test owns the key space (byte 0 is the seed), so a seen-array checks
+    // this in O(n) rather than an O(n^2) per-key scan.
+    try std.testing.expectEqual(InstructionInfo.MAX_ACCOUNT_METAS, signers.len);
+    var seen: [InstructionInfo.MAX_ACCOUNT_METAS]bool = @splat(false);
+    for (signers.constSlice()) |key| {
+        const seed = key.data[0];
+        try std.testing.expect(!seen[seed]); // no duplicate
+        seen[seed] = true;
+    }
+    for (seen) |present| try std.testing.expect(present); // every seed present
+}
