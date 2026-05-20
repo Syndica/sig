@@ -35,6 +35,7 @@ const TransactionReturnData = sig.ledger.transaction_status.TransactionReturnDat
 const encodeAccount = sig.rpc.account_codec.encodeAccount;
 const computeBudgetExecute = sig.runtime.program.compute_budget.execute;
 const getDurableNonce = sig.runtime.check_transactions.getDurableNonce;
+const getHealth = sig.rpc.hook_contexts.HealthChecker.getHealth;
 const getSysvarFromAccount = sig.replay.update_sysvar.getSysvarFromAccount;
 const resolveTransaction = sig.replay.resolve_lookup.resolveTransaction;
 const executeTransaction = sig.replay.svm_gateway.executeTransaction;
@@ -115,10 +116,11 @@ pub fn sendTransaction(
     if (!skip_preflight) {
         const result: SimulateTransactionResult = blk: {
             unsanitized_tx.verify() catch break :blk .{ .err = .SignatureFailure };
-            // TODO: Health Check
-            // Agave json rpc config specifies a health check which checks node health before servicing requests.
-            // We should consider the same.
-            // [agave] https://github.com/anza-xyz/agave/blob/2a61a3ecd417b0515c0b2f322d0128394f20626b/rpc/src/rpc.rs#L3867-L3886
+            switch (try getHealth(.{ .commitments = self.commitments }, arena, .{})) {
+                .ok => {},
+                .behind => |slots| return .{ .node_unhealthy = slots },
+                .unknown => return .{ .node_unhealthy = null },
+            }
             break :blk try self.simulateRuntimeTransaction(
                 arena,
                 transaction,
@@ -851,6 +853,34 @@ test sendTransaction {
         });
         try std.testing.expect(result == .preflight_failure);
         try std.testing.expectEqual(TransactionError.SignatureFailure, result.preflight_failure.err);
+    }
+
+    { // Preflight health check returns unknown.
+        var encode_buf_64: [std.base64.standard.Encoder.calcSize(tx_bytes.len)]u8 = undefined;
+        const encoded_64 = std.base64.standard.Encoder.encode(&encode_buf_64, &tx_bytes);
+        const result = try ctx.sendTransaction(arena, .{
+            .transaction = encoded_64,
+            .config = .{ .encoding = .base64 },
+        });
+        try std.testing.expect(result == .node_unhealthy);
+        try std.testing.expectEqual(null, result.node_unhealthy);
+    }
+
+    { // Preflight health check returns behind.
+        commitments.processed.store(71, .monotonic);
+        commitments.confirmed.store(200, .monotonic);
+
+        var encode_buf_64: [std.base64.standard.Encoder.calcSize(tx_bytes.len)]u8 = undefined;
+        const encoded_64 = std.base64.standard.Encoder.encode(&encode_buf_64, &tx_bytes);
+        const result = try ctx.sendTransaction(arena, .{
+            .transaction = encoded_64,
+            .config = .{ .encoding = .base64 },
+        });
+        try std.testing.expect(result == .node_unhealthy);
+        try std.testing.expectEqual(129, result.node_unhealthy);
+
+        commitments.processed.store(0, .monotonic);
+        commitments.confirmed.store(0, .monotonic);
     }
 }
 
