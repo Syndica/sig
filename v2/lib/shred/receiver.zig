@@ -88,9 +88,9 @@ pub const Receiver = struct {
             if (shred.slot < state.root_slot) return error.ShredOlderThanRoot;
             if (shred.slot > state.max_slot) return error.ShredTooNew;
 
-            // // ignore shred with wrong version
+            // ignore shred with wrong version
             if (shred.version != network_shred_version) {
-                // return error.ShredVersionMismatch;
+                return error.ShredVersionMismatch;
             }
 
             // reject shreds greater than the max per slot
