@@ -851,13 +851,8 @@ fn widthraw(
         } else {
             // [SIMD-0185] Withdraw: completely zero vote account data for fully withdrawn v4 accounts.
             if (vote_state == .v4) {
-                var zeros: [VoteStateV4.MAX_VOTE_STATE_SIZE]u8 = undefined;
-                @memset(&zeros, 0);
-                try vote_account.setDataFromSlice(
-                    allocator,
-                    &ic.tc.accounts_resize_delta,
-                    &zeros,
-                );
+                const data = try vote_account.mutableAccountData();
+                @memset(data, 0);
             } else {
                 var deinitialized_state: VoteState = .{ .v3 = VoteStateV3.DEFAULT };
 
@@ -5210,6 +5205,123 @@ test "vote_program: widthdraw all with v4 zeros account data" {
 
     // With V4 feature: full withdrawal zeros account data
     const final_data = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .withdraw = lamports,
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = lamports,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{
+                    .pubkey = recipient,
+                    .lamports = 0,
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = rent,
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{
+                    .feature = .vote_state_v4,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 0,
+                    .owner = vote_program.ID,
+                    .data = final_data[0..],
+                },
+                .{
+                    .pubkey = recipient,
+                    .lamports = lamports,
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+}
+
+// Regression test for: SIMD-0185 V4 withdraw deinit must zero the vote account
+// data in place (preserving its existing length) rather than resizing the
+// account to VoteStateV4.MAX_VOTE_STATE_SIZE. A legacy VoteState1_14_11-sized
+// (3731 bytes) account being fully withdrawn under the v4 target must remain
+// 3731 bytes long.
+//
+// Before the fix, the v4 deinit branch in `widthraw` called
+// `setDataFromSlice` with a `VoteStateV4.MAX_VOTE_STATE_SIZE` zero buffer,
+// which resized the account from 3731 to 3762 bytes and produced an output
+// mismatch against agave (which zeroes in place).
+test "vote_program: widthdraw all with v4 preserves v1_14_11-sized account length" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+    const VoteState1_14_11 = vote_program.state.VoteState1_14_11;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+    const rent = Rent.INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const recipient = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+    const lamports: u64 = 27074400;
+
+    // Use legacy v1_14_11 (3731-byte) layout — smaller than VoteStateV4's
+    // 3762-byte max — to detect any erroneous resize during the V4 deinit
+    // path.
+    comptime std.debug.assert(
+        VoteState1_14_11.MAX_VOTE_STATE_SIZE < VoteStateV4.MAX_VOTE_STATE_SIZE,
+    );
+
+    var initial_vote_state = VoteStateVersions{ .v1_14_11 = try VoteState1_14_11.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock.epoch,
+    ) };
+    defer initial_vote_state.deinit(allocator);
+
+    var initial_vote_state_bytes = ([_]u8{0} ** VoteState1_14_11.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    // Expected post-state: same length (3731), all zeros.
+    const final_data = ([_]u8{0} ** VoteState1_14_11.MAX_VOTE_STATE_SIZE);
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
