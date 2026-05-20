@@ -55,6 +55,11 @@ pub fn SharedPool(Item: type, cap: usize) type {
                 if (self == .null) return null;
                 return pool.indexToPtr(self);
             }
+
+            pub fn constPtr(self: ItemId, pool: *const PoolSelf) ?*const Item {
+                if (self == .null) return null;
+                return pool.indexToConstPtr(self);
+            }
         };
 
         pub fn size() usize {
