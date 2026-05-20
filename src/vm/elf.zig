@@ -14,8 +14,6 @@ const Executable = lib.Executable;
 
 const elf = std.elf;
 
-const expect = std.testing.expect;
-
 pub const LoadError = error{
     UnsupportedSBPFVersion,
     WrongClass,
@@ -271,7 +269,17 @@ fn parseLenient(
     errdefer function_registry.deinit(allocator);
 
     // [agave] https://github.com/anza-xyz/sbpf/blob/v0.12.2/src/elf.rs#L642-L647
-    try parsed.relocate(allocator, bytes, &function_registry, loader, config);
+    // Snapshot shdrs and the underlying bytes before relocate(), because
+    // relocate() writes into `bytes` and may clobber bytes that overlap
+    // section header metadata or `.shstrtab`. Agave avoids this by keeping a
+    // separate `unrelocated_elf_bytes` buffer; we mirror that with a dup.
+    const shdrs_snapshot = try allocator.alloc(elf.Elf64_Shdr, parsed.shdrs.len);
+    defer allocator.free(shdrs_snapshot);
+    for (parsed.shdrs, 0..) |s, i| shdrs_snapshot[i] = s;
+    const unrelocated_bytes = try allocator.dupe(u8, bytes);
+    defer allocator.free(unrelocated_bytes);
+    try parsed.relocate(allocator, bytes, unrelocated_bytes, &function_registry, loader, config);
+    parsed.shdrs = shdrs_snapshot;
 
     // [agave] https://github.com/anza-xyz/sbpf/blob/v0.12.2/src/elf.rs#L649-L653
     const offset = parsed.header.e_entry -| text_shdr.sh_addr;
@@ -289,7 +297,7 @@ fn parseLenient(
         entry_pc,
     );
 
-    const ro_section = try parsed.parseRoSections(allocator, config);
+    const ro_section = try parsed.parseRoSections(allocator, config, unrelocated_bytes);
 
     const text_range = Elf64.Range.get(text_shdr);
     const text_bytes = bytes[text_range.lo..text_range.hi];
@@ -406,6 +414,7 @@ const Elf64 = struct {
             ident.class != elf.ELFCLASS64 or
             ident.data != elf.ELFDATA2LSB or
             ident.version != 1 or
+            header.e_version != 1 or
             header.e_ehsize != @sizeOf(elf.Elf64_Ehdr) or
             header.e_phentsize != @sizeOf(elf.Elf64_Phdr) or
             header.e_shentsize != @sizeOf(elf.Elf64_Shdr) or
@@ -774,6 +783,14 @@ const Elf64 = struct {
         self: *Elf64,
         allocator: std.mem.Allocator,
         bytes: []u8,
+        // Immutable snapshot of `bytes` taken before any relocation writes.
+        // Parser-indexed tables (relocations, dynsym, dynstr) must be read
+        // from this buffer because relocation writes can legitimately land
+        // inside .rel.dyn / .dynsym / .dynstr regions and corrupt later
+        // iterations or symbol-name lookups.
+        // [agave] https://github.com/anza-xyz/sbpf/blob/v0.12.2/src/elf.rs#L607-L615
+        // (`unrelocated_elf_bytes` is the equivalent in agave).
+        unrelocated_bytes: []const u8,
         function_registry: *Registry,
         loader: *const SyscallMap,
         config: Config,
@@ -809,7 +826,7 @@ const Elf64 = struct {
 
         const relocations = std.mem.bytesAsSlice(
             elf.Elf64_Rel,
-            bytes[self.dt_rel_off..][0..self.dt_rel_sz],
+            unrelocated_bytes[self.dt_rel_off..][0..self.dt_rel_sz],
         );
         for (relocations) |reloc| {
             const r_offset = reloc.r_offset;
@@ -818,15 +835,23 @@ const Elf64 = struct {
                 .@"64" => {
                     const imm_offset = r_offset +| 4;
 
+                    // Match agave's ordering: bounds-check the immediate
+                    // slice before resolving the dynamic symbol table. This
+                    // ensures that an ELF with both a missing dynsym and an
+                    // out-of-bounds relocation offset reports `OutOfBounds`
+                    // (matches agave's `ValueOutOfBounds`) rather than
+                    // `UnknownSymbol`.
+                    // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/elf.rs#L975-L990
+                    const addr_slice = try safeSlice(bytes, imm_offset, 4);
+                    const ref_addr = std.mem.readInt(u32, addr_slice[0..4], .little);
+
                     const dynsymtab = self.dynsymtab orelse return error.UnknownSymbol;
                     const sh_dynsym = self.shdrs[dynsymtab];
                     const symbol_table = std.mem.bytesAsSlice(
                         elf.Elf64_Sym,
-                        bytes[sh_dynsym.sh_offset..][0..sh_dynsym.sh_size],
+                        unrelocated_bytes[sh_dynsym.sh_offset..][0..sh_dynsym.sh_size],
                     );
 
-                    const addr_slice = try safeSlice(bytes, imm_offset, 4);
-                    const ref_addr = std.mem.readInt(u32, addr_slice[0..4], .little);
                     // Make sure the relocation is referring to a symbol that's in the symbol table.
                     if (reloc.r_sym() >= symbol_table.len) return error.UnknownSymbol;
                     const symbol = symbol_table[reloc.r_sym()];
@@ -888,7 +913,12 @@ const Elf64 = struct {
                             break :address std.mem.readInt(u32, slice[0..4], .little);
                         };
                         const slice = try safeSlice(bytes, r_offset, @sizeOf(u64));
-                        std.mem.writeInt(u64, slice[0..8], address +| memory.BYTECODE_START, .little);
+                        std.mem.writeInt(
+                            u64,
+                            slice[0..8],
+                            address +| memory.BYTECODE_START,
+                            .little,
+                        );
                     }
                 },
                 .@"32" => {
@@ -900,7 +930,7 @@ const Elf64 = struct {
                     const sh_dynsym = self.shdrs[dynsymtab];
                     const symbol_table = std.mem.bytesAsSlice(
                         elf.Elf64_Sym,
-                        bytes[sh_dynsym.sh_offset..][0..sh_dynsym.sh_size],
+                        unrelocated_bytes[sh_dynsym.sh_offset..][0..sh_dynsym.sh_size],
                     );
 
                     if (reloc.r_sym() >= symbol_table.len) return error.UnknownSymbol;
@@ -909,7 +939,7 @@ const Elf64 = struct {
                     const dynstrtab = self.dynstr orelse return error.UnknownSymbol;
                     const dynstr = self.shdrs[dynstrtab];
                     const name = getStringInSection(
-                        bytes,
+                        unrelocated_bytes,
                         dynstr,
                         symbol.st_name,
                         SYMBOL_NAME_LENGTH_MAXIMUM,
@@ -949,6 +979,11 @@ const Elf64 = struct {
         self: *Elf64,
         allocator: std.mem.Allocator,
         config: Config,
+        // Section names must be looked up against the *unrelocated* ELF bytes,
+        // because relocations may overwrite bytes that overlap `.shstrtab`.
+        // Agave keeps an `unrelocated_elf_bytes` buffer for the same reason.
+        // [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/elf.rs#L660-L664
+        name_bytes: []const u8,
     ) !Section {
         // List of allowed section names for storing data.
         const valid_ro_names: []const []const u8 = &.{
@@ -987,7 +1022,7 @@ const Elf64 = struct {
 
         for (self.shdrs, 0..) |shdr, i| {
             const name = getStringInSection(
-                self.bytes,
+                name_bytes,
                 section_names_shdr,
                 shdr.sh_name,
                 SECTION_NAME_LENGTH_MAXIMUM,

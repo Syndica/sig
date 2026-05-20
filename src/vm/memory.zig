@@ -900,7 +900,10 @@ test "aligned region" {
 
     try expectError(error.AccessViolation, m.region(.constant, BYTECODE_START - 1));
     try expectEqual(&program_mem, (try m.region(.constant, BYTECODE_START)).hostSlice(.constant));
-    try expectEqual(&program_mem, (try m.region(.constant, BYTECODE_START + 3)).hostSlice(.constant));
+    try expectEqual(
+        &program_mem,
+        (try m.region(.constant, BYTECODE_START + 3)).hostSlice(.constant),
+    );
     try expectError(error.AccessViolation, m.region(.constant, BYTECODE_START + 4));
     try expectEqual(error.AccessViolation, m.region(.mutable, STACK_START));
     try expectEqual(&stack_mem, (try m.region(.constant, STACK_START)).hostSlice(.constant));
