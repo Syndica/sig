@@ -14,6 +14,7 @@ comptime {
 }
 
 pub const net = @import("net.zig");
+pub const clock = @import("clock.zig");
 pub const crypto = @import("crypto.zig");
 pub const solana = @import("solana.zig");
 pub const shred = @import("shred.zig");
@@ -27,6 +28,7 @@ pub const telemetry = @import("telemetry.zig");
 
 comptime {
     _ = net;
+    _ = clock;
     _ = crypto;
     _ = solana;
     _ = shred;

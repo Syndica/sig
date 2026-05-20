@@ -37,13 +37,21 @@ const LinkedTimeoutOp = struct {
     active_offset: u16,
     /// Timestamp captured when the current io_uring op was submitted.
     /// Used to measure SQE to CQE received latency.
-    op_start_time: std.time.Instant,
+    op_start_time: u64,
 
-    fn init(active_offset: u16) LinkedTimeoutOp {
+    fn empty() LinkedTimeoutOp {
+        return .{
+            .active_offset = 0,
+            .timed_out = false,
+            .op_start_time = 0,
+        };
+    }
+
+    fn initOffset(active_offset: u16) LinkedTimeoutOp {
         return .{
             .active_offset = active_offset,
             .timed_out = false,
-            .op_start_time = std.time.Instant.now() catch unreachable,
+            .op_start_time = lib.clock.monotonic(.ns),
         };
     }
 };
@@ -105,7 +113,7 @@ pub const ProbeConn = struct {
         net_addr: std.net.Address,
         /// timestamp captured at probe start. Used to compute
         /// latency on successful completion.
-        start_time: std.time.Instant,
+        start_time: u64,
         /// Snapshot slot that this probe is testing for.
         slot: Slot,
         /// Snapshot hash that this probe is testing for, used along with
@@ -152,7 +160,7 @@ pub const ProbeConn = struct {
         switch (active.phase) {
             .connecting => {
                 active.phase = .{ .sending = .{
-                    .op = undefined,
+                    .op = .empty(),
                     .send_buf = undefined,
                     .send_len = 0,
                 } };
@@ -169,7 +177,7 @@ pub const ProbeConn = struct {
         switch (active.phase) {
             .sending => {
                 active.phase = .{ .receiving = .{
-                    .op = undefined,
+                    .op = .empty(),
                     .recv_buf = undefined,
                 } };
             },
@@ -211,7 +219,7 @@ const DownloadCandidate = struct {
 };
 
 const DownloadProgressSample = struct {
-    time: std.time.Instant,
+    time: u64,
     bytes_written: u64,
 };
 
@@ -298,7 +306,7 @@ pub const DownloadConn = struct {
     const DownloadWritingExtra = struct {
         /// Timestamp captured when the current io_uring op was submitted.
         /// Used to measure SQE to CQE received latency.
-        op_start_time: std.time.Instant,
+        op_start_time: u64,
         /// Used to store HTTP responses. Needs to live until the extra body bytes are written.
         recv_buf: [4096]u8,
         /// The length of the HTTP payload received and stored in `recv_buf` currently.
@@ -320,13 +328,13 @@ pub const DownloadConn = struct {
     const DownloadSplicingOut = struct {
         /// Timestamp captured when the current io_uring op was submitted.
         /// Used to measure SQE to CQE received latency.
-        op_start_time: std.time.Instant,
+        op_start_time: u64,
     };
 
     const DownloadFsyncing = struct {
         /// Timestamp captured when the current io_uring op was submitted.
         /// Used to measure SQE to CQE received latency.
-        op_start_time: std.time.Instant,
+        op_start_time: u64,
     };
 
     const DownloadRuntimeState = struct {
@@ -405,7 +413,7 @@ pub const DownloadConn = struct {
         switch (active.phase) {
             .connecting => {
                 active.phase = .{ .sending = .{
-                    .op = undefined,
+                    .op = .empty(),
                     .send_buf = undefined,
                     .send_len = 0,
                 } };
@@ -422,7 +430,7 @@ pub const DownloadConn = struct {
         switch (active.phase) {
             .sending => {
                 active.phase = .{ .reading_headers = .{
-                    .op = undefined,
+                    .op = .empty(),
                     .recv_buf = undefined,
                 } };
             },
@@ -442,7 +450,7 @@ pub const DownloadConn = struct {
         switch (active.phase) {
             .reading_headers => |state| {
                 active.phase = .{ .writing_extra = .{
-                    .op_start_time = undefined,
+                    .op_start_time = lib.clock.monotonic(.ns),
                     .recv_buf = state.recv_buf,
                     .recv_len = body_start + extra_len,
                     .extra_body_start = body_start,
@@ -461,7 +469,7 @@ pub const DownloadConn = struct {
         switch (active.phase) {
             .splicing_in => {
                 active.phase = .{ .waiting_readable = .{
-                    .op = undefined,
+                    .op = .empty(),
                 } };
             },
             .waiting_readable => {},
@@ -480,7 +488,7 @@ pub const DownloadConn = struct {
             .splicing_out,
             => active.phase = .{
                 .splicing_in = .{
-                    .op = undefined,
+                    .op = .empty(),
                 },
             },
             .splicing_in => {},
@@ -495,7 +503,7 @@ pub const DownloadConn = struct {
         switch (active.phase) {
             .splicing_in => {
                 active.phase = .{ .splicing_out = .{
-                    .op_start_time = undefined,
+                    .op_start_time = lib.clock.monotonic(.ns),
                 } };
             },
             .splicing_out => {},
@@ -510,7 +518,7 @@ pub const DownloadConn = struct {
         switch (active.phase) {
             .splicing_out => {
                 active.phase = .{ .fsyncing = .{
-                    .op_start_time = undefined,
+                    .op_start_time = lib.clock.monotonic(.ns),
                 } };
             },
             .fsyncing => {},
@@ -1092,12 +1100,12 @@ pub const Downloader = struct {
                 .addr = addr,
                 .from = peer.from,
                 .net_addr = net_addr,
-                .start_time = std.time.Instant.now() catch unreachable,
+                .start_time = lib.clock.monotonic(.ns),
                 .slot = peer.slot,
                 .hash = peer.hash,
             },
             .phase = .{ .connecting = .{
-                .op = undefined,
+                .op = .empty(),
             } },
         } };
 
@@ -1182,7 +1190,7 @@ pub const Downloader = struct {
         sqes.timeout.prep_link_timeout(&PROBE_TIMEOUT, 0);
         sqes.timeout.user_data = timeout_data.encode();
 
-        connecting.op = LinkedTimeoutOp.init(0);
+        connecting.op = LinkedTimeoutOp.initOffset(0);
     }
 
     /// Enqueues a pair of SQEs to send the HTTP HEAD request along with a timeout for the corresponding probe.
@@ -1227,7 +1235,7 @@ pub const Downloader = struct {
         sqes.timeout.prep_link_timeout(&PROBE_TIMEOUT, 0);
         sqes.timeout.user_data = timeout_data.encode();
 
-        sending.op = LinkedTimeoutOp.init(offset);
+        sending.op = LinkedTimeoutOp.initOffset(offset);
     }
 
     /// Enqueues a pair of SQEs to recv the HTTP response along with a timeout.
@@ -1258,7 +1266,7 @@ pub const Downloader = struct {
         sqes.timeout.prep_link_timeout(&PROBE_TIMEOUT, 0);
         sqes.timeout.user_data = timeout_data.encode();
 
-        receiving.op = LinkedTimeoutOp.init(offset);
+        receiving.op = LinkedTimeoutOp.initOffset(offset);
     }
 
     fn handleProbeTimeout(self: *Downloader, data: UserData, cqe: std.os.linux.io_uring_cqe) void {
@@ -1463,7 +1471,7 @@ pub const Downloader = struct {
         };
 
         // Compute and store latency.
-        const elapsed_ns = (std.time.Instant.now() catch unreachable).since(active.start_time);
+        const elapsed_ns = lib.clock.monotonic(.ns) -| active.start_time;
         const latency_ms: u32 = @intCast(elapsed_ns / std.time.ns_per_ms);
         if (self.dedupe_map.getPtr(active.addr)) |peer| {
             if (peer.slot == active.slot and peer.hash.eql(&active.hash)) {
@@ -2248,7 +2256,7 @@ pub const Downloader = struct {
         sqes.timeout.prep_link_timeout(&DOWNLOAD_TIMEOUT, 0);
         sqes.timeout.user_data = timeout_data.encode();
 
-        connecting.op = LinkedTimeoutOp.init(0);
+        connecting.op = LinkedTimeoutOp.initOffset(0);
     }
 
     fn queueDownloadSendWithTimeout(
@@ -2291,7 +2299,7 @@ pub const Downloader = struct {
         sqes.timeout.prep_link_timeout(&DOWNLOAD_TIMEOUT, 0);
         sqes.timeout.user_data = timeout_data.encode();
 
-        sending.op = LinkedTimeoutOp.init(offset);
+        sending.op = LinkedTimeoutOp.initOffset(offset);
     }
 
     fn queueDownloadRecvHeadersWithTimeout(
@@ -2320,7 +2328,7 @@ pub const Downloader = struct {
         sqes.timeout.prep_link_timeout(&DOWNLOAD_TIMEOUT, 0);
         sqes.timeout.user_data = timeout_data.encode();
 
-        reading_headers.op = LinkedTimeoutOp.init(offset);
+        reading_headers.op = LinkedTimeoutOp.initOffset(offset);
     }
 
     /// handles HTTP edge case where the header recv can read past `\r\n\r\n` and already consume some snapshot body bytes into recv_buf.
@@ -2349,8 +2357,6 @@ pub const Downloader = struct {
             active.bytes_written + written,
         );
         sqe.user_data = write_data.encode();
-
-        writing_extra.op_start_time = std.time.Instant.now() catch unreachable;
     }
 
     fn queueDownloadSpliceInWithTimeout(self: *Downloader, index: u8) !void {
@@ -2378,7 +2384,7 @@ pub const Downloader = struct {
         sqes.timeout.prep_link_timeout(&DOWNLOAD_TIMEOUT, 0);
         sqes.timeout.user_data = timeout_data.encode();
 
-        splicing_in.op = LinkedTimeoutOp.init(splice_data.offset);
+        splicing_in.op = LinkedTimeoutOp.initOffset(splice_data.offset);
     }
 
     fn queueDownloadPollInWithTimeout(self: *Downloader, index: u8) !void {
@@ -2402,13 +2408,13 @@ pub const Downloader = struct {
         sqes.timeout.prep_link_timeout(&DOWNLOAD_TIMEOUT, 0);
         sqes.timeout.user_data = timeout_data.encode();
 
-        waiting_readable.op = LinkedTimeoutOp.init(poll_data.offset);
+        waiting_readable.op = LinkedTimeoutOp.initOffset(poll_data.offset);
     }
 
     fn queueDownloadSpliceOut(self: *Downloader, index: u8) !void {
         const conn = &self.download_conns[index];
         const active = conn.activePtr() orelse unreachable;
-        const splicing_out = conn.enterSplicingOut();
+        _ = conn.enterSplicingOut();
 
         std.debug.assert(active.pipe_pending > 0);
 
@@ -2420,14 +2426,12 @@ pub const Downloader = struct {
         const len: usize = @intCast(active.pipe_pending);
         sqe.prep_splice(active.pipe_rd, NO_OFFSET, active.file_fd, active.bytes_written, len);
         sqe.user_data = splice_ud.encode();
-
-        splicing_out.op_start_time = std.time.Instant.now() catch unreachable;
     }
 
     fn queueDownloadFsync(self: *Downloader, index: u8) !void {
         const conn = &self.download_conns[index];
         const active = conn.activePtr() orelse unreachable;
-        const fsyncing = conn.enterFsyncing();
+        _ = conn.enterFsyncing();
 
         const sqe = try self.ring.get_sqe();
 
@@ -2436,8 +2440,6 @@ pub const Downloader = struct {
 
         sqe.prep_fsync(active.file_fd, 0);
         sqe.user_data = fsync_data.encode();
-
-        fsyncing.op_start_time = std.time.Instant.now() catch unreachable;
     }
 
     fn startDownloadRacer(self: *Downloader, candidate_index: u8) !void {
@@ -2498,7 +2500,7 @@ pub const Downloader = struct {
                 .cancel_requested = false,
             },
             .phase = .{ .connecting = .{
-                .op = undefined,
+                .op = .empty(),
             } },
         } };
 
@@ -2534,7 +2536,7 @@ pub const Downloader = struct {
         self.download_race.phase = .winner_selected;
         self.download_race.winner_index = index;
         self.download_race.progress_sample = .{
-            .time = std.time.Instant.now() catch unreachable,
+            .time = lib.clock.monotonic(.ns),
             .bytes_written = active.bytes_written,
         };
 
@@ -2555,7 +2557,7 @@ pub const Downloader = struct {
         const active = self.download_conns[winner_index].activePtr() orelse return;
         if (active.content_len == 0) return;
 
-        const now = std.time.Instant.now() catch unreachable;
+        const now = lib.clock.monotonic(.ns);
         const sample = self.download_race.progress_sample orelse {
             self.download_race.progress_sample = .{
                 .time = now,
@@ -2564,7 +2566,7 @@ pub const Downloader = struct {
             return;
         };
 
-        const elapsed_ns = now.since(sample.time);
+        const elapsed_ns = now -| sample.time;
         if (elapsed_ns < std.time.ns_per_s) return;
 
         const delta_bytes = active.bytes_written - sample.bytes_written;
@@ -2640,10 +2642,8 @@ pub const Downloader = struct {
         self.metrics.io_uring_timeouts_total.increment(1);
     }
 
-    fn onOpComplete(self: *Downloader, op: Op, op_start: std.time.Instant) void {
-        const elapsed_ns: f64 = @floatFromInt(
-            (std.time.Instant.now() catch unreachable).since(op_start),
-        );
+    fn onOpComplete(self: *Downloader, op: Op, op_start: u64) void {
+        const elapsed_ns: f64 = @floatFromInt(lib.clock.monotonic(.ns) -| op_start);
         self.metrics.getHistogram(op).observe(elapsed_ns);
     }
 };
