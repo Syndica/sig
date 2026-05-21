@@ -1,7 +1,8 @@
-const std = @import("std");
-
 comptime {
-    _ = std.testing.refAllDecls(@This());
+    if (@import("builtin").is_test) {
+        _ = @import("collections/lcrs_tree.zig");
+        _ = @import("collections/pool.zig");
+    }
 }
 
 pub const Pool = @import("collections/pool.zig").Pool;

@@ -88,12 +88,6 @@ pub fn getAccountInfo(
         .value = null,
     };
 
-    // TODO: [agave conformance] When base58 encoding is requested and account data exceeds
-    // 128 bytes, Agave returns JSON-RPC error code -32600 (InvalidRequest) with the message:
-    // "Encoded binary (base 58) data should be less than 128 bytes, please use Base64 encoding."
-    // Currently, `error.Base58DataTooLarge` propagates to hooks.zig's generic error mapper,
-    // which produces a non-deterministic positive error code via `@intFromError` and the raw
-    // error name as the message.
     const data = try account_codec.encodeAccount(
         arena,
         params.pubkey,
@@ -1720,4 +1714,122 @@ test "getTokenSupply - resolves commitment slot" {
         .mint = sig.core.Pubkey.ZEROES,
     });
     try testing.expectError(error.RpcAccountNotFound, err);
+}
+
+// [agave] When an account larger than MAX_BASE58_INPUT_LEN (128 bytes) is requested with
+// base58 encoding, every method that encodes accounts must surface the same JSON-RPC error:
+//   code:    -32600 (invalid_request)
+//   message: "Encoded binary (base 58) data should be less than 128 bytes, please use Base64 encoding."
+// The encoder returns `error.Base58DataTooLarge` (account_codec/lib.zig); the conformance
+// mapping happens in the shared `Hooks.set` wrapper (rpc/hooks.zig:mapError). These tests
+// drive the full path — real hook context + Hooks.call + mapError — for the simple-account
+// methods. Token-account methods (gTABO/gTABD) and getProgramAccounts share the same
+// `encodeAccount` callsite and `mapError` mapping, so the mapping holds for them too by
+// construction.
+// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/lib.rs#L44-L47
+const BASE58_TOO_LARGE_EXPECTED_MESSAGE =
+    "Encoded binary (base 58) data should be less than 128 bytes, " ++
+    "please use Base64 encoding.";
+
+fn expectBase58TooLargeMapping(err: sig.rpc.response.Error) !void {
+    try testing.expectEqual(sig.rpc.response.ErrorCode.invalid_request, err.code);
+    try testing.expectEqualStrings(BASE58_TOO_LARGE_EXPECTED_MESSAGE, err.message);
+}
+
+const Base58TooLargeFixture = struct {
+    test_state: sig.accounts_db.Db.TestContext,
+    slot_tracker: sig.replay.trackers.SlotTracker,
+    commitments: sig.replay.trackers.CommitmentTracker,
+    hooks: sig.rpc.Hooks,
+    arena_state: std.heap.ArenaAllocator,
+    pubkey: sig.core.Pubkey,
+    slot: Slot,
+
+    const oversized_account_data_len = account_codec.MAX_BASE58_INPUT_LEN + 1;
+
+    /// Builds an account-hook context owning an account whose data exceeds the 128-byte
+    /// base58 ceiling, registers the context with a `sig.rpc.Hooks`, and returns the
+    /// fixture so tests can drive `hooks.call(...)` with `encoding = .base58`.
+    fn init() !Base58TooLargeFixture {
+        const allocator = testing.allocator;
+
+        var fixture: Base58TooLargeFixture = .{
+            .test_state = try sig.accounts_db.Db.initTest(allocator),
+            // populated below
+            .slot_tracker = undefined,
+            .commitments = undefined,
+            .hooks = .{},
+            .arena_state = std.heap.ArenaAllocator.init(allocator),
+            .pubkey = sig.core.Pubkey.ZEROES,
+            .slot = 42,
+        };
+        errdefer fixture.arena_state.deinit();
+        errdefer fixture.test_state.deinit();
+
+        var account_data: [oversized_account_data_len]u8 = @splat(0xAB);
+        try fixture.test_state.db.put(fixture.slot, fixture.pubkey, .{
+            .lamports = 1,
+            .data = &account_data,
+            .owner = sig.core.Pubkey.ZEROES,
+            .executable = false,
+            .rent_epoch = 0,
+        });
+
+        fixture.slot_tracker = try testInitSlotTracker(fixture.slot, &.{fixture.slot});
+        errdefer fixture.slot_tracker.deinit(allocator);
+
+        fixture.commitments = .init(allocator, fixture.slot);
+        errdefer fixture.commitments.deinit(allocator);
+
+        try fixture.hooks.set(allocator, testSetupContext(
+            &fixture.test_state.db,
+            &fixture.slot_tracker,
+            &fixture.commitments,
+        ));
+
+        return fixture;
+    }
+
+    fn deinit(fixture: *Base58TooLargeFixture) void {
+        const allocator = testing.allocator;
+        fixture.hooks.deinit(allocator);
+        fixture.commitments.deinit(allocator);
+        fixture.slot_tracker.deinit(allocator);
+        fixture.arena_state.deinit();
+        fixture.test_state.deinit();
+    }
+
+    /// Returns an arena that owns the memory `Hooks.call` allocates while building the
+    /// result. The arena is reset by `deinit`.
+    fn arena(fixture: *Base58TooLargeFixture) std.mem.Allocator {
+        return fixture.arena_state.allocator();
+    }
+};
+
+test "Base58DataTooLarge: getAccountInfo returns -32600 with Agave message" {
+    var fixture = try Base58TooLargeFixture.init();
+    defer fixture.deinit();
+
+    const result = try fixture.hooks.call(fixture.arena(), .getAccountInfo, .{
+        .pubkey = fixture.pubkey,
+        .config = .{ .encoding = .base58 },
+    });
+    switch (result) {
+        .err => |err| try expectBase58TooLargeMapping(err),
+        .ok => return error.ExpectedBase58TooLargeError,
+    }
+}
+
+test "Base58DataTooLarge: getMultipleAccounts returns -32600 with Agave message" {
+    var fixture = try Base58TooLargeFixture.init();
+    defer fixture.deinit();
+
+    const result = try fixture.hooks.call(fixture.arena(), .getMultipleAccounts, .{
+        .pubkeys = &.{fixture.pubkey},
+        .config = .{ .encoding = .base58 },
+    });
+    switch (result) {
+        .err => |err| try expectBase58TooLargeMapping(err),
+        .ok => return error.ExpectedBase58TooLargeError,
+    }
 }

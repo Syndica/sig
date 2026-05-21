@@ -20,6 +20,26 @@
 
 2. Use `.sandboxing_mode = .threaded` in your config
 
+# Linting
+
+Run V2 lint checks from this directory:
+
+```sh
+zig build lint
+```
+
+Pass explicit linter args after `--`:
+
+```sh
+zig build lint -- --fix
+```
+
+Run lint unit tests:
+
+```sh
+zig build lint-test
+```
+
 # Adding a New Service
 
 v2 runs each service as an isolated process. Services cannot allocate memory or open files at runtime. 

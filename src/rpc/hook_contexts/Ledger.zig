@@ -17,7 +17,6 @@ const GetFirstAvailableBlock = methods.GetFirstAvailableBlock;
 const GetMaxRetransmitSlot = methods.GetMaxRetransmitSlot;
 const GetMaxShredInsertSlot = methods.GetMaxShredInsertSlot;
 const GetBlocksWithLimit = methods.GetBlocksWithLimit;
-const GetHealth = methods.GetHealth;
 const GetInflationReward = methods.GetInflationReward;
 const GetRecentPerformanceSamples = methods.GetRecentPerformanceSamples;
 const GetSignatureStatuses = methods.GetSignatureStatuses;
@@ -30,9 +29,6 @@ const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 
-// Maximum allowed slot distance before node is considered unhealthy.
-// See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L158
-const DELINQUENT_VALIDATOR_SLOT_DISTANCE: u64 = 128;
 /// Maximum allowed number of signatures in a single getSignatureStatuses query.
 /// See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L144
 const MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS: usize = 256;
@@ -40,8 +36,6 @@ const MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS: usize = 256;
 const LedgerHookContext = @This();
 
 ledger: *sig.ledger.Ledger,
-/// Maximum allowed slot distance before node is considered unhealthy.
-health_check_slot_distance: u64 = DELINQUENT_VALIDATOR_SLOT_DISTANCE,
 epoch_tracker: *sig.core.EpochTracker,
 status_cache: *sig.core.StatusCache,
 slot_tracker: *sig.replay.trackers.SlotTracker,
@@ -369,44 +363,6 @@ pub fn getFirstAvailableBlock(
     _: GetFirstAvailableBlock,
 ) !GetFirstAvailableBlock.Response {
     return self.ledger.reader().getFirstAvailableBlock() catch 0;
-}
-
-/// Check the health of the node.
-///
-/// A node is considered healthy if the node's latest optimistically confirmed
-/// slot is within `health_check_slot_distance` of the cluster's latest
-/// optimistically confirmed slot.
-///
-/// Returns `RpcHealthStatus` which is then formatted by the server layer:
-/// - JSON-RPC: "ok" result on success, error with code -32005 on failure
-/// - HTTP GET /health: always 200 OK with "ok", "behind", or "unknown"
-///
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2806-L2818
-pub fn getHealth(
-    self: LedgerHookContext,
-    _: Allocator,
-    _: GetHealth,
-) !GetHealth.Response {
-    // Get the node's processed slot (replay tip according to vote tracking)
-    const latest_processed_slot = self.commitments.get(.processed);
-    if (latest_processed_slot == 0) {
-        return .unknown;
-    }
-
-    // Get the cluster's latest optimistically confirmed slot
-    // NOTE: this commitment confirmed value is from both replay and vote tracker gossip votes,
-    // gossip has latest from the network which is what we need for comparison
-    const latest_confirmed_slot = self.commitments.get(.confirmed);
-    if (latest_confirmed_slot == 0) {
-        return .unknown;
-    }
-
-    if (latest_processed_slot >= latest_confirmed_slot -| self.health_check_slot_distance) {
-        return .ok;
-    } else {
-        const num_slots_behind = latest_confirmed_slot -| latest_processed_slot;
-        return .{ .behind = num_slots_behind };
-    }
 }
 
 pub fn getInflationReward(

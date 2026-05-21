@@ -1,6 +1,11 @@
 const std = @import("std");
 
 pub const Ring = @import("ipc/ring.zig").Ring;
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("ipc/ring.zig");
+    }
+}
 
 pub const ResolvedArgs = extern struct {
     stderr: std.os.linux.fd_t,

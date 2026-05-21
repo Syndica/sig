@@ -221,6 +221,10 @@ fn submitTransaction(self: *Service, txn_info: TransactionInfo) !void {
                         self.logger.err().logf("Preflight failure: {any}", .{failure.err});
                         return error.PreflightFailure;
                     },
+                    .node_unhealthy => |maybe_slots_behind| {
+                        self.logger.err().logf("Node unhealthy: {any}", .{maybe_slots_behind});
+                        return error.PreflightFailure;
+                    },
                 },
                 .err => |rpc_err| {
                     self.logger.err().logf("RPC error: code={any} message={s}", .{
