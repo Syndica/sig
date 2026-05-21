@@ -63,6 +63,50 @@ pub fn beginPartitionedRewards(
     defer current_epoch_info.release();
     const epoch_vote_accounts = current_epoch_info.stakes.stakes.vote_accounts;
 
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank.rs#L1650
+    // Build cached vote accounts for delayed commission lookups (SIMD-0249).
+    //
+    // In Agave, epoch_stakes are keyed by leader_schedule_epoch (current+1),
+    // so      epoch_stakes[E]  = state from beginning of E-1.
+    //   - Insertion: runtime/src/bank.rs:2333 (update_epoch_stakes)
+    //   - Lookup:    runtime/src/bank.rs:1659 & 1664 (get_cached_vote_accounts)
+    // In Sig, epoch_info[E]    = state from beginning of E.
+    //   - Insertion: src/core/epoch_tracker.zig:521 (RootedEpochBuffer.insert)
+    //   - Lookup:    src/core/epoch_tracker.zig:185 (getEpochInfo)
+    // Hence the off-by-one mapping:
+    //   Agave epoch_stakes[rewarded_epoch] → Sig epoch_info[rewarded_epoch - 1]
+    //   Agave epoch_stakes[self.epoch()]   → Sig epoch_info[rewarded_epoch]
+    //
+    // snapshot_epoch_vote_accounts: state from beginning of epoch prior to
+    // rewarded epoch, saved a full epoch before being used.
+    const snapshot_epoch_info = if (parent_epoch > 0)
+        epoch_tracker.getEpochInfoNoOffset(
+            epoch_tracker.epoch_schedule.getFirstSlotInEpoch(parent_epoch - 1),
+            &slot_constants.ancestors,
+        ) catch null
+    else
+        null;
+    defer if (snapshot_epoch_info) |info| info.release();
+
+    // rewarded_epoch_vote_accounts: state from beginning of rewarded epoch.
+    const rewarded_epoch_info = epoch_tracker.getEpochInfoNoOffset(
+        epoch_tracker.epoch_schedule.getFirstSlotInEpoch(parent_epoch),
+        &slot_constants.ancestors,
+    ) catch null;
+    defer if (rewarded_epoch_info) |info| info.release();
+
+    const cached_vote_accounts = CachedVoteAccounts{
+        .snapshot_epoch_vote_accounts = if (snapshot_epoch_info) |info|
+            &info.stakes.stakes.vote_accounts
+        else
+            null,
+        .rewarded_epoch_vote_accounts = if (rewarded_epoch_info) |info|
+            &info.stakes.stakes.vote_accounts
+        else
+            null,
+        .distribution_epoch_vote_accounts = &epoch_vote_accounts,
+    };
+
     const slots_per_year = epoch_tracker.cluster.slotsPerYear();
     const previous_epoch_capitalization = &slot_state.capitalization;
     const epoch_schedule = &epoch_tracker.epoch_schedule;
@@ -86,7 +130,7 @@ pub fn beginPartitionedRewards(
             feature_set,
             inflation,
             stakes_cache,
-            &epoch_vote_accounts,
+            cached_vote_accounts,
             new_warmup_and_cooldown_rate_epoch,
             slot_store,
         );
@@ -193,7 +237,7 @@ fn calculateRewardsAndDistributeVoteRewards(
     feature_set: *const FeatureSet,
     inflation: *const Inflation,
     stakes_cache: *StakesCache,
-    epoch_vote_accounts: *const VoteAccounts,
+    cached_vote_accounts: CachedVoteAccounts,
     new_warmup_and_cooldown_rate_epoch: ?Epoch,
     slot_store: SlotAccountStore,
 ) !struct {
@@ -214,7 +258,7 @@ fn calculateRewardsAndDistributeVoteRewards(
         feature_set,
         inflation,
         stakes_cache,
-        epoch_vote_accounts,
+        cached_vote_accounts,
         new_warmup_and_cooldown_rate_epoch,
     );
     defer rewards_for_partitioning.deinit(allocator);
@@ -302,7 +346,7 @@ fn calculateRewardsForPartitioning(
     feature_set: *const FeatureSet,
     inflation: *const Inflation,
     stakes_cache: *StakesCache,
-    epoch_vote_accounts: *const VoteAccounts,
+    cached_vote_accounts: CachedVoteAccounts,
     new_warmup_and_cooldown_rate_epoch: ?Epoch,
 ) !RewardsForPartitioning {
     const prev_inflation_rewards = calculatePreviousEpochInflationRewards(
@@ -323,7 +367,7 @@ fn calculateRewardsForPartitioning(
         previous_epoch,
         prev_inflation_rewards.validator_rewards,
         stakes_cache,
-        epoch_vote_accounts,
+        cached_vote_accounts,
         new_warmup_and_cooldown_rate_epoch,
     ) orelse try ValidatorRewards.initEmpty(allocator);
     errdefer validator_rewards.deinit(allocator);
@@ -369,7 +413,7 @@ fn calculateValidatorRewards(
     rewarded_epoch: Epoch,
     rewards: u64,
     stakes_cache: *StakesCache,
-    epoch_vote_accounts: *const VoteAccounts,
+    cached_vote_accounts: CachedVoteAccounts,
     new_warmup_and_cooldown_rate_epoch: ?Epoch,
 ) !?ValidatorRewards {
     const stakes, var stakes_lg = stakes_cache.stakes.readWithLock();
@@ -384,18 +428,21 @@ fn calculateValidatorRewards(
         rewards,
         &stakes.stake_history,
         filtered_stake_delegations.items(.stake),
-        epoch_vote_accounts,
+        cached_vote_accounts.distribution_epoch_vote_accounts,
         new_warmup_and_cooldown_rate_epoch,
     ) orelse return null;
+
+    const delay_commission_updates = feature_set.active(.delay_commission_updates, slot);
 
     return try calculateStakeVoteRewards(
         allocator,
         stake_history,
         filtered_stake_delegations,
-        epoch_vote_accounts,
+        cached_vote_accounts,
         rewarded_epoch,
         point_value,
         new_warmup_and_cooldown_rate_epoch,
+        delay_commission_updates,
     );
 }
 
@@ -448,26 +495,48 @@ fn calculateRewardPointsPartitioned(
     return if (points > 0) PointValue{ .rewards = rewards, .points = points } else null;
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/partitioned_epoch_rewards/mod.rs#L284
+///
+/// Cached vote account state from different epoch boundaries, used to delay
+/// the effect of commission updates by at least one full epoch (SIMD-0249).
+const CachedVoteAccounts = struct {
+    /// Snapshot of vote account state from the beginning of the epoch prior to
+    /// the rewarded epoch. This snapshot state is saved a full epoch before
+    /// being used to prevent last minute commission rugs.
+    ///
+    /// Developer note: This field is optional to handle large bank warps.
+    snapshot_epoch_vote_accounts: ?*const VoteAccounts,
+    /// Vote account state from the beginning of the rewarded epoch.
+    ///
+    /// Developer note: This field is optional to handle large bank warps.
+    rewarded_epoch_vote_accounts: ?*const VoteAccounts,
+    /// Vote account state from the end of the rewarded epoch / beginning of the
+    /// distribution epoch.
+    distribution_epoch_vote_accounts: *const VoteAccounts,
+};
+
 const VoteReward = struct {
     commission: u8,
     rewards: u64,
     account: VoteAccount.MinimalAccount,
 };
 
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/partitioned_epoch_rewards/calculation.rs#L430
 fn calculateStakeVoteRewards(
     allocator: Allocator,
     stake_history: *const StakeHistory,
     stake_delegations: FilteredStakesDelegations,
-    cached_vote_accounts: *const VoteAccounts,
+    cached_vote_accounts: CachedVoteAccounts,
     rewarded_epoch: Epoch,
     point_value: PointValue,
     new_warmup_and_cooldown_rate_epoch: ?Epoch,
+    delay_commission_updates: bool,
 ) !ValidatorRewards {
     var vote_account_rewards_map = std.AutoArrayHashMapUnmanaged(Pubkey, VoteReward).empty;
     defer vote_account_rewards_map.deinit(allocator);
     try vote_account_rewards_map.ensureTotalCapacity(
         allocator,
-        cached_vote_accounts.vote_accounts.count(),
+        cached_vote_accounts.distribution_epoch_vote_accounts.vote_accounts.count(),
     );
 
     var partitioned_stake_rewards = std.ArrayListUnmanaged(PartitionedStakeReward){};
@@ -479,7 +548,31 @@ fn calculateStakeVoteRewards(
     const stakes = stake_delegations.items(.stake);
     for (pubkeys, stakes) |stake_pubkey, *stake| {
         const vote_pubkey = stake.delegation.voter_pubkey;
-        const vote_account = cached_vote_accounts.getAccount(vote_pubkey) orelse continue;
+        const distribution = cached_vote_accounts
+            .distribution_epoch_vote_accounts;
+        const vote_account = distribution
+            .getAccount(vote_pubkey) orelse continue;
+
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/partitioned_epoch_rewards/calculation.rs#L470
+        // Fetch the voter commission from past epochs to attempt to
+        // delay the effect of commission updates by at least one
+        // full epoch (SIMD-0249).
+        const commission: u8 = if (delay_commission_updates) blk: {
+            const snapshot = cached_vote_accounts.snapshot_epoch_vote_accounts;
+            const vote_state_for_commission = vsfc: {
+                const s = snapshot orelse break :vsfc null;
+                const a = s.getAccount(vote_pubkey) orelse break :vsfc null;
+                break :vsfc a.state;
+            };
+            const resolved = vote_state_for_commission orelse resolved: {
+                const rewarded = cached_vote_accounts.rewarded_epoch_vote_accounts orelse
+                    break :resolved null;
+                const a = rewarded.getAccount(vote_pubkey) orelse
+                    break :resolved null;
+                break :resolved a.state;
+            };
+            break :blk (resolved orelse vote_account.state).commission();
+        } else vote_account.state.commission();
 
         const redeemed = redeemRewards(
             rewarded_epoch,
@@ -488,14 +581,13 @@ fn calculateStakeVoteRewards(
             &point_value,
             stake_history,
             new_warmup_and_cooldown_rate_epoch,
+            commission,
         ) catch |e| switch (e) {
             error.NoCreditsToRedeem => continue,
             else => return e,
         };
 
-        const commission = vote_account.state.commission();
-
-        var voters_reward_entry = try vote_account_rewards_map.getOrPut(allocator, vote_pubkey);
+        const voters_reward_entry = try vote_account_rewards_map.getOrPut(allocator, vote_pubkey);
         if (!voters_reward_entry.found_existing) {
             voters_reward_entry.value_ptr.* = .{
                 .commission = commission,
@@ -643,6 +735,12 @@ fn newVoteAccountForTest(
     );
 }
 
+fn epochStakesForTest(epoch: Epoch) sig.core.EpochStakes {
+    var stakes: sig.core.EpochStakes = .EMPTY_WITH_GENESIS;
+    stakes.stakes.epoch = epoch;
+    return stakes;
+}
+
 test calculateRewardsAndDistributeVoteRewards {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -745,7 +843,11 @@ test calculateRewardsAndDistributeVoteRewards {
         &feature_set,
         &inflation,
         &stakes_cache,
-        &epoch_vote_accounts,
+        .{
+            .snapshot_epoch_vote_accounts = null,
+            .rewarded_epoch_vote_accounts = null,
+            .distribution_epoch_vote_accounts = &epoch_vote_accounts,
+        },
         null,
         slot_store,
     );
@@ -842,7 +944,11 @@ test calculateRewardsForPartitioning {
         &feature_set,
         &inflation,
         &stakes_cache,
-        &epoch_vote_accounts,
+        .{
+            .snapshot_epoch_vote_accounts = null,
+            .rewarded_epoch_vote_accounts = null,
+            .distribution_epoch_vote_accounts = &epoch_vote_accounts,
+        },
         null,
     );
     defer rewards.deinit(allocator);
@@ -868,7 +974,11 @@ test calculateValidatorRewards {
             previous_epoch,
             previous_rewards,
             &stakes_cache,
-            &epoch_vote_accounts,
+            .{
+                .snapshot_epoch_vote_accounts = null,
+                .rewarded_epoch_vote_accounts = null,
+                .distribution_epoch_vote_accounts = &epoch_vote_accounts,
+            },
             null,
         );
 
@@ -946,7 +1056,11 @@ test calculateValidatorRewards {
         previous_epoch,
         previous_rewards,
         &stakes_cache,
-        &epoch_vote_accounts,
+        .{
+            .snapshot_epoch_vote_accounts = null,
+            .rewarded_epoch_vote_accounts = null,
+            .distribution_epoch_vote_accounts = &epoch_vote_accounts,
+        },
         null,
     );
     defer rewards.?.deinit(allocator);
@@ -1100,6 +1214,12 @@ test calculateStakeVoteRewards {
     var cached_vote_accounts = VoteAccounts{};
     defer cached_vote_accounts.deinit(allocator);
 
+    const cached = CachedVoteAccounts{
+        .snapshot_epoch_vote_accounts = null,
+        .rewarded_epoch_vote_accounts = null,
+        .distribution_epoch_vote_accounts = &cached_vote_accounts,
+    };
+
     var rewarded_epoch: Epoch = 5;
     const vote_epoch: Epoch = 0;
     const vote_commission: u8 = 0;
@@ -1133,10 +1253,11 @@ test calculateStakeVoteRewards {
             allocator,
             &StakeHistory.INIT,
             stake_delegations,
-            &cached_vote_accounts,
+            cached,
             rewarded_epoch,
             .{ .rewards = 1, .points = 0 },
             null,
+            false,
         );
         defer result.deinit(allocator);
 
@@ -1150,10 +1271,11 @@ test calculateStakeVoteRewards {
             allocator,
             &StakeHistory.INIT,
             stake_delegations,
-            &cached_vote_accounts,
+            cached,
             rewarded_epoch,
             .ZERO,
             null,
+            false,
         );
         defer result.deinit(allocator);
 
@@ -1185,16 +1307,283 @@ test calculateStakeVoteRewards {
             allocator,
             &stake_history,
             stake_delegations,
-            &cached_vote_accounts,
+            cached,
             rewarded_epoch,
             .{ .points = 1, .rewards = 1 },
             null,
+            false,
         );
         defer result.deinit(allocator);
 
         try std.testing.expectEqual(1, result.vote_rewards.vote_rewards.entries.len);
         try std.testing.expectEqual(1, result.stake_rewards.stake_rewards.entries.len);
     }
+}
+
+test "calculateStakeVoteRewards with delay_commission_updates" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    var stake_delegations = FilteredStakesDelegations{};
+    defer stake_delegations.deinit(allocator);
+
+    // Distribution vote accounts with 50% commission (current).
+    var distribution_vote_accounts = VoteAccounts{};
+    defer distribution_vote_accounts.deinit(allocator);
+
+    // Snapshot vote accounts with 10% commission (delayed).
+    var snapshot_vote_accounts = VoteAccounts{};
+    defer snapshot_vote_accounts.deinit(allocator);
+
+    const vote_pubkey = Pubkey.initRandom(random);
+    const stake_activation_epoch: Epoch = 3;
+
+    // Distribution: 50% commission
+    const dist_vote_account = try newVoteAccountForTest(
+        allocator,
+        random,
+        50,
+        0,
+    );
+    try distribution_vote_accounts.vote_accounts.put(
+        allocator,
+        vote_pubkey,
+        .{ .stake = 1_000_000_000, .account = dist_vote_account },
+    );
+
+    // Snapshot: 10% commission
+    const snap_vote_account = try newVoteAccountForTest(
+        allocator,
+        random,
+        10,
+        0,
+    );
+    try snapshot_vote_accounts.vote_accounts.put(
+        allocator,
+        vote_pubkey,
+        .{ .stake = 1_000_000_000, .account = snap_vote_account },
+    );
+
+    const stake_pubkey = Pubkey.initRandom(random);
+    const stake = sig.replay.rewards.inflation_rewards.newStakeForTest(
+        1_000_000_000,
+        vote_pubkey,
+        0,
+        stake_activation_epoch,
+    );
+    try stake_delegations.append(allocator, .{
+        .pubkey = stake_pubkey,
+        .stake = stake,
+    });
+
+    // Set up credits so rewards are non-zero.
+    var stake_account = &stake_delegations.items(.stake)[0];
+    stake_account.credits_observed = 5;
+
+    var dist_va = distribution_vote_accounts.vote_accounts
+        .getPtr(vote_pubkey).?;
+    try dist_va.account.state.incrementCredits(
+        allocator,
+        stake_activation_epoch + 1,
+        10,
+    );
+    var snap_va = snapshot_vote_accounts.vote_accounts
+        .getPtr(vote_pubkey).?;
+    try snap_va.account.state.incrementCredits(
+        allocator,
+        stake_activation_epoch + 1,
+        10,
+    );
+
+    var stake_history = StakeHistory.INIT;
+    try stake_history.entries.append(.{
+        .epoch = stake_activation_epoch,
+        .stake = .{
+            .activating = 1_000_000_000,
+            .effective = 500_000_000_000,
+            .deactivating = 1_000_000_000,
+        },
+    });
+
+    const rewarded_epoch: Epoch = 5;
+
+    // Test with delay_commission_updates = true, snapshot available.
+    // Should use snapshot commission (10%) not distribution (50%).
+    const cached_with_snapshot = CachedVoteAccounts{
+        .snapshot_epoch_vote_accounts = &snapshot_vote_accounts,
+        .rewarded_epoch_vote_accounts = null,
+        .distribution_epoch_vote_accounts = &distribution_vote_accounts,
+    };
+
+    const result_delayed = try calculateStakeVoteRewards(
+        allocator,
+        &stake_history,
+        stake_delegations,
+        cached_with_snapshot,
+        rewarded_epoch,
+        .{ .points = 1, .rewards = 1 },
+        null,
+        true, // delay_commission_updates
+    );
+    defer result_delayed.deinit(allocator);
+
+    // Test with delay_commission_updates = true, only rewarded available.
+    var rewarded_vote_accounts = VoteAccounts{};
+    defer rewarded_vote_accounts.deinit(allocator);
+
+    const rew_vote_account = try newVoteAccountForTest(
+        allocator,
+        random,
+        20, // 20% commission
+        0,
+    );
+    try rewarded_vote_accounts.vote_accounts.put(
+        allocator,
+        vote_pubkey,
+        .{ .stake = 1_000_000_000, .account = rew_vote_account },
+    );
+    var rew_va = rewarded_vote_accounts.vote_accounts
+        .getPtr(vote_pubkey).?;
+    try rew_va.account.state.incrementCredits(
+        allocator,
+        stake_activation_epoch + 1,
+        10,
+    );
+
+    const cached_rewarded_only = CachedVoteAccounts{
+        .snapshot_epoch_vote_accounts = null,
+        .rewarded_epoch_vote_accounts = &rewarded_vote_accounts,
+        .distribution_epoch_vote_accounts = &distribution_vote_accounts,
+    };
+
+    // Reset stake credits for second run.
+    stake_account.credits_observed = 5;
+
+    const result_rewarded = try calculateStakeVoteRewards(
+        allocator,
+        &stake_history,
+        stake_delegations,
+        cached_rewarded_only,
+        rewarded_epoch,
+        .{ .points = 1, .rewards = 1 },
+        null,
+        true, // delay_commission_updates
+    );
+    defer result_rewarded.deinit(allocator);
+
+    // Test with delay_commission_updates = true, no snapshot or rewarded.
+    // Falls back to distribution vote account.
+    const cached_fallback = CachedVoteAccounts{
+        .snapshot_epoch_vote_accounts = null,
+        .rewarded_epoch_vote_accounts = null,
+        .distribution_epoch_vote_accounts = &distribution_vote_accounts,
+    };
+
+    stake_account.credits_observed = 5;
+
+    const result_fallback = try calculateStakeVoteRewards(
+        allocator,
+        &stake_history,
+        stake_delegations,
+        cached_fallback,
+        rewarded_epoch,
+        .{ .points = 1, .rewards = 1 },
+        null,
+        true, // delay_commission_updates
+    );
+    defer result_fallback.deinit(allocator);
+
+    // All three should produce results (non-zero rewards).
+    try std.testing.expectEqual(
+        1,
+        result_delayed.stake_rewards.stake_rewards.entries.len,
+    );
+    try std.testing.expectEqual(
+        1,
+        result_rewarded.stake_rewards.stake_rewards.entries.len,
+    );
+    try std.testing.expectEqual(
+        1,
+        result_fallback.stake_rewards.stake_rewards.entries.len,
+    );
+}
+
+test "beginPartitionedRewards caches vote accounts for delayed commission" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(2026);
+    const random = prng.random();
+
+    const slot = EpochSchedule.INIT.getFirstSlotInEpoch(2);
+    const parent_slot = slot - 1;
+
+    var slot_constants = try SlotConstants.genesis(allocator, .DEFAULT);
+    defer slot_constants.deinit(allocator);
+    slot_constants.parent_slot = parent_slot;
+    slot_constants.block_height = 123;
+    try slot_constants.ancestors.addSlot(allocator, parent_slot);
+    try slot_constants.ancestors.addSlot(allocator, slot);
+
+    var slot_state = SlotState.GENESIS;
+    defer slot_state.deinit(allocator);
+
+    const blockhash = Hash.initRandom(random);
+    {
+        const blockhash_queue, var blockhash_queue_lg = slot_state.blockhash_queue.writeWithLock();
+        defer blockhash_queue_lg.unlock();
+        try blockhash_queue.insertGenesisHash(allocator, blockhash, 0);
+    }
+
+    var epoch_tracker = try sig.core.EpochTracker.initWithEpochStakesOnlyForTest(
+        allocator,
+        &.{
+            epochStakesForTest(0),
+            epochStakesForTest(1),
+            epochStakesForTest(2),
+        },
+    );
+    defer epoch_tracker.deinit();
+
+    var db_context = try sig.accounts_db.Db.initTest(allocator);
+    defer db_context.deinit();
+
+    const account_store = sig.accounts_db.AccountStore{ .accounts_db = &db_context.db };
+    const slot_store = account_store.forSlot(slot, &slot_constants.ancestors);
+
+    try beginPartitionedRewards(
+        allocator,
+        slot,
+        &slot_constants,
+        &slot_state,
+        slot_store,
+        &epoch_tracker,
+    );
+
+    try std.testing.expect(slot_state.reward_status == .active);
+    try std.testing.expectEqual(
+        slot_constants.block_height + 1,
+        slot_state.reward_status.active.distribution_start_block_height,
+    );
+    try std.testing.expectEqual(
+        1,
+        slot_state.reward_status.active.num_partitions,
+    );
+
+    const epoch_rewards = (try sig.replay.update_sysvar.getSysvarFromAccount(
+        EpochRewards,
+        allocator,
+        slot_store.reader(),
+    )).?;
+    try std.testing.expect(epoch_rewards.active);
+    try std.testing.expectEqual(
+        slot_state.reward_status.active.distribution_start_block_height,
+        epoch_rewards.distribution_starting_block_height,
+    );
+    try std.testing.expectEqual(
+        slot_state.reward_status.active.num_partitions,
+        epoch_rewards.num_partitions,
+    );
+    try std.testing.expectEqual(blockhash, epoch_rewards.parent_blockhash);
 }
 
 test calculateVoteAccountsToStore {

@@ -88,12 +88,6 @@ pub fn getAccountInfo(
         .value = null,
     };
 
-    // TODO: [agave conformance] When base58 encoding is requested and account data exceeds
-    // 128 bytes, Agave returns JSON-RPC error code -32600 (InvalidRequest) with the message:
-    // "Encoded binary (base 58) data should be less than 128 bytes, please use Base64 encoding."
-    // Currently, `error.Base58DataTooLarge` propagates to hooks.zig's generic error mapper,
-    // which produces a non-deterministic positive error code via `@intFromError` and the raw
-    // error name as the message.
     const data = try account_codec.encodeAccount(
         arena,
         params.pubkey,
@@ -401,10 +395,15 @@ pub fn getFeeForMessage(
     };
 
     const bq_lps = maybe_bq_lps orelse {
+        const require_static_nonce_account = slot_ref.constants().feature_set.active(
+            .require_static_nonce_account,
+            slot,
+        );
         const nonce_result = check_transactions.loadMessageNonceAccount(
             arena,
             &runtime_txn,
             slot_reader,
+            require_static_nonce_account,
         ) catch return empty_result;
         if (nonce_result) |r| return .{
             .context = .{ .slot = slot },
@@ -577,10 +576,12 @@ pub fn getTokenAccountsByDelegate(
     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2149
     const encoding = config.encoding orelse AccountEncoding.binary;
 
-    const slot = self.commitments.get(commitment);
-    if (config.minContextSlot) |min_slot| {
-        if (slot < min_slot) return error.RpcMinContextSlotNotMet;
-    }
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        self.commitments,
+        commitment,
+        config.minContextSlot,
+    );
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
@@ -769,7 +770,12 @@ pub fn getSupply(
     const commitment = config.commitment orelse .finalized;
     const exclude_accounts = config.excludeNonCirculatingAccountsList;
 
-    const slot = self.commitments.get(commitment);
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        self.commitments,
+        commitment,
+        null,
+    );
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
@@ -836,7 +842,12 @@ pub fn getTokenLargestAccounts(
     const config: GetTokenLargestAccounts.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
-    const slot = self.commitments.get(commitment);
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        self.commitments,
+        commitment,
+        null,
+    );
 
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
@@ -956,7 +967,13 @@ pub fn getLargestAccounts(
     const commitment = config.commitment orelse .finalized;
     const sort_results = config.sortResults orelse true;
 
-    const slot = self.commitments.get(commitment);
+    const slot = try slot_resolution.resolveReadableCommitmentSlot(
+        self.slot_tracker,
+        self.commitments,
+        commitment,
+        null,
+    );
+
     const ref = self.slot_tracker.get(slot) orelse return error.SlotNotAvailable;
     defer ref.release();
     const ancestors = &ref.constants().ancestors;
@@ -1083,6 +1100,31 @@ fn testInitSlotTracker(
     });
 
     return slot_tracker;
+}
+
+fn testMintData(decimals: u8) [parse_token.Mint.LEN]u8 {
+    var data: [parse_token.Mint.LEN]u8 = @splat(0);
+    data[44] = decimals;
+    data[45] = 1;
+    return data;
+}
+
+fn testTokenAccountData(
+    mint: sig.core.Pubkey,
+    owner: sig.core.Pubkey,
+    amount: u64,
+    maybe_delegate: ?sig.core.Pubkey,
+) [parse_token.TokenAccount.LEN]u8 {
+    var data: [parse_token.TokenAccount.LEN]u8 = @splat(0);
+    @memcpy(data[0..32], &mint.data);
+    @memcpy(data[32..64], &owner.data);
+    std.mem.writeInt(u64, data[64..72], amount, .little);
+    if (maybe_delegate) |delegate| {
+        std.mem.writeInt(u32, data[72..76], 1, .little);
+        @memcpy(data[76..108], &delegate.data);
+    }
+    data[108] = @intFromEnum(account_codec.AccountState.initialized);
+    return data;
 }
 
 test "getBalance - returns balance for existing account" {
@@ -1366,12 +1408,84 @@ test "getTokenAccountBalance - resolves commitment slot" {
     try testing.expectError(error.RpcAccountNotFound, err);
 }
 
+test "getSupply - falls back to root and calculates supply" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const root_slot: Slot = 10;
+    const missing_slot: Slot = 99;
+    const total_supply: u64 = 1_000;
+    const non_circulating_lamports: u64 = 25;
+    const non_circulating_pubkey: sig.core.Pubkey = .{
+        .data = non_circulating_supply.non_circulating_accounts[0],
+    };
+
+    const clock_data = try sig.runtime.sysvar.serialize(
+        testing.allocator,
+        sig.runtime.sysvar.Clock.INIT,
+    );
+    defer testing.allocator.free(clock_data);
+
+    try db.put(root_slot, sig.runtime.sysvar.Clock.ID, .{
+        .lamports = 1,
+        .data = clock_data,
+        .owner = sig.runtime.sysvar.OWNER_ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+    try db.put(root_slot, non_circulating_pubkey, .{
+        .lamports = non_circulating_lamports,
+        .data = &.{},
+        .owner = sig.core.Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    var slot_tracker = try testInitSlotTracker(root_slot, &.{root_slot});
+    defer slot_tracker.deinit(testing.allocator);
+    var root_ref = slot_tracker.get(root_slot).?;
+    defer root_ref.release();
+    root_ref.state().capitalization.store(total_supply, .monotonic);
+
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, root_slot);
+    defer commitments.deinit(testing.allocator);
+    commitments.processed.store(missing_slot, .monotonic);
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
+    const result = try ctx.getSupply(arena, .{ .config = .{ .commitment = .processed } });
+    try testing.expectEqual(root_slot, result.context.slot);
+    try testing.expectEqual(total_supply, result.value.total);
+    try testing.expectEqual(non_circulating_lamports, result.value.nonCirculating);
+    try testing.expectEqual(total_supply - non_circulating_lamports, result.value.circulating);
+    try testing.expectEqual(
+        non_circulating_supply.non_circulating_accounts.len,
+        result.value.nonCirculatingAccounts.len,
+    );
+    try testing.expect(result.value.nonCirculatingAccounts[0].equals(&non_circulating_pubkey));
+
+    const excluded = try ctx.getSupply(arena, .{ .config = .{
+        .commitment = .processed,
+        .excludeNonCirculatingAccountsList = true,
+    } });
+    try testing.expectEqual(root_slot, excluded.context.slot);
+    try testing.expectEqual(total_supply, excluded.value.total);
+    try testing.expectEqual(non_circulating_lamports, excluded.value.nonCirculating);
+    try testing.expectEqual(total_supply - non_circulating_lamports, excluded.value.circulating);
+    try testing.expectEqual(@as(usize, 0), excluded.value.nonCirculatingAccounts.len);
+}
+
 test "getLargestAccounts - sortResults sorts by lamports descending" {
     var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
     defer test_state.deinit();
     const db = &test_state.db;
 
     const test_slot: Slot = 42;
+    const missing_slot: Slot = 99;
 
     // Insert accounts with different lamport amounts
     var pubkey1: sig.core.Pubkey = .ZEROES;
@@ -1407,6 +1521,7 @@ test "getLargestAccounts - sortResults sorts by lamports descending" {
 
     var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, test_slot);
     defer commitments.deinit(testing.allocator);
+    commitments.processed.store(missing_slot, .monotonic);
 
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -1416,6 +1531,7 @@ test "getLargestAccounts - sortResults sorts by lamports descending" {
 
     // sortResults = true (default): results sorted descending by lamports
     const sorted = try ctx.getLargestAccounts(arena, .{ .config = .{ .commitment = .processed } });
+    try testing.expectEqual(test_slot, sorted.context.slot);
     try testing.expectEqual(@as(usize, 3), sorted.value.len);
     try testing.expectEqual(@as(u64, 300), sorted.value[0].lamports);
     try testing.expectEqual(@as(u64, 200), sorted.value[1].lamports);
@@ -1426,7 +1542,158 @@ test "getLargestAccounts - sortResults sorts by lamports descending" {
         .commitment = .processed,
         .sortResults = false,
     } });
+    try testing.expectEqual(test_slot, unsorted.context.slot);
     try testing.expectEqual(@as(usize, 3), unsorted.value.len);
+}
+
+test "getTokenLargestAccounts - falls back to root and sorts by amount" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const root_slot: Slot = 10;
+    const missing_slot: Slot = 99;
+    var mint: sig.core.Pubkey = .ZEROES;
+    mint.data[0] = 1;
+    var owner: sig.core.Pubkey = .ZEROES;
+    owner.data[0] = 2;
+    var token_account_1: sig.core.Pubkey = .ZEROES;
+    token_account_1.data[0] = 3;
+    var token_account_2: sig.core.Pubkey = .ZEROES;
+    token_account_2.data[0] = 4;
+
+    var mint_data = testMintData(2);
+    var token_data_1 = testTokenAccountData(mint, owner, 100, null);
+    var token_data_2 = testTokenAccountData(mint, owner, 300, null);
+    const clock_data = try sig.runtime.sysvar.serialize(
+        testing.allocator,
+        sig.runtime.sysvar.Clock.INIT,
+    );
+    defer testing.allocator.free(clock_data);
+
+    try db.put(root_slot, sig.runtime.sysvar.Clock.ID, .{
+        .lamports = 1,
+        .data = clock_data,
+        .owner = sig.runtime.sysvar.OWNER_ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+    try db.put(root_slot, mint, .{
+        .lamports = 1,
+        .data = &mint_data,
+        .owner = sig.runtime.ids.TOKEN_PROGRAM_ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+    try db.put(root_slot, token_account_1, .{
+        .lamports = 1,
+        .data = &token_data_1,
+        .owner = sig.runtime.ids.TOKEN_PROGRAM_ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+    try db.put(root_slot, token_account_2, .{
+        .lamports = 1,
+        .data = &token_data_2,
+        .owner = sig.runtime.ids.TOKEN_PROGRAM_ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    const ancestors: sig.core.Ancestors = try .initWithSlots(testing.allocator, &.{root_slot});
+    defer @constCast(&ancestors).deinit(testing.allocator);
+    db.updateRoot(root_slot, &ancestors);
+
+    var slot_tracker = try testInitSlotTracker(root_slot, &.{root_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, root_slot);
+    defer commitments.deinit(testing.allocator);
+    commitments.processed.store(missing_slot, .monotonic);
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
+    const result = try ctx.getTokenLargestAccounts(arena, .{
+        .mint = mint,
+        .config = .{ .commitment = .processed },
+    });
+    try testing.expectEqual(root_slot, result.context.slot);
+    try testing.expectEqual(@as(usize, 2), result.value.len);
+    try testing.expect(result.value[0].address.equals(&token_account_2));
+    try testing.expectEqual(@as(u64, 300), result.value[0].ui_token_amount.amount);
+    try testing.expectEqual(@as(u8, 2), result.value[0].ui_token_amount.decimals);
+    try testing.expectEqualStrings(
+        "3",
+        result.value[0].ui_token_amount.ui_amount_string.constSlice(),
+    );
+    try testing.expect(result.value[1].address.equals(&token_account_1));
+    try testing.expectEqual(@as(u64, 100), result.value[1].ui_token_amount.amount);
+}
+
+test "getTokenAccountsByDelegate - falls back to root and filters by delegate" {
+    var test_state = try sig.accounts_db.Db.initTest(testing.allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const root_slot: Slot = 10;
+    const missing_slot: Slot = 99;
+    var mint: sig.core.Pubkey = .ZEROES;
+    mint.data[0] = 1;
+    var owner: sig.core.Pubkey = .ZEROES;
+    owner.data[0] = 2;
+    var delegate: sig.core.Pubkey = .ZEROES;
+    delegate.data[0] = 3;
+    var token_account: sig.core.Pubkey = .ZEROES;
+    token_account.data[0] = 4;
+    var other_token_account: sig.core.Pubkey = .ZEROES;
+    other_token_account.data[0] = 5;
+
+    var matching_data = testTokenAccountData(mint, owner, 100, delegate);
+    var non_matching_data = testTokenAccountData(mint, owner, 200, null);
+
+    try db.put(root_slot, token_account, .{
+        .lamports = 1,
+        .data = &matching_data,
+        .owner = sig.runtime.ids.TOKEN_PROGRAM_ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+    try db.put(root_slot, other_token_account, .{
+        .lamports = 1,
+        .data = &non_matching_data,
+        .owner = sig.runtime.ids.TOKEN_PROGRAM_ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    const ancestors: sig.core.Ancestors = try .initWithSlots(testing.allocator, &.{root_slot});
+    defer @constCast(&ancestors).deinit(testing.allocator);
+    db.updateRoot(root_slot, &ancestors);
+
+    var slot_tracker = try testInitSlotTracker(root_slot, &.{root_slot});
+    defer slot_tracker.deinit(testing.allocator);
+
+    var commitments: sig.replay.trackers.CommitmentTracker = .init(testing.allocator, root_slot);
+    defer commitments.deinit(testing.allocator);
+    commitments.processed.store(missing_slot, .monotonic);
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const ctx = testSetupContext(db, &slot_tracker, &commitments);
+    const result = try ctx.getTokenAccountsByDelegate(arena, .{
+        .delegate = delegate,
+        .filter = .{ .programId = sig.runtime.ids.TOKEN_PROGRAM_ID },
+        .config = .{ .commitment = .processed, .encoding = .base64 },
+    });
+    try testing.expectEqual(root_slot, result.context.slot);
+    try testing.expectEqual(@as(usize, 1), result.value.len);
+    try testing.expect(result.value[0].pubkey.equals(&token_account));
+    try testing.expectEqual(@as(u64, 1), result.value[0].account.lamports);
 }
 
 test "getTokenSupply - resolves commitment slot" {
@@ -1447,4 +1714,122 @@ test "getTokenSupply - resolves commitment slot" {
         .mint = sig.core.Pubkey.ZEROES,
     });
     try testing.expectError(error.RpcAccountNotFound, err);
+}
+
+// [agave] When an account larger than MAX_BASE58_INPUT_LEN (128 bytes) is requested with
+// base58 encoding, every method that encodes accounts must surface the same JSON-RPC error:
+//   code:    -32600 (invalid_request)
+//   message: "Encoded binary (base 58) data should be less than 128 bytes, please use Base64 encoding."
+// The encoder returns `error.Base58DataTooLarge` (account_codec/lib.zig); the conformance
+// mapping happens in the shared `Hooks.set` wrapper (rpc/hooks.zig:mapError). These tests
+// drive the full path — real hook context + Hooks.call + mapError — for the simple-account
+// methods. Token-account methods (gTABO/gTABD) and getProgramAccounts share the same
+// `encodeAccount` callsite and `mapError` mapping, so the mapping holds for them too by
+// construction.
+// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/lib.rs#L44-L47
+const BASE58_TOO_LARGE_EXPECTED_MESSAGE =
+    "Encoded binary (base 58) data should be less than 128 bytes, " ++
+    "please use Base64 encoding.";
+
+fn expectBase58TooLargeMapping(err: sig.rpc.response.Error) !void {
+    try testing.expectEqual(sig.rpc.response.ErrorCode.invalid_request, err.code);
+    try testing.expectEqualStrings(BASE58_TOO_LARGE_EXPECTED_MESSAGE, err.message);
+}
+
+const Base58TooLargeFixture = struct {
+    test_state: sig.accounts_db.Db.TestContext,
+    slot_tracker: sig.replay.trackers.SlotTracker,
+    commitments: sig.replay.trackers.CommitmentTracker,
+    hooks: sig.rpc.Hooks,
+    arena_state: std.heap.ArenaAllocator,
+    pubkey: sig.core.Pubkey,
+    slot: Slot,
+
+    const oversized_account_data_len = account_codec.MAX_BASE58_INPUT_LEN + 1;
+
+    /// Builds an account-hook context owning an account whose data exceeds the 128-byte
+    /// base58 ceiling, registers the context with a `sig.rpc.Hooks`, and returns the
+    /// fixture so tests can drive `hooks.call(...)` with `encoding = .base58`.
+    fn init() !Base58TooLargeFixture {
+        const allocator = testing.allocator;
+
+        var fixture: Base58TooLargeFixture = .{
+            .test_state = try sig.accounts_db.Db.initTest(allocator),
+            // populated below
+            .slot_tracker = undefined,
+            .commitments = undefined,
+            .hooks = .{},
+            .arena_state = std.heap.ArenaAllocator.init(allocator),
+            .pubkey = sig.core.Pubkey.ZEROES,
+            .slot = 42,
+        };
+        errdefer fixture.arena_state.deinit();
+        errdefer fixture.test_state.deinit();
+
+        var account_data: [oversized_account_data_len]u8 = @splat(0xAB);
+        try fixture.test_state.db.put(fixture.slot, fixture.pubkey, .{
+            .lamports = 1,
+            .data = &account_data,
+            .owner = sig.core.Pubkey.ZEROES,
+            .executable = false,
+            .rent_epoch = 0,
+        });
+
+        fixture.slot_tracker = try testInitSlotTracker(fixture.slot, &.{fixture.slot});
+        errdefer fixture.slot_tracker.deinit(allocator);
+
+        fixture.commitments = .init(allocator, fixture.slot);
+        errdefer fixture.commitments.deinit(allocator);
+
+        try fixture.hooks.set(allocator, testSetupContext(
+            &fixture.test_state.db,
+            &fixture.slot_tracker,
+            &fixture.commitments,
+        ));
+
+        return fixture;
+    }
+
+    fn deinit(fixture: *Base58TooLargeFixture) void {
+        const allocator = testing.allocator;
+        fixture.hooks.deinit(allocator);
+        fixture.commitments.deinit(allocator);
+        fixture.slot_tracker.deinit(allocator);
+        fixture.arena_state.deinit();
+        fixture.test_state.deinit();
+    }
+
+    /// Returns an arena that owns the memory `Hooks.call` allocates while building the
+    /// result. The arena is reset by `deinit`.
+    fn arena(fixture: *Base58TooLargeFixture) std.mem.Allocator {
+        return fixture.arena_state.allocator();
+    }
+};
+
+test "Base58DataTooLarge: getAccountInfo returns -32600 with Agave message" {
+    var fixture = try Base58TooLargeFixture.init();
+    defer fixture.deinit();
+
+    const result = try fixture.hooks.call(fixture.arena(), .getAccountInfo, .{
+        .pubkey = fixture.pubkey,
+        .config = .{ .encoding = .base58 },
+    });
+    switch (result) {
+        .err => |err| try expectBase58TooLargeMapping(err),
+        .ok => return error.ExpectedBase58TooLargeError,
+    }
+}
+
+test "Base58DataTooLarge: getMultipleAccounts returns -32600 with Agave message" {
+    var fixture = try Base58TooLargeFixture.init();
+    defer fixture.deinit();
+
+    const result = try fixture.hooks.call(fixture.arena(), .getMultipleAccounts, .{
+        .pubkeys = &.{fixture.pubkey},
+        .config = .{ .encoding = .base58 },
+    });
+    switch (result) {
+        .err => |err| try expectBase58TooLargeMapping(err),
+        .ok => return error.ExpectedBase58TooLargeError,
+    }
 }

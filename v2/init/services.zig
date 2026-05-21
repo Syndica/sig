@@ -27,6 +27,13 @@ const e = E.init;
 
 const services_zon = @import("./services.zon");
 
+/// Context created by the service initializer, used to report thread exit or crash and wake the
+/// main thread. Services receive it as opaque data and must not inspect it.
+const ThreadExitContext = struct {
+    finished_idx: *std.atomic.Value(u16),
+    reset_event: *std.Thread.ResetEvent,
+};
+
 pub const Service = blk: {
     var fields: []const std.builtin.Type.EnumField = &.{};
     for (services_zon.services) |instance| {
@@ -172,8 +179,6 @@ pub const SharedRegion = struct {
 };
 
 pub const Region = union(enum) {
-    telemetry: tel.Region.Info,
-
     net_pair: struct { port: u16 },
     gossip_config: struct {
         cluster_info: lib.gossip.ClusterInfo,
@@ -187,17 +192,27 @@ pub const Region = union(enum) {
         shred_version: u16,
     },
 
+    deshredded_out,
+
+    account_lookup,
+    accounts_db_config: struct {
+        file: []const u8,
+        memory: usize,
+    },
+    account_pool: struct {
+        memory: usize,
+    },
+
     snapshot_config: struct {
         folder_path: []const u8,
         cluster: lib.solana.Cluster,
+        known_validators: []const []const u8,
     },
-    snapshot_source_ring: void,
-    snapshot_decode_ring: void,
 
-    accounts_db_config: struct {
-        file_path: []const u8,
-        memory: usize,
-    },
+    snapshot_source_ring: void,
+    snapshot_ready_ring: void,
+
+    telemetry: tel.Region.InitParams,
 
     pub fn size(self: Region) usize {
         return switch (self) {
@@ -205,10 +220,15 @@ pub const Region = union(enum) {
             .net_pair => @sizeOf(lib.net.Pair),
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
+            .deshredded_out => @sizeOf(lib.shred.DeshredRing),
             .snapshot_config => @sizeOf(lib.snapshot.SnapshotConfig),
             .snapshot_source_ring => @sizeOf(lib.snapshot.SnapshotSourceRing),
-            .snapshot_decode_ring => @sizeOf(lib.snapshot.SnapshotDecodeRing),
-            .accounts_db_config => |cfg| @sizeOf(lib.accounts_db.DbConfig) + cfg.memory,
+            .snapshot_ready_ring => @sizeOf(lib.snapshot.SnapshotReadyRing),
+            .account_lookup => @sizeOf(lib.accounts_db.AccountLookups),
+                .accounts_db_config => |cfg| @sizeOf(lib.accounts_db.RootedConfig) + cfg.memory,
+                .account_pool => |cfg| @sizeOf(lib.accounts_db.AccountPool) + cfg.memory,
+ 
+            .telemetry => |params| params.info().regionSize(),
         };
     }
 
@@ -242,12 +262,102 @@ pub const Region = union(enum) {
                 );
                 data.shred_version = cfg.shred_version;
             },
+            .deshredded_out => {
+                std.debug.assert(buf.len == @sizeOf(lib.shred.DeshredRing));
+                const data: *lib.shred.DeshredRing = @ptrCast(buf);
+                data.init();
+            },
+            .snapshot_config => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotConfig));
+                const data: *lib.snapshot.SnapshotConfig = @ptrCast(buf);
 
-            .telemetry => |info| {
-                std.debug.assert(buf.len == info.regionSize());
+                if (cfg.known_validators.len == 0) {
+                    std.log.err(
+                        "known_validators must not be empty. Specify validator " ++
+                            "pubkeys, or \"*\" to opt in to untrusted snapshot sources.",
+                        .{},
+                    );
+                    return error.NoKnownValidators;
+                }
+                if (cfg.known_validators.len > lib.snapshot.SnapshotConfig.MAX_KNOWN_VALIDATORS) {
+                    return error.TooManyKnownValidators;
+                }
+
+                @memcpy(data.folder_buffer[0..cfg.folder_path.len], cfg.folder_path);
+                data.folder_len = @intCast(cfg.folder_path.len);
+                data.cluster = cfg.cluster;
+
+                const has_wildcard = for (cfg.known_validators) |entry| {
+                    if (std.mem.eql(u8, entry, "*")) break true;
+                } else false;
+
+                if (has_wildcard) {
+                    if (cfg.known_validators.len > 1) {
+                        std.log.warn(
+                            "known_validators contains \"*\" alongside other entries; " ++
+                                "\"*\" takes precedence, ignoring the rest.",
+                            .{},
+                        );
+                    }
+                    data.known_validators_allow_all = true;
+                    // NOTE: we zero out known_validators_len to make it clear that no validator pubkeys were provided.
+                    data.known_validators_len = 0;
+                } else {
+                    data.known_validators_allow_all = false;
+                    data.known_validators_len = @intCast(cfg.known_validators.len);
+                    for (
+                        cfg.known_validators,
+                        data.known_validators_buffer[0..cfg.known_validators.len],
+                    ) |pkstr, *pkptr| {
+                        pkptr.* = lib.solana.Pubkey.parseRuntime(pkstr) catch |err| {
+                            std.log.err(
+                                "invalid known_validator entry '{s}': {s}",
+                                .{ pkstr, @errorName(err) },
+                            );
+                            return err;
+                        };
+                    }
+                }
+            },
+            .snapshot_ready_ring => {
+                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotReadyRing));
+                const data: *lib.snapshot.SnapshotReadyRing = @ptrCast(buf);
+                data.init();
+            },
+            .snapshot_source_ring => {
+                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotSourceRing));
+                const data: *lib.snapshot.SnapshotSourceRing = @ptrCast(buf);
+                data.init();
+            },
+            .account_lookup => {
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.AccountLookups));
+                const data: *lib.accounts_db.AccountLookups = @ptrCast(buf);
+
+                data.in.init();
+                data.out.init();
+            },
+            .accounts_db_config => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.RootedConfig) + cfg.memory);
+                const data: *lib.accounts_db.RootedConfig = @ptrCast(buf);
+
+                data.file_len = @intCast(cfg.file.len);
+                @memcpy(data.file_path[0..cfg.file.len], cfg.file);
+
+                data.memory_len = cfg.memory;
+                // no need to zero-out memory as mmap should do that.
+            },
+
+            .account_pool => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.AccountPool) + cfg.memory);
+                const data: *lib.accounts_db.AccountPool = @ptrCast(buf);
+
+                data.init(cfg.memory);
+            },
+            .telemetry => |params| {
+                std.debug.assert(buf.len == params.info().regionSize());
                 const data: *tel.Region = @ptrCast(buf);
 
-                data.init(info);
+                data.init(params);
             },
             .snapshot_config => |cfg| {
                 std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotConfig));
@@ -603,6 +713,10 @@ fn resolveArgs(
         .rw_len = @splat(0),
         .ro = @splat(null),
         .ro_len = @splat(0),
+
+        .thread_crash_ctx = null,
+        .thread_crash_fn = null,
+        .service_idx = std.math.maxInt(u16),
     };
 
     var i_rw: u8 = 0;
@@ -767,6 +881,11 @@ pub fn spawnAndWaitNoSandbox(
     var reset_event: std.Thread.ResetEvent = .{};
     var finished_service_idx: std.atomic.Value(u16) = .init(std.math.maxInt(u16));
 
+    const thread_exit_ctx: ThreadExitContext = .{
+        .finished_idx = &finished_service_idx,
+        .reset_event = &reset_event,
+    };
+
     // Start up all services, storing their pids
     inline for (services, exit_memfds, 0..) |service_instance, exit, i| {
         _ = try spawnServiceNoSandbox(
@@ -775,8 +894,7 @@ pub fn spawnAndWaitNoSandbox(
             std.fs.File.stderr(),
             map.get(service_instance).?.items,
             i,
-            &finished_service_idx,
-            &reset_event,
+            &thread_exit_ctx,
         );
     }
 
@@ -789,21 +907,31 @@ pub fn spawnAndWaitNoSandbox(
     dumpOnExit(@ptrCast(try exit_memfds[exited_idx].mmap(.{})), services[exited_idx], 0, 0);
 }
 
+fn signalThreadExit(service_idx: u16, ctx: *const ThreadExitContext) void {
+    ctx.finished_idx.store(service_idx, .seq_cst);
+    ctx.reset_event.set();
+}
+
+// Called by service threads in no-sandbox mode. Uses C calling convention because the function
+// pointer crosses service/init compilation units.
+fn signalThreadCrash(ctx: ?*const anyopaque, service_idx: u16) callconv(.c) void {
+    const thread_ctx: *const ThreadExitContext = @ptrCast(@alignCast(ctx orelse return));
+    signalThreadExit(service_idx, thread_ctx);
+}
+
 fn threadEntry(
     entry_point: ServiceEntrypoint,
     service: Service,
     args: lib.ipc.ResolvedArgs,
     service_idx: u16,
-    finished_idx: *std.atomic.Value(u16),
-    reset_event: *std.Thread.ResetEvent,
+    thread_exit_ctx: *const ThreadExitContext,
 ) void {
     switch (service) {
         inline else => |svc| tracy.setThreadName("svc: " ++ @tagName(svc)),
     }
 
     entry_point(args);
-    reset_event.set();
-    finished_idx.store(service_idx, .seq_cst);
+    signalThreadExit(service_idx, thread_exit_ctx);
 }
 
 fn spawnServiceNoSandbox(
@@ -812,10 +940,12 @@ fn spawnServiceNoSandbox(
     stderr: std.fs.File,
     regions: []const LookupResult,
     service_idx: u16,
-    finished_idx: *std.atomic.Value(u16),
-    reset_event: *std.Thread.ResetEvent,
+    thread_exit_ctx: *const ThreadExitContext,
 ) !std.Thread {
-    const resolved_args = try resolveArgs(exit, stderr, regions);
+    var resolved_args = try resolveArgs(exit, stderr, regions);
+    resolved_args.thread_crash_ctx = thread_exit_ctx;
+    resolved_args.thread_crash_fn = signalThreadCrash;
+    resolved_args.service_idx = service_idx;
 
     return try std.Thread.spawn(
         .{},
@@ -825,8 +955,7 @@ fn spawnServiceNoSandbox(
             service_instance.service,
             resolved_args,
             service_idx,
-            finished_idx,
-            reset_event,
+            thread_exit_ctx,
         },
     );
 }

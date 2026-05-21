@@ -1,3 +1,15 @@
+//! This is the root process, in charge of initialising and spawning all services.
+//!
+//! Responsibilities:
+//!  - Parsing config
+//!  - Creation of shared memory regions
+//!  - Initialising shared data structures / passing through config
+//!  - Creating sandboxed processes (unsandboxed single-process also supported for e.g. profiling)
+//!  - Waiting for first service failure, and shutdown
+//!
+//! See `services` for how this works.
+//!
+
 const std = @import("std");
 
 comptime {
@@ -19,6 +31,9 @@ const Config = struct {
     gossip: Gossip,
     shred_network: ShredNetwork,
 
+    snapshot: Snapshot,
+    accounts_db: AccountsDb,
+
     telemetry: Telemetry,
     snapshot: Snapshot,
     accounts_db: AccountsDb,
@@ -35,32 +50,40 @@ const Config = struct {
 
     const Telemetry = struct {
         port: u16,
+        log_level: tel.log.Level,
     };
 
     const Snapshot = struct {
         folder: []const u8,
+        known_validators: []const []const u8,
     };
 
     const AccountsDb = struct {
         file: []const u8,
-        memory: Memory,
+        rooted: MemorySize,
+        unrooted: MemorySize,
+
+        // For nicer initialization of constants (instead of x * 1024 * !024 * 1024)
+        const MemorySize = union(enum) {
+            bytes: usize,
+            kb: usize,
+            mb: usize,
+            gb: usize,
+
+            fn toBytes(self: MemorySize) usize {
+                return switch (self) {
+                    .bytes => |b| b,
+                    .kb => |b| b * 1024,
+                    .mb => |b| b * 1024 * 1024,
+                    .gb => |b| b * 1024 * 1024 * 1024,
+                };
+            }
+        };
     };
 
-    const Memory = union(enum) {
-        bytes: usize,
-        kb: usize,
-        mb: usize,
-        gb: usize,
-
-        fn asBytes(self: Memory) usize {
-            return switch (self) {
-                .bytes => |b| b,
-                .kb => |kb| kb * 1024,
-                .mb => |mb| mb * 1024 * 1024,
-                .gb => |gb| gb * 1024 * 1024 * 1024,
-            };
-        }
-    };
+    pub fn format(self: Config, writer: *std.Io.Writer) !void {
+        try std.zon.stringify.serialize(self, .{ .whitespace = true }, writer);
+    }
 };
 
 pub fn main() !void {
@@ -68,19 +91,14 @@ pub fn main() !void {
     defer _ = dba_state.deinit();
     const allocator = dba_state.allocator();
 
-    const config: Config, //
-    const log_level: tel.log.Level //
-    = cfg: {
+    var log_filters: std.Io.Writer.Allocating = .init(allocator);
+    defer log_filters.deinit();
+
+    const config: Config = cfg: {
         var args = std.process.args();
         _ = args.next();
         const cfg_path = args.next() orelse return error.ConfigPathMissing;
-        const log_level = level: {
-            const str = args.next() orelse "info";
-            break :level std.meta.stringToEnum(tel.log.Level, str) orelse {
-                std.log.err("Invalid log level '{s}'", .{str});
-                return error.InvalidLogLevel;
-            };
-        };
+        const log_filters_str_opt = args.next();
 
         const cfg_file = try std.fs.cwd().openFile(cfg_path, .{});
         defer cfg_file.close();
@@ -95,11 +113,18 @@ pub fn main() !void {
             std.log.err("{f}", .{diag});
             return err;
         };
-        break :cfg .{ config, log_level };
+
+        try tel.log.Filter.parseListAndWriteBinary(
+            &log_filters.writer,
+            config.telemetry.log_level,
+            log_filters_str_opt orelse "",
+        );
+
+        break :cfg config;
     };
     defer std.zon.parse.free(allocator, config);
 
-    std.log.info("config: {}", .{config});
+    std.log.info("config: {f}", .{config});
 
     const gossip_cluster_info: lib.gossip.ClusterInfo =
         try .getFromEcho(config.gossip.port, config.cluster);
@@ -113,6 +138,9 @@ pub fn main() !void {
         .{ .service = .shred_receiver },
         .{ .service = .net },
         .{ .service = .gossip },
+        .{ .service = .replay },
+        .{ .service = .snapshot },
+        .{ .service= .accounts_db },
         .{ .service = .telemetry },
         .{ .service = .snapshot },
         .{ .service = .accounts_db },
@@ -138,7 +166,7 @@ pub fn main() !void {
             .shred_version = gossip_cluster_info.shred_version,
         },
 
-        // net -> gossip
+        // net <-> gossip
         .net_to_gossip = .{ .port = config.gossip.port },
         // gossip constants
         .gossip_config = .{
@@ -147,12 +175,32 @@ pub fn main() !void {
             .keypair = .fromKeyPair(.generate()),
             .turbine_recv_port = config.shred_network.recv_port,
         },
-
+        
         .gossip_to_snapshot = {},
         .snapshot_config = .{
             .folder_path = config.snapshot.folder,
             .cluster = config.cluster,
+            .known_validators = config.snapshot.known_validators,
         },
+
+        .snapshot_to_accounts_db = {},
+        .rooted_config = .{
+            .file = config.accounts_db.file,
+            .memory = config.accounts_db.rooted.toBytes(),
+        },
+        .account_pool = .{
+            .memory = config.accounts_db.unrooted.toBytes(),
+        },
+
+        // shred receiver -> replay
+        .deshredded_out = {},
+        // replay <-> accounts_db
+        .replay_accounts_db_lookup = {},
+
+        .telemetry = .{
+            .port = config.telemetry.port,
+            .log_filters_encoded = log_filters.written(),
+            .service_count = service_instances.len - 1,
 
         .snapshot_to_accounts_db = {},
         .accounts_db_config = .{

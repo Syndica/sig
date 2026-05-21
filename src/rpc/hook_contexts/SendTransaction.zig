@@ -35,6 +35,7 @@ const TransactionReturnData = sig.ledger.transaction_status.TransactionReturnDat
 const encodeAccount = sig.rpc.account_codec.encodeAccount;
 const computeBudgetExecute = sig.runtime.program.compute_budget.execute;
 const getDurableNonce = sig.runtime.check_transactions.getDurableNonce;
+const getHealth = sig.rpc.hook_contexts.HealthChecker.getHealth;
 const getSysvarFromAccount = sig.replay.update_sysvar.getSysvarFromAccount;
 const resolveTransaction = sig.replay.resolve_lookup.resolveTransaction;
 const executeTransaction = sig.replay.svm_gateway.executeTransaction;
@@ -44,6 +45,7 @@ const MAX_BASE58_SIZE: usize = 1683;
 /// Analogous to [MAX_BASE64_SIZE](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4341)
 const MAX_BASE64_SIZE: usize = 1644;
 const MAX_INSTRUCTION_TRACE_LENGTH = sig.runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH;
+const MAX_ACCOUNTS_PER_INSTRUCTION = sig.runtime.transaction_context.MAX_ACCOUNTS_PER_INSTRUCTION;
 const PACKET_DATA_SIZE = sig.net.Packet.DATA_SIZE;
 
 const SendTransactionHookContext = @This();
@@ -90,10 +92,15 @@ pub fn sendTransaction(
         self.account_store.reader().forSlot(&preflight_slot_ref.constants().ancestors),
     );
 
-    const durable_nonce_info: ?struct { Pubkey, Hash } = if (getDurableNonce(&transaction)) |nonce|
-        .{ nonce, transaction.recent_blockhash }
-    else
-        null;
+    const require_static_nonce_account = preflight_slot_ref.constants().feature_set.active(
+        .require_static_nonce_account,
+        preflight_slot,
+    );
+    const durable_nonce_info: ?struct { Pubkey, Hash } =
+        if (getDurableNonce(&transaction, require_static_nonce_account)) |nonce|
+            .{ nonce, transaction.recent_blockhash }
+        else
+            null;
 
     const last_valid_block_height = blk: {
         const bq, var bq_lg = preflight_slot_ref.state().blockhash_queue.readWithLock();
@@ -109,10 +116,11 @@ pub fn sendTransaction(
     if (!skip_preflight) {
         const result: SimulateTransactionResult = blk: {
             unsanitized_tx.verify() catch break :blk .{ .err = .SignatureFailure };
-            // TODO: Health Check
-            // Agave json rpc config specifies a health check which checks node health before servicing requests.
-            // We should consider the same.
-            // [agave] https://github.com/anza-xyz/agave/blob/2a61a3ecd417b0515c0b2f322d0128394f20626b/rpc/src/rpc.rs#L3867-L3886
+            switch (try getHealth(.{ .commitments = self.commitments }, arena, .{})) {
+                .ok => {},
+                .behind => |slots| return .{ .node_unhealthy = slots },
+                .unknown => return .{ .node_unhealthy = null },
+            }
             break :blk try self.simulateRuntimeTransaction(
                 arena,
                 transaction,
@@ -376,6 +384,20 @@ fn sanitizeTransaction(
         return error.SanitizeFailure;
     }
 
+    // SIMD-0406: Reject transactions with instructions that reference more than 255 accounts.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/rpc/src/rpc.rs#L3870
+    const enable_instruction_accounts_limit = preflight_slot_ref.constants().feature_set.active(
+        .limit_instruction_accounts,
+        preflight_slot,
+    );
+    if (enable_instruction_accounts_limit) {
+        for (tx.msg.instructions) |instr| {
+            if (instr.account_indexes.len > MAX_ACCOUNTS_PER_INSTRUCTION) {
+                return error.SanitizeFailure;
+            }
+        }
+    }
+
     try tx.validate();
 
     const slot_hashes = try getSysvarFromAccount(
@@ -406,6 +428,7 @@ fn sanitizeTransaction(
         .accounts = resolved.accounts,
         .compute_budget_instruction_details = compute_budget_instruction_details,
         .num_lookup_tables = tx.msg.address_lookups.len,
+        .num_static_account_keys = @intCast(tx.msg.account_keys.len),
         .is_simple_vote_transaction = false,
     };
 }
@@ -830,6 +853,34 @@ test sendTransaction {
         });
         try std.testing.expect(result == .preflight_failure);
         try std.testing.expectEqual(TransactionError.SignatureFailure, result.preflight_failure.err);
+    }
+
+    { // Preflight health check returns unknown.
+        var encode_buf_64: [std.base64.standard.Encoder.calcSize(tx_bytes.len)]u8 = undefined;
+        const encoded_64 = std.base64.standard.Encoder.encode(&encode_buf_64, &tx_bytes);
+        const result = try ctx.sendTransaction(arena, .{
+            .transaction = encoded_64,
+            .config = .{ .encoding = .base64 },
+        });
+        try std.testing.expect(result == .node_unhealthy);
+        try std.testing.expectEqual(null, result.node_unhealthy);
+    }
+
+    { // Preflight health check returns behind.
+        commitments.processed.store(71, .monotonic);
+        commitments.confirmed.store(200, .monotonic);
+
+        var encode_buf_64: [std.base64.standard.Encoder.calcSize(tx_bytes.len)]u8 = undefined;
+        const encoded_64 = std.base64.standard.Encoder.encode(&encode_buf_64, &tx_bytes);
+        const result = try ctx.sendTransaction(arena, .{
+            .transaction = encoded_64,
+            .config = .{ .encoding = .base64 },
+        });
+        try std.testing.expect(result == .node_unhealthy);
+        try std.testing.expectEqual(129, result.node_unhealthy);
+
+        commitments.processed.store(0, .monotonic);
+        commitments.confirmed.store(0, .monotonic);
     }
 }
 
@@ -1286,6 +1337,7 @@ test "simulateRuntimeTransaction: returns error for blockhash-not-found" {
         .accounts = accounts,
         .compute_budget_instruction_details = .{},
         .num_lookup_tables = 0,
+        .num_static_account_keys = 1,
         .is_simple_vote_transaction = false,
     };
 
@@ -1300,4 +1352,36 @@ test "simulateRuntimeTransaction: returns error for blockhash-not-found" {
     try std.testing.expect(result.err != null);
     try std.testing.expectEqual(@as(u64, 0), result.units_consumed);
     try std.testing.expectEqual(@as(usize, 0), result.logs.len);
+}
+
+test "getSimulatedAccount: oversized account + base58 propagates Base58DataTooLarge" {
+    // [agave] simulateTransaction's per-account encoder is `getSimulatedAccount`. When the
+    // post-simulation account exceeds 128 bytes and base58 encoding is requested, it must
+    // propagate `error.Base58DataTooLarge` so the shared `Hooks.set` mapper in rpc/hooks.zig
+    // can translate it to JSON-RPC -32600 with the Agave-conformant message. The wire-format
+    // mapping itself is covered by the Base58DataTooLarge tests in hook_contexts/Account.zig.
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/lib.rs#L44-L47
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const address = comptime Pubkey.parse("11111111111111111111111111111111");
+
+    var oversized_data: [sig.rpc.account_codec.MAX_BASE58_INPUT_LEN + 1]u8 = @splat(0xAB);
+    var post_simulation_accounts: ProcessedTransaction.Writes = .{};
+    post_simulation_accounts.appendAssumeCapacity(.{
+        .pubkey = address,
+        .account = .{
+            .lamports = 1,
+            .data = &oversized_data,
+            .owner = Pubkey.ZEROES,
+            .executable = false,
+            .rent_epoch = 0,
+        },
+    });
+
+    try std.testing.expectError(
+        error.Base58DataTooLarge,
+        getSimulatedAccount(arena, address, .base58, post_simulation_accounts, .noop),
+    );
 }

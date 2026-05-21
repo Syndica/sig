@@ -2,7 +2,7 @@
 //! to other validator services.
 
 const std = @import("std");
-const start = @import("start");
+const start = @import("start_service");
 const lib = @import("lib");
 const tel = lib.telemetry;
 
@@ -24,8 +24,8 @@ pub const std_options = start.options;
 
 pub const ReadWrite = struct {
     net_pair: *Pair,
-    tel: *tel.Region,
     gossip_to_snapshot: *lib.snapshot.SnapshotSourceRing,
+    tel: *tel.Region,
 };
 
 pub const ReadOnly = struct {
@@ -74,9 +74,16 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             return self.keypair.sign(msg) catch |e| std.debug.panic("signing failed: {}", .{e});
         }
 
-        pub fn reportSnapshotSource(self: Self, addr: std.net.Address, slot: lib.solana.Slot, hash: lib.solana.Hash) void {
+        pub fn reportSnapshotSource(
+            self: Self,
+            from: lib.solana.Pubkey,
+            addr: std.net.Address,
+            slot: lib.solana.Slot,
+            hash: lib.solana.Hash,
+        ) void {
             const entry = self.snapshot_writer.next() orelse return;
             entry.* = .{
+                .from = from,
                 .rpc_addr = .fromNetAddress(addr),
                 .slot = slot,
                 .hash = hash,
@@ -98,7 +105,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     sockets.set(.gossip, ro.config.cluster_info.public_ip.withPort(rw.net_pair.port));
     sockets.set(.tvu, ro.config.cluster_info.public_ip.withPort(ro.config.turbine_recv_port));
 
-    var now: u64 = @intCast(std.time.milliTimestamp());
+    var now = lib.clock.wallclock(.ms);
     var fba = std.heap.FixedBufferAllocator.init(&scratch_memory);
     var gossip = try GossipNode(Effects).init(&fba, now, .{
         .effects = effects,
@@ -109,7 +116,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
     var it = rw.net_pair.recv.get(.reader);
     while (true) {
-        now = @intCast(std.time.milliTimestamp());
+        now = lib.clock.wallclock(.ms);
         try gossip.poll(.from(logger), now);
 
         const packet = it.next() orelse continue;

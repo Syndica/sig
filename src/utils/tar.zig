@@ -57,6 +57,7 @@ fn writeToFile(
         file.handle,
         0,
     );
+    defer std.posix.munmap(memory);
     @memcpy(memory, contents);
 }
 

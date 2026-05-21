@@ -263,7 +263,7 @@ pub const bpf = struct {
     }
 
     /// Only allows writing to stderr, sleeping, and exiting.
-    pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [66]sock_filter {
+    pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [64]sock_filter {
         // load syscall number
         const preamble = .{stmt(LD + W + ABS, @offsetOf(SECCOMP.data, "nr"))};
 
@@ -300,17 +300,15 @@ pub const bpf = struct {
             // snapshot
             allowSyscall(@intFromEnum(syscalls.io_uring_setup)) ++
             allowSyscall(@intFromEnum(syscalls.io_uring_enter)) ++
-            allowSyscall(@intFromEnum(syscalls.io_uring_register)) ++
-            allowSyscall(@intFromEnum(syscalls.mmap)) ++ // io_uring
-            allowSyscall(@intFromEnum(syscalls.munmap)) ++ // io_uring
+            allowSyscall(@intFromEnum(syscalls.mmap)) ++
+            allowSyscall(@intFromEnum(syscalls.munmap)) ++
             allowSyscall(@intFromEnum(syscalls.openat)) ++
+            allowSyscall(@intFromEnum(syscalls.getdents64)) ++
+            allowSyscall(@intFromEnum(syscalls.mkdirat)) ++
+            allowSyscall(@intFromEnum(syscalls.lseek)) ++
             allowSyscall(@intFromEnum(syscalls.pipe2)) ++
-            allowSyscall(@intFromEnum(syscalls.rename)) ++
+            allowSyscall(@intFromEnum(syscalls.renameat)) ++
             allowSyscall(@intFromEnum(syscalls.unlinkat)) ++
-            allowSyscall(@intFromEnum(syscalls.unlink)) ++
-            allowSyscall(@intFromEnum(syscalls.fsync)) ++
-            // accounts_db
-            allowSyscall(@intFromEnum(syscalls.statx)) ++
             //
             syscall_fd_filters ++
             fall_through;

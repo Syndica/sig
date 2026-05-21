@@ -13,6 +13,7 @@ const root = @import("root");
 const std = @import("std");
 const builtin = @import("builtin");
 const lib = @import("lib");
+const tracy = @import("tracy");
 
 comptime {
     _ = std.testing.refAllDecls(@This());
@@ -53,6 +54,9 @@ pub const options: std.Options = .{
 pub const panic_state = struct {
     pub var stderr: std.os.linux.fd_t = undefined;
     pub var exit: *lib.ipc.Exit = undefined;
+    pub var thread_crash_ctx: ?*const anyopaque = null;
+    pub var thread_crash_fn: ?lib.ipc.ResolvedArgs.ThreadCrashFn = null;
+    pub var service_idx: u16 = std.math.maxInt(u16);
     var faulted: bool = false;
 };
 
@@ -74,6 +78,8 @@ fn serviceLog(
 
     const fmt_string = "(" ++ @tagName(root.name) ++ ") " ++ level_txt ++ prefix2 ++ format ++ "\n";
 
+    tracy.print(fmt_string, args);
+
     nosuspend writer.interface.print(fmt_string, args) catch return;
 }
 
@@ -86,6 +92,9 @@ fn serviceMain(params: lib.ipc.ResolvedArgs) callconv(.c) void {
 
     panic_state.stderr = params.stderr;
     panic_state.exit = exit;
+    panic_state.thread_crash_ctx = params.thread_crash_ctx;
+    panic_state.thread_crash_fn = params.thread_crash_fn;
+    panic_state.service_idx = params.service_idx;
 
     const max_regions = lib.ipc.ResolvedArgs.max_regions;
     var ro: root.ReadOnly = undefined;
@@ -264,6 +273,13 @@ fn handleSegfault(
     abort();
 }
 
+fn notifyThreadCrash() void {
+    const crash_fn = panic_state.thread_crash_fn orelse return;
+    const service_idx = panic_state.service_idx;
+    std.debug.assert(service_idx != std.math.maxInt(u16));
+    crash_fn(panic_state.thread_crash_ctx, service_idx);
+}
+
 fn abort() noreturn {
     std.os.linux.exit(255);
 }
@@ -350,5 +366,6 @@ pub fn servicePanic(
     }
     exit.trace_index = i;
 
+    notifyThreadCrash();
     abort();
 }

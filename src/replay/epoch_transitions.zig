@@ -191,7 +191,7 @@ pub fn computeFeatureSet(
     var new_activations = FeatureSet.ALL_DISABLED;
     var inactive_iterator = feature_set.iterator(slot, .inactive);
     while (inactive_iterator.next()) |feature| {
-        const feature_id = features.map.get(feature).key;
+        const feature_id = features.pubkey_map.get(feature);
         const feature_account = try slot_store.reader().get(
             arena.allocator(),
             feature_id,
@@ -277,6 +277,31 @@ pub fn applyFeatureActivations(
         });
     }
 
+    // SIMD-0437: incremental reduction of lamports_per_byte. Each gate assumes
+    // SIMD-0194 (deprecate_rent_exemption_threshold) has already activated, so
+    // rent.lamports_per_byte_year is set directly. If multiple gates activate
+    // in the same epoch, or out of order, the last one in this list wins.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/runtime/src/bank.rs#L5645-L5677
+    const rent_feature_gates = [_]struct { sig.core.features.Feature, u64 }{
+        .{ .set_lamports_per_byte_to_6333, 6333 },
+        .{ .set_lamports_per_byte_to_5080, 5080 },
+        .{ .set_lamports_per_byte_to_2575, 2575 },
+        .{ .set_lamports_per_byte_to_1322, 1322 },
+        .{ .set_lamports_per_byte_to_696, 696 },
+    };
+    for (rent_feature_gates) |gate| {
+        const feature, const lamports_per_byte = gate;
+        if (new_activations.active(feature, slot)) {
+            slot_constants.rent_collector.rent.lamports_per_byte_year = lamports_per_byte;
+            try updateRent(allocator, slot_constants.rent_collector.rent, .{
+                .slot = slot,
+                .slot_store = slot_store,
+                .capitalization = &slot_state.capitalization,
+                .rent = &slot_constants.rent_collector.rent,
+            });
+        }
+    }
+
     if (new_activations.active(.pico_inflation, slot)) {
         slot_constants.inflation = .PICO;
         slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
@@ -340,6 +365,7 @@ fn applyBuiltinProgramFeatureTransitions(
                     builtin_program.program_id,
                     core_bpf_config,
                     .builtin,
+                    feature_set.active(.relax_programdata_account_check_migration, slot),
                 ) catch |e| switch (e) {
                     error.OutOfMemory => return error.OutOfMemory,
                     else => {
@@ -387,6 +413,7 @@ fn applyBuiltinProgramFeatureTransitions(
                 builtin_program.program_id,
                 core_bpf_config,
                 .stateless_builtin,
+                feature_set.active(.relax_programdata_account_check_migration, slot),
             ) catch |e| switch (e) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return, // Failed to migrate
@@ -402,7 +429,7 @@ fn applyBuiltinProgramFeatureTransitions(
     }
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.0.3/runtime/src/bank/builtins/core_bpf_migration/mod.rs#L221
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/builtins/core_bpf_migration/mod.rs#L220
 fn migrateBuiltinProgramToCoreBpf(
     allocator: Allocator,
     slot: Slot,
@@ -413,8 +440,14 @@ fn migrateBuiltinProgramToCoreBpf(
     builtin_program_id: Pubkey,
     migration_config: builtin_programs.CoreBpfMigrationConfig,
     migration_type: enum { builtin, stateless_builtin },
+    allow_prefunded: bool,
 ) !void {
     const loader_v3 = program.bpf_loader.v3;
+
+    const program_data_address, _ = sig.runtime.pubkey_utils.findProgramAddress(
+        &.{&builtin_program_id.data},
+        program.bpf_loader.v3.ID,
+    ) orelse unreachable; // agave/solana-address-1.0.0 panics on this case.
 
     const target = .{
         .program_account = switch (migration_type) {
@@ -434,17 +467,23 @@ fn migrateBuiltinProgramToCoreBpf(
                 break :blk null;
             },
         },
-        .program_data_address = blk: {
-            const program_data_address, _ = sig.runtime.pubkey_utils.findProgramAddress(
-                &.{&builtin_program_id.data},
-                program.bpf_loader.v3.ID,
-            ) orelse unreachable; // agave/solana-address-1.0.0 panics on this case.
-
+        .program_data_address = program_data_address,
+        // Track lamports from a pre-funded programdata account (SIMD-0444).
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/builtins/core_bpf_migration/target_builtin.rs#L57-L82
+        .program_data_account_lamports = blk: {
             if ((try slot_store.reader().get(allocator, program_data_address))) |account| {
                 defer account.deinit(allocator);
-                return error.ProgramHasDataAccount;
+                if (allow_prefunded) {
+                    // A system-owned account with funded lamports is acceptable.
+                    if (!account.owner.equals(&program.system.ID)) {
+                        return error.ProgramHasDataAccount;
+                    }
+                    break :blk account.lamports;
+                } else {
+                    return error.ProgramHasDataAccount;
+                }
             }
-            break :blk program_data_address;
+            break :blk @as(u64, 0);
         },
     };
 
@@ -567,11 +606,17 @@ fn migrateBuiltinProgramToCoreBpf(
     );
 
     // update capitalization
-    const lamports_to_burn = std.math.add(
-        u64,
-        if (target.program_account) |account| account.lamports else 0,
-        source.lamports,
-    ) catch return error.ArithmeticOverflow;
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/builtins/core_bpf_migration/mod.rs#L278-L282
+    const lamports_to_burn = blk: {
+        const base = std.math.add(
+            u64,
+            if (target.program_account) |account| account.lamports else 0,
+            source.lamports,
+        ) catch return error.ArithmeticOverflow;
+
+        break :blk std.math.add(u64, base, target.program_data_account_lamports) catch
+            return error.ArithmeticOverflow;
+    };
     const lamports_to_fund = std.math.add(
         u64,
         new_target_account.lamports,
@@ -778,7 +823,7 @@ const TestEnvironment = struct {
         feature: features.Feature,
         activation_slot: ?Slot,
     ) !void {
-        const feature_id = features.map.get(feature).key;
+        const feature_id = features.pubkey_map.get(feature);
         const data = try allocator.alloc(u8, 9);
         defer allocator.free(data);
         @memset(data, 0);
@@ -1146,6 +1191,99 @@ test "applyFeatureActivations: basic activations" {
     }
 }
 
+test "applyFeatureActivations: SIMD-0437 incremental rent reduction" {
+    const allocator = std.testing.allocator;
+
+    const cases = [_]struct { features.Feature, u64 }{
+        .{ .set_lamports_per_byte_to_6333, 6333 },
+        .{ .set_lamports_per_byte_to_5080, 5080 },
+        .{ .set_lamports_per_byte_to_2575, 2575 },
+        .{ .set_lamports_per_byte_to_1322, 1322 },
+        .{ .set_lamports_per_byte_to_696, 696 },
+    };
+
+    // Each gate, on first activation, sets lamports_per_byte_year to its target.
+    for (cases) |case| {
+        const feature, const expected = case;
+        const slot: Slot = 0;
+
+        var env = try TestEnvironment.init(allocator);
+        defer env.deinit(allocator);
+        try env.ancestors.addSlot(allocator, slot);
+
+        try env.insertFeatureAccount(allocator, slot, 1, feature, null);
+        try applyFeatureActivations(
+            allocator,
+            slot,
+            &env.slot_constants,
+            &env.slot_state,
+            env.slotAccountStore(slot),
+            .noop,
+        );
+
+        try std.testing.expectEqual(0, env.slot_constants.feature_set.get(feature));
+        try std.testing.expectEqual(
+            expected,
+            env.slot_constants.rent_collector.rent.lamports_per_byte_year,
+        );
+    }
+
+    { // Already-activated gate does not re-apply: state unchanged from initial.
+        const slot: Slot = 1;
+
+        var env = try TestEnvironment.init(allocator);
+        defer env.deinit(allocator);
+        try env.ancestors.addSlot(allocator, slot);
+
+        const initial_lpb_year = env.slot_constants.rent_collector.rent.lamports_per_byte_year;
+
+        try env.insertFeatureAccount(allocator, slot, 1, .set_lamports_per_byte_to_696, 1);
+        try applyFeatureActivations(
+            allocator,
+            slot,
+            &env.slot_constants,
+            &env.slot_state,
+            env.slotAccountStore(slot),
+            .noop,
+        );
+
+        try std.testing.expectEqual(
+            1,
+            env.slot_constants.feature_set.get(.set_lamports_per_byte_to_696),
+        );
+        try std.testing.expectEqual(
+            initial_lpb_year,
+            env.slot_constants.rent_collector.rent.lamports_per_byte_year,
+        );
+    }
+
+    { // All five activate in the same epoch: last in list (696) wins.
+        const slot: Slot = 0;
+
+        var env = try TestEnvironment.init(allocator);
+        defer env.deinit(allocator);
+        try env.ancestors.addSlot(allocator, slot);
+
+        for (cases) |case| {
+            const feature, _ = case;
+            try env.insertFeatureAccount(allocator, slot, 1, feature, null);
+        }
+        try applyFeatureActivations(
+            allocator,
+            slot,
+            &env.slot_constants,
+            &env.slot_state,
+            env.slotAccountStore(slot),
+            .noop,
+        );
+
+        try std.testing.expectEqual(
+            696,
+            env.slot_constants.rent_collector.rent.lamports_per_byte_year,
+        );
+    }
+}
+
 test "applyFeatureActivations: Builtin Transitions" {
     const allocator = std.testing.allocator;
 
@@ -1190,6 +1328,7 @@ test "applyFeatureActivations: Builtin Transitions" {
         builtin_program.program_id,
         builtin_program.core_bpf_migration_config.?,
         .builtin,
+        false,
     ));
 
     // Store invalid account - Incorrect Owner
@@ -1213,8 +1352,161 @@ test "applyFeatureActivations: Builtin Transitions" {
         builtin_program.program_id,
         builtin_program.core_bpf_migration_config.?,
         .builtin,
+        false,
     ));
 
     // TODO: Full migration tests
     // Store program data account, store buffer account, perform migration, verify results.
+}
+
+test "SIMD-0444 relax programdata account check during migration" {
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/builtins/core_bpf_migration/target_builtin.rs#L216-L248
+    const allocator = std.testing.allocator;
+    const slot: Slot = 0;
+
+    var env = try TestEnvironment.init(allocator);
+    defer env.deinit(allocator);
+    try env.ancestors.addSlot(allocator, slot);
+
+    const builtin_program = for (builtin_programs.BUILTINS) |bp| {
+        if (bp.program_id.equals(&sig.runtime.program.address_lookup_table.ID)) break bp;
+    } else unreachable;
+
+    const migration_config = builtin_program.core_bpf_migration_config.?;
+
+    // Store valid builtin program account (native loader owned) so we get past that check.
+    try env.slotAccountStore(slot).put(
+        builtin_program.program_id,
+        AccountSharedData{
+            .lamports = 1,
+            .data = &.{},
+            .executable = true,
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            .rent_epoch = 0,
+        },
+    );
+
+    // Derive the programdata PDA.
+    const program_data_address, _ = sig.runtime.pubkey_utils.findProgramAddress(
+        &.{&builtin_program.program_id.data},
+        program.bpf_loader.v3.ID,
+    ) orelse unreachable;
+
+    // Case 1: PDA exists, owned by non-system program -> error regardless of allow_prefunded.
+    {
+        try env.slotAccountStore(slot).put(
+            program_data_address,
+            AccountSharedData{
+                .lamports = 100,
+                .data = &.{},
+                .executable = false,
+                .owner = program.bpf_loader.v3.ID, // Not system program
+                .rent_epoch = 0,
+            },
+        );
+
+        // allow_prefunded = true -> still error (wrong owner)
+        try std.testing.expectError(error.ProgramHasDataAccount, migrateBuiltinProgramToCoreBpf(
+            allocator,
+            slot,
+            env.slotAccountStore(slot),
+            &env.slot_state.capitalization,
+            &env.slot_constants.rent_collector.rent,
+            &env.slot_constants.feature_set,
+            builtin_program.program_id,
+            migration_config,
+            .builtin,
+            true,
+        ));
+
+        // allow_prefunded = false -> also error
+        try std.testing.expectError(error.ProgramHasDataAccount, migrateBuiltinProgramToCoreBpf(
+            allocator,
+            slot,
+            env.slotAccountStore(slot),
+            &env.slot_state.capitalization,
+            &env.slot_constants.rent_collector.rent,
+            &env.slot_constants.feature_set,
+            builtin_program.program_id,
+            migration_config,
+            .builtin,
+            false,
+        ));
+    }
+
+    // Case 2: PDA exists, owned by system program, allow_prefunded = false -> error.
+    {
+        try env.slotAccountStore(slot).put(
+            program_data_address,
+            AccountSharedData{
+                .lamports = 500,
+                .data = &.{},
+                .executable = false,
+                .owner = program.system.ID, // System program
+                .rent_epoch = 0,
+            },
+        );
+
+        try std.testing.expectError(error.ProgramHasDataAccount, migrateBuiltinProgramToCoreBpf(
+            allocator,
+            slot,
+            env.slotAccountStore(slot),
+            &env.slot_state.capitalization,
+            &env.slot_constants.rent_collector.rent,
+            &env.slot_constants.feature_set,
+            builtin_program.program_id,
+            migration_config,
+            .builtin,
+            false,
+        ));
+    }
+
+    // Case 3: PDA exists, owned by system program, allow_prefunded = true -> passes PDA check.
+    // (Will fail later on missing source buffer, proving we got past the PDA check.)
+    {
+        try env.slotAccountStore(slot).put(
+            program_data_address,
+            AccountSharedData{
+                .lamports = 500,
+                .data = &.{},
+                .executable = false,
+                .owner = program.system.ID,
+                .rent_epoch = 0,
+            },
+        );
+
+        // Should get past PDA check but fail on missing source buffer account.
+        try std.testing.expectError(error.AccountNotFound, migrateBuiltinProgramToCoreBpf(
+            allocator,
+            slot,
+            env.slotAccountStore(slot),
+            &env.slot_state.capitalization,
+            &env.slot_constants.rent_collector.rent,
+            &env.slot_constants.feature_set,
+            builtin_program.program_id,
+            migration_config,
+            .builtin,
+            true,
+        ));
+    }
+
+    // Case 4: PDA does not exist -> passes PDA check (0 lamports).
+    {
+        // Clear the PDA account.
+        try env.slotAccountStore(slot).put(program_data_address, AccountSharedData.EMPTY);
+
+        // Should get past PDA check, fail on missing source buffer.
+        try std.testing.expectError(error.AccountNotFound, migrateBuiltinProgramToCoreBpf(
+            allocator,
+            slot,
+            env.slotAccountStore(slot),
+            &env.slot_state.capitalization,
+            &env.slot_constants.rent_collector.rent,
+            &env.slot_constants.feature_set,
+            builtin_program.program_id,
+            migration_config,
+            .builtin,
+            false,
+        ));
+    }
 }

@@ -72,29 +72,18 @@ pub fn execute(
     // additional borrow relative to Agave. This difference should not cause any issues, but is worth noting.
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L458-L518
     executeBpfProgram(allocator, ic) catch |err| {
+        // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L574-L588
+        // Agave always logs program failure regardless of error kind.
+        try stable_log.programFailure(
+            ic.tc,
+            ic.ixn_info.program_meta.pubkey,
+            err,
+        );
         const kind = sig.vm.getExecutionErrorKind(err);
         if (kind != .Instruction) {
-            try stable_log.programFailure(
-                ic.tc,
-                ic.ixn_info.program_meta.pubkey,
-                err,
-            );
             return InstructionError.ProgramFailedToComplete;
         } else {
-            const instruction_err = sig.vm.instructionErrorFromExecutionError(err);
-            // When a CPI callee fails, ProgramFailedToComplete propagates back as an
-            // InstructionError through the caller's VM. The executor skips logging for
-            // ProgramFailedToComplete (to avoid double-logging for direct VM crashes),
-            // so we must log the caller's failure here.
-            // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L576-L579
-            if (instruction_err == InstructionError.ProgramFailedToComplete) {
-                try stable_log.programFailure(
-                    ic.tc,
-                    ic.ixn_info.program_meta.pubkey,
-                    err,
-                );
-            }
-            return instruction_err;
+            return sig.vm.instructionErrorFromExecutionError(err);
         }
     };
 }
@@ -165,6 +154,14 @@ fn executeBpfProgram(
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1621-L1640
     const compute_available = ic.tc.compute_meter;
+    // SIMD-0460: scratch state used by the access-violation handler. It needs
+    // a stable address for the whole VM run, hence declared at the outer scope
+    // rather than inside the blk.
+    var avh_ctx: AccessViolationHandlerCtx = .{
+        .tc = ic.tc,
+        .allocator = allocator,
+        .direct_mapping = account_data_direct_mapping,
+    };
     const result, const compute_consumed = blk: {
         var state = sig.vm.init(
             allocator,
@@ -178,6 +175,18 @@ fn executeBpfProgram(
             return InstructionError.ProgramEnvironmentSetupFailure;
         };
         defer state.deinit(allocator);
+
+        // SIMD-0460: install the access-violation handler so the VM auto-grows
+        // writable+owned account regions on writes within budget, and so we
+        // capture failing-access metadata for post-execution error remapping.
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0/program-runtime/src/vm.rs#L111-L119
+        if (virtual_address_space_adjustments) {
+            ic.tc.last_access_violation = null;
+            state.vm.memory_map.setAccessViolationHandler(.{
+                .ctx = @ptrCast(&avh_ctx),
+                .call = AccessViolationHandlerCtx.handle,
+            });
+        }
 
         // Run our bpf program!
         const result = state.vm.run();
@@ -209,9 +218,28 @@ fn executeBpfProgram(
         result,
         &ic.tc.custom_error,
         &ic.tc.compute_meter,
-        virtual_address_space_adjustments,
         ic.tc.feature_set.active(.deplete_cu_meter_on_vm_failure, ic.tc.slot),
     );
+
+    // SIMD-0460: remap a generic AccessViolation to the specific account-data
+    // error (`AccountDataTooSmall`, `InvalidRealloc`, `ReadonlyDataModified`,
+    // `ExternalAccountDataModified`) using the access metadata captured by
+    // the handler. Falls through to AccessViolation when the access doesn't
+    // correspond to an account region or no metadata was captured.
+    if (virtual_address_space_adjustments) {
+        if (maybe_execute_error) |err| if (err == error.AccessViolation) {
+            const is_loader_v1 = blk2: {
+                const program_account = try ic.borrowProgramAccount();
+                defer program_account.release();
+                break :blk2 program_account.account.owner.equals(
+                    &program.bpf_loader.v1.ID,
+                );
+            };
+            if (remapAccessViolation(ic, is_loader_v1)) |remapped| {
+                maybe_execute_error = remapped;
+            }
+        };
+    }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1750-L1756
     if (maybe_execute_error == null)
@@ -236,7 +264,6 @@ fn handleExecutionResult(
     result: sig.vm.interpreter.Result,
     custom_error: *?u32,
     compute_meter: *u64,
-    virtual_address_space_adjustments: bool,
     deplete_cu_meter: bool,
 ) ?ExecutionError {
     switch (result) {
@@ -252,10 +279,186 @@ fn handleExecutionResult(
             const err_kind = sig.vm.getExecutionErrorKind(err);
             if (deplete_cu_meter and err_kind != .Syscall)
                 compute_meter.* = 0;
-            if (virtual_address_space_adjustments and err == error.AccessViolation)
-                std.debug.print("TODO: Handle AccessViolation: {s}\n", .{@errorName(err)});
             return err;
         },
+    }
+    return null;
+}
+
+/// SIMD-0460: the access-violation handler installed on the VM's memory map
+/// while a bpf program runs. Performs Agave-equivalent of
+/// `TransactionContext::access_violation_handler`:
+///
+///   1. Records the failing access (`access_type`, `vm_addr`, `len`) on
+///      `tc.last_access_violation` so the post-execution path can remap a
+///      generic `AccessViolation` to a specific account-related
+///      `InstructionError`. Sig keeps this metadata explicitly, unlike Agave,
+///      so handled accesses must be marked and ignored later to avoid stale
+///      remapping.
+///   2. For *writes* to a writable+owned account region whose payload is set,
+///      attempts to grow the region (up to the account's reserved address
+///      space, `MAX_PERMITTED_DATA_LENGTH`, and the remaining
+///      `MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION` budget)
+///      and zero-extends the account data — matching SIMD-0460's
+///      "extend the account with zeros to the maximum allowed" rule.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/transaction.rs#L519-L543
+const AccessViolationHandlerCtx = struct {
+    tc: *TransactionContext,
+    allocator: std.mem.Allocator,
+    direct_mapping: bool,
+
+    fn handle(
+        ctx_raw: *anyopaque,
+        region: *vm.memory.Region,
+        address_space_reserved_for_account: u64,
+        access_type: vm.memory.MemoryState,
+        vm_addr: u64,
+        len: u64,
+    ) void {
+        const ctx: *AccessViolationHandlerCtx = @ptrCast(@alignCast(ctx_raw));
+
+        // Step 1: record for post-execution remapping (always). If the
+        // handler later grows the region enough to satisfy this access, the
+        // record is marked `handled` so remapAccessViolation can ignore it.
+        ctx.tc.last_access_violation = .{
+            .access_type = access_type,
+            .vm_addr = vm_addr,
+            .len = len,
+            .handled = false,
+        };
+
+        // Step 2: auto-grow logic. Only writable+owned account-data regions
+        // are tagged with a payload (see Serializer.writeAccount), so a
+        // missing payload means this is not a growable region.
+        if (access_type == .constant) return;
+        const index_in_transaction = region.access_violation_handler_payload orelse return;
+
+        // Offset of the requested access from this region's start in vm space.
+        const requested_length = (vm_addr +| len) -| region.vm_addr_start;
+        if (requested_length > address_space_reserved_for_account) {
+            // Access exceeds even the maximum reserved address space — the
+            // post-execution path will map this to `InvalidRealloc`.
+            return;
+        }
+
+        const tc_account = ctx.tc.getAccountAtIndex(index_in_transaction) orelse return;
+        const account, const guard = tc_account.writeWithLock() orelse return;
+        defer guard.release();
+
+        const max_growth =
+            sig.runtime.program.system.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
+        const remaining_growth: u64 = @intCast(@max(
+            0,
+            max_growth -| ctx.tc.accounts_resize_delta,
+        ));
+
+        // Gate on the region's currently-visible length (agave's `region.len`)
+        // rather than `account.data.len` — the slice's `.len` is what the VM
+        // sees. `constSlice` reads the length regardless of mutability so this
+        // stays correct if CoW later produces a `.constant` payload-tagged
+        // region (see serialize.zig `getAccountDataRegionMemoryState` TODO).
+        if (requested_length > region.constSlice().len) {
+            const old_len: u64 = account.data.len;
+            const new_len_u64 = @min(
+                address_space_reserved_for_account,
+                @min(
+                    sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH,
+                    old_len +| remaining_growth,
+                ),
+            );
+            // If we can't grow far enough to cover the access, leave the
+            // region untouched — the access violation fires and the
+            // post-execution path maps it to `InvalidRealloc`.
+            if (new_len_u64 < requested_length) return;
+
+            const new_len: usize = @intCast(new_len_u64);
+            account.resize(ctx.allocator, new_len) catch return;
+            ctx.tc.accounts_resize_delta +|=
+                @as(i64, @intCast(new_len)) -| @as(i64, @intCast(old_len));
+
+            // Non-direct-mapping: extend the slice into the
+            // `MAX_PERMITTED_DATA_INCREASE` zeros pre-allocated after the
+            // account payload during serialization. Direct-mapping is
+            // re-anchored below, mirroring agave's CoW/writable block.
+            if (!ctx.direct_mapping) {
+                const ptr = region.host_memory.mutable.ptr;
+                region.host_memory = .{ .mutable = ptr[0..new_len] };
+            }
+            region.vm_addr_end = region.vm_addr_start +| @as(u64, new_len);
+            // The originally failing access can now succeed on retry, so the
+            // recorded metadata is stale for post-execution remapping.
+            if (ctx.tc.last_access_violation) |*av| av.handled = true;
+        }
+
+        // Direct-mapping: re-anchor `host_memory` to `account.data`.
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/transaction.rs#L541-L543
+        if (ctx.direct_mapping) {
+            region.host_memory = .{ .mutable = account.data };
+        }
+    }
+};
+
+/// SIMD-0460: convert a generic `AccessViolation` from the SBPF VM into a
+/// specific account-related `InstructionError` using the access metadata
+/// recorded by `AccessViolationHandlerCtx.handle`. Returns null if the
+/// violation does not correspond to an account region (in which case the
+/// caller keeps the original `AccessViolation`).
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v4/program-runtime/src/vm.rs#L318-L381
+fn remapAccessViolation(
+    ic: *InstructionContext,
+    is_loader_v1: bool,
+) ?InstructionError {
+    const av = ic.tc.last_access_violation orelse return null;
+    // Sig stores the last attempted access explicitly. If the handler already
+    // repaired it by growing the region, skip remapping so stale metadata does
+    // not misclassify a later real access violation.
+    if (av.handled) return null;
+
+    const account_metas = ic.tc.serialized_accounts.constSlice();
+    for (account_metas, 0..) |meta, index_in_instruction| {
+        // Reserved address space for this account: the original data length
+        // plus the growth pad (everywhere except loader-v1, which doesn't
+        // reserve growth space).
+        const reserved: u64 = if (is_loader_v1)
+            meta.original_data_len
+        else
+            meta.original_data_len +| @as(u64, bpf_serialize.MAX_PERMITTED_DATA_INCREASE);
+        const range_start = meta.vm_data_addr;
+        const range_end = range_start +| reserved;
+
+        const access_end = av.vm_addr +| av.len;
+        if (av.vm_addr < range_start or access_end > range_end) continue;
+
+        // The access fell within this account's reserved range. Was it
+        // beyond the account's current data length?
+        var account =
+            ic.borrowInstructionAccount(@intCast(index_in_instruction)) catch return null;
+        defer account.release();
+        const requested_offset = access_end -| range_start;
+        const is_outside_of_data = requested_offset > account.constAccountData().len;
+        const writable = account.checkDataIsMutable() == null;
+
+        return switch (av.access_type) {
+            .mutable => if (account.checkDataIsMutable()) |err|
+                err
+            else if (is_outside_of_data)
+                // The store was permitted by the writability check but
+                // exceeded the growable range — must have been a grow attempt
+                // that the handler refused (out of budget / past the reserved
+                // address space).
+                InstructionError.InvalidRealloc
+            else
+                null,
+            .constant => if (!writable)
+                // Read past the end of a readonly account's data.
+                InstructionError.AccountDataTooSmall
+            else
+                // Read past a writable account's data is also treated as a
+                // grow attempt (per Agave / SIMD-0460).
+                InstructionError.InvalidRealloc,
+        };
     }
     return null;
 }
@@ -4325,7 +4528,6 @@ test handleExecutionResult {
         &custom_error,
         &compute_meter,
         false,
-        false,
     ));
     try std.testing.expectEqual(null, custom_error);
     try std.testing.expectEqual(1000, compute_meter);
@@ -4335,7 +4537,6 @@ test handleExecutionResult {
         .{ .ok = 0x100000000 },
         &custom_error,
         &compute_meter,
-        false,
         false,
     ).?);
     try std.testing.expectEqual(0, custom_error.?);
@@ -4348,7 +4549,6 @@ test handleExecutionResult {
         &custom_error,
         &compute_meter,
         false,
-        false,
     ).?);
     try std.testing.expectEqual(101, custom_error.?);
     try std.testing.expectEqual(1000, compute_meter);
@@ -4359,13 +4559,531 @@ test handleExecutionResult {
         .{ .err = error.InvalidArgument },
         &custom_error,
         &compute_meter,
-        false,
         true,
     ).?);
     try std.testing.expectEqual(null, custom_error);
     try std.testing.expectEqual(0, compute_meter);
 
-    // TODO: Handle AccessViolation
+    // AccessViolation is returned unchanged at this layer; SIMD-0460 remapping
+    // happens in executeBpfProgram (which has the InstructionContext + access
+    // metadata from `TransactionContext.last_access_violation`).
+}
+
+// SIMD-0460: covers `AccessViolationHandlerCtx.handle` — the function the SBPF
+// VM calls when an access misses, which both records metadata for post-execution
+// error remapping and (for writes within budget) auto-grows the account-data
+// region. Exercises each early-return guard plus the successful-grow path under
+// both direct- and non-direct-mapping.
+test "AccessViolationHandlerCtx.handle" {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const account_data_size: usize = 100;
+    const initial_data = try allocator.alloc(u8, account_data_size);
+    defer allocator.free(initial_data);
+    @memset(initial_data, 0xab);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const data_account_key = Pubkey.initRandom(prng.random());
+
+    const cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+        .accounts = &.{
+            .{ .pubkey = data_account_key, .data = initial_data, .owner = program_id },
+            .{ .pubkey = program_id, .owner = sig.runtime.ids.NATIVE_LOADER_ID },
+        },
+    });
+    defer {
+        testing.deinitTransactionContext(allocator, &tc);
+        testing.deinitAccountMap(cache, allocator);
+    }
+
+    // Non-direct-mapping host buffer: serializer pre-reserves MAX_PERMITTED_DATA_INCREASE
+    // bytes of zero-padding past the account payload, so the handler can extend
+    // the region's host slice into that padding without reallocating.
+    const region_buffer_size: usize =
+        account_data_size + bpf_serialize.MAX_PERMITTED_DATA_INCREASE;
+    const region_buffer = try allocator.alloc(u8, region_buffer_size);
+    defer allocator.free(region_buffer);
+    @memset(region_buffer, 0);
+
+    const vm_start: u64 = 0x4_0000_0000;
+
+    var ctx: AccessViolationHandlerCtx = .{
+        .tc = &tc,
+        .allocator = allocator,
+        .direct_mapping = false,
+    };
+
+    // Constant (read) access: record the violation, never grow.
+    {
+        var region = vm.memory.Region.init(
+            .mutable,
+            region_buffer[0..account_data_size],
+            vm_start,
+        );
+        region.access_violation_handler_payload = 0;
+        const old_end = region.vm_addr_end;
+        tc.last_access_violation = null;
+
+        AccessViolationHandlerCtx.handle(
+            @ptrCast(&ctx),
+            &region,
+            region_buffer_size,
+            .constant,
+            vm_start + 50,
+            100,
+        );
+
+        try std.testing.expectEqualDeep(
+            sig.runtime.transaction_context.AccessViolationInfo{
+                .access_type = .constant,
+                .vm_addr = vm_start + 50,
+                .len = 100,
+            },
+            tc.last_access_violation,
+        );
+        try std.testing.expectEqual(old_end, region.vm_addr_end);
+        try std.testing.expectEqual(account_data_size, tc.accounts[0].account.data.len);
+        try std.testing.expectEqual(@as(i64, 0), tc.accounts_resize_delta);
+    }
+
+    // Mutable access on a non-account region (payload == null): record only.
+    {
+        var region = vm.memory.Region.init(
+            .mutable,
+            region_buffer[0..account_data_size],
+            vm_start,
+        );
+        const old_end = region.vm_addr_end;
+        tc.last_access_violation = null;
+
+        AccessViolationHandlerCtx.handle(
+            @ptrCast(&ctx),
+            &region,
+            region_buffer_size,
+            .mutable,
+            vm_start + 150,
+            10,
+        );
+
+        try std.testing.expect(tc.last_access_violation != null);
+        try std.testing.expectEqual(old_end, region.vm_addr_end);
+        try std.testing.expectEqual(account_data_size, tc.accounts[0].account.data.len);
+        try std.testing.expectEqual(@as(i64, 0), tc.accounts_resize_delta);
+    }
+
+    // Access exceeds the account's reserved address space: record only.
+    {
+        var region = vm.memory.Region.init(
+            .mutable,
+            region_buffer[0..account_data_size],
+            vm_start,
+        );
+        region.access_violation_handler_payload = 0;
+        const old_end = region.vm_addr_end;
+        tc.last_access_violation = null;
+
+        AccessViolationHandlerCtx.handle(
+            @ptrCast(&ctx),
+            &region,
+            150, // reserved
+            .mutable,
+            vm_start + 200,
+            10,
+        );
+
+        try std.testing.expect(tc.last_access_violation != null);
+        try std.testing.expectEqual(old_end, region.vm_addr_end);
+        try std.testing.expectEqual(account_data_size, tc.accounts[0].account.data.len);
+        try std.testing.expectEqual(@as(i64, 0), tc.accounts_resize_delta);
+    }
+
+    // Mutable access inside the current data length: record only (nothing to grow).
+    {
+        var region = vm.memory.Region.init(
+            .mutable,
+            region_buffer[0..account_data_size],
+            vm_start,
+        );
+        region.access_violation_handler_payload = 0;
+        const old_end = region.vm_addr_end;
+        tc.last_access_violation = null;
+
+        AccessViolationHandlerCtx.handle(
+            @ptrCast(&ctx),
+            &region,
+            region_buffer_size,
+            .mutable,
+            vm_start + 50,
+            10,
+        );
+
+        try std.testing.expect(tc.last_access_violation != null);
+        try std.testing.expectEqual(old_end, region.vm_addr_end);
+        try std.testing.expectEqual(account_data_size, tc.accounts[0].account.data.len);
+        try std.testing.expectEqual(@as(i64, 0), tc.accounts_resize_delta);
+    }
+
+    // Non-direct-mapping grow path: account is resized, resize_delta accumulates,
+    // and the region's host slice is extended in place into the pre-reserved pad.
+    {
+        var region = vm.memory.Region.init(
+            .mutable,
+            region_buffer[0..account_data_size],
+            vm_start,
+        );
+        region.access_violation_handler_payload = 0;
+        const original_buffer_ptr = region.host_memory.mutable.ptr;
+        tc.last_access_violation = null;
+        tc.accounts_resize_delta = 0;
+
+        AccessViolationHandlerCtx.handle(
+            @ptrCast(&ctx),
+            &region,
+            region_buffer_size,
+            .mutable,
+            vm_start + 150,
+            10,
+        );
+
+        // new_len = min(reserved, min(MAX_DATA, old_len + remaining_growth))
+        //         = min(region_buffer_size, min(MAX_DATA, ~20MiB)) = region_buffer_size.
+        const expected_new_len: usize = region_buffer_size;
+
+        try std.testing.expect(tc.last_access_violation != null);
+        try std.testing.expectEqual(expected_new_len, tc.accounts[0].account.data.len);
+        try std.testing.expectEqual(
+            @as(i64, @intCast(expected_new_len - account_data_size)),
+            tc.accounts_resize_delta,
+        );
+        try std.testing.expectEqual(vm_start + expected_new_len, region.vm_addr_end);
+        try std.testing.expectEqual(expected_new_len, region.host_memory.mutable.len);
+        // Non-direct-mapping must not move host_memory.ptr — the serialization
+        // buffer it points into is what the VM sees, and moving it would
+        // invalidate the VM's mapping.
+        try std.testing.expectEqual(original_buffer_ptr, region.host_memory.mutable.ptr);
+    }
+
+    // Reset for next case.
+    try tc.accounts[0].account.resize(allocator, account_data_size);
+    tc.accounts_resize_delta = 0;
+
+    // Resize budget exhausted: remaining_growth = 0 → new_len capped at old_len,
+    // which doesn't cover the access → leave the region untouched.
+    {
+        var region = vm.memory.Region.init(
+            .mutable,
+            region_buffer[0..account_data_size],
+            vm_start,
+        );
+        region.access_violation_handler_payload = 0;
+        const old_end = region.vm_addr_end;
+        tc.last_access_violation = null;
+        tc.accounts_resize_delta =
+            sig.runtime.program.system.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
+
+        AccessViolationHandlerCtx.handle(
+            @ptrCast(&ctx),
+            &region,
+            region_buffer_size,
+            .mutable,
+            vm_start + 150,
+            10,
+        );
+
+        try std.testing.expect(tc.last_access_violation != null);
+        try std.testing.expectEqual(old_end, region.vm_addr_end);
+        try std.testing.expectEqual(account_data_size, tc.accounts[0].account.data.len);
+        // resize_delta must not be touched when no resize happens.
+        try std.testing.expectEqual(
+            sig.runtime.program.system.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION,
+            tc.accounts_resize_delta,
+        );
+    }
+
+    // Direct-mapping grow path: region.host_memory is re-derived from
+    // account.data (which may have moved due to the realloc).
+    {
+        tc.accounts_resize_delta = 0;
+        ctx.direct_mapping = true;
+        var region = vm.memory.Region.init(.mutable, tc.accounts[0].account.data, vm_start);
+        region.access_violation_handler_payload = 0;
+        tc.last_access_violation = null;
+
+        AccessViolationHandlerCtx.handle(
+            @ptrCast(&ctx),
+            &region,
+            region_buffer_size,
+            .mutable,
+            vm_start + 150,
+            10,
+        );
+
+        try std.testing.expectEqual(
+            tc.accounts[0].account.data.len,
+            region.host_memory.mutable.len,
+        );
+        try std.testing.expectEqual(
+            tc.accounts[0].account.data.ptr,
+            region.host_memory.mutable.ptr,
+        );
+        try std.testing.expectEqual(
+            vm_start + tc.accounts[0].account.data.len,
+            region.vm_addr_end,
+        );
+    }
+}
+
+// SIMD-0460: covers `remapAccessViolation` — converts a generic
+// `AccessViolation` (raised by the VM after the access-violation handler
+// declined to grow) into the specific account-related `InstructionError` the
+// bpf_loader reports. Each case sets `tc.last_access_violation` and asserts the
+// returned error.
+test remapAccessViolation {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const data_account_key = Pubkey.initRandom(prng.random());
+
+    const data_len: u64 = 100;
+    const initial_data = try allocator.alloc(u8, data_len);
+    defer allocator.free(initial_data);
+    @memset(initial_data, 0xab);
+
+    const cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+        .accounts = &.{
+            .{ .pubkey = data_account_key, .data = initial_data, .owner = program_id },
+            .{ .pubkey = program_id, .owner = sig.runtime.ids.NATIVE_LOADER_ID },
+        },
+    });
+    defer {
+        testing.deinitTransactionContext(allocator, &tc);
+        testing.deinitAccountMap(cache, allocator);
+    }
+
+    var info = try testing.createInstructionInfo(
+        &tc,
+        program_id,
+        @as([]const u8, &.{}),
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+        },
+    );
+    defer info.deinit(allocator);
+
+    try sig.runtime.executor.pushInstruction(&tc, info);
+    const ic = try tc.getCurrentInstructionContext();
+
+    const vm_data_addr: u64 = 0x4_0000_0000;
+    const reserved_with_pad: u64 = data_len + bpf_serialize.MAX_PERMITTED_DATA_INCREASE;
+
+    tc.serialized_accounts = .{};
+    tc.serialized_accounts.appendAssumeCapacity(.{
+        .original_data_len = data_len,
+        .vm_data_addr = vm_data_addr,
+        .vm_key_addr = 0,
+        .vm_lamports_addr = 0,
+        .vm_owner_addr = 0,
+    });
+
+    // No recorded violation → no remap.
+    tc.last_access_violation = null;
+    try std.testing.expectEqual(
+        @as(?InstructionError, null),
+        remapAccessViolation(ic, false),
+    );
+
+    // Access falls outside every account region → no remap.
+    tc.last_access_violation = .{
+        .access_type = .mutable,
+        .vm_addr = vm_data_addr + reserved_with_pad + 10,
+        .len = 4,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, null),
+        remapAccessViolation(ic, false),
+    );
+
+    // Write within reserved range but past current data length, on a
+    // writable+owned account → InvalidRealloc (the handler refused to grow).
+    tc.last_access_violation = .{
+        .access_type = .mutable,
+        .vm_addr = vm_data_addr + data_len + 4,
+        .len = 1,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, InstructionError.InvalidRealloc),
+        remapAccessViolation(ic, false),
+    );
+
+    // Write inside current data length, writable+owned → no remap
+    // (AccessViolation in this region was not due to account semantics).
+    tc.last_access_violation = .{
+        .access_type = .mutable,
+        .vm_addr = vm_data_addr + 4,
+        .len = 1,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, null),
+        remapAccessViolation(ic, false),
+    );
+
+    // Read past readonly account data → AccountDataTooSmall.
+    ic.ixn_info.account_metas.items[0].is_writable = false;
+    tc.last_access_violation = .{
+        .access_type = .constant,
+        .vm_addr = vm_data_addr + data_len + 4,
+        .len = 1,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, InstructionError.AccountDataTooSmall),
+        remapAccessViolation(ic, false),
+    );
+
+    // Write to a readonly account → ReadonlyDataModified.
+    tc.last_access_violation = .{
+        .access_type = .mutable,
+        .vm_addr = vm_data_addr + 4,
+        .len = 1,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, InstructionError.ReadonlyDataModified),
+        remapAccessViolation(ic, false),
+    );
+    ic.ixn_info.account_metas.items[0].is_writable = true;
+
+    // Write to a writable account that isn't owned by the executing program
+    // → ExternalAccountDataModified.
+    const saved_owner = tc.accounts[0].account.owner;
+    tc.accounts[0].account.owner = Pubkey.ZEROES;
+    tc.last_access_violation = .{
+        .access_type = .mutable,
+        .vm_addr = vm_data_addr + 4,
+        .len = 1,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, InstructionError.ExternalAccountDataModified),
+        remapAccessViolation(ic, false),
+    );
+    tc.accounts[0].account.owner = saved_owner;
+
+    // Read past a writable account's data → InvalidRealloc (per SIMD-0460
+    // a read that overshoots a writable account is also treated as a failed
+    // grow attempt, not a "too small" condition).
+    tc.last_access_violation = .{
+        .access_type = .constant,
+        .vm_addr = vm_data_addr + data_len + 4,
+        .len = 1,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, InstructionError.InvalidRealloc),
+        remapAccessViolation(ic, false),
+    );
+
+    // Loader-v1 reserves no growth pad, so an access at vm_data_addr+data_len
+    // falls *outside* the v1 reserved range and is not remapped — even though
+    // the same access *would* be remapped under any other loader.
+    tc.last_access_violation = .{
+        .access_type = .mutable,
+        .vm_addr = vm_data_addr + data_len,
+        .len = 1,
+    };
+    try std.testing.expectEqual(
+        @as(?InstructionError, null),
+        remapAccessViolation(ic, true),
+    );
+    try std.testing.expectEqual(
+        @as(?InstructionError, InstructionError.InvalidRealloc),
+        remapAccessViolation(ic, false),
+    );
+}
+
+test "remapAccessViolation ignores stale metadata from handled growth" {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const account_data = [_]u8{ 1, 2, 3, 4 };
+    const vm_data_addr = sig.vm.memory.INPUT_START + 0x80;
+
+    const cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+        .accounts = &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .owner = program_id,
+                .data = &account_data,
+            },
+            .{
+                .pubkey = program_id,
+                .owner = ids.NATIVE_LOADER_ID,
+            },
+        },
+    });
+    defer {
+        testing.deinitTransactionContext(allocator, &tc);
+        sig.runtime.testing.deinitAccountMap(cache, allocator);
+    }
+
+    var info = try testing.createInstructionInfo(
+        &tc,
+        program_id,
+        &.{},
+        &.{
+            .{ .index_in_transaction = 0, .is_writable = true },
+        },
+    );
+    defer info.deinit(allocator);
+
+    try sig.runtime.executor.pushInstruction(&tc, info);
+    const ic = try tc.getCurrentInstructionContext();
+
+    tc.serialized_accounts.appendAssumeCapacity(.{
+        .original_data_len = account_data.len,
+        .vm_data_addr = vm_data_addr,
+        .vm_key_addr = 0,
+        .vm_lamports_addr = 0,
+        .vm_owner_addr = 0,
+    });
+
+    const initial_data = blk: {
+        var account = try ic.borrowInstructionAccount(0);
+        defer account.release();
+        break :blk try allocator.dupe(u8, account.account.data);
+    };
+    defer allocator.free(initial_data);
+
+    var region = vm.memory.Region.init(.mutable, initial_data, vm_data_addr).withPayload(0);
+    var avh_ctx: AccessViolationHandlerCtx = .{
+        .tc = &tc,
+        .allocator = allocator,
+        .direct_mapping = true,
+    };
+
+    AccessViolationHandlerCtx.handle(
+        @ptrCast(&avh_ctx),
+        &region,
+        account_data.len + 4,
+        .mutable,
+        vm_data_addr + account_data.len,
+        4,
+    );
+
+    {
+        var account = try ic.borrowInstructionAccount(0);
+        defer account.release();
+
+        try std.testing.expectEqual(account_data.len + 4, account.constAccountData().len);
+        try std.testing.expect(tc.last_access_violation != null);
+
+        try account.setDataLength(allocator, &tc.accounts_resize_delta, account_data.len);
+        try std.testing.expectEqual(account_data.len, account.constAccountData().len);
+    }
+
+    try std.testing.expectEqual(null, remapAccessViolation(ic, false));
 }
 
 // Regression test: executeV4Retract must use tc.programs_allocator (the persistent GPA)

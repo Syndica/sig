@@ -1,15 +1,7 @@
 const std = @import("std");
-const start = @import("start");
+const start = @import("start_service");
 const lib = @import("lib");
 const tel = lib.telemetry;
-
-const Slot = lib.solana.Slot;
-const Pubkey = lib.solana.Pubkey;
-
-const Table = lib.accounts_db.Table;
-
-const Manifest = lib.snapshot.bincode.Manifest;
-const StatusCache = lib.snapshot.bincode.StatusCache;
 
 comptime {
     _ = start;
@@ -19,62 +11,84 @@ pub const name = .accounts_db;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadOnly = struct {};
+pub const ReadOnly = struct {
+    snapshot_config: *const lib.snapshot.SnapshotConfig,
+};
+
 pub const ReadWrite = struct {
-    config: *lib.accounts_db.DbConfig,
-    snapshot_to_accounts_db: *lib.snapshot.SnapshotDecodeRing,
+    rooted_config: *lib.accounts_db.RootedConfig,
+    pool: *lib.accounts_db.AccountPool,
+    snapshot_to_accounts_db: *lib.snapshot.SnapshotDataRing,
+    replay_lookups: *lib.accounts_db.AccountLookups,
     tel: *tel.Region,
 };
 
-var global: struct {
-    rooted: lib.accounts_db.Rooted,
-    snapshot_fba_buf: [256 * 1024 * 1024]u8,
-} = undefined;
-
-pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
 
-    const db_path = rw.config.file_path[0..rw.config.file_path_len];
-    logger.info().logf("accounts_db started on {s}", .{db_path});
+    const file_path = rw.rooted_config.file_path[0..rw.rooted_config.file_len];
+    logger.info().logf("accounts_db started into file: {s}", .{file_path});
 
-    const rooted = &global.rooted;
+    const Global = struct {
+        var fba_memory: [32 * 1024 * 1024]u8 = blk: {
+            @setRuntimeSafety(false);
+            break :blk undefined;
+        };
+        var snapshot_iter: lib.solana.snapshot.SnapshotIter = blk: {
+            @setRuntimeSafety(false);
+            break :blk undefined;
+        };
+        var rooted: lib.accounts_db.Rooted = blk: {
+            @setRuntimeSafety(false);
+            break :blk undefined;
+        };
+    };
+
+    const rooted = &Global.rooted;
     try rooted.init(
         .from(logger),
         std.fs.cwd(),
-        db_path,
-        rw.config.memory[0..].ptr[0..rw.config.memory_len],
+        file_path,
+        rw.rooted_config.memory[0..].ptr[0..rw.rooted_config.memory_len],
     );
     defer rooted.deinit();
 
-    // Handle the snapshot_to_accounts_db, if the rooted db isnt already loaded.
-    {
-        defer rw.snapshot_to_accounts_db.close(.reader);
-        if (rooted.table.count == 0) {
-            const TarReaderEffect = struct {
-                snapshot_decoder: *lib.snapshot.SnapshotDecodeRing,
+    if (rooted.table.count == 0) {
+        logger.info().logf("no existing rooted db. waiting for ready snapshot", .{});
 
-                pub fn getSlice(self: @This()) error{EndOfStream}![]u8 {
-                    return self.snapshot_decoder.getSlice(.reader) catch return error.EndOfStream;
-                }
+        var snapshot_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const snapshot_path: []const u8 = blk: {
+            var ready_snapshot_iter = rw.snapshot_to_accounts_db.get(.reader);
+            while (true) : (std.atomic.spinLoopHint()) {
+                const ready_ptr = ready_snapshot_iter.next() orelse continue;
+                defer ready_snapshot_iter.markUsed();
+                break :blk try ready_ptr.name(&snapshot_path_buf);
+            }
+        };
 
-                pub fn advance(self: @This(), n: usize) void {
-                    self.snapshot_decoder.advance(.reader, n);
-                }
-            };
-            var tar_iter = lib.snapshot.tar.TarIterator(TarReaderEffect).init(.{
-                .snapshot_decoder = rw.snapshot_to_accounts_db,
+        var snapshot_dir = try std.fs.cwd().openDir(
+            ro.snapshot_config.folder_buffer[0..ro.snapshot_config.folder_len],
+            .{},
+        );
+        defer snapshot_dir.close();
+
+        var fba = std.heap.FixedBufferAllocator.init(&Global.fba_memory);
+        const snapshot_iter = &Global.snapshot_iter;
+        try snapshot_iter.init(
+            .from(logger),
+            &fba,
+            snapshot_dir,
+            snapshot_path,
+        );
+        defer snapshot_iter.deinit();
+
+        logger.info().logf("snapshot loaded\n", .{});
+        for (0..10) |_| {
+            const acc = (try snapshot_iter.next()) orelse break;
+            logger.info().logf("slot:{} acc:{f} owner:{f} lamports:{} len:{}", .{
+                acc.slot, acc.pubkey, acc.owner, acc.lamports, acc.data.len,
             });
-
-            var fba = std.heap.FixedBufferAllocator.init(&global.snapshot_fba_buf);
-            var snapshot_reader = try lib.solana.SnapshotReader(@TypeOf(tar_iter)).read(
-                &fba,
-                .from(logger),
-                &tar_iter,
-            );
-
-            // TODO: publish manifest stuff here.
-            try rooted.loadSnapshot(.from(logger), &snapshot_reader);
         }
     }
 

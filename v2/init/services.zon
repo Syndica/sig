@@ -11,15 +11,21 @@
         .gossip_to_snapshot = .snapshot_source_ring,
         .snapshot_config = .snapshot_config,
 
-        .snapshot_to_accounts_db = .snapshot_decode_ring,
-        .accounts_db_config = .accounts_db_config,
+        .snapshot_to_accounts_db = .snapshot_ready_ring,
+        .rooted_config = .accounts_db_config,
+        .account_pool = .account_pool,
+
+        .replay_accounts_db_lookup = .account_lookup,
+        .deshredded_out = .deshredded_out,
+
+        .telemetry = .telemetry,
     },
     .services = .{
         .{
             .name = .net,
             .regions = .{
-                .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .net_to_gossip, .access = .rw },
+                .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .telemetry, .access = .rw },
             },
         },
@@ -28,6 +34,7 @@
             .regions = .{
                 .{ .name = .net_to_gossip, .access = .rw },
                 .{ .name = .gossip_config, .access = .readonly },
+                .{ .name = .gossip_to_snapshot, .access = .rw },
                 .{ .name = .telemetry, .access = .rw },
                 .{ .name = .gossip_to_snapshot, .access = .rw },
             },
@@ -37,12 +44,21 @@
             .regions = .{
                 .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .shred_recv_config, .access = .readonly },
+                .{ .name = .deshredded_out, .access = .rw },
                 .{ .name = .telemetry, .access = .rw },
             },
         },
         .{
             .name = .telemetry,
             .regions = .{
+                .{ .name = .telemetry, .access = .rw },
+            },
+        },
+        .{
+            .name = .replay,
+            .regions = .{
+                .{ .name = .deshredded_out, .access = .rw },
+                .{ .name = .replay_accounts_db_lookup, .access = .rw },
                 .{ .name = .telemetry, .access = .rw },
             },
         },
@@ -58,8 +74,11 @@
         .{
             .name = .accounts_db,
             .regions = .{
-                .{ .name = .accounts_db_config, .access = .rw },
+                .{ .name = .snapshot_config, .access = .readonly },
+                .{ .name = .rooted_config, .access = .rw },
+                .{ .name = .account_pool, .access = .rw },
                 .{ .name = .snapshot_to_accounts_db, .access = .rw },
+                .{ .name = .replay_accounts_db_lookup, .access = .rw },
                 .{ .name = .telemetry, .access = .rw },
             },
         },

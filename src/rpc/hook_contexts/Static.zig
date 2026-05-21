@@ -6,6 +6,7 @@ const sig = @import("../../sig.zig");
 const EpochSchedule = sig.core.EpochSchedule;
 const GetEpochSchedule = sig.rpc.methods.GetEpochSchedule;
 const GetGenesisHash = sig.rpc.methods.GetGenesisHash;
+const GetHighestSnapshotSlot = sig.rpc.methods.GetHighestSnapshotSlot;
 
 const StaticHookContext = @This();
 
@@ -55,4 +56,14 @@ pub fn getVersion(
         .solana_core = sig.version.ClientVersion.API_VERSION,
         .feature_set = sig.version.ClientVersion.CURRENT.feature_set,
     };
+}
+
+/// for the time being we will return null
+/// since accounts-db v2 don't have relevant implementation
+pub fn getHighestSnapshotSlot(
+    _: StaticHookContext,
+    _: std.mem.Allocator,
+    _: GetHighestSnapshotSlot,
+) !GetHighestSnapshotSlot.Response {
+    return null;
 }

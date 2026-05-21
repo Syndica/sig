@@ -1,19 +1,58 @@
-//! This service listens on a ringbuffer of packets, and validates, verifies, and deserialises
-//! shreds.
+//! Incoming UDP packets (typically port 8002) are sent in by the net service, via
+//! `ReadWrite.tvu_socket`. This port is currently set by config.shred_network.recv_port.
+//!
+//! Shred receiver takes in these packets and emits completed FEC (Forward Error Correction) sets.
+//! Each FEC set contains up to 32 packets (AKA shreds) worth of data, which are always sent out as
+//! 32 code and 32 data shreds.
+//!
+//! A FEC set may be reconstructed once any of these 32/64 shreds have been received. This
+//! reconstructed data encodes portions of (or whole) Entry batches.
+//!
+//! These Entry batches are produced by the leader, with each Entry batch forming a portion of the
+//! block being produced. This is the data that feeds into Replay.
+//!
+//!
+//!
+//! This service has the following responsibilities:
+//! 1) Checking that incoming packets are valid shreds, making sure that shreds:
+//!     - Are the correct size
+//!     - Have valid headers, and have a valid layout
+//!     - Are properly signed by the leader for their respective slot
+//!     - Have the same merkle root and signature as others in their FEC set
+//!     - etc
+//! 2) Grouping them into FEC sets
+//! 3) Upon receiving enough shreds to complete a FEC set, using Reed-Solomon to reconstruct the
+//!    data from said FEC set
+//! 4) Sending the reconstructed data onwards
+//!
+//!
+//! NOTE: This currently does not implement repair. Repair requests when implemented should bypass
+//!       early equivocation checks.
+//!
+//! NOTE: This service stores at most one instance of each FecSetId (slot + fecset index).
+//!
+//!       This means that incoming shreds with the same FecSetId which cannot fit into the currently
+//!       in-progress FEC set due to a mismatch (i.e. when the Signature or Merkle root are
+//!       different) are dropped under equivocation.
+//!
+//!       For example, if the shreds of two mismatching FEC sets of the same FecSetId came in
+//!       interleaved we would drop the 2nd FEC set. In this case we may have to get shreds from
+//!       the missing set from repair. I expect this to be rare, and this behaviour matches
+//!       Firedancer's.
+//!
+//!       Once we complete a FEC set, we are free to build another FEC set of that very same
+//!       FecSetId; the downstream service must be fully aware of equivocation.
+//!
+//!       Once repair is implemented, shreds from it should bypass these checks and enter the map,
+//!       even if there is already an instance of that FecSetId.
+//!
 
 const std = @import("std");
-const start = @import("start");
+const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
 
-const tel = lib.telemetry;
-const shred = lib.shred;
-const layout = shred.layout;
-
-const Pair = lib.net.Pair;
-const Packet = lib.net.Packet;
-const Slot = lib.solana.Slot;
-const Hash = lib.solana.Hash;
+const Receiver = lib.shred.Receiver;
 
 comptime {
     _ = start;
@@ -23,219 +62,66 @@ pub const name = .shred_receiver;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
+pub const ReadWrite = struct {
+    /// Translation Validation Unit (TVU)'s UDP socket, i.e. where we receive shreds. This is
+    /// typically port 8002. While we've obtained a net Pair, we only currently receive on this.
+    /// I believe once we support retransmit, we will be sending on it too.
+    tvu_socket: *lib.net.Pair,
+
+    /// Where we send our deshredded FEC (Forward Error Correction) sets to be assembled for replay.
+    /// FEC sets will be sent out as they complete.
+    ///
+    /// NOTE: it will be more performant in future to only send headers down the ring buffer, and
+    /// write to a shared fec-set pool.
+    deshredded_out: *lib.shred.DeshredRing,
+
+    tel: *lib.telemetry.Region,
+};
+
 pub const ReadOnly = struct {
     config: *const lib.shred.RecvConfig,
 };
 
-pub const ReadWrite = struct {
-    net_pair: *Pair,
-    tel: *tel.Region,
-};
-
-// stubs
-const stub_root_slot = 0;
-const stub_max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
+var scratch_memory: [1024 * 1024 * 1024]u8 = undefined;
+const max_in_progress = 8192;
+const max_done = 65536;
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
-    const logger = rw.tel.acquireLogger(@tagName(name), "main");
-
-    {
-        const metric_appender = rw.tel.metricAppender();
-        _ = metric_appender;
-    }
-
-    rw.tel.signalReady();
-
-    logger.info().logf("Waiting for shreds on port {}", .{rw.net_pair.port});
-
-    var verified_roots_fba_buf: [64 * 1024]u8 = undefined;
-    var verified_roots_fba: std.heap.FixedBufferAllocator = .init(&verified_roots_fba_buf);
-    const roots_allocator = verified_roots_fba.allocator();
-
-    var verified_roots: VerifiedMerkleRoots = try .init(roots_allocator, 128);
-    defer verified_roots.deinit(roots_allocator);
-
-    var it = rw.net_pair.recv.get(.reader);
-    while (true) {
-        const packet = it.next() orelse continue;
-        defer it.markUsed();
-
-        const zone = tracy.Zone.init(@src(), .{ .name = "shred recv" });
-        defer zone.deinit();
-
-        validateShred(packet, stub_root_slot, ro.config.shred_version, stub_max_slot) catch |err| {
-            logger.debug().logf("invalid shred: {}", .{err});
-            continue;
-        };
-
-        verifyShred(packet, &ro.config.leader_schedule, &verified_roots) catch |err| {
-            logger.debug().logf("failed to verify shred: {}", .{err});
-            continue;
-        };
-
-        // TODO: this is where we might retransmit
-
-        const payload = layout.getShred(packet, false) orelse {
-            logger.debug().logf("failed to get shred", .{});
-            continue;
-        };
-
-        const packet_shred = shred.Shred.fromPayload(payload) catch |err| {
-            logger.debug().logf(
-                "failed to deserialize verified shred {?}.{?}: {}",
-                .{ layout.getSlot(payload), layout.getIndex(payload), err },
-            );
-            continue;
-        };
-
-        logger.debug().logf(
-            \\slot: {}
-            \\erasure_set_index: {}
-            \\index: {}
-            \\shred_type: {}
-        , .{
-            packet_shred.commonHeader().slot,
-            packet_shred.commonHeader().erasure_set_index,
-            packet_shred.commonHeader().index,
-            packet_shred.commonHeader().variant.shred_type,
-        });
-    }
-}
-
-const VerifiedMerkleRoots = struct {
-    map: Map,
-    max_count: u32,
-
-    const Map = std.ArrayHashMapUnmanaged(Hash, void, MapContext, true);
-
-    const MapContext = struct {
-        pub fn hash(_: MapContext, pubkey: Hash) u32 {
-            return @bitCast(pubkey.data[0..4].*);
-        }
-
-        pub fn eql(_: MapContext, a: Hash, b: Hash, _: usize) bool {
-            return a.eql(&b);
-        }
-    };
-
-    fn init(allocator: std.mem.Allocator, max_count: u32) !VerifiedMerkleRoots {
-        var map: Map = .{};
-        errdefer map.deinit(allocator);
-
-        try map.ensureTotalCapacity(allocator, max_count);
-
-        return .{ .map = map, .max_count = max_count };
-    }
-
-    fn deinit(self: *VerifiedMerkleRoots, allocator: std.mem.Allocator) void {
-        self.map.deinit(allocator);
-    }
-
-    fn wasVerified(self: *VerifiedMerkleRoots, hash: *const Hash) bool {
-        return self.map.contains(hash.*);
-    }
-
-    fn insert(self: *VerifiedMerkleRoots, hash: *const Hash) void {
-        if (self.map.count() == self.max_count) self.map.orderedRemoveAt(0);
-        self.map.putAssumeCapacityNoClobber(hash.*, {});
-    }
-};
-
-fn validateShred(
-    packet: *const Packet,
-    root: Slot,
-    shred_version: u16,
-    max_slot: Slot,
-) ShredValidationError!void {
-    const packet_shred = layout.getShred(packet, false) orelse return error.InsufficientShredSize;
-    const version = layout.getVersion(packet_shred) orelse return error.MissingVersion;
-    const slot = layout.getSlot(packet_shred) orelse return error.SlotMissing;
-    const index = layout.getIndex(packet_shred) orelse return error.IndexMissing;
-    const variant = layout.getShredVariant(packet_shred) orelse return error.VariantMissing;
-
-    if (version != shred_version) return error.WrongVersion;
-    if (slot > max_slot) return error.SlotTooNew;
-    switch (variant.shred_type) {
-        .code => {
-            if (index >= shred.CodeShred.constants.max_per_slot) {
-                return error.CodeIndexTooHigh;
-            }
-            if (slot <= root) return error.RootedSlot;
-        },
-        .data => {
-            if (index >= shred.DataShred.constants.max_per_slot) {
-                return error.DataIndexTooHigh;
-            }
-            const parent_slot_offset = layout.getParentSlotOffset(packet_shred) orelse {
-                return error.ParentSlotOffsetMissing;
-            };
-            const parent = slot -| @as(Slot, @intCast(parent_slot_offset));
-            if (!verifyShredSlots(slot, parent, root)) return error.SlotVerificationFailed;
-        },
-    }
-
-    // TODO: check for feature activation of enable_chained_merkle_shreds
-    // 7uZBkJXJ1HkuP6R3MJfZs7mLwymBcDbKdqbF51ZWLier
-    // https://github.com/solana-labs/solana/pull/34916
-    // https://github.com/solana-labs/solana/pull/35076
-}
-
-fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
-    if (slot == 0 and parent == 0 and root == 0) {
-        return true; // valid write to slot zero.
-    }
-    // Ignore shreds that chain to slots before the root,
-    // or have invalid parent >= slot.
-    return root <= parent and parent < slot;
-}
-
-/// Analogous to [verify_shred_cpu](https://github.com/anza-xyz/agave/blob/83e7d84bcc4cf438905d07279bc07e012a49afd9/ledger/src/sigverify_shreds.rs#L35)
-pub fn verifyShred(
-    packet: *const Packet,
-    leader_schedule: *const lib.solana.LeaderSchedule,
-    verified_merkle_roots: *VerifiedMerkleRoots,
-) ShredVerificationFailure!void {
-    const zone = tracy.Zone.init(@src(), .{ .name = "verifyShred" });
+    const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
     defer zone.deinit();
 
-    const shred_ = layout.getShred(packet, false) orelse return error.InsufficientShredSize;
-    const slot = layout.getSlot(shred_) orelse return error.SlotMissing;
-    const signature = layout.getLeaderSignature(shred_) orelse return error.SignatureMissing;
-    const signed_data = layout.merkleRoot(shred_) orelse return error.SignedDataMissing;
+    var fba: std.heap.FixedBufferAllocator = .init(&scratch_memory);
+    const allocator = fba.allocator();
 
-    if (verified_merkle_roots.wasVerified(&signed_data)) return;
+    const logger = rw.tel.acquireLogger(@tagName(name), "main");
+    rw.tel.signalReady();
+    logger.info().logf("Waiting for shreds on port {}", .{rw.tvu_socket.port});
 
-    const leader = leader_schedule.get(slot) orelse return error.LeaderUnknown;
+    var receiver: Receiver = try .init(allocator, max_in_progress, max_done);
+    defer receiver.deinit(allocator);
 
-    signature.verify(leader, &signed_data.data) catch return error.FailedVerification;
+    var packet_iter = rw.tvu_socket.recv.get(.reader);
+    var deshred_out = rw.deshredded_out.get(.writer);
 
-    verified_merkle_roots.insert(&signed_data);
+    while (true) {
+        {
+            const idle_zone = tracy.Zone.init(@src(), .{ .name = "idle" });
+            defer idle_zone.deinit();
+            while (packet_iter.peek() == null) continue;
+        }
+        while (packet_iter.next()) |packet| {
+            defer packet_iter.markUsed();
+
+            const result = receiver.processPacket(
+                &ro.config.leader_schedule,
+                ro.config.shred_version,
+                packet,
+                &deshred_out,
+            ) catch |err| {
+                std.log.warn("packet failed with {}", .{err});
+                continue;
+            };
+            _ = result;
+        }
+    }
 }
-
-pub const ShredVerificationFailure = error{
-    InsufficientShredSize,
-    SlotMissing,
-    SignatureMissing,
-    SignedDataMissing,
-    LeaderUnknown,
-    FailedVerification,
-    FailedCaching,
-};
-
-/// Something about the shred was unexpected, so we will discard it.
-pub const ShredValidationError = error{
-    InsufficientShredSize,
-    MissingVersion,
-    SlotMissing,
-    IndexMissing,
-    VariantMissing,
-    WrongVersion,
-    SlotTooNew,
-    CodeIndexTooHigh,
-    RootedSlot,
-    DataIndexTooHigh,
-    ParentSlotOffsetMissing,
-    SlotVerificationFailed,
-    SignatureMissing,
-    SignedDataMissing,
-};

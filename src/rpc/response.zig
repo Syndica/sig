@@ -80,6 +80,20 @@ pub const Error = struct {
     pub fn eql(self: Error, other: Error) bool {
         return self.code == other.code and std.mem.eql(u8, self.message, other.message);
     }
+
+    /// Custom serializer: omit `data` field when null (Agave never sends `"data":null`).
+    pub fn jsonStringify(self: Error, jw: anytype) @TypeOf(jw.*).Error!void {
+        try jw.beginObject();
+        try jw.objectField("code");
+        try jw.write(self.code);
+        try jw.objectField("message");
+        try jw.write(self.message);
+        if (self.data) |data| {
+            try jw.objectField("data");
+            try jw.write(data);
+        }
+        try jw.endObject();
+    }
 };
 
 pub const ErrorCode = enum(i64) {

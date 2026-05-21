@@ -365,6 +365,9 @@ pub const ReplayState = struct {
     status_cache: sig.core.StatusCache,
     commitments: ?replay.trackers.CommitmentTracker,
     log_deduper: LogDeduper = .{},
+    /// tracks which of the last 64 slots had no entries the last time we
+    /// looked at it, to avoid logging repeatedly that it is empty.
+    empty_slots: sig.utils.collections.RingBitSet(64) = .empty,
     replay_votes_channel: ?*Channel(ParsedVote),
     event_sink: ?*jrpc_types.EventSink,
     stop_at_slot: ?sig.core.Slot,
@@ -740,11 +743,11 @@ pub fn getActiveFeatures(
     const allocator = arena.allocator();
 
     var features: sig.core.FeatureSet = .ALL_DISABLED;
-    for (0..sig.core.features.NUM_FEATURES) |i| {
+    for (0..sig.core.features.features.len) |i| {
         defer _ = arena.reset(.retain_capacity);
 
         const possible_feature: sig.core.features.Feature = @enumFromInt(i);
-        const possible_feature_pubkey = sig.core.features.map.get(possible_feature).key;
+        const possible_feature_pubkey = sig.core.features.pubkey_map.get(possible_feature);
 
         const feature_account = try account_reader.get(allocator, possible_feature_pubkey) orelse
             continue;
@@ -1142,7 +1145,6 @@ pub const LogDeduper = struct {
         active_slots: []const Slot,
         commitments: []const Slot,
         slot_update: SlotUpdate,
-        entries_for_slot: []const Slot,
 
         fn hash(self: *const MessageData) u64 {
             var hasher: sig.crypto.FnvHasher = .init;
@@ -1156,7 +1158,6 @@ pub const LogDeduper = struct {
                 }) |maybe| hasher.update(std.mem.asBytes(
                     &(if (maybe) |n| n else @as(u64, std.math.maxInt(Slot))),
                 )),
-                .entries_for_slot => |p| hasher.update(std.mem.sliceAsBytes(p)),
             }
             return hasher.final();
         }
@@ -1390,7 +1391,7 @@ test "getActiveFeatures rejects wrong ownership" {
 
     try accounts.put(
         allocator,
-        sig.core.features.map.get(.system_transfer_zero_check).key,
+        sig.core.features.pubkey_map.get(.system_transfer_zero_check),
         acct,
     );
 
@@ -1400,7 +1401,7 @@ test "getActiveFeatures rejects wrong ownership" {
     acct.owner = sig.runtime.ids.FEATURE_PROGRAM_ID;
     try accounts.put(
         allocator,
-        sig.core.features.map.get(.system_transfer_zero_check).key,
+        sig.core.features.pubkey_map.get(.system_transfer_zero_check),
         acct,
     );
 

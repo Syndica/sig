@@ -8,10 +8,22 @@ const test_install_dir: Build.Step.InstallArtifact.Options.Dir = .{
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const use_llvm = b.option(bool, "use-llvm", "Force usage of LLVM (currently ignored for some artifacts).");
+    const use_llvm = b.option(
+        bool,
+        "use-llvm",
+        "Force usage of LLVM (currently ignored for some artifacts).",
+    );
     const artifact_opts: ExeOutput.InitOptions = .{
-        .no_bin = b.option(bool, "no-bin", "Don't install artifacts implied by specified steps.") orelse false,
-        .no_run = b.option(bool, "no-run", "Don't execute run steps implied by the specified steps.") orelse false,
+        .no_bin = b.option(
+            bool,
+            "no-bin",
+            "Don't install artifacts implied by specified steps.",
+        ) orelse false,
+        .no_run = b.option(
+            bool,
+            "no-run",
+            "Don't execute run steps implied by the specified steps.",
+        ) orelse false,
     };
 
     const tracy_enable = b.option(bool, "enable-tracy", "Enables tracy") orelse false;
@@ -24,7 +36,7 @@ pub fn build(b: *Build) !void {
         bool,
         "tracy-on-demand",
         "Start capturing profiler data when tracy starts",
-    ) orelse true;
+    ) orelse false;
 
     const filters = b.option(
         []const []const u8,
@@ -32,14 +44,41 @@ pub fn build(b: *Build) !void {
         "List of unit test filters.",
     ) orelse &.{};
 
+    const allow_no_sha = b.option(
+        bool,
+        "allow-no-sha",
+        "Opt in to a slower software fallback when the target lacks the x86 SHA extension. " ++
+            "Without this flag, building for a target without SHA-NI is a compile-time error " ++
+            "so the performance hit is not silently accepted.",
+    ) orelse (optimize == .Debug);
+
+    const allow_no_avx512 = b.option(
+        bool,
+        "allow-no-avx512",
+        "Opt in to a slower generic ed25519 path when the target lacks AVX-512 " ++
+            "(avx512ifma + avx512vl). Without this flag, building for an x86_64 " ++
+            "target without these features is a compile-time error so the performance hit is " ++
+            "not silently accepted.",
+    ) orelse (optimize == .Debug);
+
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "allow_no_sha", allow_no_sha);
+    build_options.addOption(bool, "allow_no_avx512", allow_no_avx512);
+    const build_options_mod = build_options.createModule();
+
     const install_step = b.getInstallStep();
     const run_step = b.step("run", "Run supervisor");
     const test_step = b.step("test", "Run unit tests");
     const check_step = b.step("check", "Check step.");
+    const lint_step = b.step("lint", "Run lint checks");
+    const lint_test_step = b.step("lint-test", "Run lint unit tests");
     const ci_step = b.step("ci", "Run all checks used for CI");
+    const docs_step = b.step("docs", "Emit docs");
 
     ci_step.dependOn(test_step);
     ci_step.dependOn(install_step);
+    ci_step.dependOn(lint_step);
+    ci_step.dependOn(lint_test_step);
     check_step.dependOn(install_step);
 
     const tracy_mod = b.dependency("tracy", .{
@@ -58,14 +97,36 @@ pub fn build(b: *Build) !void {
     }).module("base58");
     const zstd_mod = b.dependency("zstd", .{
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .ReleaseFast, // fast to compile once, no need to recompile when changing modes,
     }).module("zstd");
 
     const fmt_check_step = b.addFmt(.{
         .check = true,
-        .paths = &.{ "init/", "lib/", "services/", "build.zig" },
+        .paths = &.{ "init/", "lib/", "services/", "build.zig", "lint/" },
     });
     ci_step.dependOn(&fmt_check_step.step);
+
+    const lint_exe = b.addExecutable(.{
+        .name = "sig-lint",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("lint/main.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    const run_lint = b.addRunArtifact(lint_exe);
+    if (b.args) |args| run_lint.addArgs(args);
+    lint_step.dependOn(&run_lint.step);
+
+    const lint_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("lint/main.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    const run_lint_tests = b.addRunArtifact(lint_tests);
+    lint_test_step.dependOn(&run_lint_tests.step);
 
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("lib/lib.zig"),
@@ -75,6 +136,8 @@ pub fn build(b: *Build) !void {
             .{ .name = "base58", .module = base58_mod },
             .{ .name = "binkode", .module = binkode_mod },
             .{ .name = "tracy", .module = tracy_mod },
+            .{ .name = "build-options", .module = build_options_mod },
+            .{ .name = "zstd", .module = zstd_mod },
         },
     });
     _ = addTestOutputs(b, test_step, null, artifact_opts, .{
@@ -127,6 +190,10 @@ pub fn build(b: *Build) !void {
         .use_llvm = true,
     });
 
+    const DocGenModule = struct { name: []const u8, module: *Build.Module };
+    var doc_service_modules: std.ArrayListUnmanaged(DocGenModule) = .empty;
+    defer doc_service_modules.deinit(b.allocator);
+
     // build + link services
     inline for (@import("init/services.zon").services) |s| {
         const service_name = @tagName(s.name);
@@ -138,9 +205,9 @@ pub fn build(b: *Build) !void {
             .omit_frame_pointer = false,
             .imports = &.{
                 .{ .name = "lib", .module = lib_mod },
-                .{ .name = "start", .module = start_service_mod },
+                .{ .name = "start_service", .module = start_service_mod },
                 .{ .name = "tracy", .module = tracy_mod },
-                .{ .name = "zstd", .module = zstd_mod },
+                .{ .name = "binkode", .module = binkode_mod },
             },
         });
 
@@ -157,6 +224,62 @@ pub fn build(b: *Build) !void {
             .filters = filters,
             .use_llvm = use_llvm,
         });
+
+        try doc_service_modules.append(
+            b.allocator,
+            .{ .name = service_name, .module = service_mod },
+        );
+    }
+
+    // generates unified docs for all modules
+    // NOTE: have to specify `-Dno-bin` & `-Dno-run` in order to
+    // avoid needing to run codegen for the sig binaries.
+    {
+        const gen_docs_run = b.addRunArtifact(
+            b.addExecutable(.{
+                .name = "gen-docs-entry",
+                .root_module = b.createModule(.{
+                    .target = b.graph.host,
+                    .optimize = .Debug,
+                    .root_source_file = b.path("scripts/gen_docs_entry.zig"),
+                }),
+            }),
+        );
+
+        const doc_modules: []const DocGenModule = &.{
+            .{ .name = "start_service", .module = start_service_mod },
+            .{ .name = "sig_init", .module = sig_init_mod },
+            .{ .name = "lib", .module = lib_mod },
+        };
+
+        inline for (&.{ doc_service_modules.items, doc_modules }) |module_list| {
+            var services_str = std.io.Writer.Allocating.init(b.allocator);
+            defer services_str.deinit();
+
+            for (module_list, 0..) |svc_mod, i| {
+                const end: []const u8 = if (i == module_list.len - 1) "" else ",";
+                try services_str.writer.print("{s}{s}", .{ svc_mod.name, end });
+            }
+
+            gen_docs_run.addArg(services_str.written());
+        }
+
+        const docs_mod = b.createModule(.{
+            .target = target,
+            .optimize = .Debug,
+            .root_source_file = gen_docs_run.addOutputFileArg("docs.zig"),
+        });
+        for (doc_modules) |mod| docs_mod.addImport(mod.name, mod.module);
+        for (doc_service_modules.items) |mod| docs_mod.addImport(mod.name, mod.module);
+
+        const docs_obj = b.addTest(.{ .name = "docs", .root_module = docs_mod });
+
+        const install_docs = b.addInstallDirectory(.{
+            .source_dir = docs_obj.getEmittedDocs(),
+            .install_dir = .prefix,
+            .install_subdir = "docs",
+        });
+        docs_step.dependOn(&install_docs.step);
     }
 }
 
@@ -196,7 +319,10 @@ fn addExeOutputs(
     const install_step = b.getInstallStep();
     install_step.dependOn(&artifact.step);
 
-    const install_opt = if (artifact_opts.no_bin) null else b.addInstallArtifact(artifact, install_opts);
+    const install_opt = if (artifact_opts.no_bin)
+        null
+    else
+        b.addInstallArtifact(artifact, install_opts);
     const run_opt = if (artifact_opts.no_run) null else b.addRunArtifact(artifact);
 
     if (install_opt) |install| {

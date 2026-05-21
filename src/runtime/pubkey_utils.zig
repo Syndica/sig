@@ -81,7 +81,8 @@ pub fn createProgramAddress(
     bump_seed: []const u8,
     program_id: Pubkey,
 ) PubkeyError!Pubkey {
-    if (seeds.len + 1 > MAX_SEEDS) {
+    const bump_seed_count: usize = @intFromBool(bump_seed.len != 0);
+    if (seeds.len + bump_seed_count > MAX_SEEDS) {
         return PubkeyError.MaxSeedLenExceeded;
     }
     for (seeds) |seed| if (seed.len > MAX_SEED_LEN) {
@@ -160,6 +161,24 @@ test createProgramAddress {
             ),
         );
     }
+}
+
+test "createProgramAddress seed count only includes non-empty bump" {
+    const max_seeds: []const []const u8 = &.{
+        &.{0},  &.{1},  &.{2},  &.{3},
+        &.{4},  &.{5},  &.{6},  &.{7},
+        &.{8},  &.{9},  &.{10}, &.{11},
+        &.{12}, &.{13}, &.{14}, &.{15},
+    };
+
+    _ = createProgramAddress(max_seeds, &.{}, Pubkey.ZEROES) catch |err| {
+        try std.testing.expect(err != PubkeyError.MaxSeedLenExceeded);
+    };
+
+    try std.testing.expectError(
+        PubkeyError.MaxSeedLenExceeded,
+        createProgramAddress(max_seeds, &.{0}, Pubkey.ZEROES),
+    );
 }
 
 test "bytesAreCurvePoint" {

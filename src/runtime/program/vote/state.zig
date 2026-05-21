@@ -1038,6 +1038,13 @@ pub const VoteState = union(enum(u32)) {
         }
     }
 
+    pub fn pendingDelegatorRewards(self: *const VoteState) u64 {
+        return switch (self.*) {
+            .v3 => 0,
+            .v4 => |s| s.pending_delegator_rewards,
+        };
+    }
+
     pub fn blockRevenueCollector(self: *const VoteState) ?*const Pubkey {
         return switch (self.*) {
             .v3 => null,
@@ -1053,6 +1060,13 @@ pub const VoteState = union(enum(u32)) {
     }
 
     pub fn inflationRewardsCollector(self: *const VoteState) ?*const Pubkey {
+        return switch (self.*) {
+            .v3 => null,
+            .v4 => |*s| &s.inflation_rewards_collector,
+        };
+    }
+
+    pub fn inflationRewardsCollectorMut(self: *VoteState) ?*Pubkey {
         return switch (self.*) {
             .v3 => null,
             .v4 => |*s| &s.inflation_rewards_collector,

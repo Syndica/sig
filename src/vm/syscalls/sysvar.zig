@@ -33,6 +33,13 @@ fn getSyscall(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMa
 
             const value_addr = registers.get(.r1);
 
+            const check_aligned = tc.getCheckAligned();
+
+            // [firedancer-io/agave] https://github.com/firedancer-io/agave/commit/922f201cc0
+            if (!check_aligned) {
+                return SyscallError.UnalignedPointer;
+            }
+
             // SIMD-0219: The destination address of all sysvar related syscalls
             // must be on the stack or heap, meaning their virtual address is
             // inside `0x200000000..0x400000000`.
@@ -48,7 +55,7 @@ fn getSyscall(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMa
                 T,
                 .mutable,
                 value_addr,
-                tc.getCheckAligned(),
+                check_aligned,
             );
 
             const v = try tc.sysvar_cache.get(T);
@@ -97,6 +104,12 @@ pub fn getSysvar(
     }
 
     const check_aligned = tc.getCheckAligned();
+
+    // [firedancer-io/agave] https://github.com/firedancer-io/agave/commit/922f201cc0
+    if (!check_aligned) {
+        return SyscallError.UnalignedPointer;
+    }
+
     const id = (try memory_map.translateType(Pubkey, .constant, id_addr, check_aligned)).*;
     const value = try memory_map.translateSlice(u8, .mutable, value_addr, length, check_aligned);
 
@@ -536,6 +549,73 @@ test getSysvar {
             callSysvarSyscall(&tc_strict, &memory_map, getSysvar, .{
                 0x200000000,
                 memory.INPUT_START,
+                0,
+                sysvar.Clock.STORAGE_SIZE,
+            }),
+        );
+    }
+
+    // Deprecated loader callers disable aligned translation and must fail early.
+    {
+        const deprecated_program_id = Pubkey.initRandom(prng.random());
+
+        var cache_unaligned, var tc_unaligned = try testing.createTransactionContext(
+            allocator,
+            prng.random(),
+            .{
+                .accounts = &.{.{
+                    .pubkey = deprecated_program_id,
+                    .owner = sig.runtime.program.bpf_loader.v1.ID,
+                    .executable = true,
+                }},
+                .compute_meter = std.math.maxInt(u64),
+                .sysvar_cache = .{
+                    .clock = src.clock,
+                    .epoch_schedule = src.epoch_schedule,
+                    .fees = src.fees,
+                    .rent = src.rent,
+                    .epoch_rewards = src.rewards,
+                    .last_restart_slot = src.restart,
+                },
+            },
+        );
+        defer {
+            testing.deinitTransactionContext(allocator, &tc_unaligned);
+            cache_unaligned.deinit(allocator);
+        }
+
+        const instruction_info = try testing.createInstructionInfo(
+            &tc_unaligned,
+            deprecated_program_id,
+            @as([]const u8, &.{}),
+            &.{},
+        );
+        try sig.runtime.executor.pushInstruction(&tc_unaligned, instruction_info);
+
+        var obj = sysvar.Clock.INIT;
+        var buffer = std.mem.zeroes([sysvar.Clock.STORAGE_SIZE]u8);
+
+        var memory_map = try MemoryMap.init(
+            allocator,
+            &.{
+                memory.Region.init(.mutable, std.mem.asBytes(&obj), 0x100000000),
+                memory.Region.init(.mutable, &buffer, 0x200000000),
+                memory.Region.init(.constant, &sysvar.Clock.ID.data, 0x300000000),
+            },
+            .v2,
+            .{},
+        );
+        defer memory_map.deinit(allocator);
+
+        try std.testing.expectError(
+            SyscallError.UnalignedPointer,
+            callSysvarSyscall(&tc_unaligned, &memory_map, getClock, .{0x100000000}),
+        );
+        try std.testing.expectError(
+            SyscallError.UnalignedPointer,
+            callSysvarSyscall(&tc_unaligned, &memory_map, getSysvar, .{
+                0x300000000,
+                0x200000000,
                 0,
                 sysvar.Clock.STORAGE_SIZE,
             }),

@@ -25,11 +25,31 @@ const Rent = sig.runtime.sysvar.Rent;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/transaction-context/src/lib.rs#L17
+pub const MAX_ACCOUNTS_PER_INSTRUCTION = 255;
+
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/transaction-context/src/lib.rs#L41
 pub const MAX_INSTRUCTION_TRACE_LENGTH = 64;
 
 // https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/execution_budget.rs#L8
 pub const MAX_INSTRUCTION_STACK_DEPTH = 5;
+
+/// SIMD-0460: information captured by the SBPF memory map's access-violation
+/// handler so the bpf_loader post-execution path can remap a generic
+/// `AccessViolation` into a specific account-related `InstructionError`.
+///
+/// Sig differs from Agave here: Agave resolves handled account-growth accesses
+/// inside the memory-mapping layer without persisting equivalent remap
+/// metadata, while Sig keeps the last attempted access for post-execution
+/// classification. `handled=true` means the handler successfully repaired the
+/// access by growing the region far enough for the retry to succeed, so this
+/// record must be ignored by `remapAccessViolation`.
+pub const AccessViolationInfo = struct {
+    access_type: vm.memory.MemoryState,
+    vm_addr: u64,
+    len: u64,
+    handled: bool = false,
+};
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L136
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L192
@@ -93,6 +113,20 @@ pub const TransactionContext = struct {
     /// If an error other than an InstructionError occurs during execution its value will
     /// be set here and InstructionError.Custom will be returned
     custom_error: ?u32 = null,
+
+    /// SIMD-0460: when the SBPF VM raises an `AccessViolation`, the access-
+    /// violation handler records the access here so the bpf_loader's
+    /// post-execution error path can remap it to a more specific
+    /// `InstructionError` per SIMD-0460:
+    ///   - read past current account length → `AccountDataTooSmall`
+    ///   - write to readonly account         → `ReadonlyDataModified`
+    ///   - write to non-owned account        → `ExternalAccountDataModified`
+    ///   - write past account growth budget  → `InvalidRealloc`
+    /// When `handled` is true, the recorded access was repaired by the
+    /// access-violation handler and must not be used for remapping.
+    /// Cleared at the start of each bpf program invocation.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0/program-runtime/src/vm.rs#L322-L385
+    last_access_violation: ?AccessViolationInfo = null,
 
     log_collector: ?LogCollector = null,
     rent: Rent,

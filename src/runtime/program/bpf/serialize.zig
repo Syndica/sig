@@ -23,6 +23,10 @@ const INPUT_START = sig.vm.memory.INPUT_START;
 /// `assert_eq(std::mem::align_of::<u128>(), 8)` is true for BPF but not for some host machines
 pub const BPF_ALIGN_OF_U128: usize = 8;
 
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L29
+/// Alignment of the host memory buffer. Agave uses `AlignedMemory::<HOST_ALIGN>` with HOST_ALIGN=16.
+pub const HOST_ALIGN: std.mem.Alignment = .@"16"; // 16 bytes
+
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/account-info/src/lib.rs#L17-L18
 pub const MAX_PERMITTED_DATA_INCREASE: usize = 1_024 * 10;
 
@@ -44,7 +48,7 @@ pub const SerializedAccountMeta = struct {
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L31
 pub const Serializer = struct {
     allocator: std.mem.Allocator,
-    buffer: std.ArrayListUnmanaged(u8),
+    buffer: std.ArrayListAlignedUnmanaged(u8, HOST_ALIGN),
     regions: std.ArrayListUnmanaged(Region),
     vaddr: u64,
     region_start: usize,
@@ -62,7 +66,10 @@ pub const Serializer = struct {
     ) error{OutOfMemory}!Serializer {
         return .{
             .allocator = allocator,
-            .buffer = try std.ArrayListUnmanaged(u8).initCapacity(allocator, size),
+            .buffer = try std.ArrayListAlignedUnmanaged(u8, HOST_ALIGN).initCapacity(
+                allocator,
+                size,
+            ),
             .regions = std.ArrayListUnmanaged(Region){},
             .vaddr = region_start,
             .region_start = 0,
@@ -93,6 +100,11 @@ pub const Serializer = struct {
     pub fn writeAccount(
         self: *Serializer,
         account: *const BorrowedAccount,
+        /// Transaction-context account index, tagged onto the resulting
+        /// account-data region as access_violation_handler_payload when
+        /// SIMD-0460 is active. The handler uses this index to borrow the
+        /// account from the transaction context's accounts list.
+        index_in_transaction: u16,
     ) (error{OutOfMemory} || InstructionError)!u64 {
         if (!self.virtual_address_space_adjustments) {
             const addr = self.vaddr +| self.buffer.items.len;
@@ -133,6 +145,15 @@ pub const Serializer = struct {
 
         if (address_space > 0) {
             const state = getAccountDataRegionMemoryState(account);
+            // SIMD-0460: only writable+owned accounts get a handler payload —
+            // the handler grows them on write; readonly account accesses past
+            // their data length just produce an access violation that the
+            // loader maps to AccountDataTooSmall / ReadonlyDataModified.
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.0/program-runtime/src/serialization.rs#L28-L34
+            const payload: ?u16 = if (account.checkDataIsMutable() == null)
+                index_in_transaction
+            else
+                null;
             if (!self.account_data_direct_mapping) {
                 try self.pushRegion(state == .mutable);
                 const region = &self.regions.items[self.regions.items.len - 1];
@@ -142,11 +163,14 @@ pub const Serializer = struct {
                     .mutable => region.host_memory.mutable.len = new_len,
                     .constant => region.host_memory.constant.len = new_len,
                 }
+                region.access_violation_handler_payload = payload;
             } else {
-                try self.regions.append(self.allocator, switch (state) {
+                var region = switch (state) {
                     .mutable => Region.init(.mutable, try account.mutableAccountData(), self.vaddr),
                     .constant => Region.init(.constant, account.constAccountData(), self.vaddr),
-                });
+                };
+                region.access_violation_handler_payload = payload;
+                try self.regions.append(self.allocator, region);
                 self.vaddr += address_space;
             }
         }
@@ -187,7 +211,7 @@ pub const Serializer = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L172
     pub fn finish(self: *Serializer) error{OutOfMemory}!struct {
-        std.ArrayListUnmanaged(u8),
+        std.ArrayListAlignedUnmanaged(u8, HOST_ALIGN),
         std.ArrayListUnmanaged(Region),
     } {
         try self.pushRegion(true);
@@ -206,7 +230,7 @@ pub const Serializer = struct {
 };
 
 const SerializeReturn = struct {
-    memory: std.ArrayListUnmanaged(u8),
+    memory: std.ArrayListAlignedUnmanaged(u8, HOST_ALIGN),
     regions: std.ArrayListUnmanaged(Region),
     account_metas: std14.BoundedArray(SerializedAccountMeta, InstructionInfo.MAX_ACCOUNT_METAS),
     instruction_data_offset: u64,
@@ -251,8 +275,11 @@ pub fn serializeParameters(
         } else {
             const account = try ic.borrowInstructionAccount(@intCast(index_in_instruction));
             defer account.release();
+            // SIMD-0460: store index_in_transaction so the serializer can tag
+            // the resulting account-data region for the access-violation handler,
+            // which uses index_in_transaction to look up the account.
             accounts.appendAssumeCapacity(.{ .account = .{
-                @intCast(index_in_instruction),
+                @intCast(account_meta.index_in_transaction),
                 account,
             } });
         }
@@ -323,6 +350,7 @@ fn serializeParametersUnaligned(
         virtual_address_space_adjustments,
         account_data_direct_mapping,
     );
+    errdefer serializer.deinit();
 
     var account_metas: std14.BoundedArray(
         SerializedAccountMeta,
@@ -333,7 +361,7 @@ fn serializeParametersUnaligned(
     for (accounts) |account| {
         switch (account) {
             .account => |index_and_account| {
-                _, const borrowed_account = index_and_account;
+                const index_in_transaction, const borrowed_account = index_and_account;
 
                 _ = serializer.write(u8, std.math.maxInt(u8));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_signer));
@@ -349,7 +377,10 @@ fn serializeParametersUnaligned(
                     u64,
                     std.mem.nativeToLittle(u64, borrowed_account.constAccountData().len),
                 );
-                const vm_data_addr = try serializer.writeAccount(&borrowed_account);
+                const vm_data_addr = try serializer.writeAccount(
+                    &borrowed_account,
+                    index_in_transaction,
+                );
                 const vm_owner_addr = serializer.writeBytes(&borrowed_account.account.owner.data);
 
                 _ = serializer.write(u8, @intFromBool(borrowed_account.account.executable));
@@ -461,7 +492,7 @@ fn serializeParametersAligned(
     for (accounts) |account| {
         switch (account) {
             .account => |index_and_borrowed_account| {
-                _, const borrowed_account = index_and_borrowed_account;
+                const index_in_transaction, const borrowed_account = index_and_borrowed_account;
                 _ = serializer.write(u8, std.math.maxInt(u8)); // NON_DUP_MARKER
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_signer));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_writable));
@@ -479,7 +510,10 @@ fn serializeParametersAligned(
                     u64,
                     std.mem.nativeToLittle(u64, borrowed_account.constAccountData().len),
                 );
-                const vm_data_addr = try serializer.writeAccount(&borrowed_account);
+                const vm_data_addr = try serializer.writeAccount(
+                    &borrowed_account,
+                    index_in_transaction,
+                );
 
                 const rent_epoch: u64 = if (mask_out_rent_epoch_in_vm_serialization)
                     std.math.maxInt(u64)
@@ -976,6 +1010,7 @@ test serializeParameters {
             false,
         );
         defer serialized.deinit(allocator);
+        try std.testing.expect(HOST_ALIGN.check(@intFromPtr(serialized.memory.items.ptr)));
 
         const serialized_regions = try concatRegions(allocator, serialized.regions.items);
         defer allocator.free(serialized_regions);
@@ -1046,4 +1081,205 @@ fn concatRegions(allocator: std.mem.Allocator, regions: []Region) ![]u8 {
         );
     }
     return memory;
+}
+
+// SIMD-0460: covers the access_violation_handler_payload tagging in
+// writeAccount, and the index_in_instruction → index_in_transaction switch
+// in serializeParameters. Verifies that under
+// `virtual_address_space_adjustments`:
+//   - writable+owned account-data regions are tagged with the account's
+//     *transaction* index (not its instruction index), so the access-violation
+//     handler can look the account up in `tc.accounts`.
+//   - readonly account regions carry a null payload (the handler must not
+//     try to grow them; the bpf_loader maps the violation to
+//     AccountDataTooSmall / ReadonlyDataModified instead).
+//   - writable-but-not-owned account regions also carry a null payload —
+//     ExternalAccountDataModified is reported, not InvalidRealloc.
+//
+// Exercises both loader variants (v1 unaligned, v3 aligned) and both
+// direct-mapping modes.
+test "writeAccount tags account-data regions with index_in_transaction" {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const cases = [_]struct { Pubkey, bool }{
+        // (loader_id, direct_mapping)
+        .{ program.bpf_loader.v1.ID, false }, // unaligned, non-direct
+        .{ program.bpf_loader.v1.ID, true }, //  unaligned, direct
+        .{ program.bpf_loader.v3.ID, false }, // aligned,   non-direct
+        .{ program.bpf_loader.v3.ID, true }, //  aligned,   direct
+    };
+
+    for (cases) |case| {
+        const loader_id, const direct_mapping = case;
+
+        const program_id = Pubkey.initRandom(prng.random());
+        const other_owner = Pubkey.initRandom(prng.random());
+
+        const cache, var tc = try testing.createTransactionContext(
+            allocator,
+            prng.random(),
+            .{
+                .accounts = &.{
+                    // tx[0]: the executing program.
+                    .{ .pubkey = program_id, .owner = loader_id, .executable = true },
+                    // tx[1]: readonly, owned by the program.
+                    .{
+                        .pubkey = Pubkey.initRandom(prng.random()),
+                        .data = &.{ 0xAA, 0xAA, 0xAA, 0xAA },
+                        .owner = program_id,
+                    },
+                    // tx[2]: writable but owned by someone else.
+                    .{
+                        .pubkey = Pubkey.initRandom(prng.random()),
+                        .data = &.{ 0xBB, 0xBB, 0xBB, 0xBB },
+                        .owner = other_owner,
+                    },
+                    // tx[3]: writable, owned by the program — the only one
+                    // that should receive a non-null payload.
+                    .{
+                        .pubkey = Pubkey.initRandom(prng.random()),
+                        .data = &.{ 0xCC, 0xCC, 0xCC, 0xCC },
+                        .owner = program_id,
+                    },
+                },
+            },
+        );
+        defer {
+            testing.deinitTransactionContext(allocator, &tc);
+            testing.deinitAccountMap(cache, allocator);
+        }
+
+        // Instruction account order intentionally differs from transaction
+        // order — this is what proves the payload is index_in_transaction,
+        // not index_in_instruction.
+        var info = try testing.createInstructionInfo(
+            &tc,
+            program_id,
+            @as([]const u8, &.{}),
+            &.{
+                // ix[0] → tx[3] writable+owned
+                .{ .index_in_transaction = 3, .is_signer = false, .is_writable = true },
+                // ix[1] → tx[1] readonly (owned)
+                .{ .index_in_transaction = 1, .is_signer = false, .is_writable = false },
+                // ix[2] → tx[2] writable but not owned
+                .{ .index_in_transaction = 2, .is_signer = false, .is_writable = true },
+            },
+        );
+        defer info.deinit(allocator);
+
+        try sig.runtime.executor.pushInstruction(&tc, info);
+        const ic = try tc.getCurrentInstructionContext();
+
+        var serialized = try serializeParameters(
+            allocator,
+            ic,
+            direct_mapping,
+            true, // virtual_address_space_adjustments
+            false, // mask_out_rent_epoch_in_vm_serialization
+        );
+        defer serialized.deinit(allocator);
+
+        // For each instruction-account, the corresponding account-data
+        // region (if any) has vm_addr_start == meta.vm_data_addr. Look it
+        // up and check the payload.
+        const expected = [_]struct { idx_in_instruction: usize, payload: ?u16 }{
+            .{ .idx_in_instruction = 0, .payload = 3 }, // writable+owned → tx index
+            .{ .idx_in_instruction = 1, .payload = null }, // readonly
+            .{ .idx_in_instruction = 2, .payload = null }, // not owned
+        };
+
+        for (expected) |e| {
+            const meta = serialized.account_metas.get(e.idx_in_instruction);
+            const region = for (serialized.regions.items) |*r| {
+                if (r.vm_addr_start == meta.vm_data_addr) break r;
+            } else return error.AccountRegionNotFound;
+            try std.testing.expectEqual(e.payload, region.access_violation_handler_payload);
+        }
+
+        // Also verify: payloads are only ever populated for regions that
+        // correspond to an account in the instruction. Header/instruction-data
+        // regions must remain null so the handler never grows them.
+        var account_region_starts: [3]u64 = .{
+            serialized.account_metas.get(0).vm_data_addr,
+            serialized.account_metas.get(1).vm_data_addr,
+            serialized.account_metas.get(2).vm_data_addr,
+        };
+        for (serialized.regions.items) |r| {
+            const is_account_region = std.mem.indexOfScalar(
+                u64,
+                &account_region_starts,
+                r.vm_addr_start,
+            ) != null;
+            if (!is_account_region) {
+                try std.testing.expectEqual(
+                    @as(?u16, null),
+                    r.access_violation_handler_payload,
+                );
+            }
+        }
+    }
+}
+
+// When virtual_address_space_adjustments is OFF, writeAccount takes an early
+// return that doesn't produce per-account regions, so no payload is ever set.
+// Locks in that the payload tagging only kicks in under SIMD-0460.
+test "writeAccount does not tag regions when virtual_address_space_adjustments is off" {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const cache, var tc = try testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = program_id,
+                    .owner = program.bpf_loader.v3.ID,
+                    .executable = true,
+                },
+                .{
+                    .pubkey = Pubkey.initRandom(prng.random()),
+                    .data = &.{ 1, 2, 3, 4 },
+                    .owner = program_id,
+                },
+            },
+        },
+    );
+    defer {
+        testing.deinitTransactionContext(allocator, &tc);
+        testing.deinitAccountMap(cache, allocator);
+    }
+
+    var info = try testing.createInstructionInfo(
+        &tc,
+        program_id,
+        @as([]const u8, &.{}),
+        &.{
+            .{ .index_in_transaction = 1, .is_signer = false, .is_writable = true },
+        },
+    );
+    defer info.deinit(allocator);
+
+    try sig.runtime.executor.pushInstruction(&tc, info);
+    const ic = try tc.getCurrentInstructionContext();
+
+    var serialized = try serializeParameters(
+        allocator,
+        ic,
+        false, // direct_mapping
+        false, // virtual_address_space_adjustments = OFF
+        false,
+    );
+    defer serialized.deinit(allocator);
+
+    for (serialized.regions.items) |r| {
+        try std.testing.expectEqual(
+            @as(?u16, null),
+            r.access_violation_handler_payload,
+        );
+    }
 }

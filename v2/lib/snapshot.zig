@@ -1,80 +1,75 @@
 const std = @import("std");
 const lib = @import("lib.zig");
+const tracy = @import("tracy");
 
-pub const bincode = @import("snapshot/bincode.zig");
-pub const tar = @import("snapshot/tar.zig");
+const Slot = lib.solana.Slot;
+const Hash = lib.solana.Hash;
+
+pub const download = @import("snapshot/download.zig");
+
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("snapshot/download.zig");
+    }
+}
+
+comptime {
+    _ = download;
+}
 
 pub const SnapshotSourceRing = lib.ipc.Ring(256, SnapshotSource);
+
 pub const SnapshotSource = extern struct {
+    from: lib.solana.Pubkey,
     rpc_addr: lib.gossip.Address,
     slot: lib.solana.Slot,
     hash: lib.solana.Hash,
 };
 
 pub const SnapshotConfig = extern struct {
-    // TODO rename to "path"
+    // TODO: Can this be configurable at runtime in the future? Requires dynamically sizing this config region.
+    pub const MAX_KNOWN_VALIDATORS = 64;
+
     folder_buffer: [std.fs.max_path_bytes]u8,
     folder_len: u32,
     cluster: lib.solana.Cluster,
+    known_validators_buffer: [MAX_KNOWN_VALIDATORS]lib.solana.Pubkey,
+    known_validators_len: u32,
+
+    /// If true, the snapshot can be downloaded from any peer (explicit "*" opt-in).
+    /// NOTE: When true, `known_validators_len` is 0.
+    known_validators_allow_all: bool,
+
+    pub const KnownValidators = union(enum) {
+        allow_all,
+        set: []const lib.solana.Pubkey,
+
+        pub fn trusts(self: KnownValidators, pk: lib.solana.Pubkey) bool {
+            return switch (self) {
+                .allow_all => true,
+                .set => |kvs| pk.indexIn(kvs) != null,
+            };
+        }
+    };
+
+    pub fn knownValidators(self: *const SnapshotConfig) KnownValidators {
+        if (self.known_validators_allow_all) return .allow_all;
+        return .{ .set = self.known_validators_buffer[0..self.known_validators_len] };
+    }
 };
 
-pub const SnapshotDecodeRing = extern struct {
-    head: std.atomic.Value(Pos),
-    buffer: [1 * 1024 * 1024 * 1024]u8,
-    tail: std.atomic.Value(Pos), // on a far enough cache line
+// Holds which snapshot to load from the SnapshotConfig.folder
+pub const SnapshotReadyRing = lib.ipc.Ring(1, ReadySnapshot);
 
-    const Pos = packed struct(u32) { closed: bool, value: u31 };
-    const Side = enum { reader, writer };
+pub const ReadySnapshot = extern struct {
+    slot: Slot,
+    hash: Hash,
 
-    pub fn init(self: *SnapshotDecodeRing) void {
-        self.head = .init(.{ .closed = false, .value = 0 });
-        self.tail = .init(.{ .closed = false, .value = 0 });
+    pub fn format(self: *const ReadySnapshot, writer: *std.Io.Writer) !void {
+        return try writer.print("snapshot-{d}-{f}.tar.zst", .{ self.slot, self.hash });
     }
 
-    pub fn getSlice(self: *SnapshotDecodeRing, comptime side: Side) ![]u8 {
-        switch (side) {
-            .reader => {
-                const h = self.head.raw;
-                std.debug.assert(!h.closed);
-
-                const t = self.tail.load(.acquire);
-                const readable = t.value -% h.value;
-                std.debug.assert(readable <= self.buffer.len);
-
-                // If closed, readable < 1 == read all items, then returns closed.
-                // If !closed, readable < 0 == never true, so never returns closed.
-                if (readable < @intFromBool(t.closed)) return error.Closed;
-
-                // Return longest contiguous buffer.
-                const idx = h.value % self.buffer.len;
-                return self.buffer[idx..@min(idx + readable, self.buffer.len)];
-            },
-            .writer => {
-                const t = self.tail.raw;
-                std.debug.assert(!t.closed);
-
-                const h = self.head.load(.acquire);
-                const readable = t.value -% h.value;
-                std.debug.assert(readable <= self.buffer.len);
-
-                const writable = self.buffer.len - readable;
-                const idx = t.value % self.buffer.len;
-                return self.buffer[idx..@min(idx + writable, self.buffer.len)];
-            },
-        }
-    }
-
-    pub fn advance(self: *SnapshotDecodeRing, comptime side: Side, n: usize) void {
-        const ptr = if (side == .reader) &self.head else &self.tail;
-        const pos = ptr.raw;
-        std.debug.assert(!pos.closed);
-        ptr.store(.{ .closed = false, .value = pos.value +% @as(u31, @intCast(n)) }, .release);
-    }
-
-    pub fn close(self: *SnapshotDecodeRing, comptime side: Side) void {
-        const ptr = if (side == .reader) &self.head else &self.tail;
-        const pos = ptr.raw;
-        std.debug.assert(!pos.closed);
-        ptr.store(.{ .closed = true, .value = pos.value }, .release);
+    pub fn name(self: *const ReadySnapshot, buf: []u8) ![]const u8 {
+        return try std.fmt.bufPrint(buf, "{f}", .{self});
     }
 };

@@ -7,18 +7,46 @@ nix develop            # if you only want to run the tests
 nix develop .#agave    # if you also want to run the test vectors against agave
 ```
 
-# Build
+`solana-conformance` is no longer provided by the flake. You'll need to install it manually if you want to use it. We also have our own test runner implemented in `src/main.zig`, so `solana-conformance` is no longer necessary to run the tests.
 
-To run the conformance tests, you'll need a build of solfuzz_sig. Either Debug or ReleaseSafe builds are fine.
+# Run
+
+**Run the test vectors using the zig test runner**
+
+Run all tests against sig:
+
+```bash
+zig build run -- env/test-vectors   # block tests will fail, this is expected.
+```
+
+Run one test against sig:
+
+```bash
+zig build run -- env/test-vectors/txn/fixtures/0a3ba0c45b67c887fd2f5b7a9c07f277bf3f8bfe_2212177.fix
+```
+
+Test against arbitrary static libs:
+
+```bash
+zig build run -Dno-sig -- <fixture-file-or-dir> <path-to-static-lib>
+```
+
+`no-sig` is optional. If you plan to dynamically link a `.so` file, this option speeds up compilation and reduces the binary size.
+
+
+**Run the test vectors using solana-conformance**
+
+The zig implementation can run the tests but offers a minimal feature set. For advanced debugging, you'll likely want to use solana-conformance.
+
+To run the conformance tests using solana-conformance, you'll need a build of solfuzz_sig. Either Debug or ReleaseSafe builds are fine.
 
 ```bash
 zig build solfuzz_sig
 ```
 
+solana-conformance must either be in path or specified with `SOLANA_CONFORMANCE_BIN` for `run` to work.
 
-# Run
-
-**Run the test vectors**
+Run the tests:
 
 ```bash
 # run all conformance test vectors
@@ -42,7 +70,7 @@ run.py is a helper script to make this process easier. But in some cases when de
 
 ```bash
 solana-conformance \
-    exec-fixtures \
+    run-fixtures \
     -i env/test-vectors/instr/fixtures/zk_sdk \
     -t zig-out/lib/libsolfuzz_sig.so \
     -o env/test-outputs/
@@ -92,7 +120,7 @@ The conformance system works as follows:
 
 - **Test vectors** are binary `.fix` files in `env/test-vectors/`, each encoding a program input (a transaction, an instruction, an ELF, etc.) along with the expected output that agave produces.
 - **Harnesses** in `src/` deserialize those inputs and feed them into sig's runtime. The harness code is the layer between the test framework and sig's actual logic in `../src/`.
-- **solana-conformance** (a Python CLI in `env/solana-conformance/`) orchestrates test execution, compares outputs, and writes results to `env/test-outputs/`.
+- **solana-conformance** (a Rust CLI binary) orchestrates test execution, compares outputs, and writes results to `env/test-outputs/`.
 - **solfuzz-agave** (`env/solfuzz-agave/`) contains the equivalent harnesses for agave. You can run the tests against agave to regenerate expected outputs, or add print statements to agave for comparison.
 
 The sig source code is in `../src/`. The agave source code is in `env/agave/`. Both can be edited for debugging—just recompile the respective harness afterward.
@@ -140,14 +168,14 @@ proto value = intFromEnum(InstructionError) + 1
 
 The full table is in `../src/core/instruction.zig` in the `intFromInstructionError` function. Some common ones:
 
-| Proto value | InstructionError             |
-|-------------|------------------------------|
-| 3           | InvalidInstructionData       |
-| 4           | InvalidAccountData           |
-| 26          | Custom                       |
-| 31          | UnsupportedProgramId         |
-| 32          | CallDepth                    |
-| 49          | UnsupportedSysvar            |
+| Proto value | InstructionError       |
+| ----------- | ---------------------- |
+| 3           | InvalidInstructionData |
+| 4           | InvalidAccountData     |
+| 26          | Custom                 |
+| 31          | UnsupportedProgramId   |
+| 32          | CallDepth              |
+| 49          | UnsupportedSysvar      |
 
 `executed_units` reflects total compute units consumed by the transaction up to the point of failure. If agave shows `0` (or no `executed_units` field, which is the protobuf default), the failure occurred before any compute was consumed—often a feature flag check at the top of a program's entrypoint.
 
