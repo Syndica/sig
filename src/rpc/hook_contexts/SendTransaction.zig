@@ -617,8 +617,9 @@ fn resolveAndConvertTokenBalances(
     if (raw_balances.len == 0) return .{};
 
     const spl_token = sig.runtime.spl_token;
+    const token_balances = sig.ledger.token_balances;
 
-    var mint_cache = spl_token.MintDecimalsCache.init(arena);
+    var mint_cache = token_balances.MintDecimalsCache.init(arena);
     defer mint_cache.deinit();
 
     // Pre-populate cache with mints found in post-simulation writes.
@@ -636,7 +637,7 @@ fn resolveAndConvertTokenBalances(
         .account_store_reader = slot_reader,
     };
 
-    const resolved = spl_token.resolveTokenBalances(
+    const resolved = token_balances.resolveTokenBalances(
         arena,
         raw_balances,
         &mint_cache,

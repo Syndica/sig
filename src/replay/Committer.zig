@@ -28,6 +28,7 @@ const LoadedAddresses = sig.ledger.transaction_status.LoadedAddresses;
 const Ledger = sig.ledger.Ledger;
 const SlotAccountStore = sig.accounts_db.SlotAccountStore;
 const spl_token = sig.runtime.spl_token;
+const token_balances = sig.ledger.token_balances;
 
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 const parseSanitizedVoteTransaction =
@@ -403,7 +404,7 @@ fn writeTransactionStatus(
 
     // Collect token balances
     // Build a mint decimals cache from writes (for mints modified in this tx)
-    var mint_cache = spl_token.MintDecimalsCache.init(allocator);
+    var mint_cache = token_balances.MintDecimalsCache.init(allocator);
     defer mint_cache.deinit();
 
     // Populate cache with any mints found in the transaction writes
@@ -422,7 +423,7 @@ fn writeTransactionStatus(
         .writes = tx_result.writes.constSlice(),
         .account_store_reader = if (account_store) |store| store.reader() else null,
     };
-    const pre_token_balances = spl_token.resolveTokenBalances(
+    const pre_token_balances = token_balances.resolveTokenBalances(
         allocator,
         tx_result.pre_token_balances,
         &mint_cache,
@@ -442,7 +443,7 @@ fn writeTransactionStatus(
         tx_result.writes.constSlice(),
         if (account_store) |store| store.reader() else null,
     );
-    const post_token_balances = spl_token.resolveTokenBalances(
+    const post_token_balances = token_balances.resolveTokenBalances(
         allocator,
         post_raw_token_balances,
         &mint_cache,
@@ -621,7 +622,7 @@ fn buildTransactionEntry(
     };
 
     // Token balances
-    var mint_cache = spl_token.MintDecimalsCache.init(temp_allocator);
+    var mint_cache = token_balances.MintDecimalsCache.init(temp_allocator);
     defer mint_cache.deinit();
     for (tx_result.writes.constSlice()) |*written| {
         if (written.account.data.len >= spl_token.MINT_ACCOUNT_SIZE) {
@@ -639,7 +640,7 @@ fn buildTransactionEntry(
         .writes = tx_result.writes.constSlice(),
         .account_store_reader = if (account_store) |s| s.reader() else null,
     };
-    const pre_token_balances = try spl_token.resolveTokenBalances(
+    const pre_token_balances = try token_balances.resolveTokenBalances(
         arena,
         tx_result.pre_token_balances,
         &mint_cache,
@@ -654,7 +655,7 @@ fn buildTransactionEntry(
         tx_result.writes.constSlice(),
         if (account_store) |s| s.reader() else null,
     );
-    const post_token_balances = try spl_token.resolveTokenBalances(
+    const post_token_balances = try token_balances.resolveTokenBalances(
         arena,
         post_raw,
         &mint_cache,
