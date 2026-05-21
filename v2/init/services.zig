@@ -402,6 +402,24 @@ pub const ServiceInstance = struct {
     }
 };
 
+pub fn telemetryServiceCount(comptime services: []const ServiceInstance) u32 {
+    var count: u32 = 0;
+
+    inline for (services) |instance| {
+        const service = instance.service;
+        if (service == .telemetry) continue;
+
+        for (getRequiredRegions(service)) |region| {
+            if (region.region == .telemetry) {
+                count += 1;
+                break;
+            }
+        }
+    }
+
+    return count;
+}
+
 const Share = struct {
     instance: ServiceInstance,
     rw: bool = false,
