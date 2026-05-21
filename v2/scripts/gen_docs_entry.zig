@@ -12,14 +12,14 @@ const preamble =
     \\ //! # Generated Docs
     \\ //!
     \\ //! ## Services
-    \\ //! 
-    \\ //! Sig runs as a collection of processes, called services, spawned by a root process. 
-    \\ //! 
+    \\ //!
+    \\ //! Sig runs as a collection of processes, called services, spawned by a root process.
+    \\ //!
     \\ //! See `services` for services.
     \\ //! See `sig_init` for the root process.
     \\ //!
     \\ //! ## Libraries
-    \\ //! 
+    \\ //!
     \\ //! See `lib` for our libraries.
     \\ //!
     \\

@@ -1,9 +1,4 @@
 const std = @import("std");
-
-comptime {
-    _ = std.testing.refAllDecls(@This());
-}
-
 const builtin = @import("builtin");
 const lib = @import("../lib.zig");
 const build_options = @import("build-options");
@@ -36,6 +31,21 @@ comptime {
         );
 }
 pub const use_avx125 = has_avx512 and builtin.zig_backend == .stage2_llvm;
+comptime {
+    // Conditionally include to allow tests to run on machines without avx512.
+    if (builtin.is_test and use_avx125) {
+        _ = avx512;
+    }
+}
+comptime {
+    if (@import("builtin").is_test) {
+        // lint: skip ed25519/avx512.zig
+        _ = @import("ed25519/generic.zig");
+        _ = @import("ed25519/pippenger.zig");
+        _ = @import("ed25519/straus.zig");
+        _ = @import("ed25519/wycheproof.zig");
+    }
+}
 
 // avx512 implementation relies on llvm specific tricks
 const namespace = if (use_avx125) avx512 else generic;
