@@ -11,7 +11,6 @@ const Ed25519 = std.crypto.ecc.Edwards25519;
 const Fe = Ed25519.Fe;
 
 const u32x8 = @Vector(8, u32);
-const i32x8 = @Vector(8, i32);
 const u64x4 = @Vector(4, u64);
 const u52x4 = @Vector(4, u52);
 

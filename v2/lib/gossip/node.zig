@@ -17,7 +17,6 @@ const bincode = lib.gossip.bincode;
 const GossipMessage = lib.gossip.GossipMessage;
 const GossipData = lib.gossip.GossipData;
 const GossipValue = lib.gossip.GossipValue;
-const ContactInfo = lib.gossip.ContactInfo;
 const BloomFilter = lib.gossip.BloomFilter;
 
 pub fn GossipNode(comptime Effects: type) type {
@@ -112,7 +111,7 @@ pub fn GossipNode(comptime Effects: type) type {
             last_updated: u64,
             duplicates: u8,
             size: u16,
-            value: [Packet.len]u8,
+            value: [Packet.capacity]u8,
         });
         const Expired = std.ArrayListUnmanaged(struct {
             hash: Hash,
@@ -300,11 +299,11 @@ pub fn GossipNode(comptime Effects: type) type {
         ) void {
             var msg_buf: [16 * 1024]u8 = undefined;
             var msg_fba = std.heap.FixedBufferAllocator.init(&msg_buf);
-            var msg_reader: std.Io.Reader = .fixed(packet.data[0..packet.size]);
+            var msg_reader: std.Io.Reader = .fixed(packet.data[0..packet.len]);
             const msg = bincode.read(&msg_fba, &msg_reader, GossipMessage) catch |e| {
                 logger.err().logf(
-                    "invalid msg from ({f}, size={}): {}",
-                    .{ packet.addr, packet.size, e },
+                    "invalid msg from ({f}, len={}): {}",
+                    .{ packet.addr, packet.len, e },
                 );
                 return;
             };
@@ -384,8 +383,9 @@ pub fn GossipNode(comptime Effects: type) type {
                     var prune_len: usize = 0;
 
                     for (push.values.items) |value| {
-                        const key, const duplicates =
-                            (try self.insertValue(.from(logger), now, .push, value)) orelse continue;
+                        const maybe_key_value =
+                            try self.insertValue(.from(logger), now, .push, value);
+                        const key, const duplicates = maybe_key_value orelse continue;
 
                         // Add to prunes if enough duplicates.
                         if (duplicates >= DUPLICATE_THRESHOLD_UNTIL_PRUNE) {
@@ -407,10 +407,14 @@ pub fn GossipNode(comptime Effects: type) type {
 
                         // Dont send back prunes from pushes that arent peers with a ContactInfo.
                         const peer = self.peers.getPtr(push.from) orelse break :blk;
-                        const ci_key: Key = .{ .from = push.from, .tag = .contact_info, .index = 0 };
+                        const ci_key: Key = .{
+                            .from = push.from,
+                            .tag = .contact_info,
+                            .index = 0,
+                        };
                         if (!self.table.contains(ci_key)) break :blk;
 
-                        var sign_buf: [Packet.len]u8 = undefined;
+                        var sign_buf: [Packet.capacity]u8 = undefined;
                         var sign_writer: std.Io.Writer = .fixed(&sign_buf);
                         try bincode.write(&sign_writer, .{
                             .prefix = PRUNE_PREFIX.*,
@@ -445,7 +449,7 @@ pub fn GossipNode(comptime Effects: type) type {
                         return error.PruneSentByUntrackedPeer;
 
                     // TODO: verify this with msg directly from the Packet
-                    var sign_buf: [Packet.len]u8 = undefined;
+                    var sign_buf: [Packet.capacity]u8 = undefined;
                     var sign_writer: std.Io.Writer = .fixed(&sign_buf);
                     try bincode.write(&sign_writer, .{
                         .prefix = bincode.Vec(u8){ .items = PRUNE_PREFIX },
@@ -646,7 +650,7 @@ pub fn GossipNode(comptime Effects: type) type {
                 const v = self.table.getPtr(key) orelse continue;
 
                 // Would overflow push message. Send one out with whats collected so far.
-                if (packet_size + v.size > Packet.len) {
+                if (packet_size + v.size > Packet.capacity) {
                     try self.sendMessage(addr, .{ .push_message = .{
                         .from = self.identity(),
                         .values = .{ .items = values.items },
@@ -798,7 +802,7 @@ pub fn GossipNode(comptime Effects: type) type {
             }
 
             // TODO: serialize directly table.
-            var buf: [Packet.len]u8 = undefined;
+            var buf: [Packet.capacity]u8 = undefined;
             var writer: std.Io.Writer = .fixed(&buf);
             try bincode.write(&writer, data);
             return .{
@@ -819,7 +823,8 @@ pub fn GossipNode(comptime Effects: type) type {
             now: u64,
             value: GossipValue,
         ) !void {
-            const key, _ = (try self.insertValue(.from(logger), now, .us, value)) orelse unreachable;
+            const maybe_key_value = try self.insertValue(.from(logger), now, .us, value);
+            const key, _ = maybe_key_value orelse unreachable;
             assert(key.from.equals(&self.identity()));
         }
 
@@ -854,7 +859,7 @@ pub fn GossipNode(comptime Effects: type) type {
 
             // Serialize the value & validate its signature.
             // TODO: verify directly from packet & memcpy from packet directly into table entry.
-            var value_buf: [Packet.len]u8 = undefined;
+            var value_buf: [Packet.capacity]u8 = undefined;
             var value_writer: std.Io.Writer = .fixed(&value_buf);
             try bincode.write(&value_writer, value);
 
@@ -1091,7 +1096,7 @@ pub fn GossipNode(comptime Effects: type) type {
 
             var writer: std.Io.Writer = .fixed(&packet.data);
             try bincode.write(&writer, msg);
-            packet.size = @intCast(writer.buffered().len);
+            packet.len = @intCast(writer.buffered().len);
 
             self.config.effects.flushWrittenPackets();
         }

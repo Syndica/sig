@@ -27,6 +27,8 @@ pub const Config = struct {
     use_llvm: bool,
     error_tracing: ?bool,
     long_tests: bool,
+    allow_no_sha: bool,
+    allow_no_avx512: bool,
     version: std.SemanticVersion,
 
     pub fn fromBuild(b: *Build) !Config {
@@ -45,9 +47,11 @@ pub const Config = struct {
                 "command line nor as a dependency argument.",
         ) orelse false;
 
+        const optimize = b.standardOptimizeOption(.{});
+
         var self: Config = .{
             .target = b.standardTargetOptions(.{}),
-            .optimize = b.standardOptimizeOption(.{}),
+            .optimize = optimize,
             .filters = filters,
             .enable_tsan = b.option(
                 bool,
@@ -125,6 +129,21 @@ pub const Config = struct {
                 "long-tests",
                 "Run extra tests that take a long time, for more exhaustive coverage.",
             ) orelse (filters != null),
+            .allow_no_sha = b.option(
+                bool,
+                "allow-no-sha",
+                "Opt in to a slower software fallback when the target lacks the x86 SHA " ++
+                    "extension. Without this flag, building for a target without SHA-NI is a " ++
+                    "compile-time error so the performance hit is not silently accepted.",
+            ) orelse (optimize == .Debug),
+            .allow_no_avx512 = b.option(
+                bool,
+                "allow-no-avx512",
+                "Opt in to a slower generic ed25519 path when the target lacks AVX-512 " ++
+                    "(avx512ifma + avx512vl). Without this flag, building for an x86_64 target " ++
+                    "without these features is a compile-time error so the performance hit is " ++
+                    "not silently accepted.",
+            ) orelse (optimize == .Debug),
             .version = s: {
                 const maybe_version_string = b.option(
                     []const u8,
@@ -214,6 +233,8 @@ pub fn build(b: *Build) !void {
     build_options.addOption(LedgerDB, "ledger_db", config.ledger_db);
     build_options.addOption(bool, "no_network_tests", config.no_network_tests);
     build_options.addOption(bool, "long_tests", config.long_tests);
+    build_options.addOption(bool, "allow_no_sha", config.allow_no_sha);
+    build_options.addOption(bool, "allow_no_avx512", config.allow_no_avx512);
     build_options.addOption(std.SemanticVersion, "version", config.version);
 
     const sig_step = b.step("sig", "Run the sig executable");
@@ -297,13 +318,13 @@ pub fn build(b: *Build) !void {
 
     // G/H table for Bulletproofs
     const gh_table = b.createModule(.{
-        .root_source_file = generateTable(b),
+        .root_source_file = generateTable(b, config.use_llvm),
         .target = config.target,
         .optimize = config.optimize,
     });
 
     // Feature set ID for version compatibility
-    const feature_set_id_gen = addFeatureSetIdGenerator(b);
+    const feature_set_id_gen = addFeatureSetIdGenerator(b, config.use_llvm);
     const feature_set_id = b.createModule(.{
         .root_source_file = b.addRunArtifact(feature_set_id_gen).addOutputFileArg("feature-set-id.zig"),
     });
@@ -311,14 +332,16 @@ pub fn build(b: *Build) !void {
     feature_set_id_step.dependOn(&print_feature_set_id.step);
 
     // Non-circulating supply pubkeys (pre-decoded at build time)
-    const non_circulating_supply = b.createModule(.{ .root_source_file = generateNonCirculatingSupply(b) });
+    const non_circulating_supply = b.createModule(.{
+        .root_source_file = generateNonCirculatingSupply(b, config.use_llvm),
+    });
 
-    const sqlite_mod = genSqlite(b, config.target, config.optimize);
+    const sqlite_mod = genSqlite(b, config.target, config.optimize, config.use_llvm);
     const blst_mod = b.dependency("blst", .{
         .target = config.target,
         .optimize = config.optimize,
     }).module("blst");
-    const bzip2_mod = genBzip2(b, config.target, config.optimize);
+    const bzip2_mod = genBzip2(b, config.target, config.optimize, config.use_llvm);
 
     // zig fmt: off
     const imports: []const Build.Module.Import = &.{
@@ -351,6 +374,7 @@ pub fn build(b: *Build) !void {
             .root_source_file = b.path("src/memcpy.zig"),
             .pic = true,
         }),
+        .use_llvm = config.use_llvm,
     });
 
     const sig_mod = b.addModule("sig", .{
@@ -472,6 +496,7 @@ pub fn build(b: *Build) !void {
             .error_tracing = config.error_tracing,
             .sanitize_thread = config.enable_tsan,
         }),
+        .use_llvm = config.use_llvm,
     });
     geyser_reader_exe.root_module.addObject(memcpy);
     geyser_reader_exe.root_module.addImport("sig", sig_mod);
@@ -489,6 +514,7 @@ pub fn build(b: *Build) !void {
             .sanitize_thread = config.enable_tsan,
             .error_tracing = config.error_tracing,
         }),
+        .use_llvm = config.use_llvm,
     });
     vm_exe.root_module.addObject(memcpy);
     vm_exe.root_module.addImport("sig", sig_mod);
@@ -563,7 +589,7 @@ fn addInstallAndRun(
                 b.dupe(config.ssh_install_dir)
             else
                 b.fmt("{s}/{s}", .{ config.ssh_workdir, config.ssh_install_dir });
-            const send = ssh.addSendArtifact(b, install, host, install_dir);
+            const send = ssh.addSendArtifact(b, install, host, install_dir, config.use_llvm);
             send.step.dependOn(&install.step);
             step.dependOn(&send.step);
             send_step = &send.step;
@@ -585,7 +611,7 @@ fn addInstallAndRun(
     }
 }
 
-fn generateTable(b: *Build) Build.LazyPath {
+fn generateTable(b: *Build, use_llvm: bool) Build.LazyPath {
     const gen = b.addExecutable(.{
         .name = "generator_chain",
         .root_module = b.createModule(.{
@@ -594,6 +620,7 @@ fn generateTable(b: *Build) Build.LazyPath {
             .optimize = .Debug,
             .root_source_file = b.path("scripts/generator_chain.zig"),
         }),
+        .use_llvm = use_llvm,
     });
     const run = b.addRunArtifact(gen);
     const generated = run.captureStdOut();
@@ -604,7 +631,7 @@ fn generateTable(b: *Build) Build.LazyPath {
     return table_file;
 }
 
-fn addFeatureSetIdGenerator(b: *Build) *Build.Step.Compile {
+fn addFeatureSetIdGenerator(b: *Build, use_llvm: bool) *Build.Step.Compile {
     // This generator runs on the host at build time, so its dependencies must
     // be fetched with default (host) target options — not the cross-compilation
     // target used for the main build. This should be repeated for other scripts if they
@@ -628,10 +655,11 @@ fn addFeatureSetIdGenerator(b: *Build) *Build.Step.Compile {
                 },
             },
         }),
+        .use_llvm = use_llvm,
     });
 }
 
-fn generateNonCirculatingSupply(b: *Build) Build.LazyPath {
+fn generateNonCirculatingSupply(b: *Build, use_llvm: bool) Build.LazyPath {
     const gen = b.addExecutable(.{
         .name = "gen_non_circulating_supply",
         .root_module = b.createModule(.{
@@ -651,6 +679,7 @@ fn generateNonCirculatingSupply(b: *Build) Build.LazyPath {
                 },
             },
         }),
+        .use_llvm = use_llvm,
     });
     return b.addRunArtifact(gen).addOutputFileArg("non-circulating-supply.zig");
 }
@@ -659,6 +688,7 @@ fn genSqlite(
     b: *Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    use_llvm: bool,
 ) *Build.Module {
     const dep = b.dependency("sqlite", .{});
 
@@ -669,6 +699,7 @@ fn genSqlite(
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = use_llvm,
     });
     lib.addCSourceFile(.{ .file = dep.path("sqlite3.c") });
     lib.linkLibC();
@@ -689,6 +720,7 @@ fn genBzip2(
     b: *Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    use_llvm: bool,
 ) *Build.Module {
     const dep = b.dependency("bzip2", .{});
 
@@ -699,6 +731,7 @@ fn genBzip2(
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = use_llvm,
     });
     lib.addCSourceFiles(.{
         .root = dep.path("."),
@@ -801,10 +834,11 @@ const ssh = struct {
         install: *Build.Step.InstallArtifact,
         host: []const u8,
         remote_dir: []const u8,
+        use_llvm: bool,
     ) *Build.Step.Run {
         const local_path = b.getInstallPath(install.dest_dir.?, install.dest_sub_path);
         const remote_path = b.pathJoin(&.{ remote_dir, install.dest_sub_path });
-        const exe = sendFileExe(b);
+        const exe = sendFileExe(b, use_llvm);
         const run = b.addRunArtifact(exe);
         run.addArgs(&.{ local_path, host, remote_path });
         return run;
@@ -812,7 +846,7 @@ const ssh = struct {
 
     /// Returns the executable for the `send-file` script, compiled
     /// exactly once regardless of how many times this is called.
-    fn sendFileExe(b: *Build) *Build.Step.Compile {
+    fn sendFileExe(b: *Build, use_llvm: bool) *Build.Step.Compile {
         const static = struct {
             var exe: ?*Build.Step.Compile = null;
         };
@@ -825,6 +859,7 @@ const ssh = struct {
                     .target = b.graph.host,
                     .link_libc = true,
                 }),
+                .use_llvm = use_llvm,
             });
         }
 

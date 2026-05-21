@@ -62,6 +62,7 @@ pub fn checkAge(
     max_age: u64,
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
+    require_static_nonce_account: bool,
 ) AccountLoadError!TransactionResult(?LoadedAccount) {
     if (blockhash_queue.getHashInfoIfValid(transaction.recent_blockhash, max_age) != null) {
         return .{ .ok = null };
@@ -73,6 +74,7 @@ pub fn checkAge(
         next_durable_nonce,
         next_lamports_per_signature,
         account_reader,
+        require_static_nonce_account,
     )) |nonce| {
         const nonce_account = nonce[0];
         return .{ .ok = nonce_account };
@@ -395,11 +397,17 @@ fn checkLoadAndAdvanceMessageNonceAccount(
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
     account_reader: SlotAccountReader,
+    require_static_nonce_account: bool,
 ) AccountLoadError!?struct { LoadedAccount, u64 } {
     if (transaction.recent_blockhash.eql(next_durable_nonce.*)) return null;
 
     const address, const nonce_account, const nonce_data =
-        try loadMessageNonceAccount(allocator, transaction, account_reader) orelse return null;
+        try loadMessageNonceAccount(
+            allocator,
+            transaction,
+            account_reader,
+            require_static_nonce_account,
+        ) orelse return null;
 
     const previous_lamports_per_signature = nonce_data.lamports_per_signature;
     const next_nonce_state = NonceVersions{
@@ -438,8 +446,9 @@ pub fn loadMessageNonceAccount(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     account_reader: SlotAccountReader,
+    require_static_nonce_account: bool,
 ) AccountLoadError!?struct { Pubkey, Account, NonceData } {
-    const nonce_address = getDurableNonce(transaction) orelse
+    const nonce_address = getDurableNonce(transaction, require_static_nonce_account) orelse
         return null;
     const nonce_account = try wrapDB(account_reader.get(allocator, nonce_address)) orelse
         return null;
@@ -478,9 +487,17 @@ pub fn verifyNonceAccount(account: Account, recent_blockhash: *const Hash) ?Nonc
     return nonce_data;
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/eb416825349ca376fa13249a0267cf7b35701938/svm-transaction/src/svm_message.rs#L84
-/// If the message uses a durable nonce, return the pubkey of the nonce account
-pub fn getDurableNonce(transaction: *const RuntimeTransaction) ?Pubkey {
+// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/svm-transaction/src/svm_message.rs#L99-L131
+/// If the message uses a durable nonce, return the pubkey of the nonce account.
+///
+/// SIMD-0242: when `require_static_nonce_account` is true, the nonce account
+/// index must reference a statically-included key (i.e. be below
+/// `transaction.num_static_account_keys`); otherwise we treat the message as
+/// not having a durable nonce, mirroring Agave's `get_durable_nonce`.
+pub fn getDurableNonce(
+    transaction: *const RuntimeTransaction,
+    require_static_nonce_account: bool,
+) ?Pubkey {
     if (transaction.instructions.len <= 0) return null;
     const instruction = transaction.instructions[NONCED_TX_MARKER_IX_INDEX];
 
@@ -507,6 +524,9 @@ pub fn getDurableNonce(transaction: *const RuntimeTransaction) ?Pubkey {
     const nonce_meta = instruction.account_metas.items[0];
     if (!nonce_meta.is_writable) return null;
     if (nonce_meta.index_in_transaction >= account_keys.len) return null;
+    if (require_static_nonce_account and
+        nonce_meta.index_in_transaction >= transaction.num_static_account_keys)
+        return null;
     return account_keys[nonce_meta.index_in_transaction];
 }
 
@@ -563,6 +583,7 @@ test "checkAge: recent blockhash" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .num_static_account_keys = 0,
         .is_simple_vote_transaction = false,
     };
 
@@ -585,6 +606,7 @@ test "checkAge: recent blockhash" {
                 max_age,
                 &Hash.ZEROES,
                 0,
+                false,
             );
 
             try std.testing.expectEqual(null, result.ok);
@@ -602,6 +624,7 @@ test "checkAge: recent blockhash" {
             max_age,
             &Hash.ZEROES,
             0,
+            false,
         );
 
         try std.testing.expectEqual(TransactionError.BlockhashNotFound, result.err);
@@ -700,6 +723,7 @@ test "checkAge: nonce account" {
         }},
         .accounts = accounts,
         .num_lookup_tables = 0,
+        .num_static_account_keys = @intCast(accounts.len),
         .is_simple_vote_transaction = false,
     };
 
@@ -718,6 +742,7 @@ test "checkAge: nonce account" {
         0,
         &next_durable_nonce,
         5001,
+        false,
     );
     defer if (result.ok) |account| allocator.free(account.account.data);
 
@@ -753,6 +778,149 @@ test "checkAge: nonce account" {
     }
 }
 
+// SIMD-0242: when the gate is on and the nonce account is not in the static
+// account keys, getDurableNonce must return None so checkAge falls through to
+// BlockhashNotFound (matching Agave's get_durable_nonce behavior).
+test "checkAge: SIMD-0242 ALT-resolved nonce" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const nonce_key = Pubkey.initRandom(prng.random());
+    const nonce_authority_key = Pubkey.initRandom(prng.random());
+    const recent_blockhash = Hash.initRandom(prng.random());
+    const next_durable_nonce = Hash.initRandom(prng.random());
+
+    const nonce_account_data = AccountSharedData{
+        .lamports = 0,
+        .owner = sig.runtime.program.system.ID,
+        .data = try sig.bincode.writeAlloc(
+            allocator,
+            sig.runtime.nonce.Versions{ .current = .{
+                .initialized = .{
+                    .authority = nonce_authority_key,
+                    .durable_nonce = recent_blockhash,
+                    .lamports_per_signature = 5000,
+                },
+            } },
+            .{},
+        ),
+        .executable = false,
+        .rent_epoch = 0,
+    };
+
+    var account_map = sig.utils.collections.PubkeyMap(AccountSharedData){};
+    defer deinitAccountMap(account_map, allocator);
+    try account_map.put(allocator, nonce_key, nonce_account_data);
+
+    const instruction_data = try sig.bincode.writeAlloc(
+        allocator,
+        sig.runtime.program.system.Instruction.advance_nonce_account,
+        .{},
+    );
+    defer allocator.free(instruction_data);
+
+    // Resolved account list: [system_program (static), authority (static),
+    // nonce (ALT-resolved)]. num_static_account_keys = 2, so the nonce at
+    // index 2 is NOT statically included.
+    var accounts = std.MultiArrayList(AccountMeta){};
+    defer accounts.deinit(allocator);
+    try accounts.append(
+        allocator,
+        .{ .pubkey = sig.runtime.program.system.ID, .is_signer = false, .is_writable = false },
+    );
+    try accounts.append(
+        allocator,
+        .{ .pubkey = nonce_authority_key, .is_signer = true, .is_writable = false },
+    );
+    try accounts.append(
+        allocator,
+        .{ .pubkey = nonce_key, .is_signer = false, .is_writable = true },
+    );
+
+    var metas: sig.runtime.InstructionInfo.AccountMetas = .empty;
+    defer metas.deinit(allocator);
+
+    try metas.appendSlice(allocator, &.{
+        .{
+            .pubkey = nonce_key,
+            .index_in_transaction = 2,
+            .is_signer = false,
+            .is_writable = true,
+        },
+        .{
+            .pubkey = nonce_authority_key,
+            .index_in_transaction = 1,
+            .is_signer = true,
+            .is_writable = false,
+        },
+    });
+
+    const transaction = RuntimeTransaction{
+        .signature_count = 0,
+        .fee_payer = Pubkey.ZEROES,
+        .msg_hash = Hash.ZEROES,
+        .recent_blockhash = recent_blockhash,
+        .instructions = &.{.{
+            .program_meta = .{ .pubkey = sig.runtime.program.system.ID, .index_in_transaction = 0 },
+            .account_metas = metas,
+            .dedupe_map = blk: {
+                var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
+                dedupe_map[2] = 0;
+                dedupe_map[1] = 1;
+                break :blk dedupe_map;
+            },
+            .instruction_data = instruction_data,
+            .owned_instruction_data = false,
+            .initial_account_lamports = 0,
+        }},
+        .accounts = accounts,
+        .num_lookup_tables = 1,
+        .num_static_account_keys = 2,
+        .is_simple_vote_transaction = false,
+    };
+
+    var blockhash_queue = BlockhashQueue{
+        .last_hash = null,
+        .max_age = 0,
+        .hash_infos = .{},
+        .last_hash_index = 0,
+    };
+
+    // Gate on: ALT-resolved nonce is not recognized, so checkAge returns
+    // BlockhashNotFound rather than treating this as a nonce transaction.
+    {
+        const result = try checkAge(
+            allocator,
+            &transaction,
+            .{ .account_shared_data_map = &account_map },
+            &blockhash_queue,
+            0,
+            &next_durable_nonce,
+            5001,
+            true,
+        );
+        try std.testing.expectEqual(TransactionError.BlockhashNotFound, result.err);
+    }
+
+    // Gate off: the nonce is recognized and checkAge succeeds.
+    {
+        const result = try checkAge(
+            allocator,
+            &transaction,
+            .{ .account_shared_data_map = &account_map },
+            &blockhash_queue,
+            0,
+            &next_durable_nonce,
+            5001,
+            false,
+        );
+        defer if (result.ok) |account| allocator.free(account.account.data);
+        try std.testing.expect(result == .ok);
+        try std.testing.expectEqualSlices(u8, &nonce_key.data, &result.ok.?.pubkey.data);
+    }
+}
+
 test "checkFeePayer: happy path fee payer only" {
     const allocator = std.testing.allocator;
 
@@ -767,6 +935,7 @@ test "checkFeePayer: happy path fee payer only" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .num_static_account_keys = 1,
         .is_simple_vote_transaction = false,
     };
     defer transaction.accounts.deinit(allocator);
@@ -825,6 +994,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .num_static_account_keys = 1,
         .is_simple_vote_transaction = false,
     };
     defer transaction.accounts.deinit(allocator);
@@ -895,6 +1065,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{},
         .num_lookup_tables = 0,
+        .num_static_account_keys = 1,
         .is_simple_vote_transaction = false,
     };
     defer transaction.accounts.deinit(allocator);

@@ -2,6 +2,7 @@ const sig = @import("../../sig.zig");
 const std = @import("std");
 const std14 = @import("std14");
 const builtin = @import("builtin");
+const build_options = @import("build-options");
 
 pub const pippenger = @import("pippenger.zig");
 pub const straus = @import("straus.zig");
@@ -20,6 +21,13 @@ const avx512 = @import("avx512.zig");
 const has_avx512 = builtin.cpu.arch == .x86_64 and
     std.Target.x86.featureSetHas(builtin.cpu.features, .avx512ifma) and
     std.Target.x86.featureSetHas(builtin.cpu.features, .avx512vl);
+comptime {
+    if (builtin.cpu.arch == .x86_64 and !has_avx512 and !build_options.allow_no_avx512)
+        @compileError(
+            "Target lacks AVX-512 (avx512ifma + avx512vl) required for the fast ed25519 path. " ++
+                "Re-build with -Dallow-no-avx512 to opt in to the slower generic fallback.",
+        );
+}
 pub const use_avx125 = has_avx512 and builtin.zig_backend == .stage2_llvm;
 
 // avx512 implementation relies on llvm specific tricks

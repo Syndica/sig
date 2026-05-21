@@ -653,8 +653,8 @@ fn executeTxnContext(
     const msg_hash, const compute_budget_instruction_details = switch (preprocessTransaction(
         transaction,
         .skip_sig_verify,
-        feature_set.active(.static_instruction_limit, slot),
-        feature_set.active(.limit_instruction_accounts, slot),
+        &feature_set,
+        slot,
     )) {
         .ok => |hash| hash,
         .err => |err| return serializeSanitizationError(err),

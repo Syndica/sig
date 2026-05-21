@@ -11,6 +11,18 @@ pub fn build(b: *Build) void {
     // Disabled by default due to it slowing down test-vector execution.
     const enable_fuzz = b.option(bool, "enable-fuzz", "Enables SanCov points for fuzzing and tracing") orelse false;
     const include_sig = !(b.option(bool, "no-sig", "Exclude sig from the `run` executable (builds faster)") orelse false);
+    const allow_no_sha = b.option(
+        bool,
+        "allow-no-sha",
+        "Forwarded to the sig dependency. Opt in to a slower software fallback when the " ++
+            "target lacks the x86 SHA extension.",
+    ) orelse (optimize == .Debug);
+    const allow_no_avx512 = b.option(
+        bool,
+        "allow-no-avx512",
+        "Forwarded to the sig dependency. Opt in to a slower generic ed25519 path when the " ++
+            "target lacks AVX-512.",
+    ) orelse (optimize == .Debug);
 
     const build_options = b.addOptions();
     build_options.addOption(bool, "include_sig", include_sig);
@@ -30,6 +42,8 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
         .@"enable-tsan" = false,
         .ledger = .hashmap,
+        .@"allow-no-sha" = allow_no_sha,
+        .@"allow-no-avx512" = allow_no_avx512,
     });
     const sig_mod = sig_dep.module("sig");
 

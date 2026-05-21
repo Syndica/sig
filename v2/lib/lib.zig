@@ -1,7 +1,16 @@
-const std = @import("std");
-
 comptime {
-    _ = std.testing.refAllDecls(@This());
+    if (@import("builtin").is_test) {
+        _ = @import("collections.zig");
+        _ = @import("crypto.zig");
+        _ = @import("gossip.zig");
+        _ = @import("ipc.zig");
+        _ = @import("linux.zig");
+        _ = @import("net.zig");
+        _ = @import("shred.zig");
+        _ = @import("solana.zig");
+        _ = @import("telemetry.zig");
+        _ = @import("util.zig");
+    }
 }
 
 pub const net = @import("net.zig");
@@ -12,6 +21,7 @@ pub const gossip = @import("gossip.zig");
 pub const ipc = @import("ipc.zig");
 pub const linux = @import("linux.zig");
 pub const util = @import("util.zig");
+pub const collections = @import("collections.zig");
 pub const telemetry = @import("telemetry.zig");
 
 comptime {
