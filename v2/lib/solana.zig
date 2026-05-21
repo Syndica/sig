@@ -1,7 +1,12 @@
-const std = @import("std");
-
 comptime {
-    _ = std.testing.refAllDecls(@This());
+    if (@import("builtin").is_test) {
+        _ = @import("solana/bincode.zig");
+        _ = @import("solana/cluster.zig");
+        _ = @import("solana/hash.zig");
+        _ = @import("solana/leader_schedule.zig");
+        _ = @import("solana/pubkey.zig");
+        _ = @import("solana/signature.zig");
+    }
 }
 
 pub const bincode = @import("solana/bincode.zig");

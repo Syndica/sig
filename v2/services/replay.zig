@@ -158,7 +158,8 @@ const BlockTree = struct {
     ) ?*Node {
         std.debug.assert(self.consensus_rooted_block != .null);
 
-        const root_node: *Node = &self.node_pool.buf[@intFromEnum(self.consensus_rooted_block)].item;
+        const root_node_index = @intFromEnum(self.consensus_rooted_block);
+        const root_node = &self.node_pool.buf[root_node_index].item;
 
         return self.findUnrootedParentRecursive(
             root_node,
@@ -471,7 +472,10 @@ const MerkleForest = struct {
         self.assertCounts();
         defer self.assertCounts();
 
-        const map_result = self.map.getOrPutAssumeCapacityAdapted(&new_fec_set.merkle_root, map_ctx);
+        const map_result = self.map.getOrPutAssumeCapacityAdapted(
+            &new_fec_set.merkle_root,
+            map_ctx,
+        );
         if (map_result.found_existing) return .node_already_known;
 
         const node = try self.pool.create();

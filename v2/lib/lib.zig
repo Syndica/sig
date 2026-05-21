@@ -1,7 +1,16 @@
-const std = @import("std");
-
 comptime {
-    _ = std.testing.refAllDecls(@This());
+    if (@import("builtin").is_test) {
+        _ = @import("collections.zig");
+        _ = @import("crypto.zig");
+        _ = @import("gossip.zig");
+        _ = @import("ipc.zig");
+        _ = @import("linux.zig");
+        _ = @import("net.zig");
+        _ = @import("shred.zig");
+        _ = @import("solana.zig");
+        _ = @import("telemetry.zig");
+        _ = @import("util.zig");
+    }
 }
 
 pub const net = @import("net.zig");
@@ -24,10 +33,6 @@ comptime {
     _ = ipc;
     _ = linux;
     _ = telemetry;
-}
-
-comptime {
-    _ = std.testing.refAllDecls(@This());
 }
 
 pub const test_data_dir = "../data/test-data/";
