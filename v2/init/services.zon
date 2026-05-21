@@ -6,10 +6,15 @@
         .net_to_gossip = .net_pair,
         .gossip_config = .gossip_config,
 
-        .deshredded_out = .deshredded_out,
-
         .gossip_to_snapshot = .snapshot_source_ring,
         .snapshot_config = .snapshot_config,
+
+        .snapshot_to_accounts_db = .snapshot_ready_ring,
+        .rooted_config = .accounts_db_config,
+        .account_pool = .account_pool,
+
+        .replay_accounts_db_lookup = .account_lookup,
+        .deshredded_out = .deshredded_out,
 
         .telemetry = .telemetry,
     },
@@ -50,6 +55,8 @@
             .name = .replay,
             .regions = .{
                 .{ .name = .deshredded_out, .access = .rw },
+                .{ .name = .replay_accounts_db_lookup, .access = .rw },
+                .{ .name = .telemetry, .access = .rw },
             },
         },
         .{
@@ -57,6 +64,18 @@
             .regions = .{
                 .{ .name = .snapshot_config, .access = .readonly },
                 .{ .name = .gossip_to_snapshot, .access = .rw },
+                .{ .name = .snapshot_to_accounts_db, .access = .rw },
+                .{ .name = .telemetry, .access = .rw },
+            },
+        },
+        .{
+            .name = .accounts_db,
+            .regions = .{
+                .{ .name = .snapshot_config, .access = .readonly },
+                .{ .name = .rooted_config, .access = .rw },
+                .{ .name = .account_pool, .access = .rw },
+                .{ .name = .snapshot_to_accounts_db, .access = .rw },
+                .{ .name = .replay_accounts_db_lookup, .access = .rw },
                 .{ .name = .telemetry, .access = .rw },
             },
         },

@@ -32,13 +32,9 @@ pub fn wallclock(comptime unit: Unit) u64 {
 }
 
 fn clockGetTime(clock_id: linux.clockid_t, comptime unit: Unit) u64 {
-    var ts: linux.timespec = undefined;
-    const ret = linux.clock_gettime(clock_id, &ts);
-
-    switch (linux.E.init(ret)) {
-        .SUCCESS => {},
-        else => |err| std.debug.panic("clock_gettime failed: {}", .{err}),
-    }
+    const ts = std.posix.clock_gettime(clock_id) catch |err| {
+        std.debug.panic("clock_gettime failed: {}", .{err});
+    };
 
     const sec: u64 = @intCast(ts.sec);
     const nsec: u64 = @intCast(ts.nsec);

@@ -1,5 +1,9 @@
 const std = @import("std");
 const lib = @import("lib.zig");
+const tracy = @import("tracy");
+
+const Slot = lib.solana.Slot;
+const Hash = lib.solana.Hash;
 
 pub const download = @import("snapshot/download.zig");
 
@@ -51,5 +55,21 @@ pub const SnapshotConfig = extern struct {
     pub fn knownValidators(self: *const SnapshotConfig) KnownValidators {
         if (self.known_validators_allow_all) return .allow_all;
         return .{ .set = self.known_validators_buffer[0..self.known_validators_len] };
+    }
+};
+
+// Holds which snapshot to load from the SnapshotConfig.folder
+pub const SnapshotReadyRing = lib.ipc.Ring(1, ReadySnapshot);
+
+pub const ReadySnapshot = extern struct {
+    slot: Slot,
+    hash: Hash,
+
+    pub fn format(self: *const ReadySnapshot, writer: *std.Io.Writer) !void {
+        return try writer.print("snapshot-{d}-{f}.tar.zst", .{ self.slot, self.hash });
+    }
+
+    pub fn name(self: *const ReadySnapshot, buf: []u8) ![]const u8 {
+        return try std.fmt.bufPrint(buf, "{f}", .{self});
     }
 };

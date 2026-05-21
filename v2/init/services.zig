@@ -194,6 +194,15 @@ pub const Region = union(enum) {
 
     deshredded_out,
 
+    account_lookup,
+    accounts_db_config: struct {
+        file: []const u8,
+        memory: usize,
+    },
+    account_pool: struct {
+        memory: usize,
+    },
+
     snapshot_config: struct {
         folder_path: []const u8,
         cluster: lib.solana.Cluster,
@@ -201,6 +210,7 @@ pub const Region = union(enum) {
     },
 
     snapshot_source_ring: void,
+    snapshot_ready_ring: void,
 
     telemetry: tel.Region.InitParams,
 
@@ -212,6 +222,11 @@ pub const Region = union(enum) {
             .deshredded_out => @sizeOf(lib.shred.DeshredRing),
             .snapshot_config => @sizeOf(lib.snapshot.SnapshotConfig),
             .snapshot_source_ring => @sizeOf(lib.snapshot.SnapshotSourceRing),
+            .snapshot_ready_ring => @sizeOf(lib.snapshot.SnapshotReadyRing),
+            .account_lookup => @sizeOf(lib.accounts_db.AccountLookups),
+                .accounts_db_config => |cfg| @sizeOf(lib.accounts_db.RootedConfig) + cfg.memory,
+                .account_pool => |cfg| @sizeOf(lib.accounts_db.AccountPool) + cfg.memory,
+ 
             .telemetry => |params| params.info().regionSize(),
         };
     }
@@ -303,10 +318,39 @@ pub const Region = union(enum) {
                     }
                 }
             },
+            .snapshot_ready_ring => {
+                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotReadyRing));
+                const data: *lib.snapshot.SnapshotReadyRing = @ptrCast(buf);
+                data.init();
+            },
             .snapshot_source_ring => {
                 std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotSourceRing));
                 const data: *lib.snapshot.SnapshotSourceRing = @ptrCast(buf);
                 data.init();
+            },
+            .account_lookup => {
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.AccountLookups));
+                const data: *lib.accounts_db.AccountLookups = @ptrCast(buf);
+
+                data.in.init();
+                data.out.init();
+            },
+            .accounts_db_config => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.RootedConfig) + cfg.memory);
+                const data: *lib.accounts_db.RootedConfig = @ptrCast(buf);
+
+                data.file_len = @intCast(cfg.file.len);
+                @memcpy(data.file_path[0..cfg.file.len], cfg.file);
+
+                data.memory_len = cfg.memory;
+                // no need to zero-out memory as mmap should do that.
+            },
+
+            .account_pool => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.AccountPool) + cfg.memory);
+                const data: *lib.accounts_db.AccountPool = @ptrCast(buf);
+
+                data.init(cfg.memory);
             },
             .telemetry => |params| {
                 std.debug.assert(buf.len == params.info().regionSize());

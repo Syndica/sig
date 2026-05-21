@@ -6,6 +6,9 @@ const tel = lib.telemetry;
 const download = lib.snapshot.download;
 
 const SnapshotSourceRing = lib.snapshot.SnapshotSourceRing;
+const SnapshotDataRing = lib.snapshot.SnapshotDataRing;
+const SnapshotIter = lib.solana.snapshot.SnapshotIter;
+
 const Metrics = download.Metrics;
 const DownloadResult = download.DownloadResult;
 const Downloader = download.Downloader;
@@ -25,61 +28,71 @@ pub const ReadOnly = struct {
 
 pub const ReadWrite = struct {
     gossip_to_snapshot: *SnapshotSourceRing,
+    snapshot_to_accounts_db: *SnapshotDataRing,
     tel: *tel.Region,
 };
 
 pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
-    const logger = rw.tel.acquireLogger(@tagName(name), "snapshot");
+    const logger = rw.tel.acquireLogger(@tagName(name), "main");
     const metrics = rw.tel.metricAppender().appendFields(Metrics, Metrics.fields_config);
-
     rw.tel.signalReady();
 
-    const snapshot_dir = ro.config.folder_buffer[0..ro.config.folder_len];
+    const snapshot_dir_path = ro.config.folder_buffer[0..ro.config.folder_len];
     const known_validators = ro.config.knownValidators();
 
     const result: DownloadResult = result: {
-        var snapshot_dir_handle = try std.fs.cwd().makeOpenPath(snapshot_dir, .{ .iterate = true });
-        defer snapshot_dir_handle.close();
+        var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_path, .{ .iterate = true });
+        defer snapshot_dir.close();
 
-        logger.info().logf("snapshot path {s}", .{snapshot_dir});
+        logger.info().logf("snapshot path {s}", .{snapshot_dir_path});
 
-        if (try download.findExistingSnapshot(snapshot_dir_handle)) |existing| {
+        if (try download.findExistingSnapshot(snapshot_dir)) |existing| {
             break :result .{ .already_exists = existing };
         }
 
         var downloader = try Downloader.init(
             rw.gossip_to_snapshot,
             known_validators,
-            snapshot_dir_handle,
+            snapshot_dir,
             metrics,
-            logger,
+            .from(logger),
         );
         defer downloader.deinit();
 
         break :result try downloader.run();
     };
 
-    switch (result) {
-        .already_exists => |existing| {
+    const ready_snapshot = switch (result) {
+        .already_exists => |existing| blk: {
             logger.info().logf("snapshot already exists, skipping download name={f}", .{
                 existing,
             });
+            break :blk existing;
         },
-        .downloaded => |snapshot| {
+        .downloaded => |snapshot| blk: {
             logger.info().logf("snapshot download completed slot={d} hash={f} path={s}/{f}", .{
                 snapshot.slot,
                 snapshot.hash,
-                snapshot_dir,
+                snapshot_dir_path,
                 snapshot,
             });
+            break :blk snapshot;
         },
         .failed => |reason| {
             logger.err().logf("snapshot download failed reason={s}", .{
                 @tagName(reason),
             });
+            return error.SnapshotDownloadFailed;
         },
+    };
+
+    {
+        var ready_snapshot_writer = rw.snapshot_to_accounts_db.get(.writer);
+        const ready_ptr = ready_snapshot_writer.next() orelse unreachable;
+        ready_ptr.* = ready_snapshot;
+        ready_snapshot_writer.markUsed();
     }
 
-    // TODO: load snapshot and stream to accountsdb service.
+    logger.info().logf("snapshot service finished", .{});
     while (true) std.atomic.spinLoopHint();
 }

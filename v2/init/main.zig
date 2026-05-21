@@ -32,6 +32,8 @@ const Config = struct {
     shred_network: ShredNetwork,
 
     snapshot: Snapshot,
+    accounts_db: AccountsDb,
+
     telemetry: Telemetry,
 
     const SandboxingMode = enum { sandboxed, threaded };
@@ -52,6 +54,29 @@ const Config = struct {
     const Snapshot = struct {
         folder: []const u8,
         known_validators: []const []const u8,
+    };
+
+    const AccountsDb = struct {
+        file: []const u8,
+        rooted: MemorySize,
+        unrooted: MemorySize,
+
+        // For nicer initialization of constants (instead of x * 1024 * !024 * 1024)
+        const MemorySize = union(enum) {
+            bytes: usize,
+            kb: usize,
+            mb: usize,
+            gb: usize,
+
+            fn toBytes(self: MemorySize) usize {
+                return switch (self) {
+                    .bytes => |b| b,
+                    .kb => |b| b * 1024,
+                    .mb => |b| b * 1024 * 1024,
+                    .gb => |b| b * 1024 * 1024 * 1024,
+                };
+            }
+        };
     };
 
     pub fn format(self: Config, writer: *std.Io.Writer) !void {
@@ -113,6 +138,7 @@ pub fn main() !void {
         .{ .service = .gossip },
         .{ .service = .replay },
         .{ .service = .snapshot },
+        .{ .service= .accounts_db },
         .{ .service = .telemetry },
     };
 
@@ -125,7 +151,7 @@ pub fn main() !void {
             .shred_version = gossip_cluster_info.shred_version,
         },
 
-        // net -> gossip
+        // net <-> gossip
         .net_to_gossip = .{ .port = config.gossip.port },
         // gossip constants
         .gossip_config = .{
@@ -134,17 +160,27 @@ pub fn main() !void {
             .keypair = .fromKeyPair(.generate()),
             .turbine_recv_port = config.shred_network.recv_port,
         },
-
+        
+        .gossip_to_snapshot = {},
         .snapshot_config = .{
             .folder_path = config.snapshot.folder,
             .cluster = config.cluster,
             .known_validators = config.snapshot.known_validators,
         },
 
-        .gossip_to_snapshot = {},
+        .snapshot_to_accounts_db = {},
+        .rooted_config = .{
+            .file = config.accounts_db.file,
+            .memory = config.accounts_db.rooted.toBytes(),
+        },
+        .account_pool = .{
+            .memory = config.accounts_db.unrooted.toBytes(),
+        },
 
         // shred receiver -> replay
         .deshredded_out = {},
+        // replay <-> accounts_db
+        .replay_accounts_db_lookup = {},
 
         .telemetry = .{
             .port = config.telemetry.port,
