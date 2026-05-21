@@ -31,6 +31,7 @@ const Config = struct {
     gossip: Gossip,
     shred_network: ShredNetwork,
 
+    snapshot: Snapshot,
     telemetry: Telemetry,
 
     const SandboxingMode = enum { sandboxed, threaded };
@@ -47,6 +48,15 @@ const Config = struct {
         port: u16,
         log_level: tel.log.Level,
     };
+
+    const Snapshot = struct {
+        folder: []const u8,
+        known_validators: []const []const u8,
+    };
+
+    pub fn format(self: Config, writer: *std.Io.Writer) !void {
+        try std.zon.stringify.serialize(self, .{ .whitespace = true }, writer);
+    }
 };
 
 pub fn main() !void {
@@ -87,7 +97,7 @@ pub fn main() !void {
     };
     defer std.zon.parse.free(allocator, config);
 
-    std.log.info("config: {}", .{config});
+    std.log.info("config: {f}", .{config});
 
     const gossip_cluster_info: lib.gossip.ClusterInfo =
         try .getFromEcho(config.gossip.port, config.cluster);
@@ -101,8 +111,9 @@ pub fn main() !void {
         .{ .service = .shred_receiver },
         .{ .service = .net },
         .{ .service = .gossip },
-        .{ .service = .telemetry },
         .{ .service = .replay },
+        .{ .service = .snapshot },
+        .{ .service = .telemetry },
     };
 
     const shared_regions = services.toSharedRegions(.{
@@ -124,6 +135,17 @@ pub fn main() !void {
             .turbine_recv_port = config.shred_network.recv_port,
         },
 
+        .snapshot_config = .{
+            .folder_path = config.snapshot.folder,
+            .cluster = config.cluster,
+            .known_validators = config.snapshot.known_validators,
+        },
+
+        .gossip_to_snapshot = {},
+
+        // shred receiver -> replay
+        .deshredded_out = {},
+
         .telemetry = .{
             .port = config.telemetry.port,
             .log_filters_encoded = log_filters.written(),
@@ -134,9 +156,6 @@ pub fn main() !void {
 
             .histogram_data_len = 4096 * 3,
         },
-
-        // shred receiver -> replay
-        .deshredded_out = {},
     });
 
     switch (config.sandboxing_mode) {

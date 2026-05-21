@@ -192,16 +192,27 @@ pub const Region = union(enum) {
         shred_version: u16,
     },
 
-    telemetry: tel.Region.InitParams,
     deshredded_out,
+
+    snapshot_config: struct {
+        folder_path: []const u8,
+        cluster: lib.solana.Cluster,
+        known_validators: []const []const u8,
+    },
+
+    snapshot_source_ring: void,
+
+    telemetry: tel.Region.InitParams,
 
     pub fn size(self: Region) usize {
         return switch (self) {
             .net_pair => @sizeOf(lib.net.Pair),
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
-            .telemetry => |params| params.info().regionSize(),
             .deshredded_out => @sizeOf(lib.shred.DeshredRing),
+            .snapshot_config => @sizeOf(lib.snapshot.SnapshotConfig),
+            .snapshot_source_ring => @sizeOf(lib.snapshot.SnapshotSourceRing),
+            .telemetry => |params| params.info().regionSize(),
         };
     }
 
@@ -235,17 +246,73 @@ pub const Region = union(enum) {
                 );
                 data.shred_version = cfg.shred_version;
             },
+            .deshredded_out => {
+                std.debug.assert(buf.len == @sizeOf(lib.shred.DeshredRing));
+                const data: *lib.shred.DeshredRing = @ptrCast(buf);
+                data.init();
+            },
+            .snapshot_config => |cfg| {
+                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotConfig));
+                const data: *lib.snapshot.SnapshotConfig = @ptrCast(buf);
 
+                if (cfg.known_validators.len == 0) {
+                    std.log.err(
+                        "known_validators must not be empty. Specify validator " ++
+                            "pubkeys, or \"*\" to opt in to untrusted snapshot sources.",
+                        .{},
+                    );
+                    return error.NoKnownValidators;
+                }
+                if (cfg.known_validators.len > lib.snapshot.SnapshotConfig.MAX_KNOWN_VALIDATORS) {
+                    return error.TooManyKnownValidators;
+                }
+
+                @memcpy(data.folder_buffer[0..cfg.folder_path.len], cfg.folder_path);
+                data.folder_len = @intCast(cfg.folder_path.len);
+                data.cluster = cfg.cluster;
+
+                const has_wildcard = for (cfg.known_validators) |entry| {
+                    if (std.mem.eql(u8, entry, "*")) break true;
+                } else false;
+
+                if (has_wildcard) {
+                    if (cfg.known_validators.len > 1) {
+                        std.log.warn(
+                            "known_validators contains \"*\" alongside other entries; " ++
+                                "\"*\" takes precedence, ignoring the rest.",
+                            .{},
+                        );
+                    }
+                    data.known_validators_allow_all = true;
+                    // NOTE: we zero out known_validators_len to make it clear that no validator pubkeys were provided.
+                    data.known_validators_len = 0;
+                } else {
+                    data.known_validators_allow_all = false;
+                    data.known_validators_len = @intCast(cfg.known_validators.len);
+                    for (
+                        cfg.known_validators,
+                        data.known_validators_buffer[0..cfg.known_validators.len],
+                    ) |pkstr, *pkptr| {
+                        pkptr.* = lib.solana.Pubkey.parseRuntime(pkstr) catch |err| {
+                            std.log.err(
+                                "invalid known_validator entry '{s}': {s}",
+                                .{ pkstr, @errorName(err) },
+                            );
+                            return err;
+                        };
+                    }
+                }
+            },
+            .snapshot_source_ring => {
+                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotSourceRing));
+                const data: *lib.snapshot.SnapshotSourceRing = @ptrCast(buf);
+                data.init();
+            },
             .telemetry => |params| {
                 std.debug.assert(buf.len == params.info().regionSize());
                 const data: *tel.Region = @ptrCast(buf);
 
                 data.init(params);
-            },
-            .deshredded_out => {
-                std.debug.assert(buf.len == @sizeOf(lib.shred.DeshredRing));
-                const data: *lib.shred.DeshredRing = @ptrCast(buf);
-                data.init();
             },
         };
     }
