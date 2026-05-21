@@ -1657,12 +1657,7 @@
         .name = "limit_instruction_accounts",
         .pubkey = "6aHuNsUmwSzCEMjrBzBCYaxHAyAcQBjVES92JigHBDuC",
         .description = "SIMD-0406: Maximum instruction accounts",
-        .status = .unsupported,
-        .note =
-        \\ TODO: Medium Priority
-        \\ Not scheduled for activation.
-        \\ Run local fuzzing on implementation before marking as supported.
-        ,
+        .status = .supported,
     },
     .{
         .name = "validator_admission_ticket",
