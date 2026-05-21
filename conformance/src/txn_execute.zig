@@ -696,14 +696,21 @@ fn executeTxnContext(
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
-    const environment = TransactionExecutionEnvironment{
+    const status_checker_adapter = sig.runtime.StatusCacheStatusCheckerAdapter{
         .ancestors = &ancestors,
-        .feature_set = &feature_set,
         .status_cache = &status_cache,
+    };
+    const epoch_stake_reader_adapter = sig.runtime.EpochStakeReaderAdapter{
+        .epoch_stakes = &current_epoch_stakes,
+    };
+
+    const environment = TransactionExecutionEnvironment{
+        .feature_set = &feature_set,
+        .status_checker = status_checker_adapter.statusChecker(),
         .sysvar_cache = &sysvar_cache,
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,
-        .epoch_stakes = &current_epoch_stakes,
+        .epoch_stake_reader = epoch_stake_reader_adapter.epochStakeReader(),
         .vm_environment = &vm_environment,
         .next_vm_environment = null,
 
@@ -729,11 +736,14 @@ fn executeTxnContext(
     };
 
     var program_map = sig.runtime.program_loader.ProgramMap.empty;
+    const account_reader_adapter = sig.runtime.SlotAccountReaderAdapter{
+        .reader = account_store.forSlot(slot, &ancestors).reader(),
+    };
     const txn_result = try sig.runtime.transaction_execution.loadAndExecuteTransaction(
         allocator,
         allocator,
         &runtime_transaction,
-        account_store.forSlot(slot, &ancestors).reader(),
+        account_reader_adapter.accountReader(),
         &environment,
         &config,
         &program_map,
