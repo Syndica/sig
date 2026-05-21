@@ -216,7 +216,7 @@ pub const Region = union(enum) {
 
     pub fn size(self: Region) usize {
         return switch (self) {
-            .telemetry => |cfg| cfg.regionSize(),
+            .telemetry => |params| params.info().regionSize(),
             .net_pair => @sizeOf(lib.net.Pair),
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
@@ -225,10 +225,8 @@ pub const Region = union(enum) {
             .snapshot_source_ring => @sizeOf(lib.snapshot.SnapshotSourceRing),
             .snapshot_ready_ring => @sizeOf(lib.snapshot.SnapshotReadyRing),
             .account_lookup => @sizeOf(lib.accounts_db.AccountLookups),
-                .accounts_db_config => |cfg| @sizeOf(lib.accounts_db.RootedConfig) + cfg.memory,
-                .account_pool => |cfg| @sizeOf(lib.accounts_db.AccountPool) + cfg.memory,
- 
-            .telemetry => |params| params.info().regionSize(),
+            .accounts_db_config => |cfg| @sizeOf(lib.accounts_db.RootedConfig) + cfg.memory,
+            .account_pool => |cfg| @sizeOf(lib.accounts_db.AccountPool) + cfg.memory,
         };
     }
 
@@ -236,6 +234,12 @@ pub const Region = union(enum) {
         std.log.info("Initialising: {}", .{std.meta.activeTag(self)});
 
         return switch (self) {
+            .telemetry => |params| {
+                std.debug.assert(buf.len == params.info().regionSize());
+                const data: *tel.Region = @ptrCast(buf);
+
+                data.init(params);
+            },
             .net_pair => |cfg| {
                 std.debug.assert(buf.len == @sizeOf(lib.net.Pair));
                 const data: *lib.net.Pair = @ptrCast(buf);
@@ -329,6 +333,7 @@ pub const Region = union(enum) {
                 const data: *lib.snapshot.SnapshotSourceRing = @ptrCast(buf);
                 data.init();
             },
+
             .account_lookup => {
                 std.debug.assert(buf.len == @sizeOf(lib.accounts_db.AccountLookups));
                 const data: *lib.accounts_db.AccountLookups = @ptrCast(buf);
@@ -346,47 +351,11 @@ pub const Region = union(enum) {
                 data.memory_len = cfg.memory;
                 // no need to zero-out memory as mmap should do that.
             },
-
             .account_pool => |cfg| {
                 std.debug.assert(buf.len == @sizeOf(lib.accounts_db.AccountPool) + cfg.memory);
                 const data: *lib.accounts_db.AccountPool = @ptrCast(buf);
 
                 data.init(cfg.memory);
-            },
-            .telemetry => |params| {
-                std.debug.assert(buf.len == params.info().regionSize());
-                const data: *tel.Region = @ptrCast(buf);
-
-                data.init(params);
-            },
-            .snapshot_config => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotConfig));
-                const data: *lib.snapshot.SnapshotConfig = @ptrCast(buf);
-
-                @memcpy(data.folder_buffer[0..cfg.folder_path.len], cfg.folder_path);
-                data.folder_len = @intCast(cfg.folder_path.len);
-                data.cluster = cfg.cluster;
-            },
-            .snapshot_source_ring => {
-                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotSourceRing));
-                const data: *lib.snapshot.SnapshotSourceRing = @ptrCast(buf);
-
-                data.init();
-            },
-            .snapshot_decode_ring => {
-                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotDecodeRing));
-                const data: *lib.snapshot.SnapshotDecodeRing = @ptrCast(buf);
-
-                data.init();
-            },
-            .accounts_db_config => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.DbConfig) + cfg.memory);
-                const data: *lib.accounts_db.DbConfig = @ptrCast(buf);
-
-                @memcpy(data.file_path[0..cfg.file_path.len], cfg.file_path);
-                data.file_path_len = @intCast(cfg.file_path.len);
-                data.memory_len = @intCast(cfg.memory);
-                // assume remaining memory is zero-faulted
             },
         };
     }
