@@ -125,6 +125,7 @@ pub fn build(b: *Build) !void {
         .root_source_file = b.path("lib/lib.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
         .imports = &.{
             .{ .name = "base58", .module = base58_mod },
             .{ .name = "binkode", .module = binkode_mod },
