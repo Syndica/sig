@@ -8,12 +8,12 @@ const test_install_dir: Build.Step.InstallArtifact.Options.Dir = .{
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const use_llvm = b.option(
+    const use_kcov = b.option(bool, "kcov", "Use kcov to run the tests.") orelse false;
+    const use_llvm: ?bool = b.option(
         bool,
         "use-llvm",
         "Force usage of LLVM (currently ignored for some artifacts).",
-    );
-    const use_kcov = b.option(bool, "kcov", "Use kcov to run the tests.") orelse false;
+    ) orelse if (use_kcov) true else null;
     const artifact_opts: ExeOutput.InitOptions = .{
         .no_bin = b.option(
             bool,
