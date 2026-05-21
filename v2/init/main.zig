@@ -127,7 +127,7 @@ pub fn main() !void {
         .telemetry = .{
             .port = config.telemetry.port,
             .log_filters_encoded = log_filters.written(),
-            .service_count = service_instances.len - 1,
+            .service_count = services.telemetryServiceCount(service_instances),
 
             .id_mem_len = 4096 * 16,
             .gauges_len = 4096 * 2,
