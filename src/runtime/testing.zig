@@ -141,7 +141,9 @@ fn initTransactionContext(
 
     // Create EpochStakes
     const epoch_stakes = try allocator.create(EpochStakes);
+    errdefer allocator.destroy(epoch_stakes);
     epoch_stakes.* = try createEpochStakes(allocator, params.epoch_stakes);
+    errdefer epoch_stakes.deinit(allocator);
 
     // Create SysvarCache
     const sysvar_cache = try allocator.create(SysvarCache);
@@ -199,7 +201,9 @@ fn initTransactionContext(
         .programs_allocator = allocator,
         .feature_set = feature_set,
         .sysvar_cache = sysvar_cache,
-        .epoch_stakes = epoch_stakes,
+        .epoch_stake_reader = (sig.runtime.EpochStakeReaderAdapter{
+            .epoch_stakes = epoch_stakes,
+        }).epochStakeReader(),
         .vm_environment = params.vm_environment,
         .next_vm_environment = params.next_vm_environment,
         .program_map = program_map,
@@ -238,8 +242,9 @@ pub fn deinitTransactionContext(
     tc.sysvar_cache.deinit(allocator);
     allocator.destroy(tc.sysvar_cache);
 
-    tc.epoch_stakes.deinit(allocator);
-    allocator.destroy(tc.epoch_stakes);
+    const epoch_stakes: *const EpochStakes = @ptrCast(@alignCast(tc.epoch_stake_reader.ctx));
+    epoch_stakes.deinit(allocator);
+    allocator.destroy(epoch_stakes);
 
     for (tc.accounts) |a| {
         a.account.deinit(allocator);
@@ -259,7 +264,7 @@ pub fn createEpochStakes(
         .node_id_to_vote_accounts = .{},
         .epoch_authorized_voters = .{},
     };
-    errdefer self.stakes.deinit(allocator);
+    errdefer self.deinit(allocator);
 
     for (params) |param| {
         self.total_stake += param.stake;

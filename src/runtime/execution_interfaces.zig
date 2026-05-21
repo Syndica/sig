@@ -28,6 +28,20 @@ pub const AccountReader = struct {
     }
 };
 
+pub const EpochStakeReader = struct {
+    ctx: *const anyopaque,
+    totalStakeFn: *const fn (*const anyopaque) u64,
+    stakeForVoteAccountFn: *const fn (*const anyopaque, Pubkey) u64,
+
+    pub fn totalStake(self: EpochStakeReader) u64 {
+        return self.totalStakeFn(self.ctx);
+    }
+
+    pub fn stakeForVoteAccount(self: EpochStakeReader, pubkey: Pubkey) u64 {
+        return self.stakeForVoteAccountFn(self.ctx, pubkey);
+    }
+};
+
 pub const StatusChecker = struct {
     ctx: *const anyopaque,
     checkFn: *const fn (

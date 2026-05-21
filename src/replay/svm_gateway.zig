@@ -74,6 +74,7 @@ pub const SvmGateway = struct {
         next_vm_environment: ?vm.Environment,
         programs: ProgramMap,
         status_checker_adapter: sig.runtime.StatusCacheStatusCheckerAdapter,
+        epoch_stake_reader_adapter: sig.runtime.EpochStakeReaderAdapter,
 
         /// This is an ugly solution, but it doesn't actually lead to any issues
         /// with contention due to how replay works. Long term, this will be
@@ -130,6 +131,7 @@ pub const SvmGateway = struct {
                     .ancestors = params.ancestors,
                     .status_cache = params.status_cache,
                 },
+                .epoch_stake_reader_adapter = .{ .epoch_stakes = params.epoch_stakes },
 
                 // blockhash queue is only written when freezing a slot,
                 // which comes *after* executing all transactions, not
@@ -167,7 +169,7 @@ pub const SvmGateway = struct {
             .sysvar_cache = &self.state.sysvar_cache,
             .rent_collector = self.params.rent_collector,
             .blockhash_queue = self.state.blockhash_queue.get(),
-            .epoch_stakes = self.params.epoch_stakes,
+            .epoch_stake_reader = self.state.epoch_stake_reader_adapter.epochStakeReader(),
             .vm_environment = &self.state.vm_environment,
             .next_vm_environment = if (self.state.next_vm_environment) |env| &env else null,
 

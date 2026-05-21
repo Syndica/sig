@@ -21,6 +21,7 @@ const RentState = sig.core.RentCollector.RentState;
 
 const AccountReader = sig.runtime.execution_interfaces.AccountReader;
 const StatusChecker = sig.runtime.execution_interfaces.StatusChecker;
+const EpochStakeReader = sig.runtime.execution_interfaces.EpochStakeReader;
 
 const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const FeatureSet = sig.core.FeatureSet;
@@ -81,7 +82,7 @@ pub const TransactionExecutionEnvironment = struct {
     sysvar_cache: *const SysvarCache,
     rent_collector: *const RentCollector,
     blockhash_queue: *const BlockhashQueue,
-    epoch_stakes: *const EpochStakes,
+    epoch_stake_reader: EpochStakeReader,
     vm_environment: *const vm.Environment,
     next_vm_environment: ?*const vm.Environment,
 
@@ -470,7 +471,7 @@ pub fn executeTransaction(
         .allocator = allocator,
         .programs_allocator = programs_allocator,
         .feature_set = environment.feature_set,
-        .epoch_stakes = environment.epoch_stakes,
+        .epoch_stake_reader = environment.epoch_stake_reader,
         .sysvar_cache = environment.sysvar_cache,
         .vm_environment = environment.vm_environment,
         .next_vm_environment = environment.next_vm_environment,
@@ -912,7 +913,9 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .sysvar_cache = &sysvar_cache,
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,
-        .epoch_stakes = &epoch_stakes,
+        .epoch_stake_reader = (sig.runtime.EpochStakeReaderAdapter{
+            .epoch_stakes = &epoch_stakes,
+        }).epochStakeReader(),
         .vm_environment = &.{
             .loader = .ALL_DISABLED,
             .config = .{},

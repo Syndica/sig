@@ -3,9 +3,11 @@ const sig = @import("../sig.zig");
 
 const AccountReader = sig.runtime.execution_interfaces.AccountReader;
 const AccountLoadError = sig.runtime.execution_interfaces.AccountLoadError;
+const EpochStakeReader = sig.runtime.execution_interfaces.EpochStakeReader;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const Ancestors = sig.core.Ancestors;
 const Hash = sig.core.Hash;
+const EpochStakes = sig.core.EpochStakes;
 const Pubkey = sig.core.Pubkey;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 const StatusCache = sig.core.StatusCache;
@@ -36,6 +38,34 @@ pub const SlotAccountReaderAdapter = struct {
         return AccountSharedData.fromAccount(allocator, &account) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
         };
+    }
+};
+
+pub const EpochStakeReaderAdapter = struct {
+    epoch_stakes: *const EpochStakes,
+
+    pub fn epochStakeReader(self: *const EpochStakeReaderAdapter) EpochStakeReader {
+        return .{
+            .ctx = self.epoch_stakes,
+            .totalStakeFn = totalStake,
+            .stakeForVoteAccountFn = stakeForVoteAccount,
+        };
+    }
+
+    fn totalStake(ctx: *const anyopaque) u64 {
+        const epoch_stakes: *const EpochStakes = @ptrCast(@alignCast(ctx));
+        return epoch_stakes.total_stake;
+    }
+
+    fn stakeForVoteAccount(ctx: *const anyopaque, pubkey: Pubkey) u64 {
+        const epoch_stakes: *const EpochStakes = @ptrCast(@alignCast(ctx));
+        // TODO(epoch_stake_interface): This preserves existing syscall behavior, but it may be a bug.
+        // It may need to be:
+        // epoch_stakes.stakes.vote_accounts.getDelegatedStake(vote_address.*);
+        return if (epoch_stakes.stakes.stake_accounts.getPtr(pubkey)) |delegation|
+            delegation.stake
+        else
+            0;
     }
 };
 
@@ -93,5 +123,46 @@ test "StatusCacheStatusCheckerAdapter" {
     try std.testing.expectEqual(
         TransactionError.AlreadyProcessed,
         status_checker.check(&msg_hash, &recent_blockhash),
+    );
+}
+
+test "EpochStakeReaderAdapter" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const vote_pubkey = Pubkey.initRandom(prng.random());
+    const other_vote_pubkey = Pubkey.initRandom(prng.random());
+
+    var epoch_stakes: EpochStakes = .{
+        .stakes = .EMPTY,
+        .total_stake = 246,
+        .node_id_to_vote_accounts = .empty,
+        .epoch_authorized_voters = .empty,
+    };
+    defer epoch_stakes.deinit(allocator);
+    try epoch_stakes.stakes.stake_accounts.put(allocator, vote_pubkey, .{
+        .voter_pubkey = vote_pubkey,
+        .stake = 123,
+        .activation_epoch = 0,
+        .deactivation_epoch = 0,
+        .deprecated_warmup_cooldown_rate = 0.0,
+    });
+    try epoch_stakes.stakes.stake_accounts.put(allocator, other_vote_pubkey, .{
+        .voter_pubkey = other_vote_pubkey,
+        .stake = 123,
+        .activation_epoch = 0,
+        .deactivation_epoch = 0,
+        .deprecated_warmup_cooldown_rate = 0.0,
+    });
+
+    const adapter = EpochStakeReaderAdapter{ .epoch_stakes = &epoch_stakes };
+    const reader = adapter.epochStakeReader();
+
+    try std.testing.expectEqual(246, reader.totalStake());
+    try std.testing.expectEqual(123, reader.stakeForVoteAccount(vote_pubkey));
+    try std.testing.expectEqual(123, reader.stakeForVoteAccount(other_vote_pubkey));
+    try std.testing.expectEqual(
+        0,
+        reader.stakeForVoteAccount(Pubkey.initRandom(prng.random())),
     );
 }
