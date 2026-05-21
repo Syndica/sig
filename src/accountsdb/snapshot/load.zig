@@ -358,6 +358,15 @@ fn insertFromSnapshotArchive(
     try account_data_buf.ensureTotalCapacity(allocator, 10 * 1024 * 1024);
     defer account_data_buf.deinit(allocator);
 
+    var progress_timer = try std.time.Timer.start();
+    const progress_interval_ns: u64 = 10 * std.time.ns_per_s;
+    var tar_files_seen: u64 = 0;
+    var account_files_seen: u64 = 0;
+    var account_records_seen: u64 = 0;
+    var skipped_accounts: u64 = 0;
+    var matched_accounts: u64 = 0;
+    var account_data_bytes_seen: u64 = 0;
+
     tar_loop: while (true) {
         const tar_hdr = blk: {
             // The tar iterator in 0.15 returns an error reading the headers from
@@ -392,6 +401,7 @@ fn insertFromSnapshotArchive(
                 .rounded_size = rounded_tar_size,
             };
         };
+        tar_files_seen += 1;
 
         // Read /version
         if (std.mem.eql(u8, tar_hdr.file_name, "version")) {
@@ -413,9 +423,17 @@ fn insertFromSnapshotArchive(
             defer inner_zone.deinit();
 
             if (maybe_status_cache) |_| return error.DuplicateStatusCache;
+            logger.info().logf(
+                "snapshot archive progress: decoding status cache archive={s} member={s} bytes={}",
+                .{ snapshot_path, tar_hdr.file_name, tar_hdr.file_size },
+            );
             // Read file content into memory for bincode deserialization
             maybe_status_cache = try StatusCache.decodeFromBincode(allocator, reader);
             try reader.skipBytes(tar_hdr.pad_len, .{});
+            logger.info().logf(
+                "snapshot archive progress: decoded status cache archive={s}",
+                .{snapshot_path},
+            );
 
             // Read /snapshot/{slot}/{slot}
         } else if (std.mem.eql(u8, tar_hdr.file_name, manifest_path.constSlice())) {
@@ -423,9 +441,17 @@ fn insertFromSnapshotArchive(
             defer inner_zone.deinit();
 
             if (maybe_manifest) |_| return error.DuplicateManifest;
+            logger.info().logf(
+                "snapshot archive progress: decoding manifest archive={s} member={s} bytes={}",
+                .{ snapshot_path, tar_hdr.file_name, tar_hdr.file_size },
+            );
             // Read file content into memory for bincode deserialization
             maybe_manifest = try Manifest.decodeFromBincode(allocator, reader);
             try reader.skipBytes(tar_hdr.pad_len, .{});
+            logger.info().logf(
+                "snapshot archive progress: decoded manifest archive={s} account_file_count={}",
+                .{ snapshot_path, maybe_manifest.?.accounts_db_fields.file_map.count() },
+            );
 
             if (maybe_manifest.?.accounts_db_fields.slot != slot_and_hash.slot)
                 return error.MismatchingManifestSlot;
@@ -463,6 +489,19 @@ fn insertFromSnapshotArchive(
             if (info.length > tar_hdr.file_size)
                 return error.InvalidAccountFile;
 
+            account_files_seen += 1;
+            logger.info().logf(
+                "snapshot archive progress: account file start archive={s} member={s} account_files={} tar_files={} file_bytes={} data_bytes={}",
+                .{
+                    snapshot_path,
+                    tar_hdr.file_name,
+                    account_files_seen,
+                    tar_files_seen,
+                    tar_hdr.file_size,
+                    info.length,
+                },
+            );
+
             // Insert accounts in AccountFile into Rooted db
             var account_file_stream = std14.limitedReader(reader, info.length);
             while (account_file_stream.bytes_left > 0) {
@@ -485,6 +524,8 @@ fn insertFromSnapshotArchive(
                     },
                     .little,
                 ) catch return error.InvalidAccountFile;
+                account_records_seen += 1;
+                account_data_bytes_seen += header.data_len;
 
                 // Header's hash is obsolete and always zero:
                 // https://github.com/anza-xyz/agave/blob/v3.0/accounts-db/src/append_vec.rs#L1335-L1339
@@ -510,13 +551,32 @@ fn insertFromSnapshotArchive(
                 } else false;
                 const should_load = owner_ok or tracked_pubkeys.contains(header.pubkey);
                 if (!should_load) {
+                    skipped_accounts += 1;
                     const skip = @min(
                         account_file_stream.bytes_left,
                         std.mem.alignForward(usize, header.data_len, 8),
                     );
                     r.skipBytes(skip, .{}) catch return error.InvalidAccountFile;
+                    if (account_records_seen % 100_000 == 0 and
+                        progress_timer.read() >= progress_interval_ns)
+                    {
+                        logger.info().logf(
+                            "snapshot archive progress: scanning archive={s} account_files={} account_records={} matched={} skipped={} account_data_bytes_seen={} current_member={s}",
+                            .{
+                                snapshot_path,
+                                account_files_seen,
+                                account_records_seen,
+                                matched_accounts,
+                                skipped_accounts,
+                                account_data_bytes_seen,
+                                tar_hdr.file_name,
+                            },
+                        );
+                        progress_timer.reset();
+                    }
                     continue;
                 }
+                matched_accounts += 1;
 
                 if (header.data_len > sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH)
                     return error.InvalidAccount;
@@ -544,9 +604,35 @@ fn insertFromSnapshotArchive(
                         else => return error.InvalidAccount,
                     },
                 });
+                if (progress_timer.read() >= progress_interval_ns) {
+                    logger.info().logf(
+                        "snapshot archive progress: inserting archive={s} account_files={} account_records={} matched={} skipped={} account_data_bytes_seen={} current_member={s}",
+                        .{
+                            snapshot_path,
+                            account_files_seen,
+                            account_records_seen,
+                            matched_accounts,
+                            skipped_accounts,
+                            account_data_bytes_seen,
+                            tar_hdr.file_name,
+                        },
+                    );
+                    progress_timer.reset();
+                }
             }
             const remaining_and_pad = (tar_hdr.file_size - info.length) + tar_hdr.pad_len;
             try reader.skipBytes(remaining_and_pad, .{});
+            logger.info().logf(
+                "snapshot archive progress: account file done archive={s} member={s} account_files={} account_records={} matched={} skipped={}",
+                .{
+                    snapshot_path,
+                    tar_hdr.file_name,
+                    account_files_seen,
+                    account_records_seen,
+                    matched_accounts,
+                    skipped_accounts,
+                },
+            );
 
             // Read unknown tar file
         } else {
