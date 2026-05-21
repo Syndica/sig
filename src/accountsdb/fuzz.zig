@@ -225,18 +225,9 @@ pub fn run(
                     break :blk .{ key, tracked_accounts.get(key).? };
                 };
 
-                var ancestors_sub = try ancestors.clone(allocator);
+                var ancestors_sub: sig.core.Ancestors = .EMPTY;
                 defer ancestors_sub.deinit(allocator);
-                for (ancestors_sub.ancestors.keys()) |other_slot| {
-                    if (other_slot <= tracked_account.slot) continue;
-                    _ = ancestors_sub.ancestors.swapRemove(other_slot);
-                }
-                ancestors_sub.ancestors.sort(struct {
-                    ancestors_sub: []Slot,
-                    pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-                        return ctx.ancestors_sub[a] < ctx.ancestors_sub[b];
-                    }
-                }{ .ancestors_sub = ancestors_sub.ancestors.keys() });
+                try ancestors.subsetInto(tracked_account.slot, allocator, &ancestors_sub);
 
                 const account_reader_for_slot = account_store.reader().forSlot(&ancestors_sub);
                 const account =
@@ -314,8 +305,6 @@ fn readRandomAccounts(
 }
 
 test run {
-    if (true) return error.SkipZigTest; // flaky test
-
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     try run(std.testing.allocator, .FOR_TESTS, std.testing.random_seed, tmp_dir.dir, .{
