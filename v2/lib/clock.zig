@@ -40,8 +40,8 @@ pub fn wallclock(comptime unit: Unit) u64 {
 
 /// Initializes libc's clock path before services install seccomp.
 pub fn warmup() void {
-    _ = wallclock(.ns);
-    _ = monotonic(.ns);
+    std.mem.doNotOptimizeAway(wallclock(.ns));
+    std.mem.doNotOptimizeAway(monotonic(.ns));
 }
 
 fn clockGetTime(clock_id: linux.clockid_t, comptime unit: Unit) u64 {
