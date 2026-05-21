@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   test_kcov_linux:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,60 +33,58 @@ jobs:
           version: 0.15.2
           cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
-      - name: Install kcov
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y kcov
-
-      - name: Build
-        run:
-          zig build test -Dno-run -Dlong-tests -Denable-tsan=false -Dno-network-tests
+      - name: Build v1 tests
+        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=false -Dno-network-tests
           -Dallow-no-sha -Dallow-no-avx512 --summary all
 
+      - name: Build v2 tests
+        run: |
+          cd v2
+          zig build test -Dno-run -Duse-llvm=true -Dallow-no-sha -Dallow-no-avx512 --summary all
+
+      - name: Configure docker defaults
+        run: |
+          printf 'DOCKER_MOUNT=-v %s:%s -w %s -e HOME=%s -u %s\n' \
+            "$PWD" "$PWD" "$PWD" "$PWD" "$(id -u):$(id -g)" >> "$GITHUB_ENV"
+
       - name: Collect v1 coverage
-        run: bash scripts/kcov_ci.sh
+        run: |
+          docker run --security-opt seccomp=unconfined \
+            $DOCKER_MOUNT \
+            kcov/kcov \
+            bash scripts/kcov_ci.sh
 
       - name: Collect v2 coverage
         run: |
-          cd v2
-          zig build test -Dkcov -Dallow-no-sha -Dallow-no-avx512 --summary all
+          docker run --security-opt seccomp=unconfined \
+            $DOCKER_MOUNT \
+            kcov/kcov \
+            bash -c '
+              mkdir -p v2-kcov-output
+              for bin in v2/zig-out/bin/tests/*; do
+                echo "=> kcov: $bin"
+                kcov --collect-only \
+                  --include-pattern=v2/ \
+                  --exclude-pattern=.cache \
+                  v2-kcov-output \
+                  "$bin"
+              done
+              kcov --merge v2-kcov-merged v2-kcov-output/
+            '
 
       - name: Debug coverage reports
         run: |
-          echo "=== v1 report (before sed) ==="
-          echo "File: kcov-merged/kcov-merged/cobertura.xml"
-          head -30 kcov-merged/kcov-merged/cobertura.xml
+          echo "=== v1 report ==="
+          head -15 kcov-merged/kcov-merged/cobertura.xml
           echo ""
           echo "--- v1 filename samples ---"
-          grep 'filename=' kcov-merged/kcov-merged/cobertura.xml | head -5
+          grep 'filename=' kcov-merged/kcov-merged/cobertura.xml | head -3
           echo ""
-          echo "=== v2 report (before sed) ==="
-          echo "File: v2/zig-out/kcov/kcov-merged/cobertura.xml"
-          head -30 v2/zig-out/kcov/kcov-merged/cobertura.xml
+          echo "=== v2 report ==="
+          head -15 v2-kcov-merged/kcov-merged/cobertura.xml
           echo ""
           echo "--- v2 filename samples ---"
-          grep 'filename=' v2/zig-out/kcov/kcov-merged/cobertura.xml | head -5
-          echo ""
-          echo "=== kcov version ==="
-          kcov --version
-
-      - name: Fix coverage paths
-        run: |
-          # Make coverage paths repo-relative so Codecov can match them to source files.
-          # kcov uses absolute DWARF paths: <source> is a common prefix, and
-          # <filename> is the remainder. Codecov needs filenames relative to the repo root.
-
-          V1_REPORT=kcov-merged/kcov-merged/cobertura.xml
-          V2_REPORT=v2/zig-out/kcov/kcov-merged/cobertura.xml
-
-          # v1: all files are under src/. Strip any path prefix before "src/" in filenames.
-          sed -i 's|<source>[^<]*</source>|<source></source>|g' "$V1_REPORT"
-          sed -i 's|filename="[^"]*src/|filename="src/|g' "$V1_REPORT"
-
-          # v2: filenames are relative to the v2/ subdirectory (e.g. "lib/foo.zig").
-          # Prefix them with "v2/" so they match repo paths (e.g. "v2/lib/foo.zig").
-          sed -i 's|<source>[^<]*</source>|<source></source>|g' "$V2_REPORT"
-          sed -i 's|filename="|filename="v2/|g' "$V2_REPORT"
+          grep 'filename=' v2-kcov-merged/kcov-merged/cobertura.xml | head -3
 
       - name: Upload coverage to Codecov
         env:
@@ -114,26 +112,11 @@ jobs:
 
           curl -fsSLo codecov https://cli.codecov.io/v11.2.6/linux/codecov
           chmod +x codecov
-
           ./codecov --verbose upload-coverage \
-              --fail-on-error \
-              --dir kcov-merged/kcov-merged \
-              --dir v2/zig-out/kcov \
-              --commit-sha "$UPLOAD_SHA"
-
-          # ./codecov --verbose upload-coverage \
-          #   --fail-on-error \
-          #   --file kcov-merged/kcov-merged/cobertura.xml \
-          #   --disable-search \
-          #   --flag v1 \
-          #   --commit-sha "$UPLOAD_SHA"
-
-          # ./codecov --verbose upload-coverage \
-          #   --fail-on-error \
-          #   --file v2/zig-out/kcov/kcov-merged/cobertura.xml \
-          #   --disable-search \
-          #   --flag v2 \
-          #   --commit-sha "$UPLOAD_SHA"
+            --fail-on-error \
+            --dir kcov-merged/kcov-merged \
+            --dir v2-kcov-merged/kcov-merged \
+            --commit-sha "$UPLOAD_SHA"
 
   gossip_and_fuzz:
     runs-on: ubuntu-latest
