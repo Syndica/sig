@@ -951,7 +951,15 @@ const Elf64 = struct {
 
                     // If the symbol is defined and a function, this is a BPF-to-BPF call.
                     if (symbol.st_type() == elf.STT_FUNC and symbol.st_value != 0) {
-                        if (!text_range.contains(symbol.st_value)) {
+                        // Match agave: check `symbol.st_value` against the text
+                        // section's virtual-address range (sh_addr-based), not
+                        // its file-offset range. For legacy ELFs sh_addr and
+                        // sh_offset can differ, so using `text_range` here
+                        // would incorrectly reject valid bpf-to-bpf calls.
+                        // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/elf.rs#L1124-L1126
+                        const text_vm_lo = text_section.sh_addr;
+                        const text_vm_hi = text_section.sh_addr +| text_section.sh_size;
+                        if (symbol.st_value < text_vm_lo or symbol.st_value >= text_vm_hi) {
                             return error.OutOfBounds;
                         }
                         const target_pc = (symbol.st_value -| text_section.sh_addr) / 8;
