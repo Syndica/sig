@@ -4,6 +4,12 @@ const lib = @import("lib.zig");
 pub const download = @import("snapshot/download.zig");
 
 comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("snapshot/download.zig");
+    }
+}
+
+comptime {
     _ = download;
 }
 

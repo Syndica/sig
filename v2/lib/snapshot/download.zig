@@ -1,5 +1,4 @@
 const std = @import("std");
-const start = @import("start");
 const lib = @import("../lib.zig");
 const tel = lib.telemetry;
 

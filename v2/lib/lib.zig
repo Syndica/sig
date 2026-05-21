@@ -1,5 +1,6 @@
 comptime {
     if (@import("builtin").is_test) {
+        _ = @import("clock.zig");
         _ = @import("collections.zig");
         _ = @import("crypto.zig");
         _ = @import("gossip.zig");
@@ -7,6 +8,7 @@ comptime {
         _ = @import("linux.zig");
         _ = @import("net.zig");
         _ = @import("shred.zig");
+        _ = @import("snapshot.zig");
         _ = @import("solana.zig");
         _ = @import("telemetry.zig");
         _ = @import("util.zig");

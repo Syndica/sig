@@ -257,8 +257,8 @@ pub const Region = union(enum) {
 
                 if (cfg.known_validators.len == 0) {
                     std.log.err(
-                        "known_validators must not be empty. Specify validator pubkeys, or \"*\" " ++
-                            "to opt in to untrusted snapshot sources.",
+                        "known_validators must not be empty. Specify validator " ++
+                            "pubkeys, or \"*\" to opt in to untrusted snapshot sources.",
                         .{},
                     );
                     return error.NoKnownValidators;
