@@ -39,7 +39,8 @@ jobs:
           sudo apt-get install -y kcov
 
       - name: Build
-        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=false -Dno-network-tests
+        run:
+          zig build test -Dno-run -Dlong-tests -Denable-tsan=false -Dno-network-tests
           -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Collect v1 coverage
@@ -49,6 +50,25 @@ jobs:
         run: |
           cd v2
           zig build test -Dkcov -Dallow-no-sha -Dallow-no-avx512 --summary all
+
+      - name: Debug coverage reports
+        run: |
+          echo "=== v1 report (before sed) ==="
+          echo "File: kcov-merged/kcov-merged/cobertura.xml"
+          head -30 kcov-merged/kcov-merged/cobertura.xml
+          echo ""
+          echo "--- v1 filename samples ---"
+          grep 'filename=' kcov-merged/kcov-merged/cobertura.xml | head -5
+          echo ""
+          echo "=== v2 report (before sed) ==="
+          echo "File: v2/zig-out/kcov/kcov-merged/cobertura.xml"
+          head -30 v2/zig-out/kcov/kcov-merged/cobertura.xml
+          echo ""
+          echo "--- v2 filename samples ---"
+          grep 'filename=' v2/zig-out/kcov/kcov-merged/cobertura.xml | head -5
+          echo ""
+          echo "=== kcov version ==="
+          kcov --version
 
       - name: Fix coverage paths
         run: |
@@ -96,18 +116,24 @@ jobs:
           chmod +x codecov
 
           ./codecov --verbose upload-coverage \
-            --fail-on-error \
-            --file kcov-merged/kcov-merged/cobertura.xml \
-            --disable-search \
-            --flag v1 \
-            --commit-sha "$UPLOAD_SHA"
+              --fail-on-error \
+              --dir kcov-merged/kcov-merged \
+              --dir v2/zig-out/kcov \
+              --commit-sha "$UPLOAD_SHA"
 
-          ./codecov --verbose upload-coverage \
-            --fail-on-error \
-            --file v2/zig-out/kcov/kcov-merged/cobertura.xml \
-            --disable-search \
-            --flag v2 \
-            --commit-sha "$UPLOAD_SHA"
+          # ./codecov --verbose upload-coverage \
+          #   --fail-on-error \
+          #   --file kcov-merged/kcov-merged/cobertura.xml \
+          #   --disable-search \
+          #   --flag v1 \
+          #   --commit-sha "$UPLOAD_SHA"
+
+          # ./codecov --verbose upload-coverage \
+          #   --fail-on-error \
+          #   --file v2/zig-out/kcov/kcov-merged/cobertura.xml \
+          #   --disable-search \
+          #   --flag v2 \
+          #   --commit-sha "$UPLOAD_SHA"
 
   gossip_and_fuzz:
     runs-on: ubuntu-latest
@@ -165,7 +191,8 @@ jobs:
           zig build -Denable-tsan=true -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out --summary all
 
       - name: Build Tests
-        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
+        run:
+          zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
           -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Run Tests
@@ -236,7 +263,8 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: build_conformance-v1-${{ hashFiles('build.zig', 'build.zig.zon',
+          cache-key:
+            build_conformance-v1-${{ hashFiles('build.zig', 'build.zig.zon',
             'conformance/build.zig', 'conformance/build.zig.zon') }}
 
       - name: Build Conformance
@@ -278,7 +306,8 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: feature_compat-v1-${{ hashFiles('build.zig', 'build.zig.zon',
+          cache-key:
+            feature_compat-v1-${{ hashFiles('build.zig', 'build.zig.zon',
             'conformance/build.zig', 'conformance/build.zig.zon') }}
 
       - uses: dtolnay/rust-toolchain@stable
