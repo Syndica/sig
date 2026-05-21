@@ -50,6 +50,24 @@ jobs:
           cd v2
           zig build test -Dkcov -Dallow-no-sha -Dallow-no-avx512 --summary all
 
+      - name: Fix coverage paths
+        run: |
+          # Make coverage paths repo-relative so Codecov can match them to source files.
+          # kcov uses absolute DWARF paths: <source> is a common prefix, and
+          # <filename> is the remainder. Codecov needs filenames relative to the repo root.
+
+          V1_REPORT=kcov-merged/kcov-merged/cobertura.xml
+          V2_REPORT=v2/zig-out/kcov/kcov-merged/cobertura.xml
+
+          # v1: all files are under src/. Strip any path prefix before "src/" in filenames.
+          sed -i 's|<source>[^<]*</source>|<source></source>|g' "$V1_REPORT"
+          sed -i 's|filename="[^"]*src/|filename="src/|g' "$V1_REPORT"
+
+          # v2: filenames are relative to the v2/ subdirectory (e.g. "lib/foo.zig").
+          # Prefix them with "v2/" so they match repo paths (e.g. "v2/lib/foo.zig").
+          sed -i 's|<source>[^<]*</source>|<source></source>|g' "$V2_REPORT"
+          sed -i 's|filename="|filename="v2/|g' "$V2_REPORT"
+
       - name: Upload coverage to Codecov
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
@@ -76,10 +94,19 @@ jobs:
 
           curl -fsSLo codecov https://cli.codecov.io/v11.2.6/linux/codecov
           chmod +x codecov
+
           ./codecov --verbose upload-coverage \
             --fail-on-error \
-            --dir kcov-merged/kcov-merged \
-            --dir v2/zig-out/kcov \
+            --file kcov-merged/kcov-merged/cobertura.xml \
+            --disable-search \
+            --flag v1 \
+            --commit-sha "$UPLOAD_SHA"
+
+          ./codecov --verbose upload-coverage \
+            --fail-on-error \
+            --file v2/zig-out/kcov/kcov-merged/cobertura.xml \
+            --disable-search \
+            --flag v2 \
             --commit-sha "$UPLOAD_SHA"
 
   gossip_and_fuzz:
