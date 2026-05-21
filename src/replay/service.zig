@@ -144,7 +144,7 @@ pub fn advanceReplay(
         };
     }
 
-    if (!processed_a_slot) try std.Thread.yield();
+    if (!processed_a_slot) std.Thread.sleep(10 * std.time.ns_per_ms);
 }
 
 pub const Dependencies = struct {

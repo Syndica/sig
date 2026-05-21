@@ -280,12 +280,31 @@ const TransactionScheduler = struct {
         var txn_deps = std.AutoArrayHashMapUnmanaged(u32, void){};
         defer txn_deps.deinit(allocator);
 
+        var expected_transaction_count: usize = 0;
+        for (entries) |entry| {
+            if (!entry.isTick()) expected_transaction_count += entry.transactions.len;
+        }
+        const resolved_transaction_count_mismatch =
+            expected_transaction_count != self.transactions.len;
+        if (resolved_transaction_count_mismatch) {
+            self.future.logger.warn().logf(
+                "resolved transaction count mismatch: entries={} resolved={}; skipping async intra-entry lock checks",
+                .{ expected_transaction_count, self.transactions.len },
+            );
+        }
+
         var i: usize = 0;
         for (entries) |entry| {
             if (entry.isTick()) continue;
 
             batch_locks.clearRetainingCapacity();
-            for (self.transactions[i..][0..entry.transactions.len]) |transaction| {
+            const remaining_transaction_count = self.transactions.len - i;
+            if (remaining_transaction_count == 0) break;
+            const entry_transaction_count = @min(
+                entry.transactions.len,
+                remaining_transaction_count,
+            );
+            for (self.transactions[i..][0..entry_transaction_count]) |transaction| {
                 i += 1;
 
                 const id: u32 = @intCast(self.workers.items.len);
@@ -295,7 +314,7 @@ const TransactionScheduler = struct {
                     transaction.accounts.items(.is_writable),
                 ) |pubkey, writable| {
                     // Verify that there's no conflicting writer accounts within a batch of txns.
-                    if (!self.svm_gateway.params.feature_set.active(
+                    if (!resolved_transaction_count_mismatch and !self.svm_gateway.params.feature_set.active(
                         .relax_intrabatch_account_locks,
                         self.svm_gateway.params.slot,
                     )) {
@@ -315,11 +334,12 @@ const TransactionScheduler = struct {
                     if (writable) {
                         // if we write, we depend on last writer, or the readers who depend on it.
                         if (lock.readers.items.len > 0) {
-                            for (lock.readers.items) |reader_id|
-                                try txn_deps.put(allocator, reader_id, {});
+                            for (lock.readers.items) |reader_id| {
+                                if (reader_id != id) try txn_deps.put(allocator, reader_id, {});
+                            }
                             lock.readers.clearRetainingCapacity();
                         } else if (lock.last_writer) |writer_id| {
-                            try txn_deps.put(allocator, writer_id, {});
+                            if (writer_id != id) try txn_deps.put(allocator, writer_id, {});
                         }
 
                         // We also become the writer for others later.
@@ -328,7 +348,7 @@ const TransactionScheduler = struct {
                         // if we read, we depend on last writer & becomes readers for next writer
                         try lock.readers.append(allocator, id);
                         if (lock.last_writer) |writer_id| {
-                            try txn_deps.put(allocator, writer_id, {});
+                            if (writer_id != id) try txn_deps.put(allocator, writer_id, {});
                         }
                     }
                 }

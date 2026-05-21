@@ -146,7 +146,12 @@ pub const EpochTracker = struct {
         errdefer epoch_tracker.deinit();
 
         const epoch_stakes_map = manifest.bank_extra.versioned_epoch_stakes;
-        const available_epochs = manifest.bank_extra.versioned_epoch_stakes.keys();
+        const available_epochs = try allocator.dupe(
+            Epoch,
+            manifest.bank_extra.versioned_epoch_stakes.keys(),
+        );
+        defer allocator.free(available_epochs);
+        std.mem.sort(Epoch, available_epochs, {}, std.sort.asc(Epoch));
         if (available_epochs.len == 0) return epoch_tracker;
 
         const start_index = available_epochs.len -| RootedEpochBuffer.BUF_LEN;
