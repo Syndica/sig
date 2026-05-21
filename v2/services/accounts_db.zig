@@ -18,7 +18,7 @@ pub const ReadOnly = struct {
 pub const ReadWrite = struct {
     rooted_config: *lib.accounts_db.RootedConfig,
     pool: *lib.accounts_db.AccountPool,
-    snapshot_to_accounts_db: *lib.snapshot.SnapshotDataRing,
+    snapshot_to_accounts_db: *lib.snapshot.SnapshotReadyRing,
     replay_lookups: *lib.accounts_db.AccountLookups,
     tel: *tel.Region,
 };

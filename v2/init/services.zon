@@ -1,7 +1,5 @@
 .{
     .regions = .{
-        .telemetry = .telemetry,
-
         .net_to_shred = .net_pair,
         .shred_recv_config = .shred_recv_config,
 

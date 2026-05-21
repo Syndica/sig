@@ -31,9 +31,6 @@ const Config = struct {
     gossip: Gossip,
     shred_network: ShredNetwork,
 
-    snapshot: Snapshot,
-    accounts_db: AccountsDb,
-
     telemetry: Telemetry,
     snapshot: Snapshot,
     accounts_db: AccountsDb,
@@ -147,17 +144,6 @@ pub fn main() !void {
     };
 
     const shared_regions = services.toSharedRegions(.{
-        .telemetry = .{
-            .port = config.telemetry.port,
-            .max_log_level = log_level,
-            .service_count = service_instances.len - 1,
-
-            .id_mem_len = 4096 * 16,
-            .gauges_len = 4096 * 2,
-
-            .histogram_data_len = 4096 * 3,
-        },
-
         // net -> shred
         .net_to_shred = .{ .port = config.shred_network.recv_port },
         // shred constants
@@ -200,12 +186,12 @@ pub fn main() !void {
         .telemetry = .{
             .port = config.telemetry.port,
             .log_filters_encoded = log_filters.written(),
-            .service_count = service_instances.len - 1,
+            .service_count = services.telemetryServiceCount(service_instances),
 
-        .snapshot_to_accounts_db = {},
-        .accounts_db_config = .{
-            .file_path = config.accounts_db.file,
-            .memory = config.accounts_db.memory.asBytes(),
+            .id_mem_len = 4096 * 16,
+            .gauges_len = 4096 * 2,
+
+            .histogram_data_len = 4096 * 3,
         },
     });
 
