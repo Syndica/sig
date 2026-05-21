@@ -16,9 +16,8 @@ pub const AccountReader = struct {
         Pubkey,
     ) AccountLoadError!?AccountSharedData,
 
-    /// Returns caller-owned account data for a live account. The caller must
-    /// deinitialize returned `AccountSharedData.data` with the same allocator.
-    /// Missing accounts and dead accounts return null.
+    /// Returns caller-owned account data. The caller must deinitialize returned
+    /// `AccountSharedData.data` with the same allocator. Missing accounts return null.
     pub fn get(
         self: AccountReader,
         allocator: std.mem.Allocator,

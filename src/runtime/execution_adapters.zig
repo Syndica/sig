@@ -33,13 +33,35 @@ pub const SlotAccountReaderAdapter = struct {
         } orelse return null;
         defer account.deinit(allocator);
 
-        if (account.lamports == 0) return null;
-
         return AccountSharedData.fromAccount(allocator, &account) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
         };
     }
 };
+
+test "SlotAccountReaderAdapter preserves reader zero-lamport behavior" {
+    const allocator = std.testing.allocator;
+    const pubkey = Pubkey.ZEROES;
+
+    var accounts = sig.utils.collections.PubkeyMap(AccountSharedData).empty;
+    defer accounts.deinit(allocator);
+    try accounts.put(allocator, pubkey, .{
+        .lamports = 0,
+        .data = &.{},
+        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    const adapter = SlotAccountReaderAdapter{
+        .reader = .{ .account_shared_data_map = &accounts },
+    };
+    const maybe_account = try adapter.accountReader().get(allocator, pubkey);
+    defer if (maybe_account) |account| account.deinit(allocator);
+
+    try std.testing.expect(maybe_account != null);
+    try std.testing.expectEqual(0, maybe_account.?.lamports);
+}
 
 pub const EpochStakeReaderAdapter = struct {
     epoch_stakes: *const EpochStakes,
