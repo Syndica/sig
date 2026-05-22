@@ -169,11 +169,11 @@ pub const Table = struct {
         // phase-4: insert into entries that are empty or have lower slots
         var stub: Entry = undefined;
         for (0..PARALLEL_SCAN) |i| {
-            const curr_hash = @as([2]@Vector(16, u8), @bitCast(curr[i]))[0];
-            self.count += @intFromBool(@reduce(.Or, curr_hash) == 0); // bump for empty inserts
-
             // empty curr has .slot=0 : always overwritten
             const newer_slot = @as(Entry, @bitCast(curr[i])).slot <= batch.entries[i].slot;
+
+            const new_write = newer_slot and batch.entries[i].slot > 0;
+            self.count +=  @intFromBool(new_write); // bump for empty inserts
 
             const ptr = if (newer_slot) &ptrs[i][0] else &stub;
             ptr.* = batch.entries[i];

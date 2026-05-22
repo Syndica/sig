@@ -34,7 +34,6 @@
                 .{ .name = .gossip_config, .access = .readonly },
                 .{ .name = .gossip_to_snapshot, .access = .rw },
                 .{ .name = .telemetry, .access = .rw },
-                .{ .name = .gossip_to_snapshot, .access = .rw },
             },
         },
         .{

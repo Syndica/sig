@@ -578,9 +578,7 @@ pub const SnapshotIter = struct {
 
     pub fn next(self: *SnapshotIter) !?Account {
         // Skip unread data & data padding of previous Accountentry
-        const skip = self.account_data_len + self.account_data_padding;
-        try self.tar_iter.discardAll(@min(self.account_file_len, skip));
-        self.account_file_len -|= skip;
+        self.tar_iter.discardAll(self.account_data_len + self.account_data_padding) catch {};
 
         // read /accounts/{slot}/{id} (containing Accounts in AppendVecs)
         while (self.account_file_len == 0) {
@@ -634,8 +632,10 @@ pub const SnapshotIter = struct {
         if (header.data_len > 10 * 1024 * 1024)
             return error.InvalidAccountData;
 
-        self.account_data_padding = std.mem.alignForward(u64, header.data_len, 8) - header.data_len;
-        self.account_data_len = header.data_len;
+        const data_padded_len = std.mem.alignForward(u64, header.data_len, 8);
+        self.account_file_len -|= data_padded_len;
+        self.account_data_padding = data_padded_len - header.data_len; // skip padding
+        self.account_data_len = header.data_len; // track data read from account
 
         return .{
             .slot = self.account_file_slot,

@@ -15,6 +15,8 @@ pub fn FileWriter(
         // publically observable fields
         file: std.fs.File,
         offset: u64,
+
+        io_transferred: u64, // total bytes written to disk.
         io_inflight: u32, // current inflight blocks being written to disk.
         io_stalled: u64, // total time spent stalled waiting for disk.
 
@@ -61,9 +63,17 @@ pub fn FileWriter(
             ring.deinit();
         }
 
-        fn isBlockWriting(self: *const Self, block_idx: usize) bool {
-            std.debug.assert(block_idx < num_blocks);
-            return (self.writing_mask[block_idx / 64] >> @intCast(block_idx % 64)) & 1 > 0;
+        /// Get the current file offset that a getBuffer() would write to.
+        pub fn getOffset(self: *const Self) u64 {
+            const pos = self.write_pos % buffer_size;
+            const block_used = pos % block_size;
+            return self.offset + block_used;
+        }
+
+        /// Set the next file offset an advance() call will write to.
+        /// NOTE: this rounds down the offset to a block_size boundary.
+        pub fn setOffset(self: *Self, new_offset: u64) void {
+            self.offset = std.mem.alignBackward(u64, new_offset, block_size);
         }
 
         /// Get a writable slice .len <= block_size
@@ -74,6 +84,8 @@ pub fn FileWriter(
 
             // We wrapped around & all blocks are currently being written out (IO stalled)
             if (self.isBlockWriting(block_idx)) {
+                @branchHint(.unlikely);
+
                 const zone = tracy.Zone.init(@src(), .{ .name = "FileWriter.stalled" });
                 defer zone.deinit();
 
@@ -93,6 +105,11 @@ pub fn FileWriter(
             return self.buffer[@as(u64, block_idx) * block_size ..][block_used..block_size];
         }
 
+        fn isBlockWriting(self: *const Self, block_idx: usize) bool {
+            std.debug.assert(block_idx < num_blocks);
+            return (self.writing_mask[block_idx / 64] >> @intCast(block_idx % 64)) & 1 > 0;
+        }
+
         // Mark n bytes (from a previous `.getBuffer()` call) as written.
         pub fn advance(self: *Self, n: usize) !void {
             const pos = self.write_pos % buffer_size;
@@ -105,6 +122,8 @@ pub fn FileWriter(
 
             self.write_pos += n;
             if (n == writable) { // completed the block
+                @branchHint(.unlikely);
+
                 const disk_block = @divExact(self.offset, block_size);
                 self.offset += block_size;
 
@@ -130,7 +149,7 @@ pub fn FileWriter(
             const zone = tracy.Zone.init(@src(), .{ .name = "FileWriter.submit" });
             defer zone.deinit();
 
-            const mask = @as(u64, 1) << @intCast(data.block_idx);
+            const mask = @as(u64, 1) << @intCast(data.block_idx % 64);
             std.debug.assert(self.writing_mask[data.block_idx / 64] & mask == 0);
             self.writing_mask[data.block_idx / 64] |= mask;
 
@@ -160,6 +179,7 @@ pub fn FileWriter(
                 @setRuntimeSafety(false);
                 break :blk undefined; // avoid needless memset
             };
+
             const n = try self.ring.copy_cqes(&cqes, 0); // dont wait: non-blocking poll is fastest
             for (cqes[0..n]) |*cqe| {
                 var data: RingUserData = @bitCast(cqe.user_data);
@@ -177,11 +197,14 @@ pub fn FileWriter(
                 std.debug.assert(self.io_inflight > 0);
                 self.io_inflight -= 1;
 
-                const mask = @as(u64, 1) << @intCast(data.block_idx);
+                const mask = @as(u64, 1) << @intCast(data.block_idx % 64);
                 std.debug.assert(self.writing_mask[data.block_idx / 64] & mask > 0);
                 self.writing_mask[data.block_idx / 64] &= ~mask;
 
-                data.written += @intCast(cqe.res);
+                const n_wrote: u32 = @intCast(cqe.res);
+                self.io_transferred += n_wrote;
+
+                data.written += @intCast(n_wrote);
                 std.debug.assert(data.written <= block_size);
                 if (data.written < block_size) try self.submit(data); // partial write
             }

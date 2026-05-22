@@ -15,11 +15,14 @@ pub fn FileReader(
         // publically observable fields
         file: std.fs.File,
         offset: u64,
+
+        io_transferred: u64, // total bytes read from disk.
         io_inflight: u32, // current inflight blocks being read to disk.
         io_stalled: u64, // total time spent stalled waiting for disk.
 
         ring: std.os.linux.IoUring,
         read_pos: u64,
+        read_offset: u64,
         block_states: [num_blocks]BlockState,
         buffer: [buffer_size]u8 align(sector_size),
 
@@ -57,6 +60,7 @@ pub fn FileReader(
             errdefer self.ring.deinit();
 
             self.read_pos = 0;
+            self.read_offset = 0;
             @memset(&self.block_states, .{ .status = .idle, .len = 0 });
 
             // start reading in blocks
@@ -70,6 +74,13 @@ pub fn FileReader(
             ring.deinit();
         }
 
+        /// Get the current file offset that a getBuffer() would read from
+        pub fn getOffset(self: *const Self) u64 {
+            const pos = self.read_pos % buffer_size;
+            const block_used = pos % block_size;
+            return self.offset + block_used;
+        }
+
         /// Get a writable slice .len <= block_size
         pub fn getBuffer(self: *Self, logger: tel.Logger("FileReader.getBuffer")) ![]const u8 {
             const pos = self.read_pos % buffer_size;
@@ -79,6 +90,8 @@ pub fn FileReader(
             // Block is currently being read into (IO stalled)
             const block_state = &self.block_states[block_idx];
             if (block_state.status != .ready) {
+                @branchHint(.unlikely);
+
                 const zone = tracy.Zone.init(@src(), .{ .name = "FileReader.stalled" });
                 defer zone.deinit();
 
@@ -115,6 +128,10 @@ pub fn FileReader(
 
             self.read_pos += n;
             if (n == readable) { // finishing reading from the block. reuse it for the next read
+                @branchHint(.unlikely);
+
+                self.offset += block_size;
+
                 block_state.status = .idle;
                 try self.submitNext(@intCast(block_idx));
             }
@@ -131,8 +148,8 @@ pub fn FileReader(
         }
 
         fn submitNext(self: *Self, block_idx: BlockIndex) !void {
-            const disk_block = @divExact(self.offset, block_size);
-            self.offset += block_size;
+            const disk_block = @divExact(self.read_offset, block_size);
+            self.read_offset += block_size;
 
             try self.submit(.{
                 .disk_block = @intCast(disk_block),
@@ -197,6 +214,8 @@ pub fn FileReader(
                 block_state.status = .idle;
 
                 const n_read: u32 = @intCast(cqe.res);
+                self.io_transferred += n_read;
+
                 data.read += @intCast(n_read);
                 std.debug.assert(data.read <= block_size);
 

@@ -137,10 +137,8 @@ pub fn main() !void {
         .{ .service = .gossip },
         .{ .service = .replay },
         .{ .service = .snapshot },
-        .{ .service= .accounts_db },
-        .{ .service = .telemetry },
-        .{ .service = .snapshot },
         .{ .service = .accounts_db },
+        .{ .service = .telemetry },
     };
 
     const shared_regions = services.toSharedRegions(.{

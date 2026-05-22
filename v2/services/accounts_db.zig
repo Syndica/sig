@@ -67,6 +67,9 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             }
         };
 
+        const dir_path = ro.snapshot_config.folder_buffer[0..ro.snapshot_config.folder_len];
+        logger.info().logf("reading snapshot {s}/{s}", .{dir_path, snapshot_path});
+
         var snapshot_dir = try std.fs.cwd().openDir(
             ro.snapshot_config.folder_buffer[0..ro.snapshot_config.folder_len],
             .{},
@@ -83,13 +86,8 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         );
         defer snapshot_iter.deinit();
 
-        logger.info().logf("snapshot loaded\n", .{});
-        for (0..10) |_| {
-            const acc = (try snapshot_iter.next()) orelse break;
-            logger.info().logf("slot:{} acc:{f} owner:{f} lamports:{} len:{}", .{
-                acc.slot, acc.pubkey, acc.owner, acc.lamports, acc.data.len,
-            });
-        }
+        logger.info().logf("reading snapshot accounts", .{});
+        try rooted.loadSnapshot(.from(logger), snapshot_iter);
     }
 
     logger.info().logf("accounts_db finished", .{});

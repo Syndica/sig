@@ -67,8 +67,12 @@ pub const Rooted = struct {
             };
             defer read_file.close();
 
+            logger.info().logf("loading from existing rooted db", .{});
             self.loadExisting(.from(logger), read_file) catch |err| switch (err) {
-                error.InvalidJournal => self.journal = .empty,
+                error.InvalidJournal => {
+                    self.journal = .empty; // reset any modifications from loadExisting()
+                    break :open_existing;
+                },
                 else => |e| return e,
             };
         }
@@ -86,10 +90,12 @@ pub const Rooted = struct {
         try self.io.writer.init(write_file);
         errdefer self.io.writer.deinit();
 
-        // write an empty journal
-        if (self.journal.state == .empty) {
-            try self.beginTransaction(.from(logger), 0);
-            try self.commitTransaction(.from(logger));
+        // sync the journal:
+        // - if empty: write first empty journal to offset 0, bumping it
+        // - if recovered: undo any uncommitted found during loadExisting()
+        {
+            try self.writeJournal(.from(logger));
+            self.io.writer.setOffset(self.journal.committed_offset);
         }
 
         // Open the file separately in buffered mode (not O_DIRECT).
@@ -106,7 +112,7 @@ pub const Rooted = struct {
 
     const SectorHeader = packed struct(u64) {
         type: enum(u2) {
-            padding, // padding data to get file aligned to block_size
+            padding, // padding data to get file aligned to block_size for writing
             account, // holds an actual account
             _, // TODO: add other types of sections
         },
@@ -115,7 +121,7 @@ pub const Rooted = struct {
             account: packed struct(u62) {
                 data_len: u24,
                 executable: bool,
-                // epoch never goes this high deliberately, max(Epoch) = max(u37)
+                // epoch never goes this high deliberately. convert max(Epoch) = max(u37)
                 rent_epoch: SmallEpoch, // could be smaller to fit more stuff in .account
             },
         },
@@ -184,6 +190,8 @@ pub const Rooted = struct {
                     return error.InvalidJournal;
                 },
             }
+
+            logger.info().logf("read journal: {any}", .{self.journal});
         }
 
         var timer = try std.time.Timer.start();
@@ -192,23 +200,34 @@ pub const Rooted = struct {
 
         // read sectors until EOF
         while ((try self.io.reader.getBuffer(.from(logger))).len > 0) {
-            const file_offset = self.io.reader.offset;
+            const file_offset = self.io.reader.getOffset();
+            if (file_offset >= self.journal.committed_offset) break; // ignore overrun file data
 
             // read section header
             var header: SectorHeader = undefined;
             try self.readExisting(.from(logger), @ptrCast(&header), @sizeOf(SectorHeader));
             switch (header.type) {
                 .padding => {
+                    const pad_len = header.info.padding;
+                    if (pad_len > self.journal.committed_offset) return error.InvalidPadding;
+
                     // skip padding bytes
-                    try self.readExisting(.from(logger), null, header.info.padding);
+                    try self.readExisting(.from(logger), null, pad_len);
                 },
                 .account => {
                     const acc_info = header.info.account;
                     if (acc_info.data_len > 10 * 1024 * 1024) return error.InvalidAccount;
 
-                    // read AccountMeta & skip its data for now
+                    const data_offset = file_offset + @sizeOf(SectorHeader) + @sizeOf(AccountMeta);
+                    if (data_offset + acc_info.data_len > self.journal.committed_offset) {
+                        return error.InvalidAccount;
+                    }
+
+                    // read AccountMeta
                     var acc: AccountMeta = undefined;
                     try self.readExisting(.from(logger), @ptrCast(&acc), @sizeOf(AccountMeta));
+
+                    // skip the account data
                     try self.readExisting(.from(logger), null, acc_info.data_len);
                     n_bytes_read += @sizeOf(AccountMeta) + acc_info.data_len;
 
@@ -225,6 +244,7 @@ pub const Rooted = struct {
 
             const elapsed_ns = timer.read();
             if (elapsed_ns >= std.time.ns_per_s) {
+                timer.reset();
                 logger.info().logf("read {} accounts ({B:.2}) in {D:.0} (io-stalled:{D:.0})", .{
                     n_puts,
                     n_bytes_read,
@@ -237,8 +257,8 @@ pub const Rooted = struct {
             }
         }
 
-        // flush table updates
         self.table.flushPuts(&self.put_batch);
+        logger.info().logf("loaded rooted db: {} accounts", .{self.table.count});
     }
 
     fn readExisting(
@@ -252,12 +272,62 @@ pub const Rooted = struct {
             const buf = try self.io.reader.getBuffer(.from(logger));
             if (buf.len == 0) return error.EndOfStream;
 
-            const take = @min(buf.len, n);
+            const take = @min(buf.len, len - n);
             if (maybe_buf) |b| @memcpy(b[n..][0..take], buf[0..take]);
 
             try self.io.reader.advance(take);
             n += take;
         }
+    }
+
+    pub fn loadSnapshot(
+        self: *Rooted,
+        logger: tel.Logger("Rooted.loadSnapshot"),
+        snapshot_iter: *lib.solana.snapshot.SnapshotIter,
+    ) !void {
+        // TODO: pass in the slot from the snapshot_iter.manifest.bank_fields/accounts_db_fields
+        try self.beginTransaction(.from(logger), 0);
+
+        var timer = try std.time.Timer.start();
+        var n_puts: usize = 0;
+        var n_transfer: usize = 0;
+        while (try snapshot_iter.next()) |acc| {
+            n_puts += 1;
+            n_transfer += @sizeOf(AccountMeta) + @sizeOf(SectorHeader) + acc.data.len;
+            try self.put(
+                .from(logger),
+                acc.slot,
+                acc.pubkey,
+                acc.owner,
+                acc.lamports,
+                acc.rent_epoch,
+                acc.data.executable,
+                acc.data.len,
+                snapshot_iter,
+            );
+
+            const elapsed_ns = timer.read();
+            if (elapsed_ns >= std.time.ns_per_s) {
+                timer.reset();
+                logger.info().logf(
+                    "wrote {} accounts (queued:{B:.4}, flushed:{B:.4}) in {D:.0} (io-stall:{D:.0})",
+                    .{
+                        n_puts,
+                        n_transfer,
+                        self.io.writer.io_transferred,
+                        elapsed_ns,
+                        self.io.writer.io_stalled,
+                    },
+                );
+                n_puts = 0;
+                n_transfer = 0;
+                self.io.writer.io_transferred = 0;
+                self.io.writer.io_stalled = 0;
+            }
+        }
+
+        try self.commitTransaction(.from(logger));
+        logger.info().logf("populated from snapshot: {} accounts", .{self.table.count});
     }
 
     pub fn beginTransaction(
@@ -269,21 +339,26 @@ pub const Rooted = struct {
         defer zone.deinit();
 
         std.debug.assert(self.journal.state != .writing);
+
         self.journal.state = .writing;
         self.journal.writing_slot = @intCast(slot);
-
         try self.writeJournal(.from(logger));
     }
 
     fn writeJournal(self: *Rooted, logger: tel.Logger("Rooted.writeJournal")) !void {
-        // change the offset just for this journal write
-        const old_offset = self.io.writer.offset;
-        defer self.io.writer.offset = old_offset;
-        self.io.writer.offset = 0;
+        logger.info().logf("writing journal: {}", .{self.journal});
 
         const buf = try self.io.writer.getBuffer(.from(logger));
         std.debug.assert(buf.len == block_size); // must be at start of new block
         std.debug.assert(self.io.writer.io_inflight == 0); // must be flushed already
+
+        // change the offset just for this journal write
+        const old_offset = self.io.writer.getOffset();
+        self.io.writer.setOffset(0);
+        defer {
+            // the first writeJournal() call should consume the 0 offset, not restore it.
+            if (old_offset > 0) self.io.writer.setOffset(old_offset);
+        }
 
         // Write the journal
         @memcpy(buf[0..@sizeOf(Journal)], std.mem.asBytes(&self.journal));
@@ -315,41 +390,46 @@ pub const Rooted = struct {
         std.debug.assert(data_len <= 10 * 1024 * 1024);
         std.debug.assert(rent_epoch != std.math.maxInt(SectorHeader.SmallEpoch));
 
+        const offset = self.io.writer.getOffset();
+        self.table.put(&self.put_batch, &pubkey, slot, .{
+            .offset = @intCast(offset),
+            .len = @intCast(data_len),
+        });
+
         self.journal.writing_slot = @max(
             self.journal.writing_slot,
             @as(u32, @intCast(slot)),
         );
 
-        self.table.put(&self.put_batch, &pubkey, slot, .{
-            .offset = @intCast(self.io.writer.offset),
-            .len = @intCast(data_len),
-        });
-
         { // write SectorHeader + AccountMeta
             const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.writeAccountHeader" });
             defer zone.deinit();
 
-            var header: extern struct {
-                sector: SectorHeader,
-                meta: AccountMeta,
-            } = .{
-                .sector = .{
+            {
+                var header = SectorHeader{
                     .type = .account,
                     .info = .{ .account = .{
                         .data_len = @intCast(data_len),
                         .executable = executable,
                         .rent_epoch = std.math.lossyCast(SectorHeader.SmallEpoch, rent_epoch),
                     } },
-                },
-                .meta = .{
+                };
+
+                var r = std.Io.Reader.fixed(std.mem.asBytes(&header));
+                try self.queueWrite(.from(logger), @sizeOf(@TypeOf(header)), &r);
+            }
+
+            {
+                var header = AccountMeta{
                     .slot = @intCast(slot),
                     .pubkey = pubkey,
                     .owner = owner,
                     .lamports = lamports,
-                },
-            };
-            var r = std.Io.Reader.fixed(std.mem.asBytes(&header));
-            try self.queueWrite(.from(logger), @sizeOf(@TypeOf(header)), &r);
+                };
+
+                var r = std.Io.Reader.fixed(std.mem.asBytes(&header));
+                try self.queueWrite(.from(logger), @sizeOf(@TypeOf(header)), &r);
+            }
         }
 
         if (data_len > 0) { // write account data
@@ -369,8 +449,10 @@ pub const Rooted = struct {
         var n: usize = 0;
         while (n < len) {
             const buf = try self.io.writer.getBuffer(.from(logger));
+
             const take = @min(buf.len, len - n);
             try reader.readSliceAll(buf[0..take]);
+
             try self.io.writer.advance(take);
             n += take;
         }
@@ -381,31 +463,39 @@ pub const Rooted = struct {
         defer zone.deinit();
 
         std.debug.assert(self.journal.state == .writing);
-        self.journal.state = .committed;
 
+        // finish up writes made during the beginTransaction().
         try self.flushWrites(.from(logger));
 
+        self.journal.committed_offset = self.io.writer.getOffset();
         self.journal.committed_slot = self.journal.writing_slot;
-        self.journal.committed_offset = self.io.writer.offset;
+        self.journal.state = .committed;
         try self.writeJournal(.from(logger));
     }
 
     fn flushWrites(self: *Rooted, logger: tel.Logger("Rooted.flushWrites")) !void {
-        const writable = (try self.io.writer.getBuffer(.from(logger))).len;
-        std.debug.assert(writable <= block_size);
+        const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.flushWrites" });
+        defer zone.deinit();
+
+        // flush the table
+        self.table.flushPuts(&self.put_batch);
 
         // flush any current writes in the Writer by writing a padding sector to fill up the block
-        if (writable < block_size) {
+        var writable = (try self.io.writer.getBuffer(.from(logger))).len;
+        std.debug.assert(writable <= block_size);
+        if (writable != block_size) {
             // If under a SectionHeader, gotta fill up the next block too
             var pad_len = writable;
             if (writable < @sizeOf(SectorHeader)) pad_len += block_size;
             std.debug.assert(pad_len >= @sizeOf(SectorHeader));
 
-            // write padding header
             var header: SectorHeader = .{
                 .type = .padding,
-                .info = .{ .padding = @intCast(pad_len) },
+                .info = .{ .padding = @intCast(pad_len - @sizeOf(SectorHeader)) },
             };
+            logger.info().logf("writing pad sector: {any}", .{header});
+
+            // write padding header
             {
                 var r = std.Io.Reader.fixed(std.mem.asBytes(&header));
                 try self.queueWrite(.from(logger), @sizeOf(SectorHeader), &r);
@@ -418,5 +508,12 @@ pub const Rooted = struct {
                 }
             }{});
         }
+
+        // the writable block should be empty now
+        writable = (try self.io.writer.getBuffer(.from(logger))).len;
+        std.debug.assert(writable == block_size);
+
+        // wait for all queued writes to complete.
+        try self.io.writer.sync(.from(logger));
     }
 };
