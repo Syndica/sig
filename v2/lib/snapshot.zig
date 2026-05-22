@@ -1,6 +1,5 @@
 const std = @import("std");
 const lib = @import("lib.zig");
-const tracy = @import("tracy");
 
 const Slot = lib.solana.Slot;
 const Hash = lib.solana.Hash;

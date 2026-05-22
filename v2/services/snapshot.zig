@@ -5,6 +5,7 @@ const tel = lib.telemetry;
 
 const download = lib.snapshot.download;
 
+const SnapshotConfig = lib.snapshot.SnapshotConfig;
 const SnapshotSourceRing = lib.snapshot.SnapshotSourceRing;
 const SnapshotReadyRing = lib.snapshot.SnapshotReadyRing;
 const SnapshotIter = lib.solana.snapshot.SnapshotIter;
@@ -23,7 +24,7 @@ pub const panic = start.panic;
 pub const std_options = start.options;
 
 pub const ReadOnly = struct {
-    config: *const lib.snapshot.SnapshotConfig,
+    config: *const SnapshotConfig,
 };
 
 pub const ReadWrite = struct {

@@ -32,6 +32,7 @@ const Config = struct {
     shred_network: ShredNetwork,
 
     telemetry: Telemetry,
+
     snapshot: Snapshot,
     accounts_db: AccountsDb,
 
@@ -160,6 +161,7 @@ pub fn main() !void {
             .turbine_recv_port = config.shred_network.recv_port,
         },
         
+        // gossip -> snapshot (download addresses)
         .gossip_to_snapshot = {},
         .snapshot_config = .{
             .folder_path = config.snapshot.folder,
@@ -167,6 +169,7 @@ pub fn main() !void {
             .known_validators = config.snapshot.known_validators,
         },
 
+        // snapshot -> accounts_db
         .snapshot_to_accounts_db = {},
         .rooted_config = .{
             .file = config.accounts_db.file,

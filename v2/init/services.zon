@@ -79,5 +79,13 @@
                 .{ .name = .telemetry, .access = .rw },
             },
         },
+        .{
+            .name = .snapshot,
+            .regions = .{
+                .{ .name = .snapshot_config, .access = .readonly },
+                .{ .name = .gossip_to_snapshot, .access = .rw },
+                .{ .name = .telemetry, .access = .rw },
+            },
+        },
     },
 }

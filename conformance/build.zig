@@ -30,6 +30,7 @@ pub fn build(b: *Build) void {
     const install_step = b.getInstallStep();
     const solfuzz_sig_step = b.step("solfuzz_sig", "The solfuzz sig library.");
     const run_step = b.step("run", "Run test fixtures");
+    const feature_id_step = b.step("feature-id", "Print metadata for a feature by name or id.");
     const test_step = b.step("test", "Run unit tests");
 
     const proto_step = b.step(
@@ -108,6 +109,34 @@ pub fn build(b: *Build) void {
         const run_cmd = b.addRunArtifact(exe);
         run_cmd.addArgs(b.args orelse &.{});
         run_step.dependOn(&run_cmd.step);
+    }
+
+    const feature_id_exe = b.addExecutable(.{
+        .name = "feature-id",
+        .root_module = b.createModule(.{
+            .target = b.graph.host,
+            .optimize = optimize,
+            .root_source_file = b.path("src/feature_id.zig"),
+            .imports = &.{
+                .{ .name = "sig", .module = sig_mod },
+                .{ .name = "build-options", .module = build_options.createModule() },
+            },
+        }),
+    });
+    feature_id_exe.linkLibC();
+    feature_id_exe.use_llvm = true;
+    feature_id_step.dependOn(&feature_id_exe.step);
+    install_step.dependOn(&feature_id_exe.step);
+
+    if (bin_install) {
+        const feature_id_install = b.addInstallArtifact(feature_id_exe, .{});
+        feature_id_step.dependOn(&feature_id_install.step);
+        install_step.dependOn(&feature_id_install.step);
+    }
+    if (bin_run) {
+        const feature_id_run = b.addRunArtifact(feature_id_exe);
+        feature_id_run.addArgs(b.args orelse &.{});
+        feature_id_step.dependOn(&feature_id_run.step);
     }
 
     const test_exe = b.addTest(.{
