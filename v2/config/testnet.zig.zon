@@ -13,4 +13,9 @@
         .port = 12345,
         .log_level = .info,
     },
+    .snapshot = .{
+        .folder = "./validator",
+        // NOTE: currently all validators are allowed as snapshot sources, but this can be configured to a specific set of pubkeys.
+        .known_validators = .{"*"},
+    },
 }

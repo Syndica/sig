@@ -635,6 +635,25 @@ fn handleRpcRequest(
                             },
                         });
                     },
+                    .node_unhealthy => |maybe_num_slots| if (maybe_num_slots) |num_slots| blk: {
+                        var msg_buf: [64]u8 = undefined;
+                        const message = behindMessage(&msg_buf, num_slots);
+                        break :blk try writeFinalJsonResponse(request, .{}, .{
+                            .jsonrpc = "2.0",
+                            .id = rpc_request.id,
+                            .@"error" = NodeUnhealthyError{
+                                .message = message,
+                                .data = .{ .numSlotsBehind = num_slots },
+                            },
+                        });
+                    } else try writeFinalJsonResponse(request, .{}, .{
+                        .jsonrpc = "2.0",
+                        .id = rpc_request.id,
+                        .@"error" = NodeUnhealthyError{
+                            .message = "Node is unhealthy",
+                            .data = .{ .numSlotsBehind = null },
+                        },
+                    }),
                 },
                 .err => |err| try writeFinalJsonResponse(request, .{}, .{
                     .jsonrpc = "2.0",

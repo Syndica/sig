@@ -12,12 +12,12 @@ const Packet = lib.net.Packet;
 const Signature = lib.solana.Signature;
 const Pubkey = lib.solana.Pubkey;
 const Hash = lib.solana.Hash;
+const Slot = lib.solana.Slot;
 
 const bincode = lib.gossip.bincode;
 const GossipMessage = lib.gossip.GossipMessage;
 const GossipData = lib.gossip.GossipData;
 const GossipValue = lib.gossip.GossipValue;
-const ContactInfo = lib.gossip.ContactInfo;
 const BloomFilter = lib.gossip.BloomFilter;
 
 pub fn GossipNode(comptime Effects: type) type {
@@ -44,6 +44,17 @@ pub fn GossipNode(comptime Effects: type) type {
         /// Signs gossip messages using the node identity
         pub fn sign(self: Effects, msg: []const u8) Signature {
             _ = .{ self, msg };
+            return undefined;
+        }
+
+        /// Sends snapshot sources from gossip to snapshot service
+        pub fn reportSnapshotSource(
+            self: Effects,
+            addr: std.net.Address,
+            slot: Slot,
+            hash: Hash,
+        ) void {
+            _ = .{ self, addr, slot, hash };
             return undefined;
         }
     });
@@ -384,8 +395,9 @@ pub fn GossipNode(comptime Effects: type) type {
                     var prune_len: usize = 0;
 
                     for (push.values.items) |value| {
-                        const key, const duplicates =
-                            (try self.insertValue(.from(logger), now, .push, value)) orelse continue;
+                        const maybe_key_value =
+                            try self.insertValue(.from(logger), now, .push, value);
+                        const key, const duplicates = maybe_key_value orelse continue;
 
                         // Add to prunes if enough duplicates.
                         if (duplicates >= DUPLICATE_THRESHOLD_UNTIL_PRUNE) {
@@ -407,7 +419,11 @@ pub fn GossipNode(comptime Effects: type) type {
 
                         // Dont send back prunes from pushes that arent peers with a ContactInfo.
                         const peer = self.peers.getPtr(push.from) orelse break :blk;
-                        const ci_key: Key = .{ .from = push.from, .tag = .contact_info, .index = 0 };
+                        const ci_key: Key = .{
+                            .from = push.from,
+                            .tag = .contact_info,
+                            .index = 0,
+                        };
                         if (!self.table.contains(ci_key)) break :blk;
 
                         var sign_buf: [Packet.capacity]u8 = undefined;
@@ -819,7 +835,8 @@ pub fn GossipNode(comptime Effects: type) type {
             now: u64,
             value: GossipValue,
         ) !void {
-            const key, _ = (try self.insertValue(.from(logger), now, .us, value)) orelse unreachable;
+            const maybe_key_value = try self.insertValue(.from(logger), now, .us, value);
+            const key, _ = maybe_key_value orelse unreachable;
             assert(key.from.equals(&self.identity()));
         }
 
@@ -986,7 +1003,27 @@ pub fn GossipNode(comptime Effects: type) type {
                     .lowest_slot => {}, // TODO: send to repair service
                     .epoch_slots => {}, // TODO: send to consensus service
                     .duplicate_shred => {}, // TODO: send to shred/consensus service
-                    .snapshot_hashes => {}, // TODO: send to snapshot service
+                    .snapshot_hashes => |sh_data| {
+                        const sh = sh_data.full;
+                        if (self.table.getPtr(.{
+                            .from = key.from,
+                            .index = 0,
+                            .tag = .contact_info,
+                        })) |v| {
+                            var alloc_buf: [16 * 1024]u8 = undefined;
+                            var fba = std.heap.FixedBufferAllocator.init(&alloc_buf);
+                            var reader = std.Io.Reader.fixed(v.value[0..v.size]);
+                            const ci_val = try bincode.read(&fba, &reader, GossipValue);
+                            if (ci_val.data.contact_info.socket_map.get(.rpc)) |rpc_addr| {
+                                self.config.effects.reportSnapshotSource(
+                                    key.from,
+                                    rpc_addr,
+                                    sh.slot,
+                                    sh.hash,
+                                );
+                            }
+                        }
+                    }, // TODO: send to snapshot service
                     .contact_info => |ci| {
                         if (ci.socket_map.get(.gossip)) |addr| {
                             if (try self.getOrTrackPeer(
@@ -1003,6 +1040,25 @@ pub fn GossipNode(comptime Effects: type) type {
                         // TODO: if ci.socket_map.get(.serve_repair): send to repair service
                         // TODO: if ci.socket_map.get(.tpu_vote): send to consensus service
                         // TODO: if ci.socket_map.get(.rpc): send to snapshot service
+                        if (ci.socket_map.get(.rpc)) |rpc_addr| {
+                            if (self.table.getPtr(.{
+                                .from = key.from,
+                                .index = 0,
+                                .tag = .snapshot_hashes,
+                            })) |v| {
+                                var alloc_buf: [16 * 1024]u8 = undefined;
+                                var fba = std.heap.FixedBufferAllocator.init(&alloc_buf);
+                                var reader = std.Io.Reader.fixed(v.value[0..v.size]);
+                                const sh_val = try bincode.read(&fba, &reader, GossipValue);
+                                const sh = sh_val.data.snapshot_hashes.full;
+                                self.config.effects.reportSnapshotSource(
+                                    key.from,
+                                    rpc_addr,
+                                    sh.slot,
+                                    sh.hash,
+                                );
+                            }
+                        }
                     },
                     .restart_heaviest_fork, .restart_last_voted_fork => {}, // deprecated
                     inline else => |v| {

@@ -19,7 +19,7 @@ const Pubkey = sig.core.Pubkey;
 
 /// [agave] Maximum input length for base58 encoding.
 /// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/lib.rs#L42
-const MAX_BASE58_INPUT_LEN = 128;
+pub const MAX_BASE58_INPUT_LEN = 128;
 const MAX_BASE58_OUTPUT_LEN = base58.encodedMaxSize(MAX_BASE58_INPUT_LEN);
 
 pub const ParseError = error{

@@ -1936,6 +1936,8 @@ pub const SendTransaction = struct {
     pub const Response = union(enum) {
         signature: Signature,
         preflight_failure: PreflightFailure,
+        /// num slots behind
+        node_unhealthy: ?Slot,
 
         pub fn jsonParse(
             allocator: Allocator,

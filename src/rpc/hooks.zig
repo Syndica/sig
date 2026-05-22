@@ -117,15 +117,39 @@ pub const Hooks = struct {
                             // serves as a way to allow the callback to not worry about error codes
                             // or error messages, while also letting it use `try`, `errdefer`, and
                             // return the Result directly (instead of wrapping it in a union).
-                            return .{ .err = .{
-                                .code = @enumFromInt(@intFromError(err)),
-                                .message = @errorName(err),
-                            } };
+                            return .{ .err = mapError(err) };
                         }
                     }
                 }.impl),
             });
         }
+    }
+
+    /// Maps an arbitrary callback error to a JSON-RPC `response.Error`.
+    /// Specific errors that must match Agave's wire format are handled explicitly;
+    /// all others fall back to the generic `@intFromError`/`@errorName` mapping.
+    fn mapError(err: anyerror) rpc.response.Error {
+        return switch (err) {
+            // [agave] When base58 encoding is requested and the account data exceeds
+            // 128 bytes, Agave returns JSON-RPC -32600 (InvalidRequest) with this exact
+            // message. Originates from `account_codec.encodeAccount` and propagates from
+            // every method that encodes accounts (getAccountInfo, getMultipleAccounts,
+            // getProgramAccounts, getTokenAccountsBy{Owner,Delegate}, simulateTransaction).
+            // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/lib.rs#L44-L47
+            error.Base58DataTooLarge => .{
+                .code = .invalid_request,
+                .message = "Encoded binary (base 58) data should be less than 128 bytes, " ++
+                    "please use Base64 encoding.",
+            },
+            error.InvalidParams => .{
+                .code = .invalid_params,
+                .message = "Invalid params",
+            },
+            else => .{
+                .code = @enumFromInt(-32600),
+                .message = @errorName(err),
+            },
+        };
     }
 
     pub const CallError = error{MethodNotImplemented};

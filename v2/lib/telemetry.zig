@@ -1,9 +1,17 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const clock = @import("clock.zig");
 
 pub const metric = @import("telemetry/metric.zig");
 pub const log = @import("telemetry/log.zig");
 pub const prometheus = @import("telemetry/prometheus.zig");
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("telemetry/log.zig");
+        _ = @import("telemetry/metric.zig");
+        _ = @import("telemetry/prometheus.zig");
+    }
+}
 
 comptime {
     _ = metric;
@@ -310,7 +318,7 @@ pub fn Logger(comptime scope_str: []const u8) type {
                     args: anytype,
                 ) void {
                     const message: log.Message = .{
-                        .epoch_millis = @intCast(std.time.milliTimestamp()),
+                        .epoch_millis = clock.wallclock(.ms),
                         .scope = scope,
                         .fields = &self.entries,
                         .msg = .fromFmt(.literal, fmt_str, &args),

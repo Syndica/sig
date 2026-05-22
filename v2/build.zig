@@ -8,10 +8,23 @@ const test_install_dir: Build.Step.InstallArtifact.Options.Dir = .{
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const use_llvm = b.option(bool, "use-llvm", "Force usage of LLVM (currently ignored for some artifacts).");
+    const use_kcov = b.option(bool, "kcov", "Use kcov to run the tests.") orelse false;
+    const use_llvm: ?bool = b.option(
+        bool,
+        "use-llvm",
+        "Force usage of LLVM (currently ignored for some artifacts).",
+    ) orelse if (use_kcov) true else null;
     const artifact_opts: ExeOutput.InitOptions = .{
-        .no_bin = b.option(bool, "no-bin", "Don't install artifacts implied by specified steps.") orelse false,
-        .no_run = b.option(bool, "no-run", "Don't execute run steps implied by the specified steps.") orelse false,
+        .no_bin = b.option(
+            bool,
+            "no-bin",
+            "Don't install artifacts implied by specified steps.",
+        ) orelse false,
+        .no_run = b.option(
+            bool,
+            "no-run",
+            "Don't execute run steps implied by the specified steps.",
+        ) orelse false,
     };
 
     const tracy_enable = b.option(bool, "enable-tracy", "Enables tracy") orelse false;
@@ -44,8 +57,9 @@ pub fn build(b: *Build) !void {
         bool,
         "allow-no-avx512",
         "Opt in to a slower generic ed25519 path when the target lacks AVX-512 " ++
-            "(avx512ifma + avx512vl). Without this flag, building for an x86_64 target without " ++
-            "these features is a compile-time error so the performance hit is not silently accepted.",
+            "(avx512ifma + avx512vl). Without this flag, building for an x86_64 " ++
+            "target without these features is a compile-time error so the performance hit is " ++
+            "not silently accepted.",
     ) orelse (optimize == .Debug);
 
     const build_options = b.addOptions();
@@ -57,12 +71,29 @@ pub fn build(b: *Build) !void {
     const run_step = b.step("run", "Run supervisor");
     const test_step = b.step("test", "Run unit tests");
     const check_step = b.step("check", "Check step.");
+    const lint_step = b.step("lint", "Run lint checks");
+    const lint_test_step = b.step("lint-test", "Run lint unit tests");
     const ci_step = b.step("ci", "Run all checks used for CI");
     const docs_step = b.step("docs", "Emit docs");
 
     ci_step.dependOn(test_step);
     ci_step.dependOn(install_step);
+    ci_step.dependOn(lint_step);
+    ci_step.dependOn(lint_test_step);
     check_step.dependOn(install_step);
+
+    const kcov_merge_run = if (use_kcov and !artifact_opts.no_run) kcov_merge: {
+        const run = b.addSystemCommand(&.{ "kcov", "--merge" });
+        const cache_dir = run.addOutputDirectoryArg("merged");
+        const install_dir = b.addInstallDirectory(.{
+            .source_dir = cache_dir,
+            .install_dir = .prefix,
+            .install_subdir = "kcov",
+        });
+        install_dir.step.dependOn(&run.step);
+        test_step.dependOn(&install_dir.step);
+        break :kcov_merge run;
+    } else null;
 
     const tracy_mod = b.dependency("tracy", .{
         .target = target,
@@ -78,9 +109,31 @@ pub fn build(b: *Build) !void {
 
     const fmt_check_step = b.addFmt(.{
         .check = true,
-        .paths = &.{ "init/", "lib/", "services/", "build.zig" },
+        .paths = &.{ "init/", "lib/", "services/", "build.zig", "lint/" },
     });
     ci_step.dependOn(&fmt_check_step.step);
+
+    const lint_exe = b.addExecutable(.{
+        .name = "sig-lint",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("lint/main.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    const run_lint = b.addRunArtifact(lint_exe);
+    if (b.args) |args| run_lint.addArgs(args);
+    lint_step.dependOn(&run_lint.step);
+
+    const lint_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("lint/main.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    const run_lint_tests = b.addRunArtifact(lint_tests);
+    lint_test_step.dependOn(&run_lint_tests.step);
 
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("lib/lib.zig"),
@@ -93,7 +146,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "build-options", .module = build_options_mod },
         },
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+    _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "lib",
         .root_module = lib_mod,
         .filters = filters,
@@ -109,7 +162,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "tracy", .module = tracy_mod },
         },
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+    _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "sig-init",
         .root_module = sig_init_mod,
         .filters = filters,
@@ -137,7 +190,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "tracy", .module = tracy_mod },
         },
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+    _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "start_service",
         .root_module = start_service_mod,
         .use_llvm = true,
@@ -171,7 +224,7 @@ pub fn build(b: *Build) !void {
         });
         sig_init_mod.linkLibrary(service_lib);
 
-        _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+        _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
             .root_module = service_mod,
             .name = service_name,
             .filters = filters,
@@ -185,17 +238,17 @@ pub fn build(b: *Build) !void {
     }
 
     // generates unified docs for all modules
-    // TODO: `zig build docs` should probably disable installing/building sig binaries
+    // NOTE: have to specify `-Dno-bin` & `-Dno-run` in order to
+    // avoid needing to run codegen for the sig binaries.
     {
         const gen_docs_run = b.addRunArtifact(
             b.addExecutable(.{
-                .name = "sig-init",
+                .name = "gen-docs-entry",
                 .root_module = b.createModule(.{
-                    .target = target,
+                    .target = b.graph.host,
                     .optimize = .Debug,
                     .root_source_file = b.path("scripts/gen_docs_entry.zig"),
                 }),
-                .use_llvm = false,
             }),
         );
 
@@ -251,13 +304,36 @@ fn addTestOutputs(
     artifact_step: *Build.Step,
     dest_sub_path: ?[]const u8,
     artifact_opts: ExeOutput.InitOptions,
+    maybe_kcov_merge_run: ?*Build.Step.Run,
     test_options: Build.TestOptions,
 ) ExeOutput {
     const mod_test_exe = b.addTest(test_options);
-    return addExeOutputs(b, mod_test_exe, artifact_step, artifact_opts, .{
+    const install_opts: Build.Step.InstallArtifact.Options = .{
         .dest_sub_path = dest_sub_path,
         .dest_dir = test_install_dir,
-    });
+    };
+
+    if (maybe_kcov_merge_run) |kcov_merge_run| {
+        const kcov_run = b.addSystemCommand(&.{
+            "kcov",
+            "--collect-only",
+            "--include-pattern=v2/",
+            "--exclude-pattern=.cache",
+        });
+        const output_dir = kcov_run.addOutputDirectoryArg("output");
+        kcov_run.addArtifactArg(mod_test_exe);
+        kcov_run.has_side_effects = true;
+
+        kcov_merge_run.step.dependOn(&kcov_run.step);
+        kcov_merge_run.addDirectoryArg(output_dir);
+
+        var outputs = addExeOutputs(b, mod_test_exe, artifact_step, .{
+            .no_bin = artifact_opts.no_bin,
+            .no_run = true,
+        }, install_opts);
+        outputs.run = kcov_run;
+        return outputs;
+    } else return addExeOutputs(b, mod_test_exe, artifact_step, artifact_opts, install_opts);
 }
 
 fn addExeOutputs(
@@ -272,7 +348,10 @@ fn addExeOutputs(
     const install_step = b.getInstallStep();
     install_step.dependOn(&artifact.step);
 
-    const install_opt = if (artifact_opts.no_bin) null else b.addInstallArtifact(artifact, install_opts);
+    const install_opt = if (artifact_opts.no_bin)
+        null
+    else
+        b.addInstallArtifact(artifact, install_opts);
     const run_opt = if (artifact_opts.no_run) null else b.addRunArtifact(artifact);
 
     if (install_opt) |install| {
