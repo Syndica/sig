@@ -171,13 +171,6 @@ pub fn curveGroupOp(
         }
     }
 
-    // For `mul` group operations, the "left" side is the scalar.
-    const left_input_addr = registers.get(.r3);
-    const right_input_addr = registers.get(.r4);
-    const result_point_addr = registers.get(.r5);
-    const cost = tc.compute_budget.curveGroupOperationCost(curve_id, group_op);
-    try tc.consumeCompute(cost);
-
     switch (curve_id) {
         inline //
         .edwards,
@@ -187,6 +180,18 @@ pub fn curveGroupOp(
         .bls12_381_g2_be,
         .bls12_381_g2_le,
         => |id| {
+            // For `mul` group operations, the "left" side is the scalar.
+            const left_input_addr = registers.get(.r3);
+            const right_input_addr = registers.get(.r4);
+            const result_point_addr = registers.get(.r5);
+
+            // Charge compute only for curve ids that have a group-op cost defined;
+            // the `else` arm below rejects everything else (e.g. the BLS12-381
+            // pairing ids `bls12_381_be` / `bls12_381_le`) before we get here,
+            // which keeps us out of `curveGroupOperationCost`'s `unreachable` arm.
+            const cost = tc.compute_budget.curveGroupOperationCost(id, group_op);
+            try tc.consumeCompute(cost);
+
             const T = switch (id) {
                 .edwards => Edwards25519,
                 .ristretto => Ristretto255,
@@ -3315,4 +3320,108 @@ test "bls12-381 validate g2" {
     try curvePointValidation(&tc, &memory_map, &registers);
     try std.testing.expectEqual(1, registers.get(.r0));
     try std.testing.expectEqual(0, tc.compute_meter);
+}
+
+// Regression test: `curveGroupOp` must reject the BLS12-381 pairing curve ids
+// (`bls12_381_be` / `bls12_381_le`, raw wire values 4 and 4 | 0x80) via the
+// outer-switch `else => invalidError(...)` arm, *without* first computing the
+// group-op cost.
+//
+// `ComputeBudget.curveGroupOperationCost` has `else => unreachable` for those
+// pairing ids (they are not group-op curves, they are inputs to
+// `sol_bls12_381_pairing`). An earlier version of `curveGroupOp` charged the
+// cost before the outer switch matched, so passing a pairing id as r1 hit the
+// `unreachable` and panicked the validator. The fix moves the cost calculation
+// inside the inline switch arm that already excludes the pairing ids; this test
+// drives the path that used to crash and asserts a clean error instead.
+test "curveGroupOp rejects BLS12-381 pairing curve ids without panicking" {
+    const allocator = std.testing.allocator;
+
+    var prng: std.Random.DefaultPrng = .init(0);
+    const random = prng.random();
+
+    // Raw wire ids for the pairing-only curve variants. These must never reach
+    // `curveGroupOperationCost`, which would `unreachable`-panic on them.
+    const pairing_wire_ids = [_]u64{
+        @intFromEnum(CurveId.bls12_381_be), // 4 | 0x80
+        @intFromEnum(CurveId.bls12_381_le), // 4
+    };
+
+    for (pairing_wire_ids) |wire_id| {
+        // Case 1: `abort_on_invalid_curve` active => syscall returns
+        // `SyscallError.InvalidAttribute`.
+        {
+            var cache, var tc = try sig.runtime.testing.createTransactionContext(
+                allocator,
+                random,
+                .{
+                    // Zero compute on purpose: if the old code path ran, it
+                    // would either panic in the cost switch or charge compute
+                    // before erroring. Either way this would fail differently
+                    // than the expected `InvalidAttribute`.
+                    .compute_meter = 0,
+                    .accounts = &.{.{
+                        .pubkey = .initRandom(random),
+                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    }},
+                    .feature_set = &.{
+                        .{ .feature = .enable_bls12_381_syscall },
+                        .{ .feature = .abort_on_invalid_curve },
+                    },
+                },
+            );
+            defer {
+                sig.runtime.testing.deinitTransactionContext(allocator, &tc);
+                cache.deinit(allocator);
+            }
+
+            var memory_map: MemoryMap = try .init(allocator, &.{}, .v2, .{});
+            defer memory_map.deinit(allocator);
+
+            var registers: sig.vm.interpreter.RegisterMap = .initFill(0);
+            registers.set(.r1, wire_id);
+            registers.set(.r2, @intFromEnum(GroupOp.add));
+            // r3/r4/r5 left zero — they must never be read for these ids.
+
+            try std.testing.expectError(
+                SyscallError.InvalidAttribute,
+                curveGroupOp(&tc, &memory_map, &registers),
+            );
+            // No compute should have been consumed before the rejection.
+            try std.testing.expectEqual(@as(u64, 0), tc.compute_meter);
+        }
+
+        // Case 2: `abort_on_invalid_curve` inactive => syscall returns ok and
+        // sets r0 = 1 (the legacy "soft error" behaviour from `invalidError`).
+        // Again no compute is charged and the function must not panic.
+        {
+            var cache, var tc = try sig.runtime.testing.createTransactionContext(
+                allocator,
+                random,
+                .{
+                    .compute_meter = 0,
+                    .accounts = &.{.{
+                        .pubkey = .initRandom(random),
+                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    }},
+                    .feature_set = &.{.{ .feature = .enable_bls12_381_syscall }},
+                },
+            );
+            defer {
+                sig.runtime.testing.deinitTransactionContext(allocator, &tc);
+                cache.deinit(allocator);
+            }
+
+            var memory_map: MemoryMap = try .init(allocator, &.{}, .v2, .{});
+            defer memory_map.deinit(allocator);
+
+            var registers: sig.vm.interpreter.RegisterMap = .initFill(0);
+            registers.set(.r1, wire_id);
+            registers.set(.r2, @intFromEnum(GroupOp.add));
+
+            try curveGroupOp(&tc, &memory_map, &registers);
+            try std.testing.expectEqual(@as(u64, 1), registers.get(.r0));
+            try std.testing.expectEqual(@as(u64, 0), tc.compute_meter);
+        }
+    }
 }
