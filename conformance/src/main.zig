@@ -196,10 +196,104 @@ pub fn writeFailureReports(
     var output_dir = try std.fs.cwd().openDir(output_dir_path, .{});
     defer output_dir.close();
 
-    const file = try output_dir.createFile("failures.json", .{});
-    defer file.close();
-    var buf: [4096]u8 = undefined;
-    var writer = file.writer(&buf);
-    try std.json.Stringify.value(details, .{ .whitespace = .indent_4 }, &writer.interface);
-    try writer.interface.flush();
+    const expected = try output_dir.createFile("expected.json", .{});
+    defer expected.close();
+    var expected_buf: [4096]u8 = undefined;
+    var expected_writer = expected.writer(&expected_buf);
+    var expected_stringify: std.json.Stringify = .{
+        .writer = &expected_writer.interface,
+        .options = .{ .whitespace = .indent_4 },
+    };
+
+    const actual = try output_dir.createFile("actual.json", .{});
+    defer actual.close();
+    var actual_buf: [4096]u8 = undefined;
+    var actual_writer = actual.writer(&actual_buf);
+    var actual_stringify: std.json.Stringify = .{
+        .writer = &actual_writer.interface,
+        .options = .{ .whitespace = .indent_4 },
+    };
+
+    try expected_stringify.beginArray();
+    try actual_stringify.beginArray();
+
+    for (details) |detail| {
+        if (detail) |d| {
+            switch (d) {
+                inline else => |fields| {
+                    const X = struct {
+                        harness: []const u8,
+                        value: @TypeOf(fields.actual),
+                        pub const _desc_table = .{
+                            .harness = @import("protobuf").fd(1, .{ .scalar = .string }),
+                            .value = @import("protobuf").fd(2, .{ .scalar = .bytes }),
+                        };
+                    };
+                    try expected_stringify.beginObject();
+                    try actual_stringify.beginObject();
+                    
+                    try expected_stringify.endObject();
+                    try actual_stringify.endObject();
+
+                    try writeJson(X{
+                        .harness = fields.harness,
+                        .value = fields.expected,
+                    }, &expected_stringify, null);
+                    try writeJson(X{
+                        .harness = fields.harness,
+                        .value = fields.actual,
+                    }, &actual_stringify, null);
+                },
+            }
+        }
+    }
+
+    try expected_stringify.endArray();
+    try actual_stringify.endArray();
+
+    try expected_writer.interface.flush();
+    try actual_writer.interface.flush();
+}
+
+pub fn writeJson(v: anytype, jws: anytype, comptime ftype: ?@import("protobuf").FieldType) !void {
+    const T = @TypeOf(v);
+    if (T == []const u8) {
+        if (ftype.?.scalar == .string) {
+            try jws.write(v);
+        } else if (v.len <= 512) {
+            try jws.beginWriteRaw();
+            defer jws.endWriteRaw();
+            try jws.writer.writeByte('"');
+            try std.base64.standard.Encoder.encodeWriter(jws.writer, v);
+            try jws.writer.writeByte('"');
+        } else {
+            var hash: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(v, &hash, .{});
+            const hash_hex = std.fmt.bytesToHex(hash, .lower);
+            var buf: [128]u8 = @splat(0);
+            const s = try std.fmt.bufPrint(&buf, "len: {d}, sha256: {s}", .{ v.len, hash_hex });
+            try jws.beginWriteRaw();
+            defer jws.endWriteRaw();
+            try std.json.Stringify.encodeJsonString(s, jws.options, jws.writer);
+        }
+    } else switch (@typeInfo(T)) {
+        .optional => if (v) |value| try writeJson(value, jws, ftype) else try jws.write(v),
+        .@"struct" => |s| {
+            try jws.beginObject();
+            inline for (s.fields) |field| {
+                const value = @field(v, field.name);
+                try jws.objectField(field.name);
+                if (@typeInfo(field.type) == .@"struct" and
+                    @hasField(field.type, "items") and @hasField(field.type, "capacity"))
+                {
+                    try jws.beginArray();
+                    for (value.items) |*account| try writeJson(account.*, jws, null);
+                    try jws.endArray();
+                } else try writeJson(value, jws, @field(T._desc_table, field.name).ftype);
+            }
+            try jws.endObject();
+        },
+
+        else => try jws.write(v),
+    }
 }
