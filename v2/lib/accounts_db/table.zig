@@ -180,101 +180,28 @@ pub const Table = struct {
         }
     }
 
-    pub const GetBatch = extern struct {
-        len: u32,
-        queue: extern union {
-            in: extern struct {
-                idx: [PARALLEL_SCAN]u32,
-                hash: [PARALLEL_SCAN][16]u8,
-            },
-            out: [PARALLEL_SCAN]Value,
-        },
-
-        pub const empty: GetBatch = .{ .len = 0, .queue = undefined };
-    };
-
-    /// Returns number of items flushed if any
-    pub fn get(
-        noalias self: *const Table,
-        noalias batch: *GetBatch,
-        noalias pubkey: *const Pubkey,
-    ) u32 {
+    pub fn get(self: *const Table, pubkey: *const Pubkey) Value {
         const hash = self.hashPubkey(pubkey);
         std.debug.assert(hash != 0);
-        std.debug.assert(batch.len < PARALLEL_SCAN);
 
-        batch.queue.in.hash[batch.len] = @bitCast(hash);
-        batch.queue.in.idx[batch.len] = self.reduceHash(hash);
+        var idx = self.reduceHash(hash);
+        for (0..self.entries.len) |_| {
+            const e = &self.entries[idx];
+            idx +%= 1;
+            if (idx >= self.entries.len) idx = 0; // cmov
 
-        batch.len += 1;
-        if (batch.len == PARALLEL_SCAN) return self.flushGets(batch);
-        return 0;
-    }
-
-    /// Reads all the queries prepared in batch.queue.in and writes out their res in batch.queue.out
-    /// returning the batch.len. Caller must reset it for future .get()s
-    pub fn flushGets(noalias self: *const Table, noalias batch: *GetBatch) u32 {
-        const zone = tracy.Zone.init(@src(), .{ .name = "Table.flushGets" });
-        defer zone.deinit();
-
-        const batch_len = batch.len;
-        std.debug.assert(batch_len <= PARALLEL_SCAN);
-        if (batch_len == 0) return 0;
-
-        // phase-0/1: gather map pointers & hashes (incomplete items are zeroed out)
-        var hashes: [PARALLEL_SCAN]@Vector(16, u8) = undefined;
-        var ptrs: [PARALLEL_SCAN][*]Entry = undefined;
-        for (0..PARALLEL_SCAN) |i| {
-            const valid = i < batch_len;
-            const idx = batch.queue.in.idx[i] * @intFromBool(valid);
-            ptrs[i] = self.entries.ptr + idx;
-
-            const mask: @Vector(16, bool) = @splat(valid);
-            const get_vec: @Vector(16, u8) = @bitCast(batch.queue.in.hash[i]);
-            hashes[i] = @select(u8, mask, get_vec, get_vec - get_vec);
-        }
-
-        // phase-2: parallel-loads of items
-        var curr: [PARALLEL_SCAN]@Vector(32, u8) = undefined;
-        for (0..PARALLEL_SCAN) |i| {
-            curr[i] = @bitCast(ptrs[i][0]); // start load of entry
-            @prefetch(@as([*]u8, @ptrCast(ptrs[i])) + 64, .{}); // start fetching next probe cache line
-        }
-
-        // phase-3: parallel-probe of items
-        std.debug.assert(self.count < self.entries.len);
-        while (true) {
-            var has_collisions = false;
-            for (0..PARALLEL_SCAN) |i| {
-                const get_hash: @Vector(16, u8) = hashes[i];
-                const curr_hash = @as([2]@Vector(16, u8), @bitCast(curr[i]))[0];
-
-                const zero: @Vector(16, u8) = @splat(0);
-                const empty_mask = @select(u8, curr_hash == zero, ~zero, zero);
-                const eq_mask = @select(u8, curr_hash == get_hash, ~zero, zero);
-
-                // check for collisions
-                const collided = @reduce(.Or, (empty_mask | eq_mask) == zero);
-                if (collided) has_collisions = true;
-
-                // probe next item if collided
-                ptrs[i] += @intFromBool(collided);
-                if (ptrs[i] == self.entries.ptr + self.entries.len) ptrs[i] = self.entries.ptr;
-                curr[i] = @bitCast(ptrs[i][0]);
+            const e_hash: u128 = @bitCast(e.hash);
+            if (e_hash == 0) {
+                @branchHint(.unlikely); // looking up non-existing accounts is rare
+                return .empty;
             }
-            if (!has_collisions) break;
+
+            if (e_hash == hash) {
+                std.debug.assert(!e.value.isEmpty());
+                return e.value;
+            }
         }
 
-        for (0..PARALLEL_SCAN) |i| {
-            const get_hash: @Vector(16, u8) = hashes[i];
-            const curr_hash = @as([2]@Vector(16, u8), @bitCast(curr[i]))[0];
-            var curr_value: u64 = @bitCast(@as(Entry, @bitCast(curr[i])).value);
-
-            const exists = @reduce(.And, get_hash == curr_hash);
-            curr_value *= @intFromBool(exists); // zero found value if not eq
-            batch.queue.out[i] = @bitCast(curr_value);
-        }
-
-        return batch_len;
+        unreachable; // table is full?
     }
 };

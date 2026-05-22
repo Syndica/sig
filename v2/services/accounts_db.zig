@@ -1,7 +1,17 @@
 const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
+
 const tel = lib.telemetry;
+
+const SnapshotConfig = lib.snapshot.SnapshotConfig;
+const SnapshotReadyRing = lib.snapshot.SnapshotReadyRing;
+const SnapshotIter = lib.solana.snapshot.SnapshotIter;
+
+const Rooted = lib.accounts_db.Rooted;
+const RootedConfig = lib.accounts_db.RootedConfig;
+const AccountPool = lib.accounts_db.AccountPool;
+const AccountLookups = lib.accounts_db.AccountLookups;
 
 comptime {
     _ = start;
@@ -12,14 +22,14 @@ pub const panic = start.panic;
 pub const std_options = start.options;
 
 pub const ReadOnly = struct {
-    snapshot_config: *const lib.snapshot.SnapshotConfig,
+    snapshot_config: *const SnapshotConfig,
 };
 
 pub const ReadWrite = struct {
-    rooted_config: *lib.accounts_db.RootedConfig,
-    pool: *lib.accounts_db.AccountPool,
-    snapshot_to_accounts_db: *lib.snapshot.SnapshotReadyRing,
-    replay_lookups: *lib.accounts_db.AccountLookups,
+    rooted_config: *RootedConfig,
+    account_pool: *AccountPool,
+    snapshot_to_accounts_db: *SnapshotReadyRing,
+    replay_lookups: *AccountLookups,
     tel: *tel.Region,
 };
 
@@ -35,11 +45,11 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             @setRuntimeSafety(false);
             break :blk undefined;
         };
-        var snapshot_iter: lib.solana.snapshot.SnapshotIter = blk: {
+        var snapshot_iter: SnapshotIter = blk: {
             @setRuntimeSafety(false);
             break :blk undefined;
         };
-        var rooted: lib.accounts_db.Rooted = blk: {
+        var rooted: Rooted = blk: {
             @setRuntimeSafety(false);
             break :blk undefined;
         };
@@ -51,6 +61,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         std.fs.cwd(),
         file_path,
         rw.rooted_config.memory[0..].ptr[0..rw.rooted_config.memory_len],
+        rw.account_pool,
     );
     defer rooted.deinit();
 
@@ -90,6 +101,21 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         try rooted.loadSnapshot(.from(logger), snapshot_iter);
     }
 
-    logger.info().logf("accounts_db finished", .{});
-    while (true) std.atomic.spinLoopHint();
+    logger.info().logf("accounts_db loaded - servicing replay requests", .{});
+
+    var replay_in = rw.replay_lookups.in.get(.reader);
+    var replay_out = rw.replay_lookups.out.get(.writer);
+    while (true) : (std.atomic.spinLoopHint()) {
+        if (replay_in.peek()) |pubkey| {
+            if (try rooted.queueRead(.from(logger), pubkey)) {
+                replay_in.markUsed();
+            }
+        }
+        if (replay_out.peek()) |result| {
+            if (try rooted.pollRead(.from(logger))) |res| {
+                result.* = res;
+                replay_out.markUsed();
+            }
+        }
+    }
 }

@@ -12,7 +12,7 @@ pub const AccountPool = extern struct {
     buckets: [data_size_classes.len]Bucket,
 
     memory_len: usize,
-    memory: [0]u8, // VLA [0..memory_len]
+    memory: [0]u8 align(index_scale), // VLA [0..memory_len]
 
     // 8-byte aligned offset into memory
     pub const Index = u32;
@@ -67,7 +67,9 @@ pub const AccountPool = extern struct {
     // TODO: base on mainnet binning of accounts usually loaded in during txns
     const MAX_DATA_LEN = 10 * 1024 * 1024;
     const data_size_classes = [_]u24{
+        0, // alot of accounts have zero data
         8,
+        32,
         64,
         256,
         1024,
@@ -88,15 +90,19 @@ pub const AccountPool = extern struct {
 
     // A VLA account stored in pool.memory (all fields align(1) to allow such).
     pub const Account = extern struct {
-        ref_count: std.atomic.Value(u32) align(1),
-        pubkey: Pubkey align(1),
-        owner: Pubkey align(1),
-        lamports: u64 align(1),
-        rent_epoch: Epoch align(1),
+        ref_count: std.atomic.Value(u32),
+        pubkey: Pubkey,
+        owner: Pubkey,
+        lamports: u64,
+        rent_epoch: Epoch,
         data: packed struct(u32) {
             executable: bool,
             len: u31,
         } align(1),
+
+        comptime {
+            std.debug.assert(@alignOf(Account) <= index_scale);
+        }
 
         // Bumps a ref on the account to keep it alive
         pub fn ref(self: *Account) *Account {
@@ -137,7 +143,7 @@ pub const AccountPool = extern struct {
             return idx;
         }
 
-        const idx_bump = // how many Index worth of memory are we wanting to alloc
+        const idx_bump = // how many Indexes worth of memory are we wanting to alloc
             std.math.divCeil(Index, @sizeOf(Account) + sc_data_size, index_scale) catch unreachable;
 
         // try bump from our own bucket's stolen block, if any
@@ -193,9 +199,9 @@ pub const AccountPool = extern struct {
     pub fn getAccount(self: *AccountPool, idx: Index) *Account {
         std.debug.assert(idx != invalid_index);
         std.debug.assert(idx < self.allocated);
-        return @ptrCast(
+        return @alignCast(@ptrCast(
             self.memory[0..].ptr[@as(u64, idx) * index_scale ..][0..@sizeOf(Account)],
-        );
+        ));
     }
 
     pub fn free(self: *AccountPool, idx: Index) void {

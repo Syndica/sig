@@ -21,11 +21,11 @@ pub const RootedConfig = extern struct {
 
 pub const AccountLookups = extern struct {
     in: lib.ipc.Ring(256, Request),
-    out: lib.ipc.Ring(256, Response),
+    out: lib.ipc.Ring(256, Result),
 
     pub const Request = Pubkey;
-    pub const Response = extern struct {
+    pub const Result = extern struct {
         pubkey: Pubkey,
-        result: AccountPool.Index, // .invalid_index if not found
+        account_index: AccountPool.Index, // .invalid_index if not found
     };
 };

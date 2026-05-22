@@ -4,9 +4,12 @@ const tracy = @import("tracy");
 
 const tel = lib.telemetry;
 
-const Table = lib.accounts_db.Table;
 const FileWriter = lib.fio.FileWriter;
 const FileReader = lib.fio.FileReader;
+
+const Table = lib.accounts_db.Table;
+const AccountPool = lib.accounts_db.AccountPool;
+const AccountLookups = lib.accounts_db.AccountLookups;
 
 const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
@@ -16,9 +19,17 @@ const Epoch = lib.solana.Epoch;
 /// TODO: The ring aspect is not implemented, so for now it grows indefinitely.
 pub const Rooted = struct {
     table: Table,
-    journal: Journal,
-    buffered_file: std.fs.File,
     put_batch: Table.PutBatch,
+
+    buffered_file: std.fs.File,
+    ring: std.os.linux.IoUring,
+    account_pool: *AccountPool,
+
+    ready_lookups: LookupIndex,
+    free_lookups: LookupIndex,
+    lookup_nodes: [max_active_lookups]LookupNode,
+
+    journal: Journal,
     io: union {
         reader: FileReader(.{ .buffer_size = buffer_size, .block_size = block_size }),
         writer: FileWriter(.{ .buffer_size = buffer_size, .block_size = block_size }),
@@ -26,6 +37,23 @@ pub const Rooted = struct {
 
     const buffer_size = 16 * 1024 * 1024;
     const block_size = 64 * 1024;
+
+    const max_active_lookups = 256;
+
+    // > max_active_lookups == null
+    const LookupIndex = std.math.IntFittingRange(0, max_active_lookups + 1);
+    const invalid_lookup_index = max_active_lookups;
+
+    const LookupResult = AccountLookups.Result;
+    const LookupNode = struct {
+        next: LookupIndex,
+        result: LookupResult,
+        file_offset: u64,
+        file_header: extern struct {
+            sector: SectorHeader,
+            meta: AccountMeta,
+        },
+    };
 
     // Put any static metadata in here
     const Journal = extern struct {
@@ -54,6 +82,7 @@ pub const Rooted = struct {
         dir: std.fs.Dir,
         path: []const u8,
         table_memory: []u8,
+        account_pool: *AccountPool,
     ) !void {
         const seed: u64 = 0; // TODO: maybe in RootedConfig?
         self.table = .init(seed, table_memory);
@@ -101,10 +130,22 @@ pub const Rooted = struct {
         // Open the file separately in buffered mode (not O_DIRECT).
         // This is to service AccountPool reads, since Account ptrs arent sector_size aligned.
         self.buffered_file = try dir.openFile(path, .{ .mode = .read_only });
-        errdefer self.buffered_file.deinit();
+        errdefer self.buffered_file.close();
+
+        self.ring = try .init(max_active_lookups, std.os.linux.IORING_SETUP_SQPOLL);
+        errdefer self.ring.deinit();
+
+        self.account_pool = account_pool;
+
+        self.ready_lookups = invalid_lookup_index; // empty
+        self.free_lookups = 0; // linked-list of free_lookups
+        for (&self.lookup_nodes, 0..) |*node, i| {
+            node.next = @intCast(i + 1);
+        }
     }
 
     pub fn deinit(self: *Rooted) void {
+        self.ring.deinit();
         self.buffered_file.close();
         self.io.writer.file.close();
         self.io.writer.deinit();
@@ -245,12 +286,17 @@ pub const Rooted = struct {
             const elapsed_ns = timer.read();
             if (elapsed_ns >= std.time.ns_per_s) {
                 timer.reset();
-                logger.info().logf("read {} accounts ({B:.2}) in {D:.0} (io-stalled:{D:.0})", .{
-                    n_puts,
-                    n_bytes_read,
-                    elapsed_ns,
-                    self.io.reader.io_stalled,
-                });
+                logger.info().logf(
+                    "({:.2}%) read {} accounts ({B:.2}) in {D:.0} (io-stalled:{D:.0})",
+                    .{
+                        (@as(f64, @floatFromInt(self.io.reader.getOffset())) * 100.0) /
+                            @as(f64, @floatFromInt(self.journal.committed_offset)),
+                        n_puts,
+                        n_bytes_read,
+                        elapsed_ns,
+                        self.io.reader.io_stalled,
+                    },
+                );
                 n_puts = 0;
                 n_bytes_read = 0;
                 self.io.reader.io_stalled = 0;
@@ -515,5 +561,249 @@ pub const Rooted = struct {
 
         // wait for all queued writes to complete.
         try self.io.writer.sync(.from(logger));
+    }
+
+    /// Queue a lookup into rooted to populate a new AccountPool index.
+    /// Returns false if it cannot queue the lookup (call pollRead to check for completions).
+    pub fn queueRead(
+        self: *Rooted,
+        logger: tel.Logger("Rooted.queueRead"),
+        pubkey: *const Pubkey,
+    ) !bool {
+        const lookup_idx = self.free_lookups;
+        if (lookup_idx == invalid_lookup_index) {
+            return false; // no available lookups to use.
+        }
+
+        const node = &self.lookup_nodes[lookup_idx];
+        self.free_lookups = node.next;
+
+        const entry = self.table.get(pubkey);
+        if (entry.isEmpty()) { // not found. complete immediately.
+            node.result = .{ .pubkey = pubkey.*, .account_index = AccountPool.invalid_index };
+            node.next = self.ready_lookups;
+            self.ready_lookups = lookup_idx;
+            return true;
+        }
+
+        const acc_idx = try self.account_pool.alloc(entry.len);
+        node.result = .{ .pubkey = pubkey.*, .account_index = acc_idx };
+
+        // prepare the account (these must be set before self.account_pool.free() on the same index)
+        const account = self.account_pool.getAccount(acc_idx);
+        account.ref_count = .init(0);
+        account.data = .{ .executable = false, .len = @intCast(entry.len) };
+
+        node.file_offset = entry.offset;
+        try self.submitRead(.from(logger), .{
+            .lookup_idx = lookup_idx,
+            .reading = .header,
+            .read = 0,
+        });
+
+        return true;
+    }
+
+    // Consume
+    pub fn pollRead(self: *Rooted, logger: tel.Logger("Rooted.pollReady")) !?LookupResult {
+        // check if lookup in ready queue
+        var lookup_idx = self.ready_lookups;
+        if (lookup_idx >= self.lookup_nodes.len) {
+            @branchHint(.unlikely);
+
+            // try to fill up ready queue, then check again
+            try self.pollCompletedReads(.from(logger));
+
+            lookup_idx = self.ready_lookups;
+            if (lookup_idx >= self.lookup_nodes.len) {
+                return null;
+            }
+        }
+
+        // pop from ready queue
+        const node = &self.lookup_nodes[lookup_idx];
+        self.ready_lookups = node.next;
+
+        // consume result, then push to free list
+        const result = node.result;
+        node.next = self.free_lookups;
+        self.free_lookups = lookup_idx;
+
+        return result;
+    }
+
+    const RingUserData = packed struct(u64) {
+        lookup_idx: LookupIndex,
+        reading: enum(u1) { header, payload },
+        read: std.meta.Int(.unsigned, 64 - @bitSizeOf(LookupIndex) - 1),
+    };
+
+    fn submitRead(
+        self: *Rooted,
+        logger: tel.Logger("Rooted.submitRead"),
+        data: RingUserData,
+    ) !void {
+        const node = &self.lookup_nodes[data.lookup_idx];
+        const account = self.account_pool.getAccount(node.result.account_index);
+        const offset: u64, const buffer: []u8 = switch (data.reading) {
+            .header => .{ 0, std.mem.asBytes(&node.file_header) },
+            .payload => .{ @sizeOf(@TypeOf(node.file_header)), account.getData() },
+        };
+
+        std.debug.assert(data.read <= buffer.len);
+        if (data.read == buffer.len) { // read is already complete
+            return self.completeRead(.from(logger), data);
+        }
+
+        const sqe = while (true) break self.ring.get_sqe() catch |err| switch (err) {
+            error.SubmissionQueueFull => {
+                _ = try self.ring.submit();
+                continue;
+            },
+        };
+        sqe.prep_read(
+            self.buffered_file.handle,
+            buffer[data.read..],
+            node.file_offset + offset + data.read,
+        );
+        sqe.user_data = @bitCast(data);
+        _ = try self.ring.submit(); // SQPOLL makes this fast if done frequently enough
+    }
+
+    fn pollCompletedReads(self: *Rooted, logger: tel.Logger("Rooted.pollCompletedReads")) !void {
+        var cqes: [max_active_lookups]std.os.linux.io_uring_cqe = comptime blk: {
+            @setRuntimeSafety(false);
+            break :blk undefined;
+        };
+
+        const n = try self.ring.copy_cqes(&cqes, 0);
+        for (cqes[0..n]) |*cqe| {
+            var data: RingUserData = @bitCast(cqe.user_data);
+
+            const node = &self.lookup_nodes[data.lookup_idx];
+            errdefer { // on IO error, free the account pool value & the node
+                self.account_pool.free(node.result.account_index);
+                node.next = self.free_lookups;
+                self.free_lookups = data.lookup_idx;
+            }
+
+            const account = self.account_pool.getAccount(node.result.account_index);
+            const offset: u64, const buffer: []u8 = switch (data.reading) {
+                .header => .{ 0, std.mem.asBytes(&node.file_header) },
+                .payload => .{ @sizeOf(@TypeOf(node.file_header)), account.getData() },
+            };
+
+            const n_read: u32 = switch (cqe.err()) {
+                .SUCCESS => @intCast(cqe.res),
+                else => |err| {
+                    logger.err().logf("pread(fd={}, buf={*}, len={}, offset={}) = {}", .{
+                        self.buffered_file.handle,
+                        buffer.ptr + data.read,
+                        buffer[data.read..].len,
+                        node.file_offset + offset + data.read,
+                        err,
+                    });
+                    return error.ReadFailed;
+                },
+            };
+
+            if (n_read == 0) {
+                logger.err().logf("EOF when reading account {s} of {f}: {}/{}", .{
+                    @tagName(data.reading),
+                    node.result.pubkey,
+                    data.read,
+                    buffer.len,
+                });
+                return error.EndOfStream;
+            }
+
+            data.read += n_read;
+            try self.submitRead(.from(logger), data); // continue the read process
+        }
+    }
+
+    const ReadError =
+        error { ReadFailed, EndOfStream } || // I/O error
+        error { InvalidRead } || // Corrupted data error
+        @typeInfo( // io_uring.submit() error
+            @typeInfo(@TypeOf(std.os.linux.IoUring.submit)).@"fn".return_type.?,
+        ).error_union.error_set;
+
+    fn completeRead(
+        self: *Rooted,
+        logger: tel.Logger("Rooted.completeRead"),
+        data: RingUserData,
+    ) ReadError!void {
+        const node = &self.lookup_nodes[data.lookup_idx];
+        const account = self.account_pool.getAccount(node.result.account_index);
+
+        switch (data.reading) {
+            .header => {
+                std.debug.assert(data.read == std.mem.asBytes(&node.file_header).len);
+
+                // validate the SectorHeader
+                const header = node.file_header.sector;
+                if (header.type != .account) {
+                    logger.err().logf("account lookup {f} read invalid sector: {any}", .{
+                        node.result.pubkey,
+                        header,
+                    });
+                    return error.InvalidRead;
+                }
+
+                const acc_info = header.info.account;
+                if (acc_info.data_len != account.data.len) {
+                    logger.err().logf(
+                        "account lookup {f} read mismatch sector size: expected {} foudn {}",
+                        .{ node.result.pubkey, account.data.len, acc_info.data_len },
+                    );
+                    return error.InvalidRead;
+                }
+
+                // validate the AccountMeta
+                const meta = node.file_header.meta;
+                if (!meta.pubkey.equals(&node.result.pubkey)) {
+                    logger.err().logf("account lookup {f} read invalid metadata: {any}", .{
+                        node.result.pubkey,
+                        meta,
+                    });
+                    return error.InvalidRead;
+                }
+
+                // start reading the account data body.
+                return self.submitRead(.from(logger), .{
+                    .lookup_idx = data.lookup_idx,
+                    .reading = .payload,
+                    .read = 0,
+                });
+            },
+            .payload => {
+                std.debug.assert(data.read == account.getData().len);
+
+                // TODO: now with account.getData(), verify meta.checksum
+                const sector = node.file_header.sector.info.account;
+                const meta = &node.file_header.meta;
+
+                // mark account as ready
+                account.* = .{
+                    .ref_count = .init(1),
+                    .pubkey = meta.pubkey,
+                    .owner = meta.owner,
+                    .lamports = meta.lamports,
+                    .rent_epoch = switch (sector.rent_epoch) {
+                        std.math.maxInt(SectorHeader.SmallEpoch) => std.math.maxInt(Epoch),
+                        else => |rent_epoch| rent_epoch,
+                    },
+                    .data = .{
+                        .executable = sector.executable,
+                        .len = @intCast(sector.data_len),
+                    },
+                };
+
+                // push node to ready queue
+                node.next = self.ready_lookups;
+                self.ready_lookups = data.lookup_idx;
+            },
+        }
     }
 };
