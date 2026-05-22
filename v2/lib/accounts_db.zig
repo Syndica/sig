@@ -33,4 +33,9 @@ pub const AccountLookups = extern struct {
         pubkey: Pubkey,
         account_index: AccountPool.Index, // .invalid_index if not found
     };
+
+    pub fn init(self: *AccountLookups) void {
+        self.in.init();
+        self.out.init();
+    }
 };

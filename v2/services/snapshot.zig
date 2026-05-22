@@ -27,8 +27,8 @@ pub const ReadOnly = struct {
 };
 
 pub const ReadWrite = struct {
-    gossip_to_snapshot: *SnapshotSourceRing,
-    snapshot_to_accounts_db: *SnapshotReadyRing,
+    source_from_gossip: *SnapshotSourceRing,
+    ready_snapshot_out: *SnapshotReadyRing,
     tel: *tel.Region,
 };
 
@@ -51,7 +51,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         }
 
         var downloader = try Downloader.init(
-            rw.gossip_to_snapshot,
+            rw.source_from_gossip,
             known_validators,
             snapshot_dir,
             metrics,
@@ -87,10 +87,11 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     };
 
     {
-        var ready_snapshot_writer = rw.snapshot_to_accounts_db.get(.writer);
+        var ready_snapshot_writer = rw.ready_snapshot_out.get(.writer);
+        defer ready_snapshot_writer.markUsed();
+
         const ready_ptr = ready_snapshot_writer.next() orelse unreachable;
         ready_ptr.* = ready_snapshot;
-        ready_snapshot_writer.markUsed();
     }
 
     logger.info().logf("snapshot service finished", .{});

@@ -4,7 +4,9 @@ const lib = @import("lib");
 const tracy = @import("tracy");
 
 const tel = lib.telemetry;
-const AccountLookups = lib.accounts_db.AccountLookups;
+
+const AccountPool = lib.accounts_db.AccountPool;
+const AccountLookups = lib.accounts_db.AccountLookups; 
 
 const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;
@@ -26,7 +28,8 @@ pub const std_options = start.options;
 pub const ReadOnly = struct {};
 pub const ReadWrite = struct {
     deshredded_in: *lib.shred.DeshredRing,
-    account_db_lookup: *AccountLookups,
+    account_pool: *AccountPool,
+    account_lookups: *AccountLookups,
     tel: *tel.Region,
 };
 

@@ -26,9 +26,9 @@ pub const ReadOnly = struct {
 };
 
 pub const ReadWrite = struct {
+    ready_snapshot_in: *SnapshotReadyRing,
     rooted_config: *RootedConfig,
     account_pool: *AccountPool,
-    snapshot_to_accounts_db: *SnapshotReadyRing,
     replay_lookups: *AccountLookups,
     tel: *tel.Region,
 };
@@ -70,7 +70,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
         var snapshot_path_buf: [std.fs.max_path_bytes]u8 = undefined;
         const snapshot_path: []const u8 = blk: {
-            var ready_snapshot_iter = rw.snapshot_to_accounts_db.get(.reader);
+            var ready_snapshot_iter = rw.ready_snapshot_in.get(.reader);
             while (true) : (std.atomic.spinLoopHint()) {
                 const ready_ptr = ready_snapshot_iter.next() orelse continue;
                 defer ready_snapshot_iter.markUsed();

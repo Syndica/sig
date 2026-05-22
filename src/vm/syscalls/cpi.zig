@@ -229,11 +229,19 @@ const CallerAccount = struct {
 
     fn getSerializedData(
         memory_map: *const MemoryMap,
+        check_aligned: bool,
         vm_addr: u64,
+        original_data_len: usize,
         len: u64,
+        syscall_parameter_address_restrictions: bool,
         virtual_address_space_adjustments: bool,
         direct_mapping: bool,
     ) ![]u8 {
+        if (syscall_parameter_address_restrictions) {
+            const reserved_space = original_data_len +|
+                MAX_PERMITTED_DATA_INCREASE * @intFromBool(check_aligned);
+            if (len > reserved_space) return InstructionError.InvalidRealloc;
+        }
         if (virtual_address_space_adjustments and direct_mapping) {
             // when direct mapping is enabled, the permissions on the
             // realloc region can change during CPI so we must delay
@@ -273,8 +281,12 @@ const CallerAccount = struct {
             .virtual_address_space_adjustments,
             ic.tc.slot,
         );
+        const syscall_parameter_address_restrictions = ic.tc.feature_set.active(
+            .syscall_parameter_address_restrictions,
+            ic.tc.slot,
+        );
 
-        if (virtual_address_space_adjustments) {
+        if (syscall_parameter_address_restrictions) {
             try checkAccountInfoPtr(
                 ic,
                 account_info.key_addr,
@@ -303,7 +315,7 @@ const CallerAccount = struct {
                 lamports_addr,
                 ic.getCheckAligned(),
             );
-            if (virtual_address_space_adjustments) {
+            if (syscall_parameter_address_restrictions) {
                 if (lamports_addr >= MM_INPUT_START) {
                     return SyscallError.InvalidPointer;
                 }
@@ -332,7 +344,7 @@ const CallerAccount = struct {
         const serialized, const vm_data_addr, const ref_to_len_addr = blk: {
             // See above on lamports regarding Rc(RefCell) pointer accessing.
             const data_ptr: u64 = @intFromPtr(account_info.data.deref().asPtr());
-            if (virtual_address_space_adjustments and data_ptr >= MM_INPUT_START) {
+            if (syscall_parameter_address_restrictions and data_ptr >= MM_INPUT_START) {
                 return SyscallError.InvalidPointer;
             }
 
@@ -343,7 +355,7 @@ const CallerAccount = struct {
                 data_ptr,
                 ic.getCheckAligned(),
             )).*;
-            if (virtual_address_space_adjustments) {
+            if (syscall_parameter_address_restrictions) {
                 try checkAccountInfoPtr(
                     ic,
                     data.ptr,
@@ -352,10 +364,12 @@ const CallerAccount = struct {
                 );
             }
 
-            try ic.tc.consumeCompute(data.len / ic.tc.compute_budget.cpi_bytes_per_unit);
+            if (!syscall_parameter_address_restrictions) {
+                try ic.tc.consumeCompute(data.len / ic.tc.compute_budget.cpi_bytes_per_unit);
+            }
 
             const vm_len_addr = data_ptr +| @sizeOf(u64);
-            if (virtual_address_space_adjustments) {
+            if (syscall_parameter_address_restrictions) {
                 // In the same vein as the other check_account_info_pointer() checks, we don't lock
                 // this pointer to a specific address but we don't want it to be inside accounts, or
                 // callees might be able to write to the pointed memory.
@@ -366,10 +380,17 @@ const CallerAccount = struct {
 
             const ref_to_len_addr = try memory_map.translate(.mutable, vm_len_addr, @sizeOf(u64));
             const vm_data_addr = data.ptr;
+            const len = if (syscall_parameter_address_restrictions)
+                @as(*align(1) const u64, @ptrFromInt(ref_to_len_addr)).*
+            else
+                data.len;
             const serialized: []u8 = try getSerializedData(
                 memory_map,
+                ic.getCheckAligned(),
                 vm_data_addr,
-                data.len,
+                account_metadata.original_data_len,
+                len,
+                syscall_parameter_address_restrictions,
                 virtual_address_space_adjustments,
                 account_data_direct_mapping,
             );
@@ -403,8 +424,12 @@ const CallerAccount = struct {
             .virtual_address_space_adjustments,
             ic.tc.slot,
         );
+        const syscall_parameter_address_restrictions = ic.tc.feature_set.active(
+            .syscall_parameter_address_restrictions,
+            ic.tc.slot,
+        );
 
-        if (virtual_address_space_adjustments) {
+        if (syscall_parameter_address_restrictions) {
             try checkAccountInfoPtr(
                 ic,
                 account_info.key_addr,
@@ -446,15 +471,11 @@ const CallerAccount = struct {
             ic.getCheckAligned(),
         );
 
-        try ic.tc.consumeCompute(account_info.data_len / ic.tc.compute_budget.cpi_bytes_per_unit);
-
-        const serialized_data: []u8 = try getSerializedData(
-            memory_map,
-            account_info.data_addr,
-            account_info.data_len,
-            virtual_address_space_adjustments,
-            account_data_direct_mapping,
-        );
+        if (!syscall_parameter_address_restrictions) {
+            try ic.tc.consumeCompute(
+                account_info.data_len / ic.tc.compute_budget.cpi_bytes_per_unit,
+            );
+        }
 
         // we already have the host addr we want: &mut account_info.data_len.
         // The account info might be read only in the vm though, so we translate
@@ -463,8 +484,25 @@ const CallerAccount = struct {
         const vm_len_addr = vm_addr +|
             @intFromPtr(&account_info.data_len) -|
             @intFromPtr(account_info);
+        if (syscall_parameter_address_restrictions and vm_len_addr >= MM_INPUT_START) {
+            return SyscallError.InvalidPointer;
+        }
 
         const ref_to_len_addr = try memory_map.translate(.mutable, vm_len_addr, @sizeOf(u64));
+        const len = if (syscall_parameter_address_restrictions)
+            @as(*align(1) const u64, @ptrFromInt(ref_to_len_addr)).*
+        else
+            account_info.data_len;
+        const serialized_data: []u8 = try getSerializedData(
+            memory_map,
+            ic.getCheckAligned(),
+            account_info.data_addr,
+            account_metadata.original_data_len,
+            len,
+            syscall_parameter_address_restrictions,
+            virtual_address_space_adjustments,
+            account_data_direct_mapping,
+        );
         return .{
             .lamports = lamports,
             .owner = owner,
@@ -492,8 +530,10 @@ const CallerAccount = struct {
 fn updateCalleeAccount(
     allocator: std.mem.Allocator,
     ic: *const InstructionContext,
+    memory_map: *const MemoryMap,
     callee_account: *BorrowedAccount,
     caller_account: *const CallerAccount,
+    syscall_parameter_address_restrictions: bool,
     virtual_address_space_adjustments: bool,
     account_data_direct_mapping: bool,
 ) !bool {
@@ -507,11 +547,19 @@ fn updateCalleeAccount(
         const prev_len = callee_account.constAccountData().len;
         const post_len = (try caller_account.ref_to_len_in_vm.get(.constant)).*;
         if (prev_len != post_len) {
-            const is_caller_loader_deprecated = !ic.getCheckAligned();
-            const address_space = caller_account.original_data_len +|
-                (MAX_PERMITTED_DATA_INCREASE * @intFromBool(!is_caller_loader_deprecated));
-            if (post_len > address_space) {
-                return InstructionError.InvalidRealloc;
+            if (!account_data_direct_mapping and post_len < prev_len) {
+                const serialized_data = try CallerAccount.getSerializedData(
+                    memory_map,
+                    ic.getCheckAligned(),
+                    caller_account.vm_data_addr,
+                    caller_account.original_data_len,
+                    prev_len,
+                    syscall_parameter_address_restrictions,
+                    virtual_address_space_adjustments,
+                    account_data_direct_mapping,
+                );
+                if (post_len > serialized_data.len) return InstructionError.AccountDataTooSmall;
+                @memset(serialized_data[post_len..], 0);
             }
             try callee_account.setDataLength(allocator, &ic.tc.accounts_resize_delta, post_len);
             // pointer to data may have changed, so caller must be updated
@@ -591,12 +639,16 @@ fn translateAccounts(
         .virtual_address_space_adjustments,
         tc.slot,
     );
+    const syscall_parameter_address_restrictions = tc.feature_set.active(
+        .syscall_parameter_address_restrictions,
+        tc.slot,
+    );
     const increase_info_limit = tc.feature_set.active(.increase_cpi_account_info_limit, tc.slot);
 
     // In the same vein as the other checkAccountInfoPtr() checks, we don't lock
     // this pointer to a specific address but we don't want it to be inside accounts, or
     // callees might be able to write to the pointed memory.
-    if (virtual_address_space_adjustments and
+    if (syscall_parameter_address_restrictions and
         (account_infos_addr +| (account_infos_len *| @sizeOf(AccountType))) >= MM_INPUT_START)
     {
         return SyscallError.InvalidPointer;
@@ -708,18 +760,36 @@ fn translateAccounts(
             },
         );
 
+        if (syscall_parameter_address_restrictions) {
+            const len = (try caller_account.ref_to_len_in_vm.get(.constant)).*;
+            const compute = if (tc.compute_budget.cpi_bytes_per_unit == 0)
+                std.math.maxInt(u64)
+            else
+                len / tc.compute_budget.cpi_bytes_per_unit;
+            try tc.consumeCompute(compute);
+        }
+
         // before initiating CPI, the caller may have modified the
         // account (caller_account). We need to update the corresponding
         // BorrowedAccount (callee_account) so the callee can see the
         // changes.
-        const update_caller = try updateCalleeAccount(
-            allocator,
-            ic,
-            &callee_account,
-            &caller_account,
-            virtual_address_space_adjustments,
-            account_data_direct_mapping,
-        );
+        const update_caller = if (syscall_parameter_address_restrictions)
+            // updateCalleeAccount is moved to invokeSigned to mirror agave's
+            // move, but i don't think it actually makes any semantic difference
+            // to move it there. they key distinction is hardcoding this to true
+            // when the feature is activated.
+            true
+        else
+            try updateCalleeAccount(
+                allocator,
+                ic,
+                memory_map,
+                &callee_account,
+                &caller_account,
+                syscall_parameter_address_restrictions,
+                virtual_address_space_adjustments,
+                account_data_direct_mapping,
+            );
 
         accounts.appendAssumeCapacity(.{
             .index_in_caller = index_in_caller,
@@ -957,6 +1027,7 @@ fn updateCallerAccount(
     memory_map: *const MemoryMap,
     caller_account: *CallerAccount,
     callee_account: *BorrowedAccount,
+    syscall_parameter_address_restrictions: bool,
     virtual_address_space_adjustments: bool,
     account_data_direct_mapping: bool,
 ) !void {
@@ -967,12 +1038,12 @@ fn updateCallerAccount(
     const post_len = callee_account.constAccountData().len;
     const is_caller_loader_deprecated = !ic.getCheckAligned();
 
-    const reserve = virtual_address_space_adjustments and is_caller_loader_deprecated;
+    const reserve = syscall_parameter_address_restrictions and is_caller_loader_deprecated;
     const address_space = caller_account.original_data_len +|
         (MAX_PERMITTED_DATA_INCREASE * @intFromBool(!reserve));
 
     if (post_len > address_space and
-        (virtual_address_space_adjustments or prev_len != post_len))
+        (syscall_parameter_address_restrictions or prev_len != post_len))
     {
         try ic.tc.log(
             "Account data size realloc limited to {} in inner instructions",
@@ -995,8 +1066,11 @@ fn updateCallerAccount(
             // Set the length of caller_account.serialized_data to post_len.
             caller_account.serialized_data = try CallerAccount.getSerializedData(
                 memory_map,
+                ic.getCheckAligned(),
                 caller_account.vm_data_addr,
+                caller_account.original_data_len,
                 post_len,
+                syscall_parameter_address_restrictions,
                 virtual_address_space_adjustments,
                 account_data_direct_mapping,
             );
@@ -1043,6 +1117,10 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
 
             const virtual_address_space_adjustments = ic.tc.feature_set.active(
                 .virtual_address_space_adjustments,
+                ic.tc.slot,
+            );
+            const syscall_parameter_address_restrictions = ic.tc.feature_set.active(
+                .syscall_parameter_address_restrictions,
                 ic.tc.slot,
             );
             const account_data_direct_mapping = ic.tc.feature_set.active(
@@ -1108,6 +1186,33 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                 &info,
             );
 
+            // before initiating CPI, the caller may have modified the
+            // account (caller_account). We need to update the corresponding
+            // BorrowedAccount (callee_account) so the callee can see the
+            // changes.
+            if (syscall_parameter_address_restrictions) {
+                for (accounts.slice()) |*translated| {
+                    var callee_account = try ic.borrowInstructionAccount(translated.index_in_caller);
+                    defer callee_account.release();
+                    const update_caller = try updateCalleeAccount(
+                        allocator,
+                        ic,
+                        memory_map,
+                        &callee_account,
+                        &translated.caller_account,
+                        syscall_parameter_address_restrictions,
+                        virtual_address_space_adjustments,
+                        account_data_direct_mapping,
+                    );
+                    // this is effectively a noop since update_caller_account_region is hardcoded
+                    // to true by translateAccounts whenever syscall_parameter_address_restrictions
+                    // is enabled, but we set it here to mirror agave's logic. this helps ensure our
+                    // code remains conformant even if translateAccounts changes later.
+                    translated.update_caller_account_region =
+                        translated.update_caller_account_info or update_caller;
+                }
+            }
+
             // Process the callee instruction.
             // Doesn't call `executeNativeCpiInstruction` as info already setup.
             try sig.runtime.executor.executeInstruction(allocator, ic.tc, info);
@@ -1124,6 +1229,7 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                         memory_map,
                         &translated.caller_account,
                         &callee_account,
+                        syscall_parameter_address_restrictions,
                         virtual_address_space_adjustments,
                         account_data_direct_mapping,
                     );
@@ -1945,8 +2051,10 @@ test "updateCalleeAccount: lamports owner" {
         _ = try updateCalleeAccount(
             allocator,
             &ctx.ic,
+            &ca.memory_map,
             &callee_account,
             &caller_account,
+            virtual_address_space_adjustments, // syscall_parameter_address_restrictions
             virtual_address_space_adjustments,
             false, // account_data_direct_mapping
         );
@@ -1983,8 +2091,10 @@ test "updateCalleeAccount: data writable" {
         _ = try updateCalleeAccount(
             allocator,
             &ctx.ic,
+            &ca.memory_map,
             &callee_account,
             &caller_account,
+            virtual_address_space_adjustments, // syscall_parameter_address_restrictions
             virtual_address_space_adjustments,
             false, // account_data_direct_mapping
         );
@@ -1999,8 +2109,10 @@ test "updateCalleeAccount: data writable" {
             try updateCalleeAccount(
                 allocator,
                 &ctx.ic,
+                &ca.memory_map,
                 &callee_account,
                 &caller_account,
+                virtual_address_space_adjustments, // syscall_parameter_address_restrictions
                 virtual_address_space_adjustments,
                 true, // account_data_direct_mapping
             ),
@@ -2015,8 +2127,10 @@ test "updateCalleeAccount: data writable" {
             try updateCalleeAccount(
                 allocator,
                 &ctx.ic,
+                &ca.memory_map,
                 &callee_account,
                 &caller_account,
+                virtual_address_space_adjustments, // syscall_parameter_address_restrictions
                 virtual_address_space_adjustments,
                 true, // account_data_direct_mapping
             ),
@@ -2030,28 +2144,27 @@ test "updateCalleeAccount: data writable" {
         _ = try updateCalleeAccount(
             allocator,
             &ctx.ic,
+            &ca.memory_map,
             &callee_account,
             &caller_account,
+            virtual_address_space_adjustments, // syscall_parameter_address_restrictions
             virtual_address_space_adjustments,
             true, // account_data_direct_mapping
         );
         try std.testing.expectEqualSlices(u8, callee_account.constAccountData(), "");
 
-        // growing beyond `address_space`
+        // CallerAccount translation enforces address-space limits before this point.
         (try caller_account.ref_to_len_in_vm.get(.mutable)).* = MAX_PERMITTED_DATA_INCREASE + 7;
-        const result = updateCalleeAccount(
+        try std.testing.expectEqual(virtual_address_space_adjustments, try updateCalleeAccount(
             allocator,
             &ctx.ic,
+            &ca.memory_map,
             &callee_account,
             &caller_account,
+            virtual_address_space_adjustments, // syscall_parameter_address_restrictions
             virtual_address_space_adjustments,
             true, // account_data_direct_mapping
-        );
-        if (virtual_address_space_adjustments) {
-            try std.testing.expectError(InstructionError.InvalidRealloc, result);
-        } else {
-            _ = try result;
-        }
+        ));
     }
 }
 
@@ -2090,8 +2203,10 @@ test "updateCalleeAccount: data readonly" {
             updateCalleeAccount(
                 allocator,
                 &ctx.ic,
+                &ca.memory_map,
                 &callee_account,
                 &caller_account,
+                false, // syscall_parameter_address_restrictions
                 false, // virtual_address_space_adjustments
                 false, // account_data_direct_mapping
             ),
@@ -2106,8 +2221,10 @@ test "updateCalleeAccount: data readonly" {
             updateCalleeAccount(
                 allocator,
                 &ctx.ic,
+                &ca.memory_map,
                 &callee_account,
                 &caller_account,
+                virtual_address_space_adjustments, // syscall_parameter_address_restrictions
                 virtual_address_space_adjustments,
                 true, // account_data_direct_mapping
             ),
@@ -2122,8 +2239,10 @@ test "updateCalleeAccount: data readonly" {
             updateCalleeAccount(
                 allocator,
                 &ctx.ic,
+                &ca.memory_map,
                 &callee_account,
                 &caller_account,
+                virtual_address_space_adjustments, // syscall_parameter_address_restrictions
                 virtual_address_space_adjustments,
                 true, // account_data_direct_mapping
             ),
@@ -2163,8 +2282,9 @@ test "updateCallerAccount: lamports owner" {
             &ca.memory_map,
             &caller_account,
             &callee_account,
-            virtual_address_space_adjustments,
-            virtual_address_space_adjustments,
+            virtual_address_space_adjustments, // syscall_parameter_address_restrictions
+            virtual_address_space_adjustments, // virtual_address_space_adjustments
+            virtual_address_space_adjustments, // account_data_direct_mapping
         );
 
         try std.testing.expectEqual(caller_account.lamports.*, 42);
@@ -2216,6 +2336,7 @@ test "updateCallerAccount: data" {
             &ca.memory_map,
             &caller_account,
             &callee_account,
+            false, // syscall_parameter_address_restrictions
             false, // virtual_address_space_adjustments
             false, // account_data_direct_mapping
         );
@@ -2246,6 +2367,7 @@ test "updateCallerAccount: data" {
         &ca.memory_map,
         &caller_account,
         &callee_account,
+        false, // syscall_parameter_address_restrictions
         false, // virtual_address_space_adjustments
         false, // account_data_direct_mapping
     );
@@ -2265,6 +2387,7 @@ test "updateCallerAccount: data" {
         &ca.memory_map,
         &caller_account,
         &callee_account,
+        false, // syscall_parameter_address_restrictions
         false, // virtual_address_space_adjustments
         false, // account_data_direct_mapping
     ));
@@ -2276,6 +2399,7 @@ test "updateCallerAccount: data" {
         &ca.memory_map,
         &caller_account,
         &callee_account,
+        false, // syscall_parameter_address_restrictions
         false, // virtual_address_space_adjustments
         false, // account_data_direct_mapping
     );
@@ -2301,6 +2425,7 @@ fn testCpiCommon(comptime AccountType: type) !void {
 
         if (virtual_address_space_adjustments) {
             const feature_set: *sig.core.FeatureSet = @constCast(ctx.tc.feature_set);
+            feature_set.setSlot(.syscall_parameter_address_restrictions, ctx.tc.slot);
             feature_set.setSlot(.virtual_address_space_adjustments, ctx.tc.slot);
             feature_set.setSlot(.account_data_direct_mapping, ctx.tc.slot);
         }
