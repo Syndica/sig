@@ -1,13 +1,6 @@
 const std = @import("std");
-const builtin = @import("builtin");
 
 const linux = std.os.linux;
-
-comptime {
-    if (!builtin.link_libc) {
-        @compileError("lib.clock requires libc clock_gettime");
-    }
-}
 
 pub const Unit = enum {
     /// Nanoseconds.
@@ -38,7 +31,7 @@ pub fn wallclock(comptime unit: Unit) u64 {
     return clockGetTime(.REALTIME, unit);
 }
 
-/// Initializes libc's clock path before services install seccomp.
+/// Initializes Zig's vDSO clock path before services install seccomp.
 pub fn warmup() void {
     std.mem.doNotOptimizeAway(wallclock(.ns));
     std.mem.doNotOptimizeAway(monotonic(.ns));
@@ -46,10 +39,11 @@ pub fn warmup() void {
 
 fn clockGetTime(clock_id: linux.clockid_t, comptime unit: Unit) u64 {
     var ts: linux.timespec = undefined;
-    const ret = std.c.clock_gettime(clock_id, &ts);
+    const ret = linux.clock_gettime(clock_id, &ts);
 
-    if (ret != 0) {
-        std.debug.panic("clock_gettime failed: {}", .{std.posix.errno(ret)});
+    switch (linux.E.init(ret)) {
+        .SUCCESS => {},
+        else => |err| std.debug.panic("clock_gettime failed: {}", .{err}),
     }
 
     const sec: u64 = @intCast(ts.sec);

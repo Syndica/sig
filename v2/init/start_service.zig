@@ -41,6 +41,7 @@ comptime {
         if (@typeInfo(Return).error_union.payload != noreturn) @compileError("Invalid return type");
 
         @export(&serviceMain, .{ .name = "svc_main_" ++ @tagName(root.name) });
+        @export(&preSandboxInit, .{ .name = "svc_presandbox_init_" ++ @tagName(root.name) });
         @export(&handleSegfault, .{ .name = "svc_fault_handler_" ++ @tagName(root.name) });
     }
 }
@@ -81,6 +82,13 @@ fn serviceLog(
     tracy.print(fmt_string, args);
 
     nosuspend writer.interface.print(fmt_string, args) catch return;
+}
+
+fn preSandboxInit(params: lib.ipc.ResolvedArgs) callconv(.c) void {
+    // Service libraries do not enter through std.start, so restore the auxv
+    // pointer Zig's vDSO lookup needs before seccomp blocks clock_gettime.
+    std.os.linux.elf_aux_maybe = params.linux_auxv;
+    lib.clock.warmup();
 }
 
 fn serviceMain(params: lib.ipc.ResolvedArgs) callconv(.c) void {

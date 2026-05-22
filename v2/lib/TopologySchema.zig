@@ -484,6 +484,7 @@ pub fn Bind(
             var args: lib.ipc.ResolvedArgs = .{
                 .stderr = params.stderr.handle,
                 .exit = @ptrCast((try params.exit.mmap(null)).ptr),
+                .linux_auxv = std.os.linux.elf_aux_maybe,
 
                 .rw = @splat(null),
                 .rw_len = @splat(0),

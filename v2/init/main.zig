@@ -158,12 +158,6 @@ pub fn main() !void {
         },
     });
 
-    // Exercise libc clock_gettime before services install seccomp. glibc uses
-    // vDSO function pointers initialized from auxv at process startup, then
-    // falls back to the syscall only if unavailable. Services inherit this
-    // process state; clock_gettime remains blocked so sandboxed fallback faults.
-    lib.clock.warmup();
-
     switch (config.sandboxing_mode) {
         .sandboxed => try topology.spawnAndWait(
             allocator,
