@@ -12,7 +12,7 @@ const Pubkey = sig.core.Pubkey;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 const StatusCache = sig.core.StatusCache;
 const StatusChecker = sig.runtime.execution_interfaces.StatusChecker;
-const TransactionError = sig.ledger.transaction_status.TransactionError;
+const TransactionError = sig.core.transaction_error.TransactionError;
 
 pub const SlotAccountReaderAdapter = struct {
     reader: SlotAccountReader,

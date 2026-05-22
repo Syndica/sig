@@ -36,7 +36,7 @@ const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnD
 const AccountMeta = sig.core.instruction.InstructionAccount;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
-const TransactionError = sig.ledger.transaction_status.TransactionError;
+const TransactionError = sig.core.transaction_error.TransactionError;
 const ComputeBudgetLimits = compute_budget_program.ComputeBudgetLimits;
 const ComputeBudgetInstructionDetails = compute_budget_program.ComputeBudgetInstructionDetails;
 const InstructionTrace = TransactionContext.InstructionTrace;

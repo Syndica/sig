@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 const AccountSharedData = @import("AccountSharedData.zig");
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
-const TransactionError = sig.ledger.transaction_status.TransactionError;
+const TransactionError = sig.core.transaction_error.TransactionError;
 
 pub const AccountLoadError = error{ OutOfMemory, AccountsDBError };
 

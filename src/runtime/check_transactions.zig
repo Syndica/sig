@@ -26,7 +26,7 @@ const NonceVersions = sig.runtime.nonce.Versions;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 
-const TransactionError = sig.ledger.transaction_status.TransactionError;
+const TransactionError = sig.core.transaction_error.TransactionError;
 
 const deinitAccountMap = sig.runtime.testing.deinitAccountMap;
 

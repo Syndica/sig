@@ -11,7 +11,7 @@ const Feature = sig.core.features.Feature;
 const Pubkey = sig.core.Pubkey;
 const Ed25519 = std.crypto.sign.Ed25519;
 const TransactionInstruction = sig.core.transaction.Instruction;
-const TransactionError = sig.ledger.transaction_status.TransactionError;
+const TransactionError = sig.core.transaction_error.TransactionError;
 
 /// https://github.com/anza-xyz/agave/blob/df063a8c6483ad1d2bbbba50ab0b7fd7290eb7f4/cost-model/src/block_cost_limits.rs#L15
 /// Cluster averaged compute unit to micro-sec conversion rate

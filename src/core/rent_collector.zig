@@ -6,7 +6,7 @@ const Epoch = sig.core.Epoch;
 const Rent = sig.runtime.sysvar.Rent;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const EpochSchedule = sig.core.EpochSchedule;
-const TransactionError = sig.ledger.transaction_status.TransactionError;
+const TransactionError = sig.core.transaction_error.TransactionError;
 
 pub const RENT_EXEMPT_RENT_EPOCH: Epoch = std.math.maxInt(Epoch);
 
