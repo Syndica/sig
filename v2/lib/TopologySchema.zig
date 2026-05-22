@@ -340,7 +340,7 @@ pub fn Bind(
         ) []const RequiredRegion {
             comptime {
                 @setEvalBranchQuota(100_000);
-                
+
                 const service_entry = topo.services[@intFromEnum(service_id)];
                 var required: []const RequiredRegion = &.{};
                 for (service_entry.regions) |region| {

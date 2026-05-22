@@ -170,7 +170,7 @@ pub fn main() !void {
         .net_to_shred = .{ .port = config.shred_network.recv_port },
         // net <-> gossip
         .net_to_gossip = .{ .port = config.gossip.port },
-        
+
         // gossip -(source)-> snapshot
         .gossip_source_to_snapshot = {},
         // snapshot -> accounts_db
@@ -182,7 +182,6 @@ pub fn main() !void {
         .shreds_to_replay = {},
         // replay <-> accounts_db
         .replay_account_lookups = {},
-
 
         .telemetry = .{
             .port = config.telemetry.port,
@@ -233,7 +232,7 @@ pub const topology = topology_schema.Bind(Region, .init(.{
         .@"net:to_gossip",
         .@"gossip:from_net",
     }),
-    
+
     .gossip_source_to_snapshot = .initMany(&.{
         .@"gossip:source_to_snapshot",
         .@"snapshot:source_from_gossip",
@@ -291,14 +290,13 @@ pub const Region = union(enum) {
 
     net_to_shred: NetPair,
     net_to_gossip: NetPair,
-    
+
     gossip_source_to_snapshot,
     snapshot_ready_to_accounts_db,
     account_pool: struct { memory: usize },
 
     shreds_to_replay,
     replay_account_lookups,
-
 
     telemetry: tel.Region.InitParams,
 
@@ -443,7 +441,7 @@ pub const Region = union(enum) {
                 const data: *lib.accounts_db.AccountPool = @ptrCast(buf);
                 data.init(params.memory);
             },
-            
+
             .shreds_to_replay => {
                 std.debug.assert(buf.len == @sizeOf(lib.shred.DeshredRing));
                 const data: *lib.shred.DeshredRing = @ptrCast(buf);
