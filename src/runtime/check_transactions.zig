@@ -5,7 +5,6 @@ const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
-const Account = sig.core.Account;
 const AccountReader = sig.runtime.execution_interfaces.AccountReader;
 
 const Hash = sig.core.Hash;
@@ -438,8 +437,10 @@ pub fn loadMessageNonceAccount(
     var nonce_account_consumed = false;
     defer if (!nonce_account_consumed) nonce_account.deinit(allocator);
 
-    const nonce_data = verifyNonceAccountSharedData(
-        &nonce_account,
+    var nonce_account_data = std.io.fixedBufferStream(nonce_account.data);
+    const nonce_data = verifyNonceAccount(
+        &nonce_account.owner,
+        nonce_account_data.reader(),
         &transaction.recent_blockhash,
     ) orelse return null;
 
@@ -456,39 +457,20 @@ pub fn loadMessageNonceAccount(
     return .{ nonce_address, nonce_account, nonce_data };
 }
 
-pub fn verifyNonceAccount(account: Account, recent_blockhash: *const Hash) ?NonceData {
-    if (!account.owner.equals(&sig.runtime.program.system.ID)) return null;
+pub fn verifyNonceAccount(
+    owner: *const Pubkey,
+    account_data_reader: anytype,
+    recent_blockhash: *const Hash,
+) ?NonceData {
+    if (!owner.equals(&sig.runtime.program.system.ID)) return null;
 
-    // could probably be smaller
     var deserialize_buf: [@sizeOf(NonceData) * 2]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&deserialize_buf);
 
-    var data = account.data.iterator();
     const nonce = sig.bincode.read(
         fba.allocator(),
         NonceVersions,
-        data.reader(),
-        .{},
-    ) catch return null;
-
-    const nonce_data = nonce.verify(recent_blockhash.*) orelse return null;
-
-    return nonce_data;
-}
-
-fn verifyNonceAccountSharedData(
-    account: *const AccountSharedData,
-    recent_blockhash: *const Hash,
-) ?NonceData {
-    if (!account.owner.equals(&sig.runtime.program.system.ID)) return null;
-
-    var deserialize_buf: [@sizeOf(NonceData) * 2]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&deserialize_buf);
-
-    const nonce = sig.bincode.readFromSlice(
-        fba.allocator(),
-        NonceVersions,
-        account.data,
+        account_data_reader,
         .{},
     ) catch return null;
 

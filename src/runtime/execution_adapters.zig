@@ -4,6 +4,7 @@ const sig = @import("../sig.zig");
 const AccountReader = sig.runtime.execution_interfaces.AccountReader;
 const AccountLoadError = sig.runtime.execution_interfaces.AccountLoadError;
 const EpochStakeReader = sig.runtime.execution_interfaces.EpochStakeReader;
+const account_conversions = sig.runtime.account_conversions;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const Ancestors = sig.core.Ancestors;
 const Hash = sig.core.Hash;
@@ -33,7 +34,7 @@ pub const SlotAccountReaderAdapter = struct {
         } orelse return null;
         defer account.deinit(allocator);
 
-        return AccountSharedData.fromAccount(allocator, &account) catch |err| switch (err) {
+        return account_conversions.fromAccount(allocator, &account) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
         };
     }

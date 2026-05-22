@@ -14,6 +14,7 @@ const Ancestors = sig.core.Ancestors;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
+const account_conversions = sig.runtime.account_conversions;
 const AccountSharedData = sig.runtime.AccountSharedData;
 
 /// Interface for both reading and writing accounts.
@@ -108,7 +109,8 @@ pub const AccountReader = union(enum) {
                             const cloned = try data.clone(allocator);
                             if (slot.slot >= latest_known[0]) {
                                 if (latest_known[1]) |acc| acc.deinit(allocator);
-                                latest_known = .{ slot.slot, cloned.toOwnedAccount() };
+                                const owned_cloned = account_conversions.toOwnedAccount(cloned);
+                                latest_known = .{ slot.slot, owned_cloned };
                             } else {
                                 cloned.deinit(allocator);
                             }
@@ -128,7 +130,7 @@ pub const AccountReader = union(enum) {
 
                 // see if we have that account in rooted storage
                 const account = (try db.rooted.get(allocator, address)) orelse return null;
-                const owned = account.toOwnedAccount();
+                const owned = account_conversions.toOwnedAccount(account);
                 // Filter out zero-lamport accounts (deleted accounts)
                 if (owned.lamports == 0) {
                     owned.deinit(allocator);
@@ -1170,15 +1172,17 @@ test "put and get zero lamports before & after cleanup" {
     try putAccountIntoStores({}, &stores, slot100, pk4, one_lamport);
     try putAccountIntoStores({}, &stores, slot200, pk4, one_lamport);
 
+    const one_lamport_account = account_conversions.asAccount(one_lamport);
+
     // where lamports == 0, treated as non-present, before and after
     try expectAccountFromStores(&stores, &ancestors_before, pk1, null);
     try expectAccountFromStores(&stores, &ancestors_after, pk1, null);
     try expectAccountFromStores(&stores, &ancestors_before, pk2, null);
-    try expectAccountFromStores(&stores, &ancestors_after, pk2, one_lamport.asAccount());
-    try expectAccountFromStores(&stores, &ancestors_before, pk3, one_lamport.asAccount());
+    try expectAccountFromStores(&stores, &ancestors_after, pk2, one_lamport_account);
+    try expectAccountFromStores(&stores, &ancestors_before, pk3, one_lamport_account);
     try expectAccountFromStores(&stores, &ancestors_after, pk3, null);
-    try expectAccountFromStores(&stores, &ancestors_before, pk4, one_lamport.asAccount());
-    try expectAccountFromStores(&stores, &ancestors_after, pk4, one_lamport.asAccount());
+    try expectAccountFromStores(&stores, &ancestors_before, pk4, one_lamport_account);
+    try expectAccountFromStores(&stores, &ancestors_after, pk4, one_lamport_account);
 
     // but it still exists in the unrooted account map regardless
     try expectDbUnrootedPubkeysInSlot(real_state, slot100, &.{ pk1, pk2, pk3, pk4 });
@@ -1199,11 +1203,11 @@ test "put and get zero lamports before & after cleanup" {
     try expectAccountFromStores(&stores, &ancestors_before, pk1, null);
     try expectAccountFromStores(&stores, &ancestors_after, pk1, null);
     try expectAccountFromStores(&stores, &ancestors_before, pk2, null);
-    try expectAccountFromStores(&stores, &ancestors_after, pk2, one_lamport.asAccount());
-    try expectAccountFromStores(&stores, &ancestors_before, pk3, one_lamport.asAccount());
+    try expectAccountFromStores(&stores, &ancestors_after, pk2, one_lamport_account);
+    try expectAccountFromStores(&stores, &ancestors_before, pk3, one_lamport_account);
     try expectAccountFromStores(&stores, &ancestors_after, pk3, null);
-    try expectAccountFromStores(&stores, &ancestors_before, pk4, one_lamport.asAccount());
-    try expectAccountFromStores(&stores, &ancestors_after, pk4, one_lamport.asAccount());
+    try expectAccountFromStores(&stores, &ancestors_before, pk4, one_lamport_account);
+    try expectAccountFromStores(&stores, &ancestors_after, pk4, one_lamport_account);
 
     // and after we run the manager on it to clean up slot200 as well...
     try real_store.updateRoot(slot200, &ancestors_after);
@@ -1262,8 +1266,10 @@ test "put and get zero lamports across forks" {
     const fork_c: Ancestors = try .initWithSlots(allocator, &.{ slot1, slot3 });
     defer fork_c.deinit(allocator);
 
+    const one_lamport_account = account_conversions.asAccount(one_lamport);
+
     try expectAccountFromStores(&stores, &fork_a, pk, null);
-    try expectAccountFromStores(&stores, &fork_b, pk, one_lamport.asAccount());
+    try expectAccountFromStores(&stores, &fork_b, pk, one_lamport_account);
     try expectAccountFromStores(&stores, &fork_c, pk, null);
 }
 
@@ -1322,9 +1328,9 @@ test "put and get across competing forks" {
     try putAccountIntoStores({}, &stores, slot2, pk, asd_b);
     try putAccountIntoStores({}, &stores, slot3, pk, asd_c);
 
-    try expectAccountFromStores(&stores, &fork_a, pk, asd_a.asAccount());
-    try expectAccountFromStores(&stores, &fork_b, pk, asd_b.asAccount());
-    try expectAccountFromStores(&stores, &fork_c, pk, asd_c.asAccount());
+    try expectAccountFromStores(&stores, &fork_a, pk, account_conversions.asAccount(asd_a));
+    try expectAccountFromStores(&stores, &fork_b, pk, account_conversions.asAccount(asd_b));
+    try expectAccountFromStores(&stores, &fork_c, pk, account_conversions.asAccount(asd_c));
 }
 
 fn expectDbUnrootedPubkeysInSlot(
