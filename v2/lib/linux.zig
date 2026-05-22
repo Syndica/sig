@@ -256,6 +256,141 @@ pub const bpf = struct {
         };
     }
 
+    /// Configuration for a single allowed syscall in a per-service seccomp filter.
+    /// Each entry allows one syscall, optionally restricted by arg0 value.
+    ///
+    /// Ref: [REF-SECCOMP-MAN] https://man7.org/linux/man-pages/man2/seccomp.2.html
+    ///      struct seccomp_data { int nr; __u32 arch; __u64 instruction_pointer; __u64 args[6]; }
+    pub const SyscallConfig = struct {
+        syscall: std.os.linux.SYS,
+        arg0: ArgMatch = .anything,
+
+        pub const ArgMatch = union(enum) {
+            /// Allow this syscall unconditionally (no argument checking).
+            anything,
+            /// Allow this syscall only when arg0 equals this value.
+            only: usize,
+        };
+
+        /// Number of BPF instructions this config generates.
+        /// Unconditional allow = 2 (JEQ + RET ALLOW).
+        /// Arg0-restricted = 5 (JEQ + LD arg0 + JEQ + RET ALLOW + RET DENY).
+        pub fn instrCount(self: SyscallConfig) usize {
+            return switch (self.arg0) {
+                .anything => 2,
+                .only => 5,
+            };
+        }
+    };
+
+    /// Base syscalls every service gets. These provide minimal process lifecycle
+    /// support per the sandboxing model:
+    /// - clock_nanosleep: std.Thread.sleep on Linux x86-64 (Zig 0.15.2)
+    /// - exit/exit_group: process termination
+    ///
+    /// Note: write/writev to stderr are handled separately with fd-restriction.
+    pub const base_syscall_configs: []const SyscallConfig = &.{
+        .{ .syscall = .clock_nanosleep },
+        .{ .syscall = .exit },
+        .{ .syscall = .exit_group },
+    };
+
+    /// Compute total BPF instruction count for a per-service seccomp filter.
+    ///
+    /// Layout: preamble(1) + base_rules + service_rules + stderr_rules(10) + deny(1)
+    ///
+    /// - preamble: LD ABS seccomp_data.nr (1 instruction)
+    /// - base_rules: base_syscall_configs entries (always unconditional = 2 each)
+    /// - service_rules: service-specific entries (2 or 5 each depending on arg0)
+    /// - stderr_rules: write + writev fd-restricted to stderr (2 × 5 = 10)
+    /// - deny: RET TRAP fallthrough (1 instruction)
+    ///
+    /// Max BPF instructions per filter: 4096 (BPF_MAXINSNS) [REF-SECCOMP-MAN].
+    pub fn computeFilterLen(comptime service_configs: []const SyscallConfig) comptime_int {
+        var len: usize = 1; // preamble: LD ABS seccomp_data.nr
+        for (base_syscall_configs) |cfg| len += cfg.instrCount();
+        for (service_configs) |cfg| len += cfg.instrCount();
+        len += 10; // stderr write + writev (2 × allowSyscallOnFd = 2 × 5)
+        len += 1; // fall-through: RET TRAP
+        return len;
+    }
+
+    /// Compute total BPF instruction count for a comptime config slice.
+    fn comptimeRulesLen(comptime configs: []const SyscallConfig) comptime_int {
+        var len: usize = 0;
+        for (configs) |cfg| len += cfg.instrCount();
+        return len;
+    }
+
+    /// Generate BPF instructions for a comptime-known slice of SyscallConfigs.
+    /// Each unconditional entry produces 2 instructions (JEQ + RET ALLOW).
+    /// Each arg0-restricted entry produces 5 instructions (JEQ + LD arg0 + JEQ + RET ALLOW + RET DENY).
+    ///
+    /// The accumulator is preserved (holds syscall NR) through skipped blocks because:
+    /// - If syscall matches: block terminates with RET (no fall-through)
+    /// - If syscall doesn't match: JEQ jumps over entire block, accumulator unchanged
+    fn genRules(comptime configs: []const SyscallConfig) [comptimeRulesLen(configs)]sock_filter {
+        comptime var result: [comptimeRulesLen(configs)]sock_filter = undefined;
+        comptime var offset: usize = 0;
+        inline for (configs) |cfg| {
+            switch (cfg.arg0) {
+                .anything => {
+                    result[offset] = jump(JMP | JEQ | K, @intFromEnum(cfg.syscall), 0, 1);
+                    result[offset + 1] = stmt(RET | K, SECCOMP.RET.ALLOW);
+                    offset += 2;
+                },
+                .only => |val| {
+                    result[offset] = jump(JMP | JEQ | K, @intFromEnum(cfg.syscall), 0, 4);
+                    result[offset + 1] = stmt(LD + W + ABS, @offsetOf(SECCOMP.data, "arg0"));
+                    result[offset + 2] = jump(JMP | JEQ | K, @intCast(val), 0, 1);
+                    result[offset + 3] = stmt(RET | K, SECCOMP.RET.ALLOW);
+                    result[offset + 4] = stmt(RET | K, default_deny_action);
+                    offset += 5;
+                },
+            }
+        }
+        return result;
+    }
+
+    /// Generate a per-service seccomp BPF filter.
+    ///
+    /// Base rules (exit, exit_group, clock_nanosleep) are always included.
+    /// stderr write/writev are fd-restricted to the given fd.
+    /// All other syscalls are denied with SECCOMP_RET_TRAP (delivers SIGSYS).
+    ///
+    /// Ref: [REF-SECCOMP-MAN] https://man7.org/linux/man-pages/man2/seccomp.2.html
+    ///      for seccomp_data layout and BPF semantics.
+    /// Ref: [REF-SECCOMP-KERNEL] https://docs.kernel.org/userspace-api/seccomp_filter.html
+    ///      for filter installation requirements.
+    pub fn serviceFilter(
+        comptime service_configs: []const SyscallConfig,
+        maybe_stderr: ?std.os.linux.fd_t,
+    ) [computeFilterLen(service_configs)]sock_filter {
+        // Load syscall number into accumulator
+        const preamble = .{stmt(LD + W + ABS, @offsetOf(SECCOMP.data, "nr"))};
+
+        // Base rules: always-allowed syscalls (comptime)
+        const base_rules = comptime genRules(base_syscall_configs);
+
+        // Service-specific rules (comptime)
+        const svc_rules = comptime genRules(service_configs);
+
+        // Stderr fd-restricted rules (runtime fd value)
+        const stderr_rules = if (maybe_stderr) |fd| blk: {
+            const stderr: u32 = std.math.cast(u32, fd) orelse
+                std.debug.panic("Negative fd: {}", .{fd});
+            break :blk allowSyscallOnFd(@intFromEnum(syscalls.write), stderr) ++
+                allowSyscallOnFd(@intFromEnum(syscalls.writev), stderr);
+        } else
+            // No stderr: fill with nops to maintain constant array size
+            .{jump(JMP, 0, 9, 9)} ++ .{jump(JMP, 0, 0, 0)} ** 9;
+
+        // Deny all unmatched syscalls with SIGSYS
+        const deny = .{stmt(RET + K, default_deny_action)};
+
+        return preamble ++ base_rules ++ svc_rules ++ stderr_rules ++ deny;
+    }
+
     /// Only allows writing to stderr, sleeping, and exiting.
     pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [64]sock_filter {
         // load syscall number
@@ -349,3 +484,286 @@ pub const bpf = struct {
     pub const K = 0x00;
     pub const X = 0x08;
 };
+
+// Tests for SyscallConfig, instrCount, and computeFilterLen
+const testing = std.testing;
+
+test "SyscallConfig.instrCount: unconditional returns 2" {
+    const cfg: bpf.SyscallConfig = .{ .syscall = .exit };
+    try testing.expectEqual(@as(usize, 2), cfg.instrCount());
+}
+
+test "SyscallConfig.instrCount: arg0-restricted returns 5" {
+    const cfg: bpf.SyscallConfig = .{ .syscall = .write, .arg0 = .{ .only = 2 } };
+    try testing.expectEqual(@as(usize, 5), cfg.instrCount());
+}
+
+test "base_syscall_configs has 3 entries" {
+    try testing.expectEqual(@as(usize, 3), bpf.base_syscall_configs.len);
+}
+
+test "base_syscall_configs entries are all unconditional" {
+    for (bpf.base_syscall_configs) |cfg| {
+        try testing.expectEqual(@as(usize, 2), cfg.instrCount());
+    }
+}
+
+test "base_syscall_configs contains expected syscalls" {
+    const configs = bpf.base_syscall_configs;
+    try testing.expectEqual(std.os.linux.SYS.clock_nanosleep, configs[0].syscall);
+    try testing.expectEqual(std.os.linux.SYS.exit, configs[1].syscall);
+    try testing.expectEqual(std.os.linux.SYS.exit_group, configs[2].syscall);
+}
+
+test "computeFilterLen: empty service list" {
+    // preamble(1) + base(3×2=6) + service(0) + stderr(10) + deny(1) = 18
+    const len = comptime bpf.computeFilterLen(&.{});
+    try testing.expectEqual(18, len);
+}
+
+test "computeFilterLen: with unconditional entries" {
+    // preamble(1) + base(6) + service(2×2=4) + stderr(10) + deny(1) = 22
+    const configs: []const bpf.SyscallConfig = &.{
+        .{ .syscall = .socket },
+        .{ .syscall = .bind },
+    };
+    const len = comptime bpf.computeFilterLen(configs);
+    try testing.expectEqual(22, len);
+}
+
+test "computeFilterLen: with arg0-restricted entries" {
+    // preamble(1) + base(6) + service(5×2=10) + stderr(10) + deny(1) = 28
+    const configs: []const bpf.SyscallConfig = &.{
+        .{ .syscall = .read, .arg0 = .{ .only = 0 } },
+        .{ .syscall = .write, .arg0 = .{ .only = 1 } },
+    };
+    const len = comptime bpf.computeFilterLen(configs);
+    try testing.expectEqual(28, len);
+}
+
+test "computeFilterLen: mixed unconditional and arg0-restricted" {
+    // preamble(1) + base(6) + service(2+5=7) + stderr(10) + deny(1) = 25
+    const configs: []const bpf.SyscallConfig = &.{
+        .{ .syscall = .socket },
+        .{ .syscall = .write, .arg0 = .{ .only = 3 } },
+    };
+    const len = comptime bpf.computeFilterLen(configs);
+    try testing.expectEqual(25, len);
+}
+
+test "computeFilterLen: all services under BPF_MAXINSNS (4096)" {
+    // Largest expected service is snapshot with 13 unconditional entries:
+    // preamble(1) + base(6) + service(13×2=26) + stderr(10) + deny(1) = 44
+    const snapshot_configs: []const bpf.SyscallConfig = &.{
+        .{ .syscall = .io_uring_setup },
+        .{ .syscall = .io_uring_enter },
+        .{ .syscall = .mmap },
+        .{ .syscall = .munmap },
+        .{ .syscall = .socket },
+        .{ .syscall = .pipe2 },
+        .{ .syscall = .close },
+        .{ .syscall = .openat },
+        .{ .syscall = .mkdirat },
+        .{ .syscall = .getdents64 },
+        .{ .syscall = .lseek },
+        .{ .syscall = .renameat },
+        .{ .syscall = .unlinkat },
+    };
+    const len = comptime bpf.computeFilterLen(snapshot_configs);
+    try testing.expectEqual(44, len);
+    try testing.expect(len < 4096); // BPF_MAXINSNS
+}
+
+test "computeFilterLen: net service (5 entries)" {
+    const net_configs: []const bpf.SyscallConfig = &.{
+        .{ .syscall = .socket },
+        .{ .syscall = .bind },
+        .{ .syscall = .sendto },
+        .{ .syscall = .recvfrom },
+        .{ .syscall = .close },
+    };
+    // preamble(1) + base(6) + service(5×2=10) + stderr(10) + deny(1) = 28
+    const len = comptime bpf.computeFilterLen(net_configs);
+    try testing.expectEqual(28, len);
+}
+
+test "computeFilterLen: replay/shred_receiver (0 entries) equals minimal" {
+    const empty: []const bpf.SyscallConfig = &.{};
+    const len = comptime bpf.computeFilterLen(empty);
+    try testing.expectEqual(18, len);
+}
+
+// Tests for serviceFilter
+
+test "serviceFilter: empty config produces valid minimal filter" {
+    const filter = bpf.serviceFilter(&.{}, 2);
+    // Length = 18 (preamble + base + stderr + deny)
+    try testing.expectEqual(18, filter.len);
+    // First instruction: LD ABS seccomp_data.nr
+    try testing.expectEqual(bpf.LD + bpf.W + bpf.ABS, filter[0].code);
+    try testing.expectEqual(@offsetOf(std.os.linux.SECCOMP.data, "nr"), filter[0].k);
+    // Last instruction: RET TRAP
+    try testing.expectEqual(bpf.RET + bpf.K, filter[filter.len - 1].code);
+    try testing.expectEqual(std.os.linux.SECCOMP.RET.TRAP, filter[filter.len - 1].k);
+}
+
+test "serviceFilter: includes base syscalls (clock_nanosleep, exit, exit_group)" {
+    const filter = bpf.serviceFilter(&.{}, 2);
+    // Instructions 1-2: clock_nanosleep
+    try testing.expectEqual(bpf.JMP | bpf.JEQ | bpf.K, filter[1].code);
+    try testing.expectEqual(@intFromEnum(std.os.linux.SYS.clock_nanosleep), filter[1].k);
+    try testing.expectEqual(bpf.RET | bpf.K, filter[2].code);
+    try testing.expectEqual(std.os.linux.SECCOMP.RET.ALLOW, filter[2].k);
+    // Instructions 3-4: exit
+    try testing.expectEqual(@intFromEnum(std.os.linux.SYS.exit), filter[3].k);
+    try testing.expectEqual(std.os.linux.SECCOMP.RET.ALLOW, filter[4].k);
+    // Instructions 5-6: exit_group
+    try testing.expectEqual(@intFromEnum(std.os.linux.SYS.exit_group), filter[5].k);
+    try testing.expectEqual(std.os.linux.SECCOMP.RET.ALLOW, filter[6].k);
+}
+
+test "serviceFilter: service-specific unconditional rules" {
+    const configs: []const bpf.SyscallConfig = &.{
+        .{ .syscall = .socket },
+        .{ .syscall = .bind },
+    };
+    const filter = bpf.serviceFilter(configs, 2);
+    // Service rules start after preamble(1) + base(6) = offset 7
+    try testing.expectEqual(bpf.JMP | bpf.JEQ | bpf.K, filter[7].code);
+    try testing.expectEqual(@intFromEnum(std.os.linux.SYS.socket), filter[7].k);
+    try testing.expectEqual(std.os.linux.SECCOMP.RET.ALLOW, filter[8].k);
+    try testing.expectEqual(@intFromEnum(std.os.linux.SYS.bind), filter[9].k);
+    try testing.expectEqual(std.os.linux.SECCOMP.RET.ALLOW, filter[10].k);
+}
+
+test "serviceFilter: arg0-restricted rule generates 5 instructions" {
+    const configs: []const bpf.SyscallConfig = &.{
+        .{ .syscall = .read, .arg0 = .{ .only = 7 } },
+    };
+    const filter = bpf.serviceFilter(configs, 2);
+    // Arg0-restricted rule starts at offset 7 (after preamble + base)
+    const offset = 7;
+    // [0] JEQ syscall, skip 4 on miss
+    try testing.expectEqual(bpf.JMP | bpf.JEQ | bpf.K, filter[offset].code);
+    try testing.expectEqual(@intFromEnum(std.os.linux.SYS.read), filter[offset].k);
+    try testing.expectEqual(@as(u8, 0), filter[offset].jt); // match: fall through
+    try testing.expectEqual(@as(u8, 4), filter[offset].jf); // miss: skip 4
+    // [1] LD arg0
+    try testing.expectEqual(bpf.LD + bpf.W + bpf.ABS, filter[offset + 1].code);
+    try testing.expectEqual(@offsetOf(std.os.linux.SECCOMP.data, "arg0"), filter[offset + 1].k);
+    // [2] JEQ arg0 value
+    try testing.expectEqual(bpf.JMP | bpf.JEQ | bpf.K, filter[offset + 2].code);
+    try testing.expectEqual(@as(u32, 7), filter[offset + 2].k);
+    // [3] RET ALLOW
+    try testing.expectEqual(std.os.linux.SECCOMP.RET.ALLOW, filter[offset + 3].k);
+    // [4] RET DENY
+    try testing.expectEqual(std.os.linux.SECCOMP.RET.TRAP, filter[offset + 4].k);
+}
+
+test "serviceFilter: null stderr produces nop jumps" {
+    const filter = bpf.serviceFilter(&.{}, null);
+    // Stderr rules at offset 7 (after preamble + base, no service rules)
+    // First nop should be JMP with k=0
+    try testing.expectEqual(bpf.JMP, filter[7].code);
+    try testing.expectEqual(@as(u32, 0), filter[7].k);
+}
+
+test "serviceFilter: valid stderr produces fd-restricted write/writev" {
+    const filter = bpf.serviceFilter(&.{}, 5);
+    // Stderr rules start at offset 7 (after preamble + base)
+    // write fd-restricted block: 5 instructions
+    try testing.expectEqual(@intFromEnum(std.os.linux.SYS.write), filter[7].k);
+    try testing.expectEqual(@offsetOf(std.os.linux.SECCOMP.data, "arg0"), filter[8].k);
+    try testing.expectEqual(@as(u32, 5), filter[9].k); // fd = 5
+    try testing.expectEqual(std.os.linux.SECCOMP.RET.ALLOW, filter[10].k);
+    try testing.expectEqual(std.os.linux.SECCOMP.RET.TRAP, filter[11].k);
+    // writev fd-restricted block: 5 instructions
+    try testing.expectEqual(@intFromEnum(std.os.linux.SYS.writev), filter[12].k);
+    try testing.expectEqual(@as(u32, 5), filter[14].k); // fd = 5
+}
+
+test "serviceFilter: filter length matches computeFilterLen" {
+    const configs: []const bpf.SyscallConfig = &.{
+        .{ .syscall = .socket },
+        .{ .syscall = .bind },
+        .{ .syscall = .close },
+    };
+    const filter = bpf.serviceFilter(configs, 2);
+    const expected_len = comptime bpf.computeFilterLen(configs);
+    try testing.expectEqual(expected_len, filter.len);
+}
+
+test "serviceFilter: net service filter (5 unconditional)" {
+    const net_configs: []const bpf.SyscallConfig = &.{
+        .{ .syscall = .socket },
+        .{ .syscall = .bind },
+        .{ .syscall = .sendto },
+        .{ .syscall = .recvfrom },
+        .{ .syscall = .close },
+    };
+    const filter = bpf.serviceFilter(net_configs, 2);
+    try testing.expectEqual(28, filter.len);
+    // All service rules should be JEQ+RET pairs
+    var i: usize = 7; // start of service rules
+    while (i < 7 + 10) : (i += 2) { // 5 rules × 2 instructions
+        try testing.expectEqual(bpf.JMP | bpf.JEQ | bpf.K, filter[i].code);
+        try testing.expectEqual(bpf.RET | bpf.K, filter[i + 1].code);
+    }
+}
+
+test "serviceFilter: snapshot service filter (13 unconditional)" {
+    const snapshot_configs: []const bpf.SyscallConfig = &.{
+        .{ .syscall = .io_uring_setup },
+        .{ .syscall = .io_uring_enter },
+        .{ .syscall = .mmap },
+        .{ .syscall = .munmap },
+        .{ .syscall = .socket },
+        .{ .syscall = .pipe2 },
+        .{ .syscall = .close },
+        .{ .syscall = .openat },
+        .{ .syscall = .mkdirat },
+        .{ .syscall = .getdents64 },
+        .{ .syscall = .lseek },
+        .{ .syscall = .renameat },
+        .{ .syscall = .unlinkat },
+    };
+    const filter = bpf.serviceFilter(snapshot_configs, 2);
+    try testing.expectEqual(44, filter.len);
+}
+
+test "serviceFilter: replay/shred_receiver get minimal filter (18 instructions)" {
+    const filter = bpf.serviceFilter(&.{}, 2);
+    try testing.expectEqual(18, filter.len);
+}
+
+test "serviceFilter: deny action is SECCOMP_RET_TRAP" {
+    const filter = bpf.serviceFilter(&.{}, 2);
+    const last = filter[filter.len - 1];
+    try testing.expectEqual(bpf.RET + bpf.K, last.code);
+    try testing.expectEqual(std.os.linux.SECCOMP.RET.TRAP, last.k);
+}
+
+test "serviceFilter: all instructions have valid BPF opcodes" {
+    const filter = bpf.serviceFilter(&.{ .{ .syscall = .socket } }, 2);
+    for (filter) |insn| {
+        const cls = insn.code & 0x07;
+        const valid = (cls == bpf.LD) or (cls == bpf.JMP) or (cls == bpf.RET);
+        try testing.expect(valid);
+    }
+}
+
+test "serviceFilter: mixed unconditional and arg0-restricted" {
+    const configs: []const bpf.SyscallConfig = &.{
+        .{ .syscall = .socket }, // unconditional: 2 instructions
+        .{ .syscall = .write, .arg0 = .{ .only = 2 } }, // arg0-restricted: 5 instructions
+        .{ .syscall = .close }, // unconditional: 2 instructions
+    };
+    const filter = bpf.serviceFilter(configs, 2);
+    // preamble(1) + base(6) + service(2+5+2=9) + stderr(10) + deny(1) = 27
+    try testing.expectEqual(27, filter.len);
+    // Verify the arg0-restricted rule at offset 9 (after preamble + base + first unconditional)
+    try testing.expectEqual(@intFromEnum(std.os.linux.SYS.write), filter[9].k);
+    try testing.expectEqual(@as(u8, 4), filter[9].jf); // skip 4 on miss
+    // Verify the third rule (close) after the arg0-restricted block
+    try testing.expectEqual(@intFromEnum(std.os.linux.SYS.close), filter[14].k);
+}

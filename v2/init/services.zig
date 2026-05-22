@@ -79,6 +79,41 @@ fn getRequiredRegions(service: Service) []const RequiredRegion {
     }
 }
 
+/// Returns the per-service syscall configurations declared in services.zon.
+/// Each returned entry maps directly to a SyscallConfig for BPF filter generation.
+/// Comptime validates that all syscall names exist in the target's std.os.linux.SYS.
+pub fn getServiceSyscalls(service: Service) []const lib.linux.bpf.SyscallConfig {
+    switch (service) {
+        inline else => |s| {
+            inline for (services_zon.services) |_service| {
+                if (comptime std.mem.eql(u8, @tagName(_service.name), @tagName(s))) {
+                    comptime var configs: []const lib.linux.bpf.SyscallConfig = &.{};
+                    inline for (_service.syscalls) |sc| {
+                        // Validate syscall name exists in target SYS enum (compile error if not)
+                        _ = comptime @field(std.os.linux.SYS, @tagName(sc.syscall));
+                        configs = configs ++ &[_]lib.linux.bpf.SyscallConfig{.{
+                            .syscall = @field(std.os.linux.SYS, @tagName(sc.syscall)),
+                        }};
+                    }
+                    return configs;
+                }
+            } else comptime unreachable;
+        },
+    }
+}
+
+/// Install a per-service seccomp BPF filter based on the syscall declarations in services.zon.
+fn installSeccomp(comptime service: Service, stderr: std.fs.File) void {
+    const syscall_configs = comptime getServiceSyscalls(service);
+    const bpf_filters = lib.linux.bpf.serviceFilter(syscall_configs, stderr.handle);
+    const program: lib.linux.bpf.sock_fprog = .{
+        .len = bpf_filters.len,
+        .sock_filter = &bpf_filters,
+    };
+    const ret = linux.seccomp(linux.SECCOMP.SET_MODE_FILTER, 0, &program);
+    if (e(ret) != .SUCCESS) std.debug.panic("seccomp err: {}", .{e(ret)});
+}
+
 fn getFaultHandler(service: Service) sigaction_fn {
     return switch (service) {
         inline else => |s| @extern(
@@ -623,20 +658,9 @@ fn spawnService(
     // makes it impossible for the service to gain privileges
     std.debug.assert(try std.posix.prctl(.SET_NO_NEW_PRIVS, .{ 1, 0, 0, 0 }) == 0);
 
-    // install a basic seccomp filter that bans syscalls except write+sleep
-    {
-        const bpf_filters = lib.linux.bpf.printSleepExit(stderr.handle);
-        const program: lib.linux.bpf.sock_fprog = .{
-            .len = bpf_filters.len,
-            .sock_filter = &bpf_filters,
-        };
-
-        const ret = linux.seccomp(linux.SECCOMP.SET_MODE_FILTER, 0, &program);
-        const err = e(ret);
-        if (err != .SUCCESS) {
-            std.debug.panic("seccomp err: {}", .{err});
-            return;
-        }
+    // Install per-service seccomp filter (least privilege)
+    switch (service_instance.service) {
+        inline else => |svc| installSeccomp(svc, stderr),
     }
 
     getEntrypoint(service_instance.service)(resolved_args);
@@ -896,4 +920,81 @@ fn spawnServiceNoSandbox(
             thread_exit_ctx,
         },
     );
+}
+
+// Tests for getServiceSyscalls and per-service seccomp integration
+
+test "getServiceSyscalls: net has 5 entries" {
+    const configs = getServiceSyscalls(.net);
+    try std.testing.expectEqual(@as(usize, 5), configs.len);
+}
+
+test "getServiceSyscalls: gossip has 1 entry" {
+    const configs = getServiceSyscalls(.gossip);
+    try std.testing.expectEqual(@as(usize, 1), configs.len);
+}
+
+test "getServiceSyscalls: shred_receiver has 0 entries" {
+    const configs = getServiceSyscalls(.shred_receiver);
+    try std.testing.expectEqual(@as(usize, 0), configs.len);
+}
+
+test "getServiceSyscalls: replay has 0 entries" {
+    const configs = getServiceSyscalls(.replay);
+    try std.testing.expectEqual(@as(usize, 0), configs.len);
+}
+
+test "getServiceSyscalls: telemetry has 10 entries" {
+    const configs = getServiceSyscalls(.telemetry);
+    try std.testing.expectEqual(@as(usize, 10), configs.len);
+}
+
+test "getServiceSyscalls: snapshot has 13 entries" {
+    const configs = getServiceSyscalls(.snapshot);
+    try std.testing.expectEqual(@as(usize, 13), configs.len);
+}
+
+test "getServiceSyscalls: net contains socket" {
+    const configs = getServiceSyscalls(.net);
+    var found = false;
+    for (configs) |c| {
+        if (c.syscall == .socket) found = true;
+    }
+    try std.testing.expect(found);
+}
+
+test "getServiceSyscalls: all services resolve without error" {
+    // Comptime check that inline else instantiates for all services
+    comptime {
+        for (std.enums.values(Service)) |svc| {
+            _ = getServiceSyscalls(svc);
+        }
+    }
+}
+
+test "per-service filters have different sizes" {
+    comptime {
+        const replay_len = lib.linux.bpf.computeFilterLen(getServiceSyscalls(.replay));
+        const net_len = lib.linux.bpf.computeFilterLen(getServiceSyscalls(.net));
+        const snapshot_len = lib.linux.bpf.computeFilterLen(getServiceSyscalls(.snapshot));
+        // replay (0 extra) < net (5 extra) < snapshot (13 extra)
+        std.debug.assert(replay_len < net_len);
+        std.debug.assert(net_len < snapshot_len);
+    }
+}
+
+test "per-service filter sizes match expected values" {
+    comptime {
+        // replay/shred_receiver: 18 (minimal)
+        std.debug.assert(lib.linux.bpf.computeFilterLen(getServiceSyscalls(.replay)) == 18);
+        std.debug.assert(lib.linux.bpf.computeFilterLen(getServiceSyscalls(.shred_receiver)) == 18);
+        // gossip: 20 (1 extra × 2 + 18)
+        std.debug.assert(lib.linux.bpf.computeFilterLen(getServiceSyscalls(.gossip)) == 20);
+        // net: 28 (5 extra × 2 + 18)
+        std.debug.assert(lib.linux.bpf.computeFilterLen(getServiceSyscalls(.net)) == 28);
+        // telemetry: 38 (10 extra × 2 + 18)
+        std.debug.assert(lib.linux.bpf.computeFilterLen(getServiceSyscalls(.telemetry)) == 38);
+        // snapshot: 44 (13 extra × 2 + 18)
+        std.debug.assert(lib.linux.bpf.computeFilterLen(getServiceSyscalls(.snapshot)) == 44);
+    }
 }

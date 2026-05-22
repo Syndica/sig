@@ -21,6 +21,13 @@
                 .{ .name = .net_to_shred, .access = .rw },
                 .{ .name = .telemetry, .access = .rw },
             },
+            .syscalls = .{
+                .{ .syscall = .socket },
+                .{ .syscall = .bind },
+                .{ .syscall = .sendto },
+                .{ .syscall = .recvfrom },
+                .{ .syscall = .close },
+            },
         },
         .{
             .name = .gossip,
@@ -29,6 +36,9 @@
                 .{ .name = .gossip_config, .access = .readonly },
                 .{ .name = .gossip_to_snapshot, .access = .rw },
                 .{ .name = .telemetry, .access = .rw },
+            },
+            .syscalls = .{
+                .{ .syscall = .clock_gettime }, // defensive: normally vDSO [REF-VDSO]
             },
         },
         .{
@@ -39,11 +49,24 @@
                 .{ .name = .deshredded_out, .access = .rw },
                 .{ .name = .telemetry, .access = .rw },
             },
+            .syscalls = .{},
         },
         .{
             .name = .telemetry,
             .regions = .{
                 .{ .name = .telemetry, .access = .rw },
+            },
+            .syscalls = .{
+                .{ .syscall = .socket },
+                .{ .syscall = .bind },
+                .{ .syscall = .listen },
+                .{ .syscall = .accept4 },
+                .{ .syscall = .setsockopt },
+                .{ .syscall = .getsockname },
+                .{ .syscall = .readv },
+                .{ .syscall = .pwritev },
+                .{ .syscall = .sendmsg },
+                .{ .syscall = .close },
             },
         },
         .{
@@ -51,6 +74,7 @@
             .regions = .{
                 .{ .name = .deshredded_out, .access = .rw },
             },
+            .syscalls = .{},
         },
         .{
             .name = .snapshot,
@@ -58,6 +82,24 @@
                 .{ .name = .snapshot_config, .access = .readonly },
                 .{ .name = .gossip_to_snapshot, .access = .rw },
                 .{ .name = .telemetry, .access = .rw },
+            },
+            .syscalls = .{
+                // io_uring ring lifecycle
+                .{ .syscall = .io_uring_setup },
+                .{ .syscall = .io_uring_enter },
+                .{ .syscall = .mmap },
+                .{ .syscall = .munmap },
+                // direct socket/pipe creation (not io_uring ops)
+                .{ .syscall = .socket },
+                .{ .syscall = .pipe2 },
+                .{ .syscall = .close },
+                // filesystem metadata (direct syscalls, not io_uring)
+                .{ .syscall = .openat },
+                .{ .syscall = .mkdirat },
+                .{ .syscall = .getdents64 },
+                .{ .syscall = .lseek },
+                .{ .syscall = .renameat },
+                .{ .syscall = .unlinkat },
             },
         },
     },
