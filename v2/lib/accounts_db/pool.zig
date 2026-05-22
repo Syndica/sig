@@ -199,7 +199,7 @@ pub const AccountPool = extern struct {
     pub fn getAccount(self: *AccountPool, idx: Index) *Account {
         std.debug.assert(idx != invalid_index);
         std.debug.assert(idx < self.allocated);
-        return @alignCast(@ptrCast(
+        return @ptrCast(@alignCast(
             self.memory[0..].ptr[@as(u64, idx) * index_scale ..][0..@sizeOf(Account)],
         ));
     }

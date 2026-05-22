@@ -160,7 +160,7 @@ pub fn main() !void {
             .keypair = .fromKeyPair(.generate()),
             .turbine_recv_port = config.shred_network.recv_port,
         },
-        
+
         // gossip -> snapshot (download addresses)
         .gossip_to_snapshot = {},
         .snapshot_config = .{

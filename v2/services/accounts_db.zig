@@ -79,7 +79,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         };
 
         const dir_path = ro.snapshot_config.folder_buffer[0..ro.snapshot_config.folder_len];
-        logger.info().logf("reading snapshot {s}/{s}", .{dir_path, snapshot_path});
+        logger.info().logf("reading snapshot {s}/{s}", .{ dir_path, snapshot_path });
 
         var snapshot_dir = try std.fs.cwd().openDir(
             ro.snapshot_config.folder_buffer[0..ro.snapshot_config.folder_len],

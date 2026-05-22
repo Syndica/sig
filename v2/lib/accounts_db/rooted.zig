@@ -723,8 +723,8 @@ pub const Rooted = struct {
     }
 
     const ReadError =
-        error { ReadFailed, EndOfStream } || // I/O error
-        error { InvalidRead } || // Corrupted data error
+        error{ ReadFailed, EndOfStream } || // I/O error
+        error{InvalidRead} || // Corrupted data error
         @typeInfo( // io_uring.submit() error
             @typeInfo(@TypeOf(std.os.linux.IoUring.submit)).@"fn".return_type.?,
         ).error_union.error_set;
