@@ -54,6 +54,7 @@ jobs:
           cmake -DCMAKE_BUILD_TYPE=Release ..
           make -j$(nproc)
           sudo make install
+          kcov --version
 
       - name: Install kcov runtime dependencies
         if: steps.cache-kcov.outputs.cache-hit == 'true'
@@ -62,6 +63,7 @@ jobs:
           sudo apt-get install -y \
             binutils-dev libcurl4-openssl-dev libelf-dev \
             libdw-dev libiberty-dev zlib1g-dev
+          kcov --version
 
       - name: Build v1 tests
         run: zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36
