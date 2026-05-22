@@ -50,15 +50,14 @@ pub fn execFixture(
 }
 
 const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
-
 const protobuf = @import("protobuf");
 
-pub const ResultDetail = union(IoCategory) {
-    elf_loader: Fields(.elf_loader),
-    instr: Fields(.instr),
-    syscall: Fields(.syscall),
-    txn: Fields(.txn),
-    unknown: Fields(.unknown),
+pub const ResultDetail = union(enum) {
+    elf_loader: Fields(pb.ELFLoaderEffects),
+    instr: Fields(pb.InstrEffects),
+    syscall: Fields(pb.SyscallEffects),
+    txn: Fields(pb.TxnResult),
+    unknown: Fields([]const u8),
 
     pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
         return switch (self.*) {
@@ -66,13 +65,11 @@ pub const ResultDetail = union(IoCategory) {
         };
     }
 
-    fn Fields(comptime cat: IoCategory) type {
-        const types = cat.types();
+    fn Fields(comptime Output: type) type {
         return struct {
             harness: []const u8,
-            // input: types.Input,
-            expected: types.Output,
-            actual: ?types.Output,
+            expected: Output,
+            actual: ?Output,
 
             pub const _desc_table = .{
                 .harness = protobuf.fd(1, .{ .scalar = .string }),
@@ -83,76 +80,50 @@ pub const ResultDetail = union(IoCategory) {
     }
 };
 
-pub const IoCategory = enum {
-    elf_loader,
-    instr,
-    syscall,
-    txn,
-    unknown,
-
-    pub fn types(comptime self: IoCategory) struct { Input: type, Output: type } {
-        return switch (self) {
-            .elf_loader => .{ .Input = pb.ELFLoaderCtx, .Output = pb.ELFLoaderEffects },
-            .instr => .{ .Input = pb.InstrContext, .Output = pb.InstrEffects },
-            .syscall => .{ .Input = pb.SyscallContext, .Output = pb.SyscallEffects },
-            .txn => .{ .Input = pb.TxnContext, .Output = pb.TxnResult },
-            .unknown => .{ .Input = []const u8, .Output = []const u8 },
-        };
-    }
-};
-
 fn toResultDetail(allocator: Allocator, fixture: Fixture, actual: ?[]const u8) !ResultDetail {
     return if (std.mem.eql(u8, "sol_compat_instr_execute_v1", fixture.entrypoint))
-        toResultDetailTyped(.instr, allocator, fixture, actual)
+        toResultDetailTyped("instr", pb.InstrEffects, allocator, fixture, actual)
     else if (std.mem.eql(u8, "sol_compat_vm_interp_v1", fixture.entrypoint))
-        toResultDetailTyped(.syscall, allocator, fixture, actual)
+        toResultDetailTyped("syscall", pb.SyscallEffects, allocator, fixture, actual)
     else if (std.mem.eql(u8, "sol_compat_vm_cpi_syscall_v1", fixture.entrypoint))
-        toResultDetailTyped(.syscall, allocator, fixture, actual)
+        toResultDetailTyped("syscall", pb.SyscallEffects, allocator, fixture, actual)
     else if (std.mem.eql(u8, "sol_compat_vm_syscall_execute_v1", fixture.entrypoint))
-        toResultDetailTyped(.syscall, allocator, fixture, actual)
+        toResultDetailTyped("syscall", pb.SyscallEffects, allocator, fixture, actual)
     else if (std.mem.eql(u8, "sol_compat_elf_loader_v1", fixture.entrypoint))
-        toResultDetailTyped(.elf_loader, allocator, fixture, actual)
+        toResultDetailTyped("elf_loader", pb.ELFLoaderEffects, allocator, fixture, actual)
     else if (std.mem.eql(u8, "sol_compat_txn_execute_v1", fixture.entrypoint))
-        toResultDetailTyped(.txn, allocator, fixture, actual)
+        toResultDetailTyped("txn", pb.TxnResult, allocator, fixture, actual)
     else
-        .{
-            .unknown = .{
-                .harness = try allocator.dupe(u8, fixture.entrypoint),
-                // .input = try allocator.dupe(u8, fixture.input),
-                .expected = try allocator.dupe(u8, fixture.expected),
-                .actual = if (actual) |bytes| try allocator.dupe(u8, bytes) else null,
-            },
-        };
+        .{ .unknown = .{
+            .harness = try allocator.dupe(u8, fixture.entrypoint),
+            .expected = try allocator.dupe(u8, fixture.expected),
+            .actual = if (actual) |bytes| try allocator.dupe(u8, bytes) else null,
+        } };
 }
 
 fn toResultDetailTyped(
-    comptime harness: IoCategory,
+    comptime tag: []const u8,
+    comptime Output: type,
     allocator: Allocator,
     fixture: Fixture,
     actual: ?[]const u8,
 ) !ResultDetail {
-    const types = harness.types();
-    var input_reader = std.Io.Reader.fixed(fixture.input);
     var expected_reader = std.Io.Reader.fixed(fixture.expected);
 
-    var input_typed = try types.Input.decode(&input_reader, allocator);
-    errdefer input_typed.deinit(allocator);
-
-    var expected_typed = try types.Output.decode(&expected_reader, allocator);
+    var expected_typed = try Output.decode(&expected_reader, allocator);
     errdefer expected_typed.deinit(allocator);
 
-    var actual_typed: ?types.Output = null;
+    var actual_typed: ?Output = null;
     if (actual) |bytes| {
         var actual_reader = std.Io.Reader.fixed(bytes);
-        actual_typed = try types.Output.decode(&actual_reader, allocator);
+        actual_typed = try Output.decode(&actual_reader, allocator);
     }
     errdefer if (actual_typed) |*value| value.deinit(allocator);
 
     const harness_name = try allocator.dupe(u8, fixture.entrypoint);
 
-    return @unionInit(ResultDetail, @tagName(harness), .{
+    return @unionInit(ResultDetail, tag, .{
         .harness = harness_name,
-        // .input = input_typed,
         .expected = expected_typed,
         .actual = actual_typed,
     });
@@ -199,13 +170,6 @@ pub fn writeJson(v: anytype, jws: anytype, comptime ftype: ?protobuf.FieldType) 
 
         else => try jws.write(v),
     }
-}
-
-test "asd" {
-    var buf: [1024]u8 = @splat(0);
-    try std.base64.standard.Decoder.decode(&buf, "abbreviated=");
-    std.debug.print("{any}", .{buf[0..22]});
-    // const x = try std.base64.standard.Encoder.encodeWriter(jws.writer, value);
 }
 
 pub const DirectoryRunStats = struct {

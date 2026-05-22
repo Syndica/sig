@@ -54,14 +54,15 @@ pub fn main() !void {
     //     report_fba = std.heap.FixedBufferAllocator.init(buffer);
     //     break :blk report_fba.threadSafeAllocator();
     // } else null;
-    const report_allocator = std.heap.c_allocator;
+    // const report_allocator = std.heap.c_allocator;
+    // _ = report_allocator; // autofix
 
     // Run the tests
     var passed_count: usize = 0;
     var failed_count: usize = 0;
     const stat = try std.fs.cwd().statFile(input_path);
     if (stat.kind == .directory) {
-        var stats = try exec.execDir(allocator, report_allocator, &lib, input_path);
+        var stats = try exec.execDir(allocator, allocator, &lib, input_path);
         defer stats.deinit(allocator);
 
         // Group results by dirname relative to input path
@@ -127,7 +128,7 @@ pub fn main() !void {
 
         switch (try exec.execFixture(
             allocator,
-            report_allocator,
+            allocator,
             &lib,
             input_path,
             out_buf,
@@ -200,6 +201,5 @@ pub fn writeFailureReports(
     var buf: [4096]u8 = undefined;
     var writer = file.writer(&buf);
     try std.json.Stringify.value(details, .{ .whitespace = .indent_4 }, &writer.interface);
-    // try std.zon.stringify.serializeArbitraryDepth(details, .{ .whitespace = true }, &writer.interface);
     try writer.interface.flush();
 }
