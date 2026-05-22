@@ -31,7 +31,7 @@ pub fn wallclock(comptime unit: Unit) u64 {
     return clockGetTime(.REALTIME, unit);
 }
 
-/// Initializes Zig's vDSO clock path before services install seccomp.
+/// Initializes Zig's vDSO clock path before normal service code runs.
 pub fn warmup() void {
     std.mem.doNotOptimizeAway(wallclock(.ns));
     std.mem.doNotOptimizeAway(monotonic(.ns));
