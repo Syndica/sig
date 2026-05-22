@@ -71,15 +71,16 @@ pub const Environment = struct {
         // For SBPFv0 this also has the side effect of lowering the per-call stack
         // bump from `stack_frame_size * 2` (8 KiB) to `stack_frame_size` (4 KiB),
         // see Interpreter.pushFrame in interpreter.zig.
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/syscalls/src/lib.rs#L319
         const virtual_address_space_adjustments = feature_set.active(
             .virtual_address_space_adjustments,
             slot,
         );
-
         // [agave] https://github.com/anza-xyz/agave/blob/v4.0/syscalls/src/lib.rs#L331
         return .{
             .max_call_depth = compute_budget.max_call_depth,
             .stack_frame_size = compute_budget.stack_frame_size,
+            // SIMD-0460: Disable stack frame gaps with virtual_address_space_adjustments.
             .enable_stack_frame_gaps = !virtual_address_space_adjustments,
             .enable_instruction_meter = true,
             .reject_broken_elfs = reject_deployment_of_broken_elfs,
