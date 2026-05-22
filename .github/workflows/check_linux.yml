@@ -42,35 +42,26 @@ jobs:
           cd v2
           zig build test -Dno-run -Duse-llvm=true -Dallow-no-sha -Dallow-no-avx512 --summary all
 
-      - name: Configure docker defaults
+      - name: Install kcov
         run: |
-          printf 'DOCKER_MOUNT=-v %s:%s -w %s -e HOME=%s -u %s\n' \
-            "$PWD" "$PWD" "$PWD" "$PWD" "$(id -u):$(id -g)" >> "$GITHUB_ENV"
+          sudo apt-get update -y
+          sudo apt-get install -y kcov
 
       - name: Collect v1 coverage
-        run: |
-          docker run --security-opt seccomp=unconfined \
-            $DOCKER_MOUNT \
-            kcov/kcov \
-            bash scripts/kcov_ci.sh
+        run: bash scripts/kcov_ci.sh
 
       - name: Collect v2 coverage
         run: |
-          docker run --security-opt seccomp=unconfined \
-            $DOCKER_MOUNT \
-            kcov/kcov \
-            bash -c '
-              mkdir -p v2-kcov-output
-              for bin in v2/zig-out/bin/tests/*; do
-                echo "=> kcov: $bin"
-                kcov --collect-only \
-                  --include-pattern=v2/ \
-                  --exclude-pattern=.cache \
-                  v2-kcov-output \
-                  "$bin"
-              done
-              kcov --merge v2-kcov-merged v2-kcov-output/
-            '
+          mkdir -p v2-kcov-output
+          for bin in v2/zig-out/bin/tests/*; do
+            echo "=> kcov: $bin"
+            kcov --collect-only \
+              --include-pattern=v2/ \
+              --exclude-pattern=.cache \
+              v2-kcov-output \
+              "$bin"
+          done
+          kcov --merge v2-kcov-merged v2-kcov-output/
 
       - name: Debug coverage reports
         run: |
