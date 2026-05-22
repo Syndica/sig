@@ -8,7 +8,6 @@ const download = lib.snapshot.download;
 const SnapshotConfig = lib.snapshot.SnapshotConfig;
 const SnapshotSourceRing = lib.snapshot.SnapshotSourceRing;
 const SnapshotReadyRing = lib.snapshot.SnapshotReadyRing;
-const SnapshotIter = lib.solana.snapshot.SnapshotIter;
 
 const Metrics = download.Metrics;
 const DownloadResult = download.DownloadResult;

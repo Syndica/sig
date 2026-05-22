@@ -1,7 +1,10 @@
 const std = @import("std");
 
 comptime {
-    _ = std.testing.refAllDecls(@This());
+    if (@import("builtin").is_test) {
+        _ = @import("fio/reader.zig");
+        _ = @import("fio/writer.zig");
+    }
 }
 
 pub const sector_size = 4096; // buffer alignment for O_DIRECT accesses

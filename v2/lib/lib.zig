@@ -1,8 +1,10 @@
 comptime {
     if (@import("builtin").is_test) {
+        _ = @import("accounts_db.zig");
         _ = @import("clock.zig");
         _ = @import("collections.zig");
         _ = @import("crypto.zig");
+        _ = @import("fio.zig");
         _ = @import("gossip.zig");
         _ = @import("ipc.zig");
         _ = @import("linux.zig");
@@ -29,20 +31,5 @@ pub const snapshot = @import("snapshot.zig");
 pub const telemetry = @import("telemetry.zig");
 pub const accounts_db = @import("accounts_db.zig");
 pub const fio = @import("fio.zig");
-
-comptime {
-    _ = net;
-    _ = clock;
-    _ = crypto;
-    _ = solana;
-    _ = shred;
-    _ = gossip;
-    _ = ipc;
-    _ = linux;
-    _ = snapshot;
-    _ = telemetry;
-    _ = snapshot;
-    _ = accounts_db;
-}
 
 pub const test_data_dir = "../data/test-data/";
