@@ -1,5 +1,6 @@
 comptime {
     if (@import("builtin").is_test) {
+        _ = @import("TopologySchema.zig");
         _ = @import("clock.zig");
         _ = @import("collections.zig");
         _ = @import("crypto.zig");
@@ -15,6 +16,7 @@ comptime {
     }
 }
 
+pub const TopologySchema = @import("TopologySchema.zig");
 pub const net = @import("net.zig");
 pub const clock = @import("clock.zig");
 pub const crypto = @import("crypto.zig");
@@ -27,18 +29,5 @@ pub const util = @import("util.zig");
 pub const collections = @import("collections.zig");
 pub const snapshot = @import("snapshot.zig");
 pub const telemetry = @import("telemetry.zig");
-
-comptime {
-    _ = net;
-    _ = clock;
-    _ = crypto;
-    _ = solana;
-    _ = shred;
-    _ = gossip;
-    _ = ipc;
-    _ = linux;
-    _ = snapshot;
-    _ = telemetry;
-}
 
 pub const test_data_dir = "../data/test-data/";
