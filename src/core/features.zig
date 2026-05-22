@@ -17,7 +17,7 @@ pub const FEATURE_SET_ID: u32 = @import("feature-set-id").FEATURE_SET_ID;
 
 /// ZonInfo represents the metadata for a feature, including its name, pubkey, description, status, and an optional note.
 /// It is used to record the history and current state of all features, including those that have been reverted.
-const ZonInfo = struct {
+pub const ZonInfo = struct {
     name: [:0]const u8,
     pubkey: [:0]const u8,
     description: [:0]const u8,

@@ -33,7 +33,7 @@ pub const Cluster = enum(u8) {
     }
 
     /// Returns the RPC URL for this cluster.
-    pub fn getRpcUrl(self: Cluster) ?[]const u8 {
+    pub fn getRpcUrl(self: Cluster) []const u8 {
         return switch (self) {
             .mainnet => "https://api.mainnet-beta.solana.com",
             .testnet => "https://api.testnet.solana.com",
