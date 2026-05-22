@@ -295,7 +295,14 @@ fn scanLedger(blockstore: *const AgaveBlockstore, config: Config) !LedgerStats {
 
 fn scanSlots(blockstore: *const AgaveBlockstore, config: Config) !SlotStats {
     var stats: SlotStats = .{};
-    var iter = blockstore.db.iterator(try blockstore.columnFamily(agave_cf_meta), .forward, null);
+
+    var start_key_buf: [8]u8 = undefined;
+    const start_key: ?[]const u8 = if (config.start_slot) |slot| start_key: {
+        writeSlotKey(&start_key_buf, slot);
+        break :start_key start_key_buf[0..];
+    } else null;
+
+    var iter = blockstore.db.iterator(try blockstore.columnFamily(agave_cf_meta), .forward, start_key);
     defer iter.deinit();
 
     var err_data: ?rocks.Data = null;
@@ -306,6 +313,7 @@ fn scanSlots(blockstore: *const AgaveBlockstore, config: Config) !SlotStats {
             std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
             return err;
         };
+        if (pastEndSlot(config, slot)) break;
         stats.record(slot, slotSelected(config, slot));
     }
 
@@ -314,7 +322,14 @@ fn scanSlots(blockstore: *const AgaveBlockstore, config: Config) !SlotStats {
 
 fn scanShreds(blockstore: *const AgaveBlockstore, config: Config, column_family_name: []const u8) !ShredStats {
     var stats: ShredStats = .{};
-    var iter = blockstore.db.iterator(try blockstore.columnFamily(column_family_name), .forward, null);
+
+    var start_key_buf: [16]u8 = undefined;
+    const start_key: ?[]const u8 = if (config.start_slot) |slot| start_key: {
+        writeShredKey(&start_key_buf, .{ .slot = slot, .index = 0 });
+        break :start_key start_key_buf[0..];
+    } else null;
+
+    var iter = blockstore.db.iterator(try blockstore.columnFamily(column_family_name), .forward, start_key);
     defer iter.deinit();
 
     var err_data: ?rocks.Data = null;
@@ -325,6 +340,7 @@ fn scanShreds(blockstore: *const AgaveBlockstore, config: Config, column_family_
             std.debug.print("invalid {s} key length: {d}\n", .{ column_family_name, entry[0].data.len });
             return err;
         };
+        if (pastEndSlot(config, key.slot)) break;
         stats.record(key, entry[1].data.len, slotSelected(config, key.slot));
     }
 
@@ -372,12 +388,21 @@ fn parseSlotKey(key: []const u8) !Slot {
     return std.mem.readInt(u64, key[0..8], .big);
 }
 
+fn writeSlotKey(key: *[8]u8, slot: Slot) void {
+    std.mem.writeInt(u64, key, slot, .big);
+}
+
 fn parseShredKey(key: []const u8) !ShredKey {
     if (key.len != 16) return error.InvalidShredKey;
     return .{
         .slot = std.mem.readInt(u64, key[0..8], .big),
         .index = std.mem.readInt(u64, key[8..16], .big),
     };
+}
+
+fn writeShredKey(key: *[16]u8, shred_key: ShredKey) void {
+    std.mem.writeInt(u64, key[0..8], shred_key.slot, .big);
+    std.mem.writeInt(u64, key[8..16], shred_key.index, .big);
 }
 
 fn slotSelected(config: Config, slot: Slot) bool {
@@ -388,6 +413,10 @@ fn slotSelected(config: Config, slot: Slot) bool {
         if (slot > end_slot) return false;
     }
     return true;
+}
+
+fn pastEndSlot(config: Config, slot: Slot) bool {
+    return if (config.end_slot) |end_slot| slot > end_slot else false;
 }
 
 fn minOptional(current: ?Slot, next: Slot) Slot {
@@ -624,6 +653,12 @@ test "parse slot key" {
     try std.testing.expectEqual(@as(Slot, 1234), try parseSlotKey(&key));
 }
 
+test "write slot key" {
+    var key: [8]u8 = undefined;
+    writeSlotKey(&key, 1234);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 0, 0, 0, 0, 0x04, 0xd2 }, &key);
+}
+
 test "reject invalid slot key" {
     try std.testing.expectError(error.InvalidSlotKey, parseSlotKey(&.{ 1, 2, 3 }));
 }
@@ -637,6 +672,15 @@ test "parse shred key" {
     const shred_key = try parseShredKey(&key);
     try std.testing.expectEqual(@as(Slot, 1234), shred_key.slot);
     try std.testing.expectEqual(@as(u64, 5678), shred_key.index);
+}
+
+test "write shred key" {
+    var key: [16]u8 = undefined;
+    writeShredKey(&key, .{ .slot = 1234, .index = 5678 });
+    try std.testing.expectEqualSlices(u8, &.{
+        0, 0, 0, 0, 0, 0, 0x04, 0xd2,
+        0, 0, 0, 0, 0, 0, 0x16, 0x2e,
+    }, &key);
 }
 
 test "reject invalid shred key" {
@@ -654,6 +698,16 @@ test "slot selected respects optional bounds" {
     try std.testing.expect(slotSelected(bounded, 10));
     try std.testing.expect(slotSelected(bounded, 20));
     try std.testing.expect(!slotSelected(bounded, 21));
+}
+
+test "past end slot respects optional end bound" {
+    const base: Config = .{ .ledger = "ledger", .target = "127.0.0.1:8002" };
+    try std.testing.expect(!pastEndSlot(base, 100));
+
+    var bounded = base;
+    bounded.end_slot = 20;
+    try std.testing.expect(!pastEndSlot(bounded, 20));
+    try std.testing.expect(pastEndSlot(bounded, 21));
 }
 
 test "resolve nested rocksdb path" {
