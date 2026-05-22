@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   test_kcov_linux:
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
