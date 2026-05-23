@@ -219,6 +219,7 @@ pub fn build(b: *Build) !void {
     const sig_step = b.step("sig", "Run the sig executable");
     const test_step = b.step("test", "Run library tests");
     const fuzz_step = b.step("fuzz", "Gossip fuzz testing");
+    const ledger_inspect_step = b.step("ledger_inspect", "Inspect a ledger RocksDB for replay handoff debugging");
     const benchmark_step = b.step("benchmark", "Benchmark client");
     const geyser_reader_step = b.step("geyser_reader", "Read data from geyser");
     const vm_step = b.step("vm", "Run the VM client");
@@ -380,6 +381,27 @@ pub fn build(b: *Build) !void {
         .hashmap => {},
     }
     addInstallAndRun(b, sig_step, sig_exe, config);
+
+    const ledger_inspect_exe = b.addExecutable(.{
+        .name = "ledger-inspect",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/ledger_inspect.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+            .error_tracing = config.error_tracing,
+            .link_libc = true,
+        }),
+        .use_llvm = config.use_llvm,
+    });
+    ledger_inspect_exe.root_module.addImport("sig", sig_mod);
+    ledger_inspect_exe.root_module.addImport("std14", std14_mod);
+    ledger_inspect_exe.root_module.addObject(memcpy);
+    switch (config.ledger_db) {
+        .rocksdb => ledger_inspect_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .hashmap => {},
+    }
+    addInstallAndRun(b, ledger_inspect_step, ledger_inspect_exe, config);
 
     const unit_tests_exe = b.addTest(.{
         .root_module = b.createModule(.{
