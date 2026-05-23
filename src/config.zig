@@ -110,6 +110,7 @@ pub const ShredNetwork = struct {
     no_retransmit: bool = true,
     dump_shred_tracker: bool = false,
     log_finished_slots: bool = false,
+    shred_watcher_start_offset_slots: u64 = 64,
 
     /// Converts from the CLI args into the `shred_network.start` parameters
     pub fn toConfig(self: ShredNetwork, fallback_slot: sig.core.Slot) ShredNetworkConfig {

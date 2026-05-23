@@ -721,6 +721,7 @@ const Cmd = struct {
         num_retransmit_threads: ?usize,
         dump_shred_tracker: bool,
         log_finished_slots: bool,
+        shred_watcher_start_offset_slots: u64,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .turbine_port = .{
@@ -785,12 +786,22 @@ const Cmd = struct {
                 .config = {},
                 .help = "Log the highest finished slot when it updates.",
             },
+            .shred_watcher_start_offset_slots = .{
+                .kind = .named,
+                .name_override = "shred-watcher-start-offset-slots",
+                .alias = .none,
+                .default_value = 64,
+                .config = {},
+                .help = "For the standalone shred-network watcher, start this many slots after the fresh RPC slot.",
+            },
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
             cfg.shred_network.turbine_recv_port = args.turbine_port;
             cfg.shred_network.repair_port = args.repair_port;
             cfg.shred_network.root_slot = args.test_repair_for_slot;
+            cfg.shred_network.shred_watcher_start_offset_slots =
+                args.shred_watcher_start_offset_slots;
             cfg.turbine.num_retransmit_threads = args.num_retransmit_threads;
             cfg.max_shreds = args.max_shreds;
         }
@@ -2142,17 +2153,25 @@ fn shredNetwork(
     });
     defer shred_network_manager.deinit();
 
-    // Fetch a fresh slot right before spawning the watcher — shred_network setup takes
-    // time (gossip connect, leader schedule wait), so root_slot may be many slots stale.
-    // Starting the watcher at the current live slot minimizes the dead-slot catchup gap.
-    const watcher_start_slot: sig.core.Slot = blk: {
+    // Fetch a fresh slot right before spawning the watcher. Starting a small
+    // number of slots in the future gives the receiver time to collect a full
+    // live slot instead of pinning the watcher behind startup holes.
+    const watcher_rpc_slot: sig.core.Slot = blk: {
         const response = rpc_client.getSlot(.{}) catch break :blk shred_network_conf.root_slot;
         defer response.deinit();
         break :blk response.result() catch shred_network_conf.root_slot;
     };
-    app_base.logger.info().logf("shred_slot_watcher: using start slot {} (root={})", .{
-        watcher_start_slot, shred_network_conf.root_slot,
-    });
+    const watcher_start_slot =
+        watcher_rpc_slot +| cfg.shred_network.shred_watcher_start_offset_slots;
+    app_base.logger.info().logf(
+        "shred_slot_watcher: using start slot {} (rpc_slot={} root={} offset_slots={})",
+        .{
+            watcher_start_slot,
+            watcher_rpc_slot,
+            shred_network_conf.root_slot,
+            cfg.shred_network.shred_watcher_start_offset_slots,
+        },
+    );
 
     // slot watcher: reads completed slots from ledger, parses PumpFun instructions, emits to geyser pipe
     const slot_watcher_thread = try std.Thread.spawn(.{}, sig.geyser.shred_slot_watcher.run, .{
