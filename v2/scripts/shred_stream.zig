@@ -147,6 +147,17 @@ fn run(allocator: Allocator, config: Config) !void {
     if (config.dry_run) {
         const stats = try scanLedger(&blockstore, config);
         try printLedgerStats(stdout, stats);
+    } else {
+        var sink: NoopPacketSink = .{};
+        const stats = try walkLedgerPackets(
+            &blockstore,
+            config,
+            NoopPacketSink,
+            &sink,
+            ignoreProducedPacket,
+        );
+        try printProducerStats(stdout, stats);
+        try stdout.print("sender: not implemented yet\n", .{});
     }
 
     try stdout.flush();
@@ -250,6 +261,47 @@ const ShredKey = struct {
     index: u64,
 };
 
+const ShredKind = enum {
+    data,
+    code,
+
+    fn columnFamilyName(kind: ShredKind) []const u8 {
+        return switch (kind) {
+            .data => agave_cf_data_shred,
+            .code => agave_cf_code_shred,
+        };
+    }
+};
+
+const RawShredPacket = struct {
+    kind: ShredKind,
+    key: ShredKey,
+    payload: []const u8,
+};
+
+const ProducerStats = struct {
+    slots: u64 = 0,
+    data_packets: u64 = 0,
+    code_packets: u64 = 0,
+    payload_bytes: u64 = 0,
+
+    fn recordSlot(self: *ProducerStats) void {
+        self.slots += 1;
+    }
+
+    fn recordPacket(self: *ProducerStats, packet: RawShredPacket) void {
+        switch (packet.kind) {
+            .data => self.data_packets += 1,
+            .code => self.code_packets += 1,
+        }
+        self.payload_bytes += @intCast(packet.payload.len);
+    }
+};
+
+const NoopPacketSink = struct {};
+
+fn ignoreProducedPacket(_: *NoopPacketSink, _: RawShredPacket) !void {}
+
 const ShredStats = struct {
     total_packets: u64 = 0,
     selected_packets: u64 = 0,
@@ -291,6 +343,85 @@ fn scanLedger(blockstore: *const AgaveBlockstore, config: Config) !LedgerStats {
         else
             null,
     };
+}
+
+fn walkLedgerPackets(
+    blockstore: *const AgaveBlockstore,
+    config: Config,
+    comptime Context: type,
+    context: *Context,
+    comptime handlePacket: fn (*Context, RawShredPacket) anyerror!void,
+) !ProducerStats {
+    var stats: ProducerStats = .{};
+
+    var start_key_buf: [8]u8 = undefined;
+    const start_key: ?[]const u8 = if (config.start_slot) |slot| start_key: {
+        writeSlotKey(&start_key_buf, slot);
+        break :start_key start_key_buf[0..];
+    } else null;
+
+    var slot_iter = blockstore.db.iterator(try blockstore.columnFamily(agave_cf_meta), .forward, start_key);
+    defer slot_iter.deinit();
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    while (try slot_iter.next(&err_data)) |entry| {
+        const slot = parseSlotKey(entry[0].data) catch |err| {
+            std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
+            return err;
+        };
+        if (pastEndSlot(config, slot)) break;
+        if (!slotSelected(config, slot)) continue;
+
+        stats.recordSlot();
+        try walkSlotShreds(blockstore, slot, .data, Context, context, handlePacket, &stats);
+        if (blockstore.has_code_shred) {
+            try walkSlotShreds(blockstore, slot, .code, Context, context, handlePacket, &stats);
+        }
+    }
+
+    return stats;
+}
+
+fn walkSlotShreds(
+    blockstore: *const AgaveBlockstore,
+    slot: Slot,
+    kind: ShredKind,
+    comptime Context: type,
+    context: *Context,
+    comptime handlePacket: fn (*Context, RawShredPacket) anyerror!void,
+    stats: *ProducerStats,
+) !void {
+    var start_key_buf: [16]u8 = undefined;
+    writeShredKey(&start_key_buf, .{ .slot = slot, .index = 0 });
+
+    var iter = blockstore.db.iterator(
+        try blockstore.columnFamily(kind.columnFamilyName()),
+        .forward,
+        start_key_buf[0..],
+    );
+    defer iter.deinit();
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    while (try iter.next(&err_data)) |entry| {
+        const key = parseShredKey(entry[0].data) catch |err| {
+            std.debug.print("invalid {s} key length: {d}\n", .{ kind.columnFamilyName(), entry[0].data.len });
+            return err;
+        };
+        if (key.slot != slot) break;
+        if (entry[1].data.len > max_shred_packet_bytes) return error.ShredPacketTooLarge;
+
+        const packet: RawShredPacket = .{
+            .kind = kind,
+            .key = key,
+            .payload = entry[1].data,
+        };
+        try handlePacket(context, packet);
+        stats.recordPacket(packet);
+    }
 }
 
 fn scanSlots(blockstore: *const AgaveBlockstore, config: Config) !SlotStats {
@@ -365,6 +496,15 @@ fn printLedgerStats(stdout: *std.Io.Writer, stats: LedgerStats) !void {
     } else {
         try stdout.print("  {s}: missing\n", .{agave_cf_code_shred});
     }
+}
+
+fn printProducerStats(stdout: *std.Io.Writer, stats: ProducerStats) !void {
+    try stdout.print("producer_walk:\n", .{});
+    try stdout.print("  slots: {d}\n", .{stats.slots});
+    try stdout.print("  data_packets: {d}\n", .{stats.data_packets});
+    try stdout.print("  code_packets: {d}\n", .{stats.code_packets});
+    try stdout.print("  total_packets: {d}\n", .{stats.data_packets + stats.code_packets});
+    try stdout.print("  payload_bytes: {d}\n", .{stats.payload_bytes});
 }
 
 fn printShredStats(stdout: *std.Io.Writer, name: []const u8, stats: ShredStats) !void {
