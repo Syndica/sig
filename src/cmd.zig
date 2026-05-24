@@ -1682,6 +1682,18 @@ fn validator(
         app_base.metrics_registry,
     );
     defer ledger.deinit();
+
+    const snapshot_root_slot = collapsed_manifest.bank_fields.slot;
+    app_base.logger.info().logf(
+        "snapshot ledger handoff: marking snapshot root as rooted and connected root_slot={}",
+        .{snapshot_root_slot},
+    );
+    try ledger.resultWriter().setRoots(&.{snapshot_root_slot});
+    try ledger.resultWriter().setAndChainConnectedOnRootAndNextSlots(
+        allocator,
+        snapshot_root_slot,
+    );
+
     const ledger_cleanup_service = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
         sig.ledger.cleanup_service.Logger.from(app_base.logger),
         &ledger,
@@ -1780,7 +1792,7 @@ fn validator(
 
     // shred network
     var shred_network_manager = try sig.shred_network.start(
-        cfg.shred_network.toConfig(loaded_snapshot.collapsed_manifest.bank_fields.slot),
+        cfg.shred_network.toConfig(snapshot_root_slot),
         .{
             .allocator = allocator,
             .logger = .from(app_base.logger),

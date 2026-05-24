@@ -8,6 +8,7 @@ const bincode = sig.bincode;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.array_list.Managed;
 const Atomic = std.atomic.Value;
+const AutoHashMap = std.AutoHashMap;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.Random;
 
@@ -57,6 +58,7 @@ pub const RepairService = struct {
     thread_pool: *RequestBatchThreadPool,
     metrics: Metrics,
     prng: std.Random.DefaultPrng,
+    debug_logged_repair_slots: AutoHashMap(Slot, void),
 
     const RequestBatchThreadPool = ScopedThreadPool(RepairRequester.sendRepairRequestBatch);
 
@@ -111,6 +113,7 @@ pub const RepairService = struct {
             .thread_pool = thread_pool,
             .metrics = try registry.initStruct(Metrics),
             .prng = std.Random.DefaultPrng.init(0),
+            .debug_logged_repair_slots = AutoHashMap(Slot, void).init(allocator),
         };
     }
 
@@ -123,6 +126,7 @@ pub const RepairService = struct {
         self.requester.deinit();
         self.thread_pool.deinit(self.allocator);
         self.report.deinit();
+        self.debug_logged_repair_slots.deinit();
     }
 
     pub fn run(self: *Self) !void {
@@ -205,12 +209,18 @@ pub const RepairService = struct {
         var individual_count: usize = 0;
         var highest_count: usize = 0;
         var slot: Slot = 0;
+        const debug_start_slot = self.shred_tracker.start_slot;
 
         // request every shred that is reported missing, up to MAX_SHRED_REPAIRS
         for (self.report.items()) |*report| {
             slot = report.slot;
             oldest_slot_needing_repair = @min(slot, oldest_slot_needing_repair);
             newest_slot_needing_repair = @max(slot, newest_slot_needing_repair);
+            if (debug_start_slot) |start_slot| {
+                if (slot >= start_slot and slot <= start_slot +| 128) {
+                    try self.logStartupRepairReportOnce(start_slot, report);
+                }
+            }
             if (individual_count < MAX_SHRED_REPAIRS) {
                 for (report.missing_shreds.items) |shred_window| mid_loop: {
                     if (shred_window.end) |end| {
@@ -237,6 +247,37 @@ pub const RepairService = struct {
         self.metrics.newest_slot_needing_repair.set(newest_slot_needing_repair);
 
         return repairs;
+    }
+
+    fn logStartupRepairReportOnce(
+        self: *Self,
+        start_slot: Slot,
+        report: *const shred_network.shred_tracker.SlotReport,
+    ) !void {
+        const gop = try self.debug_logged_repair_slots.getOrPut(report.slot);
+        if (gop.found_existing) return;
+
+        const sample_len = @min(report.missing_shreds.items.len, 8);
+        var bounded_missing_count: usize = 0;
+        var open_ended_windows: usize = 0;
+        for (report.missing_shreds.items) |window| {
+            if (window.end) |end| {
+                bounded_missing_count += end -| window.start;
+            } else {
+                open_ended_windows += 1;
+            }
+        }
+        self.logger.info().logf(
+            "startup repair report slot={} tracker_start_slot={} missing_windows={} bounded_missing_count={} open_ended_windows={} sample={any}",
+            .{
+                report.slot,
+                start_slot,
+                report.missing_shreds.items.len,
+                bounded_missing_count,
+                open_ended_windows,
+                report.missing_shreds.items[0..sample_len],
+            },
+        );
     }
 
     fn assignRequestsToPeers(
