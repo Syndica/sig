@@ -209,8 +209,10 @@ pub fn insertShreds(
     errdefer newly_completed_data_sets.deinit();
     for (shreds, is_repaired) |shred, is_repair| {
         const shred_source: ShredSource = if (is_repair) .repaired else .turbine;
+        const startup_slot = isStartupWindowSlot(options.shred_tracker, shred.commonHeader().slot);
         switch (shred) {
             .data => |data_shred| {
+                if (startup_slot) if (self.metrics) |m| m.startup_data_shreds_seen.inc();
                 if (options.shred_tracker) |tracker| {
                     tracker.registerDataShred(&shred.data, timestamp) catch |err| {
                         if (self.metrics) |m| m.register_shred_error.observe(@errorCast(err));
@@ -235,6 +237,7 @@ pub fn insertShreds(
                     defer completed_data_sets.deinit();
                     try newly_completed_data_sets.appendSlice(completed_data_sets.items);
                     if (self.metrics) |m| m.num_inserted.inc();
+                    if (startup_slot) if (self.metrics) |m| m.startup_data_shreds_inserted.inc();
                 } else |e| switch (e) {
                     error.Exists => if (is_repair) {
                         if (self.metrics) |m| m.num_repaired_data_shreds_exists.inc();
@@ -250,8 +253,9 @@ pub fn insertShreds(
                 }
             },
             .code => |code_shred| {
+                if (startup_slot) if (self.metrics) |m| m.startup_code_shreds_seen.inc();
                 // TODO error handling?
-                _ = try self.checkInsertCodeShred(
+                const was_inserted = try self.checkInsertCodeShred(
                     code_shred,
                     &state,
                     merkle_root_validator,
@@ -259,6 +263,15 @@ pub fn insertShreds(
                     options.is_trusted,
                     shred_source,
                 );
+                if (startup_slot) {
+                    if (self.metrics) |m| {
+                        if (was_inserted) {
+                            m.startup_code_shreds_inserted.inc();
+                        } else {
+                            m.startup_code_shreds_not_inserted.inc();
+                        }
+                    }
+                }
             },
         }
     }
@@ -327,6 +340,9 @@ pub fn insertShreds(
                 defer completed_data_sets.deinit();
                 try newly_completed_data_sets.appendSlice(completed_data_sets.items);
                 if (self.metrics) |m| m.num_recovered_inserted.inc();
+                if (isStartupWindowSlot(options.shred_tracker, shred.commonHeader().slot)) {
+                    if (self.metrics) |m| m.startup_recovered_data_shreds_inserted.inc();
+                }
                 try valid_recovered_shreds.append(shred.payload());
             } else |e| switch (e) {
                 error.Exists => if (self.metrics) |m| m.num_recovered_exists.inc(),
@@ -887,6 +903,15 @@ fn insertDataShred(
     return newly_completed_data_sets;
 }
 
+fn isStartupWindowSlot(
+    maybe_tracker: ?*sig.shred_network.shred_tracker.BasicShredTracker,
+    slot: Slot,
+) bool {
+    const tracker = maybe_tracker orelse return false;
+    const start_slot = tracker.start_slot orelse return false;
+    return slot >= start_slot and slot <= start_slot +| 128;
+}
+
 /// send slot full timing point to poh_timing_report service
 /// agave: send_slot_full_timing
 fn sendSlotFullTiming(self: *const ShredInserter, slot: Slot) void {
@@ -1175,6 +1200,12 @@ pub const Metrics = struct {
     num_code_shreds_invalid: *Counter,
     num_code_shreds_invalid_erasure_config: *Counter,
     num_code_shreds_inserted: *Counter,
+    startup_data_shreds_seen: *Counter,
+    startup_data_shreds_inserted: *Counter,
+    startup_code_shreds_seen: *Counter,
+    startup_code_shreds_inserted: *Counter,
+    startup_code_shreds_not_inserted: *Counter,
+    startup_recovered_data_shreds_inserted: *Counter,
 
     register_shred_error: *sig.prometheus.VariantCounter(
         sig.shred_network.shred_tracker.BasicShredTracker.RegisterDataShredError,

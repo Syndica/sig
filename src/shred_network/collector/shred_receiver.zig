@@ -184,6 +184,7 @@ pub const ShredReceiver = struct {
             tracy.plot(u32, "shred-batch packets received", @intCast(packet_count));
 
             if (try self.handlePacket(allocator, &leader_schedules, packet)) |shred| {
+                self.metrics.received_shred.observe(shredSourceKind(is_repair, shred));
                 try self.shred_batch.append(allocator, .{
                     .shred = shred,
                     .is_repair = is_repair,
@@ -473,6 +474,20 @@ const REPAIR_RESPONSE_SERIALIZED_PING_BYTES = 132;
 
 const RepairPing = union(enum) { ping: Ping };
 
+const ReceivedShredKind = enum {
+    turbine_data,
+    turbine_code,
+    repair_data,
+    repair_code,
+};
+
+fn shredSourceKind(is_repair: bool, shred: Shred) ReceivedShredKind {
+    return switch (shred) {
+        .data => if (is_repair) .repair_data else .turbine_data,
+        .code => if (is_repair) .repair_code else .turbine_code,
+    };
+}
+
 pub const ShredReceiverMetrics = struct {
     received_count: *Counter,
     turbine_received_count: *Counter,
@@ -485,6 +500,7 @@ pub const ShredReceiverMetrics = struct {
     pong_sent_count: *Counter,
     batch_size: *Histogram,
     discard: *VariantCounter(ShredValidationError),
+    received_shred: *VariantCounter(ReceivedShredKind),
 
     pub const prefix = "shred_receiver";
     pub const histogram_buckets = sig.prometheus.histogram.exponentialBuckets(2, -1, 8);
