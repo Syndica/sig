@@ -111,6 +111,7 @@ pub const ShredNetwork = struct {
     dump_shred_tracker: bool = false,
     log_finished_slots: bool = false,
     shred_watcher_start_offset_slots: u64 = 64,
+    warm_ledger_capture: bool = false,
 
     /// Converts from the CLI args into the `shred_network.start` parameters
     pub fn toConfig(self: ShredNetwork, fallback_slot: sig.core.Slot) ShredNetworkConfig {

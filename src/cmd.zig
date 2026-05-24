@@ -722,6 +722,7 @@ const Cmd = struct {
         dump_shred_tracker: bool,
         log_finished_slots: bool,
         shred_watcher_start_offset_slots: u64,
+        warm_ledger_capture: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .turbine_port = .{
@@ -794,6 +795,14 @@ const Cmd = struct {
                 .config = {},
                 .help = "For the standalone shred-network watcher, start this many slots after the fresh RPC slot.",
             },
+            .warm_ledger_capture = .{
+                .kind = .named,
+                .name_override = "warm-ledger-capture",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "Start a temporary shred network during validator snapshot load so the replay ledger is warm before handoff.",
+            },
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
@@ -802,6 +811,7 @@ const Cmd = struct {
             cfg.shred_network.root_slot = args.test_repair_for_slot;
             cfg.shred_network.shred_watcher_start_offset_slots =
                 args.shred_watcher_start_offset_slots;
+            cfg.shred_network.warm_ledger_capture = args.warm_ledger_capture;
             cfg.turbine.num_retransmit_threads = args.num_retransmit_threads;
             cfg.max_shreds = args.max_shreds;
         }
@@ -1591,6 +1601,37 @@ fn validator(
     const use_reduced_checkpoint = cfg.accounts_db.reduced_checkpoint_path != null and
         (init_db_exists or rooted_db.count() > 0);
 
+    var ledger_tracy: tracy.TracingAllocator = .{
+        .name = "Ledger",
+        .parent = allocator,
+    };
+    var ledger_tracy_metrics: sig.trace.GaugeAllocator = .{
+        .counter = allocation_metrics.allocated_bytes_ledger,
+        .parent = ledger_tracy.allocator(),
+    };
+
+    // Open the ledger before snapshot load so optional warm capture can write
+    // live shreds into the same RocksDB instance replay will use later.
+    var ledger = try Ledger.init(
+        ledger_tracy_metrics.allocator(),
+        .from(app_base.logger),
+        ledger_dir,
+        app_base.metrics_registry,
+    );
+    defer ledger.deinit();
+
+    var warm_capture_exit = std.atomic.Value(bool).init(false);
+    var warm_capture_epoch_tracker: ?*sig.core.EpochTracker = null;
+    defer if (warm_capture_epoch_tracker) |tracker| {
+        tracker.deinit();
+        allocator.destroy(tracker);
+    };
+    var warm_capture_manager: ?sig.utils.service_manager.ServiceManager = null;
+    defer if (warm_capture_manager) |*manager| {
+        warm_capture_exit.store(true, .release);
+        manager.deinit();
+    };
+
     var loaded_snapshot = if (use_reduced_checkpoint)
         try sig.accounts_db.snapshot.loadReducedCheckpointAsSnapshot(
             allocator,
@@ -1611,6 +1652,82 @@ fn validator(
                 cfg.accounts_db.max_number_of_snapshot_download_attempts,
             },
         );
+
+        if (cfg.shred_network.warm_ledger_capture) {
+            var warm_combined_manifest = try FullAndIncrementalManifest.fromFiles(
+                allocator,
+                .from(app_base.logger),
+                snapshot_dir,
+                snapshot_files,
+            );
+            defer warm_combined_manifest.deinit(allocator);
+
+            var warm_collapsed_manifest = try warm_combined_manifest.collapse(allocator);
+            defer warm_collapsed_manifest.deinit(allocator);
+
+            const warm_root_slot = warm_collapsed_manifest.bank_fields.slot;
+            app_base.logger.info().logf(
+                "warm ledger capture: starting temporary shred network root_slot={}",
+                .{warm_root_slot},
+            );
+
+            var warm_genesis_config = try GenesisConfig.init(allocator, genesis_file_path);
+            defer warm_genesis_config.deinit(allocator);
+
+            const warm_rpc_url = warm_genesis_config.cluster_type.getRpcUrl() orelse
+                @panic("No RPC Url for cluster type!");
+            var warm_rpc_client = try sig.rpc.Client.init(allocator, warm_rpc_url, .{});
+            defer warm_rpc_client.deinit();
+
+            const warm_tracker = try allocator.create(sig.core.EpochTracker);
+            errdefer allocator.destroy(warm_tracker);
+            warm_tracker.* = sig.core.EpochTracker.init(
+                .initFromGenesisConfig(&warm_genesis_config),
+                warm_root_slot,
+                warm_genesis_config.epoch_schedule,
+            );
+            errdefer warm_tracker.deinit();
+
+            var rls = RpcLeaderScheduleService.init(
+                allocator,
+                .from(app_base.logger),
+                warm_tracker,
+                warm_rpc_client,
+            );
+            rls.refresh() catch |e| {
+                app_base.logger.warn()
+                    .field("err", @errorName(e))
+                    .log("warm ledger capture: failed to fetch initial leader schedule; shreds may be discarded until final startup");
+            };
+
+            warm_capture_epoch_tracker = warm_tracker;
+            warm_capture_manager = try sig.shred_network.start(
+                cfg.shred_network.toConfig(warm_root_slot),
+                .{
+                    .allocator = allocator,
+                    .logger = .from(app_base.logger),
+                    .registry = app_base.metrics_registry,
+                    .random = std.crypto.random,
+                    .ledger = &ledger,
+                    .my_keypair = &app_base.my_keypair,
+                    .exit = &warm_capture_exit,
+                    .entrypoints = app_base.entrypoints,
+                    .gossip_table_rw = &gossip_service.gossip_table_rw,
+                    .my_shred_version = &gossip_service.my_shred_version,
+                    .epoch_tracker = warm_tracker,
+                    .my_contact_info =
+                        sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(
+                        gossip_service.my_contact_info,
+                    ),
+                    .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
+                    .overwrite_turbine_stake_for_testing =
+                        cfg.turbine.overwrite_stake_for_testing,
+                    .rpc_hooks = null,
+                    .duplicate = null,
+                    .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
+                },
+            );
+        }
 
         break :blk try loadSnapshot(
             allocator,
@@ -1664,24 +1781,6 @@ fn validator(
     defer new_db.deinit();
 
     const collapsed_manifest = &loaded_snapshot.collapsed_manifest;
-
-    var ledger_tracy: tracy.TracingAllocator = .{
-        .name = "Ledger",
-        .parent = allocator,
-    };
-    var ledger_tracy_metrics: sig.trace.GaugeAllocator = .{
-        .counter = allocation_metrics.allocated_bytes_ledger,
-        .parent = ledger_tracy.allocator(),
-    };
-
-    // ledger
-    var ledger = try Ledger.init(
-        ledger_tracy_metrics.allocator(),
-        .from(app_base.logger),
-        ledger_dir,
-        app_base.metrics_registry,
-    );
-    defer ledger.deinit();
 
     const snapshot_root_slot = collapsed_manifest.bank_fields.slot;
     app_base.logger.info().logf(
@@ -1789,6 +1888,20 @@ fn validator(
         &gossip_votes,
         &gossip_service.gossip_table_rw,
     );
+
+    if (warm_capture_manager) |*manager| {
+        app_base.logger.info().log(
+            "warm ledger capture: stopping temporary shred network before final startup",
+        );
+        warm_capture_exit.store(true, .release);
+        manager.deinit();
+        warm_capture_manager = null;
+    }
+    if (warm_capture_epoch_tracker) |tracker| {
+        tracker.deinit();
+        allocator.destroy(tracker);
+        warm_capture_epoch_tracker = null;
+    }
 
     // shred network
     var shred_network_manager = try sig.shred_network.start(
