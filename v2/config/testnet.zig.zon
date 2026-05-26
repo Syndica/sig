@@ -8,6 +8,7 @@
     },
     .shred_network = .{
         .recv_port = 8002,
+        .advertise_in_gossip = true,
     },
     .telemetry = .{
         .port = 12345,
