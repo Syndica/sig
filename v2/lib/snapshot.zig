@@ -9,10 +9,6 @@ comptime {
     }
 }
 
-comptime {
-    _ = download;
-}
-
 pub const SnapshotSourceRing = lib.ipc.Ring(256, SnapshotSource);
 
 pub const SnapshotSource = extern struct {
