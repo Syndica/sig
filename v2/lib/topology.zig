@@ -616,12 +616,11 @@ pub fn Bind(
 
             // Start up all services, storing their pids
             inline for (services, exit_memfds) |service_instance, exit| {
-                const child_pid = try spawnService(
-                    service_instance,
-                    exit,
-                    std.fs.File.stderr(),
-                    map.get(service_instance).?.items,
-                );
+                const child_pid = try spawnService(service_instance, .{
+                    .exit = exit,
+                    .stderr = .stderr(),
+                    .regions = map.get(service_instance).?.items,
+                });
 
                 try exit_meta.append(allocator, .{ .pid = child_pid, .exit = null });
             }
@@ -656,9 +655,11 @@ pub fn Bind(
 
         fn spawnService(
             service_instance: ServiceInstance,
-            exit: memfd.RW,
-            stderr: std.fs.File,
-            regions: []const ServiceMapLookupResult,
+            params: struct {
+                exit: memfd.RW,
+                stderr: std.fs.File,
+                regions: []const ServiceMapLookupResult,
+            },
         ) !i32 {
             const parent_pid = std.os.linux.getpid();
 
@@ -727,9 +728,9 @@ pub fn Bind(
             }
 
             const resolved_args = try resolveArgs(.{
-                .exit = exit,
-                .stderr = stderr,
-                .regions = regions,
+                .exit = params.exit,
+                .stderr = params.stderr,
+                .regions = params.regions,
             });
 
             // mseal our shared VMAs (essentially making sure their mapping can't be tampered with)
@@ -737,14 +738,14 @@ pub fn Bind(
             for (resolved_args.rw, resolved_args.rw_len) |ptr, len| mseal(ptr orelse continue, len);
             mseal(@ptrCast(resolved_args.exit), @sizeOf(lib.ipc.Exit));
 
-            closeAllFdsExceptStderr(stderr.handle);
+            closeAllFdsExceptStderr(params.stderr.handle);
 
             // makes it impossible for the service to gain privileges
             std.debug.assert(try std.posix.prctl(.SET_NO_NEW_PRIVS, .{ 1, 0, 0, 0 }) == 0);
 
             // install a basic seccomp filter that bans syscalls except write+sleep
             {
-                const bpf_filters = lib.linux.bpf.printSleepExit(stderr.handle);
+                const bpf_filters = lib.linux.bpf.printSleepExit(params.stderr.handle);
                 const program: lib.linux.bpf.sock_fprog = .{
                     .len = bpf_filters.len,
                     .sock_filter = &bpf_filters,
@@ -864,14 +865,13 @@ pub fn Bind(
 
             // Start up all services, storing their pids
             inline for (services, exit_memfds, 0..) |service_instance, exit, i| {
-                _ = try spawnServiceNoSandbox(
-                    service_instance,
-                    exit,
-                    std.fs.File.stderr(),
-                    map.get(service_instance).?.items,
-                    i,
-                    &thread_exit_ctx,
-                );
+                _ = try spawnServiceNoSandbox(service_instance, .{
+                    .exit = exit,
+                    .stderr = .stderr(),
+                    .regions = map.get(service_instance).?.items,
+                    .service_idx = i,
+                    .thread_exit_ctx = &thread_exit_ctx,
+                });
             }
 
             // Wait for first service to exit
@@ -924,20 +924,22 @@ pub fn Bind(
 
         fn spawnServiceNoSandbox(
             service_instance: ServiceInstance,
-            exit: memfd.RW,
-            stderr: std.fs.File,
-            regions: []const ServiceMapLookupResult,
-            service_idx: u16,
-            thread_exit_ctx: *const ThreadExitContext,
+            params: struct {
+                exit: memfd.RW,
+                stderr: std.fs.File,
+                regions: []const ServiceMapLookupResult,
+                service_idx: u16,
+                thread_exit_ctx: *const ThreadExitContext,
+            },
         ) !std.Thread {
             var resolved_args = try resolveArgs(.{
-                .exit = exit,
-                .stderr = stderr,
-                .regions = regions,
+                .exit = params.exit,
+                .stderr = params.stderr,
+                .regions = params.regions,
             });
-            resolved_args.thread_crash_ctx = thread_exit_ctx;
+            resolved_args.thread_crash_ctx = params.thread_exit_ctx;
             resolved_args.thread_crash_fn = signalThreadCrash;
-            resolved_args.service_idx = service_idx;
+            resolved_args.service_idx = params.service_idx;
 
             return try std.Thread.spawn(
                 .{},
@@ -946,8 +948,8 @@ pub fn Bind(
                     getEntrypoint(service_instance.service),
                     service_instance.service,
                     resolved_args,
-                    service_idx,
-                    thread_exit_ctx,
+                    params.service_idx,
+                    params.thread_exit_ctx,
                 },
             );
         }
