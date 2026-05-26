@@ -553,7 +553,7 @@ test "checkAge: recent blockhash" {
             const result = try checkAge(
                 allocator,
                 &transaction,
-                (sig.runtime.SlotAccountReaderAdapter{ .reader = .noop }).accountReader(),
+                AccountReader.noop(),
                 &blockhash_queue,
                 max_age,
                 &Hash.ZEROES,
@@ -571,7 +571,7 @@ test "checkAge: recent blockhash" {
         const result = try checkAge(
             allocator,
             &transaction,
-            (sig.runtime.SlotAccountReaderAdapter{ .reader = .noop }).accountReader(),
+            AccountReader.noop(),
             &blockhash_queue,
             max_age,
             &Hash.ZEROES,
@@ -689,9 +689,7 @@ test "checkAge: nonce account" {
     const result = try checkAge(
         allocator,
         &transaction,
-        (sig.runtime.SlotAccountReaderAdapter{
-            .reader = .{ .account_shared_data_map = &account_map },
-        }).accountReader(),
+        AccountReader.fromMap(&account_map),
         &blockhash_queue,
         0,
         &next_durable_nonce,
@@ -847,9 +845,7 @@ test "checkAge: SIMD-0242 ALT-resolved nonce" {
         const result = try checkAge(
             allocator,
             &transaction,
-            (sig.runtime.SlotAccountReaderAdapter{
-                .reader = .{ .account_shared_data_map = &account_map },
-            }).accountReader(),
+            AccountReader.fromMap(&account_map),
             &blockhash_queue,
             0,
             &next_durable_nonce,
@@ -864,9 +860,7 @@ test "checkAge: SIMD-0242 ALT-resolved nonce" {
         const result = try checkAge(
             allocator,
             &transaction,
-            (sig.runtime.SlotAccountReaderAdapter{
-                .reader = .{ .account_shared_data_map = &account_map },
-            }).accountReader(),
+            AccountReader.fromMap(&account_map),
             &blockhash_queue,
             0,
             &next_durable_nonce,
@@ -917,9 +911,7 @@ test "checkFeePayer: happy path fee payer only" {
     const result = try checkFeePayer(
         allocator,
         &transaction,
-        (sig.runtime.SlotAccountReaderAdapter{
-            .reader = .{ .account_shared_data_map = &account_map },
-        }).accountReader(),
+        AccountReader.fromMap(&account_map),
         &ComputeBudgetLimits.DEFAULT,
         null,
         &sig.core.rent_collector.defaultCollector(10),
@@ -986,9 +978,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
     const result = try checkFeePayer(
         allocator,
         &transaction,
-        (sig.runtime.SlotAccountReaderAdapter{
-            .reader = .{ .account_shared_data_map = &account_map },
-        }).accountReader(),
+        AccountReader.fromMap(&account_map),
         &ComputeBudgetLimits.DEFAULT,
         .{
             .pubkey = transaction.fee_payer,
@@ -1059,9 +1049,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
     const result = try checkFeePayer(
         allocator,
         &transaction,
-        (sig.runtime.SlotAccountReaderAdapter{
-            .reader = .{ .account_shared_data_map = &account_map },
-        }).accountReader(),
+        AccountReader.fromMap(&account_map),
         &ComputeBudgetLimits.DEFAULT,
         .{
             .pubkey = Pubkey.initRandom(prng.random()),

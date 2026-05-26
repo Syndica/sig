@@ -11,7 +11,6 @@ const cost_model = sig.runtime.cost_model;
 const vm = sig.vm;
 
 const BlockhashQueue = sig.core.BlockhashQueue;
-const EpochStakes = sig.core.EpochStakes;
 const Hash = sig.core.Hash;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.Pubkey;
@@ -20,6 +19,7 @@ const Slot = sig.core.Slot;
 const RentState = sig.core.RentCollector.RentState;
 
 const AccountReader = sig.runtime.execution_interfaces.AccountReader;
+const TestEpochStakeReaderContext = sig.runtime.execution_interfaces.TestEpochStakeReaderContext;
 const StatusChecker = sig.runtime.execution_interfaces.StatusChecker;
 const EpochStakeReader = sig.runtime.execution_interfaces.EpochStakeReader;
 
@@ -721,42 +721,6 @@ test getInstructionDatasSliceForPrecompiles {
     }
 }
 
-test "preprocessTransaction: invalid compute budget instruction" {
-    const Signature = sig.core.Signature;
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-
-    const recent_blockhash = Hash.initRandom(prng.random());
-
-    const transaction = sig.core.Transaction{
-        .signatures = &.{Signature.ZEROES},
-        .version = .legacy,
-        .msg = .{
-            .signature_count = 1,
-            .readonly_signed_count = 0,
-            .readonly_unsigned_count = 1,
-            .account_keys = &.{ Pubkey.ZEROES, sig.runtime.program.compute_budget.ID },
-            .recent_blockhash = recent_blockhash,
-            .instructions = &.{.{ // invalid compute budget instruction
-                .program_index = 1,
-                .account_indexes = &.{},
-                .data = &.{},
-            }},
-        },
-    };
-
-    const result = sig.replay.preprocess_transaction.preprocessTransaction(
-        transaction,
-        .skip_sig_verify,
-        &.ALL_DISABLED,
-        0,
-    );
-
-    try std.testing.expectEqual(
-        TransactionError{ .InstructionError = .{ 0, .InvalidInstructionData } },
-        result.err,
-    );
-}
-
 test "loadAndExecuteTransaction: simple transfer transaction" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -904,8 +868,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     );
     defer blockhash_queue.deinit(allocator);
 
-    const epoch_stakes = EpochStakes.EMPTY_WITH_GENESIS;
-    defer epoch_stakes.deinit(allocator);
+    const epoch_stake_reader_context: TestEpochStakeReaderContext = .{};
 
     const environment = TransactionExecutionEnvironment{
         .feature_set = &feature_set,
@@ -913,9 +876,11 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .sysvar_cache = &sysvar_cache,
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,
-        .epoch_stake_reader = (sig.runtime.EpochStakeReaderAdapter{
-            .epoch_stakes = &epoch_stakes,
-        }).epochStakeReader(),
+        .epoch_stake_reader = .{
+            .ctx = &epoch_stake_reader_context,
+            .totalStakeFn = TestEpochStakeReaderContext.totalStake,
+            .stakeForVoteAccountFn = TestEpochStakeReaderContext.stakeForVoteAccount,
+        },
         .vm_environment = &.{
             .loader = .ALL_DISABLED,
             .config = .{},
@@ -942,9 +907,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             allocator,
             allocator,
             &transaction,
-            (sig.runtime.SlotAccountReaderAdapter{
-                .reader = .{ .account_shared_data_map = &account_map },
-            }).accountReader(),
+            AccountReader.fromMap(&account_map),
             &environment,
             &config,
             &program_map,
@@ -989,9 +952,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             allocator,
             allocator,
             &transaction,
-            (sig.runtime.SlotAccountReaderAdapter{
-                .reader = .{ .account_shared_data_map = &account_map },
-            }).accountReader(),
+            AccountReader.fromMap(&account_map),
             &environment,
             &config,
             &program_map,

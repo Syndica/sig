@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const tracy = @import("tracy");
 const sig = @import("../sig.zig");
@@ -557,7 +558,7 @@ pub fn createV3ProgramAccountData(
     return .{ program_bytes, program_data_bytes };
 }
 
-/// helper function to load programs for tests
+/// Load programs from an in-memory account map (for testing).
 pub fn testLoad(
     allocator: std.mem.Allocator,
     accounts: *const sig.utils.collections.PubkeyMap(AccountSharedData),
@@ -567,10 +568,7 @@ pub fn testLoad(
     var programs = ProgramMap.empty;
     errdefer programs.deinit(allocator);
 
-    const account_reader_adapter = sig.runtime.SlotAccountReaderAdapter{
-        .reader = .{ .account_shared_data_map = accounts },
-    };
-    const account_reader = account_reader_adapter.accountReader();
+    const account_reader = AccountReader.fromMap(accounts);
 
     for (accounts.keys(), accounts.values()) |address, account| {
         try loadIfProgram(
