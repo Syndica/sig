@@ -49,7 +49,7 @@ fn testAsmWithMemory(
     var executable = try Executable.fromAsm(allocator, source, config);
     defer executable.deinit(allocator);
 
-    try executable.verify(&loader);
+    try executable.verify();
 
     const mutable = try allocator.dupe(u8, program_memory);
     defer allocator.free(mutable);
@@ -2384,7 +2384,7 @@ pub fn testElfWithSyscalls(
     var executable = try elf.load(allocator, bytes, &loader, config);
     defer executable.deinit(allocator);
 
-    try executable.verify(&loader);
+    try executable.verify();
 
     const stack_memory = try allocator.alloc(u8, config.stackSize());
     defer allocator.free(stack_memory);
@@ -2585,7 +2585,7 @@ fn testVerify(
     source: []const u8,
     expected: anytype,
 ) !void {
-    try testVerifyWithSyscalls(config, source, &.{}, expected);
+    try testVerifyWithSyscalls(config, source, expected);
 }
 
 fn testVerifyTextBytes(
@@ -2618,25 +2618,21 @@ fn testVerifyTextBytesWithSyscalls(
     );
     defer executable.deinit(allocator);
 
-    const result = executable.verify(&loader);
+    const result = executable.verify();
     try expectEqual(expected, result);
 }
 
 fn testVerifyWithSyscalls(
     config: Config,
     source: []const u8,
-    extra_syscalls: []const Syscall,
     expected: anytype,
 ) !void {
     const allocator = std.testing.allocator;
 
-    var loader: SyscallMap = .ALL_DISABLED;
-    for (extra_syscalls) |entry| loader.enable(entry);
-
     var executable = try Executable.fromAsm(allocator, source, config);
     defer executable.deinit(allocator);
 
-    const result = executable.verify(&loader);
+    const result = executable.verify();
     try expectEqual(expected, result);
 }
 
