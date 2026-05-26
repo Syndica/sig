@@ -515,15 +515,18 @@ pub const Manifest = struct {
         defer allocator.free(contents);
 
         var fbs = std.io.fixedBufferStream(contents);
-        return bincode.read(allocator, Manifest, fbs.reader(), .{ .allocation_limit = 2 << 30 });
+        return decodeFromBincode(allocator, fbs.reader(), .{
+            .allocation_limit = size *| 8,
+        });
     }
 
     pub fn decodeFromBincode(
         allocator: std.mem.Allocator,
         /// `std.io.GenericReader(...)` | `std.io.AnyReader`
         reader: anytype,
+        params: bincode.Params,
     ) !Manifest {
-        return try bincode.read(allocator, Manifest, reader, .{ .allocation_limit = 2 << 30 });
+        return try bincode.read(allocator, Manifest, reader, params);
     }
 
     pub fn epochStakes(
@@ -718,15 +721,19 @@ pub const StatusCache = struct {
     }
 
     pub fn readFromFile(allocator: std.mem.Allocator, file: std.fs.File) !StatusCache {
-        return decodeFromBincode(allocator, file.deprecatedReader());
+        const size = (try file.stat()).size;
+        return decodeFromBincode(allocator, file.deprecatedReader(), .{
+            .allocation_limit = size *| 8,
+        });
     }
 
     pub fn decodeFromBincode(
         allocator: std.mem.Allocator,
         /// `std.io.GenericReader(...)` | `std.io.AnyReader`
         reader: anytype,
+        params: bincode.Params,
     ) !StatusCache {
-        return try bincode.read(allocator, StatusCache, reader, .{});
+        return try bincode.read(allocator, StatusCache, reader, params);
     }
 
     pub fn deinit(self: StatusCache, allocator: std.mem.Allocator) void {
