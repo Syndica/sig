@@ -1,4 +1,5 @@
 const std = @import("std");
+const lib = @import("lib.zig");
 
 pub const Ring = @import("ipc/ring.zig").Ring;
 comptime {
@@ -9,6 +10,7 @@ comptime {
 
 pub const ResolvedArgs = extern struct {
     stderr: std.os.linux.fd_t,
+    runner: *align(page_size_min) lib.runner.Region,
     exit: *align(page_size_min) Exit,
     linux_auxv: ?[*]std.elf.Auxv,
 

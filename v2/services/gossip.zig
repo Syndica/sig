@@ -34,7 +34,7 @@ pub const ReadOnly = struct {
 
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
-pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
 
@@ -119,7 +119,11 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         now = lib.clock.wallclock(.ms);
         try gossip.poll(.from(logger), now);
 
-        const packet = it.next() orelse continue;
+        const packet = it.next() orelse {
+            try runner.activity.signalIdleAfterNCalls(100_000);
+            continue;
+        };
+        try runner.activity.signalActive();
         gossip.processPacket(.from(logger), now, packet);
         it.markUsed();
     }

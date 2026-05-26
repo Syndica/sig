@@ -27,7 +27,8 @@ pub const ReadWrite = struct {
 
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
-pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
+    _ = runner;
     const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
     defer zone.deinit();
 
