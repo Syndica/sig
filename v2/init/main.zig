@@ -172,11 +172,11 @@ pub fn main() !void {
     }
 }
 
-const topology_schema: lib.TopologySchema = .{
+const topology_schema: lib.topology.Schema = .{
     .services = @import("./services.zon"),
 };
 
-pub const topology = topology_schema.Bind(Region, .init(.{
+pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
     .gossip_config = .initOne(.@"gossip:config"),
     .shred_recv_config = .initOne(.@"shred_receiver:config"),
     .snapshot_config = .initOne(.@"snapshot:config"),

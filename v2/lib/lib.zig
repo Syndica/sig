@@ -1,6 +1,5 @@
 comptime {
     if (@import("builtin").is_test) {
-        _ = @import("TopologySchema.zig");
         _ = @import("clock.zig");
         _ = @import("collections.zig");
         _ = @import("crypto.zig");
@@ -12,11 +11,12 @@ comptime {
         _ = @import("snapshot.zig");
         _ = @import("solana.zig");
         _ = @import("telemetry.zig");
+        _ = @import("topology.zig");
         _ = @import("util.zig");
     }
 }
 
-pub const TopologySchema = @import("TopologySchema.zig");
+pub const topology = @import("topology.zig");
 pub const net = @import("net.zig");
 pub const clock = @import("clock.zig");
 pub const crypto = @import("crypto.zig");
