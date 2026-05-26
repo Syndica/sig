@@ -464,6 +464,7 @@ pub fn verifyNonceAccount(
 ) ?NonceData {
     if (!owner.equals(&sig.runtime.program.system.ID)) return null;
 
+    // could probably be smaller
     var deserialize_buf: [@sizeOf(NonceData) * 2]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&deserialize_buf);
 
@@ -474,7 +475,9 @@ pub fn verifyNonceAccount(
         .{},
     ) catch return null;
 
-    return nonce.verify(recent_blockhash.*) orelse null;
+    const nonce_data = nonce.verify(recent_blockhash.*) orelse return null;
+
+    return nonce_data;
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/svm-transaction/src/svm_message.rs#L99-L131

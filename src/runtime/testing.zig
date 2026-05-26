@@ -135,6 +135,7 @@ fn initTransactionContext(
         break :blk program_map;
     };
 
+    // Create EpochStakes
     const epoch_stake_reader_context = try allocator.create(TestEpochStakeReaderContext);
     errdefer allocator.destroy(epoch_stake_reader_context);
     const epoch_stakes = try allocator.dupe(
