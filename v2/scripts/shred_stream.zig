@@ -1,6 +1,7 @@
 //! Streams raw shreds from an Agave ledger to a UDP target.
 
 const std = @import("std");
+const Ring = @import("ipc-ring").Ring;
 const rocks = @import("rocksdb");
 const rocks_c = @import("rocksdb-c");
 
@@ -12,6 +13,8 @@ const agave_cf_meta = "meta";
 const agave_cf_data_shred = "data_shred";
 const agave_cf_code_shred = "code_shred";
 const max_shred_packet_bytes: usize = 1232;
+const producer_publish_packets: usize = 32;
+const stream_queue_packets = 8192;
 
 const Config = struct {
     ledger: []const u8,
@@ -124,6 +127,8 @@ fn run(allocator: Allocator, config: Config) !void {
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
     const stdout = &stdout_writer.interface;
 
+    const target = try std.net.Address.parseIpAndPort(config.target);
+
     var blockstore = try AgaveBlockstore.open(allocator, config.ledger);
     defer blockstore.deinit();
 
@@ -148,16 +153,40 @@ fn run(allocator: Allocator, config: Config) !void {
         const stats = try scanLedger(&blockstore, config);
         try printLedgerStats(stdout, stats);
     } else {
-        var sink: NoopPacketSink = .{};
-        const stats = try walkLedgerPackets(
-            &blockstore,
-            config,
-            NoopPacketSink,
-            &sink,
-            ignoreProducedPacket,
+        const sockfd = try std.posix.socket(
+            target.any.family,
+            std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC,
+            std.posix.IPPROTO.UDP,
         );
+        errdefer std.posix.close(sockfd);
+
+        var ring: StreamPacketRing = undefined;
+        ring.init();
+
+        var done: std.atomic.Value(bool) = .init(false);
+        var stop: std.atomic.Value(bool) = .init(false);
+        var net_thread_error: ?anyerror = null;
+        var net_thread_stats: NetThreadStats = .{};
+        const net_thread = try std.Thread.spawn(
+            .{},
+            netThreadMain,
+            .{ &ring, &done, &stop, &net_thread_stats, &net_thread_error, sockfd, target, config.rate_hz },
+        );
+
+        var writer = ring.get(.writer);
+        const stats = produceLedgerPackets(&blockstore, config, &writer, &stop) catch |err| {
+            stop.store(true, .release);
+            done.store(true, .release);
+            net_thread.join();
+            return err;
+        };
+        done.store(true, .release);
+        net_thread.join();
+
         try printProducerStats(stdout, stats);
-        try stdout.print("sender: not implemented yet\n", .{});
+        try printNetThreadStats(stdout, net_thread_stats);
+
+        if (net_thread_error) |err| return err;
     }
 
     try stdout.flush();
@@ -246,13 +275,13 @@ const SlotStats = struct {
 
     fn record(self: *SlotStats, slot: Slot, selected: bool) void {
         self.total += 1;
-        self.first = minOptional(self.first, slot);
-        self.last = maxOptional(self.last, slot);
+        self.first = if (self.first) |first| @min(first, slot) else slot;
+        self.last = if (self.last) |last| @max(last, slot) else slot;
 
         if (!selected) return;
         self.selected += 1;
-        self.selected_first = minOptional(self.selected_first, slot);
-        self.selected_last = maxOptional(self.selected_last, slot);
+        self.selected_first = if (self.selected_first) |first| @min(first, slot) else slot;
+        self.selected_last = if (self.selected_last) |last| @max(last, slot) else slot;
     }
 };
 
@@ -261,7 +290,7 @@ const ShredKey = struct {
     index: u64,
 };
 
-const ShredKind = enum {
+const ShredKind = enum(u8) {
     data,
     code,
 
@@ -273,10 +302,30 @@ const ShredKind = enum {
     }
 };
 
-const RawShredPacket = struct {
+const StreamPacket = extern struct {
+    data: [max_shred_packet_bytes]u8,
+    slot: Slot,
+    shred_index: u64,
+    len: u16,
     kind: ShredKind,
-    key: ShredKey,
-    payload: []const u8,
+};
+
+const StreamPacketRing = Ring(stream_queue_packets, StreamPacket);
+
+const NetThreadStats = struct {
+    data_packets: u64 = 0,
+    code_packets: u64 = 0,
+    payload_bytes: u64 = 0,
+    empty_polls: u64 = 0,
+    send_errors: u64 = 0,
+
+    fn recordPacket(self: *NetThreadStats, packet: *const StreamPacket) void {
+        switch (packet.kind) {
+            .data => self.data_packets += 1,
+            .code => self.code_packets += 1,
+        }
+        self.payload_bytes += packet.len;
+    }
 };
 
 const ProducerStats = struct {
@@ -289,18 +338,118 @@ const ProducerStats = struct {
         self.slots += 1;
     }
 
-    fn recordPacket(self: *ProducerStats, packet: RawShredPacket) void {
-        switch (packet.kind) {
+    fn recordPacket(self: *ProducerStats, kind: ShredKind, payload_len: usize) void {
+        switch (kind) {
             .data => self.data_packets += 1,
             .code => self.code_packets += 1,
         }
-        self.payload_bytes += @intCast(packet.payload.len);
+        self.payload_bytes += @intCast(payload_len);
     }
 };
 
-const NoopPacketSink = struct {};
+fn netThreadMain(
+    ring: *StreamPacketRing,
+    done: *std.atomic.Value(bool),
+    stop: *std.atomic.Value(bool),
+    stats: *NetThreadStats,
+    net_thread_error: *?anyerror,
+    sockfd: std.posix.fd_t,
+    target: std.net.Address,
+    rate_hz: ?f64,
+) void {
+    defer std.posix.close(sockfd);
 
-fn ignoreProducedPacket(_: *NoopPacketSink, _: RawShredPacket) !void {}
+    var reader = ring.get(.reader);
+    netThreadMainInner(
+        &reader,
+        done,
+        stop,
+        stats,
+        net_thread_error,
+        sockfd,
+        target,
+        rate_hz,
+    ) catch {};
+}
+
+fn netThreadMainInner(
+    reader: *StreamPacketRing.Iterator(.reader),
+    done: *std.atomic.Value(bool),
+    stop: *std.atomic.Value(bool),
+    stats: *NetThreadStats,
+    net_thread_error: *?anyerror,
+    sockfd: std.posix.fd_t,
+    target: std.net.Address,
+    rate_hz: ?f64,
+) !void {
+    defer reader.markUsed();
+    errdefer |err| {
+        net_thread_error.* = err;
+        stats.send_errors += 1;
+        stop.store(true, .release);
+    }
+
+    const packet_interval_ns: ?u64 = if (rate_hz) |rate|
+        @max(1, @as(u64, @intFromFloat(@ceil(@as(f64, @floatFromInt(std.time.ns_per_s)) / rate))))
+    else
+        null;
+    var base_instant: ?std.time.Instant = null;
+    var next_send_offset_ns: u64 = 0;
+
+    while (!stop.load(.acquire) and (!done.load(.acquire) or reader.peek() != null)) {
+        var consumed: usize = 0;
+        while (consumed < producer_publish_packets) {
+            const packet = reader.next() orelse break;
+
+            if (packet_interval_ns) |interval_ns| {
+                const now = try std.time.Instant.now();
+                const now_offset_ns = if (base_instant) |base|
+                    now.since(base)
+                else blk: {
+                    base_instant = now;
+                    break :blk 0;
+                };
+
+                if (now_offset_ns < next_send_offset_ns) {
+                    std.Thread.sleep(next_send_offset_ns - now_offset_ns);
+                }
+
+                const sent = try std.posix.sendto(
+                    sockfd,
+                    packet.data[0..packet.len],
+                    std.posix.MSG.NOSIGNAL,
+                    &target.any,
+                    target.getOsSockLen(),
+                );
+                std.debug.assert(sent == packet.len);
+
+                const after = try std.time.Instant.now();
+                const after_offset_ns = after.since(base_instant.?);
+                next_send_offset_ns = @max(next_send_offset_ns, after_offset_ns) + interval_ns;
+            } else {
+                const sent = try std.posix.sendto(
+                    sockfd,
+                    packet.data[0..packet.len],
+                    std.posix.MSG.NOSIGNAL,
+                    &target.any,
+                    target.getOsSockLen(),
+                );
+                std.debug.assert(sent == packet.len);
+            }
+
+            stats.recordPacket(packet);
+            consumed += 1;
+        }
+
+        if (consumed != 0) {
+            reader.markUsed();
+            continue;
+        }
+
+        stats.empty_polls += 1;
+        std.atomic.spinLoopHint();
+    }
+}
 
 const ShredStats = struct {
     total_packets: u64 = 0,
@@ -321,16 +470,16 @@ const ShredStats = struct {
         self.total_payload_bytes += @intCast(packet_len);
         self.max_packet_bytes = @max(self.max_packet_bytes, packet_len);
         if (packet_len > max_shred_packet_bytes) self.oversized_packets += 1;
-        self.first_slot = minOptional(self.first_slot, key.slot);
-        self.last_slot = maxOptional(self.last_slot, key.slot);
+        self.first_slot = if (self.first_slot) |first| @min(first, key.slot) else key.slot;
+        self.last_slot = if (self.last_slot) |last| @max(last, key.slot) else key.slot;
 
         if (!selected) return;
         self.selected_packets += 1;
         self.selected_payload_bytes += @intCast(packet_len);
         self.selected_max_packet_bytes = @max(self.selected_max_packet_bytes, packet_len);
         if (packet_len > max_shred_packet_bytes) self.selected_oversized_packets += 1;
-        self.selected_first_slot = minOptional(self.selected_first_slot, key.slot);
-        self.selected_last_slot = maxOptional(self.selected_last_slot, key.slot);
+        self.selected_first_slot = if (self.selected_first_slot) |first| @min(first, key.slot) else key.slot;
+        self.selected_last_slot = if (self.selected_last_slot) |last| @max(last, key.slot) else key.slot;
     }
 };
 
@@ -345,14 +494,14 @@ fn scanLedger(blockstore: *const AgaveBlockstore, config: Config) !LedgerStats {
     };
 }
 
-fn walkLedgerPackets(
+fn produceLedgerPackets(
     blockstore: *const AgaveBlockstore,
     config: Config,
-    comptime Context: type,
-    context: *Context,
-    comptime handlePacket: fn (*Context, RawShredPacket) anyerror!void,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
 ) !ProducerStats {
     var stats: ProducerStats = .{};
+    var unpublished_packets: usize = 0;
 
     var start_key_buf: [8]u8 = undefined;
     const start_key: ?[]const u8 = if (config.start_slot) |slot| start_key: {
@@ -367,6 +516,8 @@ fn walkLedgerPackets(
     defer if (err_data) |err| err.deinit();
 
     while (try slot_iter.next(&err_data)) |entry| {
+        if (stop.load(.acquire)) break;
+
         const slot = parseSlotKey(entry[0].data) catch |err| {
             std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
             return err;
@@ -375,22 +526,26 @@ fn walkLedgerPackets(
         if (!slotSelected(config, slot)) continue;
 
         stats.recordSlot();
-        try walkSlotShreds(blockstore, slot, .data, Context, context, handlePacket, &stats);
+        try produceSlotShreds(blockstore, slot, .data, writer, stop, &unpublished_packets, &stats);
         if (blockstore.has_code_shred) {
-            try walkSlotShreds(blockstore, slot, .code, Context, context, handlePacket, &stats);
+            try produceSlotShreds(blockstore, slot, .code, writer, stop, &unpublished_packets, &stats);
         }
+    }
+
+    if (unpublished_packets != 0 and !stop.load(.acquire)) {
+        writer.markUsed();
     }
 
     return stats;
 }
 
-fn walkSlotShreds(
+fn produceSlotShreds(
     blockstore: *const AgaveBlockstore,
     slot: Slot,
     kind: ShredKind,
-    comptime Context: type,
-    context: *Context,
-    comptime handlePacket: fn (*Context, RawShredPacket) anyerror!void,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
+    unpublished_packets: *usize,
     stats: *ProducerStats,
 ) !void {
     var start_key_buf: [16]u8 = undefined;
@@ -406,7 +561,10 @@ fn walkSlotShreds(
     var err_data: ?rocks.Data = null;
     defer if (err_data) |err| err.deinit();
 
+    // TODO(perf): Can use the ipc-ring as backing stable memory for rocksdb shred storage and remove the memcpys here.
     while (try iter.next(&err_data)) |entry| {
+        if (stop.load(.acquire)) break;
+
         const key = parseShredKey(entry[0].data) catch |err| {
             std.debug.print("invalid {s} key length: {d}\n", .{ kind.columnFamilyName(), entry[0].data.len });
             return err;
@@ -414,13 +572,30 @@ fn walkSlotShreds(
         if (key.slot != slot) break;
         if (entry[1].data.len > max_shred_packet_bytes) return error.ShredPacketTooLarge;
 
-        const packet: RawShredPacket = .{
-            .kind = kind,
-            .key = key,
-            .payload = entry[1].data,
+        const out = while (true) {
+            if (stop.load(.acquire)) return;
+            if (writer.next()) |out| break out;
+            if (unpublished_packets.* != 0) {
+                writer.markUsed();
+                unpublished_packets.* = 0;
+                continue;
+            }
+            std.atomic.spinLoopHint();
         };
-        try handlePacket(context, packet);
-        stats.recordPacket(packet);
+
+        out.slot = key.slot;
+        out.shred_index = key.index;
+        out.kind = kind;
+        out.len = @intCast(entry[1].data.len);
+        @memcpy(out.data[0..entry[1].data.len], entry[1].data);
+
+        stats.recordPacket(kind, entry[1].data.len);
+        unpublished_packets.* += 1;
+
+        if (unpublished_packets.* == producer_publish_packets) {
+            writer.markUsed();
+            unpublished_packets.* = 0;
+        }
     }
 }
 
@@ -507,6 +682,17 @@ fn printProducerStats(stdout: *std.Io.Writer, stats: ProducerStats) !void {
     try stdout.print("  payload_bytes: {d}\n", .{stats.payload_bytes});
 }
 
+fn printNetThreadStats(stdout: *std.Io.Writer, stats: NetThreadStats) !void {
+    try stdout.print("net_thread:\n", .{});
+    try stdout.print("  queue_packets: {d}\n", .{stream_queue_packets});
+    try stdout.print("  data_packets: {d}\n", .{stats.data_packets});
+    try stdout.print("  code_packets: {d}\n", .{stats.code_packets});
+    try stdout.print("  total_packets: {d}\n", .{stats.data_packets + stats.code_packets});
+    try stdout.print("  payload_bytes: {d}\n", .{stats.payload_bytes});
+    try stdout.print("  empty_polls: {d}\n", .{stats.empty_polls});
+    try stdout.print("  send_errors: {d}\n", .{stats.send_errors});
+}
+
 fn printShredStats(stdout: *std.Io.Writer, name: []const u8, stats: ShredStats) !void {
     try stdout.print("  {s}:\n", .{name});
     try stdout.print("    total_packets: {d}\n", .{stats.total_packets});
@@ -555,18 +741,12 @@ fn slotSelected(config: Config, slot: Slot) bool {
     return true;
 }
 
+// TODO: make this a method on Config
 fn pastEndSlot(config: Config, slot: Slot) bool {
     return if (config.end_slot) |end_slot| slot > end_slot else false;
 }
 
-fn minOptional(current: ?Slot, next: Slot) Slot {
-    return if (current) |value| @min(value, next) else next;
-}
-
-fn maxOptional(current: ?Slot, next: Slot) Slot {
-    return if (current) |value| @max(value, next) else next;
-}
-
+// TODO: is this and isDir needed? Can be removed/simplified?
 fn resolveRocksDbPath(allocator: Allocator, ledger_path: []const u8) ![]const u8 {
     const nested_rocksdb_path = try std.fs.path.join(allocator, &.{ ledger_path, "rocksdb" });
 
@@ -581,6 +761,7 @@ fn resolveRocksDbPath(allocator: Allocator, ledger_path: []const u8) ![]const u8
     return try allocator.dupe(u8, ledger_path);
 }
 
+// TODO: remove this.
 fn isDir(path: []const u8) bool {
     const stat = std.fs.cwd().statFile(path) catch return false;
     return stat.kind == .directory;

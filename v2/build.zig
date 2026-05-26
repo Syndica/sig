@@ -101,6 +101,11 @@ pub fn build(b: *Build) !void {
         .target = target,
         .optimize = .ReleaseFast, // fast to compile once, no need to recompile when changing modes,
     }).module("zstd");
+    const ipc_ring_mod = b.createModule(.{
+        .root_source_file = b.path("lib/ipc/ring.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const rocksdb_dep = b.dependency("rocksdb", .{
         .target = target,
         .optimize = optimize,
@@ -209,6 +214,7 @@ pub fn build(b: *Build) !void {
                 .optimize = optimize,
                 .link_libc = true,
                 .imports = &.{
+                    .{ .name = "ipc-ring", .module = ipc_ring_mod },
                     .{ .name = "rocksdb", .module = rocksdb_mod },
                     .{ .name = "rocksdb-c", .module = rocksdb_c_mod },
                 },
