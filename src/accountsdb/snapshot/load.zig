@@ -402,7 +402,7 @@ fn insertFromSnapshotArchive(
             if (maybe_status_cache) |_| return error.DuplicateStatusCache;
             // Read file content into memory for bincode deserialization
             maybe_status_cache = try StatusCache.decodeFromBincode(allocator, reader, .{
-                .allocation_limit = tar_hdr.file_size *| 8,
+                .allocation_limit = snapshot.data.bincodeAllocationLimit(tar_hdr.file_size),
             });
             try reader.skipBytes(tar_hdr.pad_len, .{});
 
@@ -414,7 +414,7 @@ fn insertFromSnapshotArchive(
             if (maybe_manifest) |_| return error.DuplicateManifest;
             // Read file content into memory for bincode deserialization
             maybe_manifest = try Manifest.decodeFromBincode(allocator, reader, .{
-                .allocation_limit = tar_hdr.file_size *| 8,
+                .allocation_limit = snapshot.data.bincodeAllocationLimit(tar_hdr.file_size),
             });
             try reader.skipBytes(tar_hdr.pad_len, .{});
 
