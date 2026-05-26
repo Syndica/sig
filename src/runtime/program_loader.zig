@@ -131,7 +131,7 @@ fn loadProgram(
         environment.config,
     ) catch return .failed;
 
-    executable.verify(&environment.loader) catch {
+    executable.verify() catch {
         executable.deinit(allocator);
         return .failed;
     };

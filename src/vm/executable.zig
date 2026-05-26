@@ -110,14 +110,7 @@ pub const Executable = struct {
     };
 
     /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/verifier.rs#L227
-    pub fn verify(
-        self: *const Executable,
-        loader: *const SyscallMap,
-    ) VerifierError!void {
-        // The verifier is loader-independent now (matches agave: CALL_IMM is a
-        // verifier no-op; syscall existence is a runtime check). The parameter
-        // is retained to avoid churning callers.
-        _ = loader;
+    pub fn verify(self: *const Executable) VerifierError!void {
         const zone = tracy.Zone.init(@src(), .{ .name = "Executable.Verify" });
         defer zone.deinit();
 

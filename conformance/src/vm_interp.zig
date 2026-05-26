@@ -184,7 +184,7 @@ fn executeVmTest(
             memory.RODATA_START,
     };
 
-    const verify_result = executable.verify(&env.loader);
+    const verify_result = executable.verify();
     if (std.meta.isError(verify_result)) {
         return .{
             .@"error" = -2,

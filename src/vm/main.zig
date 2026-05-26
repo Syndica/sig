@@ -91,7 +91,7 @@ pub fn main() !void {
         try elf.load(gpa, bytes, &loader, config);
     defer executable.deinit(gpa);
 
-    try executable.verify(&loader);
+    try executable.verify();
 
     const heap_mem = try gpa.alloc(u8, 0x40000);
     defer gpa.free(heap_mem);
