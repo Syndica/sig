@@ -18,27 +18,30 @@ const ServiceEntrypoint = lib.ipc.ServiceFn;
 
 const memfd = lib.linux.memfd;
 
-const TopologySchema = @This();
-services: []const ServiceSchema,
+const topology = @This();
 
-pub const ServiceSchema = struct {
-    /// The service's identifier.
-    name: @Type(.enum_literal),
-    /// The regions expected by this service.
-    regions: []const RegionSchema,
+pub const Schema = struct {
+    services: []const Service,
 
-    pub const RegionSchema = struct {
-        /// The region's identifier, local to the service.
+    pub const Service = struct {
+        /// The service's identifier.
         name: @Type(.enum_literal),
-        access: Access,
+        /// The regions expected by this service.
+        regions: []const Region,
 
-        pub const Access = enum { readonly, rw };
+        pub const Region = struct {
+            /// The region's identifier, local to the service.
+            name: @Type(.enum_literal),
+            access: Access,
+
+            pub const Access = enum { readonly, rw };
+        };
     };
 };
 
-pub fn ServiceId(comptime topo: TopologySchema) type {
-    var fields: [topo.services.len]std.builtin.Type.EnumField = undefined;
-    for (topo.services, &fields, 0..) |instance, *field, i| {
+pub fn ServiceId(comptime schema: Schema) type {
+    var fields: [schema.services.len]std.builtin.Type.EnumField = undefined;
+    for (schema.services, &fields, 0..) |instance, *field, i| {
         field.* = .{
             .name = @tagName(instance.name),
             .value = i,
@@ -54,9 +57,9 @@ pub fn ServiceId(comptime topo: TopologySchema) type {
 
 /// Flattened enum representation of `ServiceRegionInfo`, where:
 /// `.{ .service_name = .local_region_name }` <=> `.@"service_name:local_region_name"`
-pub fn ServiceRegionId(comptime topo: TopologySchema) type {
+pub fn ServiceRegionId(comptime schema: Schema) type {
     var fields: []const std.builtin.Type.EnumField = &.{};
-    for (topo.services) |service| {
+    for (schema.services) |service| {
         for (service.regions) |service_region| {
             fields = fields ++ [_]std.builtin.Type.EnumField{.{
                 .name = @tagName(service.name) ++ ":" ++ @tagName(service_region.name),
@@ -72,20 +75,20 @@ pub fn ServiceRegionId(comptime topo: TopologySchema) type {
     } });
 }
 
-pub fn RegionBindingsMap(
-    comptime topo: TopologySchema,
+pub fn BindingsMap(
+    comptime schema: Schema,
     comptime RegionTag: type,
 ) type {
     return std.EnumArray(
         RegionTag,
-        std.EnumSet(topo.ServiceRegionId()),
+        std.EnumSet(ServiceRegionId(schema)),
     );
 }
 
 /// Namespace of types and functions which, with respect to the equivalences
 /// defined by `bindings_map`, assist in materializing the regions of the topology.
 pub fn Bind(
-    comptime topo: TopologySchema,
+    comptime schema: Schema,
     /// A tagged union of all the intended shared region bindings.
     /// The associated payload should be the type that will be used to initialize the region.
     /// Expected methods:
@@ -98,13 +101,14 @@ pub fn Bind(
     /// ```
     comptime Region: type,
     /// Defines the equivalences between regions across all services, unifying them under one binding (the `Region` tag name).
-    comptime bindings_map_init: topo.RegionBindingsMap(@typeInfo(Region).@"union".tag_type.?),
+    comptime bindings_map_init: BindingsMap(schema, @typeInfo(Region).@"union".tag_type.?),
 ) type {
     return struct {
         const bound = @This();
 
         pub const RegionTag = @typeInfo(Region).@"union".tag_type.?;
-        pub const BindingsMap = topo.RegionBindingsMap(RegionTag);
+        pub const BindingsMap = topology.BindingsMap(schema, RegionTag);
+        const BindingsIndexer = bound.BindingsMap.Indexer;
         pub const bindings_map = bindings_map_init;
 
         fn regionSize(r: Region) usize {
@@ -112,7 +116,7 @@ pub fn Bind(
         }
 
         comptime {
-            if (topo.validateBindingsMap(RegionTag, bindings_map)) |result| switch (result) {
+            if (validateBindingsMap(schema, RegionTag, bindings_map)) |result| switch (result) {
                 inline .duplicated, .missing => |bad_set, reason| {
                     var err_msg: []const u8 = switch (reason) {
                         .duplicated => "The following regions were bound multiple times: ",
@@ -131,17 +135,17 @@ pub fn Bind(
         }
 
         /// Enum with a tag for each service.
-        /// NOTE: can also be used to index `topo.services_schema`.
-        pub const ServiceId = topo.ServiceId();
+        /// NOTE: can also be used to index `schema.services`.
+        pub const ServiceId = topology.ServiceId(schema);
 
-        pub const ServiceRegionId = topo.ServiceRegionId();
+        pub const ServiceRegionId = topology.ServiceRegionId(schema);
 
         /// Tagged union of enums, where the union tag is the service, and the
         /// payload is the corresponding `ServiceRegionIdLocal(service_id)`.
         /// i.e. `.{ .service_name = .local_region_name }`.
         pub const ServiceRegionInfo = @Type(.{ .@"union" = info: {
-            var fields: [topo.services.len]std.builtin.Type.UnionField = undefined;
-            for (topo.services, &fields) |service, *field| {
+            var fields: [schema.services.len]std.builtin.Type.UnionField = undefined;
+            for (schema.services, &fields) |service, *field| {
                 const service_id = @field(bound.ServiceId, @tagName(service.name));
                 const FieldType = LocalServiceRegionId(service_id);
                 field.* = .{
@@ -159,9 +163,9 @@ pub fn Bind(
         } });
 
         /// The region id enum local to `service`.
-        /// NOTE: can also be used to index `topo.services_schema[@intFromEnum(service)].regions`.
+        /// NOTE: can also be used to index `schema.services[@intFromEnum(service)].regions`.
         pub fn LocalServiceRegionId(comptime service: bound.ServiceId) type {
-            const regions = topo.services[@intFromEnum(service)].regions;
+            const regions = schema.services[@intFromEnum(service)].regions;
             var fields: [regions.len]std.builtin.Type.EnumField = undefined;
             for (regions, &fields, 0..) |region, *field, i| {
                 field.* = .{
@@ -285,7 +289,7 @@ pub fn Bind(
             );
             var shared_regions: [bindings_map.values.len]SharedRegion = undefined;
             inline for (bindings_map.values, 0..) |region_id_set, binding_i| {
-                const region_binding_tag = comptime BindingsMap.Indexer.keyForIndex(binding_i);
+                const region_binding_tag = comptime BindingsIndexer.keyForIndex(binding_i);
 
                 comptime var shares: []const Share = &.{};
 
@@ -294,7 +298,7 @@ pub fn Bind(
                     const region_id = comptime iter.next().?;
                     const region_info = getServiceRegionIdInfo(region_id);
                     const local_region_id = @field(region_info, @tagName(region_info));
-                    const service_entry = topo.services[@intFromEnum(region_info)];
+                    const service_entry = schema.services[@intFromEnum(region_info)];
                     const region_entry = service_entry.regions[@intFromEnum(local_region_id)];
 
                     shares = shares ++ [_]Share{.{
@@ -324,7 +328,7 @@ pub fn Bind(
 
         pub fn getRegionBinding(service_region_id: bound.ServiceRegionId) Region.Tag {
             return for (bindings_map.values, 0..) |region_id_set, i| {
-                const binding_tag = BindingsMap.Indexer.keyForIndex(i);
+                const binding_tag = BindingsIndexer.keyForIndex(i);
                 if (!region_id_set.contains(service_region_id)) continue;
                 break binding_tag;
             } else unreachable;
@@ -341,7 +345,7 @@ pub fn Bind(
             comptime {
                 @setEvalBranchQuota(100_000);
 
-                const service_entry = topo.services[@intFromEnum(service_id)];
+                const service_entry = schema.services[@intFromEnum(service_id)];
                 var required: []const RequiredRegion = &.{};
                 for (service_entry.regions) |region| {
                     required = required ++ &[_]RequiredRegion{.{
@@ -951,27 +955,27 @@ pub fn Bind(
 }
 
 fn ValidateBindingsMapResult(
-    comptime topo: TopologySchema,
+    comptime schema: Schema,
 ) type {
     return union(enum) {
         /// The tags in this set were specified in two bindings.
-        duplicated: std.EnumSet(topo.ServiceRegionId()),
+        duplicated: std.EnumSet(ServiceRegionId(schema)),
         /// The tags in this set were not specified in any binding.
-        missing: std.EnumSet(topo.ServiceRegionId()),
+        missing: std.EnumSet(ServiceRegionId(schema)),
     };
 }
 
 /// Returns null on success.
 /// Otherwise returns a diagnostic describing the problem.
 inline fn validateBindingsMap(
-    comptime topo: TopologySchema,
+    comptime schema: Schema,
     /// A union of all the intended shared region bindings.
     comptime RegionTag: type,
     /// Defines the equivalences between regions across all services, unifying them under one binding (the `Region` tag name).
-    comptime bindings_map: topo.RegionBindingsMap(RegionTag),
-) ?topo.ValidateBindingsMapResult() {
+    comptime bindings_map: BindingsMap(schema, RegionTag),
+) ?ValidateBindingsMapResult(schema) {
     comptime {
-        var accumulated_set: std.EnumSet(topo.ServiceRegionId()) = .{};
+        var accumulated_set: std.EnumSet(ServiceRegionId(schema)) = .{};
         for (bindings_map.values) |region_id_set| {
             const intersection = accumulated_set.intersectWith(region_id_set);
             if (intersection.count() == 0) {
@@ -980,7 +984,7 @@ inline fn validateBindingsMap(
             }
             return .{ .duplicated = intersection };
         }
-        if (accumulated_set.count() != @typeInfo(topo.ServiceRegionId()).@"enum".fields.len) {
+        if (accumulated_set.count() != @typeInfo(ServiceRegionId(schema)).@"enum".fields.len) {
             const missing = accumulated_set.complement();
             return .{ .missing = missing };
         }
