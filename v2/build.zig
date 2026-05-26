@@ -201,7 +201,7 @@ pub fn build(b: *Build) !void {
     defer doc_service_modules.deinit(b.allocator);
 
     // build + link services
-    inline for (@import("init/services.zon").services) |s| {
+    inline for (@import("init/services.zon")) |s| {
         const service_name = @tagName(s.name);
         const service_mod = b.createModule(.{
             .root_source_file = b.path("services").path(b, service_name ++ ".zig"),

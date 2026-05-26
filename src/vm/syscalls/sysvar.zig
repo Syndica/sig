@@ -40,13 +40,13 @@ fn getSyscall(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMa
                 return SyscallError.UnalignedPointer;
             }
 
-            // SIMD-0219: The destination address of all sysvar related syscalls
+            // SIMD-0459: The destination address of all sysvar related syscalls
             // must be on the stack or heap, meaning their virtual address is
             // inside `0x200000000..0x400000000`.
             // (bytecode/rodata regions below 0x200000000 are always readonly
             // so mutable translation to addresses below that will result in an AccessViolation anyways).
             if (value_addr >= memory.INPUT_START and
-                tc.feature_set.active(.virtual_address_space_adjustments, tc.slot))
+                tc.feature_set.active(.syscall_parameter_address_restrictions, tc.slot))
             {
                 return SyscallError.InvalidPointer;
             }
@@ -92,13 +92,13 @@ pub fn getSysvar(
     const mem_cost = @max(tc.compute_budget.mem_op_base_cost, buf_cost);
     try tc.consumeCompute(tc.compute_budget.sysvar_base_cost +| id_cost +| mem_cost);
 
-    // SIMD-0219: The destination address of all sysvar related syscalls
+    // SIMD-0459: The destination address of all sysvar related syscalls
     // must be on the stack or heap, meaning their virtual address is
     // inside `0x200000000..0x400000000`.
     // (bytecode/rodata regions below 0x200000000 are always readonly
     // so mutable translation to addresses below that will result in an AccessViolation anyways).
     if (value_addr >= memory.INPUT_START and
-        tc.feature_set.active(.virtual_address_space_adjustments, tc.slot))
+        tc.feature_set.active(.syscall_parameter_address_restrictions, tc.slot))
     {
         return SyscallError.InvalidPointer;
     }
@@ -506,7 +506,7 @@ test getSysvar {
         );
     }
 
-    // SIMD-0219: value_addr >= INPUT_START with virtual_address_space_adjustments returns InvalidPointer
+    // SIMD-0459: value_addr >= INPUT_START with syscall_parameter_address_restrictions returns InvalidPointer
     {
         var cache_strict, var tc_strict = try testing.createTransactionContext(
             allocator,
@@ -514,7 +514,9 @@ test getSysvar {
             .{
                 .accounts = &.{},
                 .compute_meter = std.math.maxInt(u64),
-                .feature_set = &.{.{ .feature = .virtual_address_space_adjustments, .slot = 0 }},
+                .feature_set = &.{
+                    .{ .feature = .syscall_parameter_address_restrictions, .slot = 0 },
+                },
                 .slot = 0,
                 .sysvar_cache = .{
                     .clock = src.clock,
@@ -776,5 +778,64 @@ fn testGetSlotHashes(filled: bool) !void {
         sysvar.SlotHashes.Entry,
         obj_parsed.entries.constSlice(),
         src_hashes.entries.constSlice(),
+    );
+}
+
+test "getSysvar(known id, unpopulated cache) returns NOT_FOUND" {
+    // Regression: fixture bc429abae18cfa99e733dab2845f1147313baca7_2781073.fix
+    //
+    // sol_get_sysvar diverged with Agave when r1 pointed to a known sysvar pubkey
+    // but the corresponding cache slot was null. Old behavior: getSlice() returned
+    // &.{}, caller saw buf.len(0) < offset+length(56) → OFFSET_LENGTH_EXCEEDS (=1).
+    // Agave returns SYSVAR_NOT_FOUND (=2). Fix: getSlice now returns the optional
+    // field directly so a null field propagates as null.
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    // Empty cache — all sysvar fields are null.
+    var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+        .accounts = &.{},
+        .compute_meter = std.math.maxInt(u64),
+        .sysvar_cache = .{},
+    });
+    defer {
+        testing.deinitTransactionContext(allocator, &tc);
+        cache.deinit(allocator);
+    }
+
+    // MemoryMap requires regions ordered by index: 0x1.. (bytecode), 0x2..
+    // (stack), 0x3.. (heap), 0x4.. (input). Each region must sit at its
+    // matching index slot, so we include an unused bytecode region.
+    var bytecode = [_]u8{};
+    var buffer = std.mem.zeroes([16]u8);
+    const bytecode_addr = 0x100000000;
+    const buffer_addr = 0x200000000; // stack/heap range (SIMD-459 legal)
+    const id_addr = 0x300000000;
+
+    var memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.constant, &bytecode, bytecode_addr),
+            memory.Region.init(.mutable, &buffer, buffer_addr),
+            // r1 points to a *known* sysvar id (Clock), but cache.clock is null.
+            memory.Region.init(.constant, &sysvar.Clock.ID.data, id_addr),
+        },
+        .v2,
+        .{},
+    );
+    defer memory_map.deinit(allocator);
+
+    // Same offset/length the fuzzer used (r3=45, r4=11). What matters is
+    // offset+length > 0 so the pre-fix code would have hit the OFFSET_LENGTH
+    // branch on an empty slice.
+    try std.testing.expectError(
+        error.SysvarNotFound,
+        callSysvarSyscall(&tc, &memory_map, getSysvar, .{
+            id_addr,
+            buffer_addr,
+            45, // offset (r3)
+            11, // length (r4)
+        }),
     );
 }

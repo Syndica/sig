@@ -1529,11 +1529,7 @@
         .name = "syscall_parameter_address_restrictions",
         .pubkey = "EDGMC5kxFxGk4ixsNkGt8bW7QL5hDMXnbwaZvYMwNfzF",
         .description = "SIMD-0459: Syscall Parameter Address Restrictions",
-        .status = .unsupported,
-        .note =
-        \\ TODO: High Priority 
-        \\ Pending devnet activation.
-        ,
+        .status = .supported,
     },
     .{
         .name = "virtual_address_space_adjustments",

@@ -9,7 +9,7 @@ comptime {
 
 pub const ResolvedArgs = extern struct {
     stderr: std.os.linux.fd_t,
-    exit: [*]align(page_size_min) u8,
+    exit: *align(page_size_min) Exit,
 
     rw: [max_regions]?[*]align(page_size_min) u8,
     rw_len: [max_regions]usize,
@@ -110,24 +110,3 @@ pub const Exit = extern struct {
         return str;
     }
 };
-
-/// A type that wraps a slice so that it can print the items formatted.
-/// `{f}` on a such a slice in `writer.print()` doesn't work for some reason...
-pub fn FmtSlice(comptime T: type) type {
-    return struct {
-        slice: []const T,
-
-        pub fn format(self: @This(), writer: *std.Io.Writer) !void {
-            try writer.writeAll("{ ");
-            for (self.slice, 0..) |*item, i| {
-                try item.format(writer);
-                if (i < self.slice.len - 1) try writer.writeAll(", ");
-            }
-            try writer.writeAll(" }");
-        }
-    };
-}
-
-pub fn fmtSlice(slice: anytype) FmtSlice(@TypeOf(slice[0])) {
-    return .{ .slice = slice };
-}
