@@ -93,8 +93,11 @@ pub const VoteStateV4 = struct {
     };
 
     /// Integer percentage (0-100) for backward compatibility; inflation_rewards_commission_bps / 100.
+    /// Matches Agave's `CommissionView::commission_percent`, which saturates at `u8::MAX`
+    /// rather than panicking when the stored basis-points value exceeds 25,500.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/vote/src/vote_state_view/field_frames.rs
     pub fn commission(self: *const VoteStateV4) u8 {
-        return @intCast(self.inflation_rewards_commission_bps / 100);
+        return @intCast(@min(self.inflation_rewards_commission_bps / 100, std.math.maxInt(u8)));
     }
 
     /// [SIMD-0185] Build VoteStateV4 from VoteStateV3 (e.g. for v3 InitializeAccount path).
