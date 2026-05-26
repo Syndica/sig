@@ -107,7 +107,12 @@ fn serviceMain(params: lib.ipc.ResolvedArgs) callconv(.c) void {
     comptime var rw_index: usize = 0;
     populateFields(&rw, &rw_index, .rw, max_regions, &params.rw, &params.rw_len);
 
-    root.serviceMain(ro, rw) catch |err| {
+    var activity = params.runner.activity.serviceView();
+    const connection: lib.runner.Connection = .{
+        .activity = &activity,
+    };
+
+    root.serviceMain(connection, ro, rw) catch |err| {
         // write back error name
         const err_len = @min(@errorName(err).len, exit.error_name.len);
         @memcpy(exit.error_name[0..err_len], @errorName(err)[0..err_len]);

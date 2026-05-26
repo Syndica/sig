@@ -9,6 +9,7 @@ comptime {
         _ = @import("ipc.zig");
         _ = @import("linux.zig");
         _ = @import("net.zig");
+        _ = @import("runner.zig");
         _ = @import("shred.zig");
         _ = @import("snapshot.zig");
         _ = @import("solana.zig");
@@ -30,6 +31,7 @@ pub const linux = @import("linux.zig");
 pub const util = @import("util.zig");
 pub const collections = @import("collections.zig");
 pub const snapshot = @import("snapshot.zig");
+pub const runner = @import("runner.zig");
 pub const telemetry = @import("telemetry.zig");
 pub const accounts_db = @import("accounts_db.zig");
 pub const fio = @import("fio.zig");
