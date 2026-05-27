@@ -22,6 +22,9 @@ jobs:
   test_kcov_linux:
     runs-on: ubuntu-latest
     steps:
+      - name: Delete unnecessary files to free up space
+        run: rm -rf /opt/hostedtoolcache
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -84,6 +87,9 @@ jobs:
   gossip_and_fuzz:
     runs-on: ubuntu-latest
     steps:
+      - name: Delete unnecessary files to free up space
+        run: rm -rf /opt/hostedtoolcache
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -119,6 +125,9 @@ jobs:
   build_and_test_linux:
     runs-on: ubuntu-latest
     steps:
+      - name: Delete unnecessary files to free up space
+        run: rm -rf /opt/hostedtoolcache
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -137,7 +146,8 @@ jobs:
           zig build -Denable-tsan=true -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out --summary all
 
       - name: Build Tests
-        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
+        run:
+          zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
           -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Run Tests
@@ -148,6 +158,14 @@ jobs:
   linux_misc_checks:
     runs-on: ubuntu-latest
     steps:
+      - name: Delete unnecessary files to free up space
+        run: |
+          set -x
+          sudo df -h
+          sudo du -xh / --exclude=/proc --exclude=/sys --exclude=/dev | sort -h
+          sudo rm -rf /opt/hostedtoolcache
+          sudo df -h
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -199,6 +217,9 @@ jobs:
   solana_conformance:
     runs-on: ubuntu-latest
     steps:
+      - name: Delete unnecessary files to free up space
+        run: rm -rf /opt/hostedtoolcache
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -208,7 +229,8 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: build_conformance-v1-${{ hashFiles('build.zig', 'build.zig.zon',
+          cache-key:
+            build_conformance-v1-${{ hashFiles('build.zig', 'build.zig.zon',
             'conformance/build.zig', 'conformance/build.zig.zon') }}
 
       - name: Build Conformance
@@ -241,6 +263,9 @@ jobs:
   feature_compat_conformance:
     runs-on: ubuntu-latest
     steps:
+      - name: Delete unnecessary files to free up space
+        run: rm -rf /opt/hostedtoolcache
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -250,7 +275,8 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: feature_compat-v1-${{ hashFiles('build.zig', 'build.zig.zon',
+          cache-key:
+            feature_compat-v1-${{ hashFiles('build.zig', 'build.zig.zon',
             'conformance/build.zig', 'conformance/build.zig.zon') }}
 
       - uses: dtolnay/rust-toolchain@stable
