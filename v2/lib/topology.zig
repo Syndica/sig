@@ -393,17 +393,26 @@ pub fn Bind(
             };
         }
 
-        // -- Service Map -- //
+        pub const ServiceMap = struct {
+            inner: std.AutoArrayHashMapUnmanaged(
+                ServiceInstance,
+                std.ArrayList(LookupResult),
+            ),
 
-        pub const ServiceMap = std.AutoArrayHashMapUnmanaged(ServiceInstance, ServiceMapEntry);
+            pub const empty: ServiceMap = .{ .inner = .empty };
 
-        pub const ServiceMapEntry = std.ArrayListUnmanaged(ServiceMapLookupResult);
+            pub const LookupResult = struct {
+                n: usize, // for supporting multiple regions of the same kind
+                shared: SharedRegion,
+                rw: bool,
+                memfd: lib.linux.memfd.RW,
+            };
 
-        pub const ServiceMapLookupResult = struct {
-            n: usize, // for supporting multiple regions of the same kind
-            shared: SharedRegion,
-            rw: bool,
-            memfd: lib.linux.memfd.RW,
+            pub fn deinit(self: *const ServiceMap, gpa: std.mem.Allocator) void {
+                var map = self.inner;
+                for (map.values()) |*lur| lur.deinit(gpa);
+                map.deinit(gpa);
+            }
         };
 
         /// Pairs services up with their respective required regions and their rw/ro permission
@@ -438,7 +447,7 @@ pub fn Bind(
             // check all service instances request regions which are shared with them
             inline for (services) |instance| {
                 for (getRequiredRegions(instance.service)) |required_region| {
-                    const found_region: ServiceMapLookupResult = blk: for (
+                    const found_region: ServiceMap.LookupResult = blk: for (
                         regions,
                         region_memfds,
                         0..,
@@ -449,7 +458,7 @@ pub fn Bind(
                             if (instance.service == share.instance.service and
                                 instance.n == share.instance.n)
                             {
-                                const result: ServiceMapLookupResult = .{
+                                const result: ServiceMap.LookupResult = .{
                                     .n = n,
                                     .shared = shared_region,
                                     .rw = required_region.rw,
@@ -457,7 +466,7 @@ pub fn Bind(
                                 };
 
                                 var exists = false;
-                                if (map.getPtr(instance)) |entry| {
+                                if (map.inner.getPtr(instance)) |entry| {
                                     for (entry.items) |existing_result| {
                                         if (std.meta.eql(existing_result, result)) {
                                             exists = true;
@@ -477,7 +486,7 @@ pub fn Bind(
                         .{ instance, required_region },
                     );
 
-                    const entry = try map.getOrPut(allocator, instance);
+                    const entry = try map.inner.getOrPut(allocator, instance);
                     if (!entry.found_existing) entry.value_ptr.* = .empty;
                     try entry.value_ptr.append(allocator, found_region);
                 }
@@ -493,7 +502,7 @@ pub fn Bind(
             params: struct {
                 runner: memfd.RW,
                 stderr: std.fs.File,
-                regions: []const ServiceMapLookupResult,
+                regions: []const ServiceMap.LookupResult,
             },
         ) !lib.ipc.ResolvedArgs {
             var args: lib.ipc.ResolvedArgs = .{
@@ -609,10 +618,7 @@ pub fn Bind(
             try createRunnerMemfds(services, &runner_memfds);
 
             var map = try serviceMap(allocator, services, regions, region_memfds);
-            defer {
-                for (map.values()) |*value| value.deinit(allocator);
-                map.deinit(allocator);
-            }
+            defer map.deinit(allocator);
 
             const ExitMeta = struct {
                 pid: i32,
@@ -628,7 +634,7 @@ pub fn Bind(
                 const child_pid = try spawnService(service_instance, .{
                     .runner = runner,
                     .stderr = .stderr(),
-                    .regions = map.get(service_instance).?.items,
+                    .regions = map.inner.get(service_instance).?.items,
                 });
 
                 try exit_meta.append(allocator, .{ .pid = child_pid, .exit = null });
@@ -668,7 +674,7 @@ pub fn Bind(
             params: struct {
                 runner: memfd.RW,
                 stderr: std.fs.File,
-                regions: []const ServiceMapLookupResult,
+                regions: []const ServiceMap.LookupResult,
             },
         ) !i32 {
             const parent_pid = std.os.linux.getpid();
@@ -860,10 +866,7 @@ pub fn Bind(
             try createRunnerMemfds(services, &runner_memfds);
 
             var map = try serviceMap(allocator, services, regions, region_memfds);
-            defer {
-                for (map.values()) |*value| value.deinit(allocator);
-                map.deinit(allocator);
-            }
+            defer map.deinit(allocator);
 
             var reset_event: std.Thread.ResetEvent = .{};
             var finished_service_idx: std.atomic.Value(u16) = .init(std.math.maxInt(u16));
@@ -878,7 +881,7 @@ pub fn Bind(
                 _ = try spawnServiceNoSandbox(service_instance, .{
                     .runner = runner,
                     .stderr = .stderr(),
-                    .regions = map.get(service_instance).?.items,
+                    .regions = map.inner.get(service_instance).?.items,
                     .service_idx = i,
                     .thread_exit_ctx = &thread_exit_ctx,
                 });
@@ -939,7 +942,7 @@ pub fn Bind(
             params: struct {
                 runner: memfd.RW,
                 stderr: std.fs.File,
-                regions: []const ServiceMapLookupResult,
+                regions: []const ServiceMap.LookupResult,
                 service_idx: u16,
                 thread_exit_ctx: *const ThreadExitContext,
             },
