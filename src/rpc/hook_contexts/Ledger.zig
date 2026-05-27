@@ -369,7 +369,9 @@ pub fn getInflationReward(
     self: LedgerHookContext,
     arena: Allocator,
     params: GetInflationReward,
+    error_detail: *?sig.rpc.response.Error,
 ) !GetInflationReward.Response {
+    _ = error_detail; // autofix
     const config: GetInflationReward.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
@@ -814,10 +816,11 @@ test "getInflationReward enforces minContextSlot" {
         .commitments = &commitments,
     };
 
+    var error_detail: ?sig.rpc.response.Error = null;
     const result = ctx.getInflationReward(std.testing.allocator, .{
         .addresses = &.{},
         .config = .{ .minContextSlot = 1 },
-    });
+    }, &error_detail);
 
     try std.testing.expectError(error.RpcMinContextSlotNotMet, result);
 }
