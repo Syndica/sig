@@ -423,6 +423,9 @@ fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
             }
 
             // Remove the node from the map + delete it
+            if (child_node.child != .null)
+                // if this orphan has invalid chaining, this means *all* of its children are also invalid
+                @panic("TODO: handle recursive removal from invalid orphan chaining");
             const removed = forest.map.swapRemoveAdapted(&child_node.merkle_root, map_ctx);
             std.debug.assert(removed);
             forest.pool.destroy(child_node);
