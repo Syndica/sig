@@ -53,7 +53,7 @@ pub const options: std.Options = .{
 
 pub const panic_state = struct {
     pub var stderr: std.os.linux.fd_t = undefined;
-    pub var exit: *lib.ipc.Exit = undefined;
+    pub var exit: *lib.runner.Exit = undefined;
     pub var thread_crash_ctx: ?*const anyopaque = null;
     pub var thread_crash_fn: ?lib.ipc.ResolvedArgs.ThreadCrashFn = null;
     pub var service_idx: u16 = std.math.maxInt(u16);
@@ -84,7 +84,7 @@ fn serviceLog(
 }
 
 fn serviceMain(params: lib.ipc.ResolvedArgs) callconv(.c) void {
-    const exit: *lib.ipc.Exit = @ptrCast(params.exit);
+    const exit: *lib.runner.Exit = &params.runner.exit;
     exit.* = .{};
 
     lib.clock.warmup();

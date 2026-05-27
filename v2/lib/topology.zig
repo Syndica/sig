@@ -492,16 +492,13 @@ pub fn Bind(
         pub fn resolveArgs(
             params: struct {
                 runner: memfd.RW,
-                exit: memfd.RW,
                 stderr: std.fs.File,
                 regions: []const ServiceMapLookupResult,
             },
         ) !lib.ipc.ResolvedArgs {
-            std.debug.assert(params.exit.size == @sizeOf(lib.ipc.Exit));
             var args: lib.ipc.ResolvedArgs = .{
                 .stderr = params.stderr.handle,
-                .runner = @ptrCast((try params.runner.mmap(.{})).ptr),
-                .exit = @ptrCast((try params.exit.mmap(.{})).ptr),
+                .runner = try params.runner.mmapStaticSize(lib.runner.Region, .{}),
 
                 .rw = @splat(null),
                 .rw_len = @splat(0),
@@ -578,7 +575,7 @@ pub fn Bind(
             return region_memfds;
         }
 
-        // Creates a memfd for every service, to be used for storing a lib.ipc.Exit value, which is used
+        // Creates a memfd for every service, to be used for storing a lib.runner.Region value, which is used
         // for reporting traces+errors back to the main process.
         fn createRunnerMemfds(
             comptime services: []const ServiceInstance,
@@ -592,24 +589,6 @@ pub fn Bind(
                         .{ @tagName(service_instance.service), service_instance.n },
                     ),
                     .size = @sizeOf(lib.runner.Region),
-                });
-            }
-        }
-
-        // Creates a memfd for every service, to be used for storing a lib.ipc.Exit value, which is used
-        // for reporting traces+errors back to the main process.
-        fn createExitMemfds(
-            comptime services: []const ServiceInstance,
-            exit_memfds: *[services.len]memfd.RW,
-        ) !void {
-            @memset(exit_memfds, .empty);
-            inline for (exit_memfds, services) |*exit_memfd, service_instance| {
-                exit_memfd.* = try .init(.{
-                    .name = std.fmt.comptimePrint(
-                        "exit_{s}_{}",
-                        .{ @tagName(service_instance.service), service_instance.n },
-                    ),
-                    .size = @sizeOf(lib.ipc.Exit),
                 });
             }
         }
@@ -629,9 +608,6 @@ pub fn Bind(
             var runner_memfds: [services.len]memfd.RW = undefined;
             try createRunnerMemfds(services, &runner_memfds);
 
-            var exit_memfds: [services.len]memfd.RW = undefined;
-            try createExitMemfds(services, &exit_memfds);
-
             var map = try serviceMap(allocator, services, regions, region_memfds);
             defer {
                 for (map.values()) |*value| value.deinit(allocator);
@@ -640,7 +616,7 @@ pub fn Bind(
 
             const ExitMeta = struct {
                 pid: i32,
-                exit: ?*lib.ipc.Exit,
+                exit: ?*lib.runner.Exit,
             };
 
             var exit_meta: std.MultiArrayList(ExitMeta) = .{};
@@ -648,14 +624,9 @@ pub fn Bind(
             try exit_meta.ensureUnusedCapacity(allocator, services.len);
 
             // Start up all services, storing their pids
-            inline for (
-                services,
-                &runner_memfds,
-                &exit_memfds,
-            ) |service_instance, runner, exit| {
+            inline for (services, &runner_memfds) |service_instance, runner| {
                 const child_pid = try spawnService(service_instance, .{
                     .runner = runner,
-                    .exit = exit,
                     .stderr = .stderr(),
                     .regions = map.get(service_instance).?.items,
                 });
@@ -665,8 +636,9 @@ pub fn Bind(
 
             // We only mmap the exit regions after spawning the child processes, as we don't want them
             // mapped in children
-            for (exit_meta.items(.exit), exit_memfds) |*exit, exit_fd| {
-                exit.* = @ptrCast(try exit_fd.mmap(.{}));
+            for (exit_meta.items(.exit), &runner_memfds) |*exit, runner_fd| {
+                const runner = try runner_fd.mmapStaticSize(lib.runner.Region, .{});
+                exit.* = &runner.exit;
             }
 
             // Wait for the first child to exit
@@ -695,7 +667,6 @@ pub fn Bind(
             service_instance: ServiceInstance,
             params: struct {
                 runner: memfd.RW,
-                exit: memfd.RW,
                 stderr: std.fs.File,
                 regions: []const ServiceMapLookupResult,
             },
@@ -768,7 +739,6 @@ pub fn Bind(
 
             const resolved_args = try resolveArgs(.{
                 .runner = params.runner,
-                .exit = params.exit,
                 .stderr = params.stderr,
                 .regions = params.regions,
             });
@@ -776,7 +746,7 @@ pub fn Bind(
             // mseal our shared VMAs (essentially making sure their mapping can't be tampered with)
             for (resolved_args.ro, resolved_args.ro_len) |ptr, len| mseal(ptr orelse continue, len);
             for (resolved_args.rw, resolved_args.rw_len) |ptr, len| mseal(ptr orelse continue, len);
-            mseal(@ptrCast(resolved_args.exit), @sizeOf(lib.ipc.Exit));
+            mseal(@ptrCast(resolved_args.runner), @sizeOf(lib.runner.Region));
 
             closeAllFdsExceptStderr(params.stderr.handle);
 
@@ -831,7 +801,7 @@ pub fn Bind(
         }
 
         fn dumpOnExit(
-            meta: *lib.ipc.Exit,
+            meta: *lib.runner.Exit,
             service_instance: ServiceInstance,
             pid: i32,
             status: u32,
@@ -889,9 +859,6 @@ pub fn Bind(
             var runner_memfds: [services.len]memfd.RW = undefined;
             try createRunnerMemfds(services, &runner_memfds);
 
-            var exit_memfds: [services.len]memfd.RW = undefined;
-            try createExitMemfds(services, &exit_memfds);
-
             var map = try serviceMap(allocator, services, regions, region_memfds);
             defer {
                 for (map.values()) |*value| value.deinit(allocator);
@@ -907,15 +874,9 @@ pub fn Bind(
             };
 
             // Start up all services, storing their pids
-            inline for (
-                services,
-                &runner_memfds,
-                &exit_memfds,
-                0..,
-            ) |service_instance, runner, exit, i| {
+            inline for (services, &runner_memfds, 0..) |service_instance, runner, i| {
                 _ = try spawnServiceNoSandbox(service_instance, .{
                     .runner = runner,
-                    .exit = exit,
                     .stderr = .stderr(),
                     .regions = map.get(service_instance).?.items,
                     .service_idx = i,
@@ -929,8 +890,10 @@ pub fn Bind(
             const exited_idx = finished_service_idx.load(.seq_cst);
             std.debug.assert(exited_idx != std.math.maxInt(u16));
 
+            const exited_runner_memfd = runner_memfds[exited_idx];
+            const exited_runner = try exited_runner_memfd.mmapStaticSize(lib.runner.Region, .{});
             dumpOnExit(
-                @ptrCast(try exit_memfds[exited_idx].mmap(.{})),
+                &exited_runner.exit,
                 services[exited_idx],
                 0,
                 0,
@@ -975,7 +938,6 @@ pub fn Bind(
             service_instance: ServiceInstance,
             params: struct {
                 runner: memfd.RW,
-                exit: memfd.RW,
                 stderr: std.fs.File,
                 regions: []const ServiceMapLookupResult,
                 service_idx: u16,
@@ -984,7 +946,6 @@ pub fn Bind(
         ) !std.Thread {
             var resolved_args = try resolveArgs(.{
                 .runner = params.runner,
-                .exit = params.exit,
                 .stderr = params.stderr,
                 .regions = params.regions,
             });
