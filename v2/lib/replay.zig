@@ -35,6 +35,11 @@ pub const ExecReqResponse = extern struct {
 
     pub const RequestRing = ipc.Ring(256, ExecRequest);
     pub const ResponseRing = ipc.Ring(256, ExecResponse);
+
+    pub fn init(self: *ExecReqResponse) void {
+        self.request_ring.init();
+        self.response_ring.init();
+    }
 };
 
 pub const RequestKind = enum(u8) {
