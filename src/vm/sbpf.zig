@@ -72,34 +72,22 @@ pub const Version = enum(u32) {
     pub fn enableStaticSyscalls(version: Version) bool {
         return version.gte(.v3);
     }
+
     /// Enable SIMD-0189: SBPF stricter ELF headers
     pub fn enableStricterElfHeaders(version: Version) bool {
         return version.gte(.v3);
     }
-    /// SIMD-0189: For v3, rodata moves from the bytecode region (1 << 32) down to
-    /// region 0 (vaddr 0). Named to match Agave's `enable_lower_rodata_vaddr()`.
+    /// ... SIMD-0189
     pub fn enableLowerRodataVaddr(version: Version) bool {
         return version.gte(.v3);
     }
-    /// SIMD-0377: 22 new JMP32 (class 0x06) conditional branch opcodes.
+    /// ... SIMD-0189
     pub fn enableJmp32(version: Version) bool {
         return version.gte(.v3);
     }
-    /// SIMD-0377: callx target register lives in the `dst` field (not `src` as in v2,
-    /// nor `imm` as in v0/v1).
+    /// ... SIMD-0189
     pub fn callxUsesDstReg(version: Version) bool {
         return version.gte(.v3);
-    }
-
-    /// Ensure that rodata sections don't exceed their maximum allowed size and
-    /// overlap with the stack
-    pub fn rejectRodataStackOverlap(version: Version) bool {
-        return version != .v0;
-    }
-
-    /// Allow sh_addr != sh_offset in elf sections.
-    pub fn enableElfVaddr(version: Version) bool {
-        return version != .v0;
     }
 
     pub fn gte(version: Version, other: Version) bool {
