@@ -363,21 +363,31 @@ pub fn Bind(
 
         // -- Service Externs -- //
 
-        pub fn getFaultHandler(service: bound.ServiceId) SigactionFn {
+        /// Returns the name of the segfault handler function exposed by the specified service.
+        pub fn getFaultHandlerName(service: bound.ServiceId) [:0]const u8 {
             return switch (service) {
-                inline else => |s| @extern(
-                    SigactionFn,
-                    .{ .name = "svc_fault_handler_" ++ @tagName(s) },
-                ),
+                inline else => |s| "svc_fault_handler_" ++ @tagName(s),
             };
         }
 
-        pub fn getEntrypoint(service: bound.ServiceId) ServiceEntrypoint {
+        /// Returns the segfault handler function exposed by the specified service.
+        pub fn getFaultHandlerFn(service: bound.ServiceId) SigactionFn {
             return switch (service) {
-                inline else => |s| @extern(
-                    ServiceEntrypoint,
-                    .{ .name = "svc_main_" ++ @tagName(s) },
-                ),
+                inline else => |s| @extern(SigactionFn, .{ .name = getFaultHandlerName(s) }),
+            };
+        }
+
+        /// Returns the name of the entrypoint function exposed by the specified service.
+        pub fn getEntrypointName(service: bound.ServiceId) [:0]const u8 {
+            return switch (service) {
+                inline else => |s| "svc_main_" ++ @tagName(s),
+            };
+        }
+
+        /// Returns the entrypoint function exposed by the specified service.
+        pub fn getEntrypointFn(service: bound.ServiceId) ServiceEntrypoint {
+            return switch (service) {
+                inline else => |s| @extern(ServiceEntrypoint, .{ .name = getEntrypointName(s) }),
             };
         }
 
@@ -680,7 +690,7 @@ pub fn Bind(
             // register fault handlers
             {
                 const act: *const std.os.linux.Sigaction = &.{
-                    .handler = .{ .sigaction = getFaultHandler(service_instance.service) },
+                    .handler = .{ .sigaction = getFaultHandlerFn(service_instance.service) },
                     .mask = std.os.linux.sigemptyset(),
                     .flags = (std.posix.SA.SIGINFO | std.posix.SA.RESTART | std.posix.SA.RESETHAND),
                 };
@@ -753,7 +763,7 @@ pub fn Bind(
                 }
             }
 
-            getEntrypoint(service_instance.service)(resolved_args);
+            getEntrypointFn(service_instance.service)(resolved_args);
             std.process.exit(255);
         }
 
@@ -939,7 +949,7 @@ pub fn Bind(
                 .{},
                 threadEntry,
                 .{
-                    getEntrypoint(service_instance.service),
+                    getEntrypointFn(service_instance.service),
                     service_instance.service,
                     resolved_args,
                     params.service_idx,
