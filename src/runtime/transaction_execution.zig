@@ -513,27 +513,10 @@ pub fn executeTransaction(
             ) catch |exec_err| {
                 switch (exec_err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    else => |ixn_err| {
-                        // BorshIoError carries a `[]u8` payload, but the BPF
-                        // status-code path that propagates this error has no
-                        // string to attach. Supply an owned empty slice so
-                        // `fromError` doesn't panic; the resulting variant is
-                        // freed via `InstructionErrorEnum.deinit`.
-                        const borsh_io: ?[]u8 = if (ixn_err == error.BorshIoError)
-                            try allocator.dupe(u8, "")
-                        else
-                            null;
-                        break .{ .InstructionError = .{
-                            @intCast(index),
-                            InstructionErrorEnum.fromError(
-                                ixn_err,
-                                tc.custom_error,
-                                borsh_io,
-                            ) catch |err| {
-                                std.debug.panic("Error conversion failed: error={}", .{err});
-                            },
-                        } };
-                    },
+                    else => |ixn_err| break .{ .InstructionError = .{
+                        @intCast(index),
+                        InstructionErrorEnum.fromError(ixn_err, tc.custom_error),
+                    } },
                 }
             };
         } else null;
