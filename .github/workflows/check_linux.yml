@@ -217,8 +217,14 @@ jobs:
   solana_conformance:
     runs-on: ubuntu-latest
     steps:
+      - name: check space at the beginning
+        run: df -h
+
       - name: Delete unnecessary files to free up space
         run: rm -rf /opt/hostedtoolcache
+      
+      - name: check space after removing
+        run: df -h
 
       - uses: actions/checkout@v4
         with:
@@ -259,6 +265,13 @@ jobs:
 
       - name: Run Fixtures
         run: conformance/scripts/ci-run.sh
+
+      - name: check space at the end
+        run: |
+          set -x
+          df -h
+          du -h .
+          sudo du -xh / --exclude=/proc --exclude=/sys --exclude=/dev | sort -h
 
   feature_compat_conformance:
     runs-on: ubuntu-latest
