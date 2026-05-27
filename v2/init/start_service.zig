@@ -87,6 +87,11 @@ fn serviceMain(params: lib.ipc.ResolvedArgs) callconv(.c) void {
     const exit: *lib.ipc.Exit = @ptrCast(params.exit);
     exit.* = .{};
 
+    // Service libraries do not enter through std.start, so restore the auxv
+    // pointer Zig's vDSO lookup needs before the first service clock read.
+    std.os.linux.elf_aux_maybe = params.linux_auxv;
+    lib.clock.warmup();
+
     // this is set to undefined in std, and never set for code built as a library
     std.os.environ = &.{};
 
