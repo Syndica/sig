@@ -18,7 +18,7 @@ comptime {
     }
 }
 
-const project_paths = [_][]const u8{ "build.zig", "init", "lib", "lint", "services" };
+const project_paths = [_][]const u8{ "build.zig", "crypto", "init", "lib", "lint", "services" };
 const test_inclusion_roots = [_][]const u8{ "lib/lib.zig", "lint/main.zig" };
 
 /// Runs v2 lint and exits with 0 for no diagnostics, 1 for diagnostics, and 2 for CLI or internal

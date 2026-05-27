@@ -24,7 +24,7 @@ const max_line_length = 100;
 const excluded_paths = [_][]const u8{
     "lib/shred.zig",
     "lib/shred/reed_solomon_table.zig",
-    "lib/crypto/ed25519/wycheproof.zig",
+    "crypto/ed25519/wycheproof.zig",
 };
 
 /// Sanity check files skipped exist to keep list in sync with repo
