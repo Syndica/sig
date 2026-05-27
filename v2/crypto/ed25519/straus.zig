@@ -5,7 +5,7 @@ comptime {
 }
 const common = @import("common");
 
-const ed25519 = common.crypto.ed25519;
+const ed25519 = common.ed25519;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const CompressedScalar = Edwards25519.scalar.CompressedScalar;

@@ -93,6 +93,19 @@ pub fn build(b: *Build) !void {
     const binkode_mod = b.dependency("binkode", .{}).module("binkode");
     const base58_mod = b.dependency("base58", .{}).module("base58");
 
+    const crypto_mod = b.createModule(.{
+        .root_source_file = b.path("crypto/lib.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{
+            .{ .name = "base58", .module = base58_mod },
+            .{ .name = "binkode", .module = binkode_mod },
+            .{ .name = "tracy", .module = tracy_mod },
+            .{ .name = "build-options", .module = build_options_mod },
+        },
+    });
+    crypto_mod.addImport("common", crypto_mod);
+
     const fmt_check_step = b.addFmt(.{
         .check = true,
         .paths = &.{ "init/", "lib/", "services/", "build.zig", "lint/" },
@@ -130,6 +143,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "binkode", .module = binkode_mod },
             .{ .name = "tracy", .module = tracy_mod },
             .{ .name = "build-options", .module = build_options_mod },
+            .{ .name = "sig-crypto", .module = crypto_mod },
         },
     });
     _ = addTestOutputs(b, test_step, null, artifact_opts, .{

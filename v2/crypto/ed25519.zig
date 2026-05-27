@@ -1,10 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const lib = @import("../lib.zig");
 const build_options = @import("build-options");
 
-const Signature = lib.solana.Signature;
-const Pubkey = lib.solana.Pubkey;
+const Signature = @import("signature.zig").Signature;
+const Pubkey = @import("pubkey.zig").Pubkey;
 
 pub const pippenger = @import("ed25519/pippenger.zig");
 pub const straus = @import("ed25519/straus.zig");

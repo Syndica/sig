@@ -1,19 +1,18 @@
+const crypto = @import("sig-crypto");
+
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("solana/bincode.zig");
         _ = @import("solana/cluster.zig");
-        _ = @import("solana/hash.zig");
         _ = @import("solana/leader_schedule.zig");
-        _ = @import("solana/pubkey.zig");
-        _ = @import("solana/signature.zig");
     }
 }
 
 pub const bincode = @import("solana/bincode.zig");
 
-pub const Hash = @import("solana/hash.zig").Hash;
-pub const Pubkey = @import("solana/pubkey.zig").Pubkey;
-pub const Signature = @import("solana/signature.zig").Signature;
+pub const Hash = crypto.Hash;
+pub const Pubkey = crypto.Pubkey;
+pub const Signature = crypto.Signature;
 pub const Cluster = @import("solana/cluster.zig").Cluster;
 pub const LeaderSchedule = @import("solana/leader_schedule.zig").LeaderSchedule;
 
