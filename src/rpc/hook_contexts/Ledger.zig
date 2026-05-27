@@ -47,6 +47,7 @@ pub fn getBlock(
     self: LedgerHookContext,
     arena: Allocator,
     params: GetBlock,
+    error_detail: *?sig.rpc.response.Error,
 ) !GetBlock.Response {
     const config = params.resolveConfig();
     const commitment = config.getCommitment();
@@ -83,7 +84,7 @@ pub fn getBlock(
         arena,
         params.slot,
         true,
-    ) else return error.BlockNotAvailable;
+    ) else return blockNotAvailable(arena, error_detail, params.slot);
 
     return try block_encoding.encodeBlockWithOptions(arena, block, encoding, .{
         .tx_details = transaction_details,
@@ -341,13 +342,14 @@ pub fn getBlockTime(
     self: LedgerHookContext,
     arena: Allocator,
     params: GetBlockTime,
+    error_detail: *?sig.rpc.response.Error,
 ) !GetBlockTime.Response {
     const reader = self.ledger.reader();
     const highest_root = self.commitments.get(.finalized);
 
     if (params.slot <= highest_root) {
         return reader.getRootedBlockTime(arena, params.slot) catch |err| switch (err) {
-            error.SlotNotRooted => return error.BlockNotAvailable,
+            error.SlotNotRooted => return blockNotAvailable(arena, error_detail, params.slot),
             error.SlotUnavailable => return null,
             error.SlotCleanedUp => return error.SlotCleanedUp,
             else => return err,
@@ -371,7 +373,6 @@ pub fn getInflationReward(
     params: GetInflationReward,
     error_detail: *?sig.rpc.response.Error,
 ) !GetInflationReward.Response {
-    _ = error_detail; // autofix
     const config: GetInflationReward.Config = params.config orelse .{};
     const commitment = config.commitment orelse .finalized;
 
@@ -392,18 +393,22 @@ pub fn getInflationReward(
             .start_slot = first_slot_in_reward_epoch,
             .limit = 1,
             .config = .{ .commitment = commitment },
-        }) catch return error.BlockNotAvailable;
-        if (blocks.len == 0) return error.BlockNotAvailable;
+        }) catch return blockNotAvailable(arena, error_detail, first_slot_in_reward_epoch);
+        if (blocks.len == 0) {
+            return blockNotAvailable(arena, error_detail, first_slot_in_reward_epoch);
+        }
         break :blk blocks[0];
     };
 
+    var inner_error_detail: ?sig.rpc.response.Error = null;
     const epoch_boundary_block = self.getBlock(arena, .{
         .slot = first_confirmed_block_in_epoch,
         .encoding_or_config = .{ .config = .{
             .commitment = commitment,
             .transactionDetails = .none,
         } },
-    }) catch return error.BlockNotAvailable;
+    }, &inner_error_detail) catch
+        return blockNotAvailable(arena, error_detail, first_confirmed_block_in_epoch);
 
     if (epoch_boundary_block.parentSlot >= first_slot_in_reward_epoch) {
         return error.SlotNotEpochBoundary;
@@ -473,7 +478,7 @@ pub fn getInflationReward(
                 const maybe_rewards_res = self.ledger.reader().getBlockRewards(
                     arena,
                     slot,
-                ) catch return error.BlockNotAvailable;
+                ) catch return blockNotAvailable(arena, error_detail, slot);
                 if (maybe_rewards_res) |res| break :blk res.rewards else continue;
             };
             for (block_rewards) |reward| {
@@ -773,6 +778,28 @@ fn getTransactionStatus(
         else
             .processed,
     };
+}
+
+/// Populates `error_detail` with Agave's `BlockNotAvailable` JSON-RPC error and
+/// returns `error.BlockNotAvailable` for the caller to propagate.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-api/src/custom_error.rs#L13-L14
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-api/src/custom_error.rs#L150-L155
+fn blockNotAvailable(
+    arena: std.mem.Allocator,
+    error_detail: *?sig.rpc.response.Error,
+    slot: Slot,
+) error{ BlockNotAvailable, OutOfMemory } {
+    const message = try std.fmt.allocPrint(
+        arena,
+        "Block not available for slot {d}",
+        .{slot},
+    );
+    error_detail.* = .{
+        .code = @enumFromInt(-32004),
+        .message = message,
+    };
+    return error.BlockNotAvailable;
 }
 
 /// Walk from latest_confirmed back to the root, collecting confirmed-but-unrooted slots.
