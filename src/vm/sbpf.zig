@@ -19,11 +19,18 @@ pub const Version = enum(u32) {
     v2,
     /// SIMD-0178, SIMD-0179, SIMD-0189
     v3,
+    /// Used for future versions
     reserved,
 
-    /// Enable SIMD-0166: SBPF dynamic stack frames
-    pub fn enableDynamicStackFrames(version: Version) bool {
-        return version.gte(.v1);
+    /// SIMD-0166: Dynamic stack frames
+    ///
+    /// Allows usage of `add64 r10, imm` to manually bump the stack frame.
+    pub fn manualStackFrameBump(version: Version) bool {
+        return version == .v1 or version == .v2;
+    }
+    /// ... SIMD-0166
+    pub fn stackFrameGaps(version: Version) bool {
+        return version == .v0;
     }
 
     /// Enable SIMD-0174: SBPF arithmetics improvements
@@ -64,10 +71,6 @@ pub const Version = enum(u32) {
     pub fn enableStaticSyscalls(version: Version) bool {
         return version.gte(.v3);
     }
-    /// Enable SIMD-0179: SBPF stricter verification constraints
-    pub fn enableStricterVerification(version: Version) bool {
-        return version.gte(.v3);
-    }
     /// Enable SIMD-0189: SBPF stricter ELF headers
     pub fn enableStricterElfHeaders(version: Version) bool {
         return version.gte(.v3);
@@ -85,11 +88,6 @@ pub const Version = enum(u32) {
     /// nor `imm` as in v0/v1).
     pub fn callxUsesDstReg(version: Version) bool {
         return version.gte(.v3);
-    }
-    /// SIMD-0377: Stack frame gaps (4 KiB padding holes between v0 static frames)
-    /// are disabled for v3 and any later version.
-    pub fn enableStackFrameGaps(version: Version) bool {
-        return version == .v0;
     }
 
     /// Ensure that rodata sections don't exceed their maximum allowed size and
@@ -790,16 +788,12 @@ pub const Instruction = packed struct(u64) {
             // If it's a store instruction and the destination is `r10`, it's legal.
             if (store) return;
             // You may add to the `r10` register in SBPFv1 and above.
-            if (version.enableDynamicStackFrames() and inst.opcode == .add64_imm) {
+            if (version.manualStackFrameBump() and inst.opcode == .add64_imm) {
                 return;
             }
             return error.CannotWriteR10;
         }
         return error.InvalidDestinationRegister;
-    }
-
-    pub fn isFunctionStartMarker(inst: Instruction) bool {
-        return inst.opcode == .add64_imm and inst.dst == .r10;
     }
 
     pub fn format(

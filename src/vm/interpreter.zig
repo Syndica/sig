@@ -48,7 +48,7 @@ pub const Vm = struct {
         instruction_data_offset: u64,
         ctx: *TransactionContext,
     ) error{OutOfMemory}!Vm {
-        const offset = if (executable.version.enableDynamicStackFrames())
+        const offset = if (executable.version.manualStackFrameBump())
             stack_len
         else
             executable.config.stack_frame_size;
@@ -873,13 +873,10 @@ pub const Vm = struct {
             const target_pc = self.registers.getPtrConst(inst.dst).*;
             try self.pushCallFrame();
 
-            // [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/interpreter.rs#L513
+            // [agave] https://github.com/anza-xyz/sbpf/blob/v0.20.0/src/interpreter.rs#L549
             const next_pc = (target_pc -% self.vm_addr) / 8;
             const instructions = self.executable.instructions;
             if (next_pc >= instructions.len) return error.CallOutsideTextSegment;
-            if (!instructions[next_pc].isFunctionStartMarker()) {
-                return error.UnsupportedInstruction;
-            }
             self.registers.set(.pc, next_pc);
         }
 
@@ -961,11 +958,11 @@ pub const Vm = struct {
         // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/interpreter.rs#L143-L147
         // Mirror agave's two-flag pattern: outer guard rules out v1+ (which use
         // dynamic stack frames), inner guard scales by 2 only on v0 with gaps
-        // enabled. `enableStackFrameGaps()` is v0-only and is therefore
-        // logically equivalent to `!enableDynamicStackFrames()` here, but using
+        // enabled. `stackFrameGaps()` is v0-only and is therefore
+        // logically equivalent to `!manualStackFrameBump()` here, but using
         // it spells out the SIMD-0166 invariant.
-        if (!self.executable.version.enableDynamicStackFrames()) {
-            const scale: u64 = if (self.executable.version.enableStackFrameGaps() and
+        if (!self.executable.version.manualStackFrameBump()) {
+            const scale: u64 = if (self.executable.version.stackFrameGaps() and
                 self.executable.config.enable_stack_frame_gaps) 2 else 1;
             const stack_frame_size = self.executable.config.stack_frame_size * scale;
             self.registers.getPtr(.r10).* += stack_frame_size;

@@ -93,7 +93,7 @@ pub fn load(
         @intFromEnum(sbpf_version) > @intFromEnum(config.maximum_version))
         return error.UnsupportedSBPFVersion;
 
-    return if (sbpf_version.enableStricterVerification())
+    return if (sbpf_version.enableStricterElfHeaders())
         try parseStrict(allocator, bytes, sbpf_version, config)
     else
         try parseLenient(allocator, bytes, config, loader, sbpf_version);

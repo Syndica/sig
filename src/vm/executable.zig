@@ -116,58 +116,14 @@ pub const Executable = struct {
 
         const version = self.version;
         const instructions = self.instructions;
-        // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/verifier.rs#L94-L96
+
         if (self.text_section_len % 8 != 0) return error.ProgramLengthNotMultiple;
         if (instructions.len == 0) return error.NoProgram;
 
-        var function_start: u64 = 0;
-        var function_end: u64 = instructions.len;
         var pc: u64 = 0;
-
-        const validateJumpTarget = struct {
-            inline fn run(
-                cur_pc: u64,
-                off: i16,
-                f_start: u64,
-                f_end: u64,
-                insts: []align(1) const Instruction,
-            ) VerifierError!void {
-                const destination = @as(i64, @bitCast(cur_pc)) + 1 + off;
-                if (destination < 0 or
-                    destination < f_start or
-                    destination >= f_end)
-                {
-                    return error.JumpOutOfCode;
-                }
-                const dest_inst = insts[@bitCast(destination)];
-                if (@intFromEnum(dest_inst.opcode) == 0) {
-                    return error.JumpToMiddleOfLddw;
-                }
-            }
-        }.run;
-
-        if (version.enableStricterVerification() and !instructions[pc].isFunctionStartMarker()) {
-            return error.InvalidFunction;
-        }
         while (pc + 1 <= instructions.len) : (pc += 1) {
             const inst = instructions[pc];
             var store: bool = false;
-
-            if (version.enableStricterVerification() and inst.isFunctionStartMarker()) {
-                function_start = pc;
-                function_end = pc +| 1;
-
-                while (function_end < instructions.len and
-                    !instructions[function_end].isFunctionStartMarker())
-                {
-                    function_end +|= 1;
-                }
-
-                switch (instructions[function_end -| 1].opcode) {
-                    .ja, .@"return" => {},
-                    else => return error.InvalidFunction,
-                }
-            }
 
             switch (inst.opcode) {
                 .add64_reg,
@@ -201,7 +157,7 @@ pub const Executable = struct {
                 .arsh64_reg,
                 => {}, // nothing to verify
 
-                .add64_imm => if (version.enableDynamicStackFrames() and inst.dst == .r10) {
+                .add64_imm => if (version.manualStackFrameBump() and inst.dst == .r10) {
                     if (!std.mem.isAligned(inst.imm, 64)) return error.UnalignedImmediate;
                 },
 
@@ -264,7 +220,7 @@ pub const Executable = struct {
                 .urem32_reg, // jsgt32_reg in v3
                 .urem64_reg, // jsge32_reg in v3
                 => if (version.enableJmp32()) {
-                    try validateJumpTarget(pc, inst.off, function_start, function_end, instructions);
+                    try validateJumpTarget(pc, inst.off, instructions);
                 } else if (!version.enablePqr()) return error.UnknownOpCode,
 
                 // PQR ops that have no JMP32 alias — always pure arithmetic.
@@ -284,7 +240,7 @@ pub const Executable = struct {
                 .urem32_imm, // jsgt32_imm in v3
                 .urem64_imm, // jsge32_imm in v3
                 => if (version.enableJmp32()) {
-                    try validateJumpTarget(pc, inst.off, function_start, function_end, instructions);
+                    try validateJumpTarget(pc, inst.off, instructions);
                 } else if (version.enablePqr()) {
                     if (inst.imm == 0) return error.DivisionByZero;
                 } else return error.UnknownOpCode,
@@ -306,7 +262,7 @@ pub const Executable = struct {
                 .jlt32_imm,
                 .jlt32_reg,
                 => if (version.enableJmp32()) {
-                    try validateJumpTarget(pc, inst.off, function_start, function_end, instructions);
+                    try validateJumpTarget(pc, inst.off, instructions);
                 } else return error.UnknownOpCode,
 
                 .hor64_imm => if (!version.disableLddw()) return error.UnknownOpCode,
@@ -344,21 +300,7 @@ pub const Executable = struct {
                 .jsle_reg,
                 .jslt_imm,
                 .jslt_reg,
-                => {
-                    const destination = @as(i64, @bitCast(pc)) + 1 + inst.off;
-
-                    if (destination < 0 or
-                        destination < function_start or
-                        destination >= function_end)
-                    {
-                        return error.JumpOutOfCode;
-                    }
-
-                    const dest_inst = instructions[@bitCast(destination)];
-                    if (@intFromEnum(dest_inst.opcode) == 0) {
-                        return error.JumpToMiddleOfLddw;
-                    }
-                },
+                => try validateJumpTarget(pc, inst.off, instructions),
 
                 .ld_b_reg,
                 .ld_h_reg,
@@ -442,6 +384,17 @@ pub const Executable = struct {
             .borrowed => |b| .{ b.offset, self.bytes[b.start..b.end] },
         };
         return memory.Region.init(.constant, ro_data, offset);
+    }
+
+    fn validateJumpTarget(
+        cur_pc: u64,
+        off: i16,
+        insts: []align(1) const Instruction,
+    ) VerifierError!void {
+        const destination = @as(i64, @bitCast(cur_pc)) + 1 + off;
+        if (destination < 0 or destination >= insts.len) return error.JumpOutOfCode;
+        const dest_inst = insts[@bitCast(destination)];
+        if (@intFromEnum(dest_inst.opcode) == 0) return error.JumpToMiddleOfLddw;
     }
 };
 
@@ -556,25 +509,24 @@ pub const Assembler = struct {
 
                     const instruction: Instruction = switch (bind.inst) {
                         .alu_binary => inst: {
-                            const is_register = operands[1] == .register;
-                            if (is_register) {
-                                break :inst .{
-                                    .opcode = @enumFromInt(bind.opc | Instruction.x),
-                                    .dst = operands[0].register,
-                                    .src = operands[1].register,
-                                    .off = 0,
-                                    .imm = 0,
-                                };
-                            }
-                            if (operands[0].register == .r10) {
-                                if (!version.enableDynamicStackFrames()) break :inst .{
-                                    .opcode = .or64_imm,
-                                    .dst = @enumFromInt(0),
-                                    .src = @enumFromInt(0),
-                                    .off = 0,
-                                    .imm = 0,
-                                };
-                            }
+                            if (operands[0] == .register and operands[1] == .register) break :inst .{
+                                .opcode = @enumFromInt(bind.opc | Instruction.x),
+                                .dst = operands[0].register,
+                                .src = operands[1].register,
+                                .off = 0,
+                                .imm = 0,
+                            };
+
+                            if (operands[0].register == .r10 and
+                                bind.opc == Instruction.alu64 | Instruction.add and
+                                !version.manualStackFrameBump()) break :inst .{
+                                .opcode = .or64_imm,
+                                .dst = .r0,
+                                .src = .r0,
+                                .off = 0,
+                                .imm = 0,
+                            };
+
                             break :inst .{
                                 .opcode = @enumFromInt(bind.opc | Instruction.k),
                                 .dst = operands[0].register,

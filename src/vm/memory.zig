@@ -512,7 +512,7 @@ fn accessViolation(
         @intCast(config.stack_frame_size),
     ) catch 0;
 
-    return if (!version.enableDynamicStackFrames() and
+    return if (!version.manualStackFrameBump() and
         stack_frame_idx >= -1 and stack_frame_idx <= config.max_call_depth)
         error.StackAccessViolation
     else

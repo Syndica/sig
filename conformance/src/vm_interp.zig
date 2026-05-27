@@ -212,7 +212,7 @@ fn executeVmTest(
             .mutable,
             stack,
             memory.STACK_START,
-            if (!sbpf_version.enableDynamicStackFrames() and config.enable_stack_frame_gaps)
+            if (!sbpf_version.manualStackFrameBump() and config.enable_stack_frame_gaps)
                 config.stack_frame_size
             else
                 0,

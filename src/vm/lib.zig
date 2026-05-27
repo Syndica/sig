@@ -102,8 +102,8 @@ pub fn init(
     const heap_cost = cost * tc.compute_budget.heap_cost;
     try tc.consumeCompute(heap_cost);
 
-    const stack_gap: u64 = if (!exe.version.enableDynamicStackFrames() and
-        exe.config.enable_stack_frame_gaps)
+    // TODO: Why check on version and config? Is this redundancy which can be removed?
+    const stack_gap: u64 = if (exe.version.stackFrameGaps() and exe.config.enable_stack_frame_gaps)
         exe.config.stack_frame_size
     else
         0;
