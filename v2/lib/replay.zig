@@ -70,8 +70,3 @@ pub const ExecResponse = extern struct {
         transaction_signature_verify: extern struct { success: bool },
     },
 };
-
-// pub const ExecRequest = extern struct {
-//     block_idx: BlockRef,
-//     tx_idx: TransactionPool.ItemId,
-// };
