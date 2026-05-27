@@ -35,19 +35,19 @@ pub const Version = enum(u32) {
 
     /// Enable SIMD-0174: SBPF arithmetics improvements
     pub fn enablePqr(version: Version) bool {
-        return version.gte(.v2);
-    }
-    /// ... SIMD-0174
-    pub fn swapSubRegImmOperands(version: Version) bool {
-        return version.gte(.v2);
-    }
-    /// ... SIMD-0174
-    pub fn disableNegation(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0174
     pub fn explicitSignExtensionOfResults(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
+    }
+    /// ... SIMD-0174
+    pub fn swapSubRegImmOperands(version: Version) bool {
+        return version == .v2;
+    }
+    /// ... SIMD-0174
+    pub fn disableNegation(version: Version) bool {
+        return version == .v2;
     }
 
     /// Enable SIMD-0173: callx target register lives in `src` field. Only true for v2;

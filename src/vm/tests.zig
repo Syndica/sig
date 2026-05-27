@@ -1791,7 +1791,7 @@ test "jslt reg" {
 
 test "lmul loop" {
     try testAsm(
-        .{},
+        .{ .maximum_version = .v2 },
         \\entrypoint:
         \\  add64 r10, 0
         \\  mov r0, 0x7
@@ -1811,7 +1811,7 @@ test "lmul loop" {
 
 test "lmul128" {
     try testAsmWithMemory(
-        .{},
+        .{ .maximum_version = .v2 },
         \\entrypoint:
         \\  add64 r10, 0
         \\  mov r0, r1
@@ -1864,7 +1864,7 @@ test "lmul128" {
 
 test "prime" {
     try testAsm(
-        .{},
+        .{ .maximum_version = .v2 },
         \\entrypoint:
         \\  add64 r10, 0
         \\  mov r1, 67
@@ -2144,7 +2144,7 @@ test "pqr divide by zero" {
 
 test "stack1" {
     try testAsm(
-        .{},
+        .{ .maximum_version = .v2 },
         \\entrypoint:
         \\  add64 r10, 0
         \\  mov r1, 51
@@ -2916,8 +2916,8 @@ test "write r10" {
     , error.CannotWriteR10);
 }
 
-test "neg invalid on v3" {
-    try testVerify(.{},
+test "neg invalid on v2" {
+    try testVerify(.{ .maximum_version = .v2 },
         \\entrypoint:
         \\  add64 r10, 0
         \\  neg32 r0
