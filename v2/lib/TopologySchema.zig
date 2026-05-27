@@ -399,6 +399,8 @@ pub fn Bind(
             regions: []const SharedRegion,
             region_memfds: []const lib.linux.memfd.RW,
         ) std.mem.Allocator.Error!ServiceMap {
+            @setEvalBranchQuota(5000);
+
             // check all regions reference existing services
             for (regions) |region| {
                 for (region.shares) |share| {

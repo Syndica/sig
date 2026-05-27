@@ -29,7 +29,7 @@
         .name = .replay,
         .regions = .{
             .{ .name = .deshredded_in, .access = .rw },
-            .{ .name = .replay_transaction_pool, .access = .rw },
+            .{ .name = .transaction_pool, .access = .rw },
             .{ .name = .block_pool, .access = .rw },
             .{ .name = .exec_req_response, .access = .rw },
         },
@@ -66,6 +66,14 @@
         .name = .telemetry,
         .regions = .{
             .{ .name = .main, .access = .rw },
+        },
+    },
+    .{
+        .name = .exec,
+        .regions = .{
+            .{ .name = .exec_req_response, .access = .rw },
+            .{ .name = .transaction_pool, .access = .rw },
+            .{ .name = .block_pool, .access = .rw },
         },
     },
 }
