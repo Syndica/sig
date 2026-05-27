@@ -823,6 +823,109 @@ fn getConfirmedUnrootedSlots(
     return try slots.toOwnedSlice(arena);
 }
 
+test "blockNotAvailable populates error_detail with Agave format" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var error_detail: ?sig.rpc.response.Error = null;
+    const result = blockNotAvailable(arena, &error_detail, 410060256);
+
+    try std.testing.expectEqual(error.BlockNotAvailable, result);
+    const populated = error_detail orelse return error.ErrorDetailNotSet;
+    try std.testing.expectEqual(@as(i64, -32004), @intFromEnum(populated.code));
+    try std.testing.expectEqualStrings(
+        "Block not available for slot 410060256",
+        populated.message,
+    );
+    try std.testing.expectEqual(@as(?std.json.Value, null), populated.data);
+}
+
+test "getBlock returns BlockNotAvailable with Agave format for unconfirmed finalized slot" {
+    const allocator = std.testing.allocator;
+
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var ledger, var tmp = try sig.ledger.Ledger.initForTest(allocator);
+    defer ledger.deinit();
+    defer tmp.cleanup();
+
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    // finalized=0, confirmed=0, processed=0. Querying slot 10 with .finalized
+    // means params.slot > latest_confirmed_slot and commitment != .confirmed,
+    // which hits the blockNotAvailable branch in getBlock.
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+
+    const ctx = LedgerHookContext{
+        .ledger = &ledger,
+        .epoch_tracker = undefined,
+        .status_cache = undefined,
+        .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
+    };
+
+    const target_slot: Slot = 10;
+    var error_detail: ?sig.rpc.response.Error = null;
+    const result = ctx.getBlock(arena, .{
+        .slot = target_slot,
+        .encoding_or_config = .{ .config = .{ .commitment = .finalized } },
+    }, &error_detail);
+
+    try std.testing.expectError(error.BlockNotAvailable, result);
+    const populated = error_detail orelse return error.ErrorDetailNotSet;
+    try std.testing.expectEqual(@as(i64, -32004), @intFromEnum(populated.code));
+    try std.testing.expectEqualStrings(
+        "Block not available for slot 10",
+        populated.message,
+    );
+}
+
+test "getBlockTime returns BlockNotAvailable with Agave format for unrooted slot" {
+    const allocator = std.testing.allocator;
+
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var ledger, var tmp = try sig.ledger.Ledger.initForTest(allocator);
+    defer ledger.deinit();
+    defer tmp.cleanup();
+
+    var slot_tracker = try sig.replay.trackers.SlotTracker.initEmpty(allocator, 0);
+    defer slot_tracker.deinit(allocator);
+
+    // Bump finalized to 5 so target slot 3 is <= highest_root and getRootedBlockTime
+    // is attempted; the empty ledger returns SlotNotRooted, mapped to BlockNotAvailable.
+    var commitments = sig.replay.trackers.CommitmentTracker.init(allocator, 0);
+    defer commitments.deinit(allocator);
+    commitments.update(.finalized, 5);
+
+    const ctx = LedgerHookContext{
+        .ledger = &ledger,
+        .epoch_tracker = undefined,
+        .status_cache = undefined,
+        .slot_tracker = &slot_tracker,
+        .commitments = &commitments,
+    };
+
+    const target_slot: Slot = 3;
+    var error_detail: ?sig.rpc.response.Error = null;
+    const result = ctx.getBlockTime(arena, .{ .slot = target_slot }, &error_detail);
+
+    try std.testing.expectError(error.BlockNotAvailable, result);
+    const populated = error_detail orelse return error.ErrorDetailNotSet;
+    try std.testing.expectEqual(@as(i64, -32004), @intFromEnum(populated.code));
+    try std.testing.expectEqualStrings(
+        "Block not available for slot 3",
+        populated.message,
+    );
+}
+
 test "getInflationReward enforces minContextSlot" {
     // Only slot_tracker is dereferenced before the minContextSlot check (line 433).
     // All other pointer fields (ledger, epoch_tracker, status_cache) are unused
