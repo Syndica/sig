@@ -345,10 +345,10 @@ pub const Executable = struct {
                 .call_reg => {
                     // SIMD-0377: in v3 the target register lives in `dst`; in v2
                     // it lives in `src`; older versions use `imm`.
-                    const reg = if (version.callxUsesDstReg())
-                        inst.dst
-                    else if (version.callRegUsesSrcReg())
+                    const reg = if (version.callxUsesSrcReg())
                         inst.src
+                    else if (version.callxUsesDstReg())
+                        inst.dst
                     else
                         std.meta.intToEnum(Register, inst.imm) catch
                             return error.InvalidRegister;
@@ -693,7 +693,7 @@ pub const Assembler = struct {
                                 };
                             }
                         },
-                        .call_reg => if (version.callRegUsesSrcReg()) .{
+                        .call_reg => if (version.callxUsesSrcReg()) .{
                             .opcode = @enumFromInt(bind.opc),
                             .dst = .r0,
                             .src = operands[0].register,

@@ -530,7 +530,7 @@ test "mod32 divide by zero" {
 }
 
 test "arsh32 high shift" {
-    try testAsm(.{},
+    try testAsm(.{ .maximum_version = .v2 },
         \\entrypoint:
         \\  add64 r10, 0
         \\  mov r0, 8
@@ -578,7 +578,7 @@ test "arsh64" {
 }
 
 test "hor64" {
-    try testAsm(.{},
+    try testAsm(.{ .maximum_version = .v2 },
         \\entrypoint:
         \\  add64 r10, 0
         \\  hor64 r0, 0x10203040
@@ -2255,7 +2255,7 @@ test "callx out of bounds high" {
 }
 
 test "callx out of bounds max" {
-    try testAsm(.{},
+    try testAsm(.{ .maximum_version = .v2 },
         \\entrypoint:
         \\  add64 r10, 0
         \\  mov64 r0, -0x8
@@ -2925,8 +2925,8 @@ test "neg invalid on v2" {
     , error.UnknownOpCode);
 }
 
-test "lddw invalid on v3" {
-    try testVerify(.{},
+test "lddw invalid on v2" {
+    try testVerify(.{ .maximum_version = .v2 },
         \\entrypoint:
         \\  add64 r10, 0
         \\  lddw r0, 0x1122334455667788
@@ -2934,22 +2934,22 @@ test "lddw invalid on v3" {
     , error.UnknownOpCode);
 }
 
-test "le invalid on v3" {
-    try testVerify(.{},
+test "le invalid on v2" {
+    try testVerify(.{ .maximum_version = .v2 },
         \\entrypoint:
         \\  add64 r10, 0
         \\  le16 r0
         \\  return
     , error.UnknownOpCode);
 
-    try testVerify(.{},
+    try testVerify(.{ .maximum_version = .v2 },
         \\entrypoint:
         \\  add64 r10, 0
         \\  le32 r0
         \\  return
     , error.UnknownOpCode);
 
-    try testVerify(.{},
+    try testVerify(.{ .maximum_version = .v2 },
         \\entrypoint:
         \\  add64 r10, 0
         \\  le64 r0

@@ -52,19 +52,20 @@ pub const Version = enum(u32) {
 
     /// Enable SIMD-0173: callx target register lives in `src` field. Only true for v2;
     /// in v3 it moves to `dst` (see SIMD-0377 `callxUsesDstReg`).
-    pub fn callRegUsesSrcReg(version: Version) bool {
+    pub fn callxUsesSrcReg(version: Version) bool {
         return version == .v2;
     }
     /// ... SIMD-0173
     pub fn disableLddw(version: Version) bool {
-        return version.gte(.v2);
-    }
-    pub fn moveMemoryInstructionClasses(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0173
     pub fn disableLe(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
+    }
+    /// ... SIMD-0173
+    pub fn moveMemoryInstructionClasses(version: Version) bool {
+        return version == .v2;
     }
 
     /// Enable SIMD-0178: SBPF Static Syscalls
