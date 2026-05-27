@@ -171,13 +171,6 @@ pub fn curveGroupOp(
         }
     }
 
-    // For `mul` group operations, the "left" side is the scalar.
-    const left_input_addr = registers.get(.r3);
-    const right_input_addr = registers.get(.r4);
-    const result_point_addr = registers.get(.r5);
-    const cost = tc.compute_budget.curveGroupOperationCost(curve_id, group_op);
-    try tc.consumeCompute(cost);
-
     switch (curve_id) {
         inline //
         .edwards,
@@ -187,6 +180,13 @@ pub fn curveGroupOp(
         .bls12_381_g2_be,
         .bls12_381_g2_le,
         => |id| {
+            // For `mul` group operations, the "left" side is the scalar.
+            const left_input_addr = registers.get(.r3);
+            const right_input_addr = registers.get(.r4);
+            const result_point_addr = registers.get(.r5);
+            const cost = tc.compute_budget.curveGroupOperationCost(id, group_op);
+            try tc.consumeCompute(cost);
+
             const T = switch (id) {
                 .edwards => Edwards25519,
                 .ristretto => Ristretto255,

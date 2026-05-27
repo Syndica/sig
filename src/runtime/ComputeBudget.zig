@@ -204,7 +204,7 @@ pub fn poseidonCost(self: ComputeBudget, len: std.math.IntFittingRange(0, 12)) u
 
 pub fn curveGroupOperationCost(
     self: ComputeBudget,
-    curve_id: sig.vm.syscalls.ecc.CurveId,
+    comptime curve_id: sig.vm.syscalls.ecc.CurveId,
     group_op: sig.vm.syscalls.ecc.GroupOp,
 ) u64 {
     switch (curve_id) {
@@ -228,6 +228,12 @@ pub fn curveGroupOperationCost(
                 return @field(self, name);
             },
         },
-        else => unreachable,
+        inline //
+        .bls12_381_be,
+        .bls12_381_le,
+        => @compileError(
+            "BLS12-381 pairing curve ids have no group-op cost; " ++
+                "they must be rejected by the caller's outer switch.",
+        ),
     }
 }
