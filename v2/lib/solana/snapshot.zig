@@ -104,6 +104,8 @@ pub const Manifest = struct {
 };
 
 pub const BankFields = struct {
+    slot: Slot,
+
     pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !BankFields {
         const zone = tracy.Zone.init(@src(), .{ .name = "BankFields.read" });
         defer zone.deinit();
@@ -155,8 +157,10 @@ pub const BankFields = struct {
                 16 + // ns_per_slot: u128
                 8 + // genesis_creation_time: i64
                 8 + // slots_per_year: f64
-                8 + // accounts_data_len: u64
-                8 + // slot: Slot
+                8 // accounts_data_len: u64
+        );
+        const slot = try readInt(Slot, r);
+        try r.discardAll(
                 8 + // _unused_epoch: Epoch
                 8 + // block_height: u64
                 32 + // leader_id: Pubkey
@@ -242,7 +246,9 @@ pub const BankFields = struct {
         // is_delta: bool
         try r.discardAll(1);
 
-        return .{};
+        return .{
+            .slot = slot,
+        };
     }
 };
 

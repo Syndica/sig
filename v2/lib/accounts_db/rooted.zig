@@ -35,8 +35,8 @@ pub const Rooted = struct {
         writer: FileWriter(.{ .buffer_size = buffer_size, .block_size = block_size }),
     },
 
-    const buffer_size = 16 * 1024 * 1024;
-    const block_size = 64 * 1024;
+    const buffer_size = 32 * 1024 * 1024;
+    const block_size = 128 * 1024;
 
     const max_active_lookups = 256;
 
@@ -50,8 +50,8 @@ pub const Rooted = struct {
         result: LookupResult,
         file_offset: u64,
         file_header: extern struct {
-            sector: SectorHeader,
-            meta: AccountMeta,
+            sector: SectorHeader align(1),
+            meta: AccountMeta align(1),
         },
     };
 
@@ -331,8 +331,7 @@ pub const Rooted = struct {
         logger: tel.Logger("Rooted.loadSnapshot"),
         snapshot_iter: *lib.solana.snapshot.SnapshotIter,
     ) !void {
-        // TODO: pass in the slot from the snapshot_iter.manifest.bank_fields/accounts_db_fields
-        try self.beginTransaction(.from(logger), 0);
+        try self.beginTransaction(.from(logger), snapshot_iter.manifest.bank_fields.slot);
 
         var timer = try std.time.Timer.start();
         var n_puts: usize = 0;
@@ -451,31 +450,28 @@ pub const Rooted = struct {
             const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.writeAccountHeader" });
             defer zone.deinit();
 
-            {
-                var header = SectorHeader{
+            var header: extern struct {
+                sector: SectorHeader align(1),
+                meta: AccountMeta align(1),
+            } = .{
+                .sector = .{
                     .type = .account,
                     .info = .{ .account = .{
                         .data_len = @intCast(data_len),
                         .executable = executable,
                         .rent_epoch = std.math.lossyCast(SectorHeader.SmallEpoch, rent_epoch),
                     } },
-                };
-
-                var r = std.Io.Reader.fixed(std.mem.asBytes(&header));
-                try self.queueWrite(.from(logger), @sizeOf(@TypeOf(header)), &r);
-            }
-
-            {
-                var header = AccountMeta{
+                },
+                .meta = .{
                     .slot = @intCast(slot),
                     .pubkey = pubkey,
                     .owner = owner,
                     .lamports = lamports,
-                };
+                },
+            };
 
-                var r = std.Io.Reader.fixed(std.mem.asBytes(&header));
-                try self.queueWrite(.from(logger), @sizeOf(@TypeOf(header)), &r);
-            }
+            var r = std.Io.Reader.fixed(std.mem.asBytes(&header));
+            try self.queueWrite(.from(logger), @sizeOf(@TypeOf(header)), &r);
         }
 
         if (data_len > 0) { // write account data
@@ -539,7 +535,7 @@ pub const Rooted = struct {
                 .type = .padding,
                 .info = .{ .padding = @intCast(pad_len - @sizeOf(SectorHeader)) },
             };
-            logger.info().logf("writing pad sector: {any}", .{header});
+            logger.info().logf("writing pad sector: {B:.2}", .{header.info.padding});
 
             // write padding header
             {
