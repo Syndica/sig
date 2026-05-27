@@ -173,6 +173,7 @@ pub const memfd = struct {
         }
 
         pub const mmap = mmapInner;
+        pub const mmapStaticSize = mmapStaticSizeInner;
     };
 
     pub const RO = extern struct {
@@ -193,6 +194,7 @@ pub const memfd = struct {
         }
 
         pub const mmap = mmapInner;
+        pub const mmapStaticSize = mmapStaticSizeInner;
     };
 
     pub const MapArgs = struct {
@@ -216,6 +218,69 @@ pub const memfd = struct {
             self.fd,
             0,
         );
+    }
+
+    pub fn MapTypedArgs(comptime T: type) type {
+        return struct {
+            at_ptr: ?*align(page_size_min) T = null,
+            populate: bool = false,
+            const MapTypedArgsSelf = @This();
+
+            fn toAny(self: MapTypedArgsSelf) MapArgs {
+                return .{
+                    .at_ptr = @ptrCast(self.at_ptr),
+                    .populate = self.populate,
+                };
+            }
+        };
+    }
+
+    /// Helper equivalent to `mmap`, but casts to defined-layout `T`, asserting the runtime size matches.
+    fn mmapStaticSizeInner(
+        self: anytype,
+        comptime T: type,
+        args: MapTypedArgs(T),
+    ) !*align(page_size_min) T {
+        if (verifyIpcMmapType(T)) |err_msg| {
+            @compileError(err_msg ++ " are not supported: " ++ @typeName(T));
+        }
+        const expected_size = @sizeOf(T);
+        std.debug.assert(expected_size == self.size); // memfd size does not match mmap type
+        return @ptrCast(try mmapInner(self, args.toAny()));
+    }
+
+    /// Returns `null` if `T` is a supported, mmapable, fixed-size type.
+    /// Otherwise returns a general description of the type which can be used
+    /// like `desc ++ " are not supported"`
+    inline fn verifyIpcMmapType(comptime T: type) ?[]const u8 {
+        comptime {
+            switch (@typeInfo(T)) {
+                .int => |info| if (@popCount(info.bits) != 1) {
+                    return "integers with non-power of two bit sizes";
+                },
+                .float => |info| if (@popCount(info.bits) != 1) {
+                    return "floats with non-power of two bit sizes";
+                },
+                .@"enum" => |info| if (@popCount(@bitSizeOf(info.tag_type)) != 1) {
+                    return "enums with non-power of two bit sizes";
+                },
+                inline //
+                .@"struct",
+                .@"union",
+                => |info, tag| switch (info.layout) {
+                    .auto => return "auto layout " ++ @tagName(tag) ++ "s",
+                    .@"packed" => if (@popCount(@bitSizeOf(info.tag_type)) != 1) {
+                        return "packed structs with non-power of two bit sizes";
+                    },
+                    .@"extern" => {},
+                },
+                .array => |info| if (verifyIpcMmapType(info.child)) |child_desc| {
+                    return "arrays of " ++ child_desc;
+                },
+                inline else => |_, tag| return @tagName(tag) ++ "s",
+            }
+            return null;
+        }
     }
 };
 
