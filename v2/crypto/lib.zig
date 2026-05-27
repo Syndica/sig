@@ -1,7 +1,8 @@
 const std = @import("std");
 
 comptime {
-    std.debug.assert(@import("builtin").mode == .ReleaseFast);
+    if (!@import("builtin").is_test)
+        std.debug.assert(@import("builtin").mode == .ReleaseFast);
 }
 
 comptime {

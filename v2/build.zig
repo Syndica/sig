@@ -108,7 +108,7 @@ pub fn build(b: *Build) !void {
 
     const fmt_check_step = b.addFmt(.{
         .check = true,
-        .paths = &.{ "init/", "lib/", "services/", "build.zig", "lint/" },
+        .paths = &.{ "init/", "lib/", "services/", "build.zig", "lint/", "crypto/" },
     });
     ci_step.dependOn(&fmt_check_step.step);
 
