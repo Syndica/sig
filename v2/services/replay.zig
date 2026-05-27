@@ -367,32 +367,71 @@ fn attachParent(
 }
 
 fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
+    std.debug.assert(node.child == .null);
+
     const zone = tracy.Zone.init(@src(), .{ .name = "attachChildren" });
     defer zone.deinit();
 
     const orphan_map_ctx: MerkleForest.OrphanContext = .{ .map = &forest.orphan_map };
+    const map_ctx: MerkleForest.MerkleContext = .{ .map = &forest.map };
 
-    const child = forest.orphan_map.getAdapted(&node.merkle_root, orphan_map_ctx) orelse return;
+    var children_head: ?*MerkleNode = forest.orphan_map.getAdapted(
+        &node.merkle_root,
+        orphan_map_ctx,
+    ) orelse return;
 
-    if (!node.id.mayFollowWith(&child.id)) {
-        @branchHint(.cold); // invalid chaining? Would be malicious behaviour
-        return;
+    // Iterate over all child nodes, setting their parent node, and deleting any bad child nodes
+    {
+        var maybe_child_node: ?*MerkleNode = children_head;
+        while (maybe_child_node) |child_node| {
+            std.debug.assert(child_node.parent == .null);
+
+            defer maybe_child_node = child_node.sibling.ptr(&forest.pool);
+
+            if (node.id.mayFollowWith(&child_node.id)) {
+                @branchHint(.likely);
+                child_node.parent = forest.pool.ptrToIndex(node);
+
+                continue;
+            }
+
+            // Invalid chaining should only happen if the leader is being malicious.
+            // I'm not sure if this branch will ever be hit, but we must still handle this case.
+            // This node is illegal, let's remove it now.
+
+            // Remove this node from the linked list of siblings
+            const next_node: ?*MerkleNode = child_node.sibling.ptr(&forest.pool);
+            const prev_node: ?*MerkleNode = node: {
+                if (child_node == children_head) break :node null;
+
+                var prev_node: ?*MerkleNode = children_head;
+                break :node while (prev_node) |n| {
+                    const next = n.sibling.ptr(&forest.pool);
+                    if (next == child_node) break n;
+                    prev_node = next.?;
+                } else unreachable; // either we're the head node, or we have a prev
+            };
+
+            if (prev_node) |prev| {
+                prev.sibling = if (next_node) |next|
+                    forest.pool.ptrToIndex(next)
+                else
+                    .null;
+            } else {
+                // head of list is invalid, let's move it forward
+                children_head = next_node;
+            }
+
+            // Remove the node from the map + delete it
+            const removed = forest.map.swapRemoveAdapted(&child_node.merkle_root, map_ctx);
+            std.debug.assert(removed);
+            forest.pool.destroy(child_node);
+        }
     }
 
-    std.debug.assert(node.child == .null);
-    node.child = forest.pool.ptrToIndex(child);
+    if (children_head) |c_h| node.child = forest.pool.ptrToIndex(c_h);
 
-    // NOTE: we don't have to do any extra work to "attach" these multiple nodes to the parent, as
-    //       they're already linked together as siblings.
-    var sibling_node: ?*MerkleNode = child;
-    while (sibling_node) |sib| {
-        std.debug.assert(sib.parent == .null);
-        sib.parent = forest.pool.ptrToIndex(node);
-
-        sibling_node = sib.sibling.ptr(&forest.pool);
-    }
-
-    // this 2nd map lookup could be removed
+    // NOTE: this 2nd map lookup could be removed (we looked up this entry earlier)
     const removed = forest.orphan_map.swapRemoveAdapted(&node.merkle_root, orphan_map_ctx);
     std.debug.assert(removed);
 }

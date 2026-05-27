@@ -70,8 +70,6 @@ pub const Receiver = struct {
         deshred_writer: *DeshredRing.Iterator(.writer),
         logger: lib.telemetry.Logger("processPacket"),
     ) !NonErrorStatus {
-        _ = logger;
-
         const zone = tracy.Zone.init(@src(), .{ .name = "processPacket" });
         defer zone.deinit();
 
@@ -199,7 +197,7 @@ pub const Receiver = struct {
 
                 if (!build_options.debug_skip_shred_checks) {
                     const slot_leader = leader_schedule.get(shred.slot) orelse {
-                        std.debug.print("slot {} missing?\n", .{shred.slot});
+                        logger.warn().logf("slot {} missing?\n", .{shred.slot});
                         return error.UnknownLeader;
                     };
 
