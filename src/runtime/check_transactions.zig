@@ -455,9 +455,9 @@ pub fn loadMessageNonceAccount(
     const nonce_data = verifyNonceAccount(nonce_account, &transaction.recent_blockhash) orelse
         return null;
 
-    const signers = transaction.instructions[
+    const signers = try transaction.instructions[
         NONCED_TX_MARKER_IX_INDEX
-    ].getSigners();
+    ].getSigners(allocator);
 
     // check nonce is authorised
     for (signers.constSlice()) |signer| {

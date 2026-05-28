@@ -303,7 +303,7 @@ fn executeAuthorize(
         @intFromEnum(vote_instruction.Authorize.AccountIndex.clock_sysvar),
     );
 
-    const signers = ic.ixn_info.getSigners();
+    const signers = try ic.ixn_info.getSigners(allocator);
     try authorize(
         allocator,
         ic,
@@ -502,7 +502,7 @@ fn executeAuthorizeChecked(
         @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.clock_sysvar),
     );
 
-    const signers = ic.ixn_info.getSigners();
+    const signers = try ic.ixn_info.getSigners(allocator);
     try authorize(
         allocator,
         ic,

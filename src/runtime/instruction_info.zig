@@ -107,18 +107,23 @@ pub const InstructionInfo = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/9eee2f66775291a1ec4c4b1be32efc1d314002f7/transaction-context/src/lib.rs#L736
     pub fn getSigners(
         self: *const InstructionInfo,
-    ) std14.BoundedArray(Pubkey, MAX_ACCOUNT_METAS) {
+        allocator: std.mem.Allocator,
+    ) error{OutOfMemory}!std14.BoundedArray(Pubkey, MAX_ACCOUNT_METAS) {
+        // [agave] get_signers collects into a HashSet. account_metas may hold
+        // up to MAX_INSTR_ACCOUNTS (1094) entries with duplicate pubkeys, so
+        // dedupe via a hash set (O(1) per probe) to keep the result within the
+        // distinct-account bound (MAX_ACCOUNT_METAS) instead of an O(n^2) scan
+        // or overflowing the BoundedArray.
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/instruction.rs#L253
+        var seen: std.AutoHashMapUnmanaged(Pubkey, void) = .empty;
+        defer seen.deinit(allocator);
+        try seen.ensureTotalCapacity(allocator, MAX_ACCOUNT_METAS);
+
         var signers = std14.BoundedArray(Pubkey, MAX_ACCOUNT_METAS){};
-        outer: for (self.account_metas.items) |account_meta| {
+        for (self.account_metas.items) |account_meta| {
             if (!account_meta.is_signer) continue;
-            // [agave] get_signers collects into a HashSet. account_metas may hold
-            // up to MAX_INSTR_ACCOUNTS (1094) entries with duplicate pubkeys, so
-            // dedupe to keep the result within the distinct-account bound
-            // (MAX_ACCOUNT_METAS) instead of overflowing the BoundedArray.
-            // [agave] https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/instruction.rs#L253
-            for (signers.constSlice()) |existing| {
-                if (existing.equals(&account_meta.pubkey)) continue :outer;
-            }
+            const gop = seen.getOrPutAssumeCapacity(account_meta.pubkey);
+            if (gop.found_existing) continue;
             signers.appendAssumeCapacity(account_meta.pubkey);
         }
         return signers;
@@ -206,7 +211,7 @@ test "getSigners collects signer keys and excludes non-signers" {
         .instruction_data = "",
         .owned_instruction_data = false,
     };
-    const signers = ixn_info.getSigners();
+    const signers = try ixn_info.getSigners(allocator);
 
     // Tally result occurrences by seed (byte 0): both signers present once,
     // the non-signer absent.
@@ -255,7 +260,7 @@ test "getSigners dedupes duplicate signers without overflowing" {
         .instruction_data = "",
         .owned_instruction_data = false,
     };
-    const signers = ixn_info.getSigners();
+    const signers = try ixn_info.getSigners(allocator);
 
     try std.testing.expectEqual(InstructionInfo.MAX_ACCOUNT_METAS, signers.len);
     var seen: std.AutoHashMapUnmanaged(Pubkey, void) = .empty;
