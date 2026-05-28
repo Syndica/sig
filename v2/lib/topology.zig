@@ -417,8 +417,8 @@ pub fn Bind(
         pub fn serviceMap(
             allocator: std.mem.Allocator,
             comptime services: []const ServiceInstance,
-            regions: []const SharedRegion,
-            region_memfds: []const lib.linux.memfd.RW,
+            regions: *const [bindings_map.values.len]SharedRegion,
+            region_memfds: *const [regions.len]memfd.RW,
         ) std.mem.Allocator.Error!ServiceMap {
             // check all regions reference existing services
             for (regions) |region| {
@@ -552,11 +552,9 @@ pub fn Bind(
         /// Create and initialize memfds for each shared memory region (map it, initialize it, and then unmap it).
         /// We must unmap to avoid sharing regions with services that don't need them.
         fn createAndInitSharedRegionMemfds(
-            gpa: std.mem.Allocator,
-            regions: []const SharedRegion,
-        ) ![]const memfd.RW {
-            const region_memfds: []memfd.RW = try gpa.alloc(memfd.RW, regions.len);
-            errdefer gpa.free(region_memfds);
+            regions: *const [bindings_map.values.len]SharedRegion,
+            region_memfds: *[regions.len]memfd.RW,
+        ) !void {
             @memset(region_memfds, .empty);
 
             for (region_memfds, regions) |*region_memfd, shared_region| {
@@ -574,8 +572,6 @@ pub fn Bind(
                 try shared_region.region.init(buf);
                 std.log.info("Initialised: {f}", .{shared_region});
             }
-
-            return region_memfds;
         }
 
         // Creates a memfd for every service, to be used for storing a lib.runner.Region value, which is used
@@ -603,15 +599,15 @@ pub fn Bind(
         pub fn spawnAndWait(
             allocator: std.mem.Allocator,
             comptime services: []const ServiceInstance,
-            regions: []const SharedRegion,
+            regions: *const [bindings_map.values.len]SharedRegion,
         ) !void {
-            const region_memfds = try createAndInitSharedRegionMemfds(allocator, regions);
-            defer allocator.free(region_memfds);
+            var region_memfds: [regions.len]memfd.RW = undefined;
+            try createAndInitSharedRegionMemfds(regions, &region_memfds);
 
             var runner_memfds: [services.len]memfd.RW = undefined;
             try createRunnerMemfds(services, &runner_memfds);
 
-            var map = try serviceMap(allocator, services, regions, region_memfds);
+            var map = try serviceMap(allocator, services, regions, &region_memfds);
             defer map.deinit(allocator);
 
             const ExitMeta = struct {
@@ -851,15 +847,15 @@ pub fn Bind(
         pub fn spawnAndWaitNoSandbox(
             allocator: std.mem.Allocator,
             comptime services: []const ServiceInstance,
-            regions: []const SharedRegion,
+            regions: *const [bindings_map.values.len]SharedRegion,
         ) !void {
-            const region_memfds = try createAndInitSharedRegionMemfds(allocator, regions);
-            defer allocator.free(region_memfds);
+            var region_memfds: [regions.len]memfd.RW = undefined;
+            try createAndInitSharedRegionMemfds(regions, &region_memfds);
 
             var runner_memfds: [services.len]memfd.RW = undefined;
             try createRunnerMemfds(services, &runner_memfds);
 
-            var map = try serviceMap(allocator, services, regions, region_memfds);
+            var map = try serviceMap(allocator, services, regions, &region_memfds);
             defer map.deinit(allocator);
 
             var reset_event: std.Thread.ResetEvent = .{};
