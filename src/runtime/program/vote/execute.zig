@@ -58,10 +58,17 @@ pub fn execute(
     else
         .v3;
 
-    const instruction = try ic.ixn_info.deserializeInstruction(
-        allocator,
-        VoteProgramInstruction,
-    );
+    const instruction = blk: {
+        var fbs = std.io.fixedBufferStream(ic.ixn_info.instructionDataToDeserialize());
+        break :blk sig.bincode.read(
+            allocator,
+            VoteProgramInstruction,
+            fbs.reader(),
+            .{},
+        ) catch {
+            return InstructionError.InvalidInstructionData;
+        };
+    };
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {

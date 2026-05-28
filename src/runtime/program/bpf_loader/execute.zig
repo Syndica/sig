@@ -469,10 +469,18 @@ pub fn executeBpfLoaderV4ProgramInstruction(
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     var buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
-    const instruction = try ic.ixn_info.limitedDeserializeInstruction(
-        bpf_loader_program.v4.Instruction,
-        &buf,
-    );
+    const instruction = blk: {
+        var fbs = std.io.fixedBufferStream(ic.ixn_info.instructionDataToDeserialize());
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        break :blk sig.bincode.read(
+            fba.allocator(),
+            bpf_loader_program.v4.Instruction,
+            fbs.reader(),
+            .{},
+        ) catch {
+            return InstructionError.InvalidInstructionData;
+        };
+    };
     return switch (instruction) {
         .write => |args| executeV4Write(
             allocator,
@@ -924,10 +932,18 @@ pub fn executeBpfLoaderV3ProgramInstruction(
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     var buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
-    const instruction = try ic.ixn_info.limitedDeserializeInstruction(
-        bpf_loader_program.v3.Instruction,
-        &buf,
-    );
+    const instruction = blk: {
+        var fbs = std.io.fixedBufferStream(ic.ixn_info.instructionDataToDeserialize());
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        break :blk sig.bincode.read(
+            fba.allocator(),
+            bpf_loader_program.v3.Instruction,
+            fbs.reader(),
+            .{},
+        ) catch {
+            return InstructionError.InvalidInstructionData;
+        };
+    };
 
     return switch (instruction) {
         .initialize_buffer => executeV3InitializeBuffer(

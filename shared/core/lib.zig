@@ -7,7 +7,9 @@ pub const instruction_error = @import("instruction_error.zig");
 pub const pubkey = @import("pubkey.zig");
 pub const rent = @import("rent.zig");
 pub const rent_collector = @import("rent_collector.zig");
+pub const signature = @import("signature.zig");
 pub const time = @import("time.zig");
+pub const transaction = @import("transaction.zig");
 pub const transaction_error = @import("transaction_error.zig");
 
 pub const BlockhashQueue = blockhash_queue.BlockhashQueue;
@@ -16,6 +18,7 @@ pub const FeatureSet = features.Set;
 pub const Hash = hash.Hash;
 pub const LtHash = hash.LtHash;
 pub const SlotAndHash = hash.SlotAndHash;
+pub const Instruction = instruction.Instruction;
 pub const InstructionAccount = instruction.InstructionAccount;
 pub const InstructionError = instruction_error.InstructionError;
 pub const InstructionErrorEnum = instruction_error.InstructionErrorEnum;
@@ -23,6 +26,8 @@ pub const intFromInstructionError = instruction_error.intFromInstructionError;
 pub const Pubkey = pubkey.Pubkey;
 pub const Rent = rent.Rent;
 pub const RentCollector = rent_collector.RentCollector;
+pub const Signature = signature.Signature;
+pub const Transaction = transaction.Transaction;
 pub const TransactionError = transaction_error.TransactionError;
 
 pub const Epoch = time.Epoch;

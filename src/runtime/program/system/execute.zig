@@ -32,10 +32,17 @@ pub fn execute(
 
     // Deserialize the instruction and dispatch to the appropriate handler
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L304-L308
-    const instruction = try ic.ixn_info.deserializeInstruction(
-        allocator,
-        SystemProgramInstruction,
-    );
+    const instruction = blk: {
+        var fbs = std.io.fixedBufferStream(ic.ixn_info.instructionDataToDeserialize());
+        break :blk sig.bincode.read(
+            allocator,
+            SystemProgramInstruction,
+            fbs.reader(),
+            .{},
+        ) catch {
+            return InstructionError.InvalidInstructionData;
+        };
+    };
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {

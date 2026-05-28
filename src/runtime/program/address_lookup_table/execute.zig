@@ -32,10 +32,17 @@ pub fn execute(
     // agave: consumed in declare_process_instruction
     try ic.tc.consumeCompute(program.COMPUTE_UNITS);
 
-    const lookuptable_instruction = try ic.ixn_info.deserializeInstruction(
-        allocator,
-        Instruction,
-    );
+    const lookuptable_instruction = blk: {
+        var fbs = std.io.fixedBufferStream(ic.ixn_info.instructionDataToDeserialize());
+        break :blk sig.bincode.read(
+            allocator,
+            Instruction,
+            fbs.reader(),
+            .{},
+        ) catch {
+            return InstructionError.InvalidInstructionData;
+        };
+    };
     defer sig.bincode.free(allocator, lookuptable_instruction);
 
     return switch (lookuptable_instruction) {

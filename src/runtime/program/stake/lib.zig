@@ -58,10 +58,18 @@ pub fn execute(
         false;
 
     var stake_instruction_buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
-    const stake_instruction = try ic.ixn_info.limitedDeserializeInstruction(
-        Instruction,
-        &stake_instruction_buf,
-    );
+    const stake_instruction = blk: {
+        var fbs = std.io.fixedBufferStream(ic.ixn_info.instructionDataToDeserialize());
+        var fba = std.heap.FixedBufferAllocator.init(&stake_instruction_buf);
+        break :blk sig.bincode.read(
+            fba.allocator(),
+            Instruction,
+            fbs.reader(),
+            .{},
+        ) catch {
+            return InstructionError.InvalidInstructionData;
+        };
+    };
 
     if (epoch_rewards_active and stake_instruction != .get_minimum_delegation) {
         ic.tc.custom_error = @intFromEnum(StakeError.epoch_rewards_active);

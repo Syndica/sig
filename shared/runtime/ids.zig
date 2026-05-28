@@ -23,6 +23,8 @@ pub const ZK_TOKEN_PROOF_PROGRAM_ID: Pubkey = .parse("ZkTokenProof11111111111111
 
 pub const INCINERATOR: Pubkey = .parse("1nc1nerator11111111111111111111111111111111");
 
+pub const VOTE_PROGRAM_ID: Pubkey = .parse("Vote111111111111111111111111111111111111111");
+
 // SPL Token Program IDs
 pub const TOKEN_PROGRAM_ID: Pubkey = .parse("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 pub const TOKEN_2022_PROGRAM_ID: Pubkey = .parse("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");

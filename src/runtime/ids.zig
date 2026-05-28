@@ -7,6 +7,7 @@ pub const FEATURE_PROGRAM_ID = shared_ids.FEATURE_PROGRAM_ID;
 pub const FEATURE_PROGRAM_SOURCE_ID = shared_ids.FEATURE_PROGRAM_SOURCE_ID;
 pub const ZK_TOKEN_PROOF_PROGRAM_ID = shared_ids.ZK_TOKEN_PROOF_PROGRAM_ID;
 pub const INCINERATOR = shared_ids.INCINERATOR;
+pub const VOTE_PROGRAM_ID = shared_ids.VOTE_PROGRAM_ID;
 pub const TOKEN_PROGRAM_ID = shared_ids.TOKEN_PROGRAM_ID;
 pub const TOKEN_2022_PROGRAM_ID = shared_ids.TOKEN_2022_PROGRAM_ID;
 pub const NATIVE_MINT_ID = shared_ids.NATIVE_MINT_ID;
