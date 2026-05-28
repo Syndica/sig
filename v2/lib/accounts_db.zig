@@ -3,7 +3,6 @@ const lib = @import("lib.zig");
 
 comptime {
     if (@import("builtin").is_test) {
-        _ = @import("accounts_db/io.zig");
         _ = @import("accounts_db/pool.zig");
         _ = @import("accounts_db/rooted.zig");
         _ = @import("accounts_db/table.zig");
