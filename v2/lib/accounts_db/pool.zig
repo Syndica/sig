@@ -26,6 +26,27 @@ pub const AccountPool = extern struct {
             offset: u32,
             len: u32,
         },
+
+        fn pushFreeList(self: *Bucket, idx: Index, memory: []u8) void {
+            memory[@as(u64, idx) * index_scale ..][0..@sizeOf(Index)].* = @bitCast(self.free_list);
+            self.free_list = idx;
+        }
+
+        fn popFreeList(self: *Bucket, memory: []const u8) ?Index {
+            const idx = self.free_list;
+            if (idx == invalid_index) return null;
+
+            self.free_list = @bitCast(memory[@as(u64, idx) * index_scale ..][0..@sizeOf(Index)].*);
+            return idx;
+        }
+
+        fn bumpStolenBlock(self: *Bucket, idx_bump: Index) ?Index {
+            const idx = self.stolen.block + self.stolen.offset;
+            if (idx + idx_bump > self.stolen.len) return null;
+
+            self.stolen.offset += idx_bump;
+            return idx;
+        }
     };
 
     pub fn init(self: *AccountPool, memory_len: usize) void {
@@ -42,7 +63,6 @@ pub const AccountPool = extern struct {
         self.memory_len = memory_len;
     }
 
-    // Similar to qspinlock in the linux kernel
     const Lock = extern struct {
         locked: std.atomic.Value(u32) = .init(0),
 
@@ -126,6 +146,7 @@ pub const AccountPool = extern struct {
     pub fn alloc(self: *AccountPool, data_len: u32) !Index {
         std.debug.assert(data_len <= MAX_DATA_LEN);
 
+        const memory = self.memory[0..].ptr[0..self.memory_len];
         const sc_idx = getSizeClass(data_len);
         const sc_data_size = data_size_classes[sc_idx];
         const bucket = &self.buckets[sc_idx];
@@ -135,11 +156,7 @@ pub const AccountPool = extern struct {
         defer self.lock.release(&lock_holder);
 
         // try free-list first
-        var idx = bucket.free_list;
-        if (idx != invalid_index) {
-            bucket.free_list = @bitCast(
-                self.memory[0..].ptr[@as(u64, idx) * index_scale ..][0..@sizeOf(Index)].*,
-            );
+        if (bucket.popFreeList(memory)) |idx| {
             return idx;
         }
 
@@ -147,17 +164,13 @@ pub const AccountPool = extern struct {
             std.math.divCeil(Index, @sizeOf(Account) + sc_data_size, index_scale) catch unreachable;
 
         // try bump from our own bucket's stolen block, if any
-        if (bucket.stolen.block != invalid_index) {
-            idx = bucket.stolen.block + bucket.stolen.offset;
-            if (idx + idx_bump < bucket.stolen.len) {
-                bucket.stolen.offset += idx_bump;
-                return idx;
-            }
+        if (bucket.bumpStolenBlock(idx_bump)) |idx| {
+            return idx;
         }
 
-        // try bump from memory
-        idx = self.allocated;
-        if ((@as(u64, idx + idx_bump) * index_scale) < self.memory_len) {
+        // try bump from total memory
+        if ((@as(u64, self.allocated + idx_bump) * index_scale) <= self.memory_len) {
+            const idx = self.allocated;
             self.allocated += idx_bump;
             return idx;
         }
@@ -169,30 +182,28 @@ pub const AccountPool = extern struct {
             const target = &self.buckets[target_sc_idx];
 
             // try steal from its own stolen bump allocating region
-            if (target.stolen.block != invalid_index) {
-                idx = target.stolen.block + target.stolen.offset;
-                if (idx + idx_bump < target.stolen.len) {
-                    target.stolen.offset += idx_bump;
-                    return idx;
-                }
+            if (target.bumpStolenBlock(idx_bump)) |idx| {
+                return idx;
             }
 
             // try steal from its free list into our own stolen block
-            idx = target.free_list;
-            if (idx != invalid_index) {
+            if (target.popFreeList(memory)) |stolen_block_idx| {
                 bucket.stolen = .{
-                    .block = idx,
-                    .offset = idx_bump,
+                    .block = stolen_block_idx,
+                    .offset = 0,
                     .len = std.math.divCeil(
                         Index,
                         @sizeOf(Account) + target_sc_data_size,
                         index_scale,
                     ) catch unreachable,
                 };
-                return idx;
+                return bucket.bumpStolenBlock(idx_bump) orelse unreachable;
             }
         }
 
+        // TODO: Under extreme memory pressure. Should really signal operator here.
+        // But additionally, try to coalesce contiguous 1) stolen blocks or 2) free_list chunks 
+        // from size classes, in order to service this allocation request.
         return error.OutOfMemory;
     }
 
@@ -208,6 +219,7 @@ pub const AccountPool = extern struct {
         const acc = self.getAccount(idx);
         std.debug.assert(acc.ref_count.load(.monotonic) == 0);
 
+        const memory = self.memory[0..].ptr[0..self.memory_len];
         const sc_idx = getSizeClass(acc.data.len);
         const bucket = &self.buckets[sc_idx];
 
@@ -215,9 +227,6 @@ pub const AccountPool = extern struct {
         self.lock.acquire(&lock_holder);
         defer self.lock.release(&lock_holder);
 
-        // add to free list
-        self.memory[0..].ptr[@as(u64, idx) * index_scale ..][0..@sizeOf(Index)].* =
-            @bitCast(bucket.free_list);
-        bucket.free_list = idx;
+        bucket.pushFreeList(idx, memory);
     }
 };
