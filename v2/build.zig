@@ -92,6 +92,20 @@ pub fn build(b: *Build) !void {
     }).module("tracy");
     const binkode_mod = b.dependency("binkode", .{}).module("binkode");
     const base58_mod = b.dependency("base58", .{}).module("base58");
+    const feature_set_id_gen = addFeatureSetIdGenerator(b);
+    const feature_set_id = b.createModule(.{
+        .root_source_file = b.addRunArtifact(feature_set_id_gen).addOutputFileArg(
+            "feature-set-id.zig",
+        ),
+    });
+    const shared_mod = b.addModule("shared", .{
+        .root_source_file = b.path("../shared/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    shared_mod.addImport("base58", base58_mod);
+    shared_mod.addImport("build-options", build_options_mod);
+    shared_mod.addImport("feature-set-id", feature_set_id);
 
     const fmt_check_step = b.addFmt(.{
         .check = true,
@@ -128,6 +142,7 @@ pub fn build(b: *Build) !void {
         .imports = &.{
             .{ .name = "base58", .module = base58_mod },
             .{ .name = "binkode", .module = binkode_mod },
+            .{ .name = "shared", .module = shared_mod },
             .{ .name = "tracy", .module = tracy_mod },
             .{ .name = "build-options", .module = build_options_mod },
         },
@@ -296,6 +311,29 @@ fn addTestOutputs(
     return addExeOutputs(b, mod_test_exe, artifact_step, artifact_opts, .{
         .dest_sub_path = dest_sub_path,
         .dest_dir = test_install_dir,
+    });
+}
+
+fn addFeatureSetIdGenerator(b: *Build) *Build.Step.Compile {
+    return b.addExecutable(.{
+        .name = "gen_feature_set_id",
+        .root_module = b.createModule(.{
+            .target = b.graph.host,
+            .optimize = .Debug,
+            .root_source_file = b.path("../scripts/gen_feature_set_id.zig"),
+            .imports = &.{
+                .{
+                    .name = "base58",
+                    .module = b.dependency("base58", .{}).module("base58"),
+                },
+                .{
+                    .name = "features",
+                    .module = b.createModule(.{
+                        .root_source_file = b.path("../shared/core/features.zon"),
+                    }),
+                },
+            },
+        }),
     });
 }
 

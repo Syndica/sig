@@ -236,6 +236,7 @@ pub fn build(b: *Build) !void {
     build_options.addOption(bool, "allow_no_sha", config.allow_no_sha);
     build_options.addOption(bool, "allow_no_avx512", config.allow_no_avx512);
     build_options.addOption(std.SemanticVersion, "version", config.version);
+    const build_options_mod = build_options.createModule();
 
     const sig_step = b.step("sig", "Run the sig executable");
     const test_step = b.step("test", "Run library tests");
@@ -303,11 +304,20 @@ pub fn build(b: *Build) !void {
     }).module("tracy");
     tracy_mod.sanitize_c = .off; // Workaround UB in Tracy.
 
+    const shared_mod = b.addModule("shared", .{
+        .root_source_file = b.path("shared/lib.zig"),
+        .target = config.target,
+        .optimize = config.optimize,
+    });
+    shared_mod.addImport("base58", base58_mod);
+    shared_mod.addImport("build-options", build_options_mod);
+
     const std14_mod = b.createModule(.{
         .root_source_file = b.path("src/std14.zig"),
         .target = config.target,
         .optimize = config.optimize,
     });
+    std14_mod.addImport("shared", shared_mod);
 
     const cli_mod = b.createModule(.{
         .root_source_file = b.path("src/cli.zig"),
@@ -328,6 +338,7 @@ pub fn build(b: *Build) !void {
     const feature_set_id = b.createModule(.{
         .root_source_file = b.addRunArtifact(feature_set_id_gen).addOutputFileArg("feature-set-id.zig"),
     });
+    shared_mod.addImport("feature-set-id", feature_set_id);
     const print_feature_set_id = b.addRunArtifact(feature_set_id_gen);
     feature_set_id_step.dependOn(&print_feature_set_id.step);
 
@@ -347,7 +358,7 @@ pub fn build(b: *Build) !void {
     const imports: []const Build.Module.Import = &.{
         .{ .name = "base58",        .module = base58_mod },
         .{ .name = "blst",          .module = blst_mod },
-        .{ .name = "build-options", .module = build_options.createModule() },
+        .{ .name = "build-options", .module = build_options_mod },
         .{ .name = "feature-set-id", .module = feature_set_id },
         .{ .name = "non-circulating-supply", .module = non_circulating_supply },
         .{ .name = "bzip2",         .module = bzip2_mod },
@@ -356,6 +367,7 @@ pub fn build(b: *Build) !void {
         .{ .name = "poseidon",      .module = poseidon_mod },
         .{ .name = "prettytable",   .module = pretty_table_mod },
         .{ .name = "secp256k1",     .module = secp256k1_mod },
+        .{ .name = "shared",        .module = shared_mod },
         .{ .name = "sqlite",        .module = sqlite_mod },
         .{ .name = "ssl",           .module = ssl_mod },
         .{ .name = "table",         .module = gh_table },
@@ -650,7 +662,7 @@ fn addFeatureSetIdGenerator(b: *Build, use_llvm: bool) *Build.Step.Compile {
                 .{
                     .name = "features",
                     .module = b.createModule(.{
-                        .root_source_file = b.path("src/core/features.zon"),
+                        .root_source_file = b.path("shared/core/features.zon"),
                     }),
                 },
             },

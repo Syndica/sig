@@ -2,7 +2,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const AccountSharedData = @import("AccountSharedData.zig");
+const AccountSharedData = sig.runtime.AccountSharedData;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const TransactionError = sig.core.transaction_error.TransactionError;

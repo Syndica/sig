@@ -42,4 +42,4 @@ pub const TransactionContext = transaction_context.TransactionContext;
 pub const TransactionContextAccount = transaction_context.TransactionContextAccount;
 
 // TODO: move to accounts db
-pub const AccountSharedData = @import("AccountSharedData.zig");
+pub const AccountSharedData = @import("shared").runtime.AccountSharedData;
