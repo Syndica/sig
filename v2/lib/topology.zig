@@ -41,9 +41,9 @@ pub const Schema = struct {
 
 pub fn ServiceId(comptime schema: Schema) type {
     var fields: [schema.services.len]std.builtin.Type.EnumField = undefined;
-    for (schema.services, &fields, 0..) |instance, *field, i| {
+    for (schema.services, &fields, 0..) |service, *field, i| {
         field.* = .{
-            .name = @tagName(instance.name),
+            .name = @tagName(service.name),
             .value = i,
         };
     }
@@ -113,6 +113,34 @@ pub fn Bind(
 
         fn regionSize(r: Region) usize {
             return r.size();
+        }
+
+        fn regionInit(r: Region, buf: []align(std.heap.page_size_min) u8) !void {
+            try r.init(buf);
+        }
+
+        fn regionFmtShareInfo(region_tag: RegionTag) std.fmt.Alt(RegionTag, regionWriteShareInfo) {
+            return .{ .data = region_tag };
+        }
+
+        fn regionWriteShareInfo(
+            region: RegionTag,
+            w: *std.Io.Writer,
+        ) std.Io.Writer.Error!void {
+            try w.print("Region `{t}` shared with [ ", .{region});
+
+            var shares_copy = getRegionBindingShares(region);
+            var shares_iter = shares_copy.iterator();
+            for (0..shares_copy.count()) |i| {
+                const share_entry = shares_iter.next().?;
+
+                if (i != 0) try w.writeAll(", ");
+                const mode = if (share_entry.value.access == .rw) "rw" else "ro";
+                try w.print("{t} ({s})", .{ share_entry.key, mode });
+            }
+            if (shares_iter.next() != null) unreachable;
+
+            try w.writeAll(" ]");
         }
 
         comptime {
@@ -192,82 +220,52 @@ pub fn Bind(
         }
 
         /// `.@"foo:bar"` -> `.{ .foo = .bar }`
-        inline fn getServiceRegionIdInfo(service_id: bound.ServiceRegionId) ServiceRegionInfo {
+        inline fn getServiceRegionIdInfo(region_id: bound.ServiceRegionId) ServiceRegionInfo {
             if (@inComptime()) {
-                const str = @tagName(service_id);
+                const str = @tagName(region_id);
                 const colon = std.mem.indexOfScalarPos(u8, str, 0, ':').?;
                 const service_str = str[0..colon];
                 const service = @field(bound.ServiceId, service_str);
                 const region = @field(LocalServiceRegionId(service), str[colon + 1 ..]);
                 return @unionInit(ServiceRegionInfo, service_str, region);
             }
-            return switch (service_id) {
+            return switch (region_id) {
                 inline else => |iservice_id| comptime getServiceRegionIdInfo(iservice_id),
             };
         }
 
-        pub const ServiceInstance = struct {
-            service: bound.ServiceId,
-            /// for supporting multiple services of the same kind
-            n: u8 = 0,
-
-            pub fn format(
-                self: ServiceInstance,
-                w: *std.Io.Writer,
-            ) std.Io.Writer.Error!void {
-                try w.print("{s}_{}", .{ @tagName(self.service), self.n });
-            }
-        };
-
-        /// Returns the total number of spawned services will be sharing the specified `region`.
-        /// This accounts for the maximum instance index (the `n` field).
-        pub fn countRegionShares(
-            region: RegionTag,
-            services: []const ServiceInstance,
-        ) usize {
-            var service_counts: std.EnumArray(bound.ServiceId, u8) = .initFill(0);
-
-            const region_bindings = bindings_map.get(region);
-            var iter = region_bindings.iterator();
-            for (0..region_bindings.count()) |_| {
-                const service_region_id: bound.ServiceRegionId = iter.next().?;
-                const info = getServiceRegionIdInfo(service_region_id);
-                for (services) |instance| {
-                    if (info == instance.service) {
-                        const max_count_ptr = service_counts.getPtr(instance.service);
-                        max_count_ptr.* = @max(max_count_ptr.*, instance.n + 1);
-                    }
-                }
-            }
-            if (iter.next() != null) unreachable;
-
-            const vec: @Vector(service_counts.values.len, usize) = service_counts.values;
-            return @reduce(.Add, vec);
+        fn serviceRegionIdFromTags(
+            comptime service: bound.ServiceId,
+            region_id: bound.LocalServiceRegionId(service),
+        ) bound.ServiceRegionId {
+            return switch (region_id) {
+                inline else => |iregion| @field(
+                    bound.ServiceRegionId,
+                    @tagName(service) ++ ":" ++ @tagName(iregion),
+                ),
+            };
         }
 
-        pub const Share = struct {
-            instance: ServiceInstance,
-            rw: bool,
-        };
+        /// Returns the read/write access associated with the region id.
+        inline fn getServiceRegionIdAccess(
+            region_id: bound.ServiceRegionId,
+        ) Schema.Service.Region.Access {
+            return switch (region_id) {
+                inline else => |itag| comptime blk: {
+                    const region_info = getServiceRegionIdInfo(itag);
+                    const Local = LocalServiceRegionId(region_info);
+                    const local_region_id: Local = @field(region_info, @tagName(region_info));
+                    const service_entry = schema.services[@intFromEnum(region_info)];
+                    const region_entry = service_entry.regions[@intFromEnum(local_region_id)];
+                    break :blk region_entry.access;
+                },
+            };
+        }
 
-        pub const SharedRegion = struct {
-            region: Region,
-            shares: []const Share,
-            requested_location: ?[*]align(std.heap.page_size_min) u8 = null,
-
-            pub fn format(
-                self: SharedRegion,
-                w: *std.Io.Writer,
-            ) std.Io.Writer.Error!void {
-                try w.print("Region `{s}` shared with [ ", .{@tagName(self.region)});
-                for (self.shares, 0..) |share, i| {
-                    if (i != 0) try w.writeAll(", ");
-                    const mode = if (share.rw) "rw" else "ro";
-                    try w.print("{f} ({s})", .{ share.instance, mode });
-                }
-                try w.writeAll(" ]");
-            }
-        };
+        /// Returns the total number of spawned services that will be sharing the specified `region`.
+        pub fn countTotalRegionShares(region: RegionTag) usize {
+            return bindings_map.get(region).count();
+        }
 
         pub const SharedRegionInstances = @Type(.{ .@"struct" = info: {
             var fields: [bindings_map.values.len]std.builtin.Type.StructField = undefined;
@@ -289,88 +287,34 @@ pub fn Bind(
             };
         } });
 
-        pub fn toSharedRegions(
-            instances: SharedRegionInstances,
-        ) [bindings_map.values.len]SharedRegion {
-            @setEvalBranchQuota(
-                bindings_map.values.len *
-                    128 * // reasonable upper bound of 128 services
-                    100, // reasonable upper bound of 100 bytes per service name
-            );
-            var shared_regions: [bindings_map.values.len]SharedRegion = undefined;
-            inline for (bindings_map.values, 0..) |region_id_set, binding_i| {
-                const region_binding_tag = comptime BindingsIndexer.keyForIndex(binding_i);
+        const RegionBindingSharesMap = std.EnumMap(bound.ServiceId, struct {
+            access: Schema.Service.Region.Access,
+        });
 
-                comptime var shares: []const Share = &.{};
-
-                comptime var iter = region_id_set.iterator();
-                inline for (0..comptime region_id_set.count()) |_| {
-                    const region_id = comptime iter.next().?;
-                    const region_info = getServiceRegionIdInfo(region_id);
-                    const local_region_id = @field(region_info, @tagName(region_info));
-                    const service_entry = schema.services[@intFromEnum(region_info)];
-                    const region_entry = service_entry.regions[@intFromEnum(local_region_id)];
-
-                    shares = shares ++ [_]Share{.{
-                        .instance = .{
-                            .service = region_info,
-                            .n = 0, // TODO: support referencing multiple service instances (.n > 0)
-                        },
-                        .rw = switch (region_entry.access) {
-                            .readonly => false,
-                            .rw => true,
-                        },
-                    }};
-                }
-                comptime if (iter.next() != null) unreachable;
-
-                shared_regions[binding_i] = .{
-                    .region = @unionInit(
-                        Region,
-                        @tagName(region_binding_tag),
-                        @field(instances, @tagName(region_binding_tag)),
-                    ),
-                    .shares = shares,
-                };
+        /// Returns a set of all the services which the specified region binding is shared with,
+        /// with each entry accompanied by properties of the share.
+        fn getRegionBindingShares(region_binding_tag: RegionTag) RegionBindingSharesMap {
+            const region_id_set = bindings_map.getPtrConst(region_binding_tag);
+            var shares: RegionBindingSharesMap = .{};
+            var iter = region_id_set.iterator();
+            for (0..region_id_set.count()) |_| {
+                const region_id = iter.next().?;
+                const region_info = getServiceRegionIdInfo(region_id);
+                const prev_opt = shares.fetchPut(region_info, .{
+                    .access = getServiceRegionIdAccess(region_id),
+                });
+                if (prev_opt != null) unreachable;
             }
-            return shared_regions;
+            if (iter.next() != null) unreachable;
+            return shares;
         }
 
-        pub fn getRegionBinding(service_region_id: bound.ServiceRegionId) Region.Tag {
+        fn getRegionBinding(service_region_id: bound.ServiceRegionId) RegionTag {
             return for (bindings_map.values, 0..) |region_id_set, i| {
                 const binding_tag = BindingsIndexer.keyForIndex(i);
                 if (!region_id_set.contains(service_region_id)) continue;
                 break binding_tag;
             } else unreachable;
-        }
-
-        pub const RequiredRegion = struct {
-            region: RegionTag,
-            rw: bool = false,
-        };
-
-        pub inline fn getRequiredRegions(
-            comptime service_id: bound.bound.ServiceId,
-        ) []const RequiredRegion {
-            comptime {
-                @setEvalBranchQuota(100_000);
-
-                const service_entry = schema.services[@intFromEnum(service_id)];
-                var required: []const RequiredRegion = &.{};
-                for (service_entry.regions) |region| {
-                    required = required ++ &[_]RequiredRegion{.{
-                        .region = getRegionBinding(@field(
-                            bound.ServiceRegionId,
-                            @tagName(service_id) ++ ":" ++ @tagName(region.name),
-                        )),
-                        .rw = switch (region.access) {
-                            .rw => true,
-                            .readonly => false,
-                        },
-                    }};
-                }
-                return required;
-            }
         }
 
         // -- Service Externs -- //
@@ -404,101 +348,96 @@ pub fn Bind(
         }
 
         pub const ServiceMap = struct {
-            inner: std.AutoArrayHashMapUnmanaged(
-                ServiceInstance,
+            inner: std.EnumMap(
+                bound.ServiceId,
                 std.ArrayList(LookupResult),
             ),
 
-            pub const empty: ServiceMap = .{ .inner = .empty };
+            pub const empty: ServiceMap = .{ .inner = .{} };
 
             pub const LookupResult = struct {
-                n: usize, // for supporting multiple regions of the same kind
-                shared: SharedRegion,
-                rw: bool,
+                region: Region,
+                access: Schema.Service.Region.Access,
                 memfd: lib.linux.memfd.RW,
             };
 
             pub fn deinit(self: *const ServiceMap, gpa: std.mem.Allocator) void {
                 var map = self.inner;
-                for (map.values()) |*lur| lur.deinit(gpa);
-                map.deinit(gpa);
+                for (&map.values) |*lur| lur.deinit(gpa);
             }
         };
 
         /// Pairs services up with their respective required regions and their rw/ro permission
         pub fn serviceMap(
             allocator: std.mem.Allocator,
-            comptime services: []const ServiceInstance,
-            regions: *const [bindings_map.values.len]SharedRegion,
-            region_memfds: *const [regions.len]memfd.RW,
-        ) std.mem.Allocator.Error!ServiceMap {
-            // check all regions reference existing services
-            for (regions) |region| {
-                for (region.shares) |share| {
-                    const found_service: bool = for (services) |instance| {
-                        const matching =
-                            instance.service == share.instance.service and
-                            instance.n == share.instance.n;
+            instances: SharedRegionInstances,
+        ) !ServiceMap {
+            const regions: [bindings_map.values.len]Region = regions: {
+                var regions: [bindings_map.values.len]Region = undefined;
 
-                        if (matching) break true;
-                    } else false;
-
-                    if (!found_service)
-                        std.debug.panic(
-                            "Shared region {f} with unknown service {}\n",
-                            .{ region, share },
-                        );
+                @setEvalBranchQuota(bindings_map.values.len * schema.services.len);
+                inline for (&regions, 0..bindings_map.values.len) |*region, binding_i| {
+                    const region_binding_tag = comptime BindingsIndexer.keyForIndex(binding_i);
+                    region.* = @unionInit(
+                        Region,
+                        @tagName(region_binding_tag),
+                        @field(instances, @tagName(region_binding_tag)),
+                    );
                 }
-            }
+
+                break :regions regions;
+            };
+
+            var region_memfds: [regions.len]memfd.RW = undefined;
+            try createAndInitSharedRegionMemfds(&regions, &region_memfds);
 
             var map: ServiceMap = .empty;
             errdefer map.deinit(allocator);
 
             // check all service instances request regions which are shared with them
-            inline for (services) |instance| {
-                for (getRequiredRegions(instance.service)) |required_region| {
+            inline for (schema.services) |service_entry| {
+                const service: bound.ServiceId = service_entry.name;
+
+                inline for (service_entry.regions) |region_entry| {
+                    const region_local_id: bound.LocalServiceRegionId(service) = region_entry.name;
+                    const region_id: bound.ServiceRegionId =
+                        serviceRegionIdFromTags(service, region_local_id);
+
                     const found_region: ServiceMap.LookupResult = blk: for (
                         regions,
-                        region_memfds,
-                        0..,
-                    ) |shared_region, region_memfd, n| {
-                        if (shared_region.region != required_region.region) continue;
+                        &region_memfds,
+                    ) |region, region_memfd| {
+                        std.debug.assert(region_memfd.size == regionSize(region));
+                        if (region != getRegionBinding(region_id)) continue;
 
-                        for (shared_region.shares) |share| {
-                            if (instance.service == share.instance.service and
-                                instance.n == share.instance.n)
-                            {
-                                const result: ServiceMap.LookupResult = .{
-                                    .n = n,
-                                    .shared = shared_region,
-                                    .rw = required_region.rw,
-                                    .memfd = region_memfd,
-                                };
+                        var shares = getRegionBindingShares(region);
+                        var shares_iter = shares.iterator();
+                        for (0..shares.count()) |_| {
+                            const share_target = shares_iter.next().?.key;
+                            if (service != share_target) continue;
 
-                                var exists = false;
-                                if (map.inner.getPtr(instance)) |entry| {
-                                    for (entry.items) |existing_result| {
-                                        if (std.meta.eql(existing_result, result)) {
-                                            exists = true;
-                                            break;
-                                        }
-                                    }
-                                }
+                            const result: ServiceMap.LookupResult = .{
+                                .region = region,
+                                .access = region_entry.access,
+                                .memfd = region_memfd,
+                            };
 
-                                std.debug.assert(
-                                    region_memfd.size == regionSize(shared_region.region),
-                                );
-                                if (!exists) break :blk result;
-                            }
-                        }
+                            const exists = if (map.inner.getPtr(service)) |entry| exists: {
+                                break :exists for (entry.items) |existing_result| {
+                                    if (std.meta.eql(existing_result, result)) break true;
+                                } else false;
+                            } else false;
+
+                            if (!exists) break :blk result;
+                        } else if (shares_iter.next() != null) unreachable;
                     } else std.debug.panic(
-                        "Service instance {f} requested {} region which was not shared with it",
-                        .{ instance, required_region },
+                        "Service instance {t} requested {} region which was not shared with it",
+                        .{ service, region_entry },
                     );
 
-                    const entry = try map.inner.getOrPut(allocator, instance);
-                    if (!entry.found_existing) entry.value_ptr.* = .empty;
-                    try entry.value_ptr.append(allocator, found_region);
+                    if (!map.inner.contains(service)) map.inner.put(service, .empty);
+                    const lur_list = map.inner.getPtrAssertContains(service);
+                    try lur_list.append(allocator, found_region);
                 }
             }
 
@@ -533,32 +472,30 @@ pub fn Bind(
             var i_ro: u8 = 0;
 
             for (params.regions) |region| {
-                const region_size = regionSize(region.shared.region);
+                const region_size = regionSize(region.region);
                 if (region_size != region.memfd.size) {
                     std.debug.panic(
-                        "region {s}[{d}] expected to have size {Bi}, but memfd has size {Bi}.",
+                        "region {s} expected to have size {Bi}, but memfd has size {Bi}.",
                         .{
-                            @tagName(region.shared.region), region.n,
-                            region_size,                    region.memfd.size,
+                            @tagName(region.region),
+                            region_size,
+                            region.memfd.size,
                         },
                     );
                 }
 
-                if (region.rw) {
-                    args.rw[i_rw] = (try region.memfd.mmap(.{
-                        .at_ptr = region.shared.requested_location,
-                        .populate = true,
-                    })).ptr;
-                    args.rw_len[i_rw] = region_size;
-                    i_rw += 1;
-                } else {
-                    const ro_memfd = try memfd.RO.fromRW(region.memfd);
-                    args.ro[i_ro] = (try ro_memfd.mmap(.{
-                        .at_ptr = region.shared.requested_location,
-                        .populate = true,
-                    })).ptr;
-                    args.ro_len[i_ro] = region_size;
-                    i_ro += 1;
+                switch (region.access) {
+                    .rw => {
+                        args.rw[i_rw] = (try region.memfd.mmap(.{ .populate = true })).ptr;
+                        args.rw_len[i_rw] = region_size;
+                        i_rw += 1;
+                    },
+                    .readonly => {
+                        const ro_memfd = try memfd.RO.fromRW(region.memfd);
+                        args.ro[i_ro] = (try ro_memfd.mmap(.{ .populate = true })).ptr;
+                        args.ro_len[i_ro] = region_size;
+                        i_ro += 1;
+                    },
                 }
             }
 
@@ -568,41 +505,35 @@ pub fn Bind(
         /// Create and initialize memfds for each shared memory region (map it, initialize it, and then unmap it).
         /// We must unmap to avoid sharing regions with services that don't need them.
         fn createAndInitSharedRegionMemfds(
-            regions: *const [bindings_map.values.len]SharedRegion,
+            regions: *const [bindings_map.values.len]Region,
             region_memfds: *[regions.len]memfd.RW,
         ) !void {
             @memset(region_memfds, .empty);
 
-            for (region_memfds, regions) |*region_memfd, shared_region| {
+            for (regions, region_memfds) |region, *region_memfd| {
                 // This name should be visible from a debugger, but serves no other purpose.
                 var fmt_buf: [4096]u8 = undefined;
-                const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{shared_region});
+                const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{regionFmtShareInfo(region)});
 
                 region_memfd.* = try .init(.{
                     .name = name,
-                    .size = shared_region.region.size(),
+                    .size = regionSize(region),
                 });
 
-                const buf = try region_memfd.mmap(.{ .at_ptr = shared_region.requested_location });
+                const buf = try region_memfd.mmap(.{});
                 defer std.posix.munmap(buf);
-                try shared_region.region.init(buf);
-                std.log.info("Initialised: {f}", .{shared_region});
+                try regionInit(region, buf);
+                std.log.info("Initialised: {f}", .{regionFmtShareInfo(region)});
             }
         }
 
         // Creates a memfd for every service, to be used for storing a lib.runner.Region value, which is used
         // for reporting traces+errors back to the main process.
-        fn createRunnerMemfds(
-            comptime services: []const ServiceInstance,
-            runner_memfds: *[services.len]memfd.RW,
-        ) !void {
+        fn createRunnerMemfds(runner_memfds: *[schema.services.len]memfd.RW) !void {
             @memset(runner_memfds, .empty);
-            inline for (runner_memfds, services) |*runner_memfd, service_instance| {
+            inline for (runner_memfds, schema.services) |*runner_memfd, service_entry| {
                 runner_memfd.* = try .init(.{
-                    .name = std.fmt.comptimePrint(
-                        "runner_{s}_{}",
-                        .{ @tagName(service_instance.service), service_instance.n },
-                    ),
+                    .name = std.fmt.comptimePrint("runner_{s}", .{@tagName(service_entry.name)}),
                     .size = @sizeOf(lib.runner.Region),
                 });
             }
@@ -612,45 +543,39 @@ pub fn Bind(
 
         /// Initialises the shared memory regions with their parameters, then securely starts up services.
         /// Blocks until the first service has exited, before dumping out traces.
-        pub fn spawnAndWait(
-            allocator: std.mem.Allocator,
-            comptime services: []const ServiceInstance,
-            regions: *const [bindings_map.values.len]SharedRegion,
-        ) !void {
-            var region_memfds: [regions.len]memfd.RW = undefined;
-            try createAndInitSharedRegionMemfds(regions, &region_memfds);
-
-            var runner_memfds: [services.len]memfd.RW = undefined;
-            try createRunnerMemfds(services, &runner_memfds);
-
-            var map = try serviceMap(allocator, services, regions, &region_memfds);
-            defer map.deinit(allocator);
+        pub fn spawnAndWait(map: *const ServiceMap) !void {
+            var runner_memfds: [schema.services.len]memfd.RW = undefined;
+            try createRunnerMemfds(&runner_memfds);
 
             const ExitMeta = struct {
+                id: bound.ServiceId,
                 pid: i32,
                 exit: ?*lib.runner.Exit,
             };
 
-            var exit_meta: std.MultiArrayList(ExitMeta) = .{};
-            defer exit_meta.deinit(allocator);
-            try exit_meta.ensureUnusedCapacity(allocator, services.len);
+            var exit_meta_buf: [schema.services.len]ExitMeta = undefined;
+            var exit_metas: std.ArrayList(ExitMeta) = .initBuffer(&exit_meta_buf);
 
             // Start up all services, storing their pids
-            inline for (services, &runner_memfds) |service_instance, runner| {
-                const child_pid = try spawnService(service_instance, .{
+            inline for (schema.services, &runner_memfds) |service_entry, runner| {
+                const child_pid = try spawnService(service_entry.name, .{
                     .runner = runner,
                     .stderr = .stderr(),
-                    .regions = map.inner.get(service_instance).?.items,
+                    .regions = map.inner.get(service_entry.name).?.items,
                 });
 
-                try exit_meta.append(allocator, .{ .pid = child_pid, .exit = null });
+                exit_metas.appendAssumeCapacity(.{
+                    .id = service_entry.name,
+                    .pid = child_pid,
+                    .exit = null,
+                });
             }
 
             // We only mmap the exit regions after spawning the child processes, as we don't want them
             // mapped in children
-            for (exit_meta.items(.exit), &runner_memfds) |*exit, runner_fd| {
+            for (exit_metas.items, &runner_memfds) |*exit_meta, runner_fd| {
                 const runner = try runner_fd.mmapStaticSize(lib.runner.Region, .{});
-                exit.* = &runner.exit;
+                exit_meta.exit = &runner.exit;
             }
 
             // Wait for the first child to exit
@@ -661,22 +586,20 @@ pub fn Bind(
                 break :pid @intCast(ret);
             };
 
-            const exited_service_idx = std.mem.indexOfScalar(
-                i32,
-                exit_meta.items(.pid),
-                exited_pid,
-            ) orelse std.debug.panic("Unknown child pid {} exited\n", .{exited_pid});
+            const exited_meta = for (exit_metas.items) |exit_meta| {
+                if (exit_meta.pid == exited_pid) break exit_meta;
+            } else std.debug.panic("Unknown child pid {} exited\n", .{exited_pid});
 
             dumpOnExit(
-                exit_meta.items(.exit)[exited_service_idx].?,
-                services[exited_service_idx],
-                exited_pid,
+                exited_meta.exit.?,
+                exited_meta.id,
+                exited_meta.pid,
                 status,
             );
         }
 
         fn spawnService(
-            service_instance: ServiceInstance,
+            service: bound.ServiceId,
             params: struct {
                 runner: memfd.RW,
                 stderr: std.fs.File,
@@ -697,18 +620,18 @@ pub fn Bind(
 
             if (maybe_child_pid) |child_pid| {
                 // parent code
-                std.log.info("Starting Service `{f}`, pid: {}", .{ service_instance, child_pid });
+                std.log.info("Starting Service `{t}`, pid: {}", .{ service, child_pid });
                 return child_pid;
             }
 
-            switch (service_instance.service) {
+            switch (service) {
                 inline else => |svc| tracy.setThreadName("svc: " ++ @tagName(svc)),
             }
 
             // register fault handlers
             {
                 const act: *const std.os.linux.Sigaction = &.{
-                    .handler = .{ .sigaction = getFaultHandlerFn(service_instance.service) },
+                    .handler = .{ .sigaction = getFaultHandlerFn(service) },
                     .mask = std.os.linux.sigemptyset(),
                     .flags = (std.posix.SA.SIGINFO | std.posix.SA.RESTART | std.posix.SA.RESETHAND),
                 };
@@ -781,7 +704,7 @@ pub fn Bind(
                 }
             }
 
-            getEntrypointFn(service_instance.service)(resolved_args);
+            getEntrypointFn(service)(resolved_args);
             std.process.exit(255);
         }
 
@@ -814,33 +737,33 @@ pub fn Bind(
 
         fn dumpOnExit(
             meta: *lib.runner.Exit,
-            service_instance: ServiceInstance,
+            service: bound.ServiceId,
             pid: i32,
             status: u32,
         ) void {
             if (meta.panicMsg()) |panic_msg| {
                 std.log.err(
-                    "Service `{f}` (pid: {}) panicked with message: {s}",
-                    .{ service_instance, pid, panic_msg },
+                    "Service `{t}` (pid: {}) panicked with message: {s}",
+                    .{ service, pid, panic_msg },
                 );
             }
             if (meta.errorName()) |error_string| {
                 std.log.err(
-                    "Service `{f}` (pid: {}) exited with error: {s}",
-                    .{ service_instance, pid, error_string },
+                    "Service `{t}` (pid: {}) exited with error: {s}",
+                    .{ service, pid, error_string },
                 );
             }
             if (meta.faultMsg()) |fault_msg| {
                 std.log.err(
-                    "Service `{f}` (pid: {}) faulted with message: {s}",
-                    .{ service_instance, pid, fault_msg },
+                    "Service `{t}` (pid: {}) faulted with message: {s}",
+                    .{ service, pid, fault_msg },
                 );
             }
 
             if (linux.W.TERMSIG(status) != 0) {
                 std.log.err(
-                    "Service `{f}` (pid: {}) exited from signal {}",
-                    .{ service_instance, pid, linux.W.TERMSIG(status) },
+                    "Service `{t}` (pid: {}) exited from signal {}",
+                    .{ service, pid, linux.W.TERMSIG(status) },
                 );
             }
 
@@ -860,19 +783,9 @@ pub fn Bind(
             }
         }
 
-        pub fn spawnAndWaitNoSandbox(
-            allocator: std.mem.Allocator,
-            comptime services: []const ServiceInstance,
-            regions: *const [bindings_map.values.len]SharedRegion,
-        ) !void {
-            var region_memfds: [regions.len]memfd.RW = undefined;
-            try createAndInitSharedRegionMemfds(regions, &region_memfds);
-
-            var runner_memfds: [services.len]memfd.RW = undefined;
-            try createRunnerMemfds(services, &runner_memfds);
-
-            var map = try serviceMap(allocator, services, regions, &region_memfds);
-            defer map.deinit(allocator);
+        pub fn spawnAndWaitNoSandbox(map: *const ServiceMap) !void {
+            var runner_memfds: [schema.services.len]memfd.RW = undefined;
+            try createRunnerMemfds(&runner_memfds);
 
             var reset_event: std.Thread.ResetEvent = .{};
             var finished_service_idx: std.atomic.Value(u16) = .init(std.math.maxInt(u16));
@@ -883,11 +796,11 @@ pub fn Bind(
             };
 
             // Start up all services, storing their pids
-            inline for (services, &runner_memfds, 0..) |service_instance, runner, i| {
-                _ = try spawnServiceNoSandbox(service_instance, .{
+            inline for (schema.services, &runner_memfds, 0..) |service_entry, runner, i| {
+                _ = try spawnServiceNoSandbox(service_entry.name, .{
                     .runner = runner,
                     .stderr = .stderr(),
-                    .regions = map.inner.get(service_instance).?.items,
+                    .regions = map.inner.get(service_entry.name).?.items,
                     .service_idx = i,
                     .thread_exit_ctx = &thread_exit_ctx,
                 });
@@ -901,9 +814,10 @@ pub fn Bind(
 
             const exited_runner_memfd = runner_memfds[exited_idx];
             const exited_runner = try exited_runner_memfd.mmapStaticSize(lib.runner.Region, .{});
+            const exited_service_id: bound.ServiceId = @enumFromInt(exited_idx);
             dumpOnExit(
                 &exited_runner.exit,
-                services[exited_idx],
+                exited_service_id,
                 0,
                 0,
             );
@@ -944,7 +858,7 @@ pub fn Bind(
         }
 
         fn spawnServiceNoSandbox(
-            service_instance: ServiceInstance,
+            service: bound.ServiceId,
             params: struct {
                 runner: memfd.RW,
                 stderr: std.fs.File,
@@ -966,8 +880,8 @@ pub fn Bind(
                 .{},
                 threadEntry,
                 .{
-                    getEntrypointFn(service_instance.service),
-                    service_instance.service,
+                    getEntrypointFn(service),
+                    service,
                     resolved_args,
                     params.service_idx,
                     params.thread_exit_ctx,

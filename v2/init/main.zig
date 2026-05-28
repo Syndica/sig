@@ -132,17 +132,7 @@ pub fn main() !void {
     var reader_buf: [4096]u8 = undefined;
     var reader = schedule_file.reader(&reader_buf);
 
-    const service_instances: []const topology.ServiceInstance = &.{
-        .{ .service = .net },
-        .{ .service = .gossip },
-        .{ .service = .shred_receiver },
-        .{ .service = .snapshot },
-        .{ .service = .accounts_db },
-        .{ .service = .replay },
-        .{ .service = .telemetry },
-    };
-
-    const shared_regions = topology.toSharedRegions(.{
+    const service_map = try topology.serviceMap(allocator, .{
         // gossip constants
         .gossip_config = .{
             .cluster_info = gossip_cluster_info,
@@ -189,7 +179,7 @@ pub fn main() !void {
             .port = config.telemetry.port,
             .log_filters_encoded = log_filters.written(),
             .service_count = @intCast(
-                topology.countRegionShares(.telemetry, service_instances) - 1,
+                topology.countTotalRegionShares(.telemetry) - 1,
             ),
 
             .id_mem_len = 4096 * 16,
@@ -198,18 +188,11 @@ pub fn main() !void {
             .histogram_data_len = 4096 * 3,
         },
     });
+    defer service_map.deinit(allocator);
 
     switch (config.sandboxing_mode) {
-        .sandboxed => try topology.spawnAndWait(
-            allocator,
-            service_instances,
-            &shared_regions,
-        ),
-        .threaded => try topology.spawnAndWaitNoSandbox(
-            allocator,
-            service_instances,
-            &shared_regions,
-        ),
+        .sandboxed => try topology.spawnAndWait(&service_map),
+        .threaded => try topology.spawnAndWaitNoSandbox(&service_map),
     }
 }
 
