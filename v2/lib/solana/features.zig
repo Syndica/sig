@@ -1,0 +1,303 @@
+const std = @import("std");
+const lib = @import("../lib.zig");
+
+const Pubkey = lib.solana.Pubkey;
+const Slot = lib.solana.Slot;
+const EpochSchedule = lib.solana.EpochSchedule;
+
+/// The feature set identifier - first 4 bytes of SHA256 hash of all known (non-reverted) feature pubkeys (sorted).
+/// This is used for client compatibility checks.
+///
+/// Generated at build time by `scripts/gen_feature_set_id.zig` to avoid comptime compiler issues.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/feature-set/src/lib.rs#L2318
+pub const FEATURE_SET_ID: u32 = @import("feature-set-id").FEATURE_SET_ID;
+
+/// ZonInfo represents the metadata for a feature, including its name, pubkey, description, status, and an optional note.
+/// It is used to record the history and current state of all features, including those that have been reverted.
+pub const ZonInfo = struct {
+    name: [:0]const u8,
+    pubkey: [:0]const u8,
+    description: [:0]const u8,
+    status: union(enum) {
+        /// The feature has been removed from the feature set and its implementation has been removed from source.
+        /// The feature is not advertised as a supported feature for fuzzing (i.e. it will not be toggled on).
+        reverted,
+        /// The feature is contained in the feature set but its implementation is not complete.
+        /// The feature is not advertised as a supported feature for fuzzing (i.e. it will not be toggled on).
+        unsupported,
+        /// The feature is contained in the feature set and its implementation is complete.
+        /// The feature is advertised as a supported feature for fuzzing (i.e. it may be toggled on and off).
+        supported,
+        /// The feature is contained in the feature set, its implementation is complete, and the inactive path remains in source.
+        /// The feature is advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
+        hardcoded_for_fuzzing,
+        /// The feature is contained in the feature set, its implementation is complete, and the inactive path has been removed from source.
+        /// The feature is advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
+        hardcoded,
+    },
+    /// Optional note about the feature status.
+    /// Required for all unsupported features.
+    note: ?[:0]const u8 = null,
+
+    pub fn id(self: ZonInfo) u64 {
+        const key = Pubkey.parseRuntime(std.mem.sliceTo(self.pubkey, 0)) catch
+            @panic("invalid pubkey in feature definition");
+        return @bitCast(key.data[0..8].*);
+    }
+};
+
+/// All known features past and present.
+/// Includes features which previously existed in agave but have since been removed.
+pub const all_features: []const ZonInfo = @import("features-zon");
+
+/// All known features which are active, or pending activation (sometimes for a very long time...).
+/// These features form the basis for the `Feature` enum and the `FEATURE_SET_ID` computation.
+pub const features: []const ZonInfo = blk: {
+    var filtered: []const ZonInfo = &.{};
+    for (all_features) |feature| {
+        switch (feature.status) {
+            .reverted => continue,
+            else => {},
+        }
+        filtered = filtered ++ .{feature};
+    }
+    break :blk filtered;
+};
+
+/// The `Feature` enum represents all available features that could be activated.
+/// - `unsupported` features are included to allow deliberate failure if encountered, but are not advertised for fuzzing.
+/// - `hardcoded` features have a suffix '_hardcoded' to provide comptime hint to ensure they are no longer referenced in source.
+pub const Feature = @Type(.{
+    .@"enum" = .{
+        .tag_type = u64,
+        .fields = f: {
+            var fields: []const std.builtin.Type.EnumField = &.{};
+            for (features, 0..) |feature, i| {
+                const suffix = switch (feature.status) {
+                    .hardcoded => "_hardcoded",
+                    else => "",
+                };
+                fields = fields ++ .{std.builtin.Type.EnumField{
+                    .name = feature.name ++ suffix,
+                    .value = i,
+                }};
+            }
+            break :f fields;
+        },
+        .decls = &.{},
+        .is_exhaustive = true,
+    },
+});
+
+/// Maps each `Feature` to its corresponding `Pubkey`.
+pub const pubkey_map: std.EnumArray(Feature, Pubkey) = blk: {
+    @setEvalBranchQuota(features.len * 1000);
+    var s: std.enums.EnumFieldStruct(Feature, Pubkey, null) = undefined;
+    for (@typeInfo(Feature).@"enum".fields, features) |field, feature| {
+        @field(s, field.name) = .parse(feature.pubkey);
+    }
+    break :blk .init(s);
+};
+
+/// Checks if the provided `id` corresponds to a known feature by comparing it against the `id`s of all known features.
+pub fn isKnownFeatureId(id: u64) bool {
+    for (all_features) |feature| {
+        if (feature.id() == id) return true;
+    } else return false;
+}
+
+/// Represents the set of currently enabled feature flags.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/feature-set/src/lib.rs#L1188
+pub const Set = struct {
+    array: std.EnumArray(Feature, ?Slot),
+
+    pub const ALL_DISABLED: Set = .{ .array = .initFill(null) };
+    pub const ALL_ENABLED_AT_GENESIS: Set = .{ .array = .initFill(0) };
+
+    /// Check whether `feature` is enabled at or before the provided slot.
+    pub fn active(self: *const Set, feature: Feature, slot: Slot) bool {
+        if (self.array.getPtrConst(feature).*) |activated|
+            return slot >= activated;
+        return false;
+    }
+
+    /// Gets the activation slot for a feature, if one has been set.
+    pub fn get(self: *const Set, feature: Feature) ?Slot {
+        return self.array.getPtrConst(feature).*;
+    }
+
+    /// Updates the set to update the feature whos pubkey was provided. Possible input values for
+    /// the slot look can be:
+    ///
+    /// - `0` to indicate that this feature is enabled for all slots.
+    /// - an actual slot number to indicate that this feature is enabled/active after this slot
+    ///
+    /// If the provided pubkey doesn't match with any of the known feature gates, `InvalidPubkey`
+    /// is returned.
+    pub fn setSlotPubkey(self: *Set, pubkey: Pubkey, slot: Slot) !void {
+        for (&self.array.values, 0..) |*destination, i| {
+            const feature: Feature = @enumFromInt(i);
+            const feature_pubkey = pubkey_map.getPtrConst(feature).*;
+            if (!feature_pubkey.equals(&pubkey)) continue;
+            destination.* = slot;
+            return;
+        }
+        return error.InvalidPubkey;
+    }
+
+    /// Has identical behaviour to `setSlot`, however it works on the "id" of public keys, aka
+    /// the first 8 bytes. Useful in the conformance harnesses where the features allowed to be
+    /// enabled are provided as `u64`s instead of full public keys.
+    pub fn setSlotId(self: *Set, id: u64, slot: Slot) !void {
+        for (&self.array.values, 0..) |*destination, i| {
+            const feature: Feature = @enumFromInt(i);
+            const feature_pubkey = pubkey_map.getPtrConst(feature).*;
+            const feature_id: u64 = @bitCast(feature_pubkey.data[0..8].*);
+            if (feature_id == id) {
+                destination.* = slot;
+                return;
+            }
+        } else {
+            @branchHint(.unlikely);
+            return error.InvalidPubkey;
+        }
+    }
+
+    pub fn setSlot(self: *Set, feature: Feature, slot: Slot) void {
+        self.array.set(feature, slot);
+    }
+
+    pub fn disable(self: *Set, feature: Feature) void {
+        self.array.set(feature, null);
+    }
+
+    pub fn fullInflationFeaturesEnabled(self: *const Set, slot: Slot, new: *const Set) bool {
+        if (self.active(.full_inflation_mainnet_vote, slot) and
+            self.active(.full_inflation_mainnet_enable, slot) and
+            new.active(.full_inflation_mainnet_enable, slot)) return true;
+
+        if (self.active(.full_inflation_devnet_and_testnet, slot) and
+            new.active(.full_inflation_devnet_and_testnet, slot)) return true;
+
+        return false;
+    }
+
+    pub fn newWarmupCooldownRateEpoch(self: *const Set, epoch_schedule: *const EpochSchedule) ?u64 {
+        return if (self.get(.reduce_stake_warmup_cooldown)) |slot|
+            epoch_schedule.getEpoch(slot)
+        else
+            null;
+    }
+
+    pub fn iterator(set: *const Set, slot: Slot, state: Iterator.State) Iterator {
+        return .{
+            .state = state,
+            .set = set,
+            .slot = slot,
+            .index = 0,
+        };
+    }
+
+    const Iterator = struct {
+        state: State,
+        set: *const Set,
+        slot: Slot,
+        index: std.math.IntFittingRange(0, features.len),
+
+        const State = enum { active, inactive };
+
+        pub fn next(self: *Iterator) ?Feature {
+            while (true) : (self.index += 1) {
+                if (self.index == features.len) return null;
+                const feature: Feature = @enumFromInt(self.index);
+                const is_active = self.set.active(feature, self.slot);
+                if ((self.state == .active and is_active) or
+                    (self.state == .inactive and !is_active))
+                {
+                    self.index += 1;
+                    return feature;
+                }
+            }
+        }
+    };
+};
+
+/// Returns the activation slot from a feature account.
+/// - Returns `.pending` if the feature is pending activation (valid 9-byte account with null slot)
+/// - Returns `.{ .activated = slot }` if already activated
+/// - Returns `.invalid` if the account is not a valid feature account
+const FeatureActivationState = union(enum) {
+    pending,
+    activated: u64,
+    invalid,
+};
+
+/// Feature accounts must have at least 9 bytes of data (bincode-serialized ?u64)
+/// An empty account (0 bytes) is not a valid pending feature
+/// [solana-sdk] https://github.com/anza-xyz/solana-sdk/blob/54449336c03ae8a99bc37745ac97ab90a77eb24b/feature-gate-interface/src/state.rs#L37
+pub fn activationStateFromAccount(owner: Pubkey, data: []const u8) !FeatureActivationState {
+    if (data.len < 9 or
+        !owner.equals(&lib.solana.ids.FEATURE_PROGRAM_ID)) return .invalid;
+
+    const maybe_slot: ?Slot = switch (data[0]) {
+        0 => null,
+        1 => std.mem.readInt(u64, data[1..9], .little),
+        else => return error.InvalidFeatureAccount,
+    };
+
+    return if (maybe_slot) |slot| .{ .activated = slot } else .pending;
+}
+
+test "full inflation enabled" {
+    var feature_set: Set = .ALL_DISABLED;
+    var new_feature_set: Set = .ALL_DISABLED;
+
+    try std.testing.expect(!feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
+    feature_set.setSlot(.full_inflation_mainnet_vote, 0);
+    try std.testing.expect(!feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
+    feature_set.setSlot(.full_inflation_mainnet_enable, 0);
+    try std.testing.expect(!feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
+    new_feature_set.setSlot(.full_inflation_mainnet_enable, 0);
+    try std.testing.expect(feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
+
+    feature_set = .ALL_DISABLED;
+    new_feature_set = .ALL_DISABLED;
+    try std.testing.expect(!feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
+    feature_set.setSlot(.full_inflation_devnet_and_testnet, 0);
+    try std.testing.expect(!feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
+    new_feature_set.setSlot(.full_inflation_devnet_and_testnet, 0);
+    try std.testing.expect(feature_set.fullInflationFeaturesEnabled(0, &new_feature_set));
+}
+
+test "runtime feature map excludes reverted entries" {
+    const runtime_feature_name = "deprecate_rewards_sysvar";
+
+    var found_runtime_in_all = false;
+    var expected_runtime_count: usize = 0;
+    var excluded_names: [all_features.len][]const u8 = undefined;
+    var excluded_count: usize = 0;
+
+    for (all_features) |feature| {
+        if (std.mem.eql(u8, std.mem.sliceTo(feature.name, 0), runtime_feature_name)) {
+            found_runtime_in_all = true;
+            try std.testing.expect(feature.status != .reverted);
+        }
+        if (feature.status != .reverted) {
+            expected_runtime_count += 1;
+        } else {
+            excluded_names[excluded_count] = std.mem.sliceTo(feature.name, 0);
+            excluded_count += 1;
+        }
+    }
+
+    try std.testing.expect(found_runtime_in_all);
+    try std.testing.expectEqual(expected_runtime_count, features.len);
+
+    inline for (@typeInfo(Feature).@"enum".fields) |field| {
+        for (excluded_names[0..excluded_count]) |excluded_name| {
+            try std.testing.expect(!std.mem.eql(u8, field.name, excluded_name));
+        }
+    }
+}
