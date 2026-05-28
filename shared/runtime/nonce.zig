@@ -1,4 +1,3 @@
-const std = @import("std");
 const sig = @import("../lib.zig");
 
 const Hash = sig.core.Hash;
