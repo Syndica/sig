@@ -13,6 +13,7 @@ pub const program_loader = @import("program_loader.zig");
 pub const spl_token = @import("spl_token.zig");
 pub const sysvar = @import("sysvar/lib.zig");
 pub const sysvar_cache = @import("sysvar_cache.zig");
+pub const transaction_context = @import("transaction_context.zig");
 pub const transaction_execution = @import("transaction_execution.zig");
 
 pub const AccountReader = execution_interfaces.AccountReader;
@@ -23,3 +24,5 @@ pub const LoadedProgram = program_loader.LoadedProgram;
 pub const ProgramMap = program_loader.ProgramMap;
 pub const StatusChecker = execution_interfaces.StatusChecker;
 pub const SysvarCache = sysvar_cache.SysvarCache;
+pub const TransactionContextAccount = transaction_context.TransactionContextAccount;
+pub const TransactionReturnData = transaction_context.TransactionReturnData;
