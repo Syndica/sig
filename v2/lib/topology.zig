@@ -117,6 +117,16 @@ pub fn Bind(
 
         comptime {
             if (validateBindingsMap(schema, RegionTag, bindings_map)) |result| switch (result) {
+                .unordered_tags => |unordered| {
+                    const region_tag_fields = @typeInfo(RegionTag).@"enum".fields;
+                    const prev = region_tag_fields[unordered.prev];
+                    const next = region_tag_fields[unordered.next];
+                    @compileError("The tag for the Region union isn't sorted" ++
+                        std.fmt.comptimePrint(
+                            "; {s} ({d}) is greater than {s} ({d})",
+                            .{ prev.name, prev.value, next.name, next.value },
+                        ));
+                },
                 inline .duplicated, .missing => |bad_set, reason| {
                     var err_msg: []const u8 = switch (reason) {
                         .duplicated => "The following regions were bound multiple times: ",
@@ -965,6 +975,11 @@ fn ValidateBindingsMapResult(
     comptime schema: Schema,
 ) type {
     return union(enum) {
+        /// The two enums referenced by index are out of order.
+        unordered_tags: struct {
+            prev: usize,
+            next: usize,
+        },
         /// The tags in this set were specified in two bindings.
         duplicated: std.EnumSet(ServiceRegionId(schema)),
         /// The tags in this set were not specified in any binding.
@@ -982,6 +997,22 @@ inline fn validateBindingsMap(
     comptime bindings_map: BindingsMap(schema, RegionTag),
 ) ?ValidateBindingsMapResult(schema) {
     comptime {
+        const region_tag_info = @typeInfo(RegionTag).@"enum";
+        for (
+            region_tag_info.fields[0 .. region_tag_info.fields.len - 1],
+            0..,
+            region_tag_info.fields[1..],
+            1..,
+        ) |prev, prev_i, next, next_i| {
+            if (prev.value == next.value) unreachable;
+            if (prev.value > next.value) return .{
+                .unrodered_tags = .{
+                    .prev = prev_i,
+                    .next = next_i,
+                },
+            };
+        }
+
         var accumulated_set: std.EnumSet(ServiceRegionId(schema)) = .{};
         for (bindings_map.values) |region_id_set| {
             const intersection = accumulated_set.intersectWith(region_id_set);
