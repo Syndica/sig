@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const sig = @import("../../sig.zig");
+const shared_ecc = @import("shared").vm.syscalls.ecc;
 
 const bn254 = sig.crypto.bn254;
 const bls12_381 = sig.crypto.bls12_381;
@@ -22,32 +23,17 @@ const Keccak256 = std.crypto.hash.sha3.Keccak256;
 const Secp256k1 = std.crypto.ecc.Secp256k1;
 const Ecdsa = std.crypto.sign.ecdsa.Ecdsa(Secp256k1, Keccak256);
 
-pub const CurveId = enum(u64) {
-    edwards = 0,
-    ristretto = 1,
+pub const CurveId = shared_ecc.CurveId;
+pub const GroupOp = shared_ecc.GroupOp;
 
-    bls12_381_be = 4 | 0x80,
-    bls12_381_le = 4,
-    bls12_381_g1_be = 5 | 0x80,
-    bls12_381_g1_le = 5,
-    bls12_381_g2_be = 6 | 0x80,
-    bls12_381_g2_le = 6,
+fn wrapCurveId(id: u64) ?CurveId {
+    return std.meta.intToEnum(CurveId, id) catch null;
+}
 
-    fn wrap(id: u64) ?CurveId {
-        return std.meta.intToEnum(CurveId, id) catch null;
-    }
-};
-
-pub const GroupOp = enum(u64) {
-    add = 0,
-    subtract = 1,
-    multiply = 2,
-
-    fn wrap(id: u64) ?GroupOp {
-        if (id > 2) return null;
-        return @enumFromInt(id);
-    }
-};
+fn wrapGroupOp(id: u64) ?GroupOp {
+    if (id > 2) return null;
+    return @enumFromInt(id);
+}
 
 fn invalidError(tc: *const TransactionContext, registers: *RegisterMap) !void {
     if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
@@ -64,7 +50,7 @@ pub fn curvePointValidation(
     memory_map: *MemoryMap,
     registers: *RegisterMap,
 ) Error!void {
-    const curve_id = CurveId.wrap(registers.get(.r1)) orelse
+    const curve_id = wrapCurveId(registers.get(.r1)) orelse
         return invalidError(tc, registers);
     const point_addr = registers.get(.r2);
 
@@ -153,9 +139,9 @@ pub fn curveGroupOp(
     memory_map: *MemoryMap,
     registers: *RegisterMap,
 ) Error!void {
-    const curve_id = CurveId.wrap(registers.get(.r1)) orelse
+    const curve_id = wrapCurveId(registers.get(.r1)) orelse
         return invalidError(tc, registers);
-    const group_op = GroupOp.wrap(registers.get(.r2)) orelse
+    const group_op = wrapGroupOp(registers.get(.r2)) orelse
         return invalidError(tc, registers);
 
     // Only allow the BLS12-381 syscalls if the feature gate is enabled.
@@ -314,7 +300,7 @@ pub fn curveMultiscalarMul(
 
     if (points_len > 512) return SyscallError.InvalidLength;
 
-    const curve_id = CurveId.wrap(attribute_id) orelse
+    const curve_id = wrapCurveId(attribute_id) orelse
         return invalidError(tc, registers);
 
     const cost = switch (curve_id) {
@@ -759,7 +745,7 @@ pub fn curveDecompress(
     const point_addr = registers.get(.r2);
     const result_addr = registers.get(.r3);
 
-    const curve_id = CurveId.wrap(attribute_id) orelse
+    const curve_id = wrapCurveId(attribute_id) orelse
         return SyscallError.InvalidAttribute;
 
     switch (curve_id) {
@@ -814,7 +800,7 @@ pub fn curvePairingMap(
     memory_map: *MemoryMap,
     registers: *RegisterMap,
 ) Error!void {
-    const curve_id = CurveId.wrap(registers.get(.r1)) orelse
+    const curve_id = wrapCurveId(registers.get(.r1)) orelse
         return SyscallError.InvalidAttribute;
     const num_pairs = registers.get(.r2);
     const g1_points_addr = registers.get(.r3);
