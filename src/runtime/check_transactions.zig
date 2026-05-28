@@ -458,9 +458,10 @@ pub fn loadMessageNonceAccount(
     const signers = try transaction.instructions[
         NONCED_TX_MARKER_IX_INDEX
     ].getSigners(allocator);
+    defer allocator.free(signers);
 
     // check nonce is authorised
-    for (signers.constSlice()) |signer| {
+    for (signers) |signer| {
         if (signer.equals(&nonce_data.authority)) break;
     } else return null;
 

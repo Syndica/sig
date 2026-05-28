@@ -88,11 +88,12 @@ pub fn execute(
             const custodian_pubkey = try getOptionalPubkey(ic, 3, false);
 
             const signers = try ic.ixn_info.getSigners(allocator);
+            defer allocator.free(signers);
             try authorize(
                 allocator,
                 ic,
                 &me,
-                signers.constSlice(),
+                signers,
                 &authorized_pubkey,
                 stake_authorize,
                 &clock,
@@ -135,6 +136,7 @@ pub fn execute(
             };
 
             const signers = try ic.ixn_info.getSigners(allocator);
+            defer allocator.free(signers);
             try delegate(
                 allocator,
                 ic,
@@ -142,7 +144,7 @@ pub fn execute(
                 1,
                 &clock,
                 &stake_history,
-                signers.constSlice(),
+                signers,
                 ic.tc.feature_set,
             );
         },
@@ -154,13 +156,14 @@ pub fn execute(
                 try ic.ixn_info.checkNumberOfAccounts(2);
             }
             const signers = try ic.ixn_info.getSigners(allocator);
+            defer allocator.free(signers);
             try split(
                 allocator,
                 ic,
                 0,
                 lamports,
                 1,
-                signers.constSlice(),
+                signers,
                 ic.tc.feature_set,
             );
         },
@@ -178,6 +181,7 @@ pub fn execute(
             };
 
             const signers = try ic.ixn_info.getSigners(allocator);
+            defer allocator.free(signers);
             try merge(
                 allocator,
                 ic,
@@ -185,7 +189,7 @@ pub fn execute(
                 1,
                 &clock,
                 &stake_history,
-                signers.constSlice(),
+                signers,
             );
         },
         .withdraw => |lamports| {
@@ -223,12 +227,13 @@ pub fn execute(
             const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, 1);
 
             const signers = try ic.ixn_info.getSigners(allocator);
+            defer allocator.free(signers);
             try deactivate(
                 allocator,
                 ic,
                 &me,
                 &clock,
-                signers.constSlice(),
+                signers,
             );
         },
         .set_lockup => |lockup| {
@@ -237,11 +242,12 @@ pub fn execute(
             const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
 
             const signers = try ic.ixn_info.getSigners(allocator);
+            defer allocator.free(signers);
             try setLockup(
                 allocator,
                 &me,
                 &lockup,
-                signers.constSlice(),
+                signers,
                 &clock,
             );
         },
@@ -289,11 +295,12 @@ pub fn execute(
             const custodian_pubkey = try getOptionalPubkey(ic, 4, false);
 
             const signers = try ic.ixn_info.getSigners(allocator);
+            defer allocator.free(signers);
             try authorize(
                 allocator,
                 ic,
                 &me,
-                signers.constSlice(),
+                signers,
                 &authorized.pubkey,
                 stake_authorize,
                 &clock,
@@ -347,11 +354,12 @@ pub fn execute(
 
             const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
             const signers = try ic.ixn_info.getSigners(allocator);
+            defer allocator.free(signers);
             try setLockup(
                 allocator,
                 &me,
                 &lockup,
-                signers.constSlice(),
+                signers,
                 &clock,
             );
         },

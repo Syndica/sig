@@ -304,6 +304,7 @@ fn executeAuthorize(
     );
 
     const signers = try ic.ixn_info.getSigners(allocator);
+    defer allocator.free(signers);
     try authorize(
         allocator,
         ic,
@@ -311,7 +312,7 @@ fn executeAuthorize(
         pubkey,
         vote_authorize,
         clock,
-        signers.constSlice(),
+        signers,
     );
 }
 
@@ -503,6 +504,7 @@ fn executeAuthorizeChecked(
     );
 
     const signers = try ic.ixn_info.getSigners(allocator);
+    defer allocator.free(signers);
     try authorize(
         allocator,
         ic,
@@ -510,7 +512,7 @@ fn executeAuthorizeChecked(
         new_authority_meta.pubkey,
         vote_authorize,
         clock,
-        signers.constSlice(),
+        signers,
     );
 }
 

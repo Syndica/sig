@@ -1,5 +1,4 @@
 const std = @import("std");
-const std14 = @import("std14");
 const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
@@ -104,29 +103,27 @@ pub const InstructionInfo = struct {
         return false;
     }
 
+    /// Caller owns the returned slice.
     /// [agave] https://github.com/anza-xyz/agave/blob/9eee2f66775291a1ec4c4b1be32efc1d314002f7/transaction-context/src/lib.rs#L736
     pub fn getSigners(
         self: *const InstructionInfo,
         allocator: std.mem.Allocator,
-    ) error{OutOfMemory}!std14.BoundedArray(Pubkey, MAX_ACCOUNT_METAS) {
+    ) error{OutOfMemory}![]Pubkey {
         // [agave] get_signers collects into a HashSet. account_metas may hold
         // up to MAX_INSTR_ACCOUNTS (1094) entries with duplicate pubkeys, so
-        // dedupe via a hash set (O(1) per probe) to keep the result within the
-        // distinct-account bound (MAX_ACCOUNT_METAS) instead of an O(n^2) scan
-        // or overflowing the BoundedArray.
+        // dedupe via an ArrayHashMap (O(1) per probe, insertion-ordered) to
+        // keep the result within the distinct-account bound
+        // (MAX_ACCOUNT_METAS) instead of an O(n^2) scan.
         // [agave] https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/instruction.rs#L253
-        var seen: std.AutoHashMapUnmanaged(Pubkey, void) = .empty;
+        var seen: std.AutoArrayHashMapUnmanaged(Pubkey, void) = .empty;
         defer seen.deinit(allocator);
         try seen.ensureTotalCapacity(allocator, MAX_ACCOUNT_METAS);
 
-        var signers = std14.BoundedArray(Pubkey, MAX_ACCOUNT_METAS){};
         for (self.account_metas.items) |account_meta| {
             if (!account_meta.is_signer) continue;
-            const gop = seen.getOrPutAssumeCapacity(account_meta.pubkey);
-            if (gop.found_existing) continue;
-            signers.appendAssumeCapacity(account_meta.pubkey);
+            seen.putAssumeCapacity(account_meta.pubkey, {});
         }
-        return signers;
+        return allocator.dupe(Pubkey, seen.keys());
     }
 
     pub fn instructionDataToDeserialize(self: *const InstructionInfo) []const u8 {
@@ -212,11 +209,12 @@ test "getSigners collects signer keys and excludes non-signers" {
         .owned_instruction_data = false,
     };
     const signers = try ixn_info.getSigners(allocator);
+    defer allocator.free(signers);
 
     // Tally result occurrences by seed (byte 0): both signers present once,
     // the non-signer absent.
     var seen: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0);
-    for (signers.constSlice()) |key| seen[key.data[0]] += 1;
+    for (signers) |key| seen[key.data[0]] += 1;
 
     try std.testing.expectEqual(2, signers.len);
     try std.testing.expectEqual(1, seen[signer_a.data[0]]);
@@ -261,11 +259,12 @@ test "getSigners dedupes duplicate signers without overflowing" {
         .owned_instruction_data = false,
     };
     const signers = try ixn_info.getSigners(allocator);
+    defer allocator.free(signers);
 
     try std.testing.expectEqual(InstructionInfo.MAX_ACCOUNT_METAS, signers.len);
     var seen: std.AutoHashMapUnmanaged(Pubkey, void) = .empty;
     defer seen.deinit(allocator);
-    for (signers.constSlice()) |key| try seen.put(allocator, key, {});
+    for (signers) |key| try seen.put(allocator, key, {});
     try std.testing.expectEqual(InstructionInfo.MAX_ACCOUNT_METAS, seen.count());
     for (distinct) |key| try std.testing.expect(seen.contains(key));
 }
