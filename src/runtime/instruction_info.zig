@@ -168,21 +168,17 @@ pub const InstructionInfo = struct {
     }
 };
 
-fn pubkeyFromSeed(seed: u8) Pubkey {
-    var data: [Pubkey.SIZE]u8 = @splat(0);
-    data[0] = seed;
-    return .{ .data = data };
-}
-
 test "getSigners collects signer keys and excludes non-signers" {
     const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
 
     var account_metas = InstructionInfo.AccountMetas{};
     defer account_metas.deinit(allocator);
 
-    const signer_a = pubkeyFromSeed(1);
-    const non_signer = pubkeyFromSeed(2);
-    const signer_b = pubkeyFromSeed(3);
+    const signer_a: Pubkey = .initRandom(random);
+    const non_signer: Pubkey = .initRandom(random);
+    const signer_b: Pubkey = .initRandom(random);
 
     try account_metas.append(allocator, .{
         .pubkey = signer_a,
@@ -231,17 +227,21 @@ test "getSigners collects signer keys and excludes non-signers" {
 // fix this panicked with "reached unreachable code" on the 257th append.
 test "getSigners dedupes duplicate signers without overflowing" {
     const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
 
     var account_metas = InstructionInfo.AccountMetas{};
     defer account_metas.deinit(allocator);
 
     // 1094 signer metas (well past MAX_ACCOUNT_METAS) drawn from exactly
-    // MAX_ACCOUNT_METAS distinct pubkeys.
+    // MAX_ACCOUNT_METAS distinct pubkeys, cycled in order.
+    var distinct: [InstructionInfo.MAX_ACCOUNT_METAS]Pubkey = undefined;
+    for (&distinct) |*key| key.* = .initRandom(random);
+
     const meta_count = 1094;
     for (0..meta_count) |i| {
-        const seed: u8 = @intCast(i % InstructionInfo.MAX_ACCOUNT_METAS);
         try account_metas.append(allocator, .{
-            .pubkey = pubkeyFromSeed(seed),
+            .pubkey = distinct[i % InstructionInfo.MAX_ACCOUNT_METAS],
             .index_in_transaction = 0,
             .is_signer = true,
             .is_writable = false,
@@ -257,15 +257,10 @@ test "getSigners dedupes duplicate signers without overflowing" {
     };
     const signers = ixn_info.getSigners();
 
-    // Each distinct pubkey appears exactly once — no overflow, no duplicates.
-    // The test owns the key space (byte 0 is the seed), so a seen-array checks
-    // this in O(n) rather than an O(n^2) per-key scan.
     try std.testing.expectEqual(InstructionInfo.MAX_ACCOUNT_METAS, signers.len);
-    var seen: [InstructionInfo.MAX_ACCOUNT_METAS]bool = @splat(false);
-    for (signers.constSlice()) |key| {
-        const seed = key.data[0];
-        try std.testing.expect(!seen[seed]); // no duplicate
-        seen[seed] = true;
-    }
-    for (seen) |present| try std.testing.expect(present); // every seed present
+    var seen: std.AutoHashMapUnmanaged(Pubkey, void) = .empty;
+    defer seen.deinit(allocator);
+    for (signers.constSlice()) |key| try seen.put(allocator, key, {});
+    try std.testing.expectEqual(InstructionInfo.MAX_ACCOUNT_METAS, seen.count());
+    for (distinct) |key| try std.testing.expect(seen.contains(key));
 }
