@@ -1,6 +1,7 @@
 pub const AccountSharedData = @import("AccountSharedData.zig");
 pub const ComputeBudget = @import("ComputeBudget.zig");
 pub const account_loader = @import("account_loader.zig");
+pub const borrowed_account = @import("borrowed_account.zig");
 pub const check_transactions = @import("check_transactions.zig");
 pub const cost_model = @import("cost_model.zig");
 pub const execution_interfaces = @import("execution_interfaces.zig");
@@ -17,6 +18,7 @@ pub const transaction_context = @import("transaction_context.zig");
 pub const transaction_execution = @import("transaction_execution.zig");
 
 pub const AccountReader = execution_interfaces.AccountReader;
+pub const BorrowedAccountContext = borrowed_account.BorrowedAccountContext;
 pub const EpochStakeReader = execution_interfaces.EpochStakeReader;
 pub const InstructionInfo = instruction_info.InstructionInfo;
 pub const LogCollector = log_collector.LogCollector;
