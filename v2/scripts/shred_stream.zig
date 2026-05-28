@@ -16,13 +16,35 @@ const max_shred_packet_bytes: usize = 1232;
 const producer_publish_packets: usize = 32;
 const stream_queue_packets = 8192;
 
+const TestMode = enum {
+    linear,
+    shuffle_global,
+    shuffle_slot,
+
+    fn parse(raw: []const u8) ?TestMode {
+        if (std.mem.eql(u8, raw, "linear")) return .linear;
+        if (std.mem.eql(u8, raw, "shuffle-global")) return .shuffle_global;
+        if (std.mem.eql(u8, raw, "shuffle-slot")) return .shuffle_slot;
+        return null;
+    }
+
+    fn name(self: TestMode) []const u8 {
+        return switch (self) {
+            .linear => "linear",
+            .shuffle_global => "shuffle-global",
+            .shuffle_slot => "shuffle-slot",
+        };
+    }
+};
+
 const Config = struct {
     ledger: []const u8,
     target: []const u8,
     start_slot: ?Slot = null,
     end_slot: ?Slot = null,
     rate_hz: ?f64 = null,
-    shuffle_seed: ?u64 = null,
+    test_mode: TestMode = .linear,
+    seed: ?u64 = null,
     dry_run: bool = false,
 };
 
@@ -32,7 +54,8 @@ const PartialConfig = struct {
     start_slot: ?Slot = null,
     end_slot: ?Slot = null,
     rate_hz: ?f64 = null,
-    shuffle_seed: ?u64 = null,
+    test_mode: TestMode = .linear,
+    seed: ?u64 = null,
     dry_run: bool = false,
 
     fn finalize(self: PartialConfig) ParseArgsError!Config {
@@ -49,9 +72,24 @@ const PartialConfig = struct {
             std.debug.print("--end-slot must be greater than or equal to --start-slot\n", .{});
             return error.InvalidArguments;
         }
-        if (self.shuffle_seed != null and (self.start_slot == null or self.end_slot == null)) {
-            std.debug.print("--shuffle-seed requires both --start-slot and --end-slot\n", .{});
-            return error.InvalidArguments;
+
+        switch (self.test_mode) {
+            .linear => {
+                if (self.seed != null) {
+                    std.debug.print("--seed is only valid with --test-mode shuffle-global or shuffle-slot\n", .{});
+                    return error.InvalidArguments;
+                }
+            },
+            .shuffle_global, .shuffle_slot => {
+                if (self.seed == null) {
+                    std.debug.print("--test-mode {s} requires --seed\n", .{self.test_mode.name()});
+                    return error.InvalidArguments;
+                }
+                if (self.start_slot == null or self.end_slot == null) {
+                    std.debug.print("--test-mode {s} requires both --start-slot and --end-slot\n", .{self.test_mode.name()});
+                    return error.InvalidArguments;
+                }
+            },
         }
 
         return .{
@@ -60,7 +98,8 @@ const PartialConfig = struct {
             .start_slot = self.start_slot,
             .end_slot = self.end_slot,
             .rate_hz = self.rate_hz,
-            .shuffle_seed = self.shuffle_seed,
+            .test_mode = self.test_mode,
+            .seed = self.seed,
             .dry_run = self.dry_run,
         };
     }
@@ -82,7 +121,8 @@ const Arg = enum {
     start_slot,
     end_slot,
     rate_hz,
-    shuffle_seed,
+    test_mode,
+    seed,
     dry_run,
 
     fn parse(raw: []const u8) ?Arg {
@@ -92,7 +132,8 @@ const Arg = enum {
         if (std.mem.eql(u8, raw, "--start-slot")) return .start_slot;
         if (std.mem.eql(u8, raw, "--end-slot")) return .end_slot;
         if (std.mem.eql(u8, raw, "--rate-hz")) return .rate_hz;
-        if (std.mem.eql(u8, raw, "--shuffle-seed")) return .shuffle_seed;
+        if (std.mem.eql(u8, raw, "--test-mode")) return .test_mode;
+        if (std.mem.eql(u8, raw, "--seed")) return .seed;
         if (std.mem.eql(u8, raw, "--dry-run")) return .dry_run;
         return null;
     }
@@ -105,7 +146,8 @@ const Arg = enum {
             .start_slot => "--start-slot",
             .end_slot => "--end-slot",
             .rate_hz => "--rate-hz",
-            .shuffle_seed => "--shuffle-seed",
+            .test_mode => "--test-mode",
+            .seed => "--seed",
             .dry_run => "--dry-run",
         };
     }
@@ -149,7 +191,8 @@ fn run(allocator: Allocator, config: Config) !void {
     try stdout.print("  start_slot: {?d}\n", .{config.start_slot});
     try stdout.print("  end_slot: {?d}\n", .{config.end_slot});
     try stdout.print("  rate_hz: {?}\n", .{config.rate_hz});
-    try stdout.print("  shuffle_seed: {?}\n", .{config.shuffle_seed});
+    try stdout.print("  test_mode: {s}\n", .{config.test_mode.name()});
+    try stdout.print("  seed: {?}\n", .{config.seed});
     try stdout.print("  dry_run: {}\n", .{config.dry_run});
     try stdout.print("  column_families:\n", .{});
     try stdout.print("    {s}: present\n", .{agave_cf_meta});
@@ -530,8 +573,10 @@ fn produceLedgerPackets(
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
 ) !ProducerStats {
-    if (config.shuffle_seed) |seed| {
-        return produceShuffledRefSchedule(blockstore, config, seed, writer, stop);
+    switch (config.test_mode) {
+        .linear => {},
+        .shuffle_global => return produceGlobalShuffledRefSchedule(blockstore, config, writer, stop),
+        .shuffle_slot => return produceSlotShuffledPackets(blockstore, config, writer, stop),
     }
 
     var stats: ProducerStats = .{};
@@ -573,31 +618,76 @@ fn produceLedgerPackets(
     return stats;
 }
 
-fn produceShuffledRefSchedule(
+fn produceGlobalShuffledRefSchedule(
     blockstore: *const AgaveBlockstore,
     config: Config,
-    seed: u64,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
 ) !ProducerStats {
-    var schedule = try buildShuffledRefSchedule(blockstore, config, seed, stop);
+    var schedule = try buildOrderedRefSchedule(blockstore, config, stop);
     defer schedule.deinit(blockstore.allocator);
+
+    var prng = std.Random.DefaultPrng.init(config.seed.?);
+    prng.random().shuffleWithIndex(ShredRef, schedule.refs.items, u64);
 
     return produceRefSchedule(blockstore, schedule, writer, stop);
 }
 
-fn buildShuffledRefSchedule(
+fn produceSlotShuffledPackets(
     blockstore: *const AgaveBlockstore,
     config: Config,
-    seed: u64,
+    writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
-) !RefSchedule {
-    var schedule = try buildOrderedRefSchedule(blockstore, config, stop);
-    errdefer schedule.deinit(blockstore.allocator);
+) !ProducerStats {
+    var stats: ProducerStats = .{};
+    var unpublished_packets: usize = 0;
+    var prng = std.Random.DefaultPrng.init(config.seed.?);
 
-    var prng = std.Random.DefaultPrng.init(seed);
-    prng.random().shuffleWithIndex(ShredRef, schedule.refs.items, u64);
-    return schedule;
+    var start_key_buf: [8]u8 = undefined;
+    const start_key: ?[]const u8 = if (config.start_slot) |slot| start_key: {
+        writeSlotKey(&start_key_buf, slot);
+        break :start_key &start_key_buf;
+    } else null;
+
+    var slot_iter = blockstore.db.iterator(try blockstore.columnFamily(agave_cf_meta), .forward, start_key);
+    defer slot_iter.deinit();
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    var refs: std.ArrayList(ShredRef) = .empty;
+    defer refs.deinit(blockstore.allocator);
+
+    while (try slot_iter.next(&err_data)) |entry| {
+        if (stop.load(.acquire)) break;
+
+        const slot = parseSlotKey(entry[0].data) catch |err| {
+            std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
+            return err;
+        };
+        if (pastEndSlot(config, slot)) break;
+        if (!slotSelected(config, slot)) continue;
+
+        refs.clearRetainingCapacity();
+        try collectSlotShredRefs(blockstore, slot, .data, &refs, stop);
+        if (blockstore.has_code_shred) {
+            try collectSlotShredRefs(blockstore, slot, .code, &refs, stop);
+        }
+
+        prng.random().shuffleWithIndex(ShredRef, refs.items, u64);
+        stats.recordSlot();
+
+        for (refs.items) |shred_ref| {
+            if (stop.load(.acquire)) break;
+            try produceShredByRef(blockstore, shred_ref, writer, stop, &unpublished_packets, &stats);
+        }
+    }
+
+    if (unpublished_packets != 0 and !stop.load(.acquire)) {
+        writer.markUsed();
+    }
+
+    return stats;
 }
 
 fn produceRefSchedule(
@@ -1073,7 +1163,8 @@ fn parseArgs(args: []const []const u8) ParseArgsError!ParseResult {
                 parsed_arg.name(),
             ),
             .rate_hz => config.rate_hz = try parseRateHz(try nextValue(args, &i, parsed_arg.name())),
-            .shuffle_seed => config.shuffle_seed = try parseSeed(try nextValue(args, &i, parsed_arg.name())),
+            .test_mode => config.test_mode = try parseTestMode(try nextValue(args, &i, parsed_arg.name())),
+            .seed => config.seed = try parseSeed(try nextValue(args, &i, parsed_arg.name())),
             .dry_run => config.dry_run = true,
         }
     }
@@ -1112,16 +1203,24 @@ fn parseRateHz(value: []const u8) ParseArgsError!f64 {
     return rate_hz;
 }
 
+fn parseTestMode(value: []const u8) ParseArgsError!TestMode {
+    return TestMode.parse(value) orelse {
+        std.debug.print("invalid test mode for --test-mode: {s}\n", .{value});
+        std.debug.print("valid test modes: linear, shuffle-global, shuffle-slot\n", .{});
+        return error.InvalidArguments;
+    };
+}
+
 fn parseSeed(value: []const u8) ParseArgsError!u64 {
     if (std.mem.startsWith(u8, value, "0x") or std.mem.startsWith(u8, value, "0X")) {
         return std.fmt.parseUnsigned(u64, value[2..], 16) catch {
-            std.debug.print("invalid seed for --shuffle-seed: {s}\n", .{value});
+            std.debug.print("invalid seed for --seed: {s}\n", .{value});
             return error.InvalidArguments;
         };
     }
 
     return std.fmt.parseUnsigned(u64, value, 10) catch {
-        std.debug.print("invalid seed for --shuffle-seed: {s}\n", .{value});
+        std.debug.print("invalid seed for --seed: {s}\n", .{value});
         return error.InvalidArguments;
     };
 }
@@ -1138,7 +1237,8 @@ fn printHelp() void {
         \\  --start-slot <slot>   First slot to stream
         \\  --end-slot <slot>     Inclusive last slot to stream
         \\  --rate-hz <float>     Maximum packets per second
-        \\  --shuffle-seed <seed> Randomize selected shreds with a decimal or 0x-prefixed seed
+        \\  --test-mode <mode>    linear, shuffle-global, or shuffle-slot
+        \\  --seed <seed>         Decimal or 0x-prefixed seed for randomized test modes
         \\  --dry-run             Read and print stats without sending UDP
         \\  -h, --help            Print this help
         \\
@@ -1153,62 +1253,78 @@ test "parse required arguments" {
     try std.testing.expectEqual(@as(?Slot, null), config.start_slot);
     try std.testing.expectEqual(@as(?Slot, null), config.end_slot);
     try std.testing.expectEqual(@as(?f64, null), config.rate_hz);
-    try std.testing.expectEqual(@as(?u64, null), config.shuffle_seed);
+    try std.testing.expectEqual(.linear, config.test_mode);
+    try std.testing.expectEqual(@as(?u64, null), config.seed);
     try std.testing.expect(!config.dry_run);
 }
 
 test "parse optional arguments" {
     const result = try parseArgs(&.{
-        "--ledger",       "ledger",
-        "--target",       "127.0.0.1:8002",
-        "--start-slot",   "10",
-        "--end-slot",     "20",
-        "--rate-hz",      "100.5",
-        "--shuffle-seed", "0xdeadbeef",
+        "--ledger",     "ledger",
+        "--target",     "127.0.0.1:8002",
+        "--start-slot", "10",
+        "--end-slot",   "20",
+        "--rate-hz",    "100.5",
+        "--test-mode",  "shuffle-global",
+        "--seed",       "0xdeadbeef",
         "--dry-run",
     });
     const config = result.config;
     try std.testing.expectEqual(@as(?Slot, 10), config.start_slot);
     try std.testing.expectEqual(@as(?Slot, 20), config.end_slot);
     try std.testing.expectEqual(@as(?f64, 100.5), config.rate_hz);
-    try std.testing.expectEqual(@as(?u64, 0xdeadbeef), config.shuffle_seed);
+    try std.testing.expectEqual(.shuffle_global, config.test_mode);
+    try std.testing.expectEqual(@as(?u64, 0xdeadbeef), config.seed);
     try std.testing.expect(config.dry_run);
 }
 
-test "parse decimal shuffle seed" {
-    const result = try parseArgs(&.{
-        "--ledger",       "ledger",
-        "--target",       "127.0.0.1:8002",
-        "--start-slot",   "10",
-        "--end-slot",     "20",
-        "--shuffle-seed", "12345",
-    });
-    try std.testing.expectEqual(@as(?u64, 12345), result.config.shuffle_seed);
-}
+test "parse and validate test modes" {
+    {
+        const result = try parseArgs(&.{
+            "--ledger",     "ledger",
+            "--target",     "127.0.0.1:8002",
+            "--start-slot", "10",
+            "--end-slot",   "20",
+            "--test-mode",  "shuffle-slot",
+            "--seed",       "12345",
+        });
+        try std.testing.expectEqual(.shuffle_slot, result.config.test_mode);
+        try std.testing.expectEqual(@as(?u64, 12345), result.config.seed);
+    }
 
-test "reject shuffle seed without bounded slot range" {
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
-        "--ledger",       "ledger",
-        "--target",       "127.0.0.1:8002",
-        "--shuffle-seed", "1",
-    }));
-
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
-        "--ledger",       "ledger",
-        "--target",       "127.0.0.1:8002",
-        "--start-slot",   "10",
-        "--shuffle-seed", "1",
-    }));
-}
-
-test "reject invalid shuffle seed" {
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
-        "--ledger",       "ledger",
-        "--target",       "127.0.0.1:8002",
-        "--start-slot",   "10",
-        "--end-slot",     "20",
-        "--shuffle-seed", "not-a-seed",
-    }));
+    {
+        try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+            "--ledger",    "ledger",
+            "--target",    "127.0.0.1:8002",
+            "--test-mode", "shuffle-slot",
+            "--seed",      "1",
+        }));
+        try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+            "--ledger",     "ledger",
+            "--target",     "127.0.0.1:8002",
+            "--start-slot", "10",
+            "--end-slot",   "20",
+            "--test-mode",  "shuffle-global",
+        }));
+        try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+            "--ledger", "ledger",
+            "--target", "127.0.0.1:8002",
+            "--seed",   "1",
+        }));
+        try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+            "--ledger",    "ledger",
+            "--target",    "127.0.0.1:8002",
+            "--test-mode", "not-a-mode",
+        }));
+        try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+            "--ledger",     "ledger",
+            "--target",     "127.0.0.1:8002",
+            "--start-slot", "10",
+            "--end-slot",   "20",
+            "--test-mode",  "shuffle-slot",
+            "--seed",       "not-a-seed",
+        }));
+    }
 }
 
 test "reject invalid slot range" {
