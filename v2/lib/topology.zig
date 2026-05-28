@@ -348,12 +348,14 @@ pub fn Bind(
         }
 
         pub const ServiceMap = struct {
-            inner: std.EnumMap(
-                bound.ServiceId,
-                std.ArrayList(LookupResult),
-            ),
+            inner: std.EnumMap(bound.ServiceId, Entry),
 
             pub const empty: ServiceMap = .{ .inner = .{} };
+
+            pub const Entry = struct {
+                runner: memfd.RW,
+                regions: std.ArrayList(LookupResult),
+            };
 
             pub const LookupResult = struct {
                 region: Region,
@@ -363,7 +365,7 @@ pub fn Bind(
 
             pub fn deinit(self: *const ServiceMap, gpa: std.mem.Allocator) void {
                 var map = self.inner;
-                for (&map.values) |*lur| lur.deinit(gpa);
+                for (&map.values) |*lur| lur.regions.deinit(gpa);
             }
         };
 
@@ -391,11 +393,14 @@ pub fn Bind(
             var region_memfds: [regions.len]memfd.RW = undefined;
             try createAndInitSharedRegionMemfds(&regions, &region_memfds);
 
+            var runner_memfds: [schema.services.len]memfd.RW = undefined;
+            try createRunnerMemfds(&runner_memfds);
+
             var map: ServiceMap = .empty;
             errdefer map.deinit(allocator);
 
             // check all service instances request regions which are shared with them
-            inline for (schema.services) |service_entry| {
+            inline for (schema.services, &runner_memfds) |service_entry, runner_memfd| {
                 const service: bound.ServiceId = service_entry.name;
 
                 inline for (service_entry.regions) |region_entry| {
@@ -423,8 +428,14 @@ pub fn Bind(
                             };
 
                             const exists = if (map.inner.getPtr(service)) |entry| exists: {
-                                break :exists for (entry.items) |existing_result| {
-                                    if (std.meta.eql(existing_result, result)) break true;
+                                break :exists for (entry.regions.items) |existing| {
+                                    if (existing.region != std.meta.activeTag(result.region)) {
+                                        continue;
+                                    }
+                                    if (existing.access != result.access) {
+                                        continue;
+                                    }
+                                    break true;
                                 } else false;
                             } else false;
 
@@ -435,9 +446,12 @@ pub fn Bind(
                         .{ service, region_entry },
                     );
 
-                    if (!map.inner.contains(service)) map.inner.put(service, .empty);
+                    if (!map.inner.contains(service)) map.inner.put(service, .{
+                        .runner = runner_memfd,
+                        .regions = .empty,
+                    });
                     const lur_list = map.inner.getPtrAssertContains(service);
-                    try lur_list.append(allocator, found_region);
+                    try lur_list.regions.append(allocator, found_region);
                 }
             }
 
@@ -544,9 +558,6 @@ pub fn Bind(
         /// Initialises the shared memory regions with their parameters, then securely starts up services.
         /// Blocks until the first service has exited, before dumping out traces.
         pub fn spawnAndWait(map: *const ServiceMap) !void {
-            var runner_memfds: [schema.services.len]memfd.RW = undefined;
-            try createRunnerMemfds(&runner_memfds);
-
             const ExitMeta = struct {
                 id: bound.ServiceId,
                 pid: i32,
@@ -557,15 +568,15 @@ pub fn Bind(
             var exit_metas: std.ArrayList(ExitMeta) = .initBuffer(&exit_meta_buf);
 
             // Start up all services, storing their pids
-            inline for (schema.services, &runner_memfds) |service_entry, runner| {
-                const child_pid = try spawnService(service_entry.name, .{
-                    .runner = runner,
+            inline for (schema.services) |service_schema| {
+                const entry = map.inner.get(service_schema.name).?;
+                const child_pid = try spawnService(service_schema.name, .{
+                    .runner = entry.runner,
                     .stderr = .stderr(),
-                    .regions = map.inner.get(service_entry.name).?.items,
+                    .regions = entry.regions.items,
                 });
-
                 exit_metas.appendAssumeCapacity(.{
-                    .id = service_entry.name,
+                    .id = service_schema.name,
                     .pid = child_pid,
                     .exit = null,
                 });
@@ -573,8 +584,9 @@ pub fn Bind(
 
             // We only mmap the exit regions after spawning the child processes, as we don't want them
             // mapped in children
-            for (exit_metas.items, &runner_memfds) |*exit_meta, runner_fd| {
-                const runner = try runner_fd.mmapStaticSize(lib.runner.Region, .{});
+            for (exit_metas.items) |*exit_meta| {
+                const entry = map.inner.get(exit_meta.id).?;
+                const runner = try entry.runner.mmapStaticSize(lib.runner.Region, .{});
                 exit_meta.exit = &runner.exit;
             }
 
@@ -784,9 +796,6 @@ pub fn Bind(
         }
 
         pub fn spawnAndWaitNoSandbox(map: *const ServiceMap) !void {
-            var runner_memfds: [schema.services.len]memfd.RW = undefined;
-            try createRunnerMemfds(&runner_memfds);
-
             var reset_event: std.Thread.ResetEvent = .{};
             var finished_service_idx: std.atomic.Value(u16) = .init(std.math.maxInt(u16));
 
@@ -796,11 +805,12 @@ pub fn Bind(
             };
 
             // Start up all services, storing their pids
-            inline for (schema.services, &runner_memfds, 0..) |service_entry, runner, i| {
+            inline for (schema.services, 0..) |service_entry, i| {
+                const entry = map.inner.get(service_entry.name).?;
                 _ = try spawnServiceNoSandbox(service_entry.name, .{
-                    .runner = runner,
+                    .runner = entry.runner,
                     .stderr = .stderr(),
-                    .regions = map.inner.get(service_entry.name).?.items,
+                    .regions = map.inner.get(service_entry.name).?.regions.items,
                     .service_idx = i,
                     .thread_exit_ctx = &thread_exit_ctx,
                 });
@@ -812,7 +822,7 @@ pub fn Bind(
             const exited_idx = finished_service_idx.load(.seq_cst);
             std.debug.assert(exited_idx != std.math.maxInt(u16));
 
-            const exited_runner_memfd = runner_memfds[exited_idx];
+            const exited_runner_memfd = map.inner.get(@enumFromInt(exited_idx)).?.runner;
             const exited_runner = try exited_runner_memfd.mmapStaticSize(lib.runner.Region, .{});
             const exited_service_id: bound.ServiceId = @enumFromInt(exited_idx);
             dumpOnExit(
