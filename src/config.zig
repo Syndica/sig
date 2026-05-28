@@ -136,6 +136,9 @@ pub const AccountsDB = struct {
     /// Optional newline-delimited list of explicit pubkeys to load from snapshot
     /// in addition to the built-in owner filter.
     tracked_pubkeys_file: ?[]const u8 = null,
+    /// When true, skip broad built-in owner filters and load only explicit
+    /// tracked pubkeys plus mandatory runtime/sysvar accounts.
+    tracked_pubkeys_only: bool = false,
     /// number of threads to load snapshot
     num_threads_snapshot_load: u32 = 0,
     /// number of threads to unpack snapshot from .tar.zstd

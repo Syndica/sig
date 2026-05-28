@@ -384,6 +384,33 @@ pub fn setAndChainConnectedOnRootAndNextSlots(
         SlotMeta.init(allocator, root, null);
     defer root_slot_meta.deinit();
 
+    // When joining from a snapshot root the ledger may contain live child slots
+    // even though the synthetic root meta has no child list. This happens after
+    // cleanup purges the snapshot-root slot_meta but preserves post-root shreds.
+    if (root_slot_meta.child_slots.items.len == 0) {
+        var iterator = try self.ledger.db.iterator(schema.slot_meta, .forward, root +| 1);
+        defer iterator.deinit();
+
+        while (try iterator.next()) |entry| {
+            const slot, var slot_meta = entry;
+            defer slot_meta.deinit();
+
+            if (slot <= root) continue;
+            if (slot_meta.parent_slot) |parent_slot| {
+                if (parent_slot == root) {
+                    try root_slot_meta.child_slots.append(slot);
+                }
+            }
+        }
+
+        if (root_slot_meta.child_slots.items.len != 0) {
+            self.logger.info().logf(
+                "Repaired snapshot root child links root_slot={} child_slots={any}",
+                .{ root, root_slot_meta.child_slots.items },
+            );
+        }
+    }
+
     // If the slot was already connected, there is nothing to do as this slot's
     // children are also assumed to be appropriately connected
     if (root_slot_meta.isConnected()) {

@@ -93,11 +93,14 @@ pub fn start(
         "shred network",
         .{},
     );
+    errdefer service_manager.deinit();
     const arena = service_manager.arena.allocator();
     const defers = &service_manager.defers; // use this instead of defer statements
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
+    try defers.deferCall(closeSocket, .{repair_socket});
     const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
+    try defers.deferCall(closeSocket, .{turbine_socket});
 
     // NAT hole punch: send a probe from turbine and repair sockets to each entrypoint.
     // This creates NAT mappings (external:8002 → internal:8002, external:8003 → internal:8003)
@@ -257,6 +260,10 @@ fn bindUdpReusable(port: u16) !sig.net.UdpSocket {
     try socket.bindToPort(port);
     try socket.setReadTimeout(sig.net.SOCKET_TIMEOUT_US);
     return socket;
+}
+
+fn closeSocket(socket: sig.net.UdpSocket) void {
+    socket.close();
 }
 
 // This test verifies that the shred_network:

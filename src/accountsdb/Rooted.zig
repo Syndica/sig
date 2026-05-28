@@ -16,6 +16,8 @@ const OK = sql.SQLITE_OK;
 const DONE = sql.SQLITE_DONE;
 const ROW = sql.SQLITE_ROW;
 
+extern "c" fn malloc_zone_pressure_relief(zone: ?*anyopaque, goal: usize) usize;
+
 /// Handle to the underlying sqlite database.
 handle: *sql.sqlite3,
 /// Tracks the largest rooted slot.
@@ -48,7 +50,7 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         const pragmas =
             \\ PRAGMA journal_mode = OFF;
             \\ PRAGMA synchronous = 0;
-            \\ PRAGMA cache_size = -524288;
+            \\ PRAGMA cache_size = -65536;
             \\ PRAGMA locking_mode = EXCLUSIVE;
             \\ PRAGMA temp_store = FILE;
             \\ PRAGMA page_size = 65536;
@@ -142,7 +144,10 @@ pub fn get(
         self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_stmt, null));
         break :blk get_stmt.?;
     };
-    defer std.debug.assert(sql.sqlite3_reset(stmt) == OK);
+    defer {
+        std.debug.assert(sql.sqlite3_reset(stmt) == OK);
+        std.debug.assert(sql.sqlite3_clear_bindings(stmt) == OK);
+    }
 
     self.err(sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC));
 
@@ -329,6 +334,11 @@ pub fn commitTransaction(self: *Rooted) void {
     defer zone.deinit();
 
     self.err(sql.sqlite3_exec(self.handle, "COMMIT;", null, null, null));
+    self.err(sql.sqlite3_db_release_memory(self.handle));
+    _ = sql.sqlite3_release_memory(std.math.maxInt(c_int));
+    if (builtin.os.tag == .macos) {
+        _ = malloc_zone_pressure_relief(null, 0);
+    }
 }
 
 /// Should not be called outside of snapshot loading or slot rooting.
@@ -363,7 +373,10 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
         self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &put_stmt, null));
         break :blk put_stmt.?;
     };
-    defer std.debug.assert(sql.sqlite3_reset(stmt) == OK);
+    defer {
+        std.debug.assert(sql.sqlite3_reset(stmt) == OK);
+        std.debug.assert(sql.sqlite3_clear_bindings(stmt) == OK);
+    }
 
     self.err(sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC));
     self.err(sql.sqlite3_bind_int64(stmt, 2, @bitCast(account.lamports)));

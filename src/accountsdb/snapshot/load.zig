@@ -1,10 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 const std14 = @import("std14");
 const tracy = @import("tracy");
 const accountsdb = @import("../lib.zig");
 const snapshot = @import("lib.zig");
-const zstd = @import("zstd");
+const std_zstd = std.compress.zstd;
 
 const Allocator = std.mem.Allocator;
 
@@ -21,6 +22,16 @@ const FullAndIncrementalManifest = sig.accounts_db.snapshot.FullAndIncrementalMa
 
 const Logger = sig.trace.Logger("accountsdb.snapshot.load");
 const TrackedPubkeySet = std.AutoHashMap(Pubkey, void);
+const SNAPSHOT_SQLITE_COMMIT_INTERVAL: u64 = 10_000;
+const SNAPSHOT_SCAN_PRESSURE_RELIEF_INTERVAL: u64 = 100_000;
+
+extern "c" fn malloc_zone_pressure_relief(zone: ?*anyopaque, goal: usize) usize;
+
+fn relieveMallocPressure() void {
+    if (builtin.os.tag == .macos) {
+        _ = malloc_zone_pressure_relief(null, 0);
+    }
+}
 
 pub const LoadedSnapshot = struct {
     allocator: Allocator,
@@ -70,6 +81,9 @@ pub fn loadSnapshot(
         // Optional newline-delimited file of extra pubkeys to load from snapshot
         // in addition to the built-in owner filter.
         tracked_pubkeys_file_path: ?[]const u8 = null,
+        // If set, skip broad built-in owner filters and load only explicit
+        // tracked pubkeys plus mandatory runtime/sysvar accounts.
+        tracked_pubkeys_only: bool = false,
         // How and what to load from the snapshot files
         extract: union(enum) {
             /// Extract only the snapshot metadata (not the accounts)
@@ -150,6 +164,7 @@ pub fn loadSnapshot(
             if (db_has_entries) null else maybe_rooted_db,
             .{ .slot = snapshot_files.full.slot, .hash = snapshot_files.full.hash },
             &tracked_pubkeys,
+            options.tracked_pubkeys_only,
         );
     };
     errdefer full_manifest.deinit(allocator);
@@ -200,6 +215,7 @@ pub fn loadSnapshot(
             maybe_rooted_db, // incremental doesnt have too many accounts to overwrite
             info.slotAndHash(),
             &tracked_pubkeys,
+            options.tracked_pubkeys_only,
         );
     };
     errdefer if (maybe_incremental_manifest) |manifest| manifest.deinit(allocator);
@@ -297,6 +313,7 @@ fn insertFromSnapshotArchive(
     maybe_rooted_db: ?*Rooted,
     slot_and_hash: sig.core.hash.SlotAndHash,
     tracked_pubkeys: *const TrackedPubkeySet,
+    tracked_pubkeys_only: bool,
 ) !struct { Manifest, StatusCache } {
     const zone = tracy.Zone.init(@src(), .{ .name = "insertFromSnapshotArchive" });
     defer zone.deinit();
@@ -314,34 +331,22 @@ fn insertFromSnapshotArchive(
     const file = try snapshot_dir.openFile(snapshot_path, .{ .mode = .read_only });
     defer file.close();
 
-    // calling posix.mmap on a zero-sized file will cause illegal behaviour
     const file_size = (try file.stat()).size;
     if (file_size == 0) return error.ZeroSizedTarball;
 
-    const memory = try std.posix.mmap(
-        null,
-        file_size,
-        std.posix.PROT.READ,
-        std.posix.MAP{ .TYPE = .PRIVATE },
-        file.handle,
-        0,
+    var file_read_buf: [256 * 1024]u8 = undefined;
+    var file_reader = file.reader(&file_read_buf);
+
+    var zstd_buf: [std_zstd.default_window_len + std_zstd.block_size_max]u8 = undefined;
+    var archive_stream: std_zstd.Decompress = .init(
+        &file_reader.interface,
+        &zstd_buf,
+        .{},
     );
-    defer std.posix.munmap(memory);
-
-    if (@import("builtin").os.tag != .macos) {
-        try std.posix.madvise(
-            memory.ptr,
-            memory.len,
-            std.posix.MADV.SEQUENTIAL | std.posix.MADV.WILLNEED,
-        );
-    }
-
-    var archive_stream = try zstd.Reader.init(memory);
-    defer archive_stream.deinit();
 
     // Use utils/tar for parsing since it works with old GenericReader interface
     const tar = sig.utils.tar;
-    var reader = archive_stream.reader();
+    var reader = std14.deprecatedReader(&archive_stream.reader);
     var tar_file_name_buf: [tar.TarHeaderMinimal.MAX_NAME_SIZE]u8 = undefined;
 
     var maybe_version: ?[5]u8 = null;
@@ -365,7 +370,9 @@ fn insertFromSnapshotArchive(
     var account_records_seen: u64 = 0;
     var skipped_accounts: u64 = 0;
     var matched_accounts: u64 = 0;
+    var inserted_since_commit: u64 = 0;
     var account_data_bytes_seen: u64 = 0;
+    var skipped_since_pressure_relief: u64 = 0;
 
     tar_loop: while (true) {
         const tar_hdr = blk: {
@@ -490,17 +497,19 @@ fn insertFromSnapshotArchive(
                 return error.InvalidAccountFile;
 
             account_files_seen += 1;
-            logger.info().logf(
-                "snapshot archive progress: account file start archive={s} member={s} account_files={} tar_files={} file_bytes={} data_bytes={}",
-                .{
-                    snapshot_path,
-                    tar_hdr.file_name,
-                    account_files_seen,
-                    tar_files_seen,
-                    tar_hdr.file_size,
-                    info.length,
-                },
-            );
+            if (account_files_seen == 1 or account_files_seen % 10_000 == 0) {
+                logger.info().logf(
+                    "snapshot archive progress: account file start archive={s} member={s} account_files={} tar_files={} file_bytes={} data_bytes={}",
+                    .{
+                        snapshot_path,
+                        tar_hdr.file_name,
+                        account_files_seen,
+                        tar_files_seen,
+                        tar_hdr.file_size,
+                        info.length,
+                    },
+                );
+            }
 
             // Insert accounts in AccountFile into Rooted db
             var account_file_stream = std14.limitedReader(reader, info.length);
@@ -546,17 +555,40 @@ fn insertFromSnapshotArchive(
                     Pubkey.parse("Sysvar1111111111111111111111111111111111111"), // Sysvars (SlotHistory required at startup)
                     // SPL Token removed — 300M+ accounts overflow 135GB disk
                 };
-                const owner_ok = for (chimera_owners) |allowed| {
-                    if (header.owner.equals(&allowed)) break true;
-                } else false;
-                const should_load = owner_ok or tracked_pubkeys.contains(header.pubkey);
+                const owner_ok = if (tracked_pubkeys_only)
+                    false
+                else
+                    for (chimera_owners) |allowed| {
+                        if (header.owner.equals(&allowed)) break true;
+                    } else false;
+                const mandatory_pubkeys = [_]Pubkey{
+                    sig.runtime.sysvar.SlotHistory.ID,
+                    Pubkey.parse("11111111111111111111111111111111"), // System
+                    Pubkey.parse("ComputeBudget111111111111111111111111111111"), // Compute Budget
+                    Pubkey.parse("BPFLoaderUpgradeab1e11111111111111111111111"), // BPF loader
+                    Pubkey.parse("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), // SPL Token
+                    Pubkey.parse("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"), // Associated Token
+                    Pubkey.parse("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"), // Memo
+                    Pubkey.parse("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"), // PumpFun
+                    Pubkey.parse("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"), // PumpSwap
+                };
+                const mandatory_ok = header.owner.equals(&sig.runtime.sysvar.OWNER_ID) or
+                    for (mandatory_pubkeys) |allowed| {
+                        if (header.pubkey.equals(&allowed)) break true;
+                    } else false;
+                const should_load = mandatory_ok or owner_ok or tracked_pubkeys.contains(header.pubkey);
                 if (!should_load) {
                     skipped_accounts += 1;
+                    skipped_since_pressure_relief += 1;
                     const skip = @min(
                         account_file_stream.bytes_left,
                         std.mem.alignForward(usize, header.data_len, 8),
                     );
                     r.skipBytes(skip, .{}) catch return error.InvalidAccountFile;
+                    if (skipped_since_pressure_relief >= SNAPSHOT_SCAN_PRESSURE_RELIEF_INTERVAL) {
+                        relieveMallocPressure();
+                        skipped_since_pressure_relief = 0;
+                    }
                     if (account_records_seen % 100_000 == 0 and
                         progress_timer.read() >= progress_interval_ns)
                     {
@@ -604,6 +636,16 @@ fn insertFromSnapshotArchive(
                         else => return error.InvalidAccount,
                     },
                 });
+                inserted_since_commit += 1;
+                if (inserted_since_commit >= SNAPSHOT_SQLITE_COMMIT_INTERVAL) {
+                    rooted_db.commitTransaction();
+                    rooted_db.beginTransaction();
+                    inserted_since_commit = 0;
+                    logger.info().logf(
+                        "snapshot archive progress: committed sqlite insert batch archive={s} matched={} account_records={}",
+                        .{ snapshot_path, matched_accounts, account_records_seen },
+                    );
+                }
                 if (progress_timer.read() >= progress_interval_ns) {
                     logger.info().logf(
                         "snapshot archive progress: inserting archive={s} account_files={} account_records={} matched={} skipped={} account_data_bytes_seen={} current_member={s}",
@@ -622,17 +664,19 @@ fn insertFromSnapshotArchive(
             }
             const remaining_and_pad = (tar_hdr.file_size - info.length) + tar_hdr.pad_len;
             try reader.skipBytes(remaining_and_pad, .{});
-            logger.info().logf(
-                "snapshot archive progress: account file done archive={s} member={s} account_files={} account_records={} matched={} skipped={}",
-                .{
-                    snapshot_path,
-                    tar_hdr.file_name,
-                    account_files_seen,
-                    account_records_seen,
-                    matched_accounts,
-                    skipped_accounts,
-                },
-            );
+            if (account_files_seen % 10_000 == 0) {
+                logger.info().logf(
+                    "snapshot archive progress: account file done archive={s} member={s} account_files={} account_records={} matched={} skipped={}",
+                    .{
+                        snapshot_path,
+                        tar_hdr.file_name,
+                        account_files_seen,
+                        account_records_seen,
+                        matched_accounts,
+                        skipped_accounts,
+                    },
+                );
+            }
 
             // Read unknown tar file
         } else {

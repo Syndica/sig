@@ -50,6 +50,29 @@ pub fn run(
     }
 }
 
+pub fn runWithRootSlot(
+    logger: Logger,
+    ledger_state: *sig.ledger.Ledger,
+    max_ledger_shreds: u64,
+    exit: *AtomicBool,
+    root_slot: *const std.atomic.Value(Slot),
+) !void {
+    logger.info().log("Starting replay-rooted ledger cleanup service");
+
+    var last_purge_slot: Slot = 0;
+    while (!exit.load(.acquire)) {
+        last_purge_slot = try cleanLedgerWithMaxRoot(
+            logger,
+            ledger_state,
+            max_ledger_shreds,
+            last_purge_slot,
+            DEFAULT_CLEANUP_SLOT_INTERVAL,
+            root_slot.load(.monotonic),
+        );
+        _ = sig.utils.thread.sleep(LOOP_LIMITER, .{ .signal = exit });
+    }
+}
+
 /// Checks for new roots and initiates a cleanup if the last cleanup was at
 /// least `purge_interval` slots ago. A cleanup will no-op if the ledger
 /// already has fewer than `max_ledger_shreds`; otherwise, the cleanup will
@@ -86,6 +109,24 @@ pub fn cleanLedger(
     else
         try ledger_state.reader().lowestSlot();
 
+    return cleanLedgerWithMaxRoot(
+        logger,
+        ledger_state,
+        max_ledger_shreds,
+        last_purge_slot,
+        purge_interval,
+        root,
+    );
+}
+
+pub fn cleanLedgerWithMaxRoot(
+    logger: Logger,
+    ledger_state: *sig.ledger.Ledger,
+    max_ledger_shreds: u64,
+    last_purge_slot: u64,
+    purge_interval: u64,
+    root: Slot,
+) !Slot {
     if (root - last_purge_slot <= purge_interval) return last_purge_slot;
 
     const result = try findSlotsToClean(ledger_state, root, max_ledger_shreds);

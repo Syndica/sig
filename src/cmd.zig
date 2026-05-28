@@ -604,6 +604,7 @@ const Cmd = struct {
 
     const AccountsDbArgumentsBase = struct {
         tracked_pubkeys_file: ?[]const u8,
+        tracked_pubkeys_only: bool,
         reduced_checkpoint_path: ?[]const u8,
         n_threads_snapshot_load: u32,
         n_threads_snapshot_unpack: u16,
@@ -619,6 +620,14 @@ const Cmd = struct {
                 .default_value = null,
                 .config = .string,
                 .help = "newline-delimited file of explicit pubkeys to load from snapshot in addition to the built-in owner filter",
+            },
+            .tracked_pubkeys_only = .{
+                .kind = .named,
+                .name_override = "tracked-pubkeys-only",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "load only explicit tracked pubkeys plus mandatory runtime/sysvar accounts; disables broad built-in owner filters",
             },
             .reduced_checkpoint_path = .{
                 .kind = .named,
@@ -676,6 +685,7 @@ const Cmd = struct {
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
             cfg.accounts_db.tracked_pubkeys_file = args.tracked_pubkeys_file;
+            cfg.accounts_db.tracked_pubkeys_only = args.tracked_pubkeys_only;
             cfg.accounts_db.reduced_checkpoint_path = args.reduced_checkpoint_path;
             cfg.accounts_db.num_threads_snapshot_load = args.n_threads_snapshot_load;
             cfg.accounts_db.num_threads_snapshot_unpack = args.n_threads_snapshot_unpack;
@@ -1654,18 +1664,10 @@ fn validator(
         );
 
         if (cfg.shred_network.warm_ledger_capture) {
-            var warm_combined_manifest = try FullAndIncrementalManifest.fromFiles(
-                allocator,
-                .from(app_base.logger),
-                snapshot_dir,
-                snapshot_files,
-            );
-            defer warm_combined_manifest.deinit(allocator);
-
-            var warm_collapsed_manifest = try warm_combined_manifest.collapse(allocator);
-            defer warm_collapsed_manifest.deinit(allocator);
-
-            const warm_root_slot = warm_collapsed_manifest.bank_fields.slot;
+            const warm_root_slot = if (snapshot_files.incremental_info) |inc|
+                inc.slot
+            else
+                snapshot_files.full.slot;
             app_base.logger.info().logf(
                 "warm ledger capture: starting temporary shred network root_slot={}",
                 .{warm_root_slot},
@@ -1737,6 +1739,7 @@ fn validator(
             .{
                 .genesis_file_path = genesis_file_path,
                 .tracked_pubkeys_file_path = cfg.accounts_db.tracked_pubkeys_file,
+                .tracked_pubkeys_only = cfg.accounts_db.tracked_pubkeys_only,
                 .extract = if (init_db_exists)
                     .metadata_only
                 else if (cfg.accounts_db.skip_snapshot_validation)
@@ -1792,13 +1795,6 @@ fn validator(
         allocator,
         snapshot_root_slot,
     );
-
-    const ledger_cleanup_service = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        sig.ledger.cleanup_service.Logger.from(app_base.logger),
-        &ledger,
-        cfg.max_shreds,
-        app_base.exit,
-    });
 
     // Random number generator
     var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
@@ -1930,6 +1926,14 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
+    const ledger_cleanup_service = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.runWithRootSlot, .{
+        sig.ledger.cleanup_service.Logger.from(app_base.logger),
+        &ledger,
+        cfg.max_shreds,
+        app_base.exit,
+        &replay_service_state.replay_state.slot_tracker.root,
+    });
+
     const rpc_server_thread = if (cfg.rpc_port) |rpc_port|
         try std.Thread.spawn(.{}, runRPCServer, .{
             allocator,
@@ -2047,6 +2051,7 @@ fn replayOffline(
         .{
             .genesis_file_path = genesis_file_path,
             .tracked_pubkeys_file_path = cfg.accounts_db.tracked_pubkeys_file,
+            .tracked_pubkeys_only = cfg.accounts_db.tracked_pubkeys_only,
             .extract = if (init_db_exists)
                 .metadata_only
             else if (cfg.accounts_db.skip_snapshot_validation)
@@ -2441,6 +2446,7 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         .{
             .genesis_file_path = genesis_file_path,
             .tracked_pubkeys_file_path = cfg.accounts_db.tracked_pubkeys_file,
+            .tracked_pubkeys_only = cfg.accounts_db.tracked_pubkeys_only,
             .extract = .{ .entire_snapshot_and_validate = &rooted_db },
         },
     );
