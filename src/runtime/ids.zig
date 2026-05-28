@@ -1,32 +1,12 @@
-// This file exists for convenience and to provide access to IDs that do not
-// have an appropriate place to live yet. It is not intended to be a permanent
+const shared_ids = @import("shared").runtime.ids;
 
-// TODO: move IDs to programs as they are implemented, or to a more appropriate location for non-program IDs
-
-const sig = @import("../sig.zig");
-const Pubkey = sig.core.Pubkey;
-
-pub const NATIVE_LOADER_ID: Pubkey = .parse("NativeLoader1111111111111111111111111111111");
-
-// Deprecated - UNUSED
-pub const SYSVAR_REWARDS_ID: Pubkey = .parse("SysvarRewards111111111111111111111111111111");
-
-pub const STAKE_CONFIG_PROGRAM_ID: Pubkey =
-    .parse("StakeConfig11111111111111111111111111111111");
-
-// Proposed - SIMD0072
-pub const FEATURE_PROGRAM_ID: Pubkey = .parse("Feature111111111111111111111111111111111111");
-pub const FEATURE_PROGRAM_SOURCE_ID: Pubkey =
-    .parse("3D3ydPWvmEszrSjrickCtnyRSJm1rzbbSsZog8Ub6vLh");
-
-pub const ZK_TOKEN_PROOF_PROGRAM_ID: Pubkey = .parse("ZkTokenProof1111111111111111111111111111111");
-
-pub const INCINERATOR: Pubkey = .parse("1nc1nerator11111111111111111111111111111111");
-
-// SPL Token Program IDs
-pub const TOKEN_PROGRAM_ID: Pubkey = .parse("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-pub const TOKEN_2022_PROGRAM_ID: Pubkey = .parse("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
-
-/// SPL Token Native Mint (wrapped SOL)
-/// NOTE: Defined here solely for use in account decoders. perhaps move it?
-pub const NATIVE_MINT_ID: Pubkey = .parse("So11111111111111111111111111111111111111112");
+pub const NATIVE_LOADER_ID = shared_ids.NATIVE_LOADER_ID;
+pub const SYSVAR_REWARDS_ID = shared_ids.SYSVAR_REWARDS_ID;
+pub const STAKE_CONFIG_PROGRAM_ID = shared_ids.STAKE_CONFIG_PROGRAM_ID;
+pub const FEATURE_PROGRAM_ID = shared_ids.FEATURE_PROGRAM_ID;
+pub const FEATURE_PROGRAM_SOURCE_ID = shared_ids.FEATURE_PROGRAM_SOURCE_ID;
+pub const ZK_TOKEN_PROOF_PROGRAM_ID = shared_ids.ZK_TOKEN_PROOF_PROGRAM_ID;
+pub const INCINERATOR = shared_ids.INCINERATOR;
+pub const TOKEN_PROGRAM_ID = shared_ids.TOKEN_PROGRAM_ID;
+pub const TOKEN_2022_PROGRAM_ID = shared_ids.TOKEN_2022_PROGRAM_ID;
+pub const NATIVE_MINT_ID = shared_ids.NATIVE_MINT_ID;
