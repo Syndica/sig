@@ -48,6 +48,7 @@ pub fn FileWriter(
             self.file = file;
             self.offset = 0;
 
+            self.io_transferred = 0;
             self.io_inflight = 0;
             self.io_stalled = 0;
 
