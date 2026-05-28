@@ -105,6 +105,7 @@ pub fn build(b: *Build) !void {
     });
     shared_mod.addImport("base58", base58_mod);
     shared_mod.addImport("build-options", build_options_mod);
+    shared_mod.addImport("tracy", tracy_mod);
     shared_mod.addImport("feature-set-id", feature_set_id);
 
     const fmt_check_step = b.addFmt(.{

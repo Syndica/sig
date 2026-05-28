@@ -460,7 +460,7 @@ pub const Vm = struct {
         }
 
         fn call_imm(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
-            if (self.loader.get(inst.imm)) |entry| {
+            if (sig.vm.syscalls.resolve(self.loader, inst.imm)) |entry| {
                 try self.dispatchSyscall(entry);
                 self.registers.set(.pc, pc + 1);
                 return;
@@ -809,7 +809,7 @@ pub const Vm = struct {
         }
 
         pub fn exit_or_syscall(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
-            if (self.loader.get(inst.imm)) |entry| {
+            if (sig.vm.syscalls.resolve(self.loader, inst.imm)) |entry| {
                 try self.dispatchSyscall(entry);
                 self.registers.set(.pc, pc + 1);
             } else {

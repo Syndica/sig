@@ -112,7 +112,8 @@ pub const Config = struct {
             .tracy_on_demand = b.option(
                 bool,
                 "tracy-on-demand",
-                "Enables tracy on-demand mode (allows reconnecting). Only has an effect if tracy is enabled via enable-tracy.",
+                "Enables tracy on-demand mode (allows reconnecting). " ++
+                    "Only has an effect if tracy is enabled via enable-tracy.",
             ) orelse false,
             .use_llvm = b.option(
                 bool,
@@ -168,7 +169,10 @@ pub const Config = struct {
                             // This is a tagged release version (e.g. 0.2.0)
                             if (!std.mem.eql(u8, git_describe, version_string)) {
                                 // Something must be very wrong.
-                                std.debug.print("Sig's version '{s}' does not match Git tag '{s}'\n", .{ version_string, git_describe });
+                                std.debug.print(
+                                    "Sig's version '{s}' does not match Git tag '{s}'\n",
+                                    .{ version_string, git_describe },
+                                );
                                 std.process.exit(1);
                             }
                             break :v version_string;
@@ -196,15 +200,24 @@ pub const Config = struct {
                             // Check that the commit hash is prefixed with a 'g' (a Git convention).
                             // e.g v0.1.0-1832-g5ef9eaf0b
                             if (commit_id.len < 1 or commit_id[0] != 'g') {
-                                std.debug.print("Unexpected `git describe` output: {s}\n", .{git_describe});
+                                std.debug.print(
+                                    "Unexpected `git describe` output: {s}\n",
+                                    .{git_describe},
+                                );
                                 break :v version_string;
                             }
 
                             // The version is reformatted in accordance with the https://semver.org specification.
-                            break :v b.fmt("{s}-dev.{s}+{s}", .{ version_string, commit_height, commit_id[1..] });
+                            break :v b.fmt(
+                                "{s}-dev.{s}+{s}",
+                                .{ version_string, commit_height, commit_id[1..] },
+                            );
                         },
                         else => {
-                            std.debug.print("Unexpected `git describe` output: {s}\n", .{git_describe});
+                            std.debug.print(
+                                "Unexpected `git describe` output: {s}\n",
+                                .{git_describe},
+                            );
                             break :v version_string;
                         },
                     }
@@ -244,8 +257,14 @@ pub fn build(b: *Build) !void {
     const benchmark_step = b.step("benchmark", "Benchmark client");
     const geyser_reader_step = b.step("geyser_reader", "Read data from geyser");
     const vm_step = b.step("vm", "Run the VM client");
-    const test_send_transactions_step = b.step("test_send_transactions", "Attempt to land transactions on testnet using QUIC client");
-    const test_mock_transfers_step = b.step("test_mock_transfers", "Test MockTransferService in RPC submission mode");
+    const test_send_transactions_step = b.step(
+        "test_send_transactions",
+        "Attempt to land transactions on testnet using QUIC client",
+    );
+    const test_mock_transfers_step = b.step(
+        "test_mock_transfers",
+        "Test MockTransferService in RPC submission mode",
+    );
     const docs_step = b.step("docs", "Generate and install documentation for the Sig Library");
     const feature_set_id_step = b.step("feature_set_id", "Print the generated feature set ID");
 
@@ -311,6 +330,7 @@ pub fn build(b: *Build) !void {
     });
     shared_mod.addImport("base58", base58_mod);
     shared_mod.addImport("build-options", build_options_mod);
+    shared_mod.addImport("tracy", tracy_mod);
 
     const std14_mod = b.createModule(.{
         .root_source_file = b.path("src/std14.zig"),
@@ -336,7 +356,8 @@ pub fn build(b: *Build) !void {
     // Feature set ID for version compatibility
     const feature_set_id_gen = addFeatureSetIdGenerator(b, config.use_llvm);
     const feature_set_id = b.createModule(.{
-        .root_source_file = b.addRunArtifact(feature_set_id_gen).addOutputFileArg("feature-set-id.zig"),
+        .root_source_file = b.addRunArtifact(feature_set_id_gen)
+            .addOutputFileArg("feature-set-id.zig"),
     });
     shared_mod.addImport("feature-set-id", feature_set_id);
     const print_feature_set_id = b.addRunArtifact(feature_set_id_gen);

@@ -1,6 +1,7 @@
 const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../../sig.zig");
+const shared_syscalls = @import("shared").vm.syscalls;
 
 pub const cpi = @import("cpi.zig");
 pub const memops = @import("memops.zig");
@@ -13,7 +14,6 @@ const pubkey_utils = sig.runtime.pubkey_utils;
 const serialize = sig.runtime.program.bpf.serialize;
 
 const memory = sig.vm.memory;
-const Murmur3 = std.hash.Murmur3_32;
 const SyscallError = sig.vm.SyscallError;
 const Pubkey = sig.core.Pubkey;
 const MemoryMap = memory.MemoryMap;
@@ -23,7 +23,6 @@ const TransactionContext = sig.runtime.TransactionContext;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const AccountMeta = cpi.AccountMetaRust;
-const Feature = sig.core.features.Feature;
 
 pub const Error = sig.vm.ExecutionError;
 
@@ -33,183 +32,67 @@ pub const SyscallFn = *const fn (
     *RegisterMap,
 ) Error!void;
 
-pub const Syscall = enum {
-    abort,
-    sol_panic_,
-    sol_alloc_free_,
+pub const Syscall = shared_syscalls.Syscall;
 
-    sol_log_,
-    sol_log_64_,
-    sol_log_pubkey,
-    sol_log_compute_units_,
-    sol_log_data,
+fn stubbed(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {}
 
-    sol_create_program_address,
-    sol_try_find_program_address,
+pub fn resolve(loader: *const Syscall.Registry, bytes: u32) ?SyscallFn {
+    const syscall = loader.get(bytes) orelse return null;
+    return if (loader.is_stubbed) &stubbed else map.getPtrConst(syscall).*;
+}
 
-    sol_sha256,
-    sol_keccak256,
-    sol_blake3,
-    sol_poseidon,
+pub const map = std.EnumArray(Syscall, SyscallFn).init(.{
+    .abort = abort,
+    .sol_panic_ = panic,
+    .sol_alloc_free_ = allocFree,
 
-    sol_secp256k1_recover,
-    sol_curve_validate_point,
-    sol_curve_group_op,
-    sol_curve_multiscalar_mul,
-    sol_alt_bn128_group_op,
-    sol_alt_bn128_compression,
+    .sol_log_ = log,
+    .sol_log_64_ = log64,
+    .sol_log_pubkey = logPubkey,
+    .sol_log_compute_units_ = logComputeUnits,
+    .sol_log_data = logData,
 
-    sol_curve_decompress,
-    sol_curve_pairing_map,
+    .sol_create_program_address = createProgramAddress,
+    .sol_try_find_program_address = findProgramAddress,
 
-    sol_get_clock_sysvar,
-    sol_get_epoch_schedule_sysvar,
-    sol_get_fees_sysvar,
-    sol_get_rent_sysvar,
-    sol_get_last_restart_slot,
-    sol_get_epoch_rewards_sysvar,
+    .sol_sha256 = hash.sha256,
+    .sol_keccak256 = hash.keccak256,
+    .sol_blake3 = hash.blake3,
+    .sol_poseidon = hash.poseidon,
 
-    sol_memcpy_,
-    sol_memmove_,
-    sol_memset_,
-    sol_memcmp_,
+    .sol_secp256k1_recover = ecc.secp256k1Recover,
+    .sol_curve_validate_point = ecc.curvePointValidation,
+    .sol_curve_group_op = ecc.curveGroupOp,
+    .sol_curve_multiscalar_mul = ecc.curveMultiscalarMul,
+    .sol_alt_bn128_group_op = ecc.altBn128GroupOp,
+    .sol_alt_bn128_compression = ecc.altBn128Compression,
 
-    sol_get_processed_sibling_instruction,
-    sol_get_stack_height,
-    sol_set_return_data,
-    sol_get_return_data,
-    sol_get_sysvar,
-    sol_get_epoch_stake,
-    sol_remaining_compute_units,
+    .sol_curve_decompress = ecc.curveDecompress,
+    .sol_curve_pairing_map = ecc.curvePairingMap,
 
-    sol_invoke_signed_c,
-    sol_invoke_signed_rust,
+    .sol_get_clock_sysvar = sysvar.getClock,
+    .sol_get_epoch_schedule_sysvar = sysvar.getEpochSchedule,
+    .sol_get_fees_sysvar = sysvar.getFees,
+    .sol_get_rent_sysvar = sysvar.getRent,
+    .sol_get_last_restart_slot = sysvar.getLastRestartSlot,
+    .sol_get_epoch_rewards_sysvar = sysvar.getEpochRewards,
+    .sol_get_sysvar = sysvar.getSysvar,
 
-    /// We basically just store this as an array of syscall enumerations with their murmur hash as the value.
-    /// This makes lookups O(N) relative to the number of syscalls, however this shouldn't be a huge problem.
-    /// The hashmap approach we had before only slightly reduced the lookup times, all of which was wiped
-    /// out by the cost of allocating it. So this is the prefered approach for now.
-    ///
-    /// TODO: perhaps we can look into a PHF based approach here, although I imagine it'll just end up
-    /// being keyed by murmur and truncated to unique bits.
-    pub const Registry = struct {
-        map: std.EnumArray(Syscall, ?u32),
-        is_stubbed: bool,
+    .sol_memcpy_ = memops.memcpy,
+    .sol_memmove_ = memops.memmove,
+    .sol_memset_ = memops.memset,
+    .sol_memcmp_ = memops.memcmp,
 
-        /// Relates Syscalls to the Murmur3 hash of their name, used for symbol collision checking.
-        pub const ALL_ENABLED: Registry = .{ .map = b: {
-            var kvs: std.enums.EnumFieldStruct(Syscall, ?u32, null) = undefined;
-            for (@typeInfo(Syscall).@"enum".fields) |field| {
-                @field(kvs, field.name) = Murmur3.hashWithSeed(field.name, 0);
-            }
-            break :b .init(kvs);
-        }, .is_stubbed = false };
+    .sol_get_processed_sibling_instruction = getProcessedSiblingInstruction,
+    .sol_get_stack_height = getStackHeight,
+    .sol_set_return_data = setReturnData,
+    .sol_get_return_data = getReturnData,
+    .sol_get_epoch_stake = getEpochStake,
+    .sol_remaining_compute_units = remainingComputeUnits,
 
-        pub const ALL_DISABLED: Registry = .{ .map = .initFill(null), .is_stubbed = false };
-
-        /// Returns a `SycallFn` based on the provided hash.
-        pub fn get(self: *const Registry, bytes: u32) ?SyscallFn {
-            const syscall: Syscall = for (self.map.values, 0..) |entry, i| {
-                const value = entry orelse continue; // disabled entries don't collide
-                if (value == bytes) break @enumFromInt(i); // assumes that the EnumArray will be in "array" mode, which it should be.
-            } else return null; // no such hash
-            // TODO: consider just making a build flag for harness builds that removes this check entirely for perf
-            return if (self.is_stubbed) &stubbed else map.getPtrConst(syscall).*;
-        }
-
-        fn stubbed(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {}
-
-        /// Generally spekaing this should only be used for tests and special setup.
-        /// Otherwise take the ALL_ENABLED -> disabling approach, since it's faster.
-        pub fn enable(self: *Registry, name: Syscall) void {
-            self.map.set(name, Murmur3.hashWithSeed(@tagName(name), 0));
-        }
-    };
-
-    /// Lookup for the syscall's implementation function.
-    pub const map = std.EnumArray(Syscall, SyscallFn).init(.{
-        .abort = abort,
-        .sol_panic_ = panic,
-        .sol_alloc_free_ = allocFree,
-
-        .sol_log_ = log,
-        .sol_log_64_ = log64,
-        .sol_log_pubkey = logPubkey,
-        .sol_log_compute_units_ = logComputeUnits,
-        .sol_log_data = logData,
-
-        .sol_create_program_address = createProgramAddress,
-        .sol_try_find_program_address = findProgramAddress,
-
-        .sol_sha256 = hash.sha256,
-        .sol_keccak256 = hash.keccak256,
-        .sol_blake3 = hash.blake3,
-        .sol_poseidon = hash.poseidon,
-
-        .sol_secp256k1_recover = ecc.secp256k1Recover,
-        .sol_curve_validate_point = ecc.curvePointValidation,
-        .sol_curve_group_op = ecc.curveGroupOp,
-        .sol_curve_multiscalar_mul = ecc.curveMultiscalarMul,
-        .sol_alt_bn128_group_op = ecc.altBn128GroupOp,
-        .sol_alt_bn128_compression = ecc.altBn128Compression,
-
-        .sol_curve_decompress = ecc.curveDecompress,
-        .sol_curve_pairing_map = ecc.curvePairingMap,
-
-        .sol_get_clock_sysvar = sysvar.getClock,
-        .sol_get_epoch_schedule_sysvar = sysvar.getEpochSchedule,
-        .sol_get_fees_sysvar = sysvar.getFees,
-        .sol_get_rent_sysvar = sysvar.getRent,
-        .sol_get_last_restart_slot = sysvar.getLastRestartSlot,
-        .sol_get_epoch_rewards_sysvar = sysvar.getEpochRewards,
-        .sol_get_sysvar = sysvar.getSysvar,
-
-        .sol_memcpy_ = memops.memcpy,
-        .sol_memmove_ = memops.memmove,
-        .sol_memset_ = memops.memset,
-        .sol_memcmp_ = memops.memcmp,
-
-        .sol_get_processed_sibling_instruction = getProcessedSiblingInstruction,
-        .sol_get_stack_height = getStackHeight,
-        .sol_set_return_data = setReturnData,
-        .sol_get_return_data = getReturnData,
-        .sol_get_epoch_stake = getEpochStake,
-        .sol_remaining_compute_units = remainingComputeUnits,
-
-        .sol_invoke_signed_c = cpi.invokeSigned(cpi.AccountInfoC),
-        .sol_invoke_signed_rust = cpi.invokeSigned(cpi.AccountInfoRust),
-    });
-
-    const Gate = struct {
-        feature: Feature,
-        /// Whether the feature "disables", instead of "enabling" the syscall.
-        invert: bool = false,
-    };
-
-    /// Describes syscalls whos activation is locked behind a feature gate.
-    pub const gates = std.EnumArray(Syscall, ?Gate).initDefault(@as(?Gate, null), .{
-        // NOTE: also needs to check for `reject_deployment_of_broken_elfs`.
-        .sol_alloc_free_ = .{ .feature = .disable_deploy_of_alloc_free_syscall, .invert = true },
-
-        .sol_blake3 = .{ .feature = .blake3_syscall_enabled },
-        .sol_poseidon = .{ .feature = .enable_poseidon_syscall },
-
-        .sol_curve_validate_point = .{ .feature = .curve25519_syscall_enabled },
-        .sol_curve_group_op = .{ .feature = .curve25519_syscall_enabled },
-        .sol_curve_multiscalar_mul = .{ .feature = .curve25519_syscall_enabled },
-        .sol_alt_bn128_group_op = .{ .feature = .enable_alt_bn128_syscall },
-        .sol_alt_bn128_compression = .{ .feature = .enable_alt_bn128_compression_syscall },
-
-        .sol_curve_decompress = .{ .feature = .enable_bls12_381_syscall },
-        .sol_curve_pairing_map = .{ .feature = .enable_bls12_381_syscall },
-
-        .sol_get_fees_sysvar = .{ .feature = .disable_fees_sysvar, .invert = true },
-        .sol_get_last_restart_slot = .{ .feature = .last_restart_slot_sysvar },
-        .sol_remaining_compute_units = .{ .feature = .remaining_compute_units_syscall_enabled },
-        .sol_get_sysvar = .{ .feature = .get_sysvar_syscall_enabled },
-        .sol_get_epoch_stake = .{ .feature = .enable_get_epoch_stake_syscall },
-    });
-};
+    .sol_invoke_signed_c = cpi.invokeSigned(cpi.AccountInfoC),
+    .sol_invoke_signed_rust = cpi.invokeSigned(cpi.AccountInfoRust),
+});
 
 // logging
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L3-L33
