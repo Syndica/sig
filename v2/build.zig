@@ -212,7 +212,6 @@ pub fn build(b: *Build) !void {
                 .root_source_file = b.path("scripts/shred_stream.zig"),
                 .target = target,
                 .optimize = optimize,
-                .link_libc = true,
                 .imports = &.{
                     .{ .name = "ipc-ring", .module = ipc_ring_mod },
                     .{ .name = "rocksdb", .module = rocksdb_mod },
