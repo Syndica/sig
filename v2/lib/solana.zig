@@ -2,7 +2,10 @@ comptime {
     if (@import("builtin").is_test) {
         _ = @import("solana/bincode.zig");
         _ = @import("solana/cluster.zig");
+        _ = @import("solana/epoch_schedule.zig");
+        _ = @import("solana/features.zig");
         _ = @import("solana/hash.zig");
+        _ = @import("solana/ids.zig");
         _ = @import("solana/leader_schedule.zig");
         _ = @import("solana/pubkey.zig");
         _ = @import("solana/signature.zig");
@@ -44,4 +47,3 @@ pub const time = struct {
     /// 1 Epoch ~= 2 days.
     pub const DEFAULT_SLOTS_PER_EPOCH: u64 = 2 * TICKS_PER_DAY / DEFAULT_TICKS_PER_SLOT;
 };
-

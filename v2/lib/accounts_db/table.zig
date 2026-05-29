@@ -48,6 +48,7 @@ pub const Table = struct {
     // Number of hash map probes to do together with ILP to amortize DRAM cache-miss latency.
     const PARALLEL_SCAN = 8;
 
+    // Hashes the pubkey for table access (see Entry.hash doc-comment)
     fn hashPubkey(self: *const Table, pubkey: *const Pubkey) u128 {
         // based on xxh3 / rapidhash / wyhash mixing
         const s: [4]u64 = .{
@@ -60,7 +61,10 @@ pub const Table = struct {
         const in: [4]u64 = @bitCast(pubkey.data);
         const a: [2]u64 = @bitCast(@as(u128, in[0] ^ (s[0] +% seed)) * (in[1] ^ (s[1] -% seed)));
         const b: [2]u64 = @bitCast(@as(u128, in[2] ^ (s[2] +% seed)) * (in[3] ^ (s[3] -% seed)));
-        return @bitCast([2]u64{ a[0] ^ a[1], b[0] ^ b[1] });
+        return @bitCast([2]u64{
+            (a[0] ^ a[1]) | 1, // make sure at least one bit is set so the result is non-zero
+            b[0] ^ b[1],
+        });
     }
 
     // hash % num_entries (based on xxh3 avalanche)
@@ -178,6 +182,9 @@ pub const Table = struct {
             const ptr = if (newer_slot) &ptrs[i][0] else &stub;
             ptr.* = batch.entries[i];
         }
+
+        // Hard cap at this point to consider a re-design (store Pubkey directly, chain probing)
+        std.debug.assert(self.count < std.math.maxInt(u32));
     }
 
     pub fn get(self: *const Table, pubkey: *const Pubkey) Value {

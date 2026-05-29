@@ -22,9 +22,8 @@ pub const AccountPool = extern struct {
     const Bucket = extern struct {
         free_list: Index,
         stolen: extern struct {
-            block: Index,
-            offset: u32,
-            len: u32,
+            start: Index,
+            end: u32,
         },
 
         fn pushFreeList(self: *Bucket, idx: Index, memory: []u8) void {
@@ -41,10 +40,10 @@ pub const AccountPool = extern struct {
         }
 
         fn bumpStolenBlock(self: *Bucket, idx_bump: Index) ?Index {
-            const idx = self.stolen.block + self.stolen.offset;
-            if (idx + idx_bump > self.stolen.len) return null;
+            const idx = self.stolen.start;
+            if (idx + idx_bump > self.stolen.end) return null;
 
-            self.stolen.offset += idx_bump;
+            self.stolen.start = idx + idx_bump;
             return idx;
         }
     };
@@ -55,14 +54,16 @@ pub const AccountPool = extern struct {
         @memset(&self.buckets, .{
             .free_list = invalid_index,
             .stolen = .{
-                .block = invalid_index,
-                .offset = 0,
-                .len = 0,
+                .start = invalid_index,
+                .end = invalid_index,
             },
         });
         self.memory_len = memory_len;
     }
 
+    // A lock to protect alloc() path mostly, since the operations it needs to do could be made
+    // lock-free, but it would be complex to do so. Not using std.Thread.Mutex as that can block the
+    // OS thread which 1) is slow for us since wanting to pin cores 2) uses syscalls not in seccomp.
     const Lock = extern struct {
         locked: std.atomic.Value(u32) = .init(0),
 
@@ -108,7 +109,9 @@ pub const AccountPool = extern struct {
         } else unreachable;
     }
 
-    // A VLA account stored in pool.memory (all fields align(1) to allow such).
+    // A VLA account stored in pool.memory.
+    // The `memory` field is aligned to `index_scale`, and all allocations are done on `index_scale`
+    // units, so Accounts in `.memory` should all be properly aligned to avoid `align(1)` on fields.
     pub const Account = extern struct {
         ref_count: std.atomic.Value(u32),
         pubkey: Pubkey,
@@ -189,20 +192,19 @@ pub const AccountPool = extern struct {
             // try steal from its free list into our own stolen block
             if (target.popFreeList(memory)) |stolen_block_idx| {
                 bucket.stolen = .{
-                    .block = stolen_block_idx,
-                    .offset = 0,
-                    .len = std.math.divCeil(
+                    .start = stolen_block_idx,
+                    .end = stolen_block_idx + (std.math.divCeil(
                         Index,
                         @sizeOf(Account) + target_sc_data_size,
                         index_scale,
-                    ) catch unreachable,
+                    ) catch unreachable),
                 };
                 return bucket.bumpStolenBlock(idx_bump) orelse unreachable;
             }
         }
 
         // TODO: Under extreme memory pressure. Should really signal operator here.
-        // But additionally, try to coalesce contiguous 1) stolen blocks or 2) free_list chunks 
+        // But additionally, try to coalesce contiguous 1) stolen blocks or 2) free_list chunks
         // from size classes, in order to service this allocation request.
         return error.OutOfMemory;
     }

@@ -126,7 +126,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
             logger.info().logf(
                 "feature lookup: {s}: pubkey:{f} idx:{}",
-                .{@tagName(feature), result.pubkey, result.account_index },
+                .{ @tagName(feature), result.pubkey, result.account_index },
             );
 
             if (result.account_index == AccountPool.invalid_index) {
@@ -155,7 +155,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
                     var new_data: [9]u8 = undefined;
                     new_data[0] = 1;
                     std.mem.writeInt(u64, new_data[1..9], slot, .little);
-                    
+
                     var r = std.Io.Reader.fixed(&new_data);
                     try rooted.put(
                         .from(logger),
@@ -200,7 +200,6 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     }
 }
 
-
 // const features = lib.solana.features;
 // const Slot = lib.solana.Slot;
 
@@ -221,5 +220,5 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 //     // queueRead(self, logger, *pubkey) !bool
 //     // pollRead(self, logger) !?
 //     // freeRead(self, )
-    
+
 // }
