@@ -1,3 +1,5 @@
+pub const ELF_DATA_DIR = "data/test-elfs/";
+
 pub const bincode = @import("bincode/bincode.zig");
 pub const bloom = struct {
     pub const bit_set = @import("bloom/bit_set.zig");

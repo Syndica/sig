@@ -57,7 +57,7 @@ pub fn execute(
     else |_|
         false;
 
-    var stake_instruction_buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
+    var stake_instruction_buf: [sig.core.Transaction.MAX_BYTES]u8 = undefined;
     const stake_instruction = try ic.ixn_info.limitedDeserializeInstruction(
         Instruction,
         &stake_instruction_buf,

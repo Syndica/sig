@@ -10,6 +10,7 @@ const Blake3 = std.crypto.hash.Blake3;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const shortVecConfig = sig.bincode.shortvec.sliceConfig;
 
@@ -137,7 +138,7 @@ pub const Transaction = struct {
         allocator: std.mem.Allocator,
         version: Version,
         message: Message,
-        keypairs: []const sig.identity.KeyPair,
+        keypairs: []const KeyPair,
     ) InitOwnedMessageWithSigningKeypairsError!Transaction {
         const msg_bytes_bounded = message.serializeBounded(version) catch return error.BadMessage;
         const msg_bytes = msg_bytes_bounded.constSlice();

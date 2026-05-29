@@ -467,7 +467,7 @@ pub fn executeBpfLoaderV4ProgramInstruction(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
+    var buf: [sig.core.Transaction.MAX_BYTES]u8 = undefined;
     const instruction = try ic.ixn_info.limitedDeserializeInstruction(
         bpf_loader_program.v4.Instruction,
         &buf,
@@ -922,7 +922,7 @@ pub fn executeBpfLoaderV3ProgramInstruction(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
+    var buf: [sig.core.Transaction.MAX_BYTES]u8 = undefined;
     const instruction = try ic.ixn_info.limitedDeserializeInstruction(
         bpf_loader_program.v3.Instruction,
         &buf,

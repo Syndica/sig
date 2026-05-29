@@ -263,16 +263,14 @@ const FeatureActivationState = union(enum) {
 /// Feature accounts must have at least 9 bytes of data (bincode-serialized ?u64)
 /// An empty account (0 bytes) is not a valid pending feature
 /// [solana-sdk] https://github.com/anza-xyz/solana-sdk/blob/54449336c03ae8a99bc37745ac97ab90a77eb24b/feature-gate-interface/src/state.rs#L37
-pub fn activationStateFromAccount(account: sig.core.Account) !FeatureActivationState {
-    if (account.data.len() < 9 or
-        !account.owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) return .invalid;
+pub fn activationStateFromAccount(owner: Pubkey, data: []const u8) !FeatureActivationState {
+    if (data.len < 9 or
+        !owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) return .invalid;
 
-    var feature_bytes = [_]u8{0} ** 9;
-    account.data.readAll(&feature_bytes);
     const maybe_slot = sig.bincode.readFromSlice(
         failing_allocator,
         ?u64,
-        &feature_bytes,
+        data[0..9],
         .{},
     ) catch @panic("failed to deserialize feature account data");
 

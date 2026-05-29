@@ -1,3 +1,5 @@
+const shared = @import("../shared/lib.zig");
+
 pub const accounts_db = @import("accountsdb/lib.zig");
 pub const bincode = @import("bincode/bincode.zig");
 pub const bloom = @import("bloom/lib.zig");
@@ -37,7 +39,7 @@ pub const TEST_STATE_DIR = "data/test-state/";
 pub const FUZZ_DATA_DIR = "data/fuzz-data/";
 pub const BENCHMARK_RESULTS_DIR = "results/";
 pub const GENESIS_DIR = "data/genesis-files/";
-pub const ELF_DATA_DIR = "data/test-elfs/";
+pub const ELF_DATA_DIR = shared.ELF_DATA_DIR;
 
 /// The maximum cluster size supported by sig. Raise this number to support
 /// larger clusters. It's used in cases when we need to assume an upper bound,

@@ -198,7 +198,18 @@ pub fn computeFeatureSet(
         ) orelse continue;
         defer feature_account.deinit(arena.allocator());
 
-        switch (try features.activationStateFromAccount(feature_account)) {
+        // TODO(shared): this is a bit hacky, done to decouple shared dependence on `Account`
+        var feature_data_buf: [9]u8 = undefined;
+        const feature_data: []const u8 =
+            if (feature_account.data.len() >= feature_data_buf.len) blk: {
+                _ = feature_account.data.read(0, &feature_data_buf);
+                break :blk &feature_data_buf;
+            } else &.{};
+
+        switch (try features.activationStateFromAccount(
+            feature_account.owner,
+            feature_data,
+        )) {
             .activated => |activation_slot| if (slot >= activation_slot) feature_set.setSlot(
                 feature,
                 activation_slot,

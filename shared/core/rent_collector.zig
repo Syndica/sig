@@ -9,6 +9,10 @@ const EpochSchedule = sig.core.EpochSchedule;
 const TransactionError = sig.core.transaction_error.TransactionError;
 
 pub const RENT_EXEMPT_RENT_EPOCH: Epoch = std.math.maxInt(Epoch);
+/// Derived from `src/core/genesis_config.zig` as `GenesisConfig.default().slotsPerYear()`.
+/// The default genesis config uses `DEFAULT_TICKS_PER_SECOND` of 160 and
+/// `DEFAULT_TICKS_PER_SLOT` of 64.
+pub const DEFAULT_SLOTS_PER_YEAR: f64 = 78892314.983999997;
 
 pub const RentResult = union(enum) {
     NoRentCollectionNow,
@@ -40,11 +44,9 @@ pub const RentCollector = struct {
     pub const DEFAULT: RentCollector = .{
         .epoch = 0,
         .epoch_schedule = .INIT,
-        .slots_per_year = sig.core.GenesisConfig.default(failing_allocator).slotsPerYear(),
+        .slots_per_year = DEFAULT_SLOTS_PER_YEAR,
         .rent = .INIT,
     };
-    const failing_allocator = sig.utils.allocators.failing.allocator(.{});
-
     pub fn initRandom(random: std.Random) RentCollector {
         return .{
             .epoch = random.int(Epoch),
@@ -197,7 +199,7 @@ pub const RentCollector = struct {
         return .{
             .epoch = epoch,
             .epoch_schedule = .INIT,
-            .slots_per_year = 78892314.983999997, // [agave] GenesisConfig::default().slots_per_year()
+            .slots_per_year = DEFAULT_SLOTS_PER_YEAR,
             .rent = .INIT,
         };
     }
