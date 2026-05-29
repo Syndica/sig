@@ -18,11 +18,13 @@ const stream_queue_packets = 8192;
 
 const TestMode = enum {
     linear,
+    reverse,
     shuffle_global,
     shuffle_slot,
 
     fn parse(raw: []const u8) ?TestMode {
         if (std.mem.eql(u8, raw, "linear")) return .linear;
+        if (std.mem.eql(u8, raw, "reverse")) return .reverse;
         if (std.mem.eql(u8, raw, "shuffle-global")) return .shuffle_global;
         if (std.mem.eql(u8, raw, "shuffle-slot")) return .shuffle_slot;
         return null;
@@ -31,6 +33,7 @@ const TestMode = enum {
     fn name(self: TestMode) []const u8 {
         return switch (self) {
             .linear => "linear",
+            .reverse => "reverse",
             .shuffle_global => "shuffle-global",
             .shuffle_slot => "shuffle-slot",
         };
@@ -74,7 +77,7 @@ const PartialConfig = struct {
         }
 
         switch (self.test_mode) {
-            .linear => {
+            .linear, .reverse => {
                 if (self.seed != null) {
                     std.debug.print("--seed is only valid with --test-mode shuffle-global or shuffle-slot\n", .{});
                     return error.InvalidArguments;
@@ -575,6 +578,7 @@ fn produceLedgerPackets(
 ) !ProducerStats {
     switch (config.test_mode) {
         .linear => {},
+        .reverse => return produceReverseLedgerPackets(blockstore, config, writer, stop),
         .shuffle_global => return produceGlobalShuffledRefSchedule(blockstore, config, writer, stop),
         .shuffle_slot => return produceSlotShuffledPackets(blockstore, config, writer, stop),
     }
@@ -605,10 +609,57 @@ fn produceLedgerPackets(
         if (!slotSelected(config, slot)) continue;
 
         stats.recordSlot();
-        try produceSlotShreds(blockstore, slot, .data, writer, stop, &unpublished_packets, &stats);
+        try produceSlotShreds(blockstore, slot, .data, .forward, writer, stop, &unpublished_packets, &stats);
         if (blockstore.has_code_shred) {
-            try produceSlotShreds(blockstore, slot, .code, writer, stop, &unpublished_packets, &stats);
+            try produceSlotShreds(blockstore, slot, .code, .forward, writer, stop, &unpublished_packets, &stats);
         }
+    }
+
+    if (unpublished_packets != 0 and !stop.load(.acquire)) {
+        writer.markUsed();
+    }
+
+    return stats;
+}
+
+fn produceReverseLedgerPackets(
+    blockstore: *const AgaveBlockstore,
+    config: Config,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
+) !ProducerStats {
+    var stats: ProducerStats = .{};
+    var unpublished_packets: usize = 0;
+
+    var start_key_buf: [8]u8 = undefined;
+    const start_key: ?[]const u8 = if (config.end_slot) |slot| start_key: {
+        writeSlotKey(&start_key_buf, slot);
+        break :start_key &start_key_buf;
+    } else null;
+
+    var slot_iter = blockstore.db.iterator(try blockstore.columnFamily(agave_cf_meta), .reverse, start_key);
+    defer slot_iter.deinit();
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    while (try slot_iter.next(&err_data)) |entry| {
+        if (stop.load(.acquire)) break;
+
+        const slot = parseSlotKey(entry[0].data) catch |err| {
+            std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
+            return err;
+        };
+        if (config.start_slot) |start_slot| {
+            if (slot < start_slot) break;
+        }
+        if (!slotSelected(config, slot)) continue;
+
+        stats.recordSlot();
+        if (blockstore.has_code_shred) {
+            try produceSlotShreds(blockstore, slot, .code, .reverse, writer, stop, &unpublished_packets, &stats);
+        }
+        try produceSlotShreds(blockstore, slot, .data, .reverse, writer, stop, &unpublished_packets, &stats);
     }
 
     if (unpublished_packets != 0 and !stop.load(.acquire)) {
@@ -855,18 +906,25 @@ fn produceSlotShreds(
     blockstore: *const AgaveBlockstore,
     slot: Slot,
     kind: ShredKind,
+    comptime direction: rocks.IteratorDirection,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
     unpublished_packets: *usize,
     stats: *ProducerStats,
 ) !void {
     var start_key_buf: [16]u8 = undefined;
-    writeShredKey(&start_key_buf, .{ .slot = slot, .index = 0 });
+    writeShredKey(&start_key_buf, .{
+        .slot = slot,
+        .index = switch (direction) {
+            .forward => 0,
+            .reverse => std.math.maxInt(u64),
+        },
+    });
 
     var iter = blockstore.db.iterator(
         try blockstore.columnFamily(kind.columnFamilyName()),
-        .forward,
-        start_key_buf[0..],
+        direction,
+        &start_key_buf,
     );
     defer iter.deinit();
 
@@ -1206,7 +1264,7 @@ fn parseRateHz(value: []const u8) ParseArgsError!f64 {
 fn parseTestMode(value: []const u8) ParseArgsError!TestMode {
     return TestMode.parse(value) orelse {
         std.debug.print("invalid test mode for --test-mode: {s}\n", .{value});
-        std.debug.print("valid test modes: linear, shuffle-global, shuffle-slot\n", .{});
+        std.debug.print("valid test modes: linear, reverse, shuffle-global, shuffle-slot\n", .{});
         return error.InvalidArguments;
     };
 }
@@ -1237,7 +1295,7 @@ fn printHelp() void {
         \\  --start-slot <slot>   First slot to stream
         \\  --end-slot <slot>     Inclusive last slot to stream
         \\  --rate-hz <float>     Maximum packets per second
-        \\  --test-mode <mode>    linear, shuffle-global, or shuffle-slot
+        \\  --test-mode <mode>    linear, reverse, shuffle-global, or shuffle-slot
         \\  --seed <seed>         Decimal or 0x-prefixed seed for randomized test modes
         \\  --dry-run             Read and print stats without sending UDP
         \\  -h, --help            Print this help
@@ -1293,6 +1351,16 @@ test "parse and validate test modes" {
     }
 
     {
+        const result = try parseArgs(&.{
+            "--ledger",    "ledger",
+            "--target",    "127.0.0.1:8002",
+            "--test-mode", "reverse",
+        });
+        try std.testing.expectEqual(.reverse, result.config.test_mode);
+        try std.testing.expectEqual(@as(?u64, null), result.config.seed);
+    }
+
+    {
         try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
             "--ledger",    "ledger",
             "--target",    "127.0.0.1:8002",
@@ -1310,6 +1378,12 @@ test "parse and validate test modes" {
             "--ledger", "ledger",
             "--target", "127.0.0.1:8002",
             "--seed",   "1",
+        }));
+        try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+            "--ledger",    "ledger",
+            "--target",    "127.0.0.1:8002",
+            "--test-mode", "reverse",
+            "--seed",      "1",
         }));
         try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
             "--ledger",    "ledger",
