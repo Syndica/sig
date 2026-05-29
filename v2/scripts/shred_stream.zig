@@ -24,6 +24,20 @@ const Config = struct {
     end_slot: ?Slot = null,
     rate_hz: ?f64 = null,
     dry_run: bool = false,
+
+    fn slotSelected(self: Config, slot: Slot) bool {
+        if (self.start_slot) |start_slot| {
+            if (slot < start_slot) return false;
+        }
+        if (self.end_slot) |end_slot| {
+            if (slot > end_slot) return false;
+        }
+        return true;
+    }
+
+    fn pastEndSlot(self: Config, slot: Slot) bool {
+        return if (self.end_slot) |end_slot| slot > end_slot else false;
+    }
 };
 
 const PartialConfig = struct {
@@ -44,7 +58,10 @@ const PartialConfig = struct {
             return error.InvalidArguments;
         };
 
-        if (self.start_slot != null and self.end_slot != null and self.end_slot.? < self.start_slot.?) {
+        if (self.start_slot != null and
+            self.end_slot != null and
+            self.end_slot.? < self.start_slot.?)
+        {
             std.debug.print("--end-slot must be greater than or equal to --start-slot\n", .{});
             return error.InvalidArguments;
         }
@@ -144,10 +161,16 @@ fn run(allocator: Allocator, config: Config) !void {
     try stdout.print("  column_families:\n", .{});
     try stdout.print("    {s}: present\n", .{agave_cf_meta});
     try stdout.print("    {s}: present\n", .{agave_cf_data_shred});
-    try stdout.print("    {s}: {s}\n", .{ agave_cf_code_shred, if (blockstore.has_code_shred) "present" else "missing" });
+    try stdout.print("    {s}: {s}\n", .{
+        agave_cf_code_shred,
+        if (blockstore.has_code_shred) "present" else "missing",
+    });
 
     if (!blockstore.has_code_shred) {
-        try stdout.print("warning: missing optional {s} column family; streaming data shreds only\n", .{agave_cf_code_shred});
+        try stdout.print(
+            "warning: missing optional {s} column family; streaming data shreds only\n",
+            .{agave_cf_code_shred},
+        );
     }
 
     if (config.dry_run) {
@@ -175,7 +198,17 @@ fn run(allocator: Allocator, config: Config) !void {
         const net_thread = try std.Thread.spawn(
             .{},
             netThreadMain,
-            .{ &ring, &producer_done, &stop, &net_thread_stats, &net_progress, &net_thread_error, sockfd, target, config.rate_hz },
+            .{
+                &ring,
+                &producer_done,
+                &stop,
+                &net_thread_stats,
+                &net_progress,
+                &net_thread_error,
+                sockfd,
+                target,
+                config.rate_hz,
+            },
         );
         errdefer {
             stop.store(true, .release);
@@ -186,10 +219,26 @@ fn run(allocator: Allocator, config: Config) !void {
         const producer_thread = try std.Thread.spawn(
             .{},
             producerThreadMain,
-            .{ &blockstore, config, &ring, &producer_done, &stop, &producer_progress, &producer_result },
+            .{
+                &blockstore,
+                config,
+                &ring,
+                &producer_done,
+                &stop,
+                &producer_progress,
+                &producer_result,
+            },
         );
 
-        monitorProgress(stdout, &ring, &producer_done, &stop, &producer_progress, &net_progress, config.rate_hz) catch |err| {
+        monitorProgress(
+            stdout,
+            &ring,
+            &producer_done,
+            &stop,
+            &producer_progress,
+            &net_progress,
+            config.rate_hz,
+        ) catch |err| {
             stop.store(true, .release);
             producer_done.store(true, .release);
             producer_thread.join();
@@ -246,12 +295,15 @@ const AgaveBlockstore = struct {
             &err_data,
         ) catch |err| {
             if (err_data) |rocks_err| {
-                std.debug.print("failed to open RocksDB at {s}: {s}\n", .{ rocksdb_path, rocks_err.data });
+                std.debug.print(
+                    "failed to open RocksDB at {s}: {s}\n",
+                    .{ rocksdb_path, rocks_err.data },
+                );
             }
             return err;
         };
         errdefer db.deinit();
-        errdefer freeOpenedColumnFamilies(allocator, opened_cfs);
+        errdefer allocator.free(opened_cfs);
 
         return .{
             .allocator = allocator,
@@ -263,7 +315,7 @@ const AgaveBlockstore = struct {
     }
 
     fn deinit(self: *AgaveBlockstore) void {
-        freeOpenedColumnFamilies(self.allocator, self.column_families);
+        self.allocator.free(self.column_families);
         self.db.deinit();
         self.allocator.free(self.rocksdb_path);
     }
@@ -407,7 +459,10 @@ const ProgressSnapshot = struct {
     producer_full_polls: u64,
     sender_empty_polls: u64,
 
-    fn init(producer_progress: *ProducerProgress, net_progress: *NetThreadProgress) ProgressSnapshot {
+    fn init(
+        producer_progress: *ProducerProgress,
+        net_progress: *NetThreadProgress,
+    ) ProgressSnapshot {
         const produced_packets = producer_progress.data_packets.load(.acquire) +
             producer_progress.code_packets.load(.acquire);
         const sent_packets = net_progress.data_packets.load(.acquire) +
@@ -610,7 +665,8 @@ fn printProgress(
         try stdout.print("slot={d}", .{current_slot});
     }
     try stdout.print(
-        " slots={d} produced={d} sent={d} produce_pps={d} send_pps={d} queue={d}/{d} producer_backpressured={} net_idle={}",
+        " slots={d} produced={d} sent={d} produce_pps={d} send_pps={d}" ++
+            " queue={d}/{d} producer_backpressured={} net_idle={}",
         .{
             slots,
             produced_packets,
@@ -657,8 +713,16 @@ const ShredStats = struct {
         self.selected_payload_bytes += @intCast(packet_len);
         self.selected_max_packet_bytes = @max(self.selected_max_packet_bytes, packet_len);
         if (packet_len > max_shred_packet_bytes) self.selected_oversized_packets += 1;
-        self.selected_first_slot = if (self.selected_first_slot) |first| @min(first, key.slot) else key.slot;
-        self.selected_last_slot = if (self.selected_last_slot) |last| @max(last, key.slot) else key.slot;
+
+        self.selected_first_slot = if (self.selected_first_slot) |first|
+            @min(first, key.slot)
+        else
+            key.slot;
+
+        self.selected_last_slot = if (self.selected_last_slot) |last|
+            @max(last, key.slot)
+        else
+            key.slot;
     }
 };
 
@@ -689,7 +753,11 @@ fn produceLedgerPackets(
         break :start_key start_key_buf[0..];
     } else null;
 
-    var slot_iter = blockstore.db.iterator(try blockstore.columnFamily(agave_cf_meta), .forward, start_key);
+    var slot_iter = blockstore.db.iterator(
+        try blockstore.columnFamily(agave_cf_meta),
+        .forward,
+        start_key,
+    );
     defer slot_iter.deinit();
 
     var err_data: ?rocks.Data = null;
@@ -702,15 +770,33 @@ fn produceLedgerPackets(
             std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
             return err;
         };
-        if (pastEndSlot(config, slot)) break;
-        if (!slotSelected(config, slot)) continue;
+        if (config.pastEndSlot(slot)) break;
+        if (!config.slotSelected(slot)) continue;
 
         progress.current_slot.store(slot, .release);
         stats.recordSlot();
         progress.store(stats);
-        try produceSlotShreds(blockstore, slot, .data, writer, stop, progress, &unpublished_packets, &stats);
+        try produceSlotShreds(
+            blockstore,
+            slot,
+            .data,
+            writer,
+            stop,
+            progress,
+            &unpublished_packets,
+            &stats,
+        );
         if (blockstore.has_code_shred) {
-            try produceSlotShreds(blockstore, slot, .code, writer, stop, progress, &unpublished_packets, &stats);
+            try produceSlotShreds(
+                blockstore,
+                slot,
+                .code,
+                writer,
+                stop,
+                progress,
+                &unpublished_packets,
+                &stats,
+            );
         }
     }
 
@@ -786,16 +872,29 @@ fn produceSlotShreds(
     var err_data: ?rocks.Data = null;
     defer if (err_data) |err| err.deinit();
 
-    // TODO(perf): Can use the ipc-ring as backing stable memory for rocksdb shred storage and remove the memcpys here.
+    // TODO(perf): Use the ipc-ring as backing stable memory for RocksDB shred storage and
+    // remove the memcpys here.
     while (try iter.next(&err_data)) |entry| {
         if (stop.load(.acquire)) break;
 
         const key = parseShredKey(entry[0].data) catch |err| {
-            std.debug.print("invalid {s} key length: {d}\n", .{ kind.columnFamilyName(), entry[0].data.len });
+            std.debug.print(
+                "invalid {s} key length: {d}\n",
+                .{ kind.columnFamilyName(), entry[0].data.len },
+            );
             return err;
         };
         if (key.slot != slot) break;
-        try publishPacket(key, kind, entry[1].data, writer, stop, progress, unpublished_packets, stats);
+        try publishPacket(
+            key,
+            kind,
+            entry[1].data,
+            writer,
+            stop,
+            progress,
+            unpublished_packets,
+            stats,
+        );
     }
     progress.store(stats.*);
 }
@@ -809,7 +908,11 @@ fn scanSlots(blockstore: *const AgaveBlockstore, config: Config) !SlotStats {
         break :start_key start_key_buf[0..];
     } else null;
 
-    var iter = blockstore.db.iterator(try blockstore.columnFamily(agave_cf_meta), .forward, start_key);
+    var iter = blockstore.db.iterator(
+        try blockstore.columnFamily(agave_cf_meta),
+        .forward,
+        start_key,
+    );
     defer iter.deinit();
 
     var err_data: ?rocks.Data = null;
@@ -820,14 +923,18 @@ fn scanSlots(blockstore: *const AgaveBlockstore, config: Config) !SlotStats {
             std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
             return err;
         };
-        if (pastEndSlot(config, slot)) break;
-        stats.record(slot, slotSelected(config, slot));
+        if (config.pastEndSlot(slot)) break;
+        stats.record(slot, config.slotSelected(slot));
     }
 
     return stats;
 }
 
-fn scanShreds(blockstore: *const AgaveBlockstore, config: Config, column_family_name: []const u8) !ShredStats {
+fn scanShreds(
+    blockstore: *const AgaveBlockstore,
+    config: Config,
+    column_family_name: []const u8,
+) !ShredStats {
     var stats: ShredStats = .{};
 
     var start_key_buf: [16]u8 = undefined;
@@ -836,7 +943,11 @@ fn scanShreds(blockstore: *const AgaveBlockstore, config: Config, column_family_
         break :start_key start_key_buf[0..];
     } else null;
 
-    var iter = blockstore.db.iterator(try blockstore.columnFamily(column_family_name), .forward, start_key);
+    var iter = blockstore.db.iterator(
+        try blockstore.columnFamily(column_family_name),
+        .forward,
+        start_key,
+    );
     defer iter.deinit();
 
     var err_data: ?rocks.Data = null;
@@ -844,11 +955,14 @@ fn scanShreds(blockstore: *const AgaveBlockstore, config: Config, column_family_
 
     while (try iter.next(&err_data)) |entry| {
         const key = parseShredKey(entry[0].data) catch |err| {
-            std.debug.print("invalid {s} key length: {d}\n", .{ column_family_name, entry[0].data.len });
+            std.debug.print(
+                "invalid {s} key length: {d}\n",
+                .{ column_family_name, entry[0].data.len },
+            );
             return err;
         };
-        if (pastEndSlot(config, key.slot)) break;
-        stats.record(key, entry[1].data.len, slotSelected(config, key.slot));
+        if (config.pastEndSlot(key.slot)) break;
+        stats.record(key, entry[1].data.len, config.slotSelected(key.slot));
     }
 
     return stats;
@@ -931,40 +1045,20 @@ fn writeShredKey(key: *[16]u8, shred_key: ShredKey) void {
     std.mem.writeInt(u64, key[8..16], shred_key.index, .big);
 }
 
-fn slotSelected(config: Config, slot: Slot) bool {
-    if (config.start_slot) |start_slot| {
-        if (slot < start_slot) return false;
-    }
-    if (config.end_slot) |end_slot| {
-        if (slot > end_slot) return false;
-    }
-    return true;
-}
-
-// TODO: make this a method on Config
-fn pastEndSlot(config: Config, slot: Slot) bool {
-    return if (config.end_slot) |end_slot| slot > end_slot else false;
-}
-
-// TODO: is this and isDir needed? Can be removed/simplified?
 fn resolveRocksDbPath(allocator: Allocator, ledger_path: []const u8) ![]const u8 {
     const nested_rocksdb_path = try std.fs.path.join(allocator, &.{ ledger_path, "rocksdb" });
 
-    if (isDir(nested_rocksdb_path)) return nested_rocksdb_path;
+    if (std.fs.cwd().statFile(nested_rocksdb_path)) |stat| {
+        if (stat.kind == .directory) return nested_rocksdb_path;
+    } else |_| {}
     allocator.free(nested_rocksdb_path);
 
-    if (!isDir(ledger_path)) {
-        std.debug.print("ledger path does not exist or is not a directory: {s}\n", .{ledger_path});
-        return error.InvalidLedgerPath;
-    }
+    if (std.fs.cwd().statFile(ledger_path)) |stat| {
+        if (stat.kind == .directory) return try allocator.dupe(u8, ledger_path);
+    } else |_| {}
 
-    return try allocator.dupe(u8, ledger_path);
-}
-
-// TODO: remove this.
-fn isDir(path: []const u8) bool {
-    const stat = std.fs.cwd().statFile(path) catch return false;
-    return stat.kind == .directory;
+    std.debug.print("ledger path does not exist or is not a directory: {s}\n", .{ledger_path});
+    return error.InvalidLedgerPath;
 }
 
 const ColumnFamilyNames = struct {
@@ -1001,7 +1095,10 @@ fn listColumnFamilies(allocator: Allocator, rocksdb_path: []const u8) !ColumnFam
     );
     if (err_ptr) |err_z| {
         defer rocks_c.rocksdb_free(err_z);
-        std.debug.print("failed to list RocksDB column families at {s}: {s}\n", .{ rocksdb_path, std.mem.span(err_z) });
+        std.debug.print(
+            "failed to list RocksDB column families at {s}: {s}\n",
+            .{ rocksdb_path, std.mem.span(err_z) },
+        );
         return error.RocksDBListColumnFamilies;
     }
     if (raw_names == null) return error.RocksDBListColumnFamilies;
@@ -1034,10 +1131,6 @@ fn columnFamilyDescriptions(
     cfs[2] = .{ .name = agave_cf_data_shred };
     if (has_code_shred) cfs[3] = .{ .name = agave_cf_code_shred };
     return cfs;
-}
-
-fn freeOpenedColumnFamilies(allocator: Allocator, column_families: []const rocks.ColumnFamily) void {
-    allocator.free(column_families);
 }
 
 fn parseArgs(args: []const []const u8) ParseArgsError!ParseResult {
@@ -1076,7 +1169,9 @@ fn parseArgs(args: []const []const u8) ParseArgsError!ParseResult {
                 try nextValue(args, &i, parsed_arg.name()),
                 parsed_arg.name(),
             ),
-            .rate_hz => config.rate_hz = try parseRateHz(try nextValue(args, &i, parsed_arg.name())),
+            .rate_hz => config.rate_hz = try parseRateHz(
+                try nextValue(args, &i, parsed_arg.name()),
+            ),
             .dry_run => config.dry_run = true,
         }
     }
@@ -1199,18 +1294,18 @@ test "parse and write shred keys" {
 
 test "slot bounds helpers respect optional bounds" {
     const base: Config = .{ .ledger = "ledger", .target = "127.0.0.1:8002" };
-    try std.testing.expect(slotSelected(base, 10));
-    try std.testing.expect(!pastEndSlot(base, 100));
+    try std.testing.expect(base.slotSelected(10));
+    try std.testing.expect(!base.pastEndSlot(100));
 
     var bounded = base;
     bounded.start_slot = 10;
     bounded.end_slot = 20;
-    try std.testing.expect(!slotSelected(bounded, 9));
-    try std.testing.expect(slotSelected(bounded, 10));
-    try std.testing.expect(slotSelected(bounded, 20));
-    try std.testing.expect(!slotSelected(bounded, 21));
-    try std.testing.expect(!pastEndSlot(bounded, 20));
-    try std.testing.expect(pastEndSlot(bounded, 21));
+    try std.testing.expect(!bounded.slotSelected(9));
+    try std.testing.expect(bounded.slotSelected(10));
+    try std.testing.expect(bounded.slotSelected(20));
+    try std.testing.expect(!bounded.slotSelected(21));
+    try std.testing.expect(!bounded.pastEndSlot(20));
+    try std.testing.expect(bounded.pastEndSlot(21));
 }
 
 test "resolve rocksdb path" {

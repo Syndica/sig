@@ -117,7 +117,7 @@ pub fn build(b: *Build) !void {
 
     const fmt_check_step = b.addFmt(.{
         .check = true,
-        .paths = &.{ "init/", "lib/", "services/", "build.zig", "lint/" },
+        .paths = &.{ "init/", "lib/", "services/", "scripts/", "build.zig", "lint/" },
     });
     ci_step.dependOn(&fmt_check_step.step);
 
@@ -221,7 +221,13 @@ pub fn build(b: *Build) !void {
             }),
             .use_llvm = true,
         });
-        const shred_stream_out = addExeOutputs(b, shred_stream_exe, shred_stream_step, artifact_opts, .{});
+        const shred_stream_out = addExeOutputs(
+            b,
+            shred_stream_exe,
+            shred_stream_step,
+            artifact_opts,
+            .{},
+        );
         if (shred_stream_out.run) |shred_stream_run| {
             shred_stream_run.addArgs(b.args orelse &.{});
         }
