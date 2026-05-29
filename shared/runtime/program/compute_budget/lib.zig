@@ -14,7 +14,6 @@ const InstructionContext = sig.runtime.InstructionContext;
 const TransactionError = sig.core.transaction_error.TransactionError;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 
-const MIGRATING_BUILTIN_COSTS = builtin_program_costs.MIGRATING_BUILTIN_COSTS;
 const MAX_TRANSACTION_ACCOUNTS = sig.core.Transaction.MAX_ACCOUNTS;
 pub const DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT: u32 = 200_000;
 pub const MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT: u32 = 3_000;

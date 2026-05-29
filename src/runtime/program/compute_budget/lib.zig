@@ -15,15 +15,16 @@ const InstructionContext = sig.runtime.InstructionContext;
 const TransactionError = sig.core.transaction_error.TransactionError;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 
-const MIGRATING_BUILTIN_COSTS = builtin_program_costs.MIGRATING_BUILTIN_COSTS;
 const MAX_TRANSACTION_ACCOUNTS = sig.core.Transaction.MAX_ACCOUNTS;
-const DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT = shared_compute_budget.DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT;
-const MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT = shared_compute_budget.MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT;
-const HEAP_LENGTH = shared_compute_budget.HEAP_LENGTH;
+const DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT =
+    shared_compute_budget.DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT;
+const MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT =
+    shared_compute_budget.MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT;
 const MAX_HEAP_FRAME_BYTES = shared_compute_budget.MAX_HEAP_FRAME_BYTES;
 const MIN_HEAP_FRAME_BYTES = shared_compute_budget.MIN_HEAP_FRAME_BYTES;
 const MAX_COMPUTE_UNIT_LIMIT = shared_compute_budget.MAX_COMPUTE_UNIT_LIMIT;
-pub const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES = shared_compute_budget.MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES;
+pub const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES =
+    shared_compute_budget.MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES;
 
 pub const ID = shared_compute_budget.ID;
 

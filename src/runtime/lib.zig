@@ -41,5 +41,4 @@ pub const SysvarCache = sysvar_cache.SysvarCache;
 pub const TransactionContext = transaction_context.TransactionContext;
 pub const TransactionContextAccount = transaction_context.TransactionContextAccount;
 
-// TODO: move to accounts db
-pub const AccountSharedData = @import("shared").runtime.AccountSharedData;
+pub const AccountSharedData = @import("AccountSharedData.zig").AccountSharedData;
