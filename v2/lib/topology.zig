@@ -18,8 +18,6 @@ const ServiceEntrypoint = lib.ipc.ServiceFn;
 
 const memfd = lib.linux.memfd;
 
-const topology = @This();
-
 pub const Schema = struct {
     services: []const Service,
 
@@ -39,50 +37,179 @@ pub const Schema = struct {
     };
 };
 
-pub fn ServiceId(comptime schema: Schema) type {
-    var fields: [schema.services.len]std.builtin.Type.EnumField = undefined;
-    for (schema.services, &fields, 0..) |service, *field, i| {
-        field.* = .{
-            .name = @tagName(service.name),
-            .value = i,
-        };
-    }
-    return @Type(.{ .@"enum" = .{
-        .tag_type = u8,
-        .fields = &fields,
-        .decls = &.{},
-        .is_exhaustive = true,
-    } });
-}
+pub fn Unbound(comptime schema: Schema) type {
+    return struct {
+        /// Enum with a tag for each service.
+        /// NOTE: can also be used to index `schema.services`.
+        pub const ServiceId = @Type(.{ .@"enum" = info: {
+            var fields: [schema.services.len]std.builtin.Type.EnumField = undefined;
+            for (schema.services, &fields, 0..) |service, *field, i| {
+                field.* = .{
+                    .name = @tagName(service.name),
+                    .value = i,
+                };
+            }
+            break :info .{
+                .tag_type = u8,
+                .fields = &fields,
+                .decls = &.{},
+                .is_exhaustive = true,
+            };
+        } });
 
-/// Flattened enum representation of `ServiceRegionInfo`, where:
-/// `.{ .service_name = .local_region_name }` <=> `.@"service_name:local_region_name"`
-pub fn ServiceRegionId(comptime schema: Schema) type {
-    var fields: []const std.builtin.Type.EnumField = &.{};
-    for (schema.services) |service| {
-        for (service.regions) |service_region| {
-            fields = fields ++ [_]std.builtin.Type.EnumField{.{
-                .name = @tagName(service.name) ++ ":" ++ @tagName(service_region.name),
-                .value = fields.len,
-            }};
+        /// The region id enum local to `service`.
+        /// NOTE: can also be used to index `schema.services[@intFromEnum(service)].regions`.
+        pub fn RegionIdServiceLocal(comptime service: ServiceId) type {
+            const regions = schema.services[@intFromEnum(service)].regions;
+            var fields: [regions.len]std.builtin.Type.EnumField = undefined;
+            for (regions, &fields, 0..) |region, *field, i| {
+                field.* = .{
+                    .name = @tagName(region.name),
+                    .value = i,
+                };
+            }
+            return @Type(.{ .@"enum" = .{
+                .tag_type = u8,
+                .fields = &fields,
+                .decls = &.{},
+                .is_exhaustive = true,
+            } });
         }
-    }
-    return @Type(.{ .@"enum" = .{
-        .tag_type = std.math.IntFittingRange(0, fields.len -| 1),
-        .fields = fields,
-        .decls = &.{},
-        .is_exhaustive = true,
-    } });
-}
 
-pub fn BindingsMap(
-    comptime schema: Schema,
-    comptime RegionTag: type,
-) type {
-    return std.EnumArray(
-        RegionTag,
-        std.EnumSet(ServiceRegionId(schema)),
-    );
+        /// Enum comprised of unique ids for every region across every service.
+        /// Each name is defined by `regionIdName`.
+        /// It is also a flattened enum representation of `ServiceRegionInfo`, where:
+        /// `.{ .service_name = .local_region_name }` <=> `.@"service_name:local_region_name"`
+        pub const RegionId = @Type(.{ .@"enum" = info: {
+            var fields: []const std.builtin.Type.EnumField = &.{};
+            for (schema.services) |service_schema| {
+                for (service_schema.regions) |region_schema| {
+                    fields = fields ++ [_]std.builtin.Type.EnumField{.{
+                        .name = regionIdName(service_schema.name, region_schema.name),
+                        .value = fields.len,
+                    }};
+                }
+            }
+            break :info .{
+                .tag_type = std.math.IntFittingRange(0, fields.len -| 1),
+                .fields = fields,
+                .decls = &.{},
+                .is_exhaustive = true,
+            };
+        } });
+
+        /// Returns a unique name for every region across every service.
+        pub fn regionIdName(
+            comptime service: ServiceId,
+            region: RegionIdServiceLocal(service),
+        ) [:0]const u8 {
+            if (@inComptime()) {
+                return @tagName(service) ++ ":" ++ @tagName(region);
+            }
+            return switch (region) {
+                inline else => |iregion| comptime regionIdName(service, iregion),
+            };
+        }
+
+        /// Tagged union of enums, where the union tag is the `ServiceId`, and the
+        /// payload is the corresponding `RegionIdServiceLocal(service_id)`.
+        /// i.e. `.{ .service_id = .region_id_local }`.
+        pub const ServiceRegionId = @Type(.{ .@"union" = info: {
+            var fields: [schema.services.len]std.builtin.Type.UnionField = undefined;
+            for (schema.services, &fields) |service, *field| {
+                const service_id = @field(ServiceId, @tagName(service.name));
+                const FieldType = RegionIdServiceLocal(service_id);
+                field.* = .{
+                    .name = @tagName(service.name),
+                    .type = FieldType,
+                    .alignment = @alignOf(FieldType),
+                };
+            }
+            break :info .{
+                .layout = .auto,
+                .tag_type = ServiceId,
+                .fields = &fields,
+                .decls = &.{},
+            };
+        } });
+
+        /// `.@"foo:bar"` -> `.{ .foo = .bar }`
+        pub fn serviceRegionIdFromRegionId(region_id: RegionId) ServiceRegionId {
+            if (@inComptime()) {
+                const str = @tagName(region_id);
+                const colon = std.mem.indexOfScalar(u8, str, ':').?;
+                const service_str = str[0..colon];
+                const service = @field(ServiceId, service_str);
+                const region = @field(RegionIdServiceLocal(service), str[colon + 1 ..]);
+                return @unionInit(ServiceRegionId, service_str, region);
+            }
+            return switch (region_id) {
+                inline else => |iservice_id| comptime serviceRegionIdFromRegionId(iservice_id),
+            };
+        }
+
+        pub fn regionIdFromServiceAndRegionId(
+            comptime service: ServiceId,
+            region_id: RegionIdServiceLocal(service),
+        ) RegionId {
+            return switch (region_id) {
+                inline else => |iregion| @field(RegionId, regionIdName(service, iregion)),
+            };
+        }
+
+        /// Returns the read/write access associated with the region id.
+        pub fn getServiceRegionIdAccess(
+            region_id: RegionId,
+        ) Schema.Service.Region.Access {
+            return switch (region_id) {
+                inline else => |itag| comptime blk: {
+                    const region_info = serviceRegionIdFromRegionId(itag);
+                    const Local = RegionIdServiceLocal(region_info);
+                    const local_region_id: Local = @field(region_info, @tagName(region_info));
+                    const service_entry = schema.services[@intFromEnum(region_info)];
+                    const region_entry = service_entry.regions[@intFromEnum(local_region_id)];
+                    break :blk region_entry.access;
+                },
+            };
+        }
+
+        // -- Service Externs -- //
+
+        /// Returns the name of the segfault handler function exposed by the specified service.
+        pub fn getFaultHandlerName(service: ServiceId) [:0]const u8 {
+            return switch (service) {
+                inline else => |s| "svc_fault_handler_" ++ @tagName(s),
+            };
+        }
+
+        /// Returns the segfault handler function exposed by the specified service.
+        pub fn getFaultHandlerFn(service: ServiceId) SigactionFn {
+            return switch (service) {
+                inline else => |s| @extern(SigactionFn, .{ .name = getFaultHandlerName(s) }),
+            };
+        }
+
+        /// Returns the name of the entrypoint function exposed by the specified service.
+        pub fn getEntrypointName(service: ServiceId) [:0]const u8 {
+            return switch (service) {
+                inline else => |s| "svc_main_" ++ @tagName(s),
+            };
+        }
+
+        /// Returns the entrypoint function exposed by the specified service.
+        pub fn getEntrypointFn(service: ServiceId) ServiceEntrypoint {
+            return switch (service) {
+                inline else => |s| @extern(ServiceEntrypoint, .{ .name = getEntrypointName(s) }),
+            };
+        }
+
+        pub fn BindingsMap(comptime RegionTag: type) type {
+            return std.EnumArray(
+                RegionTag,
+                std.EnumSet(Unbound(schema).RegionId),
+            );
+        }
+    };
 }
 
 /// Namespace of types and functions which, with respect to the equivalences
@@ -101,14 +228,14 @@ pub fn Bind(
     /// ```
     comptime Region: type,
     /// Defines the equivalences between regions across all services, unifying them under one binding (the `Region` tag name).
-    comptime bindings_map_init: BindingsMap(schema, @typeInfo(Region).@"union".tag_type.?),
+    comptime bindings_map_init: Unbound(schema).BindingsMap(@typeInfo(Region).@"union".tag_type.?),
 ) type {
     return struct {
-        const bound = @This();
+        pub const unbound = Unbound(schema);
 
         pub const RegionTag = @typeInfo(Region).@"union".tag_type.?;
-        pub const BindingsMap = topology.BindingsMap(schema, RegionTag);
-        const BindingsIndexer = bound.BindingsMap.Indexer;
+        pub const BindingsMap = unbound.BindingsMap(RegionTag);
+        const BindingsIndexer = BindingsMap.Indexer;
         pub const bindings_map = bindings_map_init;
 
         fn regionSize(r: Region) usize {
@@ -172,96 +299,6 @@ pub fn Bind(
             };
         }
 
-        /// Enum with a tag for each service.
-        /// NOTE: can also be used to index `schema.services`.
-        pub const ServiceId = topology.ServiceId(schema);
-
-        pub const ServiceRegionId = topology.ServiceRegionId(schema);
-
-        /// Tagged union of enums, where the union tag is the service, and the
-        /// payload is the corresponding `ServiceRegionIdLocal(service_id)`.
-        /// i.e. `.{ .service_name = .local_region_name }`.
-        pub const ServiceRegionInfo = @Type(.{ .@"union" = info: {
-            var fields: [schema.services.len]std.builtin.Type.UnionField = undefined;
-            for (schema.services, &fields) |service, *field| {
-                const service_id = @field(bound.ServiceId, @tagName(service.name));
-                const FieldType = LocalServiceRegionId(service_id);
-                field.* = .{
-                    .name = @tagName(service.name),
-                    .type = FieldType,
-                    .alignment = @alignOf(FieldType),
-                };
-            }
-            break :info .{
-                .layout = .auto,
-                .tag_type = bound.ServiceId,
-                .fields = &fields,
-                .decls = &.{},
-            };
-        } });
-
-        /// The region id enum local to `service`.
-        /// NOTE: can also be used to index `schema.services[@intFromEnum(service)].regions`.
-        pub fn LocalServiceRegionId(comptime service: bound.ServiceId) type {
-            const regions = schema.services[@intFromEnum(service)].regions;
-            var fields: [regions.len]std.builtin.Type.EnumField = undefined;
-            for (regions, &fields, 0..) |region, *field, i| {
-                field.* = .{
-                    .name = @tagName(region.name),
-                    .value = i,
-                };
-            }
-            return @Type(.{ .@"enum" = .{
-                .tag_type = u8,
-                .fields = &fields,
-                .decls = &.{},
-                .is_exhaustive = true,
-            } });
-        }
-
-        /// `.@"foo:bar"` -> `.{ .foo = .bar }`
-        inline fn getServiceRegionIdInfo(region_id: bound.ServiceRegionId) ServiceRegionInfo {
-            if (@inComptime()) {
-                const str = @tagName(region_id);
-                const colon = std.mem.indexOfScalarPos(u8, str, 0, ':').?;
-                const service_str = str[0..colon];
-                const service = @field(bound.ServiceId, service_str);
-                const region = @field(LocalServiceRegionId(service), str[colon + 1 ..]);
-                return @unionInit(ServiceRegionInfo, service_str, region);
-            }
-            return switch (region_id) {
-                inline else => |iservice_id| comptime getServiceRegionIdInfo(iservice_id),
-            };
-        }
-
-        fn serviceRegionIdFromTags(
-            comptime service: bound.ServiceId,
-            region_id: bound.LocalServiceRegionId(service),
-        ) bound.ServiceRegionId {
-            return switch (region_id) {
-                inline else => |iregion| @field(
-                    bound.ServiceRegionId,
-                    @tagName(service) ++ ":" ++ @tagName(iregion),
-                ),
-            };
-        }
-
-        /// Returns the read/write access associated with the region id.
-        inline fn getServiceRegionIdAccess(
-            region_id: bound.ServiceRegionId,
-        ) Schema.Service.Region.Access {
-            return switch (region_id) {
-                inline else => |itag| comptime blk: {
-                    const region_info = getServiceRegionIdInfo(itag);
-                    const Local = LocalServiceRegionId(region_info);
-                    const local_region_id: Local = @field(region_info, @tagName(region_info));
-                    const service_entry = schema.services[@intFromEnum(region_info)];
-                    const region_entry = service_entry.regions[@intFromEnum(local_region_id)];
-                    break :blk region_entry.access;
-                },
-            };
-        }
-
         /// Returns the total number of spawned services that will be sharing the specified `region`.
         pub fn countTotalRegionShares(region: RegionTag) usize {
             return bindings_map.get(region).count();
@@ -287,7 +324,7 @@ pub fn Bind(
             };
         } });
 
-        const RegionBindingSharesMap = std.EnumMap(bound.ServiceId, struct {
+        const RegionBindingSharesMap = std.EnumMap(unbound.ServiceId, struct {
             access: Schema.Service.Region.Access,
         });
 
@@ -299,9 +336,9 @@ pub fn Bind(
             var iter = region_id_set.iterator();
             for (0..region_id_set.count()) |_| {
                 const region_id = iter.next().?;
-                const region_info = getServiceRegionIdInfo(region_id);
+                const region_info = unbound.serviceRegionIdFromRegionId(region_id);
                 const prev_opt = shares.fetchPut(region_info, .{
-                    .access = getServiceRegionIdAccess(region_id),
+                    .access = unbound.getServiceRegionIdAccess(region_id),
                 });
                 if (prev_opt != null) unreachable;
             }
@@ -309,46 +346,16 @@ pub fn Bind(
             return shares;
         }
 
-        fn getRegionBinding(service_region_id: bound.ServiceRegionId) RegionTag {
+        fn getRegionBinding(region_id: unbound.RegionId) RegionTag {
             return for (bindings_map.values, 0..) |region_id_set, i| {
                 const binding_tag = BindingsIndexer.keyForIndex(i);
-                if (!region_id_set.contains(service_region_id)) continue;
+                if (!region_id_set.contains(region_id)) continue;
                 break binding_tag;
             } else unreachable;
         }
 
-        // -- Service Externs -- //
-
-        /// Returns the name of the segfault handler function exposed by the specified service.
-        pub fn getFaultHandlerName(service: bound.ServiceId) [:0]const u8 {
-            return switch (service) {
-                inline else => |s| "svc_fault_handler_" ++ @tagName(s),
-            };
-        }
-
-        /// Returns the segfault handler function exposed by the specified service.
-        pub fn getFaultHandlerFn(service: bound.ServiceId) SigactionFn {
-            return switch (service) {
-                inline else => |s| @extern(SigactionFn, .{ .name = getFaultHandlerName(s) }),
-            };
-        }
-
-        /// Returns the name of the entrypoint function exposed by the specified service.
-        pub fn getEntrypointName(service: bound.ServiceId) [:0]const u8 {
-            return switch (service) {
-                inline else => |s| "svc_main_" ++ @tagName(s),
-            };
-        }
-
-        /// Returns the entrypoint function exposed by the specified service.
-        pub fn getEntrypointFn(service: bound.ServiceId) ServiceEntrypoint {
-            return switch (service) {
-                inline else => |s| @extern(ServiceEntrypoint, .{ .name = getEntrypointName(s) }),
-            };
-        }
-
         pub const ServiceMap = struct {
-            inner: std.EnumMap(bound.ServiceId, Entry),
+            inner: std.EnumMap(unbound.ServiceId, Entry),
 
             pub const empty: ServiceMap = .{ .inner = .{} };
 
@@ -401,12 +408,13 @@ pub fn Bind(
 
             // check all service instances request regions which are shared with them
             inline for (schema.services, &runner_memfds) |service_entry, runner_memfd| {
-                const service: bound.ServiceId = service_entry.name;
+                const service: unbound.ServiceId = service_entry.name;
 
                 inline for (service_entry.regions) |region_entry| {
-                    const region_local_id: bound.LocalServiceRegionId(service) = region_entry.name;
-                    const region_id: bound.ServiceRegionId =
-                        serviceRegionIdFromTags(service, region_local_id);
+                    const region_local_id: unbound.RegionIdServiceLocal(service) =
+                        region_entry.name;
+                    const region_id: unbound.RegionId =
+                        unbound.regionIdFromServiceAndRegionId(service, region_local_id);
 
                     const found_region: ServiceMap.LookupResult = blk: for (
                         regions,
@@ -559,7 +567,7 @@ pub fn Bind(
         /// Blocks until the first service has exited, before dumping out traces.
         pub fn spawnAndWait(map: *const ServiceMap) !void {
             const ExitMeta = struct {
-                id: bound.ServiceId,
+                id: unbound.ServiceId,
                 pid: i32,
                 exit: ?*lib.runner.Exit,
             };
@@ -611,7 +619,7 @@ pub fn Bind(
         }
 
         fn spawnService(
-            service: bound.ServiceId,
+            service: unbound.ServiceId,
             params: struct {
                 runner: memfd.RW,
                 stderr: std.fs.File,
@@ -643,7 +651,7 @@ pub fn Bind(
             // register fault handlers
             {
                 const act: *const std.os.linux.Sigaction = &.{
-                    .handler = .{ .sigaction = getFaultHandlerFn(service) },
+                    .handler = .{ .sigaction = unbound.getFaultHandlerFn(service) },
                     .mask = std.os.linux.sigemptyset(),
                     .flags = (std.posix.SA.SIGINFO | std.posix.SA.RESTART | std.posix.SA.RESETHAND),
                 };
@@ -716,7 +724,7 @@ pub fn Bind(
                 }
             }
 
-            getEntrypointFn(service)(resolved_args);
+            unbound.getEntrypointFn(service)(resolved_args);
             std.process.exit(255);
         }
 
@@ -749,7 +757,7 @@ pub fn Bind(
 
         fn dumpOnExit(
             meta: *lib.runner.Exit,
-            service: bound.ServiceId,
+            service: unbound.ServiceId,
             pid: i32,
             status: u32,
         ) void {
@@ -824,7 +832,7 @@ pub fn Bind(
 
             const exited_runner_memfd = map.inner.get(@enumFromInt(exited_idx)).?.runner;
             const exited_runner = try exited_runner_memfd.mmapStaticSize(lib.runner.Region, .{});
-            const exited_service_id: bound.ServiceId = @enumFromInt(exited_idx);
+            const exited_service_id: unbound.ServiceId = @enumFromInt(exited_idx);
             dumpOnExit(
                 &exited_runner.exit,
                 exited_service_id,
@@ -854,7 +862,7 @@ pub fn Bind(
 
         fn threadEntry(
             entry_point: ServiceEntrypoint,
-            service: bound.ServiceId,
+            service: unbound.ServiceId,
             args: lib.ipc.ResolvedArgs,
             service_idx: u16,
             thread_exit_ctx: *const ThreadExitContext,
@@ -868,7 +876,7 @@ pub fn Bind(
         }
 
         fn spawnServiceNoSandbox(
-            service: bound.ServiceId,
+            service: unbound.ServiceId,
             params: struct {
                 runner: memfd.RW,
                 stderr: std.fs.File,
@@ -890,7 +898,7 @@ pub fn Bind(
                 .{},
                 threadEntry,
                 .{
-                    getEntrypointFn(service),
+                    unbound.getEntrypointFn(service),
                     service,
                     resolved_args,
                     params.service_idx,
@@ -904,6 +912,7 @@ pub fn Bind(
 fn ValidateBindingsMapResult(
     comptime schema: Schema,
 ) type {
+    const unbound = Unbound(schema);
     return union(enum) {
         /// The two enums referenced by index are out of order.
         unordered_tags: struct {
@@ -911,22 +920,23 @@ fn ValidateBindingsMapResult(
             next: usize,
         },
         /// The tags in this set were specified in two bindings.
-        duplicated: std.EnumSet(ServiceRegionId(schema)),
+        duplicated: std.EnumSet(unbound.RegionId),
         /// The tags in this set were not specified in any binding.
-        missing: std.EnumSet(ServiceRegionId(schema)),
+        missing: std.EnumSet(unbound.RegionId),
     };
 }
 
 /// Returns null on success.
 /// Otherwise returns a diagnostic describing the problem.
-inline fn validateBindingsMap(
+fn validateBindingsMap(
     comptime schema: Schema,
     /// A union of all the intended shared region bindings.
     comptime RegionTag: type,
     /// Defines the equivalences between regions across all services, unifying them under one binding (the `Region` tag name).
-    comptime bindings_map: BindingsMap(schema, RegionTag),
+    comptime bindings_map: Unbound(schema).BindingsMap(RegionTag),
 ) ?ValidateBindingsMapResult(schema) {
     comptime {
+        const unbound = Unbound(schema);
         const region_tag_info = @typeInfo(RegionTag).@"enum";
         for (
             region_tag_info.fields[0 .. region_tag_info.fields.len - 1],
@@ -943,7 +953,7 @@ inline fn validateBindingsMap(
             };
         }
 
-        var accumulated_set: std.EnumSet(ServiceRegionId(schema)) = .{};
+        var accumulated_set: std.EnumSet(unbound.RegionId) = .{};
         for (bindings_map.values) |region_id_set| {
             const intersection = accumulated_set.intersectWith(region_id_set);
             if (intersection.count() == 0) {
@@ -952,7 +962,7 @@ inline fn validateBindingsMap(
             }
             return .{ .duplicated = intersection };
         }
-        if (accumulated_set.count() != @typeInfo(ServiceRegionId(schema)).@"enum".fields.len) {
+        if (accumulated_set.count() != @typeInfo(unbound.RegionId).@"enum".fields.len) {
             const missing = accumulated_set.complement();
             return .{ .missing = missing };
         }
