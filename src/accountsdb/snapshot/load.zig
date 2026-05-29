@@ -401,7 +401,9 @@ fn insertFromSnapshotArchive(
 
             if (maybe_status_cache) |_| return error.DuplicateStatusCache;
             // Read file content into memory for bincode deserialization
-            maybe_status_cache = try StatusCache.decodeFromBincode(allocator, reader);
+            maybe_status_cache = try StatusCache.decodeFromBincode(allocator, reader, .{
+                .allocation_limit = snapshot.data.bincodeAllocationLimit(tar_hdr.file_size),
+            });
             try reader.skipBytes(tar_hdr.pad_len, .{});
 
             // Read /snapshot/{slot}/{slot}
@@ -411,7 +413,9 @@ fn insertFromSnapshotArchive(
 
             if (maybe_manifest) |_| return error.DuplicateManifest;
             // Read file content into memory for bincode deserialization
-            maybe_manifest = try Manifest.decodeFromBincode(allocator, reader);
+            maybe_manifest = try Manifest.decodeFromBincode(allocator, reader, .{
+                .allocation_limit = snapshot.data.bincodeAllocationLimit(tar_hdr.file_size),
+            });
             try reader.skipBytes(tar_hdr.pad_len, .{});
 
             if (maybe_manifest.?.accounts_db_fields.slot != slot_and_hash.slot)

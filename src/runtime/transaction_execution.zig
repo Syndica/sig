@@ -515,13 +515,7 @@ pub fn executeTransaction(
                     error.OutOfMemory => return error.OutOfMemory,
                     else => |ixn_err| break .{ .InstructionError = .{
                         @intCast(index),
-                        InstructionErrorEnum.fromError(
-                            ixn_err,
-                            tc.custom_error,
-                            null,
-                        ) catch |err| {
-                            std.debug.panic("Error conversion failed: error={}", .{err});
-                        },
+                        InstructionErrorEnum.fromError(ixn_err, tc.custom_error),
                     } },
                 }
             };
