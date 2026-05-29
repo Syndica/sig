@@ -447,9 +447,9 @@ pub const Filter = struct {
 
     pub const Header = extern struct {
         /// Length of zero represents `null`.
-        service_len: u32,
+        service_len: u32 align(1),
         /// Length of zero represents `null`.
-        scope_len: u32,
+        scope_len: u32 align(1),
         level: Level,
 
         pub fn encodedLength(self: Header) u32 {
