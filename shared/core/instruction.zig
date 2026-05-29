@@ -49,3 +49,7 @@ pub const Instruction = struct {
         };
     }
 };
+
+pub const InstructionError = @import("instruction_error.zig").InstructionError;
+pub const InstructionErrorEnum = @import("instruction_error.zig").InstructionErrorEnum;
+pub const intFromInstructionError = @import("instruction_error.zig").intFromInstructionError;

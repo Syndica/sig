@@ -7,3 +7,5 @@ pub const LimitAllocator = allocators.LimitAllocator;
 pub const PubkeyMap = collections.PubkeyMap;
 pub const PubkeyMapManaged = collections.PubkeyMapManaged;
 pub const failing = allocators.failing;
+
+pub const pht = @import("pht.zig").pht;

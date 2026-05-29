@@ -373,6 +373,10 @@ pub fn build(b: *Build) !void {
         .target = config.target,
         .optimize = config.optimize,
     }).module("blst");
+    shared_mod.addImport("blst", blst_mod);
+    shared_mod.addImport("poseidon", poseidon_mod);
+    shared_mod.addImport("secp256k1", secp256k1_mod);
+    shared_mod.addImport("table", gh_table);
     const bzip2_mod = genBzip2(b, config.target, config.optimize, config.use_llvm);
 
     // zig fmt: off
