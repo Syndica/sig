@@ -44,3 +44,4 @@ pub const v4 = struct {
 
 pub const execute = @import("execute.zig").execute;
 pub const verifyProgram = @import("execute.zig").verifyProgram;
+pub const AccessViolationHandlerCtx = @import("execute.zig").AccessViolationHandlerCtx;

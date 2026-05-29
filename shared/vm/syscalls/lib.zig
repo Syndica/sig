@@ -347,16 +347,22 @@ pub fn allocFree(
         bump_max = heap_region.constSlice().len;
     }
 
+    // Per-invocation bump allocator state.
+    const ic = tc.getCurrentInstructionContext() catch {
+        registers.set(.r0, 0);
+        return;
+    };
+
     // Bound check
-    const bytes_to_align = (alignment - (tc.bpf_alloc_pos % alignment)) % alignment;
-    const addr_offset = tc.bpf_alloc_pos +| bytes_to_align;
+    const bytes_to_align = (alignment - (ic.bpf_alloc_pos % alignment)) % alignment;
+    const addr_offset = ic.bpf_alloc_pos +| bytes_to_align;
     if (addr_offset +| size > bump_max) {
         registers.set(.r0, 0);
         return;
     }
 
     // Return bump allocated offset
-    tc.bpf_alloc_pos = addr_offset +| size;
+    ic.bpf_alloc_pos = addr_offset +| size;
     registers.set(.r0, memory.HEAP_START +| addr_offset);
 }
 
@@ -1138,6 +1144,19 @@ test allocFree {
         .{},
     );
     defer memory_map.deinit(allocator);
+
+    // Push a minimal instruction stack entry so allocFree has an InstructionContext.
+    tc.instruction_stack.appendAssumeCapacity(.{
+        .tc = &tc,
+        .ixn_info = .{
+            .program_meta = .{ .pubkey = Pubkey.ZEROES, .index_in_transaction = 0 },
+            .account_metas = .empty,
+            .dedupe_map = @splat(0xffff),
+            .instruction_data = &.{},
+            .owned_instruction_data = false,
+        },
+        .depth = 1,
+    });
 
     for ([_]struct { u64, u64, u64 }{
         // first alloc 1021 bytes
