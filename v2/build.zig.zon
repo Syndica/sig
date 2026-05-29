@@ -4,7 +4,9 @@
     .paths = .{
         "build.zig.zon",
         "build.zig",
-        "src",
+        "lib",
+        "init",
+        "services",
     },
     .minimum_zig_version = "0.15.2",
     .fingerprint = 0xce1f2b0ea0d47009,
