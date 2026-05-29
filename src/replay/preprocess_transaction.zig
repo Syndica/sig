@@ -234,6 +234,32 @@ test preprocessTransaction {
         try std.testing.expectEqual(TransactionError{ .DuplicateInstruction = 1 }, err);
     }
 
+    { // Compute budget fails with invalid instruction data
+        const txn = Transaction{
+            .signatures = &.{Signature.ZEROES},
+            .version = .legacy,
+            .msg = .{
+                .signature_count = 1,
+                .readonly_signed_count = 0,
+                .readonly_unsigned_count = 1,
+                .account_keys = &.{ Pubkey.ZEROES, compute_budget.ID },
+                .recent_blockhash = Hash.ZEROES,
+                .instructions = &.{.{
+                    .program_index = 1,
+                    .account_indexes = &.{},
+                    .data = &.{},
+                }},
+                .address_lookups = &.{},
+            },
+        };
+
+        const err = preprocessTransaction(txn, .skip_sig_verify, &disabled, 0).err;
+        try std.testing.expectEqual(
+            TransactionError{ .InstructionError = .{ 0, .InvalidInstructionData } },
+            err,
+        );
+    }
+
     { // SIMD-160, message with more instructions than the limit.
 
         const inst = try compute_budget.testCreateComputeBudgetInstruction(

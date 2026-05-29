@@ -20,6 +20,7 @@ const Slot = core.Slot;
 const SlotState = core.SlotState;
 const SlotConstants = core.SlotConstants;
 
+const account_conversions = sig.runtime.account_conversions;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const Rent = sig.runtime.sysvar.Rent;
 
@@ -574,7 +575,7 @@ pub fn deltaLtHash(
             ) |data, key| {
                 defer _ = arena.reset(.retain_capacity);
 
-                const account = data.asAccount();
+                const account = account_conversions.asAccount(data);
 
                 const old_account = self.db.get(
                     arena.allocator(),

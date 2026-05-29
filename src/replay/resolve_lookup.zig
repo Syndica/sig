@@ -190,12 +190,18 @@ pub fn resolveTransaction(
     for (message.account_keys, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = message.isSigner(i),
-        .is_writable = message.isWritable(i, lookups, params.reserved_accounts),
+        .is_writable = isWritable(
+            message,
+            i,
+            lookups,
+            params.reserved_accounts,
+        ),
     });
     for (lookups.writable, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
         .is_signer = false,
-        .is_writable = message.isWritable(
+        .is_writable = isWritable(
+            message,
             message.account_keys.len + i,
             lookups,
             params.reserved_accounts,
@@ -259,6 +265,59 @@ pub const LookupTableAccounts = struct {
     writable: []const Pubkey,
     readonly: []const Pubkey,
 };
+
+/// https://github.com/anza-xyz/solana-sdk/blob/5ff67c1a53c10e16689e377f98a92ba3afd6bb7c/message/src/versions/v0/loaded.rs#L118-L150
+pub fn isWritable(
+    message: core.transaction.Message,
+    index: usize,
+    maybe_lookups: ?LookupTableAccounts,
+    reserved_accounts: *const ReservedAccounts,
+) bool {
+    const lookups = maybe_lookups orelse LookupTableAccounts{
+        .writable = &.{},
+        .readonly = &.{},
+    };
+    const pubkey = blk: {
+        if (index < message.account_keys.len) {
+            if (index >= message.signature_count) {
+                // check if signed readable
+                if (index >= message.account_keys.len - message.readonly_unsigned_count) {
+                    return false;
+                }
+            } else {
+                // check if unsigned readable
+                if (index >= message.signature_count - message.readonly_signed_count) {
+                    return false;
+                }
+            }
+            break :blk message.account_keys[index];
+        } else if (index < message.account_keys.len + lookups.writable.len) {
+            // lookups.writable
+            break :blk lookups.writable[index - message.account_keys.len];
+        } else {
+            // lookups.readable
+            return false;
+        }
+    };
+
+    const is_upgradeable_loader_present = blk: for ([_][]const Pubkey{
+        message.account_keys,
+        lookups.writable,
+        lookups.readonly,
+    }) |accounts| {
+        for (accounts) |account_key|
+            if (account_key.equals(&sig.runtime.program.bpf_loader.v3.ID))
+                break :blk true;
+    } else false;
+
+    const is_key_called_as_program = for (message.instructions) |ixn| {
+        if (ixn.program_index == index) break true;
+    } else false;
+
+    const is_reserved = reserved_accounts.map.contains(pubkey);
+    const demote_program_id = is_key_called_as_program and !is_upgradeable_loader_present;
+    return !(is_reserved or demote_program_id);
+}
 
 // [agave] https://github.com/anza-xyz/agave/blob/6dcc39fcba90fbb5c924c71a1ef287c234f56c17/accounts-db/src/accounts.rs#L105
 fn resolveLookupTableAccounts(

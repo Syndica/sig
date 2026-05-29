@@ -9,8 +9,8 @@ const vm = sig.vm;
 const Hash = sig.core.Hash;
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
+const EpochStakeReader = sig.runtime.execution_interfaces.EpochStakeReader;
 const Pubkey = sig.core.Pubkey;
-const EpochStakes = sig.core.EpochStakes;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
@@ -64,7 +64,7 @@ pub const TransactionContext = struct {
     // These data structures exist beyond the lifetime of the TransactionContext.
     // These exist per-epoch.
     feature_set: *const FeatureSet,
-    epoch_stakes: *const EpochStakes,
+    epoch_stake_reader: EpochStakeReader,
     // This exists per-slot.
     sysvar_cache: *const SysvarCache,
 

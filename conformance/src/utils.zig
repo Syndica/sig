@@ -111,7 +111,9 @@ pub fn createTransactionContext(
         .allocator = allocator,
         .programs_allocator = allocator,
         .feature_set = feature_set,
-        .epoch_stakes = epoch_stakes,
+        .epoch_stake_reader = (sig.runtime.EpochStakeReaderAdapter{
+            .epoch_stakes = epoch_stakes,
+        }).epochStakeReader(),
         .sysvar_cache = sysvar_cache,
         .vm_environment = vm_environment,
         .next_vm_environment = vm_environment,
@@ -155,8 +157,9 @@ pub fn deinitTransactionContext(
     allocator.destroy(tc.feature_set);
     allocator.destroy(tc.vm_environment);
 
-    tc.epoch_stakes.deinit(allocator);
-    allocator.destroy(tc.epoch_stakes);
+    const epoch_stakes: *const EpochStakes = @ptrCast(@alignCast(tc.epoch_stake_reader.ctx));
+    epoch_stakes.deinit(allocator);
+    allocator.destroy(epoch_stakes);
 
     tc.sysvar_cache.deinit(allocator);
     allocator.destroy(tc.sysvar_cache);

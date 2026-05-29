@@ -399,10 +399,11 @@ pub fn getFeeForMessage(
             .require_static_nonce_account,
             slot,
         );
+        const account_reader_adapter = sig.runtime.SlotAccountReaderAdapter{ .reader = slot_reader };
         const nonce_result = check_transactions.loadMessageNonceAccount(
             arena,
             &runtime_txn,
-            slot_reader,
+            account_reader_adapter.accountReader(),
             require_static_nonce_account,
         ) catch return empty_result;
         if (nonce_result) |r| return .{

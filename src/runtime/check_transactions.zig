@@ -5,11 +5,9 @@ const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
-const Account = sig.core.Account;
-const SlotAccountReader = sig.accounts_db.SlotAccountReader;
+const AccountReader = sig.runtime.execution_interfaces.AccountReader;
 
 const Hash = sig.core.Hash;
-const Ancestors = sig.core.Ancestors;
 const BlockhashQueue = sig.core.BlockhashQueue;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
@@ -27,27 +25,13 @@ const NonceVersions = sig.runtime.nonce.Versions;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 
-const TransactionError = sig.ledger.transaction_status.TransactionError;
+const TransactionError = sig.core.transaction_error.TransactionError;
 
 const deinitAccountMap = sig.runtime.testing.deinitAccountMap;
 
-const AccountLoadError = sig.runtime.account_loader.AccountLoadError;
-const wrapDB = sig.runtime.account_loader.wrapDB;
+const AccountLoadError = sig.runtime.execution_interfaces.AccountLoadError;
 
 const NONCED_TX_MARKER_IX_INDEX = 0;
-
-/// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L186
-pub fn checkStatusCache(
-    msg_hash: *const Hash,
-    recent_blockhash: *const Hash,
-    ancestors: *const Ancestors,
-    status_cache: *sig.core.StatusCache,
-) ?TransactionError {
-    return switch (status_cache.getStatus(&msg_hash.data, recent_blockhash, ancestors)) {
-        .pending => null,
-        .failed, .succeeded => .AlreadyProcessed,
-    };
-}
 
 /// Requires full transaction to find nonce account in the event that the transactions recent blockhash
 /// is not in the blockhash queue within the max age. Also worth noting that Agave returns a CheckTransactionDetails
@@ -57,7 +41,7 @@ pub fn checkStatusCache(
 pub fn checkAge(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
-    account_reader: SlotAccountReader,
+    account_reader: AccountReader,
     blockhash_queue: *const BlockhashQueue,
     max_age: u64,
     next_durable_nonce: *const Hash,
@@ -95,7 +79,7 @@ pub fn checkFeePayer(
     /// same allocator as batch account cache
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
-    accounts: SlotAccountReader,
+    accounts: AccountReader,
     compute_budget_limits: *const ComputeBudgetLimits,
     /// Takes ownership of this
     maybe_nonce: ?LoadedAccount,
@@ -118,24 +102,17 @@ pub fn checkFeePayer(
 
     const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
     const fee_payer_key = transaction.accounts.items(.pubkey)[0];
-    const payer_account = try wrapDB(accounts.get(allocator, fee_payer_key)) orelse
+    var payer_account = try accounts.get(allocator, fee_payer_key) orelse
         return .{ .err = .AccountNotFound };
     const formalized = feature_set.active(.formalize_loaded_transaction_data_size, slot);
     const base: u64 = if (formalized) account_loader.TRANSACTION_ACCOUNT_BASE_SIZE else 0;
-    const payer_loaded_size = base +| payer_account.data.len();
-    var payer_shared = AccountSharedData{
-        .lamports = payer_account.lamports,
-        .data = try payer_account.data.readAllAllocate(allocator),
-        .owner = payer_account.owner,
-        .executable = payer_account.executable,
-        .rent_epoch = payer_account.rent_epoch,
-    };
-    errdefer payer_shared.deinit(allocator);
+    const payer_loaded_size = base +| payer_account.data.len;
+    errdefer payer_account.deinit(allocator);
 
-    const fee_payer_loaded_rent_epoch = payer_shared.rent_epoch;
+    const fee_payer_loaded_rent_epoch = payer_account.rent_epoch;
 
     const rent_collected = account_loader.collectRentFromAccount(
-        &payer_shared,
+        &payer_account,
         &fee_payer_key,
         feature_set,
         slot,
@@ -171,10 +148,13 @@ pub fn checkFeePayer(
 
     if (validateFeePayer(
         fee_payer_key,
-        &payer_shared,
+        &payer_account,
         rent_collector,
         fee_details.total(),
-    )) |validation_error| return .{ .err = validation_error };
+    )) |validation_error| {
+        payer_account.deinit(allocator);
+        return .{ .err = validation_error };
+    }
 
     var rollbacks = std14.BoundedArray(LoadedAccount, 2){};
     errdefer for (rollbacks.slice()) |rollback| rollback.deinit(allocator);
@@ -184,15 +164,15 @@ pub fn checkFeePayer(
         rollbacks.append(.{
             .pubkey = maybe_nonce.?.pubkey,
             .account = .{
-                .lamports = payer_shared.lamports +| rent_collected,
+                .lamports = payer_account.lamports +| rent_collected,
                 .data = maybe_nonce.?.account.data,
                 .owner = maybe_nonce.?.account.owner,
                 .executable = maybe_nonce.?.account.executable,
-                .rent_epoch = payer_shared.rent_epoch,
+                .rent_epoch = payer_account.rent_epoch,
             },
         }) catch unreachable;
     } else {
-        var rollback_payer = try payer_shared.clone(allocator);
+        var rollback_payer = try payer_account.clone(allocator);
         if (maybe_nonce) |nonce|
             rollbacks.append(nonce) catch unreachable
         else
@@ -205,7 +185,7 @@ pub fn checkFeePayer(
     }
 
     return .{ .ok = .{ fee_details, rollbacks, .{
-        .account = payer_shared,
+        .account = payer_account,
         .loaded_size = payer_loaded_size,
         .rent_collected = rent_collected,
     } } };
@@ -396,7 +376,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
     transaction: *const RuntimeTransaction,
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
-    account_reader: SlotAccountReader,
+    account_reader: AccountReader,
     require_static_nonce_account: bool,
 ) AccountLoadError!?struct { LoadedAccount, u64 } {
     if (transaction.recent_blockhash.eql(next_durable_nonce.*)) return null;
@@ -408,6 +388,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
             account_reader,
             require_static_nonce_account,
         ) orelse return null;
+    defer nonce_account.deinit(allocator);
 
     const previous_lamports_per_signature = nonce_data.lamports_per_signature;
     const next_nonce_state = NonceVersions{
@@ -445,15 +426,23 @@ fn checkLoadAndAdvanceMessageNonceAccount(
 pub fn loadMessageNonceAccount(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
-    account_reader: SlotAccountReader,
+    account_reader: AccountReader,
     require_static_nonce_account: bool,
-) AccountLoadError!?struct { Pubkey, Account, NonceData } {
+) AccountLoadError!?struct { Pubkey, AccountSharedData, NonceData } {
     const nonce_address = getDurableNonce(transaction, require_static_nonce_account) orelse
         return null;
-    const nonce_account = try wrapDB(account_reader.get(allocator, nonce_address)) orelse
+    // TODO(accounts_interface): we don't need an owned account data here
+    const nonce_account = try account_reader.get(allocator, nonce_address) orelse
         return null;
-    const nonce_data = verifyNonceAccount(nonce_account, &transaction.recent_blockhash) orelse
-        return null;
+    var nonce_account_consumed = false;
+    defer if (!nonce_account_consumed) nonce_account.deinit(allocator);
+
+    var nonce_account_data = std.io.fixedBufferStream(nonce_account.data);
+    const nonce_data = verifyNonceAccount(
+        &nonce_account.owner,
+        nonce_account_data.reader(),
+        &transaction.recent_blockhash,
+    ) orelse return null;
 
     const signers = try transaction.instructions[
         NONCED_TX_MARKER_IX_INDEX
@@ -465,21 +454,25 @@ pub fn loadMessageNonceAccount(
         if (signer.equals(&nonce_data.authority)) break;
     } else return null;
 
+    nonce_account_consumed = true;
     return .{ nonce_address, nonce_account, nonce_data };
 }
 
-pub fn verifyNonceAccount(account: Account, recent_blockhash: *const Hash) ?NonceData {
-    if (!account.owner.equals(&sig.runtime.program.system.ID)) return null;
+pub fn verifyNonceAccount(
+    owner: *const Pubkey,
+    account_data_reader: anytype,
+    recent_blockhash: *const Hash,
+) ?NonceData {
+    if (!owner.equals(&sig.runtime.program.system.ID)) return null;
 
     // could probably be smaller
     var deserialize_buf: [@sizeOf(NonceData) * 2]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&deserialize_buf);
 
-    var data = account.data.iterator();
     const nonce = sig.bincode.read(
         fba.allocator(),
         NonceVersions,
-        data.reader(),
+        account_data_reader,
         .{},
     ) catch return null;
 
@@ -531,44 +524,6 @@ pub fn getDurableNonce(
     return account_keys[nonce_meta.index_in_transaction];
 }
 
-test checkStatusCache {
-    const allocator = std.testing.allocator;
-
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-
-    var ancestors = Ancestors{};
-    defer ancestors.deinit(allocator);
-
-    var status_cache: sig.core.StatusCache = .DEFAULT;
-    defer status_cache.deinit(allocator);
-
-    const msg_hash = Hash.init("msg hash");
-    const recent_blockhash = Hash.init("recent blockhash");
-
-    try std.testing.expectEqual(
-        null,
-        checkStatusCache(
-            &msg_hash,
-            &recent_blockhash,
-            &ancestors,
-            &status_cache,
-        ),
-    );
-
-    try ancestors.ancestors.put(allocator, 0, {});
-    try status_cache.insert(allocator, prng.random(), &recent_blockhash, &msg_hash.data, 0, null);
-
-    try std.testing.expectEqual(
-        .AlreadyProcessed,
-        checkStatusCache(
-            &msg_hash,
-            &recent_blockhash,
-            &ancestors,
-            &status_cache,
-        ),
-    );
-}
-
 test "checkAge: recent blockhash" {
     const allocator = std.testing.allocator;
 
@@ -602,7 +557,7 @@ test "checkAge: recent blockhash" {
             const result = try checkAge(
                 allocator,
                 &transaction,
-                .noop,
+                AccountReader.noop(),
                 &blockhash_queue,
                 max_age,
                 &Hash.ZEROES,
@@ -620,7 +575,7 @@ test "checkAge: recent blockhash" {
         const result = try checkAge(
             allocator,
             &transaction,
-            .noop,
+            AccountReader.noop(),
             &blockhash_queue,
             max_age,
             &Hash.ZEROES,
@@ -643,7 +598,7 @@ test "checkAge: nonce account" {
     const next_durable_nonce = Hash.initRandom(prng.random());
 
     const nonce_account = AccountSharedData{
-        .lamports = 0,
+        .lamports = 1,
         .owner = sig.runtime.program.system.ID,
         .data = try sig.bincode.writeAlloc(
             allocator,
@@ -738,14 +693,14 @@ test "checkAge: nonce account" {
     const result = try checkAge(
         allocator,
         &transaction,
-        .{ .account_shared_data_map = &account_map },
+        AccountReader.fromMap(&account_map),
         &blockhash_queue,
         0,
         &next_durable_nonce,
         5001,
         false,
     );
-    defer if (result.ok) |account| allocator.free(account.account.data);
+    defer if (result == .ok) result.ok.?.deinit(allocator);
 
     switch (result) {
         .ok => |ca| {
@@ -793,7 +748,7 @@ test "checkAge: SIMD-0242 ALT-resolved nonce" {
     const next_durable_nonce = Hash.initRandom(prng.random());
 
     const nonce_account_data = AccountSharedData{
-        .lamports = 0,
+        .lamports = 1,
         .owner = sig.runtime.program.system.ID,
         .data = try sig.bincode.writeAlloc(
             allocator,
@@ -894,7 +849,7 @@ test "checkAge: SIMD-0242 ALT-resolved nonce" {
         const result = try checkAge(
             allocator,
             &transaction,
-            .{ .account_shared_data_map = &account_map },
+            AccountReader.fromMap(&account_map),
             &blockhash_queue,
             0,
             &next_durable_nonce,
@@ -909,14 +864,14 @@ test "checkAge: SIMD-0242 ALT-resolved nonce" {
         const result = try checkAge(
             allocator,
             &transaction,
-            .{ .account_shared_data_map = &account_map },
+            AccountReader.fromMap(&account_map),
             &blockhash_queue,
             0,
             &next_durable_nonce,
             5001,
             false,
         );
-        defer if (result.ok) |account| allocator.free(account.account.data);
+        defer if (result == .ok) result.ok.?.deinit(allocator);
         try std.testing.expect(result == .ok);
         try std.testing.expectEqualSlices(u8, &nonce_key.data, &result.ok.?.pubkey.data);
     }
@@ -960,7 +915,7 @@ test "checkFeePayer: happy path fee payer only" {
     const result = try checkFeePayer(
         allocator,
         &transaction,
-        .{ .account_shared_data_map = &account_map },
+        AccountReader.fromMap(&account_map),
         &ComputeBudgetLimits.DEFAULT,
         null,
         &sig.core.rent_collector.defaultCollector(10),
@@ -1027,7 +982,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
     const result = try checkFeePayer(
         allocator,
         &transaction,
-        .{ .account_shared_data_map = &account_map },
+        AccountReader.fromMap(&account_map),
         &ComputeBudgetLimits.DEFAULT,
         .{
             .pubkey = transaction.fee_payer,
@@ -1098,7 +1053,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
     const result = try checkFeePayer(
         allocator,
         &transaction,
-        .{ .account_shared_data_map = &account_map },
+        AccountReader.fromMap(&account_map),
         &ComputeBudgetLimits.DEFAULT,
         .{
             .pubkey = Pubkey.initRandom(prng.random()),

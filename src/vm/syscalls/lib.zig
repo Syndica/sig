@@ -371,7 +371,7 @@ pub fn getEpochStake(
     // On null voter vm address, return total active cluster stake (as defined by EpochContext).
     if (vote_pubkey_addr == 0) {
         try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
-        registers.set(.r0, tc.epoch_stakes.total_stake);
+        registers.set(.r0, tc.epoch_stake_reader.totalStake());
         return;
     }
 
@@ -388,11 +388,7 @@ pub fn getEpochStake(
         tc.getCheckAligned(),
     );
 
-    if (tc.epoch_stakes.stakes.stake_accounts.getPtr(vote_address.*)) |delegation| {
-        registers.set(.r0, delegation.stake);
-    } else {
-        registers.set(.r0, 0);
-    }
+    registers.set(.r0, tc.epoch_stake_reader.stakeForVoteAccount(vote_address.*));
 }
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/ac11e3e568952977e63bce6bb20e37f26a61e151/instruction/src/lib.rs#L296

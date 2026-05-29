@@ -291,8 +291,10 @@ fn processTransactions(
                         break :invalid_nonce true;
                     defer account.deinit(allocator);
 
+                    var account_data = account.data.iterator();
                     break :invalid_nonce sig.runtime.check_transactions.verifyNonceAccount(
-                        account,
+                        &account.owner,
+                        account_data.reader(),
                         &nonce[1],
                     ) == null;
                 };
