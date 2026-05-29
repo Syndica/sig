@@ -120,10 +120,7 @@ pub const TransactionContext = struct {
         MAX_INSTRUCTION_STACK_DEPTH,
     );
 
-    pub const InstructionTrace = std14.BoundedArray(struct {
-        ixn_info: InstructionInfo,
-        depth: u8,
-    }, MAX_INSTRUCTION_TRACE_LENGTH);
+    pub const InstructionTrace = shared_transaction_context.TransactionContext.InstructionTrace;
 
     pub fn deinit(self: TransactionContext) void {
         const zone = tracy.Zone.init(@src(), .{ .name = "TransactionContext.deinit" });
