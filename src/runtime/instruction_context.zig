@@ -33,6 +33,12 @@ pub const InstructionContext = struct {
     /// The depth of the instruction on the stack
     depth: u8,
 
+    /// Bump-allocator cursor used by `syscall.allocFree`. Lives per-invocation
+    /// so each CPI level has a fresh heap (matches agave's per-invocation
+    /// `SyscallContext.allocator`).
+    /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L168
+    bpf_alloc_pos: u64 = 0,
+
     pub fn deinit(self: *InstructionContext, allocator: std.mem.Allocator) void {
         self.ixn_info.deinit(allocator);
     }
