@@ -60,7 +60,7 @@ const Config = struct {
         rooted: MemorySize,
         unrooted: MemorySize,
 
-        // For nicer initialization of constants (instead of x * 1024 * !024 * 1024)
+        // For nicer initialization of constants (instead of x * 1024 * 1024 * 1024)
         const MemorySize = union(enum) {
             bytes: usize,
             kb: usize,

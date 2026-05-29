@@ -186,12 +186,14 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     while (true) : (std.atomic.spinLoopHint()) {
         if (replay_in.peek()) |pubkey| {
             if (try rooted.queueRead(.from(logger), pubkey)) {
+                _ = replay_in.next();
                 replay_in.markUsed();
             }
         }
         if (replay_out.peek()) |result| {
             if (try rooted.pollRead(.from(logger))) |res| {
                 result.* = res;
+                _ = replay_out.next();
                 replay_out.markUsed();
             }
         }
