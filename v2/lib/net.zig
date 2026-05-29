@@ -25,9 +25,19 @@ pub const Pair = extern struct {
 
     pub const PacketRing = Ring(MAX_PACKETS, Packet);
 
-    pub fn init(p: *Pair, port: u16) void {
-        p.recv.init();
-        p.send.init();
-        p.port = port;
-    }
+    pub const InitParams = struct {
+        port: u16,
+
+        pub fn size(_: InitParams) usize {
+            return @sizeOf(Pair);
+        }
+
+        pub fn init(cfg: InitParams, buf: []align(std.heap.page_size_min) u8) void {
+            std.debug.assert(buf.len == @sizeOf(Pair));
+            const data: *Pair = @ptrCast(buf);
+            data.recv.init();
+            data.send.init();
+            data.port = cfg.port;
+        }
+    };
 };

@@ -42,6 +42,26 @@ pub const Config = extern struct {
     keypair: KeyPair,
     cluster_info: ClusterInfo,
     turbine_recv_port: u16,
+
+    pub const InitParams = struct {
+        cluster_info: lib.gossip.ClusterInfo,
+        // TODO: this should live in signing service
+        keypair: lib.gossip.KeyPair,
+        turbine_recv_port: u16,
+
+        pub fn size(_: InitParams) usize {
+            return @sizeOf(Config);
+        }
+
+        pub fn init(self: InitParams, buf: []align(std.heap.page_size_min) u8) void {
+            std.debug.assert(buf.len == @sizeOf(lib.gossip.Config));
+            const data: *lib.gossip.Config = @ptrCast(buf);
+
+            data.keypair = self.keypair;
+            data.cluster_info = self.cluster_info;
+            data.turbine_recv_port = self.turbine_recv_port;
+        }
+    };
 };
 
 // For std.meta.eql compatibility inside `serviceMap` & defined repr across processes
