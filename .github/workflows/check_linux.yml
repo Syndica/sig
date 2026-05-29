@@ -39,16 +39,25 @@ jobs:
           echo "$PWD/kcov-v43-bin-linux-x86_64/bin" >> "$GITHUB_PATH"
 
       - name: Build v1 tests
-        run: zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36
-          -Denable-tsan=false -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
+        uses: Syndica/retry@master
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Denable-tsan=false -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Collect v1 coverage
         run: bash scripts/kcov_ci.sh
 
       - name: Collect v2 coverage
-        run: |
-          cd v2
-          zig build test -Dkcov --summary all
+        uses: Syndica/retry@master
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            cd v2
+            zig build test -Dkcov --summary all
 
       - name: Debug coverage reports
         run: |
@@ -111,10 +120,12 @@ jobs:
           cache-key: selfhosted-release-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build
-        run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh zig
-          zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out-release --summary all
+        uses: Syndica/retry@master
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out-release --summary all
 
       - name: Run Gossip
         run: bash scripts/gossip_test.sh 120 workspace/zig-out-release/bin/sig
@@ -146,15 +157,20 @@ jobs:
           cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build
-        run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh zig
-          zig build -Denable-tsan=true -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out --summary all
+        uses: Syndica/retry@master
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: zig build -Denable-tsan=true -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out --summary all
 
       - name: Build Tests
-        run:
-          zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
-          -Dallow-no-sha -Dallow-no-avx512 --summary all
+        uses: Syndica/retry@master
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Run Tests
         run: |
@@ -195,22 +211,35 @@ jobs:
         run: python3 docs/check.py ./
 
       - name: V2 checks
-        run: |
-          cd v2/
-          zig build ci -Dallow-no-sha -Dallow-no-avx512 --summary all
+        uses: Syndica/retry@master
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            cd v2/
+            zig build ci -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Build and test hashmap ledger (linux)
-        run: |
-          set -eo pipefail
-          sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh zig
-          zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" -Dallow-no-sha -Dallow-no-avx512 --summary all
-          zig-out/bin/test 2>&1 | cat
+        uses: Syndica/retry@master
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            set -eo pipefail
+            zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" -Dallow-no-sha -Dallow-no-avx512 --summary all
+            zig-out/bin/test 2>&1 | cat
 
       - name: Webzockets tests (linux)
-        run: |
-          cd src/rpc/webzockets
-          zig build test --summary all
+        uses: Syndica/retry@master
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            cd src/rpc/webzockets
+            zig build test --summary all
 
   solana_conformance:
     runs-on: ubuntu-latest
@@ -229,11 +258,14 @@ jobs:
             'conformance/build.zig', 'conformance/build.zig.zon') }}
 
       - name: Build Conformance
-        run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh zig
-          cd conformance
-          zig build -Dallow-no-sha -Dallow-no-avx512 --summary all
+        uses: Syndica/retry@master
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            cd conformance
+            zig build -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - id: test_vectors_cache
         uses: actions/cache@v4
@@ -290,17 +322,22 @@ jobs:
             conformance/env/solfuzz-agave/target
 
       - name: Build Sig target and Agave target
-        run: |
-          cd conformance
-          zig build solfuzz_sig -Dallow-no-sha -Dallow-no-avx512 --summary all
-          . commits.env
+        uses: Syndica/retry@master
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            cd conformance
+            zig build solfuzz_sig -Dallow-no-sha -Dallow-no-avx512 --summary all
+            . commits.env
 
-          mkdir -p env
-          rm -rf env/solfuzz-agave
-          git clone https://github.com/firedancer-io/solfuzz-agave.git env/solfuzz-agave
-          cd env/solfuzz-agave
-          git checkout "$SOLFUZZ_AGAVE_COMMIT"
-          cargo build --lib --release
+            mkdir -p env
+            rm -rf env/solfuzz-agave
+            git clone https://github.com/firedancer-io/solfuzz-agave.git env/solfuzz-agave
+            cd env/solfuzz-agave
+            git checkout "$SOLFUZZ_AGAVE_COMMIT"
+            cargo build --lib --release
 
       - name: Check feature compatibility
         run: |

@@ -34,7 +34,12 @@ jobs:
           cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build Check
-        run: zig build -Denable-tsan=false --summary all -Dno-run -Dno-bin
+        uses: Syndica/retry@master
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: zig build -Denable-tsan=false --summary all -Dno-run -Dno-bin
 
   test_macos:
     runs-on: macos-15
@@ -51,7 +56,12 @@ jobs:
           cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build Tests
-        run: zig build test -Dno-run -Denable-tsan=false --summary all
+        uses: Syndica/retry@master
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: zig build test -Dno-run -Denable-tsan=false --summary all
 
       - name: Run Tests
         run: |
@@ -73,8 +83,12 @@ jobs:
           cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build Tests
-        run: zig build test -Dno-run -Denable-tsan=false --summary all -Dlong-tests
-          -Dledger=hashmap -Dfilter="ledger"
+        uses: Syndica/retry@master
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: zig build test -Dno-run -Denable-tsan=false --summary all -Dlong-tests -Dledger=hashmap -Dfilter="ledger"
 
       - name: Run Tests
         run: |
@@ -98,6 +112,11 @@ jobs:
             }}
 
       - name: Build and Run Webzockets Tests
-        run: |
-          cd src/rpc/webzockets
-          zig build test --summary all
+        uses: Syndica/retry@master
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            cd src/rpc/webzockets
+            zig build test --summary all

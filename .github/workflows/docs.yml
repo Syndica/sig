@@ -33,7 +33,12 @@ jobs:
           version: 0.15.2
 
       - name: build-docs
-        run: zig build docs -Dallow-no-sha -Dallow-no-avx512
+        uses: Syndica/retry@master
+        with:
+          timeout_minutes: 40
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: zig build docs -Dallow-no-sha -Dallow-no-avx512
       
       - name: upload
         uses: actions/upload-pages-artifact@v3
