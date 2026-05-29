@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../../../sig.zig");
+const sig = @import("../../../lib.zig");
 
 const program_loader = sig.runtime.program_loader;
 const vm = sig.vm;

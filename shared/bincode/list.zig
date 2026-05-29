@@ -1,4 +1,4 @@
-const sig = @import("../sig.zig");
+const sig = @import("../lib.zig");
 const bincode = sig.bincode;
 
 pub const Error = error{SingleElementSliceInvalidLength};

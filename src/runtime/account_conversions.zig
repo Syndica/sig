@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Account = sig.core.Account;
-const AccountSharedData = @import("AccountSharedData.zig");
+const AccountSharedData = sig.runtime.AccountSharedData;
 
 /// Returns `account` as shared data with owned account data.
 pub fn fromAccount(

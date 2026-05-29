@@ -1,4 +1,4 @@
-const sig = @import("../../../sig.zig");
+const sig = @import("../../../lib.zig");
 pub const Instruction = @import("instruction.zig").Instruction;
 pub const state = @import("state.zig");
 

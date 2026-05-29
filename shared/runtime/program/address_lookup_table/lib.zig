@@ -1,4 +1,4 @@
-const sig = @import("../../../sig.zig");
+const sig = @import("../../../lib.zig");
 
 pub const program = @import("lib.zig");
 pub const state = @import("state.zig");

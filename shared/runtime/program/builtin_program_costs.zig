@@ -1,7 +1,7 @@
 //! [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/builtins-default-costs/src/lib.rs
 
 const std = @import("std");
-const sig = @import("../../sig.zig");
+const sig = @import("../../lib.zig");
 
 const programs = sig.runtime.program;
 

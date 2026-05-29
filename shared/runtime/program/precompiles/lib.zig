@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../../../sig.zig");
+const sig = @import("../../../lib.zig");
 
 pub const ed25519 = @import("ed25519.zig");
 pub const secp256k1 = @import("secp256k1.zig");

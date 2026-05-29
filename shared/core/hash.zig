@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const std14 = @import("std14");
-const sig = @import("../sig.zig");
+const sig = @import("../lib.zig");
 const base58 = @import("base58");
 const build_options = @import("build-options");
 

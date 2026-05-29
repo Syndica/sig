@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../../../sig.zig");
+const sig = @import("../../../lib.zig");
 
 const zksdk = sig.zksdk;
 const zk_elgamal = sig.runtime.program.zk_elgamal;

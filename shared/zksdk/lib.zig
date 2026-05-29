@@ -1,3 +1,4 @@
+pub const benchmarks = @import("benchmarks.zig");
 pub const elgamal = @import("elgamal.zig");
 pub const pedersen = @import("pedersen.zig");
 pub const merlin = @import("merlin.zig");

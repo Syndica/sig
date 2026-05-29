@@ -1,6 +1,6 @@
 //! system variables definitions and addresses (clock, slot_history, …)
 const std = @import("std");
-const sig = @import("../../sig.zig");
+const sig = @import("../../lib.zig");
 
 const Allocator = std.mem.Allocator;
 

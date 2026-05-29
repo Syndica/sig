@@ -3,7 +3,7 @@
 
 // TODO: move IDs to programs as they are implemented, or to a more appropriate location for non-program IDs
 
-const sig = @import("../sig.zig");
+const sig = @import("../lib.zig");
 const Pubkey = sig.core.Pubkey;
 
 pub const NATIVE_LOADER_ID: Pubkey = .parse("NativeLoader1111111111111111111111111111111");

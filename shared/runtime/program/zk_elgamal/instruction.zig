@@ -1,4 +1,4 @@
-const sig = @import("../../../sig.zig");
+const sig = @import("../../../lib.zig");
 const Pubkey = sig.core.Pubkey;
 
 pub const ProofInstruction = enum(u8) {

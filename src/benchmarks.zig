@@ -76,11 +76,11 @@ fn getBenchmarks(comptime filter: Filter) []const Benchmark {
         },
         .crypto => &.{
             .{
-                .type = @import("crypto/benchmark.zig").BenchmarkSigVerify,
+                .type = @import("shared").crypto.benchmark.BenchmarkSigVerify,
                 .resolution = .micros,
             },
             .{
-                .type = @import("crypto/benchmark.zig").BenchmarkPohHash,
+                .type = @import("shared").crypto.benchmark.BenchmarkPohHash,
                 .resolution = .nanos,
             },
         },
@@ -99,7 +99,7 @@ fn getBenchmarks(comptime filter: Filter) []const Benchmark {
             .resolution = .nanos,
         }},
         .zksdk => &.{.{
-            .type = @import("zksdk/benchmarks.zig").Benchmark,
+            .type = @import("shared").zksdk.benchmarks.Benchmark,
             .resolution = .micros,
         }},
         .geyser => &.{},

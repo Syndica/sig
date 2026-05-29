@@ -9,7 +9,7 @@
 
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../sig.zig");
+const sig = @import("../lib.zig");
 
 const account_loader = sig.runtime.account_loader;
 

@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const sig = @import("../sig.zig");
+const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
 const Alignment = std.mem.Alignment;

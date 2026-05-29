@@ -1,4 +1,4 @@
-const sig = @import("../../../sig.zig");
+const sig = @import("../../../lib.zig");
 
 /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/zk_elgamal_proof_program/proof_data/mod.rs#L48
 pub const ProofType = enum(u8) {

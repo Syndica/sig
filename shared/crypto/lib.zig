@@ -1,5 +1,6 @@
 const std = @import("std");
 
+pub const benchmark = @import("benchmark.zig");
 pub const FnvHasher = @import("fnv.zig").FnvHasher;
 pub const bn254 = @import("bn254/lib.zig");
 pub const bls12_381 = @import("bls12_381/lib.zig");

@@ -1,7 +1,7 @@
 //! Elf Spec: http://refspecs.linux-foundation.org/LSB_4.1.0/LSB-Core-generic/LSB-Core-generic.html
 
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../lib.zig");
 const sbpf = @import("sbpf.zig");
 const memory = @import("memory.zig");
 

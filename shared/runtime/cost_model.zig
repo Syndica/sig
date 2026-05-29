@@ -6,7 +6,7 @@
 /// - https://github.com/anza-xyz/agave/blob/v3.1.8/cost-model/src/block_cost_limits.rs
 /// - https://github.com/anza-xyz/agave/blob/v3.1.8/cost-model/src/cost_model.rs
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../lib.zig");
 
 const FeatureSet = sig.core.FeatureSet;
 const Slot = sig.core.Slot;

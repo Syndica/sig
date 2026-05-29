@@ -2,7 +2,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const tracy = @import("tracy");
 const std14 = @import("std14");
-const sig = @import("../../../sig.zig");
+const sig = @import("../../../lib.zig");
 
 const ids = sig.runtime.ids;
 const bincode = sig.bincode;

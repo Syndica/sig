@@ -1,6 +1,6 @@
 const std = @import("std");
 const tracy = @import("tracy");
-const sig = @import("../sig.zig");
+const sig = @import("../lib.zig");
 
 const sbpf = sig.vm.sbpf;
 const memory = sig.vm.memory;

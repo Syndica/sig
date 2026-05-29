@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../../sig.zig");
+const sig = @import("../../lib.zig");
 const crypto = std.crypto;
 const Ed25519 = crypto.ecc.Edwards25519;
 const Ristretto255 = crypto.ecc.Ristretto255;

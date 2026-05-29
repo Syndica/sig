@@ -1,7 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const tracy = @import("tracy");
-const sig = @import("../../../sig.zig");
+const sig = @import("../../../lib.zig");
 
 const builtin_program_costs = sig.runtime.program.builtin_program_costs;
 

@@ -1,4 +1,4 @@
-const sig = @import("../../../sig.zig");
+const sig = @import("../../../lib.zig");
 const state = @import("state.zig");
 
 const bincode = sig.bincode;

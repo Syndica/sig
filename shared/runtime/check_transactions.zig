@@ -1,6 +1,6 @@
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../sig.zig");
+const sig = @import("../lib.zig");
 const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;

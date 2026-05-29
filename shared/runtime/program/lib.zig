@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../../sig.zig");
+const sig = @import("../../lib.zig");
 
 pub const address_lookup_table = @import("address_lookup_table/lib.zig");
 pub const bpf = @import("bpf/lib.zig");

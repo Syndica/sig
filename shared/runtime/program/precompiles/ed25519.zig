@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const sig = @import("../../../sig.zig");
+const sig = @import("../../../lib.zig");
 
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;

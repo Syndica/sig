@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.array_list.Managed;

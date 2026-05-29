@@ -1,7 +1,7 @@
 //! [agave] Analogous to https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L1
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../../../sig.zig");
+const sig = @import("../../../lib.zig");
 const vote_program = @import("lib.zig");
 const builtin = @import("builtin");
 const state_v4 = @import("state_v4.zig");

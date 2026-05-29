@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("../lib.zig");
 
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;

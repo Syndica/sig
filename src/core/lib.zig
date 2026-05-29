@@ -1,28 +1,30 @@
+const shared = @import("shared");
+
 pub const account = @import("account.zig");
 pub const ancestors = @import("ancestors.zig");
 pub const bank = @import("bank.zig");
-pub const blockhash_queue = @import("blockhash_queue.zig");
+pub const blockhash_queue = shared.core.blockhash_queue;
 pub const entry = @import("entry.zig");
-pub const epoch_schedule = @import("epoch_schedule.zig");
+pub const epoch_schedule = shared.core.epoch_schedule;
 pub const epoch_stakes = @import("epoch_stakes.zig");
-pub const features = @import("features.zig");
+pub const features = shared.core.features;
 pub const genesis_config = @import("genesis_config.zig");
 pub const genesis_download = @import("genesis_download.zig");
 pub const hard_forks = @import("hard_forks.zig");
-pub const hash = @import("hash.zig");
-pub const instruction = @import("instruction.zig");
+pub const hash = shared.core.hash;
+pub const instruction = shared.core.instruction;
 pub const leader_schedule = @import("leader_schedule.zig");
 pub const poh = @import("poh.zig");
-pub const pubkey = @import("pubkey.zig");
-pub const rent_collector = @import("rent_collector.zig");
+pub const pubkey = shared.core.pubkey;
+pub const rent_collector = shared.core.rent_collector;
 pub const ReservedAccounts = @import("ReservedAccounts.zig");
 pub const shred = @import("shred.zig");
-pub const signature = @import("signature.zig");
+pub const signature = shared.core.signature;
 pub const stakes = @import("stakes.zig");
 pub const status_cache = @import("status_cache.zig");
-pub const time = @import("time.zig");
-pub const transaction = @import("transaction.zig");
-pub const transaction_error = @import("transaction_error.zig");
+pub const time = shared.core.time;
+pub const transaction = shared.core.transaction;
+pub const transaction_error = shared.core.transaction_error;
 pub const epoch_tracker = @import("epoch_tracker.zig");
 
 /// TODO: Change EpochStakes to use EpochStakes(.stake) everywhere except in the `epoch_stakes` field
