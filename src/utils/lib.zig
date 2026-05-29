@@ -1,7 +1,7 @@
 const shared = @import("shared");
 
 pub const ahash = @import("ahash.zig");
-pub const allocators = shared.utils.allocators;
+pub const allocators = @import("allocators.zig");
 pub const base64 = @import("base64.zig");
 pub const bitflags = @import("bitflags.zig");
 pub const collections = shared.utils.collections;
