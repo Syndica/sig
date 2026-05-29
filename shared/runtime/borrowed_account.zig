@@ -1,7 +1,6 @@
 const std = @import("std");
 const tracy = @import("tracy");
 const sig = @import("../lib.zig");
-const shared_borrowed_account = @import("borrowed_account_types.zig");
 
 const bincode = sig.bincode;
 
@@ -17,8 +16,17 @@ const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION =
 
 const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH;
 
-pub const MAX_INSTRUCTION_STACK_DEPTH = shared_borrowed_account.MAX_INSTRUCTION_STACK_DEPTH;
-pub const BorrowedAccountContext = shared_borrowed_account.BorrowedAccountContext;
+/// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/compute-budget/src/compute_budget.rs#L11-L12
+pub const MAX_INSTRUCTION_STACK_DEPTH: usize = 5;
+
+/// Borrowed account context exists to provide information about the context under which an account
+/// was borrowed. It replaces the reference to an `InstructionContext` used in Agave.
+pub const BorrowedAccountContext = struct {
+    program_id: Pubkey,
+    is_signer: bool = false,
+    is_writable: bool = false,
+    accounts_lamport_delta: *i128,
+};
 
 /// `BorrowedAccount` represents an account which has been 'borrowed' from the `TransactionContext`
 /// It provides methods for accessing and modifying account state with the required checks.

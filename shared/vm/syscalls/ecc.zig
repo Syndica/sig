@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const sig = @import("../../lib.zig");
-const shared_ecc = @import("ecc_base.zig");
 
 const bn254 = sig.crypto.bn254;
 const bls12_381 = sig.crypto.bls12_381;
@@ -23,8 +22,32 @@ const Keccak256 = std.crypto.hash.sha3.Keccak256;
 const Secp256k1 = std.crypto.ecc.Secp256k1;
 const Ecdsa = std.crypto.sign.ecdsa.Ecdsa(Secp256k1, Keccak256);
 
-pub const CurveId = shared_ecc.CurveId;
-pub const GroupOp = shared_ecc.GroupOp;
+pub const CurveId = enum(u64) {
+    edwards = 0,
+    ristretto = 1,
+
+    bls12_381_be = 4 | 0x80,
+    bls12_381_le = 4,
+    bls12_381_g1_be = 5 | 0x80,
+    bls12_381_g1_le = 5,
+    bls12_381_g2_be = 6 | 0x80,
+    bls12_381_g2_le = 6,
+
+    fn wrap(id: u64) ?CurveId {
+        return std.meta.intToEnum(CurveId, id) catch null;
+    }
+};
+
+pub const GroupOp = enum(u64) {
+    add = 0,
+    subtract = 1,
+    multiply = 2,
+
+    fn wrap(id: u64) ?GroupOp {
+        if (id > 2) return null;
+        return @enumFromInt(id);
+    }
+};
 
 fn wrapCurveId(id: u64) ?CurveId {
     return std.meta.intToEnum(CurveId, id) catch null;

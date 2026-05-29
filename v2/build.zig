@@ -92,33 +92,6 @@ pub fn build(b: *Build) !void {
     }).module("tracy");
     const binkode_mod = b.dependency("binkode", .{}).module("binkode");
     const base58_mod = b.dependency("base58", .{}).module("base58");
-    const poseidon_mod = b.dependency("poseidon", .{}).module("poseidon");
-    const secp256k1_mod = b.dependency("secp256k1", .{}).module("secp256k1");
-    const blst_mod = b.dependency("blst", .{}).module("blst");
-    const feature_set_id_gen = addFeatureSetIdGenerator(b);
-    const feature_set_id = b.createModule(.{
-        .root_source_file = b.addRunArtifact(feature_set_id_gen).addOutputFileArg(
-            "feature-set-id.zig",
-        ),
-    });
-    const table_mod = b.createModule(.{
-        .root_source_file = generateTable(b),
-        .target = target,
-        .optimize = optimize,
-    });
-    const shared_mod = b.addModule("shared", .{
-        .root_source_file = b.path("../shared/lib.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    shared_mod.addImport("base58", base58_mod);
-    shared_mod.addImport("build-options", build_options_mod);
-    shared_mod.addImport("tracy", tracy_mod);
-    shared_mod.addImport("blst", blst_mod);
-    shared_mod.addImport("poseidon", poseidon_mod);
-    shared_mod.addImport("secp256k1", secp256k1_mod);
-    shared_mod.addImport("table", table_mod);
-    shared_mod.addImport("feature-set-id", feature_set_id);
 
     const fmt_check_step = b.addFmt(.{
         .check = true,
@@ -165,23 +138,6 @@ pub fn build(b: *Build) !void {
         .filters = filters,
         .use_llvm = use_llvm,
     });
-
-    {
-        const shared_runtime_compile_mod = b.createModule(.{
-            .root_source_file = b.path("lib/shared_runtime_compile.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "shared", .module = shared_mod },
-            },
-        });
-        const shared_runtime_compile_exe = b.addExecutable(.{
-            .name = "shared-runtime-compile",
-            .root_module = shared_runtime_compile_mod,
-            .use_llvm = true,
-        });
-        _ = addExeOutputs(b, shared_runtime_compile_exe, check_step, artifact_opts, .{});
-    }
 
     const sig_init_mod = b.createModule(.{
         .root_source_file = b.path("init/main.zig"),
@@ -340,47 +296,6 @@ fn addTestOutputs(
     return addExeOutputs(b, mod_test_exe, artifact_step, artifact_opts, .{
         .dest_sub_path = dest_sub_path,
         .dest_dir = test_install_dir,
-    });
-}
-
-fn generateTable(b: *Build) Build.LazyPath {
-    const gen = b.addExecutable(.{
-        .name = "generator_chain",
-        .root_module = b.createModule(.{
-            .target = b.graph.host,
-            .optimize = .Debug,
-            .root_source_file = b.path("../scripts/generator_chain.zig"),
-        }),
-        .use_llvm = true,
-    });
-    const run = b.addRunArtifact(gen);
-    const generated = run.captureStdOut();
-    const wf = b.addWriteFiles();
-    const table_file = wf.addCopyFile(generated, "table.zig");
-    wf.step.dependOn(&run.step);
-    return table_file;
-}
-
-fn addFeatureSetIdGenerator(b: *Build) *Build.Step.Compile {
-    return b.addExecutable(.{
-        .name = "gen_feature_set_id",
-        .root_module = b.createModule(.{
-            .target = b.graph.host,
-            .optimize = .Debug,
-            .root_source_file = b.path("../scripts/gen_feature_set_id.zig"),
-            .imports = &.{
-                .{
-                    .name = "base58",
-                    .module = b.dependency("base58", .{}).module("base58"),
-                },
-                .{
-                    .name = "features",
-                    .module = b.createModule(.{
-                        .root_source_file = b.path("../shared/core/features.zon"),
-                    }),
-                },
-            },
-        }),
     });
 }
 

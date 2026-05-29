@@ -3,8 +3,6 @@ const std14 = @import("../std14.zig");
 const sig = @import("../lib.zig");
 const tracy = @import("tracy");
 
-const shared_transaction_execution = @import("transaction_execution_types.zig");
-
 const account_loader = sig.runtime.account_loader;
 const program_loader = sig.runtime.program_loader;
 const executor = sig.runtime.executor;
@@ -62,7 +60,21 @@ const AccountLoadError = sig.runtime.account_loader.AccountLoadError;
 // Once the accounts have been loaded, the transaction is commitable, even if its
 // execution fails.
 
-pub const RuntimeTransaction = shared_transaction_execution.RuntimeTransaction;
+pub const RuntimeTransaction = struct {
+    signature_count: u64,
+    fee_payer: Pubkey,
+    msg_hash: Hash,
+    recent_blockhash: Hash,
+    instructions: []const InstructionInfo,
+    accounts: std.MultiArrayList(AccountMeta) = .{},
+    compute_budget_instruction_details: ComputeBudgetInstructionDetails = .{},
+    num_lookup_tables: u64,
+    /// Count of statically-included account keys (the message's `account_keys`),
+    /// excluding any accounts loaded from address-lookup tables. Equal to
+    /// `accounts.len - <ALT-loaded count>` and used to enforce SIMD-0242.
+    num_static_account_keys: u16,
+    is_simple_vote_transaction: bool,
+};
 
 pub const TransactionExecutionEnvironment = struct {
     feature_set: *const FeatureSet,
@@ -156,7 +168,12 @@ pub const ProcessedTransaction = struct {
     }
 };
 
-pub const TransactionResult = shared_transaction_execution.TransactionResult;
+pub fn TransactionResult(comptime T: type) type {
+    return union(enum(u8)) {
+        ok: T,
+        err: sig.core.TransactionError,
+    };
+}
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L323-L324
 pub fn loadAndExecuteTransaction(

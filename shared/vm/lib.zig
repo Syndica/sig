@@ -1,21 +1,22 @@
+const executable = @import("executable.zig");
+
 const std = @import("std");
 const sig = @import("../lib.zig");
-const shared_vm = @import("base.zig");
 
-pub const sbpf = shared_vm.sbpf;
-pub const elf = shared_vm.elf;
-pub const memory = shared_vm.memory;
+pub const sbpf = @import("sbpf.zig");
+pub const elf = @import("elf.zig");
+pub const memory = @import("memory.zig");
 pub const tests = @import("tests.zig");
 pub const interpreter = @import("interpreter.zig");
 pub const syscalls = @import("syscalls/lib.zig");
 pub const environment = @import("environment.zig");
 
-pub const Executable = shared_vm.Executable;
-pub const Registry = shared_vm.Registry;
-pub const Assembler = shared_vm.Assembler;
-pub const Config = shared_vm.Config;
+pub const Executable = executable.Executable;
+pub const Registry = executable.Registry;
+pub const Assembler = executable.Assembler;
+pub const Config = executable.Config;
 pub const Vm = interpreter.Vm;
-pub const Section = shared_vm.Section;
+pub const Section = executable.Section;
 pub const SyscallFn = syscalls.SyscallFn;
 pub const SyscallMap = syscalls.Syscall.Registry;
 pub const Environment = environment.Environment;
