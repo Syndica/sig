@@ -15,6 +15,7 @@ const agave_cf_code_shred = "code_shred";
 const max_shred_packet_bytes: usize = 1232;
 const producer_publish_packets: usize = 32;
 const stream_queue_packets = 8192;
+const no_current_slot = std.math.maxInt(Slot);
 
 const TestMode = enum {
     linear,
@@ -220,29 +221,45 @@ fn run(allocator: Allocator, config: Config) !void {
         var ring: StreamPacketRing = undefined;
         ring.init();
 
-        var done: std.atomic.Value(bool) = .init(false);
+        var producer_done: std.atomic.Value(bool) = .init(false);
         var stop: std.atomic.Value(bool) = .init(false);
         var net_thread_error: ?anyerror = null;
         var net_thread_stats: NetThreadStats = .{};
+        var net_progress: NetThreadProgress = .{};
+        var producer_progress: ProducerProgress = .{};
+        var producer_result: ProducerThreadResult = .{};
+
         const net_thread = try std.Thread.spawn(
             .{},
             netThreadMain,
-            .{ &ring, &done, &stop, &net_thread_stats, &net_thread_error, sockfd, target, config.rate_hz },
+            .{ &ring, &producer_done, &stop, &net_thread_stats, &net_progress, &net_thread_error, sockfd, target, config.rate_hz },
+        );
+        errdefer {
+            stop.store(true, .release);
+            producer_done.store(true, .release);
+            net_thread.join();
+        }
+
+        const producer_thread = try std.Thread.spawn(
+            .{},
+            producerThreadMain,
+            .{ &blockstore, config, &ring, &producer_done, &stop, &producer_progress, &producer_result },
         );
 
-        var writer = ring.get(.writer);
-        const stats = produceLedgerPackets(&blockstore, config, &writer, &stop) catch |err| {
+        monitorProgress(stdout, &ring, &producer_done, &stop, &producer_progress, &net_progress, config.rate_hz) catch |err| {
             stop.store(true, .release);
-            done.store(true, .release);
+            producer_done.store(true, .release);
+            producer_thread.join();
             net_thread.join();
             return err;
         };
-        done.store(true, .release);
+        producer_thread.join();
         net_thread.join();
 
-        try printProducerStats(stdout, stats);
+        try printProducerStats(stdout, producer_result.stats);
         try printNetThreadStats(stdout, net_thread_stats);
 
+        if (producer_result.err) |err| return err;
         if (net_thread_error) |err| return err;
     }
 
@@ -404,6 +421,22 @@ const NetThreadStats = struct {
     }
 };
 
+const NetThreadProgress = struct {
+    data_packets: std.atomic.Value(u64) = .init(0),
+    code_packets: std.atomic.Value(u64) = .init(0),
+    payload_bytes: std.atomic.Value(u64) = .init(0),
+    empty_polls: std.atomic.Value(u64) = .init(0),
+    send_errors: std.atomic.Value(u64) = .init(0),
+
+    fn store(self: *NetThreadProgress, stats: NetThreadStats) void {
+        self.data_packets.store(stats.data_packets, .release);
+        self.code_packets.store(stats.code_packets, .release);
+        self.payload_bytes.store(stats.payload_bytes, .release);
+        self.empty_polls.store(stats.empty_polls, .release);
+        self.send_errors.store(stats.send_errors, .release);
+    }
+};
+
 const ProducerStats = struct {
     slots: u64 = 0,
     data_packets: u64 = 0,
@@ -423,11 +456,50 @@ const ProducerStats = struct {
     }
 };
 
+const ProducerProgress = struct {
+    current_slot: std.atomic.Value(Slot) = .init(no_current_slot),
+    slots: std.atomic.Value(u64) = .init(0),
+    data_packets: std.atomic.Value(u64) = .init(0),
+    code_packets: std.atomic.Value(u64) = .init(0),
+    payload_bytes: std.atomic.Value(u64) = .init(0),
+    full_polls: std.atomic.Value(u64) = .init(0),
+
+    fn store(self: *ProducerProgress, stats: ProducerStats) void {
+        self.slots.store(stats.slots, .release);
+        self.data_packets.store(stats.data_packets, .release);
+        self.code_packets.store(stats.code_packets, .release);
+        self.payload_bytes.store(stats.payload_bytes, .release);
+    }
+};
+
+const ProducerThreadResult = struct {
+    stats: ProducerStats = .{},
+    err: ?anyerror = null,
+};
+
+const ProgressSnapshot = struct {
+    produced_packets: u64,
+    sent_packets: u64,
+
+    fn init(producer_progress: *ProducerProgress, net_progress: *NetThreadProgress) ProgressSnapshot {
+        const produced_packets = producer_progress.data_packets.load(.acquire) +
+            producer_progress.code_packets.load(.acquire);
+        const sent_packets = net_progress.data_packets.load(.acquire) +
+            net_progress.code_packets.load(.acquire);
+
+        return .{
+            .produced_packets = produced_packets,
+            .sent_packets = sent_packets,
+        };
+    }
+};
+
 fn netThreadMain(
     ring: *StreamPacketRing,
     done: *std.atomic.Value(bool),
     stop: *std.atomic.Value(bool),
     stats: *NetThreadStats,
+    progress: *NetThreadProgress,
     net_thread_error: *?anyerror,
     sockfd: std.posix.fd_t,
     target: std.net.Address,
@@ -441,6 +513,7 @@ fn netThreadMain(
         done,
         stop,
         stats,
+        progress,
         net_thread_error,
         sockfd,
         target,
@@ -453,6 +526,7 @@ fn netThreadMainInner(
     done: *std.atomic.Value(bool),
     stop: *std.atomic.Value(bool),
     stats: *NetThreadStats,
+    progress: *NetThreadProgress,
     net_thread_error: *?anyerror,
     sockfd: std.posix.fd_t,
     target: std.net.Address,
@@ -462,6 +536,7 @@ fn netThreadMainInner(
     errdefer |err| {
         net_thread_error.* = err;
         stats.send_errors += 1;
+        progress.store(stats.*);
         stop.store(true, .release);
     }
 
@@ -518,13 +593,110 @@ fn netThreadMainInner(
         }
 
         if (consumed != 0) {
+            progress.store(stats.*);
             reader.markUsed();
             continue;
         }
 
         stats.empty_polls += 1;
+        if (stats.empty_polls % 1024 == 0) {
+            progress.empty_polls.store(stats.empty_polls, .release);
+        }
         std.atomic.spinLoopHint();
     }
+}
+
+fn producerThreadMain(
+    blockstore: *const AgaveBlockstore,
+    config: Config,
+    ring: *StreamPacketRing,
+    done: *std.atomic.Value(bool),
+    stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
+    result: *ProducerThreadResult,
+) void {
+    var writer = ring.get(.writer);
+    result.stats = produceLedgerPackets(blockstore, config, &writer, stop, progress) catch |err| {
+        result.err = err;
+        stop.store(true, .release);
+        done.store(true, .release);
+        return;
+    };
+    progress.store(result.stats);
+    done.store(true, .release);
+}
+
+fn monitorProgress(
+    stdout: *std.Io.Writer,
+    ring: *StreamPacketRing,
+    producer_done: *std.atomic.Value(bool),
+    stop: *std.atomic.Value(bool),
+    producer_progress: *ProducerProgress,
+    net_progress: *NetThreadProgress,
+    rate_hz: ?f64,
+) !void {
+    var last_snapshot = ProgressSnapshot.init(producer_progress, net_progress);
+    while (!stop.load(.acquire) and !producer_done.load(.acquire)) {
+        std.Thread.sleep(std.time.ns_per_s);
+        try printProgress(stdout, ring, producer_progress, net_progress, last_snapshot, rate_hz);
+        last_snapshot = ProgressSnapshot.init(producer_progress, net_progress);
+    }
+
+    while (!stop.load(.acquire)) {
+        const queue_packets = ring.tail.value.load(.acquire) -% ring.head.value.load(.acquire);
+        if (queue_packets == 0) break;
+        std.Thread.sleep(std.time.ns_per_s);
+        try printProgress(stdout, ring, producer_progress, net_progress, last_snapshot, rate_hz);
+        last_snapshot = ProgressSnapshot.init(producer_progress, net_progress);
+    }
+}
+
+fn printProgress(
+    stdout: *std.Io.Writer,
+    ring: *StreamPacketRing,
+    producer_progress: *ProducerProgress,
+    net_progress: *NetThreadProgress,
+    last_snapshot: ProgressSnapshot,
+    rate_hz: ?f64,
+) !void {
+    const current_slot = producer_progress.current_slot.load(.acquire);
+    const slots = producer_progress.slots.load(.acquire);
+    const produced_data = producer_progress.data_packets.load(.acquire);
+    const produced_code = producer_progress.code_packets.load(.acquire);
+    const produced_packets = produced_data + produced_code;
+    const sent_data = net_progress.data_packets.load(.acquire);
+    const sent_code = net_progress.code_packets.load(.acquire);
+    const sent_packets = sent_data + sent_code;
+    const send_pps = sent_packets -| last_snapshot.sent_packets;
+    const produced_pps = produced_packets -| last_snapshot.produced_packets;
+    const queue_packets = ring.tail.value.load(.acquire) -% ring.head.value.load(.acquire);
+    const producer_full_polls = producer_progress.full_polls.load(.acquire);
+    const sender_empty_polls = net_progress.empty_polls.load(.acquire);
+
+    if (current_slot == no_current_slot) {
+        try stdout.print(" slot=-", .{});
+    } else {
+        try stdout.print(" slot={d}", .{current_slot});
+    }
+    try stdout.print(
+        " slots={d} produced={d} sent={d} produce_pps={d} send_pps={d} queue={d}/{d} producer_full={d} sender_empty={d}",
+        .{
+            slots,
+            produced_packets,
+            sent_packets,
+            produced_pps,
+            send_pps,
+            queue_packets,
+            stream_queue_packets,
+            producer_full_polls,
+            sender_empty_polls,
+        },
+    );
+    if (rate_hz) |rate| {
+        try stdout.print(" rate_hz={d:.0}", .{rate});
+    }
+    try stdout.print("\n", .{});
+    try stdout.flush();
 }
 
 const ShredStats = struct {
@@ -575,12 +747,13 @@ fn produceLedgerPackets(
     config: Config,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
 ) !ProducerStats {
     switch (config.test_mode) {
         .linear => {},
-        .reverse => return produceReverseLedgerPackets(blockstore, config, writer, stop),
-        .shuffle_global => return produceGlobalShuffledRefSchedule(blockstore, config, writer, stop),
-        .shuffle_slot => return produceSlotShuffledPackets(blockstore, config, writer, stop),
+        .reverse => return produceReverseLedgerPackets(blockstore, config, writer, stop, progress),
+        .shuffle_global => return produceGlobalShuffledRefSchedule(blockstore, config, writer, stop, progress),
+        .shuffle_slot => return produceSlotShuffledPackets(blockstore, config, writer, stop, progress),
     }
 
     var stats: ProducerStats = .{};
@@ -608,17 +781,21 @@ fn produceLedgerPackets(
         if (pastEndSlot(config, slot)) break;
         if (!slotSelected(config, slot)) continue;
 
+        progress.current_slot.store(slot, .release);
         stats.recordSlot();
-        try produceSlotShreds(blockstore, slot, .data, .forward, writer, stop, &unpublished_packets, &stats);
+        progress.store(stats);
+        try produceSlotShreds(blockstore, slot, .data, .forward, writer, stop, progress, &unpublished_packets, &stats);
         if (blockstore.has_code_shred) {
-            try produceSlotShreds(blockstore, slot, .code, .forward, writer, stop, &unpublished_packets, &stats);
+            try produceSlotShreds(blockstore, slot, .code, .forward, writer, stop, progress, &unpublished_packets, &stats);
         }
     }
 
     if (unpublished_packets != 0 and !stop.load(.acquire)) {
+        progress.store(stats);
         writer.markUsed();
     }
 
+    progress.store(stats);
     return stats;
 }
 
@@ -627,6 +804,7 @@ fn produceReverseLedgerPackets(
     config: Config,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
 ) !ProducerStats {
     var stats: ProducerStats = .{};
     var unpublished_packets: usize = 0;
@@ -655,17 +833,21 @@ fn produceReverseLedgerPackets(
         }
         if (!slotSelected(config, slot)) continue;
 
+        progress.current_slot.store(slot, .release);
         stats.recordSlot();
+        progress.store(stats);
         if (blockstore.has_code_shred) {
-            try produceSlotShreds(blockstore, slot, .code, .reverse, writer, stop, &unpublished_packets, &stats);
+            try produceSlotShreds(blockstore, slot, .code, .reverse, writer, stop, progress, &unpublished_packets, &stats);
         }
-        try produceSlotShreds(blockstore, slot, .data, .reverse, writer, stop, &unpublished_packets, &stats);
+        try produceSlotShreds(blockstore, slot, .data, .reverse, writer, stop, progress, &unpublished_packets, &stats);
     }
 
     if (unpublished_packets != 0 and !stop.load(.acquire)) {
+        progress.store(stats);
         writer.markUsed();
     }
 
+    progress.store(stats);
     return stats;
 }
 
@@ -674,6 +856,7 @@ fn produceGlobalShuffledRefSchedule(
     config: Config,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
 ) !ProducerStats {
     var schedule = try buildOrderedRefSchedule(blockstore, config, stop);
     defer schedule.deinit(blockstore.allocator);
@@ -681,7 +864,7 @@ fn produceGlobalShuffledRefSchedule(
     var prng = std.Random.DefaultPrng.init(config.seed.?);
     prng.random().shuffleWithIndex(ShredRef, schedule.refs.items, u64);
 
-    return produceRefSchedule(blockstore, schedule, writer, stop);
+    return produceRefSchedule(blockstore, schedule, writer, stop, progress);
 }
 
 fn produceSlotShuffledPackets(
@@ -689,6 +872,7 @@ fn produceSlotShuffledPackets(
     config: Config,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
 ) !ProducerStats {
     var stats: ProducerStats = .{};
     var unpublished_packets: usize = 0;
@@ -719,6 +903,7 @@ fn produceSlotShuffledPackets(
         if (pastEndSlot(config, slot)) break;
         if (!slotSelected(config, slot)) continue;
 
+        progress.current_slot.store(slot, .release);
         refs.clearRetainingCapacity();
         try collectSlotShredRefs(blockstore, slot, .data, &refs, stop);
         if (blockstore.has_code_shred) {
@@ -727,10 +912,11 @@ fn produceSlotShuffledPackets(
 
         prng.random().shuffleWithIndex(ShredRef, refs.items, u64);
         stats.recordSlot();
+        progress.store(stats);
 
         for (refs.items) |shred_ref| {
             if (stop.load(.acquire)) break;
-            try produceShredByRef(blockstore, shred_ref, writer, stop, &unpublished_packets, &stats);
+            try produceShredByRef(blockstore, shred_ref, writer, stop, progress, &unpublished_packets, &stats);
         }
     }
 
@@ -738,6 +924,7 @@ fn produceSlotShuffledPackets(
         writer.markUsed();
     }
 
+    progress.store(stats);
     return stats;
 }
 
@@ -746,18 +933,22 @@ fn produceRefSchedule(
     schedule: RefSchedule,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
 ) !ProducerStats {
     var stats: ProducerStats = .{ .slots = schedule.selected_slots };
+    progress.store(stats);
     var unpublished_packets: usize = 0;
     for (schedule.refs.items) |shred_ref| {
         if (stop.load(.acquire)) break;
-        try produceShredByRef(blockstore, shred_ref, writer, stop, &unpublished_packets, &stats);
+        progress.current_slot.store(shred_ref.slot, .release);
+        try produceShredByRef(blockstore, shred_ref, writer, stop, progress, &unpublished_packets, &stats);
     }
 
     if (unpublished_packets != 0 and !stop.load(.acquire)) {
         writer.markUsed();
     }
 
+    progress.store(stats);
     return stats;
 }
 
@@ -838,6 +1029,7 @@ fn produceShredByRef(
     shred_ref: ShredRef,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
     unpublished_packets: *usize,
     stats: *ProducerStats,
 ) !void {
@@ -860,6 +1052,7 @@ fn produceShredByRef(
         packet.data,
         writer,
         stop,
+        progress,
         unpublished_packets,
         stats,
     );
@@ -871,6 +1064,7 @@ fn publishPacket(
     packet_data: []const u8,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
     unpublished_packets: *usize,
     stats: *ProducerStats,
 ) !void {
@@ -884,6 +1078,7 @@ fn publishPacket(
             unpublished_packets.* = 0;
             continue;
         }
+        _ = progress.full_polls.fetchAdd(1, .monotonic);
         std.atomic.spinLoopHint();
     };
 
@@ -897,6 +1092,7 @@ fn publishPacket(
     unpublished_packets.* += 1;
 
     if (unpublished_packets.* == producer_publish_packets) {
+        progress.store(stats.*);
         writer.markUsed();
         unpublished_packets.* = 0;
     }
@@ -909,6 +1105,7 @@ fn produceSlotShreds(
     comptime direction: rocks.IteratorDirection,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
     unpublished_packets: *usize,
     stats: *ProducerStats,
 ) !void {
@@ -940,8 +1137,9 @@ fn produceSlotShreds(
             return err;
         };
         if (key.slot != slot) break;
-        try publishPacket(key, kind, entry[1].data, writer, stop, unpublished_packets, stats);
+        try publishPacket(key, kind, entry[1].data, writer, stop, progress, unpublished_packets, stats);
     }
+    progress.store(stats.*);
 }
 
 fn scanSlots(blockstore: *const AgaveBlockstore, config: Config) !SlotStats {
