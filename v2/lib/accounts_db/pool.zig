@@ -41,8 +41,9 @@ pub const AccountPool = extern struct {
 
         fn bumpStolenBlock(self: *Bucket, idx_bump: Index) ?Index {
             const idx = self.stolen.start;
-            if (idx + idx_bump > self.stolen.end) return null;
+            if (idx == invalid_index) return null;
 
+            if (idx + idx_bump > self.stolen.end) return null;
             self.stolen.start = idx + idx_bump;
             return idx;
         }
