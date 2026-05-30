@@ -9,7 +9,7 @@ const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const PrecompileProgramError = sig.runtime.program.precompiles.PrecompileProgramError;
 const verifyPrecompiles = sig.runtime.program.precompiles.verifyPrecompiles;
-const TransactionError = sig.ledger.transaction_status.TransactionError;
+const TransactionError = sig.core.transaction_error.TransactionError;
 const getInstructionData = sig.runtime.program.precompiles.getInstructionData;
 
 const Ed25519 = std.crypto.sign.Ed25519;

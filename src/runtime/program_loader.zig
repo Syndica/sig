@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const tracy = @import("tracy");
 const sig = @import("../sig.zig");
@@ -7,7 +8,7 @@ const vm = sig.vm;
 
 const Allocator = std.mem.Allocator;
 
-const SlotAccountReader = sig.accounts_db.SlotAccountReader;
+const AccountReader = sig.runtime.execution_interfaces.AccountReader;
 
 const Pubkey = sig.core.Pubkey;
 const AccountSharedData = sig.runtime.AccountSharedData;
@@ -15,8 +16,7 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 const assert = std.debug.assert;
 
-const AccountLoadError = sig.runtime.account_loader.AccountLoadError;
-const wrapDB = sig.runtime.account_loader.wrapDB;
+const AccountLoadError = sig.runtime.execution_interfaces.AccountLoadError;
 
 pub const ProgramMap = struct {
     inner: sig.utils.collections.PubkeyMap(LoadedProgram),
@@ -79,7 +79,7 @@ pub fn loadIfProgram(
     programs: *ProgramMap,
     address: Pubkey,
     account: *const AccountSharedData,
-    account_reader: SlotAccountReader,
+    account_reader: AccountReader,
     enviroment: *const vm.Environment,
     slot: u64,
 ) AccountLoadError!void {
@@ -108,7 +108,7 @@ pub fn loadIfProgram(
 fn loadProgram(
     allocator: std.mem.Allocator,
     account: *const AccountSharedData,
-    accounts: SlotAccountReader,
+    accounts: AccountReader,
     environment: *const vm.Environment,
     slot: u64,
 ) AccountLoadError!LoadedProgram {
@@ -146,7 +146,7 @@ fn loadProgram(
 fn loadDeploymentSlotAndExecutableBytes(
     allocator: Allocator,
     account: *const AccountSharedData,
-    accounts: SlotAccountReader,
+    accounts: AccountReader,
 ) AccountLoadError!?struct { ?u64, []u8 } {
     if (account.owner.equals(&bpf_loader.v1.ID) or account.owner.equals(&bpf_loader.v2.ID)) {
         return .{ null, try allocator.dupe(u8, account.data) };
@@ -163,28 +163,25 @@ fn loadDeploymentSlotAndExecutableBytes(
             else => return null,
         };
 
-        const program_data_account = try wrapDB(accounts.get(allocator, program_data_key)) orelse
+        // TODO(accounts_interface): we don't need an owned account data here
+        const program_data_account = try accounts.get(allocator, program_data_key) orelse
             return null;
         defer program_data_account.deinit(allocator);
 
         const meta_size = bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE;
-        const account_len = program_data_account.data.len();
+        const account_len = program_data_account.data.len;
         if (account_len < meta_size) {
             return null;
         }
 
-        var program_metadata_bytes: [meta_size]u8 = undefined;
-        assert(meta_size == program_data_account.data.read(0, &program_metadata_bytes));
-
         const program_elf_bytes = try allocator.alloc(u8, account_len - meta_size);
         errdefer allocator.free(program_elf_bytes);
-        assert(account_len - meta_size ==
-            program_data_account.data.read(@intCast(meta_size), program_elf_bytes));
+        @memcpy(program_elf_bytes, program_data_account.data[meta_size..]);
 
         const program_metadata = sig.bincode.readFromSlice(
             failing_allocator,
             bpf_loader.v3.State,
-            &program_metadata_bytes,
+            program_data_account.data[0..meta_size],
             .{},
         ) catch {
             allocator.free(program_elf_bytes);
@@ -561,7 +558,7 @@ pub fn createV3ProgramAccountData(
     return .{ program_bytes, program_data_bytes };
 }
 
-/// helper function to load programs for tests
+/// Load programs from an in-memory account map (for testing).
 pub fn testLoad(
     allocator: std.mem.Allocator,
     accounts: *const sig.utils.collections.PubkeyMap(AccountSharedData),
@@ -571,13 +568,15 @@ pub fn testLoad(
     var programs = ProgramMap.empty;
     errdefer programs.deinit(allocator);
 
+    const account_reader = AccountReader.fromMap(accounts);
+
     for (accounts.keys(), accounts.values()) |address, account| {
         try loadIfProgram(
             allocator,
             &programs,
             address,
             &account,
-            .{ .account_shared_data_map = accounts },
+            account_reader,
             environment,
             slot,
         );

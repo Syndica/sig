@@ -14,6 +14,7 @@ const ReservedAccounts = sig.core.ReservedAccounts;
 const Signature = sig.core.Signature;
 const TransactionDetails = methods.common.TransactionDetails;
 const TransactionEncoding = methods.common.TransactionEncoding;
+const resolve_lookup = sig.replay.resolve_lookup;
 
 /// Encode transactions and/or signatures based on the requested options.
 /// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L332
@@ -635,7 +636,8 @@ fn parseLegacyMessageAccounts(
     for (message.account_keys, 0..) |account_key, i| {
         accounts[i] = .{
             .pubkey = account_key,
-            .writable = message.isWritable(
+            .writable = resolve_lookup.isWritable(
+                message,
                 i,
                 null,
                 reserved_account_keys,
@@ -666,10 +668,15 @@ fn parseV0MessageAccounts(
         const account_key = account_keys.get(i).?;
         accounts[i] = .{
             .pubkey = account_key,
-            .writable = message.isWritable(i, .{
-                .writable = loaded_addresses.writable,
-                .readonly = loaded_addresses.readonly,
-            }, reserved_account_keys),
+            .writable = resolve_lookup.isWritable(
+                message,
+                i,
+                .{
+                    .writable = loaded_addresses.writable,
+                    .readonly = loaded_addresses.readonly,
+                },
+                reserved_account_keys,
+            ),
             .signer = message.isSigner(i),
             .source = if (i < message.account_keys.len)
                 .transaction

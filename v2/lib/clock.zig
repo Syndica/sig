@@ -31,6 +31,12 @@ pub fn wallclock(comptime unit: Unit) u64 {
     return clockGetTime(.REALTIME, unit);
 }
 
+/// Initializes Zig's vDSO clock path before normal service code runs.
+pub fn warmup() void {
+    std.mem.doNotOptimizeAway(wallclock(.ns));
+    std.mem.doNotOptimizeAway(monotonic(.ns));
+}
+
 fn clockGetTime(clock_id: linux.clockid_t, comptime unit: Unit) u64 {
     const ts = std.posix.clock_gettime(clock_id) catch |err| {
         std.debug.panic("clock_gettime failed: {}", .{err});

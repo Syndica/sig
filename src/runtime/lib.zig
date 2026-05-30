@@ -1,9 +1,12 @@
+pub const account_conversions = @import("account_conversions.zig");
 pub const account_loader = @import("account_loader.zig");
 pub const borrowed_account = @import("borrowed_account.zig");
 pub const check_transactions = @import("check_transactions.zig");
 pub const ComputeBudget = @import("ComputeBudget.zig");
 pub const cost_model = @import("cost_model.zig");
 pub const executor = @import("executor.zig");
+pub const execution_adapters = @import("execution_adapters.zig");
+pub const execution_interfaces = @import("execution_interfaces.zig");
 pub const ids = @import("ids.zig");
 pub const instruction_context = @import("instruction_context.zig");
 pub const instruction_info = @import("instruction_info.zig");
@@ -24,6 +27,12 @@ pub const builtin_programs = program.builtin_programs;
 pub const builtin_program_costs = program.builtin_program_costs;
 
 pub const BorrowedAccount = borrowed_account.BorrowedAccount;
+pub const AccountReader = execution_interfaces.AccountReader;
+pub const EpochStakeReader = execution_interfaces.EpochStakeReader;
+pub const StatusChecker = execution_interfaces.StatusChecker;
+pub const SlotAccountReaderAdapter = execution_adapters.SlotAccountReaderAdapter;
+pub const EpochStakeReaderAdapter = execution_adapters.EpochStakeReaderAdapter;
+pub const StatusCacheStatusCheckerAdapter = execution_adapters.StatusCacheStatusCheckerAdapter;
 pub const BorrowedAccountContext = borrowed_account.BorrowedAccountContext;
 pub const InstructionContext = instruction_context.InstructionContext;
 pub const InstructionInfo = instruction_info.InstructionInfo;

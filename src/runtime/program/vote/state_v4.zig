@@ -93,8 +93,11 @@ pub const VoteStateV4 = struct {
     };
 
     /// Integer percentage (0-100) for backward compatibility; inflation_rewards_commission_bps / 100.
+    /// Matches Agave's `CommissionView::commission_percent`, which saturates at `u8::MAX`
+    /// rather than panicking when the stored basis-points value exceeds 25,500.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/vote/src/vote_state_view/field_frames.rs
     pub fn commission(self: *const VoteStateV4) u8 {
-        return @intCast(self.inflation_rewards_commission_bps / 100);
+        return @intCast(@min(self.inflation_rewards_commission_bps / 100, std.math.maxInt(u8)));
     }
 
     /// [SIMD-0185] Build VoteStateV4 from VoteStateV3 (e.g. for v3 InitializeAccount path).
@@ -596,17 +599,16 @@ pub const VoteStateV4 = struct {
         return null;
     }
 
-    fn compareFn(key: Slot, mid_item: LandedVote) std.math.Order {
-        return std.math.order(key, mid_item.lockout.slot);
-    }
-
+    /// Returns whether the vote state contains a slot `candidate_slot`.
+    ///
+    /// NOTE: agave performs this lookup with `slice::binary_search_by`, whose
+    /// probe sequence differs from `std.sort.binarySearch`. Because the vote
+    /// list is not guaranteed to be sorted (it can be arbitrary in fuzzer
+    /// inputs and only happens to be sorted under normal operation), we must
+    /// mirror Rust's algorithm exactly to stay bit-for-bit compatible with
+    /// agave on unsorted inputs.
     pub fn containsSlot(self: *const VoteStateV4, candidate_slot: Slot) bool {
-        return std.sort.binarySearch(
-            LandedVote,
-            self.votes.items,
-            candidate_slot,
-            compareFn,
-        ) != null;
+        return state.rustBinarySearchSlot(LandedVote, self.votes.items, candidate_slot);
     }
 
     pub fn checkAndFilterProposedVoteState(
@@ -1611,6 +1613,46 @@ test "state_v4.VoteStateV4.containsSlot" {
     try std.testing.expect(vs.containsSlot(10));
     try std.testing.expect(!vs.containsSlot(1));
     try std.testing.expect(!vs.containsSlot(7));
+}
+
+// Regression test: containsSlot must match Rust's `slice::binary_search_by`
+// on UNSORTED inputs (which fuzzer-generated vote accounts may contain).
+//
+// Zig's `std.sort.binarySearch` and Rust's `slice::binary_search_by` use
+// different probe sequences, so they can disagree on unsorted data. For the
+// minimal case `[5, 3, 1]` searching for `3`:
+//   - Zig's stdlib binarySearch picks mid=1 first, finds 3, returns hit.
+//   - Rust's binary_search_by walks base=1 then base=2, finds 1, returns miss.
+// A previously observed conformance failure traced to this exact divergence
+// (sig kept a vote agave filtered out, producing a different VoteError).
+test "state_v4.VoteStateV4.containsSlot unsorted matches Rust" {
+    const allocator = std.testing.allocator;
+    var vs: VoteStateV4 = VoteStateV4.DEFAULT;
+    defer vs.deinit(allocator);
+
+    // Intentionally unsorted: slots in descending order.
+    try vs.votes.append(allocator, .{
+        .latency = 0,
+        .lockout = Lockout{ .slot = 5, .confirmation_count = 1 },
+    });
+    try vs.votes.append(allocator, .{
+        .latency = 0,
+        .lockout = Lockout{ .slot = 3, .confirmation_count = 1 },
+    });
+    try vs.votes.append(allocator, .{
+        .latency = 0,
+        .lockout = Lockout{ .slot = 1, .confirmation_count = 1 },
+    });
+
+    // Slot 3 is physically present, but Rust's binary_search_by walks past
+    // it on this unsorted input and reports miss. Zig's std.sort.binarySearch
+    // would report hit here — that mismatch is exactly the regression.
+    try std.testing.expect(!vs.containsSlot(3));
+    // For completeness: Rust's walk on `[5, 3, 1]` lands on items[2]=1 for
+    // any target ≥ 3, and on items[0]=5 for any target < 3, so 5 also misses.
+    try std.testing.expect(!vs.containsSlot(5));
+    try std.testing.expect(!vs.containsSlot(1));
+    try std.testing.expect(!vs.containsSlot(42));
 }
 
 test "state_v4.VoteStateV4.processNewVoteState too many votes" {

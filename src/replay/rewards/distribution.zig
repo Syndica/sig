@@ -280,7 +280,9 @@ fn buildUpdatedStakeReward(
 
     // NOTE: If we stored the full stake state in the stake account we might be able to skip
     // deserializing and just update the stake directly.
-    var stake_state = try StakeStateV2.fromAccount(allocator, account);
+    const account_data = try account.data.readAllAllocate(allocator);
+    defer allocator.free(account_data);
+    var stake_state = try StakeStateV2.fromAccountData(account_data);
     switch (stake_state) {
         .stake => {},
         else => return error.InvalidAccountData,

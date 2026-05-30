@@ -104,10 +104,14 @@ pub const Hooks = struct {
                     fn impl(
                         _allocator: std.mem.Allocator,
                         ctx_ref: *ContextRef,
-                        args: sig.rpc.methods.Request(method),
+                        request: sig.rpc.methods.Request(method),
                     ) sig.rpc.methods.Result(method) {
                         const _cref: *CRef = @alignCast(@fieldParentPtr("ctx_ref", ctx_ref));
-                        if (@call(.auto, callback, .{ _cref.value, _allocator, args })) |response| {
+                        var custom_err: ?rpc.response.Error = null;
+                        const takes_error = @typeInfo(@TypeOf(callback)).@"fn".params.len == 4;
+                        const args = .{ _cref.value, _allocator, request } ++
+                            if (takes_error) .{&custom_err} else .{};
+                        if (@call(.auto, callback, args)) |response| {
                             return .{ .ok = response };
                         } else |err| {
                             // JSON RPC spec reserves error codes at or below -32_000. So the
@@ -117,7 +121,7 @@ pub const Hooks = struct {
                             // serves as a way to allow the callback to not worry about error codes
                             // or error messages, while also letting it use `try`, `errdefer`, and
                             // return the Result directly (instead of wrapping it in a union).
-                            return .{ .err = mapError(err) };
+                            return .{ .err = custom_err orelse mapError(err) };
                         }
                     }
                 }.impl),
