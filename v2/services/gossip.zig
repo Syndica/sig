@@ -122,7 +122,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         try gossip.poll(.from(logger), now);
 
         const packet = it.next() orelse {
-            try runner.activity.signalIdleAfterNCalls(100_000);
+            try runner.activity.signalIdleAfterNCalls(1_000_000);
             continue;
         };
         try runner.activity.signalActive();
