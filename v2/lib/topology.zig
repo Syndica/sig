@@ -272,16 +272,11 @@ pub fn Bind(
 
         comptime {
             if (validateBindingsMap(schema, RegionTag, bindings_map)) |result| switch (result) {
-                .unordered_tags => |unordered| {
-                    const region_tag_fields = @typeInfo(RegionTag).@"enum".fields;
-                    const prev = region_tag_fields[unordered.prev];
-                    const next = region_tag_fields[unordered.next];
-                    @compileError("The tag for the Region union isn't sorted" ++
-                        std.fmt.comptimePrint(
-                            "; {s} ({d}) is greater than {s} ({d})",
-                            .{ prev.name, prev.value, next.name, next.value },
-                        ));
-                },
+                .unordered_binding => |unordered| @compileError(std.fmt.comptimePrint(
+                    "Expected Binding tag " ++ @tagName(unordered.tag) ++
+                        " has value {d}, expected to have value {d}.",
+                    .{ @intFromEnum(unordered.tag), unordered.expected },
+                )),
                 inline .duplicated, .missing => |bad_set, reason| {
                     var err_msg: []const u8 = switch (reason) {
                         .duplicated => "The following regions were bound multiple times: ",
@@ -869,13 +864,14 @@ pub fn Bind(
 
 fn ValidateBindingsMapResult(
     comptime schema: Schema,
+    comptime BindingTag: type,
 ) type {
     const unbound = Unbound(schema);
     return union(enum) {
-        /// The two enums referenced by index are out of order.
-        unordered_tags: struct {
-            prev: usize,
-            next: usize,
+        /// The specified tag's value is not in the expected ascending order.
+        unordered_binding: struct {
+            tag: BindingTag,
+            expected: usize,
         },
         /// The tags in this set were specified in two bindings.
         duplicated: std.EnumSet(unbound.RegionId),
@@ -889,24 +885,18 @@ fn ValidateBindingsMapResult(
 fn validateBindingsMap(
     comptime schema: Schema,
     /// A union of all the intended shared region bindings.
-    comptime RegionTag: type,
+    comptime BindingTag: type,
     /// Defines the equivalences between regions across all services, unifying them under one binding (the `Region` tag name).
-    comptime bindings_map: Unbound(schema).BindingsMap(RegionTag),
-) ?ValidateBindingsMapResult(schema) {
+    comptime bindings_map: Unbound(schema).BindingsMap(BindingTag),
+) ?ValidateBindingsMapResult(schema, BindingTag) {
     comptime {
         const unbound = Unbound(schema);
-        const region_tag_info = @typeInfo(RegionTag).@"enum";
-        for (
-            region_tag_info.fields[0 .. region_tag_info.fields.len - 1],
-            0..,
-            region_tag_info.fields[1..],
-            1..,
-        ) |prev, prev_i, next, next_i| {
-            if (prev.value == next.value) unreachable;
-            if (prev.value > next.value) return .{
-                .unrodered_tags = .{
-                    .prev = prev_i,
-                    .next = next_i,
+        const region_tag_info = @typeInfo(BindingTag).@"enum";
+        for (region_tag_info.fields, 0..) |field, field_i| {
+            if (field.value != field_i) return .{
+                .unordered_binding = .{
+                    .tag = @enumFromInt(field.value),
+                    .expected = field_i,
                 },
             };
         }
