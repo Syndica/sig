@@ -40,10 +40,10 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     const snapshot_dir_path = ro.config.folder_buffer[0..ro.config.folder_len];
     const known_validators = ro.config.knownValidators();
 
-    const result: DownloadResult = result: {
-        var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_path, .{ .iterate = true });
-        defer snapshot_dir.close();
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_path, .{ .iterate = true });
+    defer snapshot_dir.close();
 
+    const result: DownloadResult = result: {
         logger.info().logf("snapshot path {s}", .{snapshot_dir_path});
 
         if (try download.findExistingSnapshot(snapshot_dir)) |existing| {
@@ -87,11 +87,31 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     };
 
     {
-        var ready_snapshot_writer = rw.ready_snapshot_out.get(.writer);
-        defer ready_snapshot_writer.markUsed();
+        const Global = struct {
+            var zst_reader: lib.solana.snapshot.ZstReader = blk: {
+                @setRuntimeSafety(false);
+                break :blk undefined;
+            };
+        };
 
-        const ready_ptr = ready_snapshot_writer.next() orelse unreachable;
-        ready_ptr.* = ready_snapshot;
+        var snapshot_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const snapshot_path = try ready_snapshot.name(&snapshot_path_buf);
+
+        const zst_reader = &Global.zst_reader;
+        try zst_reader.init(snapshot_dir, snapshot_path);
+        defer zst_reader.deinit();
+
+        var out = rw.ready_snapshot_out.getView(.writer);
+        defer out.close();
+
+        while (true) : (std.atomic.spinLoopHint()) {
+            const buf: []u8 = out.getBuffer() orelse continue;
+            if (buf.len == 0) break; // reader closed their side
+
+            const n = try zst_reader.read(.from(logger), buf[0..@min(buf.len, 128 * 1024)]);
+            if (n == 0) break;
+            out.advance(n);
+        }
     }
 
     logger.info().logf("snapshot service finished", .{});

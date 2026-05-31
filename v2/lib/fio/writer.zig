@@ -163,9 +163,11 @@ pub fn FileWriter(
                     continue;
                 },
             };
+            const buf_offset = @as(u64, data.block_idx) * block_size + data.written;
+            const buf_len = block_size - data.written;
             sqe.prep_write(
                 self.file.handle,
-                self.buffer[@as(u64, data.block_idx) * block_size + data.written ..][0..block_size],
+                self.buffer[buf_offset ..][0..buf_len],
                 @as(u64, data.disk_block) * block_size + data.written,
             );
             sqe.user_data = @bitCast(data);

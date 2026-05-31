@@ -33,7 +33,7 @@ pub const ReadWrite = struct {
     tel: *tel.Region,
 };
 
-pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
 
@@ -42,10 +42,6 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
     const Global = struct {
         var fba_memory: [32 * 1024 * 1024]u8 = blk: {
-            @setRuntimeSafety(false);
-            break :blk undefined;
-        };
-        var snapshot_iter: SnapshotIter = blk: {
             @setRuntimeSafety(false);
             break :blk undefined;
         };
@@ -65,40 +61,17 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     );
     defer rooted.deinit();
 
+    var in = rw.ready_snapshot_in.getView(.reader);
+    defer in.close();
+
     if (rooted.table.count == 0) {
         logger.info().logf("no existing rooted db. waiting for ready snapshot", .{});
 
-        var snapshot_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const snapshot_path: []const u8 = blk: {
-            var ready_snapshot_iter = rw.ready_snapshot_in.get(.reader);
-            while (true) : (std.atomic.spinLoopHint()) {
-                const ready_ptr = ready_snapshot_iter.next() orelse continue;
-                defer ready_snapshot_iter.markUsed();
-                break :blk try ready_ptr.name(&snapshot_path_buf);
-            }
-        };
-
-        const dir_path = ro.snapshot_config.folder_buffer[0..ro.snapshot_config.folder_len];
-        logger.info().logf("reading snapshot {s}/{s}", .{ dir_path, snapshot_path });
-
-        var snapshot_dir = try std.fs.cwd().openDir(
-            ro.snapshot_config.folder_buffer[0..ro.snapshot_config.folder_len],
-            .{},
-        );
-        defer snapshot_dir.close();
-
         var fba = std.heap.FixedBufferAllocator.init(&Global.fba_memory);
-        const snapshot_iter = &Global.snapshot_iter;
-        try snapshot_iter.init(
-            .from(logger),
-            &fba,
-            snapshot_dir,
-            snapshot_path,
-        );
-        defer snapshot_iter.deinit();
+        var snapshot_iter = try SnapshotIter(*@TypeOf(in)).init(&fba, &in);
 
         logger.info().logf("reading snapshot accounts", .{});
-        try rooted.loadSnapshot(.from(logger), snapshot_iter);
+        try rooted.loadSnapshot(.from(logger), &snapshot_iter);
     }
 
     // {

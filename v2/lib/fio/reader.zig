@@ -176,9 +176,11 @@ pub fn FileReader(
                     continue;
                 },
             };
+            const buf_offset = @as(u64, data.block_idx) * block_size + data.read;
+            const buf_len = block_size - data.read;
             sqe.prep_read(
                 self.file.handle,
-                self.buffer[@as(u64, data.block_idx) * block_size + data.read ..][0..block_size],
+                self.buffer[buf_offset ..][0..buf_len],
                 @as(u64, data.disk_block) * block_size + data.read,
             );
             sqe.user_data = @bitCast(data);

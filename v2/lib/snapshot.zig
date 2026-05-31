@@ -58,7 +58,7 @@ pub const SnapshotConfig = extern struct {
 };
 
 // Holds which snapshot to load from the SnapshotConfig.folder
-pub const SnapshotReadyRing = lib.ipc.Ring(1, ReadySnapshot);
+pub const SnapshotReadyRing = lib.ipc.Ring(16 * 1024 * 1024, u8);
 
 pub const ReadySnapshot = extern struct {
     slot: Slot,
