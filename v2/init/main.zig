@@ -320,7 +320,7 @@ pub const Region = union(enum) {
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
             .snapshot_config => @sizeOf(lib.snapshot.SnapshotConfig),
-            .accounts_db_config => |params| @sizeOf(lib.accounts_db.RootedConfig) + params.memory,
+            .accounts_db_config => @sizeOf(lib.accounts_db.RootedConfig),
 
             .net_to_shred,
             .net_to_gossip,
@@ -412,14 +412,13 @@ pub const Region = union(enum) {
                 }
             },
             .accounts_db_config => |params| {
-                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.RootedConfig) + params.memory);
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.RootedConfig));
                 const data: *lib.accounts_db.RootedConfig = @ptrCast(buf);
 
                 data.file_len = @intCast(params.file_path.len);
                 @memcpy(data.file_path[0..data.file_len], params.file_path);
 
                 data.memory_len = params.memory;
-                // NOTE: mmap should automatically zero data.memory on first access
             },
 
             .net_to_shred,

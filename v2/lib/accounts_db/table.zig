@@ -11,7 +11,9 @@ pub const Table = struct {
     seed: u64, // runtime-provided hashing seed (if wanting to help lower collision attacks)
     count: u64, // number of entries present in the table
     reducer: FastDiv, // for fast hash % entries.len
-    entries: []Entry, // comes from []u8 so Entry must be align(1)
+    num_entries: u64,
+    mapped: []align(std.heap.page_size_min) u8,
+    zero_entry: Entry, // special case for a valid zero pubkey
 
     const Entry = extern struct {
         key: Key align(1),
@@ -35,18 +37,40 @@ pub const Table = struct {
         }
     };
 
-    pub fn init(seed: u64, memory: []u8) Table {
+    pub fn init(seed: u64, memory_len: usize) !Table {
+        const num_entries = @divFloor(memory_len, @sizeOf(Entry));
+        std.debug.assert(num_entries > 0);
+
+        const huge_page_size = 1 * 1024 * 1024 * 1024; // assume the max
+        const huge_page_aligned = std.mem.alignForward(
+            usize,
+            num_entries * @sizeOf(Entry),
+            huge_page_size,
+        );
+
         // NOTE: memory should already be zeroed from mmap
-        const len = @divFloor(memory.len, @sizeOf(Entry));
-        const entries: []Entry = @ptrCast(memory[0 .. len * @sizeOf(Entry)]);
-        std.debug.assert(entries.len > 0);
+        const mapped = try std.posix.mmap(
+            null,
+            huge_page_aligned,
+            std.posix.PROT.READ | std.posix.PROT.WRITE,
+            .{ .TYPE = .PRIVATE, .ANONYMOUS = true, .HUGETLB = true, .POPULATE = true },
+            -1,
+            0,
+        );
+        errdefer std.posix.munmap(mapped);
 
         return .{
             .seed = seed,
             .count = 0,
-            .reducer = .init(entries.len),
-            .entries = entries,
+            .reducer = .init(num_entries),
+            .num_entries = num_entries,
+            .mapped = mapped,
+            .zero_entry = .{ .key = .ZEROES, .value = .empty, .slot = 0 },
         };
+    }
+
+    pub fn deinit(self: *const Table) void {
+        std.posix.munmap(self.mapped);
     }
 
     // Number of hash map probes to do together with ILP to amortize DRAM cache-miss latency.
@@ -66,9 +90,16 @@ pub const Table = struct {
         slot: Slot,
         value: Value,
     ) void {
-        std.debug.assert(!pubkey.isZeroed());
         std.debug.assert(slot <= std.math.maxInt(u32));
         std.debug.assert(!value.isEmpty());
+
+        // We use a zero pubkey in the map to denote empty Entry.
+        // If actualy inserting to the zero pubkey, update the one in the table instead.
+        if (pubkey.isZeroed()) {
+            @branchHint(.unlikely); // zero pubkey is System Program. Should rarely be written.
+            if (slot >= self.zero_entry.slot) self.zero_entry.value = value;
+            return;
+        }
 
         std.debug.assert(batch.len <= PARALLEL_SCAN);
         if (batch.len == PARALLEL_SCAN) {
@@ -94,7 +125,8 @@ pub const Table = struct {
         batch.len = 0; // mark as flushed
 
         // table should never fill up fully (means it shouldve been given more memory)
-        std.debug.assert(self.count + batch_len < self.entries.len);
+        const entries: []Entry = @ptrCast(self.mapped[0 .. self.num_entries * @sizeOf(Entry)]);
+        std.debug.assert(self.count + batch_len < entries.len);
 
         // phase-0: zero out unused batch items
         const zero: @Vector(32, u8) = @splat(0);
@@ -109,7 +141,7 @@ pub const Table = struct {
         var ptrs: [PARALLEL_SCAN][*]Entry = undefined;
         for (0..PARALLEL_SCAN) |i| {
             const pubkey: Pubkey = @bitCast(item_keys[i]);
-            ptrs[i] = self.entries.ptr + self.hashKeyToIndex(&pubkey);
+            ptrs[i] = entries.ptr + self.hashKeyToIndex(&pubkey);
         }
 
         // phase-2: parallel-loads of entries
@@ -132,7 +164,7 @@ pub const Table = struct {
 
                 // probe next item if collided
                 ptrs[i] += @intFromBool(collided);
-                if (ptrs[i] == self.entries.ptr + self.entries.len) ptrs[i] = self.entries.ptr;
+                if (ptrs[i] == entries.ptr + entries.len) ptrs[i] = entries.ptr;
                 keys[i] = @bitCast(ptrs[i][0].key);
             }
             if (!had_collision) break;
@@ -166,9 +198,15 @@ pub const Table = struct {
     }
 
     pub fn get(self: *const Table, pubkey: *const Pubkey) Value {
-        std.debug.assert(!pubkey.isZeroed());
+        // We use a zero pubkey in the map to denote empty Entry.
+        // If actualy fetching from the zero pubkey, access the one in the table instead.
+        if (pubkey.isZeroed()) {
+            @branchHint(.unlikely); // zero pubkey is System Program, which is hopefully cached.
+            return self.zero_entry.value;
+        }
 
-        var ptr = self.entries.ptr + self.hashKeyToIndex(pubkey);
+        const entries: []Entry = @ptrCast(self.mapped[0 .. self.num_entries * @sizeOf(Entry)]);
+        var ptr = entries.ptr + self.hashKeyToIndex(pubkey);
         while (true) {
             // load the entry values out
             const key = ptr[0].key;
@@ -176,7 +214,7 @@ pub const Table = struct {
 
             // branchless increment
             ptr += 1;
-            if (ptr == self.entries.ptr + self.entries.len) ptr = self.entries.ptr;
+            if (ptr == entries.ptr + entries.len) ptr = entries.ptr;
 
             // branch out for empty (looking up unfound accounts is rare)
             if (key.isZeroed()) {
@@ -218,8 +256,8 @@ pub const Table = struct {
         acc ^= acc >> 32;
 
         // reduce into table index
-        const acc_mod_len = acc - (self.reducer.div(acc) * self.entries.len);
-        std.debug.assert(acc_mod_len < self.entries.len);
+        const acc_mod_len = acc - (self.reducer.div(acc) * self.num_entries);
+        std.debug.assert(acc_mod_len < self.num_entries);
         return acc_mod_len;
     }
 };

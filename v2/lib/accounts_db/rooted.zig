@@ -81,12 +81,14 @@ pub const Rooted = struct {
         logger: tel.Logger("Rooted.init"),
         dir: std.fs.Dir,
         path: []const u8,
-        table_memory: []u8,
+        table_memory_len: usize,
         account_pool: *AccountPool,
     ) !void {
         const seed: u64 = 0; // TODO: maybe in RootedConfig?
-        self.table = .init(seed, table_memory);
         self.put_batch = .empty;
+
+        self.table = try .init(seed, table_memory_len);
+        errdefer self.table.deinit();
 
         self.journal = .empty;
         open_existing: {
@@ -149,6 +151,7 @@ pub const Rooted = struct {
         self.buffered_file.close();
         self.io.writer.file.close();
         self.io.writer.deinit();
+        self.table.deinit();
     }
 
     const SectorHeader = packed struct(u64) {
@@ -209,7 +212,7 @@ pub const Rooted = struct {
                     @intFromEnum(@TypeOf(self.journal.magic).valid),
                     @intFromEnum(self.journal.magic),
                 });
-                return error.InvalidJournal;
+                return;
             }
 
             switch (self.journal.state) {
