@@ -1,6 +1,11 @@
 const std = @import("std");
 const Build = std.Build;
 
+const lib = @import("lib/lib.zig");
+/// The schema for services used in release.
+const topo_schema: lib.topology.Schema = .{ .services = @import("init/services.zon") };
+const topo_types = lib.topology.Unbound(topo_schema);
+
 const test_install_dir: Build.Step.InstallArtifact.Options.Dir = .{
     .override = .{ .custom = "bin/tests" },
 };
@@ -68,13 +73,18 @@ pub fn build(b: *Build) !void {
 
     const install_step = b.getInstallStep();
     const run_step = b.step("run", "Run supervisor");
-    const test_step = b.step("test", "Run unit tests");
+    const test_step = b.step("test", "Run all tests.");
+    const unit_test_step = b.step("unit-test", "Run unit tests.");
+    const bb_test_step = b.step("bb-test", "Run black box tests.");
     const check_step = b.step("check", "Check step.");
     const lint_step = b.step("lint", "Run lint checks");
     const lint_test_step = b.step("lint-test", "Run lint unit tests");
     const ci_step = b.step("ci", "Run all checks used for CI");
     const sig_step = b.step("sig", "Build only the sig binary");
     const docs_step = b.step("docs", "Emit docs");
+
+    test_step.dependOn(unit_test_step);
+    test_step.dependOn(bb_test_step);
 
     ci_step.dependOn(test_step);
     ci_step.dependOn(install_step);
@@ -133,23 +143,25 @@ pub fn build(b: *Build) !void {
             .{ .name = "build-options", .module = build_options_mod },
         },
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+    _ = addTestOutputs(b, unit_test_step, null, artifact_opts, .{
         .name = "lib",
         .root_module = lib_mod,
         .filters = filters,
         .use_llvm = use_llvm,
     });
 
-    const sig_init_mod = b.createModule(.{
+    const runner_imports: RunnerModuleOptions.Imports = .{
+        .sig_lib = lib_mod,
+        .tracy = tracy_mod,
+    };
+
+    const sig_init_mod = createRunnerModule(b, .{
         .root_source_file = b.path("init/main.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
-            .{ .name = "lib", .module = lib_mod },
-            .{ .name = "tracy", .module = tracy_mod },
-        },
+        .imports = runner_imports,
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+    _ = addTestOutputs(b, unit_test_step, null, artifact_opts, .{
         .name = "sig-init",
         .root_module = sig_init_mod,
         .filters = filters,
@@ -181,7 +193,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "tracy", .module = tracy_mod },
         },
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+    _ = addTestOutputs(b, unit_test_step, null, artifact_opts, .{
         .name = "start_service",
         .root_module = start_service_mod,
         .use_llvm = true,
@@ -191,8 +203,10 @@ pub fn build(b: *Build) !void {
     var doc_service_modules: std.ArrayListUnmanaged(DocGenModule) = .empty;
     defer doc_service_modules.deinit(b.allocator);
 
+    var service_libs: std.EnumArray(topo_types.ServiceId, *Build.Step.Compile) = .initUndefined();
+
     // build + link services
-    inline for (@import("init/services.zon")) |s| {
+    inline for (topo_schema.services) |s| {
         const service_name = @tagName(s.name);
         const service_mod = b.createModule(.{
             .root_source_file = b.path("services").path(b, service_name ++ ".zig"),
@@ -214,8 +228,9 @@ pub fn build(b: *Build) !void {
             .use_llvm = true,
         });
         sig_init_mod.linkLibrary(service_lib);
+        service_libs.set(s.name, service_lib);
 
-        _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+        _ = addTestOutputs(b, unit_test_step, null, artifact_opts, .{
             .root_module = service_mod,
             .name = service_name,
             .filters = filters,
@@ -227,6 +242,30 @@ pub fn build(b: *Build) !void {
             .{ .name = service_name, .module = service_mod },
         );
     }
+
+    const gossip_bbt_exe = b.addExecutable(.{
+        .name = "bbt-" ++ "gossip",
+        .root_module = createRunnerModule(b, .{
+            .root_source_file = b.path("tests/gossip/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = runner_imports,
+        }),
+        .use_llvm = true,
+    });
+    gossip_bbt_exe.linkLibrary(service_libs.get(.gossip));
+    gossip_bbt_exe.linkLibrary(service_libs.get(.telemetry));
+    gossip_bbt_exe.root_module.addAnonymousImport("schema", .{
+        .root_source_file = topoSchemaSubsetFile(
+            b,
+            "schema.zon",
+            .initMany(&.{ .gossip, .telemetry }),
+        ),
+    });
+
+    _ = addExeOutputs(b, gossip_bbt_exe, bb_test_step, artifact_opts, .{
+        .dest_dir = test_install_dir,
+    });
 
     // generates unified docs for all modules
     // NOTE: have to specify `-Dno-bin` & `-Dno-run` in order to
@@ -278,6 +317,48 @@ pub fn build(b: *Build) !void {
         });
         docs_step.dependOn(&install_docs.step);
     }
+}
+
+const RunnerModuleOptions = struct {
+    root_source_file: Build.LazyPath,
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    imports: Imports,
+
+    const Imports = struct {
+        sig_lib: *Build.Module,
+        tracy: *Build.Module,
+    };
+};
+
+fn createRunnerModule(
+    b: *Build,
+    options: RunnerModuleOptions,
+) *Build.Module {
+    return b.createModule(.{
+        .root_source_file = options.root_source_file,
+        .target = options.target,
+        .optimize = options.optimize,
+        .imports = &.{
+            .{ .name = "lib", .module = options.imports.sig_lib },
+            .{ .name = "tracy", .module = options.imports.tracy },
+        },
+    });
+}
+
+fn topoSchemaSubsetFile(
+    b: *Build,
+    name: []const u8,
+    service_ids: std.EnumSet(topo_types.ServiceId),
+) Build.LazyPath {
+    var rendered: std.Io.Writer.Allocating = .init(b.allocator);
+    var sz: std.zon.Serializer = .{
+        .options = .{ .whitespace = true },
+        .indent_level = 0,
+        .writer = &rendered.writer,
+    };
+    topo_schema.renderPrettyZonSubset(&sz, .{}, service_ids) catch std.debug.panic("OOM", .{});
+    return b.addWriteFiles().add(name, rendered.written());
 }
 
 const ExeOutput = struct {

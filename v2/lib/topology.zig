@@ -34,7 +34,66 @@ pub const Schema = struct {
 
             pub const Access = enum { readonly, rw };
         };
+
+        pub fn renderPrettyZon(
+            service: Service,
+            sz: *std.zon.Serializer,
+            options: std.zon.Serializer.ValueOptions,
+        ) std.Io.Writer.Error!void {
+            var sz_service = try sz.beginStruct(.{
+                .whitespace_style = .{ .wrap = true },
+            });
+
+            {
+                try sz_service.field("name", service.name, options);
+            }
+
+            {
+                var sz_regions = try sz_service.beginTupleField("regions", .{
+                    .whitespace_style = .{ .wrap = true },
+                });
+                inline for (service.regions) |region| {
+                    try sz_regions.field(region, .{});
+                }
+                try sz_regions.end();
+            }
+
+            try sz_service.end();
+        }
     };
+
+    pub fn renderPrettyZonSubset(
+        schema: Schema,
+        sz: *std.zon.Serializer,
+        options: std.zon.Serializer.ValueOptions,
+        service_ids_subset: std.EnumSet(Unbound(schema).ServiceId),
+    ) std.Io.Writer.Error!void {
+        var sz_tuple = try sz.beginTuple(.{
+            .whitespace_style = .{ .wrap = true },
+        });
+        try schema.renderPrettyZonSubsetFields(&sz_tuple, options, service_ids_subset);
+        try sz_tuple.end();
+    }
+
+    pub fn renderPrettyZonSubsetFields(
+        schema: Schema,
+        sz_tuple: *std.zon.Serializer.Tuple,
+        options: std.zon.Serializer.ValueOptions,
+        service_ids_subset: std.EnumSet(Unbound(schema).ServiceId),
+    ) std.Io.Writer.Error!void {
+        var subset_iter = service_ids_subset.iterator();
+        for (0..service_ids_subset.count()) |_| {
+            try sz_tuple.fieldPrefix();
+            const service_id = subset_iter.next().?;
+            switch (service_id) {
+                inline else => |itag| {
+                    const service = schema.services[@intFromEnum(itag)];
+                    try service.renderPrettyZon(sz_tuple.container.serializer, options);
+                },
+            }
+        }
+        if (subset_iter.next() != null) unreachable;
+    }
 };
 
 pub fn Unbound(comptime schema: Schema) type {
