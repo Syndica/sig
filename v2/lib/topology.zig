@@ -385,11 +385,19 @@ pub fn Bind(
                 break :regions regions;
             };
 
-            var region_memfds: [regions.len]memfd.RW = undefined;
-            try createAndInitSharedRegionMemfds(&regions, &region_memfds);
+            var region_memfds: [bindings_map.values.len]memfd.RW = @splat(.empty);
+            for (&regions, &region_memfds) |binding, *region_memfd| {
+                region_memfd.* = try createAndInitSharedRegionMemfd(binding);
+                std.log.info("Initialised: {f}", .{regionFmtShareInfo(binding)});
+            }
 
-            var runner_memfds: [schema.services.len]memfd.RW = undefined;
-            try createRunnerMemfds(&runner_memfds);
+            var runner_memfds: [schema.services.len]memfd.RW = @splat(.empty);
+            inline for (&runner_memfds, schema.services) |*runner_memfd, service_entry| {
+                runner_memfd.* = try .init(.{
+                    .name = std.fmt.comptimePrint("runner_{s}", .{@tagName(service_entry.name)}),
+                    .size = @sizeOf(lib.runner.Region),
+                });
+            }
 
             var map: ServiceMap = .empty;
 
@@ -475,45 +483,30 @@ pub fn Bind(
                     },
                 }
             }
+            if (binding_iter.next() != null) unreachable;
 
             return args;
         }
 
-        /// Create and initialize memfds for each shared memory region (map it, initialize it, and then unmap it).
-        /// We must unmap to avoid sharing regions with services that don't need them.
-        fn createAndInitSharedRegionMemfds(
-            regions: *const [bindings_map.values.len]Region,
-            region_memfds: *[regions.len]memfd.RW,
-        ) !void {
-            @memset(region_memfds, .empty);
+        /// Create and initialize a memfd for the shared memory region (map it, initialize it, and then unmap it).
+        /// We must unmap it to avoid sharing regions with services that don't need them.
+        fn createAndInitSharedRegionMemfd(binding_init: Region) !memfd.RW {
+            // This name should be visible from a debugger, but serves no other purpose.
+            var fmt_buf: [4096]u8 = undefined;
+            const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{
+                regionFmtShareInfo(binding_init),
+            });
 
-            for (regions, region_memfds) |region, *region_memfd| {
-                // This name should be visible from a debugger, but serves no other purpose.
-                var fmt_buf: [4096]u8 = undefined;
-                const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{regionFmtShareInfo(region)});
+            const region_memfd: memfd.RW = try .init(.{
+                .name = name,
+                .size = regionSize(binding_init),
+            });
 
-                region_memfd.* = try .init(.{
-                    .name = name,
-                    .size = regionSize(region),
-                });
+            const buf = try region_memfd.mmap(null);
+            defer std.posix.munmap(buf);
+            try regionInit(binding_init, buf);
 
-                const buf = try region_memfd.mmap(null);
-                defer std.posix.munmap(buf);
-                try regionInit(region, buf);
-                std.log.info("Initialised: {f}", .{regionFmtShareInfo(region)});
-            }
-        }
-
-        // Creates a memfd for every service, to be used for storing a lib.runner.Region value, which is used
-        // for reporting traces+errors back to the main process.
-        fn createRunnerMemfds(runner_memfds: *[schema.services.len]memfd.RW) !void {
-            @memset(runner_memfds, .empty);
-            inline for (runner_memfds, schema.services) |*runner_memfd, service_entry| {
-                runner_memfd.* = try .init(.{
-                    .name = std.fmt.comptimePrint("runner_{s}", .{@tagName(service_entry.name)}),
-                    .size = @sizeOf(lib.runner.Region),
-                });
-            }
+            return region_memfd;
         }
 
         // -- Service Spawning -- //
