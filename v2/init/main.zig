@@ -132,7 +132,7 @@ pub fn main() !void {
     var reader_buf: [4096]u8 = undefined;
     var reader = schedule_file.reader(&reader_buf);
 
-    const service_map = try topology.serviceMap(allocator, .{
+    const service_map = try topology.serviceMap(.{
         // gossip constants
         .gossip_config = .{
             .cluster_info = gossip_cluster_info,
@@ -188,7 +188,6 @@ pub fn main() !void {
             .histogram_data_len = 4096 * 3,
         },
     });
-    defer service_map.deinit(allocator);
 
     switch (config.sandboxing_mode) {
         .sandboxed => try topology.spawnAndWait(&service_map),

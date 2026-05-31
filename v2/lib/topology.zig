@@ -355,32 +355,25 @@ pub fn Bind(
         }
 
         pub const ServiceMap = struct {
-            inner: std.EnumMap(unbound.ServiceId, Entry),
+            entries: lib.util.ArrayEnumMap(unbound.ServiceId, Entry),
 
-            pub const empty: ServiceMap = .{ .inner = .{} };
+            pub const empty: ServiceMap = .{ .entries = .empty };
 
             pub const Entry = struct {
                 runner: memfd.RW,
-                regions: std.ArrayList(LookupResult),
+                bindings: Bindings,
+
+                pub const Bindings = lib.util.ArrayEnumMap(RegionTag, Binding);
             };
 
-            pub const LookupResult = struct {
-                region: Region,
+            pub const Binding = struct {
                 access: Schema.Service.Region.Access,
                 memfd: lib.linux.memfd.RW,
             };
-
-            pub fn deinit(self: *const ServiceMap, gpa: std.mem.Allocator) void {
-                var map = self.inner;
-                for (&map.values) |*lur| lur.regions.deinit(gpa);
-            }
         };
 
-        /// Pairs services up with their respective required regions and their rw/ro permission
-        pub fn serviceMap(
-            allocator: std.mem.Allocator,
-            instances: SharedRegionInstances,
-        ) !ServiceMap {
+        /// Pairs services up with their respective required regions and their read/write permissions.
+        pub fn serviceMap(instances: SharedRegionInstances) !ServiceMap {
             const regions: [bindings_map.values.len]Region = regions: {
                 var regions: [bindings_map.values.len]Region = undefined;
 
@@ -404,62 +397,36 @@ pub fn Bind(
             try createRunnerMemfds(&runner_memfds);
 
             var map: ServiceMap = .empty;
-            errdefer map.deinit(allocator);
 
             // check all service instances request regions which are shared with them
-            inline for (schema.services, &runner_memfds) |service_entry, runner_memfd| {
-                const service: unbound.ServiceId = service_entry.name;
+            inline for (schema.services, &runner_memfds) |service_schema, runner_memfd| {
+                const service: unbound.ServiceId = service_schema.name;
+                const service_entry: *ServiceMap.Entry = entry: {
+                    const gop = map.entries.getOrPut(service);
+                    std.debug.assert(!gop.found_existing);
+                    gop.value_ptr.* = .{
+                        .runner = runner_memfd,
+                        .bindings = .empty,
+                    };
+                    break :entry gop.value_ptr;
+                };
 
-                inline for (service_entry.regions) |region_entry| {
+                inline for (service_schema.regions) |region_schema| {
                     const region_local_id: unbound.RegionIdServiceLocal(service) =
-                        region_entry.name;
+                        region_schema.name;
                     const region_id: unbound.RegionId =
                         unbound.regionIdFromServiceAndRegionId(service, region_local_id);
+                    const binding_tag = getRegionBinding(region_id);
+                    const binding_memfd = region_memfds[@intFromEnum(binding_tag)];
 
-                    const found_region: ServiceMap.LookupResult = blk: for (
-                        regions,
-                        &region_memfds,
-                    ) |region, region_memfd| {
-                        std.debug.assert(region_memfd.size == regionSize(region));
-                        if (region != getRegionBinding(region_id)) continue;
-
-                        var shares = getRegionBindingShares(region);
-                        var shares_iter = shares.iterator();
-                        for (0..shares.count()) |_| {
-                            const share_target = shares_iter.next().?.key;
-                            if (service != share_target) continue;
-
-                            const result: ServiceMap.LookupResult = .{
-                                .region = region,
-                                .access = region_entry.access,
-                                .memfd = region_memfd,
-                            };
-
-                            const exists = if (map.inner.getPtr(service)) |entry| exists: {
-                                break :exists for (entry.regions.items) |existing| {
-                                    if (existing.region != std.meta.activeTag(result.region)) {
-                                        continue;
-                                    }
-                                    if (existing.access != result.access) {
-                                        continue;
-                                    }
-                                    break true;
-                                } else false;
-                            } else false;
-
-                            if (!exists) break :blk result;
-                        } else if (shares_iter.next() != null) unreachable;
-                    } else std.debug.panic(
-                        "Service instance {t} requested {} region which was not shared with it",
-                        .{ service, region_entry },
-                    );
-
-                    if (!map.inner.contains(service)) map.inner.put(service, .{
-                        .runner = runner_memfd,
-                        .regions = .empty,
-                    });
-                    const lur_list = map.inner.getPtrAssertContains(service);
-                    try lur_list.regions.append(allocator, found_region);
+                    const gop = service_entry.bindings.getOrPut(binding_tag);
+                    if (gop.found_existing) {
+                        std.debug.panic("Two equivalent binding entries for '{t}'", .{binding_tag});
+                    }
+                    gop.value_ptr.* = .{
+                        .access = region_schema.access,
+                        .memfd = binding_memfd,
+                    };
                 }
             }
 
@@ -473,7 +440,7 @@ pub fn Bind(
             params: struct {
                 runner: memfd.RW,
                 stderr: std.fs.File,
-                regions: []const ServiceMap.LookupResult,
+                bindings: *const ServiceMap.Entry.Bindings,
             },
         ) !lib.ipc.ResolvedArgs {
             var args: lib.ipc.ResolvedArgs = .{
@@ -493,27 +460,18 @@ pub fn Bind(
             var i_rw: u8 = 0;
             var i_ro: u8 = 0;
 
-            for (params.regions) |region| {
-                const region_size = regionSize(region.region);
-                if (region_size != region.memfd.size) {
-                    std.debug.panic(
-                        "region {s} expected to have size {Bi}, but memfd has size {Bi}.",
-                        .{
-                            @tagName(region.region),
-                            region_size,
-                            region.memfd.size,
-                        },
-                    );
-                }
-
-                switch (region.access) {
+            var binding_iter = params.bindings.iteratorImmut();
+            for (0..params.bindings.len) |_| {
+                const binding = binding_iter.next().?.value.*;
+                const region_size = binding.memfd.size;
+                switch (binding.access) {
                     .rw => {
-                        args.rw[i_rw] = (try region.memfd.mmap(.{ .populate = true })).ptr;
+                        args.rw[i_rw] = (try binding.memfd.mmap(.{ .populate = true })).ptr;
                         args.rw_len[i_rw] = region_size;
                         i_rw += 1;
                     },
                     .readonly => {
-                        const ro_memfd = try memfd.RO.fromRW(region.memfd);
+                        const ro_memfd = try memfd.RO.fromRW(binding.memfd);
                         args.ro[i_ro] = (try ro_memfd.mmap(.{ .populate = true })).ptr;
                         args.ro_len[i_ro] = region_size;
                         i_ro += 1;
@@ -577,11 +535,11 @@ pub fn Bind(
 
             // Start up all services, storing their pids
             inline for (schema.services) |service_schema| {
-                const entry = map.inner.get(service_schema.name).?;
+                const entry = map.entries.get(service_schema.name).?;
                 const child_pid = try spawnService(service_schema.name, .{
                     .runner = entry.runner,
                     .stderr = .stderr(),
-                    .regions = entry.regions.items,
+                    .regions = &entry.bindings,
                 });
                 exit_metas.appendAssumeCapacity(.{
                     .id = service_schema.name,
@@ -593,7 +551,7 @@ pub fn Bind(
             // We only mmap the exit regions after spawning the child processes, as we don't want them
             // mapped in children
             for (exit_metas.items) |*exit_meta| {
-                const entry = map.inner.get(exit_meta.id).?;
+                const entry = map.entries.get(exit_meta.id).?;
                 const runner = try entry.runner.mmapStaticSize(lib.runner.Region, .{});
                 exit_meta.exit = &runner.exit;
             }
@@ -623,7 +581,7 @@ pub fn Bind(
             params: struct {
                 runner: memfd.RW,
                 stderr: std.fs.File,
-                regions: []const ServiceMap.LookupResult,
+                regions: *const ServiceMap.Entry.Bindings,
             },
         ) !i32 {
             const parent_pid = std.os.linux.getpid();
@@ -695,7 +653,7 @@ pub fn Bind(
             const resolved_args = try resolveArgs(.{
                 .runner = params.runner,
                 .stderr = params.stderr,
-                .regions = params.regions,
+                .bindings = params.regions,
             });
 
             // mseal our shared VMAs (essentially making sure their mapping can't be tampered with)
@@ -814,11 +772,11 @@ pub fn Bind(
 
             // Start up all services, storing their pids
             inline for (schema.services, 0..) |service_entry, i| {
-                const entry = map.inner.get(service_entry.name).?;
+                const entry = map.entries.get(service_entry.name).?;
                 _ = try spawnServiceNoSandbox(service_entry.name, .{
                     .runner = entry.runner,
                     .stderr = .stderr(),
-                    .regions = map.inner.get(service_entry.name).?.regions.items,
+                    .regions = &map.entries.get(service_entry.name).?.bindings,
                     .service_idx = i,
                     .thread_exit_ctx = &thread_exit_ctx,
                 });
@@ -830,7 +788,7 @@ pub fn Bind(
             const exited_idx = finished_service_idx.load(.seq_cst);
             std.debug.assert(exited_idx != std.math.maxInt(u16));
 
-            const exited_runner_memfd = map.inner.get(@enumFromInt(exited_idx)).?.runner;
+            const exited_runner_memfd = map.entries.get(@enumFromInt(exited_idx)).?.runner;
             const exited_runner = try exited_runner_memfd.mmapStaticSize(lib.runner.Region, .{});
             const exited_service_id: unbound.ServiceId = @enumFromInt(exited_idx);
             dumpOnExit(
@@ -880,7 +838,7 @@ pub fn Bind(
             params: struct {
                 runner: memfd.RW,
                 stderr: std.fs.File,
-                regions: []const ServiceMap.LookupResult,
+                regions: *const ServiceMap.Entry.Bindings,
                 service_idx: u16,
                 thread_exit_ctx: *const ThreadExitContext,
             },
@@ -888,7 +846,7 @@ pub fn Bind(
             var resolved_args = try resolveArgs(.{
                 .runner = params.runner,
                 .stderr = params.stderr,
-                .regions = params.regions,
+                .bindings = params.regions,
             });
             resolved_args.thread_crash_ctx = params.thread_exit_ctx;
             resolved_args.thread_crash_fn = signalThreadCrash;
