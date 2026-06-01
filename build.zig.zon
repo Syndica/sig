@@ -30,8 +30,8 @@
             .hash = "libxev-0.0.0-86vtcwE9EwB942iWRnaNMXHv3n0BeLAs_tVhrs5cT8cQ",
         },
         .prettytable = .{
-            .url = "git+https://github.com/Syndica/prettytable-zig/#aacfdb9ed7b580c3fbd8ad96e70c85723770a47d",
-            .hash = "prettytable-0.3.0--Be650WGAQB0vR1FKtyaHnCykPjKTeqTgabQi8HHcHT1",
+            .url = "git+https://github.com/Syndica/prettytable-zig/#7bb65ebe985ca5f0444e514a31b4dcfad3d1c7ed",
+            .hash = "prettytable-0.3.0--Be650WGAQDL4e6QfofWGes1q4_xd_bCsRgHKBEqwobD",
         },
         .base58 = .{
             .url = "git+https://github.com/Syndica/base58-zig#2acfa605d23d4d565a7e5a8ff35ea4a827eaaab9",
