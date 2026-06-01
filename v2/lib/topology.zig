@@ -524,18 +524,19 @@ pub fn Bind(
         // -- Sandboxed -- //
 
         pub const Sandboxed = struct {
-            meta_buf: [schema.services.len]Meta,
-            meta_len: usize,
+            services_index: lib.util.ArrayEnumMap(unbound.ServiceId, void),
+            meta: struct {
+                pids_buf: [schema.services.len]i32,
+                runners_buf: [schema.services.len]*lib.runner.Region,
+            },
 
-            pub fn metas(self: *const Sandboxed) []const Meta {
-                return self.meta_buf[0..self.meta_len];
+            pub fn pids(self: *const Sandboxed) []const i32 {
+                return self.meta.pids_buf[0..self.services_index.len];
             }
 
-            pub const Meta = struct {
-                id: unbound.ServiceId,
-                pid: i32,
-                runner: *lib.runner.Region,
-            };
+            pub fn runners(self: *const Sandboxed) []const *lib.runner.Region {
+                return self.meta.runners_buf[0..self.services_index.len];
+            }
 
             pub fn wait(self: *const Sandboxed) void {
                 // Wait for the first child to exit
@@ -545,23 +546,23 @@ pub fn Bind(
                     std.debug.assert(e(ret) == .SUCCESS);
                     break :pid @intCast(ret);
                 };
-
-                const meta: Sandboxed.Meta = for (self.metas()) |meta| {
-                    if (meta.pid == exited_pid) break meta;
-                } else std.debug.panic("Unknown child pid {} exited\n", .{exited_pid});
-
-                dumpOnExit(
-                    &meta.runner.exit,
-                    meta.id,
-                    meta.pid,
-                    status,
-                );
+                const exited_index = std.mem.indexOfScalar(i32, self.pids(), exited_pid) orelse
+                    std.debug.panic("Unknown child pid {} exited\n", .{exited_pid});
+                const id = self.services_index.keys()[exited_index];
+                const pid = self.pids()[exited_index];
+                const runner = self.runners()[exited_index];
+                dumpOnExit(&runner.exit, id, pid, status);
             }
         };
 
         pub fn spawnSandboxed(map: *const ServiceMap) !Sandboxed {
-            var meta_buf: [schema.services.len]Sandboxed.Meta = undefined;
-            var metas: std.ArrayList(Sandboxed.Meta) = .initBuffer(&meta_buf);
+            var sandboxed: Sandboxed = .{
+                .services_index = .empty,
+                .meta = .{
+                    .pids_buf = @splat(undefined),
+                    .runners_buf = @splat(undefined),
+                },
+            };
 
             // Start up all services, storing their pids
             inline for (schema.services) |service_schema| {
@@ -571,26 +572,19 @@ pub fn Bind(
                     .stderr = .stderr(),
                     .regions = &entry.bindings,
                 });
-                metas.appendAssumeCapacity(.{
-                    .id = service_schema.name,
-                    .pid = child_pid,
-                    // initialized below
-                    .runner = undefined,
-                });
+                const index = sandboxed.services_index.len;
+                sandboxed.services_index.putNoClobber(service_schema.name, {});
+                sandboxed.meta.pids_buf[index] = child_pid;
             }
 
             // We only mmap the exit regions after spawning the child processes, as we don't want them
             // mapped in children
-            for (metas.items) |*exit_meta| {
-                const entry = map.entries.get(exit_meta.id).?;
-                const runner = try entry.runner.mmapStaticSize(lib.runner.Region, .{});
-                exit_meta.runner = runner;
+            for (sandboxed.services_index.keys(), &sandboxed.meta.runners_buf) |id, *meta| {
+                const entry = map.entries.get(id).?;
+                meta.* = try entry.runner.mmapStaticSize(lib.runner.Region, .{});
             }
 
-            return .{
-                .meta_buf = meta_buf,
-                .meta_len = metas.items.len,
-            };
+            return sandboxed;
         }
 
         fn spawnService(
@@ -745,12 +739,7 @@ pub fn Bind(
 
                 const exited_service_id: unbound.ServiceId = @enumFromInt(exited_idx);
                 const exited_runner = state.runners.get(exited_service_id).?.*;
-                dumpOnExit(
-                    &exited_runner.exit,
-                    exited_service_id,
-                    0,
-                    0,
-                );
+                dumpOnExit(&exited_runner.exit, exited_service_id, 0, 0);
             }
         };
 
