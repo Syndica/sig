@@ -35,8 +35,8 @@ pub const Rooted = struct {
         writer: FileWriter(.{ .buffer_size = buffer_size, .block_size = block_size }),
     },
 
-    const buffer_size = 32 * 1024 * 1024;
-    const block_size = 128 * 1024;
+    const buffer_size = 64 * 1024 * 1024;
+    const block_size = 1 * 1024 * 1024;
 
     const max_active_lookups = 256;
 
@@ -329,7 +329,7 @@ pub const Rooted = struct {
     pub fn loadSnapshot(
         self: *Rooted,
         logger: tel.Logger("Rooted.loadSnapshot"),
-        snapshot_iter: *lib.solana.snapshot.SnapshotIter,
+        snapshot_iter: anytype, // lib.solana.snapshot.SnapshotIter(anytype),
     ) !void {
         try self.beginTransaction(.from(logger), snapshot_iter.manifest.bank_fields.slot);
 

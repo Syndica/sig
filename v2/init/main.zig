@@ -218,11 +218,8 @@ const topology_schema: lib.TopologySchema = .{
 pub const topology = topology_schema.Bind(Region, .init(.{
     .gossip_config = .initOne(.@"gossip:config"),
     .shred_recv_config = .initOne(.@"shred_receiver:config"),
-    .accounts_db_config = .initOne(.@"accounts_db:rooted_config"),
-    .snapshot_config = .initMany(&.{
-        .@"snapshot:config",
-        .@"accounts_db:snapshot_config",
-    }),
+    .accounts_db_config = .initOne(.@"accounts_db:config"),
+    .snapshot_config = .initOne(.@"snapshot:config"),
 
     .net_to_shred = .initMany(&.{
         .@"net:to_shred",
@@ -327,7 +324,7 @@ pub const Region = union(enum) {
             => @sizeOf(lib.net.Pair),
 
             .gossip_source_to_snapshot => @sizeOf(lib.snapshot.SnapshotSourceRing),
-            .snapshot_ready_to_accounts_db => @sizeOf(lib.snapshot.SnapshotReadyRing),
+            .snapshot_ready_to_accounts_db => @sizeOf(lib.snapshot.SnapshotDataRing),
             .account_pool => |params| @sizeOf(lib.accounts_db.AccountPool) + params.memory,
 
             .shreds_to_replay => @sizeOf(lib.shred.DeshredRing),
@@ -431,8 +428,8 @@ pub const Region = union(enum) {
                 data.init();
             },
             .snapshot_ready_to_accounts_db => {
-                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotReadyRing));
-                const data: *lib.snapshot.SnapshotReadyRing = @ptrCast(buf);
+                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotDataRing));
+                const data: *lib.snapshot.SnapshotDataRing = @ptrCast(buf);
                 data.init();
             },
             .account_pool => |params| {

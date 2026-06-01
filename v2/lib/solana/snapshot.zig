@@ -517,232 +517,240 @@ fn discardVoteAccounts(r: anytype) !void {
     }
 }
 
-pub const SnapshotIter = struct {
-    // public fields instantiated using the fba from init()
-    status_cache: StatusCache,
-    manifest: Manifest,
+pub fn SnapshotIter(comptime BufReader: type) type {
+    return struct {
+        // public fields instantiated using the fba from init()
+        status_cache: StatusCache,
+        manifest: Manifest,
 
-    tar_iter: TarZstIter,
-    account_file_len: usize,
-    account_file_slot: Slot,
-    account_data_len: usize,
-    account_data_padding: usize,
+        tar_iter: TarZstIter(BufReader),
+        account_file_len: usize,
+        account_file_slot: Slot,
+        account_data_len: usize,
+        account_data_padding: usize,
 
-    pub fn init(
-        self: *SnapshotIter,
-        logger: tel.Logger("SnapshotIter"),
-        fba: *std.heap.FixedBufferAllocator,
-        dir: std.fs.Dir,
-        path: []const u8,
-    ) !void {
-        try self.tar_iter.init(.from(logger), dir, path);
-        errdefer self.tar_iter.deinit();
+        const Self = @This();
 
-        // read /version
-        {
-            const tar_file = (try self.tar_iter.next()) orelse return error.MissingVersionFile;
-            if (!std.mem.eql(u8, tar_file.name, "version")) return error.MissingVersionFile;
-            const expected = "1.2.0";
-            var version: [expected.len]u8 = undefined;
-            try self.tar_iter.readSliceAll(&version);
-            if (!std.mem.eql(u8, &version, expected)) return error.InvalidVersion;
+        pub fn init(
+            fba: *std.heap.FixedBufferAllocator,
+            buf_reader: BufReader,
+        ) !Self {
+            var self: Self = undefined;
+            self.tar_iter = .{ .buf_reader = buf_reader };
+
+            // read /version
+            {
+                const tar_file = (try self.tar_iter.next()) orelse return error.MissingVersionFile;
+                if (!std.mem.eql(u8, tar_file.name, "version")) return error.MissingVersionFile;
+                const expected = "1.2.0";
+                var version: [expected.len]u8 = undefined;
+                try self.tar_iter.readSliceAll(&version);
+                if (!std.mem.eql(u8, &version, expected)) return error.InvalidVersion;
+            }
+
+            // read /snapshots/status_cache & /snapshots/{slot}/{slot} (can be in any order)
+            {
+                const tar_file = (try self.tar_iter.next()) orelse return error.MissingMetadata;
+                if (std.mem.eql(u8, tar_file.name, "snapshots/status_cache")) {
+                    self.status_cache = try StatusCache.read(fba, &self.tar_iter);
+                    _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
+                    self.manifest = try Manifest.read(fba, &self.tar_iter);
+                } else {
+                    self.manifest = try Manifest.read(fba, &self.tar_iter);
+                    _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
+                    self.status_cache = try StatusCache.read(fba, &self.tar_iter);
+                }
+            }
+
+            self.account_file_len = 0;
+            self.account_file_slot = 0;
+            self.account_data_len = 0;
+            self.account_data_padding = 0;
+            return self;
         }
 
-        // read /snapshots/status_cache & /snapshots/{slot}/{slot} (can be in any order)
-        {
-            const tar_file = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-            if (std.mem.eql(u8, tar_file.name, "snapshots/status_cache")) {
-                self.status_cache = try StatusCache.read(fba, &self.tar_iter);
-                _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                self.manifest = try Manifest.read(fba, &self.tar_iter);
-            } else {
-                self.manifest = try Manifest.read(fba, &self.tar_iter);
-                _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                self.status_cache = try StatusCache.read(fba, &self.tar_iter);
+        pub const Account = struct {
+            slot: Slot,
+            pubkey: Pubkey,
+            owner: Pubkey,
+            lamports: u64,
+            rent_epoch: Epoch,
+            data: packed struct(u32) { executable: bool, len: u31 },
+        };
+
+        pub fn next(self: *Self) !?Account {
+            // Skip unread data & data padding of previous Accountentry
+            self.tar_iter.discardAll(self.account_data_len + self.account_data_padding) catch {};
+
+            // read /accounts/{slot}/{id} (containing Accounts in AppendVecs)
+            while (self.account_file_len == 0) {
+                @branchHint(.unlikely);
+
+                const tar_file = (try self.tar_iter.next()) orelse return null;
+                const split = std.mem.indexOfScalar(u8, tar_file.name, '.') orelse
+                    return error.InvalidAccountFileName;
+                if (split + 1 >= tar_file.name.len)
+                    return error.InvalidAccountFileName;
+
+                const slot = std.fmt.parseInt(u64, tar_file.name["accounts/".len..split], 10) catch
+                    return error.InvalidAccountFileSlot;
+                const id = std.fmt.parseInt(u32, tar_file.name[split + 1 ..], 10) catch
+                    return error.InvalidAccountFileId;
+                if (slot > self.manifest.accounts_db_fields.slot)
+                    return error.InvalidAccountFileSlot;
+
+                const info = self.manifest.accounts_db_fields.account_file_map.getPtr(slot) orelse
+                    return error.InvalidAccountFileSlot;
+                if (info.id != id)
+                    return error.InvalidAccountFileId;
+                if (info.length > tar_file.size)
+                    return error.InvalidAccountFileLength;
+
+                self.account_file_slot = slot;
+                self.account_file_len = info.length;
+            }
+
+            var header: extern struct { // little-endian
+                _unused_write_version: u64,
+                data_len: u64,
+                pubkey: lib.solana.Pubkey,
+                lamports: u64,
+                rent_epoch: lib.solana.Epoch,
+                owner: lib.solana.Pubkey,
+                executable: u8,
+                _padding: [7]u8,
+                hash: lib.solana.Hash,
+            } = undefined;
+            self.account_file_len -= @sizeOf(@TypeOf(header));
+            self.tar_iter.readSliceAll(std.mem.asBytes(&header)) catch
+                return error.InvalidAccountHeader;
+
+            // Header's hash is obsolete and always zero:
+            // https://github.com/anza-xyz/agave/blob/v4.0/accounts-db/src/append_vec.rs#L1353-L1357
+            if (!header.hash.eql(&lib.solana.Hash.ZEROES))
+                return error.InvalidAccountHeader;
+            if (header.executable > 1)
+                return error.InvalidAccountHeader;
+            if (header.data_len > 10 * 1024 * 1024)
+                return error.InvalidAccountData;
+
+            const data_padded_len = std.mem.alignForward(u64, header.data_len, 8);
+            self.account_file_len -|= data_padded_len;
+            self.account_data_padding = data_padded_len - header.data_len; // skip padding
+            self.account_data_len = header.data_len; // track data read from account
+
+            return .{
+                .slot = self.account_file_slot,
+                .pubkey = header.pubkey,
+                .owner = header.owner,
+                .lamports = header.lamports,
+                .rent_epoch = header.rent_epoch,
+                .data = .{ .executable = header.executable > 0, .len = @intCast(header.data_len) },
+            };
+        }
+
+        pub fn readSliceAll(self: *Self, buf: []u8) !void {
+            if (buf.len > self.account_data_len) return error.EndOfStream;
+            self.account_data_len -= buf.len;
+            try self.tar_iter.readSliceAll(buf);
+        }
+    };
+}
+
+pub fn TarZstIter(comptime BufReader: type) type {
+    lib.util.assertInterface(BufReader, struct {
+        /// Get a slice of readable memory. Returns empty slice on EOF.
+        pub fn getBuffer(self: BufReader) ?[]const u8 {
+            _ = .{self};
+            return undefined;
+        }
+
+        /// Mark n bytes (from a previous getBuffer() call) as consumed.
+        pub fn advance(self: BufReader, n: usize) void {
+            _ = .{ self, n };
+            return undefined;
+        }
+    });
+
+    return struct {
+        buf_reader: BufReader,
+        header: [512]u8 = undefined,
+        file_size: usize = 0,
+        file_padding: usize = 0,
+
+        const Self = @This();
+
+        pub const TarFile = struct {
+            name: []const u8,
+            size: usize,
+        };
+
+        pub fn next(self: *Self) !?TarFile {
+            while (true) {
+                // skip the previously returned TarFile's unread + padding data
+                _ = self.read(null, self.file_padding + self.file_size);
+
+                const n = self.read(&self.header, self.header.len);
+                if (n == 0) return null;
+                if (n < 512) return error.EndOfStream;
+
+                const is_file = self.header[156] == '0' or self.header[156] == 0;
+                const file_name = std.mem.sliceTo(self.header[0..100], 0);
+                const file_size = blk: {
+                    const buf = self.header[124..][0..12];
+                    if (buf[0] == 0xff) return error.InvalidTar; // negative size
+                    if (buf[0] == 0x80) {
+                        if (std.mem.readInt(u32, buf[0..4], .little) != 0x80) return error.InvalidTar;
+                        break :blk std.mem.readInt(u64, buf[4..12], .big);
+                    }
+                    const trimmed = std.mem.trimRight(u8, std.mem.trimLeft(u8, buf, "0 "), " \x00");
+                    if (trimmed.len == 0) break :blk 0;
+                    break :blk std.fmt.parseInt(u64, trimmed, 8) catch return error.InvalidTar;
+                };
+
+                self.file_size = file_size;
+                self.file_padding = std.mem.alignForward(usize, file_size, 512) - file_size;
+                if (file_size == 0 and file_name.len == 0) return null;
+                if (is_file) return .{ .name = file_name, .size = file_size };
             }
         }
 
-        self.account_file_len = 0;
-        self.account_file_slot = 0;
-        self.account_data_len = 0;
-        self.account_data_padding = 0;
-    }
+        // std.Io.Reader-like API for Manifest/StatusCache.read()
 
-    pub fn deinit(self: *SnapshotIter) void {
-        self.tar_iter.deinit();
-    }
-
-    pub const Account = struct {
-        slot: Slot,
-        pubkey: Pubkey,
-        owner: Pubkey,
-        lamports: u64,
-        rent_epoch: Epoch,
-        data: packed struct(u32) { executable: bool, len: u31 },
-    };
-
-    pub fn next(self: *SnapshotIter) !?Account {
-        // Skip unread data & data padding of previous Accountentry
-        self.tar_iter.discardAll(self.account_data_len + self.account_data_padding) catch {};
-
-        // read /accounts/{slot}/{id} (containing Accounts in AppendVecs)
-        while (self.account_file_len == 0) {
-            @branchHint(.unlikely);
-
-            const tar_file = (try self.tar_iter.next()) orelse return null;
-            const split = std.mem.indexOfScalar(u8, tar_file.name, '.') orelse
-                return error.InvalidAccountFileName;
-            if (split + 1 >= tar_file.name.len)
-                return error.InvalidAccountFileName;
-
-            const slot = std.fmt.parseInt(u64, tar_file.name["accounts/".len..split], 10) catch
-                return error.InvalidAccountFileSlot;
-            const id = std.fmt.parseInt(u32, tar_file.name[split + 1 ..], 10) catch
-                return error.InvalidAccountFileId;
-            if (slot > self.manifest.accounts_db_fields.slot)
-                return error.InvalidAccountFileSlot;
-
-            const info = self.manifest.accounts_db_fields.account_file_map.getPtr(slot) orelse
-                return error.InvalidAccountFileSlot;
-            if (info.id != id)
-                return error.InvalidAccountFileId;
-            if (info.length > tar_file.size)
-                return error.InvalidAccountFileLength;
-
-            self.account_file_slot = slot;
-            self.account_file_len = info.length;
+        pub fn readSliceAll(self: *Self, buf: []u8) !void {
+            if (self.file_size < buf.len) return error.EndOfStream;
+            self.file_size -= buf.len;
+            if (self.read(buf.ptr, buf.len) != buf.len) return error.EndOfStream;
         }
 
-        var header: extern struct { // little-endian
-            _unused_write_version: u64,
-            data_len: u64,
-            pubkey: lib.solana.Pubkey,
-            lamports: u64,
-            rent_epoch: lib.solana.Epoch,
-            owner: lib.solana.Pubkey,
-            executable: u8,
-            _padding: [7]u8,
-            hash: lib.solana.Hash,
-        } = undefined;
-        self.account_file_len -= @sizeOf(@TypeOf(header));
-        self.tar_iter.readSliceAll(std.mem.asBytes(&header)) catch
-            return error.InvalidAccountHeader;
-
-        // Header's hash is obsolete and always zero:
-        // https://github.com/anza-xyz/agave/blob/v4.0/accounts-db/src/append_vec.rs#L1353-L1357
-        if (!header.hash.eql(&lib.solana.Hash.ZEROES))
-            return error.InvalidAccountHeader;
-        if (header.executable > 1)
-            return error.InvalidAccountHeader;
-        if (header.data_len > 10 * 1024 * 1024)
-            return error.InvalidAccountData;
-
-        const data_padded_len = std.mem.alignForward(u64, header.data_len, 8);
-        self.account_file_len -|= data_padded_len;
-        self.account_data_padding = data_padded_len - header.data_len; // skip padding
-        self.account_data_len = header.data_len; // track data read from account
-
-        return .{
-            .slot = self.account_file_slot,
-            .pubkey = header.pubkey,
-            .owner = header.owner,
-            .lamports = header.lamports,
-            .rent_epoch = header.rent_epoch,
-            .data = .{ .executable = header.executable > 0, .len = @intCast(header.data_len) },
-        };
-    }
-
-    pub fn readSliceAll(self: *SnapshotIter, buf: []u8) !void {
-        if (buf.len > self.account_data_len) return error.EndOfStream;
-        self.account_data_len -= buf.len;
-        try self.tar_iter.readSliceAll(buf);
-    }
-};
-
-const TarZstIter = struct {
-    zst_reader: ZstReader,
-    header: [512]u8,
-    file_size: usize,
-    file_padding: usize,
-
-    pub fn init(
-        self: *TarZstIter,
-        logger: tel.Logger("TarZst"),
-        dir: std.fs.Dir,
-        path: []const u8,
-    ) !void {
-        try self.zst_reader.init(.from(logger), dir, path);
-        errdefer self.zst_reader.deinit();
-
-        self.file_size = 0;
-        self.file_padding = 0;
-    }
-
-    pub fn deinit(self: *TarZstIter) void {
-        self.zst_reader.deinit();
-    }
-
-    pub const TarFile = struct {
-        name: []const u8,
-        size: usize,
-    };
-
-    pub fn next(self: *TarZstIter) !?TarFile {
-        while (true) {
-            // skip the previously returned TarFile's unread + padding data
-            _ = try self.zst_reader.read(null, self.file_padding + self.file_size);
-
-            const n = try self.zst_reader.read(&self.header, self.header.len);
-            if (n == 0) return null;
-            if (n < 512) return error.EndOfStream;
-
-            const is_file = self.header[156] == '0' or self.header[156] == 0;
-            const file_name = std.mem.sliceTo(self.header[0..100], 0);
-            const file_size = blk: {
-                const buf = self.header[124..][0..12];
-                if (buf[0] == 0xff) return error.InvalidTar; // negative size
-                if (buf[0] == 0x80) {
-                    if (std.mem.readInt(u32, buf[0..4], .little) != 0x80) return error.InvalidTar;
-                    break :blk std.mem.readInt(u64, buf[4..12], .big);
-                }
-                const trimmed = std.mem.trimRight(u8, std.mem.trimLeft(u8, buf, "0 "), " \x00");
-                if (trimmed.len == 0) break :blk 0;
-                break :blk std.fmt.parseInt(u64, trimmed, 8) catch return error.InvalidTar;
-            };
-
-            self.file_size = file_size;
-            self.file_padding = std.mem.alignForward(usize, file_size, 512) - file_size;
-            if (file_size == 0 and file_name.len == 0) return null;
-            if (is_file) return .{ .name = file_name, .size = file_size };
+        pub fn discardAll(self: *Self, n: usize) !void {
+            if (self.file_size < n) return error.EndOfStream;
+            self.file_size -= n;
+            if (self.read(null, n) != n) return error.EndOfStream;
         }
-    }
 
-    // std.Io.Reader-like API for Manifest/StatusCache.read()
+        fn read(self: *Self, maybe_buf: ?[*]u8, len: usize) usize {
+            var n: usize = 0;
+            while (n < len) : (std.atomic.spinLoopHint()) {
+                const buf: []const u8 = self.buf_reader.getBuffer() orelse continue;
+                if (buf.len == 0) break;
 
-    pub fn readSliceAll(self: *TarZstIter, buf: []u8) !void {
-        if (self.file_size < buf.len) return error.EndOfStream;
-        self.file_size -= buf.len;
-        if ((try self.zst_reader.read(buf.ptr, buf.len)) != buf.len) return error.EndOfStream;
-    }
+                const take = @min(buf.len, len - n);
+                if (maybe_buf) |b| @memcpy(b[n..][0..take], buf[0..take]);
 
-    pub fn discardAll(self: *TarZstIter, n: usize) !void {
-        if (self.file_size < n) return error.EndOfStream;
-        self.file_size -= n;
-        if ((try self.zst_reader.read(null, n)) != n) return error.EndOfStream;
-    }
-};
+                self.buf_reader.advance(take);
+                n += take;
+            }
+            return n;
+        }
+    };
+}
 
-const ZstReader = struct {
-    logger: tel.Logger("ZstReader"),
+pub const ZstReader = struct {
     decompressor: Decompressor,
-    zstd: struct {
-        end: usize,
-        seek: usize,
-        buffer: [128 * 1024]u8,
-    },
     file_reader: lib.fio.FileReader(.{
-        .buffer_size = 8 * 1024 * 1024,
-        .block_size = 64 * 1024,
+        .buffer_size = 64 * 1024 * 1024,
+        .block_size = 1 * 1024 * 1024,
     }),
 
     // TODO: InBuffer/OutBuffer aren't public & cba to update the zstd fork being referenced.
@@ -751,19 +759,9 @@ const ZstReader = struct {
     const InBuffer = @typeInfo(params[1].type.?).pointer.child;
     const OutBuffer = @typeInfo(params[2].type.?).pointer.child;
 
-    pub fn init(
-        self: *ZstReader,
-        logger: tel.Logger("ZstReader"),
-        dir: std.fs.Dir,
-        path: []const u8,
-    ) !void {
-        self.logger = logger;
-
+    pub fn init(self: *ZstReader, dir: std.fs.Dir, path: []const u8) !void {
         self.decompressor = try .init(.{});
         errdefer self.decompressor.deinit();
-
-        self.zstd.end = 0;
-        self.zstd.seek = 0;
 
         const file = try lib.fio.openDirect(dir, path, .read_only);
         errdefer file.close();
@@ -778,41 +776,26 @@ const ZstReader = struct {
         self.file_reader.file.close();
     }
 
-    pub fn read(self: *ZstReader, maybe_buf: ?[*]u8, len: usize) !usize {
+    pub fn read(
+        self: *ZstReader,
+        logger: tel.Logger("ZstReader.read"),
+        buffer: []u8,
+    ) !usize {
         var n: usize = 0;
-        while (n < len) {
-            // check of theres some to copy from the buffer.
-            if (self.zstd.seek != self.zstd.end) {
-                const take = @min(self.zstd.end - self.zstd.seek, len - n);
-                if (maybe_buf) |b| @memcpy(
-                    b[n..][0..take],
-                    self.zstd.buffer[self.zstd.seek..][0..take],
-                );
-                self.zstd.seek += take;
-                n += take;
-                continue;
-            }
-
+        while (n < buffer.len) {
             // Get compressed buffer from file.
-            const compressed = try self.file_reader.getBuffer(.from(self.logger));
+            const compressed = try self.file_reader.getBuffer(.from(logger));
             if (compressed.len == 0) break; // EOF
 
             // Get decompressed buffer to write to.
-            const buf: []u8 = if (maybe_buf) |b| b[n..len] else &.{};
-            const use_maybe_buf = buf.len >= self.zstd.buffer.len; // avoid multiple copies
-            const decompressed = if (use_maybe_buf) buf else &self.zstd.buffer;
+            const decompressed = buffer[n..];
 
             var in = InBuffer{ .src = compressed.ptr, .size = compressed.len, .pos = 0 };
             var out = OutBuffer{ .dst = decompressed.ptr, .size = decompressed.len, .pos = 0 };
             _ = try self.decompressor.decompressStream(&in, &out);
 
             try self.file_reader.advance(in.pos);
-            if (use_maybe_buf) {
-                n += out.pos;
-            } else {
-                self.zstd.seek = 0;
-                self.zstd.end = out.pos;
-            }
+            n += out.pos;
         }
         return n;
     }

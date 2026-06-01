@@ -22,7 +22,16 @@ pub fn fmtSlice(slice: anytype) FmtSlice(@TypeOf(slice[0])) {
     return .{ .slice = slice };
 }
 
-pub fn assertInterface(comptime Interface: type, comptime Contract: type) void {
+pub fn assertInterface(comptime InterfaceType: type, comptime ContractStruct: type) void {
+    const Contract = ContractStruct;
+    const Interface = switch (@typeInfo(InterfaceType)) {
+        .pointer => |info| switch (info.size) {
+            .one => info.child,
+            else => @compileError("assertInterface does not accept: " ++ @typeName(InterfaceType)),
+        },
+        else => InterfaceType,
+    };
+
     const info = @typeInfo(Contract).@"struct";
     if (@typeInfo(Interface) != .@"struct") {
         @compileError(std.fmt.comptimePrint("Expected struct, found {s}", .{@typeName(Interface)}));

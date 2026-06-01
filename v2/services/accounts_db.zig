@@ -5,7 +5,7 @@ const lib = @import("lib");
 const tel = lib.telemetry;
 
 const SnapshotConfig = lib.snapshot.SnapshotConfig;
-const SnapshotReadyRing = lib.snapshot.SnapshotReadyRing;
+const SnapshotDataRing = lib.snapshot.SnapshotDataRing;
 const SnapshotIter = lib.solana.snapshot.SnapshotIter;
 
 const Rooted = lib.accounts_db.Rooted;
@@ -21,31 +21,24 @@ pub const name = .accounts_db;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadOnly = struct {
-    snapshot_config: *const SnapshotConfig,
-};
-
+pub const ReadOnly = struct {};
 pub const ReadWrite = struct {
-    rooted_config: *RootedConfig,
-    ready_snapshot_in: *SnapshotReadyRing,
+    config: *RootedConfig,
+    ready_snapshot_in: *SnapshotDataRing,
     account_pool: *AccountPool,
     replay_lookups: *AccountLookups,
     tel: *tel.Region,
 };
 
-pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
 
-    const file_path = rw.rooted_config.file_path[0..rw.rooted_config.file_len];
+    const file_path = rw.config.file_path[0..rw.config.file_len];
     logger.info().logf("accounts_db started into file: {s}", .{file_path});
 
     const Global = struct {
         var fba_memory: [32 * 1024 * 1024]u8 = blk: {
-            @setRuntimeSafety(false);
-            break :blk undefined;
-        };
-        var snapshot_iter: SnapshotIter = blk: {
             @setRuntimeSafety(false);
             break :blk undefined;
         };
@@ -60,45 +53,22 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         .from(logger),
         std.fs.cwd(),
         file_path,
-        rw.rooted_config.memory[0..].ptr[0..rw.rooted_config.memory_len],
+        rw.config.memory[0..].ptr[0..rw.config.memory_len],
         rw.account_pool,
     );
     defer rooted.deinit();
 
+    var in = rw.ready_snapshot_in.getView(.reader);
+    defer in.close();
+
     if (rooted.table.count == 0) {
-        logger.info().logf("no existing rooted db. waiting for ready snapshot", .{});
-
-        var snapshot_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const snapshot_path: []const u8 = blk: {
-            var ready_snapshot_iter = rw.ready_snapshot_in.get(.reader);
-            while (true) : (std.atomic.spinLoopHint()) {
-                const ready_ptr = ready_snapshot_iter.next() orelse continue;
-                defer ready_snapshot_iter.markUsed();
-                break :blk try ready_ptr.name(&snapshot_path_buf);
-            }
-        };
-
-        const dir_path = ro.snapshot_config.folder_buffer[0..ro.snapshot_config.folder_len];
-        logger.info().logf("reading snapshot {s}/{s}", .{ dir_path, snapshot_path });
-
-        var snapshot_dir = try std.fs.cwd().openDir(
-            ro.snapshot_config.folder_buffer[0..ro.snapshot_config.folder_len],
-            .{},
-        );
-        defer snapshot_dir.close();
+        logger.info().logf("no existing rooted db. reading from snapshot", .{});
 
         var fba = std.heap.FixedBufferAllocator.init(&Global.fba_memory);
-        const snapshot_iter = &Global.snapshot_iter;
-        try snapshot_iter.init(
-            .from(logger),
-            &fba,
-            snapshot_dir,
-            snapshot_path,
-        );
-        defer snapshot_iter.deinit();
+        var snapshot_iter = try SnapshotIter(*@TypeOf(in)).init(&fba, &in);
 
         logger.info().logf("reading snapshot accounts", .{});
-        try rooted.loadSnapshot(.from(logger), snapshot_iter);
+        try rooted.loadSnapshot(.from(logger), &snapshot_iter);
     }
 
     // {
