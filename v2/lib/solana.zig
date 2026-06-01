@@ -1,4 +1,4 @@
-const crypto = @import("sig-crypto");
+const crypto = @import("crypto.zig");
 
 comptime {
     if (@import("builtin").is_test) {

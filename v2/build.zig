@@ -106,6 +106,24 @@ pub fn build(b: *Build) !void {
     });
     crypto_mod.addImport("common", crypto_mod);
 
+    const crypto_lib = b.addLibrary(.{
+        .name = "sig-crypto",
+        .linkage = .static,
+        .root_module = crypto_mod,
+    });
+
+    // Public API module (header) — what consumers import via @import("crypto").
+    const crypto_api_mod = b.createModule(.{
+        .root_source_file = b.path("crypto/header.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "base58", .module = base58_mod },
+            .{ .name = "binkode", .module = binkode_mod },
+        },
+    });
+    crypto_api_mod.linkLibrary(crypto_lib);
+
     const fmt_check_step = b.addFmt(.{
         .check = true,
         .paths = &.{ "init/", "lib/", "services/", "build.zig", "lint/", "crypto/" },
@@ -143,7 +161,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "binkode", .module = binkode_mod },
             .{ .name = "tracy", .module = tracy_mod },
             .{ .name = "build-options", .module = build_options_mod },
-            .{ .name = "sig-crypto", .module = crypto_mod },
+            .{ .name = "crypto", .module = crypto_api_mod },
         },
     });
     _ = addTestOutputs(b, test_step, null, artifact_opts, .{

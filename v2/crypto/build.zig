@@ -44,6 +44,25 @@ pub fn build(b: *Build) void {
     // Self-reference so sub-files can @import("common") to reach the module root.
     crypto_mod.addImport("common", crypto_mod);
 
+    // Static library (implementation — @export symbols)
+    const crypto_lib = b.addLibrary(.{
+        .name = "sig-crypto",
+        .linkage = .static,
+        .root_module = crypto_mod,
+    });
+    b.installArtifact(crypto_lib);
+
+    // Public API module (header — what consumers import, uses @extern)
+    const api_mod = b.addModule("crypto-api", .{
+        .root_source_file = b.path("header.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "base58", .module = base58_mod },
+            .{ .name = "binkode", .module = binkode_mod },
+        },
+    });
+    _ = api_mod;
+
     // Test step
     const test_step = b.step("test", "Run crypto unit tests");
     const tests = b.addTest(.{

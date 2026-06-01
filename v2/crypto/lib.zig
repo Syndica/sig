@@ -14,6 +14,11 @@ comptime {
     }
 }
 
+// Force export symbols to be included in the library compilation unit.
+comptime {
+    _ = @import("exports.zig");
+}
+
 pub const ed25519 = @import("ed25519.zig");
 pub const Pubkey = @import("pubkey.zig").Pubkey;
 pub const Signature = @import("signature.zig").Signature;
