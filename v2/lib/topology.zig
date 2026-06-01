@@ -513,94 +513,12 @@ pub fn Bind(
         /// Blocks until the first service has exited, before dumping out traces.
         pub fn spawnAndWait(map: *const ServiceMap) !void {
             const sandboxed = try spawnSandboxed(map);
-
-            // Wait for the first child to exit
-            var status: u32 = 0;
-            const exited_pid: i32 = pid: {
-                const ret: usize = linux.waitpid(-1, &status, 0);
-                std.debug.assert(e(ret) == .SUCCESS);
-                break :pid @intCast(ret);
-            };
-
-            const meta: Sandboxed.Meta = for (sandboxed.metas()) |meta| {
-                if (meta.pid == exited_pid) break meta;
-            } else std.debug.panic("Unknown child pid {} exited\n", .{exited_pid});
-
-            dumpOnExit(
-                &meta.runner.exit,
-                meta.id,
-                meta.pid,
-                status,
-            );
+            sandboxed.wait();
         }
 
         pub fn spawnAndWaitNoSandbox(map: *const ServiceMap) !void {
             var state: NoSandbox = undefined;
             try spawnNoSandbox(&state, map);
-
-            // Wait for first service to exit
-            state.thread_exit_ctx.reset_event.wait();
-
-            const exited_idx = state.thread_exit_ctx.finished_idx.load(.seq_cst);
-            std.debug.assert(exited_idx != std.math.maxInt(u16));
-
-            const exited_runner_memfd = map.entries.get(@enumFromInt(exited_idx)).?.runner;
-            const exited_runner = try exited_runner_memfd.mmapStaticSize(lib.runner.Region, .{});
-            const exited_service_id: unbound.ServiceId = @enumFromInt(exited_idx);
-            dumpOnExit(
-                &exited_runner.exit,
-                exited_service_id,
-                0,
-                0,
-            );
-        }
-
-        fn dumpOnExit(
-            meta: *lib.runner.Exit,
-            service: unbound.ServiceId,
-            pid: i32,
-            status: u32,
-        ) void {
-            if (meta.panicMsg()) |panic_msg| {
-                std.log.err(
-                    "Service `{t}` (pid: {}) panicked with message: {s}",
-                    .{ service, pid, panic_msg },
-                );
-            }
-            if (meta.errorName()) |error_string| {
-                std.log.err(
-                    "Service `{t}` (pid: {}) exited with error: {s}",
-                    .{ service, pid, error_string },
-                );
-            }
-            if (meta.faultMsg()) |fault_msg| {
-                std.log.err(
-                    "Service `{t}` (pid: {}) faulted with message: {s}",
-                    .{ service, pid, fault_msg },
-                );
-            }
-
-            if (linux.W.TERMSIG(status) != 0) {
-                std.log.err(
-                    "Service `{t}` (pid: {}) exited from signal {}",
-                    .{ service, pid, linux.W.TERMSIG(status) },
-                );
-            }
-
-            if (meta.errorReturnStackTrace()) |trace| {
-                std.log.err("Error trace:", .{});
-                std.debug.dumpStackTrace(trace);
-            }
-
-            if (meta.stackTrace()) |trace| {
-                std.log.err("Stack trace:", .{});
-                std.debug.dumpStackTrace(trace);
-            }
-
-            if (meta.faultStackTrace()) |trace| {
-                std.log.err("Fault trace:", .{});
-                std.debug.dumpStackTrace(trace);
-            }
         }
 
         // -- Sandboxed -- //
@@ -618,6 +536,27 @@ pub fn Bind(
                 pid: i32,
                 runner: *lib.runner.Region,
             };
+
+            pub fn wait(self: *const Sandboxed) void {
+                // Wait for the first child to exit
+                var status: u32 = 0;
+                const exited_pid: i32 = pid: {
+                    const ret: usize = linux.waitpid(-1, &status, 0);
+                    std.debug.assert(e(ret) == .SUCCESS);
+                    break :pid @intCast(ret);
+                };
+
+                const meta: Sandboxed.Meta = for (self.metas()) |meta| {
+                    if (meta.pid == exited_pid) break meta;
+                } else std.debug.panic("Unknown child pid {} exited\n", .{exited_pid});
+
+                dumpOnExit(
+                    &meta.runner.exit,
+                    meta.id,
+                    meta.pid,
+                    status,
+                );
+            }
         };
 
         pub fn spawnSandboxed(map: *const ServiceMap) !Sandboxed {
@@ -794,7 +733,25 @@ pub fn Bind(
         // -- No Sandbox -- //
 
         pub const NoSandbox = struct {
+            runners: lib.util.ArrayEnumMap(unbound.ServiceId, *lib.runner.Region),
             thread_exit_ctx: ThreadExitContext,
+
+            pub fn wait(state: *NoSandbox) !void {
+                // Wait for first service to exit
+                state.thread_exit_ctx.reset_event.wait();
+
+                const exited_idx = state.thread_exit_ctx.finished_idx.load(.seq_cst);
+                std.debug.assert(exited_idx != std.math.maxInt(u16));
+
+                const exited_service_id: unbound.ServiceId = @enumFromInt(exited_idx);
+                const exited_runner = state.runners.get(exited_service_id).?.*;
+                dumpOnExit(
+                    &exited_runner.exit,
+                    exited_service_id,
+                    0,
+                    0,
+                );
+            }
         };
 
         pub fn spawnNoSandbox(
@@ -803,6 +760,7 @@ pub fn Bind(
             map: *const ServiceMap,
         ) !void {
             state.* = .{
+                .runners = .empty,
                 .thread_exit_ctx = .{
                     .finished_idx = .init(std.math.maxInt(u16)),
                     .reset_event = .{},
@@ -819,6 +777,12 @@ pub fn Bind(
                     .service_idx = i,
                     .thread_exit_ctx = &state.thread_exit_ctx,
                 });
+            }
+
+            // We only mmap the exit regions after spawning the child processes, as we don't want them
+            // mapped in children
+            for (map.entries.keys(), map.entries.values()) |k, v| {
+                state.runners.putNoClobber(k, try v.runner.mmapStaticSize(lib.runner.Region, .{}));
             }
         }
 
@@ -886,6 +850,56 @@ pub fn Bind(
         fn signalThreadCrash(ctx: ?*anyopaque, service_idx: u16) callconv(.c) void {
             const thread_exit_ctx: *ThreadExitContext = @ptrCast(@alignCast(ctx orelse return));
             thread_exit_ctx.signalThreadExit(service_idx);
+        }
+
+        // -- Shared Functionality -- //
+
+        fn dumpOnExit(
+            meta: *lib.runner.Exit,
+            service: unbound.ServiceId,
+            pid: i32,
+            status: u32,
+        ) void {
+            if (meta.panicMsg()) |panic_msg| {
+                std.log.err(
+                    "Service `{t}` (pid: {}) panicked with message: {s}",
+                    .{ service, pid, panic_msg },
+                );
+            }
+            if (meta.errorName()) |error_string| {
+                std.log.err(
+                    "Service `{t}` (pid: {}) exited with error: {s}",
+                    .{ service, pid, error_string },
+                );
+            }
+            if (meta.faultMsg()) |fault_msg| {
+                std.log.err(
+                    "Service `{t}` (pid: {}) faulted with message: {s}",
+                    .{ service, pid, fault_msg },
+                );
+            }
+
+            if (linux.W.TERMSIG(status) != 0) {
+                std.log.err(
+                    "Service `{t}` (pid: {}) exited from signal {}",
+                    .{ service, pid, linux.W.TERMSIG(status) },
+                );
+            }
+
+            if (meta.errorReturnStackTrace()) |trace| {
+                std.log.err("Error trace:", .{});
+                std.debug.dumpStackTrace(trace);
+            }
+
+            if (meta.stackTrace()) |trace| {
+                std.log.err("Stack trace:", .{});
+                std.debug.dumpStackTrace(trace);
+            }
+
+            if (meta.faultStackTrace()) |trace| {
+                std.log.err("Fault trace:", .{});
+                std.debug.dumpStackTrace(trace);
+            }
         }
     };
 }
