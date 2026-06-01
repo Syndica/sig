@@ -108,10 +108,7 @@ pub const Rooted = struct {
 
         // Activate the writer union member so future accesses arent UB.
         // Do so without an expensive memset(0xaa) given the buffer_size.
-        {
-            @setRuntimeSafety(false);
-            self.io = .{ .writer = undefined };
-        }
+        self.io = .{ .writer = lib.util.initUndefUnchecked(@TypeOf(self.io.writer)) };
 
         const write_file = try lib.fio.openDirect(dir, path, .rw);
         errdefer write_file.close();
@@ -188,10 +185,7 @@ pub const Rooted = struct {
 
         // Activate the reader union member so future accesses arent UB.
         // Do so without an expensive memset(0xaa) given the buffer_size.
-        {
-            @setRuntimeSafety(false);
-            self.io = .{ .reader = undefined };
-        }
+        self.io = .{ .reader = lib.util.initUndefUnchecked(@TypeOf(self.io.reader)) };
 
         try self.io.reader.init(file);
         defer self.io.reader.deinit();
@@ -667,10 +661,8 @@ pub const Rooted = struct {
     }
 
     fn pollCompletedReads(self: *Rooted, logger: tel.Logger("Rooted.pollCompletedReads")) !void {
-        var cqes: [max_active_lookups]std.os.linux.io_uring_cqe = comptime blk: {
-            @setRuntimeSafety(false);
-            break :blk undefined;
-        };
+        // avoid needless memset(0xaa)
+        var cqes = lib.util.initUndefUnchecked([max_active_lookups]std.os.linux.io_uring_cqe);
 
         const n = try self.ring.copy_cqes(&cqes, 0);
         for (cqes[0..n]) |*cqe| {

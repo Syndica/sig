@@ -4,7 +4,6 @@ const lib = @import("lib");
 
 const tel = lib.telemetry;
 
-const SnapshotConfig = lib.snapshot.SnapshotConfig;
 const SnapshotDataRing = lib.snapshot.SnapshotDataRing;
 const SnapshotIter = lib.solana.snapshot.SnapshotIter;
 
@@ -38,14 +37,8 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     logger.info().logf("accounts_db started into file: {s}", .{file_path});
 
     const Global = struct {
-        var fba_memory: [32 * 1024 * 1024]u8 = blk: {
-            @setRuntimeSafety(false);
-            break :blk undefined;
-        };
-        var rooted: Rooted = blk: {
-            @setRuntimeSafety(false);
-            break :blk undefined;
-        };
+        var fba_memory = lib.util.initUndefUnchecked([32 * 1024 * 1024]u8); // avoid memset(0xaa)
+        var rooted = lib.util.initUndefUnchecked(Rooted); // avoid memset(0xaa)
     };
 
     const rooted = &Global.rooted;

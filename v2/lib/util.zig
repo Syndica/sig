@@ -22,6 +22,14 @@ pub fn fmtSlice(slice: anytype) FmtSlice(@TypeOf(slice[0])) {
     return .{ .slice = slice };
 }
 
+// Initialize an undefined type instance without filling it with 0xAA in safe modes.
+pub inline fn initUndefUnchecked(comptime T: type) T {
+    @setRuntimeSafety(false);
+    var init: T = undefined;
+    _ = &init;
+    return init;
+}
+
 pub fn assertInterface(comptime InterfaceType: type, comptime ContractStruct: type) void {
     const Contract = ContractStruct;
     const Interface = switch (@typeInfo(InterfaceType)) {
