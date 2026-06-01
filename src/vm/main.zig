@@ -54,7 +54,9 @@ pub fn main() !void {
         .allocator = gpa,
         .programs_allocator = gpa,
         .feature_set = &FeatureSet.ALL_DISABLED,
-        .epoch_stakes = &epoch_stakes,
+        .epoch_stake_reader = (sig.runtime.EpochStakeReaderAdapter{
+            .epoch_stakes = &epoch_stakes,
+        }).epochStakeReader(),
         .sysvar_cache = &SysvarCache{},
         .vm_environment = &.{
             .loader = .ALL_ENABLED,

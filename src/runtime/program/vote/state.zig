@@ -39,6 +39,32 @@ pub const VOTE_CREDITS_GRACE_SLOTS: u8 = 2;
 // Maximum number of credits to award for a vote; this number of credits is awarded to votes on slots that land within the grace period. After that grace period, vote credits are reduced.
 pub const VOTE_CREDITS_MAXIMUM_PER_SLOT: u8 = 16;
 
+/// Port of Rust's `slice::binary_search_by` searching `items` for an entry
+/// whose nested `.lockout.slot` field equals `candidate_slot`.
+///
+/// agave's `VoteState::contains_slot` calls
+/// `self.votes.binary_search_by(|vote| vote.slot().cmp(&candidate_slot)).is_ok()`.
+/// Rust's `binary_search_by` and Zig's `std.sort.binarySearch` use different
+/// probe sequences, so on unsorted vote lists (which fuzzer-generated vote
+/// accounts may contain) they can disagree on whether a slot is present.
+/// To stay bit-for-bit compatible with agave we replicate Rust's algorithm.
+pub fn rustBinarySearchSlot(comptime T: type, items: []const T, candidate_slot: Slot) bool {
+    var size: usize = items.len;
+    if (size == 0) return false;
+    var base: usize = 0;
+    while (size > 1) {
+        const half = size / 2;
+        const mid = base + half;
+        // Rust: `base = if cmp == Greater { base } else { mid };`
+        // where `cmp` is `items[mid].slot.cmp(&candidate_slot)`.
+        if (items[mid].lockout.slot <= candidate_slot) {
+            base = mid;
+        }
+        size -= half;
+    }
+    return items[base].lockout.slot == candidate_slot;
+}
+
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L357
 pub const BlockTimestamp = struct {
     slot: Slot,
@@ -2055,20 +2081,18 @@ pub const VoteStateV3 = struct {
         return @min(current_slot -| voted_for_slot, std.math.maxInt(u8));
     }
 
-    fn compareFn(key: Slot, mid_item: LandedVote) std.math.Order {
-        return std.math.order(key, mid_item.lockout.slot);
-    }
-
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L690
     ///
-    /// Returns if the vote state contains a slot `candidate_slot`
+    /// Returns if the vote state contains a slot `candidate_slot`.
+    ///
+    /// NOTE: agave performs this lookup with `slice::binary_search_by`, whose
+    /// probe sequence differs from `std.sort.binarySearch`. Because the vote
+    /// list is not guaranteed to be sorted (it can be arbitrary in fuzzer
+    /// inputs and only happens to be sorted under normal operation), we must
+    /// mirror Rust's algorithm exactly to stay bit-for-bit compatible with
+    /// agave on unsorted inputs.
     pub fn containsSlot(self: *const VoteStateV3, candidate_slot: Slot) bool {
-        return std.sort.binarySearch(
-            LandedVote,
-            self.votes.items,
-            candidate_slot,
-            compareFn,
-        ) != null;
+        return rustBinarySearchSlot(LandedVote, self.votes.items, candidate_slot);
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L1014
@@ -6363,6 +6387,37 @@ test "state.VoteState.delegating methods" {
         // incrementCredits
         try vs3.incrementCredits(allocator, 1, 5);
         try std.testing.expectEqual(5, vs3.getCredits());
+    }
+
+    // Regression: unsorted vote slices must match Rust's `binary_search_by`.
+    // See `rustBinarySearchSlot` doc comment. The case `[5, 3, 1]` searching
+    // for `3` is the minimal divergence between Rust's algorithm and Zig's
+    // `std.sort.binarySearch`; Rust reports miss even though 3 is present.
+    {
+        var vs3: VoteState = .{ .v3 = try VoteStateV3.init(
+            allocator,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            0,
+            0,
+        ) };
+        defer vs3.deinit(allocator);
+        try vs3.votesMut().append(allocator, .{
+            .latency = 0,
+            .lockout = .{ .slot = 5, .confirmation_count = 1 },
+        });
+        try vs3.votesMut().append(allocator, .{
+            .latency = 0,
+            .lockout = .{ .slot = 3, .confirmation_count = 1 },
+        });
+        try vs3.votesMut().append(allocator, .{
+            .latency = 0,
+            .lockout = .{ .slot = 1, .confirmation_count = 1 },
+        });
+        try std.testing.expect(!vs3.containsSlot(3));
+        try std.testing.expect(!vs3.containsSlot(5));
+        try std.testing.expect(!vs3.containsSlot(1));
     }
 
     // V4

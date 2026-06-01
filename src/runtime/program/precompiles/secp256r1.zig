@@ -10,7 +10,7 @@ const FeatureSet = sig.core.FeatureSet;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const PrecompileProgramError = precompile_programs.PrecompileProgramError;
-const TransactionError = sig.ledger.transaction_status.TransactionError;
+const TransactionError = sig.core.transaction_error.TransactionError;
 const verifyPrecompiles = precompile_programs.verifyPrecompiles;
 const getInstructionData = precompile_programs.getInstructionData;
 

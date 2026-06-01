@@ -20,7 +20,7 @@ const SlotConstants = sig.core.SlotConstants;
 const Stakes = sig.core.Stakes;
 const StakesCache = sig.core.stakes.StakesCacheGeneric(.stake);
 
-const AccountSharedData = sig.runtime.AccountSharedData;
+const account_conversions = sig.runtime.account_conversions;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 const VoteStateV3 = sig.runtime.program.vote.state.VoteStateV3;
@@ -305,7 +305,7 @@ fn storeVoteAccountsPartitioned(
         // NOTE: Cloning should not be necessary here. Check and store only uses the account data to deserialise
         // the stake state and obtain the delegation and credits observed. This will be addressed during
         // transition to using stakes delegations deltas, so is acceptable for now.
-        var account_shared_data = try AccountSharedData.fromAccount(allocator, &account);
+        var account_shared_data = try account_conversions.fromAccount(allocator, &account);
         defer account_shared_data.deinit(allocator);
 
         account_shared_data.lamports = vote_reward.account.lamports;

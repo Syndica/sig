@@ -22,6 +22,7 @@ pub const stakes = @import("stakes.zig");
 pub const status_cache = @import("status_cache.zig");
 pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");
+pub const transaction_error = @import("transaction_error.zig");
 pub const epoch_tracker = @import("epoch_tracker.zig");
 
 /// TODO: Change EpochStakes to use EpochStakes(.stake) everywhere except in the `epoch_stakes` field
@@ -73,6 +74,7 @@ pub const SlotConstants = bank.SlotConstants;
 pub const SlotState = bank.SlotState;
 pub const StatusCache = status_cache.StatusCache;
 pub const Transaction = transaction.Transaction;
+pub const TransactionError = transaction_error.TransactionError;
 
 pub const Epoch = time.Epoch;
 pub const Slot = time.Slot;

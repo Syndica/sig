@@ -5351,7 +5351,7 @@ fn tokenAmountToUiAmount(arena: Allocator, amount: u64, decimals: u8) !JsonValue
         const divisor: f64 = std.math.pow(f64, 10.0, @floatFromInt(decimals));
         const ui_amount: f64 = @as(f64, @floatFromInt(amount)) / divisor;
         try obj.put("uiAmount", .{ .number_string = try exactFloat(arena, ui_amount) });
-        const ui_amount_str = try sig.runtime.spl_token.realNumberStringTrimmed(
+        const ui_amount_str = try sig.ledger.token_balances.realNumberStringTrimmed(
             arena,
             amount,
             decimals,

@@ -10,9 +10,6 @@ const Blake3 = std.crypto.hash.Blake3;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
-const ReservedAccounts = sig.core.ReservedAccounts;
-
-const LookupTableAccounts = sig.replay.resolve_lookup.LookupTableAccounts;
 
 const shortVecConfig = sig.bincode.shortvec.sliceConfig;
 
@@ -437,55 +434,6 @@ pub const Message = struct {
 
     pub fn isSigner(self: Message, index: usize) bool {
         return index < self.signature_count;
-    }
-
-    /// https://github.com/anza-xyz/solana-sdk/blob/5ff67c1a53c10e16689e377f98a92ba3afd6bb7c/message/src/versions/v0/loaded.rs#L118-L150
-    pub fn isWritable(
-        self: Message,
-        index: usize,
-        maybe_lookups: ?LookupTableAccounts,
-        reserved_accounts: *const ReservedAccounts,
-    ) bool {
-        const lookups = maybe_lookups orelse LookupTableAccounts{
-            .writable = &.{},
-            .readonly = &.{},
-        };
-        const pubkey = blk: {
-            if (index < self.account_keys.len) {
-                if (index >= self.signature_count) {
-                    // check if signed readable
-                    if (index >= self.account_keys.len - self.readonly_unsigned_count) return false;
-                } else {
-                    // check if unsigned readable
-                    if (index >= self.signature_count - self.readonly_signed_count) return false;
-                }
-                break :blk self.account_keys[index];
-            } else if (index < self.account_keys.len + lookups.writable.len) {
-                // lookups.writable
-                break :blk lookups.writable[index - self.account_keys.len];
-            } else {
-                // lookups.readable
-                return false;
-            }
-        };
-
-        const is_upgradeable_loader_present = blk: for ([_][]const Pubkey{
-            self.account_keys,
-            lookups.writable,
-            lookups.readonly,
-        }) |accounts| {
-            for (accounts) |account_key|
-                if (account_key.equals(&sig.runtime.program.bpf_loader.v3.ID))
-                    break :blk true;
-        } else false;
-
-        const is_key_called_as_program = for (self.instructions) |ixn| {
-            if (ixn.program_index == index) break true;
-        } else false;
-
-        const is_reserved = reserved_accounts.map.contains(pubkey);
-        const demote_program_id = is_key_called_as_program and !is_upgradeable_loader_present;
-        return !(is_reserved or demote_program_id);
     }
 
     /// Returns the serialized message as a bounded array.

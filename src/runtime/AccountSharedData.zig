@@ -87,38 +87,3 @@ pub fn resize(
         self.data = new_memory;
     }
 }
-
-/// Returns `self` as an account, without transferring ownership of the data.
-pub fn asAccount(self: AccountSharedData) sig.core.Account {
-    return .{
-        .lamports = self.lamports,
-        .data = .{ .unowned_allocation = self.data },
-        .owner = self.owner,
-        .executable = self.executable,
-        .rent_epoch = self.rent_epoch,
-    };
-}
-
-/// Returns `self` as an account, while transferring ownership of the data.
-pub fn toOwnedAccount(self: AccountSharedData) sig.core.Account {
-    return .{
-        .lamports = self.lamports,
-        .data = .{ .owned_allocation = self.data },
-        .owner = self.owner,
-        .executable = self.executable,
-        .rent_epoch = self.rent_epoch,
-    };
-}
-
-pub fn fromAccount(
-    allocator: std.mem.Allocator,
-    account: *const sig.core.Account,
-) !AccountSharedData {
-    return .{
-        .lamports = account.lamports,
-        .data = try account.data.readAllAllocate(allocator),
-        .owner = account.owner,
-        .executable = account.executable,
-        .rent_epoch = account.rent_epoch,
-    };
-}

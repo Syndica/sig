@@ -12,7 +12,7 @@ const Slot = sig.core.Slot;
 const Ancestors = sig.core.Ancestors;
 
 // StatusCache is only used with <Result<(), TransactionError>>
-const T = ?sig.ledger.transaction_status.TransactionError;
+const T = ?sig.core.transaction_error.TransactionError;
 
 const Fork = struct {
     slot: Slot,
@@ -646,7 +646,7 @@ test "status cache retains transaction errors for any-blockhash lookup" {
     defer ancestors.deinit(allocator);
 
     const borsh_io = try allocator.dupe(u8, "borsh io");
-    var tx_err: sig.ledger.transaction_status.TransactionError = .{
+    var tx_err: sig.core.transaction_error.TransactionError = .{
         .InstructionError = .{ 7, .{ .BorshIoError = borsh_io } },
     };
     defer tx_err.deinit(allocator);
@@ -692,7 +692,7 @@ test "status cache insert and retrieve with transaction error" {
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
-    const tx_err: sig.ledger.transaction_status.TransactionError = .AccountNotFound;
+    const tx_err: sig.core.transaction_error.TransactionError = .AccountNotFound;
     try status_cache.insert(allocator, random, &blockhash, &signature.toBytes(), 0, tx_err);
 
     const result = try status_cache.getFork(

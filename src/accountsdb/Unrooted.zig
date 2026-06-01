@@ -15,6 +15,7 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Ancestors = sig.core.Ancestors;
 const Account = sig.core.Account;
+const account_conversions = sig.runtime.account_conversions;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const PubkeyMap = sig.utils.collections.PubkeyMap;
 const ids = sig.runtime.ids;
@@ -157,7 +158,7 @@ pub fn getWithModifiedSlotOwned(
             continue;
         };
         return .{
-            .account = (try data.clone(allocator)).toOwnedAccount(),
+            .account = account_conversions.toOwnedAccount(try data.clone(allocator)),
             .modified_slot = best_slot,
         };
     }
@@ -216,7 +217,10 @@ pub fn getWithModifiedSlot(
         if (index.slot >= best_slot and ancestors.containsSlot(index.slot)) {
             n_gets += 1;
             const data = index.entries.get(address) orelse continue;
-            result = .{ .account = data.asAccount(), .modified_slot = index.slot };
+            result = .{
+                .account = account_conversions.asAccount(data),
+                .modified_slot = index.slot,
+            };
             best_slot = index.slot;
         }
     }
@@ -257,7 +261,7 @@ pub fn getByOwnerOwned(
             if (gop.found_existing and index.slot <= gop.value_ptr[0]) continue;
             if (gop.found_existing) gop.value_ptr[1].deinit(allocator);
 
-            const cloned = try acc.asAccount().cloneOwned(allocator);
+            const cloned = try account_conversions.asAccount(acc.*).cloneOwned(allocator);
             gop.value_ptr.* = .{ index.slot, cloned };
         }
     }
@@ -299,7 +303,7 @@ pub fn getBySplTokenOwner(
             if (gop.found_existing and index.slot <= gop.value_ptr[0]) continue;
             if (gop.found_existing) gop.value_ptr[1].deinit(allocator);
 
-            const cloned = try acc.asAccount().cloneOwned(allocator);
+            const cloned = try account_conversions.asAccount(acc.*).cloneOwned(allocator);
             gop.value_ptr.* = .{ index.slot, cloned };
         }
     }
