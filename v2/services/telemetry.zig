@@ -21,7 +21,6 @@ pub const ReadWrite = struct {
 };
 
 pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
-    _ = runner;
     _ = ro;
 
     const region = rw.region;
@@ -99,12 +98,17 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             const stderr = &stderr_fw.interface;
             defer stderr.flush() catch {};
             for (log_streams) |*log_stream| {
+                try runner.activity.signalIdleAfterNCalls(1000);
+                const log_messages_buffer = log_stream.swap_buffer.swap();
                 try api.log.streamLogs(.{
                     .output = stderr,
                     .service_name = log_stream.name.slice(),
-                    .log_messages_buffer = log_stream.swap_buffer.swap(),
+                    .log_messages_buffer = log_messages_buffer,
                     .filters = filters,
                 });
+                if (log_messages_buffer.len != 0) {
+                    try runner.activity.signalActive();
+                }
             }
             try stderr.flush();
         }
