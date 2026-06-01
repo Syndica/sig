@@ -162,9 +162,10 @@ pub fn build(b: *Build) !void {
             .use_llvm = true,
         });
         const sig_init_out = addExeOutputs(b, sig_init_exe, run_step, artifact_opts, .{});
-        install_step.dependOn(&sig_init_exe.step);
+        const sig_step = b.step("sig", "Build only the sig binary");
+        sig_step.dependOn(&sig_init_exe.step);
         if (sig_init_out.install) |install| {
-            install_step.dependOn(&install.step);
+            sig_step.dependOn(&install.step);
         }
         if (sig_init_out.run) |sig_init_run| {
             sig_init_run.addArgs(b.args orelse &.{});
@@ -312,6 +313,9 @@ fn addExeOutputs(
 ) ExeOutput {
     artifact_step.dependOn(&artifact.step);
 
+    const install_step = b.getInstallStep();
+    install_step.dependOn(&artifact.step);
+
     const install_opt = if (artifact_opts.no_bin)
         null
     else
@@ -320,6 +324,7 @@ fn addExeOutputs(
 
     if (install_opt) |install| {
         artifact_step.dependOn(&install.step);
+        install_step.dependOn(&install.step);
     }
 
     if (run_opt) |run| {
