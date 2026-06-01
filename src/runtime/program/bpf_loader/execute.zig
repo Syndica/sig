@@ -1348,10 +1348,6 @@ pub fn executeV3Upgrade(
         );
         defer program_account.release();
 
-        if (!program_account.account.executable) {
-            try ic.tc.log("Program account not executable", .{});
-            return InstructionError.AccountNotExecutable;
-        }
         if (!program_account.context.is_writable) {
             try ic.tc.log("Program account not writeable", .{});
             return InstructionError.InvalidArgument;
