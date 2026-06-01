@@ -38,7 +38,12 @@ comptime {
     @export(&hashInitMany, .{ .name = "sig_crypto_hash_init_many" });
 }
 
-fn hashExtend(self: *const Hash, data_ptr: [*]const u8, data_len: usize, out: *Hash) callconv(.c) void {
+fn hashExtend(
+    self: *const Hash,
+    data_ptr: [*]const u8,
+    data_len: usize,
+    out: *Hash,
+) callconv(.c) void {
     out.* = self.extend(data_ptr[0..data_len]);
 }
 comptime {
@@ -54,7 +59,12 @@ comptime {
 
 // -- Signature Exports (cryptographic) -- //
 
-fn sigVerify(self: *const Signature, pubkey: *const Pubkey, msg_ptr: [*]const u8, msg_len: usize) callconv(.c) bool {
+fn sigVerify(
+    self: *const Signature,
+    pubkey: *const Pubkey,
+    msg_ptr: [*]const u8,
+    msg_len: usize,
+) callconv(.c) bool {
     self.verify(pubkey, msg_ptr[0..msg_len]) catch return false;
     return true;
 }

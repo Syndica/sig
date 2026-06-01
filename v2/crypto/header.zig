@@ -15,13 +15,28 @@ const binkode = @import("binkode");
 // -- @extern declarations for cryptographic operations from sig-crypto -- //
 
 // Hash (cryptographic)
-const sig_crypto_hash_init = @extern(*const fn ([*]const u8, usize, *Hash) callconv(.c) void, .{ .name = "sig_crypto_hash_init" });
-const sig_crypto_hash_init_many = @extern(*const fn ([*]const [*]const u8, [*]const usize, usize, *Hash) callconv(.c) void, .{ .name = "sig_crypto_hash_init_many" });
-const sig_crypto_hash_extend = @extern(*const fn (*const Hash, [*]const u8, usize, *Hash) callconv(.c) void, .{ .name = "sig_crypto_hash_extend" });
-const sig_crypto_hash_repeated = @extern(*const fn (*const Hash, *Hash, usize) callconv(.c) void, .{ .name = "sig_crypto_hash_repeated" });
+const sig_crypto_hash_init = @extern(
+    *const fn ([*]const u8, usize, *Hash) callconv(.c) void,
+    .{ .name = "sig_crypto_hash_init" },
+);
+const sig_crypto_hash_init_many = @extern(
+    *const fn ([*]const [*]const u8, [*]const usize, usize, *Hash) callconv(.c) void,
+    .{ .name = "sig_crypto_hash_init_many" },
+);
+const sig_crypto_hash_extend = @extern(
+    *const fn (*const Hash, [*]const u8, usize, *Hash) callconv(.c) void,
+    .{ .name = "sig_crypto_hash_extend" },
+);
+const sig_crypto_hash_repeated = @extern(
+    *const fn (*const Hash, *Hash, usize) callconv(.c) void,
+    .{ .name = "sig_crypto_hash_repeated" },
+);
 
 // Signature (cryptographic)
-const sig_crypto_sig_verify = @extern(*const fn (*const Signature, *const Pubkey, [*]const u8, usize) callconv(.c) bool, .{ .name = "sig_crypto_sig_verify" });
+const sig_crypto_sig_verify = @extern(
+    *const fn (*const Signature, *const Pubkey, [*]const u8, usize) callconv(.c) bool,
+    .{ .name = "sig_crypto_sig_verify" },
+);
 
 // -- Types -- //
 
@@ -225,8 +240,17 @@ pub const Signature = extern struct {
 
     // -- Cryptographic operation (bridged to static library) -- //
 
-    pub fn verify(self: *const Signature, pubkey: *const Pubkey, message: []const u8) !void {
-        if (!sig_crypto_sig_verify(self, pubkey, message.ptr, message.len)) return error.InvalidSignature;
+    pub fn verify(
+        self: *const Signature,
+        pubkey: *const Pubkey,
+        message: []const u8,
+    ) !void {
+        if (!sig_crypto_sig_verify(
+            self,
+            pubkey,
+            message.ptr,
+            message.len,
+        )) return error.InvalidSignature;
     }
 
     // -- Non-crypto operations (implemented directly) -- //
