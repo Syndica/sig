@@ -485,16 +485,9 @@ pub fn createSyscallEffect(allocator: std.mem.Allocator, params: struct {
     registers: sig.vm.interpreter.RegisterMap = sig.vm.interpreter.RegisterMap.initFill(0),
     skip_input_data_regions: bool = false,
 }) !pb.SyscallEffects {
-    var log: std.ArrayList(u8) = .{};
-    defer log.deinit(allocator);
-    if (params.tc.log_collector) |log_collector| {
-        var iter = log_collector.iterator();
-        while (iter.next()) |msg| {
-            try log.appendSlice(allocator, msg);
-            try log.append(allocator, '\n');
-        }
-        if (log.items.len > 0) _ = log.pop();
-    }
+    // Protosol marks SyscallEffects field 8 (`log`) as `reserved`, i.e.
+    // conformance target no longer emits log output in the structured result
+    // [protosol] https://github.com/firedancer-io/protosol/commit/040c98bd6468fd6dc94ab18639c9db190c8c692b
 
     // When virtual_address_space_adjustments is enabled, Agave's cpi_common()
     // calls update_caller_account_region only after process_instruction succeeds
@@ -517,7 +510,6 @@ pub fn createSyscallEffect(allocator: std.mem.Allocator, params: struct {
         .stack = try allocator.dupe(u8, params.stack),
         .input_data_regions = input_data_regions,
         .frame_count = params.frame_count,
-        .log = try allocator.dupe(u8, log.items),
         .rodata = try allocator.dupe(u8, params.rodata),
         .r0 = params.registers.get(.r0),
         .r1 = params.registers.get(.r1),

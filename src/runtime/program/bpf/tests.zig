@@ -483,3 +483,65 @@ test "program_init_vm_not_enough_compute" {
         .{},
     );
 }
+
+// Regression test for the removal of the `provide_instruction_data_offset_in_vm_r2`
+// feature gate in `executeBpfProgram` (see `src/runtime/program/bpf_loader/execute.zig`).
+//
+// Agave 4.1.0-beta.1 unconditionally provides the instruction-data offset in r2,
+// so sig must always pass `serialized.instruction_data_offset` to `Vm.init`
+// regardless of feature-set activation. The bundled `r2_instruction_offset.so`
+// program reads `r2 - 8` to recover the instruction-data length and then echoes
+// the instruction-data via `sol_set_return_data`. If `r2` were ever zeroed
+// again (i.e. the feature gate re-introduced and inactive), this would dereference
+// an invalid address and the program would fail rather than producing the
+// expected return data.
+test "r2_instruction_offset_always_provided" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const elf_bytes = try std.fs.cwd().readFileAlloc(
+        allocator,
+        sig.ELF_DATA_DIR ++ "r2_instruction_offset.so",
+        MAX_FILE_BYTES,
+    );
+    defer allocator.free(elf_bytes);
+
+    // Intentionally omit `provide_instruction_data_offset_in_vm_r2` from the
+    // active feature set: r2 must still be populated with the instruction-data
+    // offset because the loader no longer gates that behavior on the feature.
+    const feature_params = &[_]FeatureParams{
+        .{ .feature = .enable_sbpf_v3_deployment_and_execution },
+    };
+
+    const program_account, const environment, const program_map = try prepareBpfV3Test(
+        allocator,
+        prng.random(),
+        elf_bytes,
+        feature_params,
+    );
+    defer allocator.free(program_account.data);
+
+    const instruction_data = "test_r2_offset";
+
+    try expectProgramExecuteResult(
+        allocator,
+        program_account.pubkey.?,
+        instruction_data,
+        &.{},
+        .{
+            .accounts = &.{program_account},
+            .compute_meter = 106,
+            .program_map = program_map,
+            .vm_environment = &environment,
+            .feature_set = feature_params,
+        },
+        .{
+            .accounts = &.{program_account},
+            .return_data = .{
+                .program_id = program_account.pubkey.?,
+                .data = instruction_data,
+            },
+        },
+        .{},
+    );
+}
