@@ -11,9 +11,8 @@ pub const Table = struct {
     seed: u64, // runtime-provided hashing seed (if wanting to help lower collision attacks)
     count: u64, // number of entries present in the table
     reducer: FastDiv, // for fast hash % entries.len
-    num_entries: u64,
-    mapped: []align(std.heap.page_size_min) u8,
     zero_entry: Entry, // special case for a valid zero pubkey
+    entries: []Entry,
 
     const Entry = extern struct {
         key: Key align(1),
@@ -37,40 +36,17 @@ pub const Table = struct {
         }
     };
 
-    pub fn init(seed: u64, memory_len: usize) !Table {
-        const num_entries = @divFloor(memory_len, @sizeOf(Entry));
+    pub fn init(seed: u64, memory: []u8) Table {
+        const num_entries = @divFloor(memory.len, @sizeOf(Entry));
         std.debug.assert(num_entries > 0);
-
-        const huge_page_size = 1 * 1024 * 1024 * 1024; // assume the max
-        const huge_page_aligned = std.mem.alignForward(
-            usize,
-            num_entries * @sizeOf(Entry),
-            huge_page_size,
-        );
-
-        // NOTE: memory should already be zeroed from mmap
-        const mapped = try std.posix.mmap(
-            null,
-            huge_page_aligned,
-            std.posix.PROT.READ | std.posix.PROT.WRITE,
-            .{ .TYPE = .PRIVATE, .ANONYMOUS = true, .HUGETLB = true, .POPULATE = true },
-            -1,
-            0,
-        );
-        errdefer std.posix.munmap(mapped);
 
         return .{
             .seed = seed,
             .count = 0,
             .reducer = .init(num_entries),
-            .num_entries = num_entries,
-            .mapped = mapped,
             .zero_entry = .{ .key = .ZEROES, .value = .empty, .slot = 0 },
+            .entries = @ptrCast(memory[0 .. num_entries * @sizeOf(Entry)]),
         };
-    }
-
-    pub fn deinit(self: *const Table) void {
-        std.posix.munmap(self.mapped);
     }
 
     // Number of hash map probes to do together with ILP to amortize DRAM cache-miss latency.
@@ -125,7 +101,7 @@ pub const Table = struct {
         batch.len = 0; // mark as flushed
 
         // table should never fill up fully (means it shouldve been given more memory)
-        const entries: []Entry = @ptrCast(self.mapped[0 .. self.num_entries * @sizeOf(Entry)]);
+        const entries: []Entry = self.entries;
         std.debug.assert(self.count + batch_len < entries.len);
 
         // phase-0: zero out unused batch items
@@ -205,7 +181,7 @@ pub const Table = struct {
             return self.zero_entry.value;
         }
 
-        const entries: []Entry = @ptrCast(self.mapped[0 .. self.num_entries * @sizeOf(Entry)]);
+        const entries: []Entry = self.entries;
         var ptr = entries.ptr + self.hashKeyToIndex(pubkey);
         while (true) {
             // load the entry values out
@@ -256,8 +232,8 @@ pub const Table = struct {
         acc ^= acc >> 32;
 
         // reduce into table index
-        const acc_mod_len = acc - (self.reducer.div(acc) * self.num_entries);
-        std.debug.assert(acc_mod_len < self.num_entries);
+        const acc_mod_len = acc - (self.reducer.div(acc) * self.entries.len);
+        std.debug.assert(acc_mod_len < self.entries.len);
         return acc_mod_len;
     }
 };

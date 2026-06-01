@@ -26,8 +26,8 @@ pub const ReadOnly = struct {
 };
 
 pub const ReadWrite = struct {
-    ready_snapshot_in: *SnapshotReadyRing,
     rooted_config: *RootedConfig,
+    ready_snapshot_in: *SnapshotReadyRing,
     account_pool: *AccountPool,
     replay_lookups: *AccountLookups,
     tel: *tel.Region,
@@ -60,7 +60,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         .from(logger),
         std.fs.cwd(),
         file_path,
-        rw.rooted_config.memory_len,
+        rw.rooted_config.memory[0..].ptr[0..rw.rooted_config.memory_len],
         rw.account_pool,
     );
     defer rooted.deinit();

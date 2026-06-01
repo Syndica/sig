@@ -320,7 +320,7 @@ pub const Region = union(enum) {
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
             .snapshot_config => @sizeOf(lib.snapshot.SnapshotConfig),
-            .accounts_db_config => @sizeOf(lib.accounts_db.RootedConfig),
+            .accounts_db_config => |params| @sizeOf(lib.accounts_db.RootedConfig) + params.memory,
 
             .net_to_shred,
             .net_to_gossip,
@@ -412,7 +412,7 @@ pub const Region = union(enum) {
                 }
             },
             .accounts_db_config => |params| {
-                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.RootedConfig));
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.RootedConfig) + params.memory);
                 const data: *lib.accounts_db.RootedConfig = @ptrCast(buf);
 
                 data.file_len = @intCast(params.file_path.len);

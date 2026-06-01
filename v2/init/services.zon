@@ -38,8 +38,8 @@
         .name = .accounts_db,
         .regions = .{
             .{ .name = .snapshot_config, .access = .readonly },
-            .{ .name = .ready_snapshot_in, .access = .rw },
             .{ .name = .rooted_config, .access = .rw },
+            .{ .name = .ready_snapshot_in, .access = .rw },
             .{ .name = .account_pool, .access = .rw },
             .{ .name = .replay_lookups, .access = .rw },
             .{ .name = .telemetry, .access = .rw },

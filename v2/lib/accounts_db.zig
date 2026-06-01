@@ -18,7 +18,9 @@ pub const Table = @import("accounts_db/table.zig").Table;
 pub const RootedConfig = extern struct {
     file_len: u32,
     file_path: [std.fs.max_path_bytes]u8,
+
     memory_len: usize,
+    memory: [0]u8, // VLA for [0..memory_len]
 };
 
 pub const AccountLookups = extern struct {
