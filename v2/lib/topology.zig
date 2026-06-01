@@ -512,37 +512,7 @@ pub fn Bind(
         /// Initialises the shared memory regions with their parameters, then securely starts up services.
         /// Blocks until the first service has exited, before dumping out traces.
         pub fn spawnAndWait(map: *const ServiceMap) !void {
-            const ExitMeta = struct {
-                id: unbound.ServiceId,
-                pid: i32,
-                exit: ?*lib.runner.Exit,
-            };
-
-            var exit_meta_buf: [schema.services.len]ExitMeta = undefined;
-            var exit_metas: std.ArrayList(ExitMeta) = .initBuffer(&exit_meta_buf);
-
-            // Start up all services, storing their pids
-            inline for (schema.services) |service_schema| {
-                const entry = map.entries.get(service_schema.name).?;
-                const child_pid = try spawnService(service_schema.name, .{
-                    .runner = entry.runner,
-                    .stderr = .stderr(),
-                    .regions = &entry.bindings,
-                });
-                exit_metas.appendAssumeCapacity(.{
-                    .id = service_schema.name,
-                    .pid = child_pid,
-                    .exit = null,
-                });
-            }
-
-            // We only mmap the exit regions after spawning the child processes, as we don't want them
-            // mapped in children
-            for (exit_metas.items) |*exit_meta| {
-                const entry = map.entries.get(exit_meta.id).?;
-                const runner = try entry.runner.mmapStaticSize(lib.runner.Region, .{});
-                exit_meta.exit = &runner.exit;
-            }
+            const sandboxed = try spawnSandboxed(map);
 
             // Wait for the first child to exit
             var status: u32 = 0;
@@ -552,16 +522,136 @@ pub fn Bind(
                 break :pid @intCast(ret);
             };
 
-            const exited_meta = for (exit_metas.items) |exit_meta| {
-                if (exit_meta.pid == exited_pid) break exit_meta;
+            const meta: Sandboxed.Meta = for (sandboxed.metas()) |meta| {
+                if (meta.pid == exited_pid) break meta;
             } else std.debug.panic("Unknown child pid {} exited\n", .{exited_pid});
 
             dumpOnExit(
-                exited_meta.exit.?,
-                exited_meta.id,
-                exited_meta.pid,
+                &meta.runner.exit,
+                meta.id,
+                meta.pid,
                 status,
             );
+        }
+
+        pub fn spawnAndWaitNoSandbox(map: *const ServiceMap) !void {
+            var state: NoSandbox = undefined;
+            try spawnNoSandbox(&state, map);
+
+            // Wait for first service to exit
+            state.thread_exit_ctx.reset_event.wait();
+
+            const exited_idx = state.thread_exit_ctx.finished_idx.load(.seq_cst);
+            std.debug.assert(exited_idx != std.math.maxInt(u16));
+
+            const exited_runner_memfd = map.entries.get(@enumFromInt(exited_idx)).?.runner;
+            const exited_runner = try exited_runner_memfd.mmapStaticSize(lib.runner.Region, .{});
+            const exited_service_id: unbound.ServiceId = @enumFromInt(exited_idx);
+            dumpOnExit(
+                &exited_runner.exit,
+                exited_service_id,
+                0,
+                0,
+            );
+        }
+
+        fn dumpOnExit(
+            meta: *lib.runner.Exit,
+            service: unbound.ServiceId,
+            pid: i32,
+            status: u32,
+        ) void {
+            if (meta.panicMsg()) |panic_msg| {
+                std.log.err(
+                    "Service `{t}` (pid: {}) panicked with message: {s}",
+                    .{ service, pid, panic_msg },
+                );
+            }
+            if (meta.errorName()) |error_string| {
+                std.log.err(
+                    "Service `{t}` (pid: {}) exited with error: {s}",
+                    .{ service, pid, error_string },
+                );
+            }
+            if (meta.faultMsg()) |fault_msg| {
+                std.log.err(
+                    "Service `{t}` (pid: {}) faulted with message: {s}",
+                    .{ service, pid, fault_msg },
+                );
+            }
+
+            if (linux.W.TERMSIG(status) != 0) {
+                std.log.err(
+                    "Service `{t}` (pid: {}) exited from signal {}",
+                    .{ service, pid, linux.W.TERMSIG(status) },
+                );
+            }
+
+            if (meta.errorReturnStackTrace()) |trace| {
+                std.log.err("Error trace:", .{});
+                std.debug.dumpStackTrace(trace);
+            }
+
+            if (meta.stackTrace()) |trace| {
+                std.log.err("Stack trace:", .{});
+                std.debug.dumpStackTrace(trace);
+            }
+
+            if (meta.faultStackTrace()) |trace| {
+                std.log.err("Fault trace:", .{});
+                std.debug.dumpStackTrace(trace);
+            }
+        }
+
+        // -- Sandboxed -- //
+
+        pub const Sandboxed = struct {
+            meta_buf: [schema.services.len]Meta,
+            meta_len: usize,
+
+            pub fn metas(self: *const Sandboxed) []const Meta {
+                return self.meta_buf[0..self.meta_len];
+            }
+
+            pub const Meta = struct {
+                id: unbound.ServiceId,
+                pid: i32,
+                runner: *lib.runner.Region,
+            };
+        };
+
+        pub fn spawnSandboxed(map: *const ServiceMap) !Sandboxed {
+            var meta_buf: [schema.services.len]Sandboxed.Meta = undefined;
+            var metas: std.ArrayList(Sandboxed.Meta) = .initBuffer(&meta_buf);
+
+            // Start up all services, storing their pids
+            inline for (schema.services) |service_schema| {
+                const entry = map.entries.get(service_schema.name).?;
+                const child_pid = try spawnService(service_schema.name, .{
+                    .runner = entry.runner,
+                    .stderr = .stderr(),
+                    .regions = &entry.bindings,
+                });
+                metas.appendAssumeCapacity(.{
+                    .id = service_schema.name,
+                    .pid = child_pid,
+                    // initialized below
+                    .runner = undefined,
+                });
+            }
+
+            // We only mmap the exit regions after spawning the child processes, as we don't want them
+            // mapped in children
+            for (metas.items) |*exit_meta| {
+                const entry = map.entries.get(exit_meta.id).?;
+                const runner = try entry.runner.mmapStaticSize(lib.runner.Region, .{});
+                exit_meta.runner = runner;
+            }
+
+            return .{
+                .meta_buf = meta_buf,
+                .meta_len = metas.items.len,
+            };
         }
 
         fn spawnService(
@@ -701,61 +791,22 @@ pub fn Bind(
             }
         }
 
-        fn dumpOnExit(
-            meta: *lib.runner.Exit,
-            service: unbound.ServiceId,
-            pid: i32,
-            status: u32,
-        ) void {
-            if (meta.panicMsg()) |panic_msg| {
-                std.log.err(
-                    "Service `{t}` (pid: {}) panicked with message: {s}",
-                    .{ service, pid, panic_msg },
-                );
-            }
-            if (meta.errorName()) |error_string| {
-                std.log.err(
-                    "Service `{t}` (pid: {}) exited with error: {s}",
-                    .{ service, pid, error_string },
-                );
-            }
-            if (meta.faultMsg()) |fault_msg| {
-                std.log.err(
-                    "Service `{t}` (pid: {}) faulted with message: {s}",
-                    .{ service, pid, fault_msg },
-                );
-            }
+        // -- No Sandbox -- //
 
-            if (linux.W.TERMSIG(status) != 0) {
-                std.log.err(
-                    "Service `{t}` (pid: {}) exited from signal {}",
-                    .{ service, pid, linux.W.TERMSIG(status) },
-                );
-            }
+        pub const NoSandbox = struct {
+            thread_exit_ctx: ThreadExitContext,
+        };
 
-            if (meta.errorReturnStackTrace()) |trace| {
-                std.log.err("Error trace:", .{});
-                std.debug.dumpStackTrace(trace);
-            }
-
-            if (meta.stackTrace()) |trace| {
-                std.log.err("Stack trace:", .{});
-                std.debug.dumpStackTrace(trace);
-            }
-
-            if (meta.faultStackTrace()) |trace| {
-                std.log.err("Fault trace:", .{});
-                std.debug.dumpStackTrace(trace);
-            }
-        }
-
-        pub fn spawnAndWaitNoSandbox(map: *const ServiceMap) !void {
-            var reset_event: std.Thread.ResetEvent = .{};
-            var finished_service_idx: std.atomic.Value(u16) = .init(std.math.maxInt(u16));
-
-            const thread_exit_ctx: ThreadExitContext = .{
-                .finished_idx = &finished_service_idx,
-                .reset_event = &reset_event,
+        pub fn spawnNoSandbox(
+            /// Will be overwritten after this call, and should be treated as a stable memory location thereafter.
+            state: *NoSandbox,
+            map: *const ServiceMap,
+        ) !void {
+            state.* = .{
+                .thread_exit_ctx = .{
+                    .finished_idx = .init(std.math.maxInt(u16)),
+                    .reset_event = .{},
+                },
             };
 
             // Start up all services, storing their pids
@@ -766,59 +817,9 @@ pub fn Bind(
                     .stderr = .stderr(),
                     .regions = &map.entries.get(service_entry.name).?.bindings,
                     .service_idx = i,
-                    .thread_exit_ctx = &thread_exit_ctx,
+                    .thread_exit_ctx = &state.thread_exit_ctx,
                 });
             }
-
-            // Wait for first service to exit
-            reset_event.wait();
-
-            const exited_idx = finished_service_idx.load(.seq_cst);
-            std.debug.assert(exited_idx != std.math.maxInt(u16));
-
-            const exited_runner_memfd = map.entries.get(@enumFromInt(exited_idx)).?.runner;
-            const exited_runner = try exited_runner_memfd.mmapStaticSize(lib.runner.Region, .{});
-            const exited_service_id: unbound.ServiceId = @enumFromInt(exited_idx);
-            dumpOnExit(
-                &exited_runner.exit,
-                exited_service_id,
-                0,
-                0,
-            );
-        }
-
-        /// Context created by the service initializer, used to report thread exit or crash and wake the
-        /// main thread. Services receive it as opaque data and must not inspect it.
-        const ThreadExitContext = struct {
-            finished_idx: *std.atomic.Value(u16),
-            reset_event: *std.Thread.ResetEvent,
-        };
-
-        fn signalThreadExit(service_idx: u16, ctx: *const ThreadExitContext) void {
-            ctx.finished_idx.store(service_idx, .seq_cst);
-            ctx.reset_event.set();
-        }
-
-        // Called by service threads in no-sandbox mode. Uses C calling convention because the function
-        // pointer crosses service/init compilation units.
-        fn signalThreadCrash(ctx: ?*const anyopaque, service_idx: u16) callconv(.c) void {
-            const thread_ctx: *const ThreadExitContext = @ptrCast(@alignCast(ctx orelse return));
-            signalThreadExit(service_idx, thread_ctx);
-        }
-
-        fn threadEntry(
-            entry_point: ServiceEntrypoint,
-            service: unbound.ServiceId,
-            args: lib.ipc.ResolvedArgs,
-            service_idx: u16,
-            thread_exit_ctx: *const ThreadExitContext,
-        ) void {
-            switch (service) {
-                inline else => |svc| tracy.setThreadName("svc: " ++ @tagName(svc)),
-            }
-
-            entry_point(args);
-            signalThreadExit(service_idx, thread_exit_ctx);
         }
 
         fn spawnServiceNoSandbox(
@@ -828,7 +829,7 @@ pub fn Bind(
                 stderr: std.fs.File,
                 regions: *const ServiceMap.Entry.Bindings,
                 service_idx: u16,
-                thread_exit_ctx: *const ThreadExitContext,
+                thread_exit_ctx: *ThreadExitContext,
             },
         ) !std.Thread {
             var resolved_args = try resolveArgs(.{
@@ -851,6 +852,40 @@ pub fn Bind(
                     params.thread_exit_ctx,
                 },
             );
+        }
+
+        /// Context created by the service initializer, used to report thread exit or crash and wake the
+        /// main thread. Services receive it as opaque data and must not inspect it.
+        const ThreadExitContext = struct {
+            finished_idx: std.atomic.Value(u16),
+            reset_event: std.Thread.ResetEvent,
+
+            fn signalThreadExit(self: *ThreadExitContext, service_idx: u16) void {
+                self.finished_idx.store(service_idx, .seq_cst);
+                self.reset_event.set();
+            }
+        };
+
+        fn threadEntry(
+            entry_point: ServiceEntrypoint,
+            service: unbound.ServiceId,
+            args: lib.ipc.ResolvedArgs,
+            service_idx: u16,
+            thread_exit_ctx: *ThreadExitContext,
+        ) void {
+            switch (service) {
+                inline else => |svc| tracy.setThreadName("svc: " ++ @tagName(svc)),
+            }
+
+            entry_point(args);
+            thread_exit_ctx.signalThreadExit(service_idx);
+        }
+
+        // Called by service threads in no-sandbox mode. Uses C calling convention because the function
+        // pointer crosses service/init compilation units.
+        fn signalThreadCrash(ctx: ?*anyopaque, service_idx: u16) callconv(.c) void {
+            const thread_exit_ctx: *ThreadExitContext = @ptrCast(@alignCast(ctx orelse return));
+            thread_exit_ctx.signalThreadExit(service_idx);
         }
     };
 }
