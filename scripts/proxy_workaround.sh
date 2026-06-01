@@ -31,20 +31,20 @@ do_fetch() {
         fi
         hash=`grep -m 1 -A 1 "$d" $1 | grep hash |  awk -F \" '{print $(NF-1)}'`
         if [ -z "$hash" ]; then
-          forceupdate_dep=true
+            forceupdate_dep=true
         else
-          forceupdate_dep=$forceupdate
+            forceupdate_dep=$forceupdate
         fi
         if ! $forceupdate_dep && [ -e ~/.cache/zig/p/$hash ]; then
-          echo ">>> Found $url in cache, skipping download"
+            echo ">>> Found $url in cache, skipping download"
         else
-          echo ">>> Downloading $url"
-          wget $url
-          tarfile=${url##*/}
-          hash=`$zig_path fetch --debug-hash $tarfile | tail -n 1`
-          echo ">> hash of $d:"
-          echo -e "\t$hash"
-          rm $tarfile
+            echo ">>> Downloading $url"
+            wget $url
+            tarfile=${url##*/}
+            hash=`$zig_path fetch --debug-hash $tarfile | tail -n 1`
+            echo ">> hash of $d:"
+            echo -e "\t$hash"
+            rm $tarfile
         fi
         # Always recurse into nested zon so transitive (including lazy)
         # dependencies are pre-fetched even on cache hits.
