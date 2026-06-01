@@ -20,11 +20,11 @@ pub const ResolvedArgs = extern struct {
 
     /// Opaque context created by the service initializer. Services must not inspect it, only pass it
     /// back to `thread_crash_fn`.
-    thread_crash_ctx: ?*const anyopaque,
+    thread_crash_ctx: ?*anyopaque,
     thread_crash_fn: ?ThreadCrashFn,
     service_idx: u16,
 
-    pub const ThreadCrashFn = *const fn (?*const anyopaque, u16) callconv(.c) void;
+    pub const ThreadCrashFn = *const fn (?*anyopaque, u16) callconv(.c) void;
     pub const max_regions = 8; // chosen arbitrarily
     const page_size_min = std.heap.page_size_min;
 };
