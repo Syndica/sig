@@ -120,6 +120,14 @@ pub fn Ring(N: comptime_int, T: type) type {
                 const Self = @This();
                 const Ptr = if (side == .reader) *const T else *T;
 
+                // For reader, returns if more items can be read.
+                // For writer, returns if any items have been writte.
+                pub fn pending(self: *Self) bool {
+                    const buf = self.view.getBuffer() orelse return false;
+                    const n = if (side == .reader) buf.len else N - buf.len;
+                    return n > 0;
+                }
+
                 /// Returns a pointer to the next item to consume on this side of the ring buffer.
                 pub fn peek(self: *Self) ?Ptr {
                     const buf = self.view.getBuffer() orelse return null;

@@ -167,7 +167,7 @@ pub fn FileWriter(
             const buf_len = block_size - data.written;
             sqe.prep_write(
                 self.file.handle,
-                self.buffer[buf_offset ..][0..buf_len],
+                self.buffer[buf_offset..][0..buf_len],
                 @as(u64, data.disk_block) * block_size + data.written,
             );
             sqe.user_data = @bitCast(data);

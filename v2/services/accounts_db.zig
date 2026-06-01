@@ -22,22 +22,22 @@ pub const panic = start.panic;
 pub const std_options = start.options;
 
 pub const ReadOnly = struct {
-    snapshot_config: *const SnapshotConfig,
+    rooted_config: *const RootedConfig,
 };
 
 pub const ReadWrite = struct {
     ready_snapshot_in: *SnapshotReadyRing,
-    rooted_config: *RootedConfig,
+    rooted_lookups: *lib.accounts_db.TableLookups,
     account_pool: *AccountPool,
     replay_lookups: *AccountLookups,
     tel: *tel.Region,
 };
 
-pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
 
-    const file_path = rw.rooted_config.file_path[0..rw.rooted_config.file_len];
+    const file_path = ro.rooted_config.file_path[0..ro.rooted_config.file_len];
     logger.info().logf("accounts_db started into file: {s}", .{file_path});
 
     const Global = struct {
@@ -56,7 +56,7 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
         .from(logger),
         std.fs.cwd(),
         file_path,
-        rw.rooted_config.memory_len,
+        rw.rooted_lookups,
         rw.account_pool,
     );
     defer rooted.deinit();
@@ -64,7 +64,7 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     var in = rw.ready_snapshot_in.getView(.reader);
     defer in.close();
 
-    if (rooted.table.count == 0) {
+    if (rooted.table_lookups.count.load(.monotonic) == 0) {
         logger.info().logf("no existing rooted db. waiting for ready snapshot", .{});
 
         var fba = std.heap.FixedBufferAllocator.init(&Global.fba_memory);
@@ -158,7 +158,7 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     var replay_out = rw.replay_lookups.out.get(.writer);
     while (true) : (std.atomic.spinLoopHint()) {
         if (replay_in.peek()) |pubkey| {
-            if (try rooted.queueRead(.from(logger), pubkey)) {
+            if (try rooted.queueRead(pubkey)) {
                 _ = replay_in.next();
                 replay_in.markUsed();
             }

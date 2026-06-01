@@ -116,16 +116,13 @@ pub const Table = struct {
     }
 
     pub fn flushPuts(noalias self: *Table, noalias batch: *PutBatch) void {
-        const zone = tracy.Zone.init(@src(), .{ .name = "Table.flushPuts" });
-        defer zone.deinit();
-
         const batch_len = batch.len;
         std.debug.assert(batch_len <= PARALLEL_SCAN);
         if (batch_len == 0) return;
         batch.len = 0; // mark as flushed
 
         // table should never fill up fully (means it shouldve been given more memory)
-        const entries: []Entry = @ptrCast(self.mapped[0 .. self.num_entries * @sizeOf(Entry)]);
+        const entries: []Entry = @ptrCast(self.mapped[0..self.num_entries * @sizeOf(Entry)]);
         std.debug.assert(self.count + batch_len < entries.len);
 
         // phase-0: zero out unused batch items
@@ -143,7 +140,7 @@ pub const Table = struct {
             const pubkey: Pubkey = @bitCast(item_keys[i]);
             ptrs[i] = entries.ptr + self.hashKeyToIndex(&pubkey);
         }
-
+        
         // phase-2: parallel-loads of entries
         var keys: [PARALLEL_SCAN]@Vector(32, u8) = undefined;
         for (0..PARALLEL_SCAN) |i| {
@@ -175,7 +172,7 @@ pub const Table = struct {
         for (0..PARALLEL_SCAN) |i| {
             const item_slot = batch.items[i].slot;
             const newer_slot = @intFromBool(item_slot >= ptrs[i][0].slot);
-
+            
             const item_key: Pubkey = @bitCast(item_keys[i]);
             const valid = @intFromBool(!item_key.isZeroed());
 
@@ -183,12 +180,7 @@ pub const Table = struct {
             const was_empty = @intFromBool(ptrs[i][0].key.isZeroed());
             self.count += overwrite & was_empty;
 
-            var dst = if (overwrite > 0) &ptrs[i][0] else &stub;
-            asm volatile (""
-                : [_] "=r" (dst),
-                : [_] "r" (dst),
-            ); // hide from compiler to not branch
-
+            const dst = if (overwrite > 0) &ptrs[i][0] else &stub;
             dst.* = .{
                 .key = item_key,
                 .slot = item_slot,
@@ -205,7 +197,7 @@ pub const Table = struct {
             return self.zero_entry.value;
         }
 
-        const entries: []Entry = @ptrCast(self.mapped[0 .. self.num_entries * @sizeOf(Entry)]);
+        const entries: []Entry = @ptrCast(self.mapped[0..self.num_entries * @sizeOf(Entry)]);
         var ptr = entries.ptr + self.hashKeyToIndex(pubkey);
         while (true) {
             // load the entry values out
@@ -239,12 +231,12 @@ pub const Table = struct {
             0xdb979083e96dd4de,
             0x1f67b3b7a4a44072,
         };
-
+        
         // XXH3_mix16B
         const in: [4]u64 = @bitCast(pubkey.*);
         const a: [2]u64 = @bitCast(@as(u128, in[0] ^ (sk[0] +% sd)) * (in[1] ^ (sk[1] -% sd)));
         const b: [2]u64 = @bitCast(@as(u128, in[2] ^ (sk[2] +% sd)) * (in[3] ^ (sk[3] -% sd)));
-
+        
         // XXH3_len_17to128_64b
         var acc = @as(u64, 0x9E3779B185EBCA87) *% 32;
         acc +%= a[0] ^ a[1];
@@ -261,3 +253,4 @@ pub const Table = struct {
         return acc_mod_len;
     }
 };
+

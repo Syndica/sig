@@ -137,6 +137,7 @@ pub fn main() !void {
         .{ .service = .shred_receiver },
         .{ .service = .snapshot },
         .{ .service = .accounts_db },
+        .{ .service = .rooted_table },
         .{ .service = .replay },
         .{ .service = .telemetry },
     };
@@ -175,6 +176,8 @@ pub fn main() !void {
         .gossip_source_to_snapshot = {},
         // snapshot -> accounts_db
         .snapshot_ready_to_accounts_db = {},
+        // rooted_table <-> accounts_db
+        .rooted_lookups = {},
         // pool <-> { accounts_db, replay }
         .account_pool = .{ .memory = config.accounts_db.unrooted.toBytes() },
 
@@ -218,11 +221,11 @@ const topology_schema: lib.TopologySchema = .{
 pub const topology = topology_schema.Bind(Region, .init(.{
     .gossip_config = .initOne(.@"gossip:config"),
     .shred_recv_config = .initOne(.@"shred_receiver:config"),
-    .accounts_db_config = .initOne(.@"accounts_db:rooted_config"),
-    .snapshot_config = .initMany(&.{
-        .@"snapshot:config",
-        .@"accounts_db:snapshot_config",
+    .accounts_db_config = .initMany(&.{
+        .@"accounts_db:rooted_config",
+        .@"rooted_table:rooted_config",
     }),
+    .snapshot_config = .initOne(.@"snapshot:config"),
 
     .net_to_shred = .initMany(&.{
         .@"net:to_shred",
@@ -240,6 +243,10 @@ pub const topology = topology_schema.Bind(Region, .init(.{
     .snapshot_ready_to_accounts_db = .initMany(&.{
         .@"snapshot:ready_snapshot_out",
         .@"accounts_db:ready_snapshot_in",
+    }),
+    .rooted_lookups = .initMany(&.{
+        .@"rooted_table:rooted_lookups",
+        .@"accounts_db:rooted_lookups",
     }),
     .account_pool = .initMany(&.{
         .@"accounts_db:account_pool",
@@ -262,6 +269,7 @@ pub const topology = topology_schema.Bind(Region, .init(.{
         .@"shred_receiver:telemetry",
         .@"snapshot:telemetry",
         .@"accounts_db:telemetry",
+        .@"rooted_table:telemetry",
         .@"replay:telemetry",
     }),
 }));
@@ -293,6 +301,7 @@ pub const Region = union(enum) {
 
     gossip_source_to_snapshot,
     snapshot_ready_to_accounts_db,
+    rooted_lookups,
     account_pool: struct { memory: usize },
 
     shreds_to_replay,
@@ -328,6 +337,7 @@ pub const Region = union(enum) {
 
             .gossip_source_to_snapshot => @sizeOf(lib.snapshot.SnapshotSourceRing),
             .snapshot_ready_to_accounts_db => @sizeOf(lib.snapshot.SnapshotReadyRing),
+            .rooted_lookups => @sizeOf(lib.accounts_db.TableLookups),
             .account_pool => |params| @sizeOf(lib.accounts_db.AccountPool) + params.memory,
 
             .shreds_to_replay => @sizeOf(lib.shred.DeshredRing),
@@ -433,6 +443,11 @@ pub const Region = union(enum) {
             .snapshot_ready_to_accounts_db => {
                 std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotReadyRing));
                 const data: *lib.snapshot.SnapshotReadyRing = @ptrCast(buf);
+                data.init();
+            },
+            .rooted_lookups => {
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.TableLookups));
+                const data: *lib.accounts_db.TableLookups = @ptrCast(buf);
                 data.init();
             },
             .account_pool => |params| {

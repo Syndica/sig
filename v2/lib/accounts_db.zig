@@ -10,6 +10,7 @@ comptime {
 }
 
 const Pubkey = lib.solana.Pubkey;
+const Slot = lib.solana.Slot;
 
 pub const AccountPool = @import("accounts_db/pool.zig").AccountPool;
 pub const Rooted = @import("accounts_db/rooted.zig").Rooted;
@@ -19,6 +20,31 @@ pub const RootedConfig = extern struct {
     file_len: u32,
     file_path: [std.fs.max_path_bytes]u8,
     memory_len: usize,
+};
+
+pub const TableLookups = extern struct {
+    count: std.atomic.Value(u64),
+    put: lib.ipc.Ring(put_cap, Request),
+    get: extern struct {
+        in: lib.ipc.Ring(get_cap, Pubkey),
+        out: lib.ipc.Ring(get_cap, Table.Value),
+    },
+
+    const put_cap = 1 * 1024 * 1024;
+    const get_cap = 256;
+
+    pub const Request = extern struct {
+        pubkey: Pubkey,
+        slot: Slot,
+        value: Table.Value,
+    };
+
+    pub fn init(self: *TableLookups) void {
+        self.count = .init(0);
+        self.put.init();
+        self.get.in.init();
+        self.get.out.init();
+    }
 };
 
 pub const AccountLookups = extern struct {

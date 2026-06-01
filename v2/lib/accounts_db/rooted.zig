@@ -10,6 +10,7 @@ const FileReader = lib.fio.FileReader;
 const Table = lib.accounts_db.Table;
 const AccountPool = lib.accounts_db.AccountPool;
 const AccountLookups = lib.accounts_db.AccountLookups;
+const TableLookups = lib.accounts_db.TableLookups;
 
 const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
@@ -18,15 +19,16 @@ const Epoch = lib.solana.Epoch;
 /// The rooted database stores data on disk in the form of [journal][ring of sector data].
 /// TODO: The ring aspect is not implemented, so for now it grows indefinitely.
 pub const Rooted = struct {
-    table: Table,
-    put_batch: Table.PutBatch,
+    table_lookups: *TableLookups,
+    table_putter: @FieldType(TableLookups, "put").Iterator(.writer),
 
     buffered_file: std.fs.File,
     ring: std.os.linux.IoUring,
     account_pool: *AccountPool,
 
-    ready_lookups: LookupIndex,
-    free_lookups: LookupIndex,
+    free_lookups: LookupList,
+    get_lookups: LookupList,
+    ready_lookups: LookupList,
     lookup_nodes: [max_active_lookups]LookupNode,
 
     journal: Journal,
@@ -53,6 +55,35 @@ pub const Rooted = struct {
             sector: SectorHeader align(1),
             meta: AccountMeta align(1),
         },
+    };
+    const LookupList = struct {
+        head: LookupIndex = invalid_lookup_index,
+        tail: LookupIndex = invalid_lookup_index,
+
+        fn push(self: *LookupList, nodes: []LookupNode, idx: LookupIndex) void {
+            const node = &nodes[idx];
+            node.next = invalid_lookup_index;
+
+            if (self.head == invalid_lookup_index) {
+                self.head = idx;
+                self.tail = idx;
+            } else {
+                std.debug.assert(self.tail != invalid_lookup_index);
+                nodes[self.tail].next = idx;
+                self.tail = idx;
+            }
+        }
+
+        fn peek(self: *const LookupList) ?LookupIndex {
+            return if (self.head == invalid_lookup_index) null else self.head;
+        }
+
+        fn pop(self: *LookupList, nodes: []LookupNode) ?LookupIndex {
+            const idx = self.peek() orelse return null;
+            self.head = nodes[idx].next;
+            if (self.head == invalid_lookup_index) self.tail = invalid_lookup_index;
+            return idx;
+        }
     };
 
     // Put any static metadata in here
@@ -81,14 +112,11 @@ pub const Rooted = struct {
         logger: tel.Logger("Rooted.init"),
         dir: std.fs.Dir,
         path: []const u8,
-        table_memory_len: usize,
+        table_lookups: *TableLookups,
         account_pool: *AccountPool,
     ) !void {
-        const seed: u64 = 0; // TODO: maybe in RootedConfig?
-        self.put_batch = .empty;
-
-        self.table = try .init(seed, table_memory_len);
-        errdefer self.table.deinit();
+        self.table_lookups = table_lookups;
+        self.table_putter = self.table_lookups.put.get(.writer);
 
         self.journal = .empty;
         open_existing: {
@@ -139,10 +167,13 @@ pub const Rooted = struct {
 
         self.account_pool = account_pool;
 
-        self.ready_lookups = invalid_lookup_index; // empty
-        self.free_lookups = 0; // linked-list of free_lookups
-        for (&self.lookup_nodes, 0..) |*node, i| {
-            node.next = @intCast(i + 1);
+        self.free_lookups = .{};
+        self.get_lookups = .{};
+        self.ready_lookups = .{};
+
+        // populate free_lookups list with all the nodes
+        for (0..self.lookup_nodes.len) |i| {
+            self.free_lookups.push(&self.lookup_nodes, @intCast(i));
         }
     }
 
@@ -151,7 +182,6 @@ pub const Rooted = struct {
         self.buffered_file.close();
         self.io.writer.file.close();
         self.io.writer.deinit();
-        self.table.deinit();
     }
 
     const SectorHeader = packed struct(u64) {
@@ -276,11 +306,19 @@ pub const Rooted = struct {
                     n_bytes_read += @sizeOf(AccountMeta) + acc_info.data_len;
 
                     // put() into rooted
+                    const put_req = while (true) : (std.atomic.spinLoopHint())
+                        break self.table_putter.next() orelse continue;
+                    put_req.* = .{
+                        .pubkey = acc.pubkey,
+                        .slot = acc.slot,
+                        .value = .{
+                            .offset = @intCast(file_offset),
+                            .len = @intCast(acc_info.data_len),
+                        },
+                    };
+                    self.table_putter.markUsed();
+
                     self.journal.committed_slot = @max(self.journal.committed_slot, acc.slot);
-                    self.table.put(&self.put_batch, &acc.pubkey, acc.slot, .{
-                        .offset = @intCast(file_offset),
-                        .len = @intCast(acc_info.data_len),
-                    });
                     n_puts += 1;
                 },
                 _ => return error.InvalidSector,
@@ -306,8 +344,12 @@ pub const Rooted = struct {
             }
         }
 
-        self.table.flushPuts(&self.put_batch);
-        logger.info().logf("loaded rooted db: {} accounts", .{self.table.count});
+        // wait for table writes to finish
+        while (self.table_putter.pending()) std.atomic.spinLoopHint();
+
+        logger.info().logf("loaded rooted db: {} accounts", .{
+            self.table_lookups.count.load(.monotonic),
+        });
     }
 
     fn readExisting(
@@ -339,10 +381,12 @@ pub const Rooted = struct {
         var timer = try std.time.Timer.start();
         var n_puts: usize = 0;
         var n_transfer: usize = 0;
+        var n_table: u64 = 0;
+
         while (try snapshot_iter.next()) |acc| {
             n_puts += 1;
             n_transfer += @sizeOf(AccountMeta) + @sizeOf(SectorHeader) + acc.data.len;
-            try self.put(
+            n_table += try self.put(
                 .from(logger),
                 acc.slot,
                 acc.pubkey,
@@ -358,24 +402,28 @@ pub const Rooted = struct {
             if (elapsed_ns >= std.time.ns_per_s) {
                 timer.reset();
                 logger.info().logf(
-                    "wrote {} accounts (queued:{B:.4}, flushed:{B:.4}) in {D:.0} (io-stall:{D:.0})",
+                    "wrote {} accounts (queued:{B:.4}, flushed:{B:.4}) in {D:.0} (table:{D:.2}, io-stall:{D:.0})",
                     .{
                         n_puts,
                         n_transfer,
                         self.io.writer.io_transferred,
                         elapsed_ns,
+                        n_table / n_puts,
                         self.io.writer.io_stalled,
                     },
                 );
                 n_puts = 0;
                 n_transfer = 0;
+                n_table =0 ;
                 self.io.writer.io_transferred = 0;
                 self.io.writer.io_stalled = 0;
             }
         }
 
         try self.commitTransaction(.from(logger));
-        logger.info().logf("populated from snapshot: {} accounts", .{self.table.count});
+        logger.info().logf("populated from snapshot: {} accounts", .{
+            self.table_lookups.count.load(.monotonic),
+        });
     }
 
     pub fn beginTransaction(
@@ -433,16 +481,26 @@ pub const Rooted = struct {
         executable: bool,
         data_len: usize,
         data_reader: anytype, // anything with a std.Io.Reader.readSliceAll API
-    ) !void {
+    ) !u64 {
         std.debug.assert(self.journal.state == .writing);
         std.debug.assert(data_len <= 10 * 1024 * 1024);
         std.debug.assert(rent_epoch != std.math.maxInt(SectorHeader.SmallEpoch));
 
-        const offset = self.io.writer.getOffset();
-        self.table.put(&self.put_batch, &pubkey, slot, .{
-            .offset = @intCast(offset),
-            .len = @intCast(data_len),
-        });
+        { // put in table
+            const put_req = self.table_putter.next() orelse blk: {
+                self.table_putter.markUsed();
+                while (true) : (std.atomic.spinLoopHint())
+                    break :blk self.table_putter.next() orelse continue;
+            };
+            put_req.* = .{
+                .pubkey = pubkey,
+                .slot = slot,
+                .value = .{
+                    .offset = @intCast(self.io.writer.getOffset()),
+                    .len = @intCast(data_len),
+                },
+            };
+        }
 
         self.journal.writing_slot = @max(
             self.journal.writing_slot,
@@ -483,6 +541,8 @@ pub const Rooted = struct {
 
             try self.queueWrite(.from(logger), data_len, data_reader);
         }
+
+        return 0;
     }
 
     fn queueWrite(
@@ -522,9 +582,6 @@ pub const Rooted = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.flushWrites" });
         defer zone.deinit();
 
-        // flush the table
-        self.table.flushPuts(&self.put_batch);
-
         // flush any current writes in the Writer by writing a padding sector to fill up the block
         var writable = (try self.io.writer.getBuffer(.from(logger))).len;
         std.debug.assert(writable <= block_size);
@@ -560,45 +617,32 @@ pub const Rooted = struct {
 
         // wait for all queued writes to complete.
         try self.io.writer.sync(.from(logger));
+
+        // wait for table writes to finish
+        while (self.table_putter.pending()) std.atomic.spinLoopHint();
     }
 
     /// Queue a lookup into rooted to populate a new AccountPool index.
     /// Returns false if it cannot queue the lookup (call pollRead to check for completions).
     pub fn queueRead(
         self: *Rooted,
-        logger: tel.Logger("Rooted.queueRead"),
         pubkey: *const Pubkey,
     ) !bool {
-        const lookup_idx = self.free_lookups;
-        if (lookup_idx == invalid_lookup_index) {
-            return false; // no available lookups to use.
-        }
+        // Check if theres a free lookup
+        const idx = self.free_lookups.peek() orelse return false;
+        const node = &self.lookup_nodes[idx];
+        node.result = .{ .pubkey = pubkey.*, .account_index = AccountPool.invalid_index };
 
-        const node = &self.lookup_nodes[lookup_idx];
-        self.free_lookups = node.next;
+        // check if we can send a get_req
+        var get_req = self.table_lookups.get.in.get(.writer);
+        const req_ptr = get_req.next() orelse unreachable;
+        req_ptr.* = pubkey.*;
+        get_req.markUsed();
 
-        const entry = self.table.get(pubkey);
-        if (entry.isEmpty()) { // not found. complete immediately.
-            node.result = .{ .pubkey = pubkey.*, .account_index = AccountPool.invalid_index };
-            node.next = self.ready_lookups;
-            self.ready_lookups = lookup_idx;
-            return true;
-        }
-
-        const acc_idx = try self.account_pool.alloc(entry.len);
-        node.result = .{ .pubkey = pubkey.*, .account_index = acc_idx };
-
-        // prepare the account (these must be set before self.account_pool.free() on the same index)
-        const account = self.account_pool.getAccount(acc_idx);
-        account.ref_count = .init(0);
-        account.data = .{ .executable = false, .len = @intCast(entry.len) };
-
-        node.file_offset = entry.offset;
-        try self.submitRead(.from(logger), .{
-            .lookup_idx = lookup_idx,
-            .reading = .header,
-            .read = 0,
-        });
+        // commit to popping from free list, then push to get list
+        const popped_idx = self.free_lookups.pop(&self.lookup_nodes) orelse unreachable;
+        std.debug.assert(idx == popped_idx);
+        self.get_lookups.push(&self.lookup_nodes, idx);
 
         return true;
     }
@@ -606,29 +650,59 @@ pub const Rooted = struct {
     // Consume
     pub fn pollRead(self: *Rooted, logger: tel.Logger("Rooted.pollReady")) !?LookupResult {
         // check if lookup in ready queue
-        var lookup_idx = self.ready_lookups;
-        if (lookup_idx >= self.lookup_nodes.len) {
+        const idx = self.ready_lookups.pop(&self.lookup_nodes) orelse blk: {
             @branchHint(.unlikely);
-
             // try to fill up ready queue, then check again
-            try self.pollCompletedReads(.from(logger));
-
-            lookup_idx = self.ready_lookups;
-            if (lookup_idx >= self.lookup_nodes.len) {
-                return null;
-            }
-        }
-
-        // pop from ready queue
-        const node = &self.lookup_nodes[lookup_idx];
-        self.ready_lookups = node.next;
+            try self.pollGetReads(.from(logger));
+            break :blk self.ready_lookups.pop(&self.lookup_nodes) orelse return null;
+        };
 
         // consume result, then push to free list
-        const result = node.result;
-        node.next = self.free_lookups;
-        self.free_lookups = lookup_idx;
-
+        const result = self.lookup_nodes[idx].result;
+        self.free_lookups.push(&self.lookup_nodes, idx);
         return result;
+    }
+
+    fn pollGetReads(self: *Rooted, logger: tel.Logger("Rooted.pollGetReads")) !void {
+        // consume table get lookups made in pollRead() & match then to get_lookups nodes
+        var get_resp = self.table_lookups.get.out.get(.reader);
+        while (get_resp.next()) |*resp| {
+            const entry = resp.*;
+            get_resp.markUsed();
+
+            const idx = self.get_lookups.pop(&self.lookup_nodes) orelse 
+                @panic("get_resp without matching get_lookup node");
+            const node = &self.lookup_nodes[idx];
+
+            // resolve get_lookups that werent found directly to ready list
+            if (entry.isEmpty()) {
+                node.result.account_index = AccountPool.invalid_index;
+                self.ready_lookups.push(&self.lookup_nodes, idx);
+                continue;
+            }
+
+            // Now that the data_len for the account is known, allocate one from pool.
+            const acc_idx = try self.account_pool.alloc(entry.len);
+            node.result.account_index = acc_idx;
+
+            // prepare the account (these must be set before account_pool.free() on the same index)
+            const account = self.account_pool.getAccount(acc_idx);
+            account.ref_count = .init(0);
+            account.data = .{ .executable = false, .len = @intCast(entry.len) };
+
+            // Read the disk header first.
+            node.file_offset = entry.offset;
+            try self.submitRead(.from(logger), .{
+                .lookup_idx = idx,
+                .reading = .header,
+                .read = 0,
+            });
+        }
+
+        // If none completed immediately, check disk submissions
+        if (self.ready_lookups.peek() == null) {
+            try self.pollCompletedReads(.from(logger));
+        }
     }
 
     const RingUserData = packed struct(u64) {
@@ -682,8 +756,7 @@ pub const Rooted = struct {
             const node = &self.lookup_nodes[data.lookup_idx];
             errdefer { // on IO error, free the account pool value & the node
                 self.account_pool.free(node.result.account_index);
-                node.next = self.free_lookups;
-                self.free_lookups = data.lookup_idx;
+                self.free_lookups.push(&self.lookup_nodes, data.lookup_idx);
             }
 
             const account = self.account_pool.getAccount(node.result.account_index);
@@ -800,8 +873,7 @@ pub const Rooted = struct {
                 };
 
                 // push node to ready queue
-                node.next = self.ready_lookups;
-                self.ready_lookups = data.lookup_idx;
+                self.ready_lookups.push(&self.lookup_nodes, data.lookup_idx);
             },
         }
     }
