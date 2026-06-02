@@ -20,10 +20,12 @@ const no_current_slot = std.math.maxInt(Slot);
 const TestMode = enum {
     linear,
     reverse,
+    shuffle_global,
 
     fn parse(raw: []const u8) ?TestMode {
         if (std.mem.eql(u8, raw, "linear")) return .linear;
         if (std.mem.eql(u8, raw, "reverse")) return .reverse;
+        if (std.mem.eql(u8, raw, "shuffle-global")) return .shuffle_global;
         return null;
     }
 
@@ -31,6 +33,7 @@ const TestMode = enum {
         return switch (self) {
             .linear => "linear",
             .reverse => "reverse",
+            .shuffle_global => "shuffle-global",
         };
     }
 };
@@ -42,6 +45,7 @@ const Config = struct {
     end_slot: ?Slot = null,
     rate_hz: ?f64 = null,
     test_mode: TestMode = .linear,
+    seed: ?u64 = null,
     dry_run: bool = false,
 
     fn slotSelected(self: Config, slot: Slot) bool {
@@ -54,6 +58,17 @@ const Config = struct {
     fn pastEndSlot(self: Config, slot: Slot) bool {
         return if (self.end_slot) |end_slot| slot > end_slot else false;
     }
+
+    fn pastSlotRange(
+        self: Config,
+        slot: Slot,
+        comptime direction: rocks.IteratorDirection,
+    ) bool {
+        return switch (direction) {
+            .forward => self.pastEndSlot(slot),
+            .reverse => if (self.start_slot) |start_slot| slot < start_slot else false,
+        };
+    }
 };
 
 const PartialConfig = struct {
@@ -63,6 +78,7 @@ const PartialConfig = struct {
     end_slot: ?Slot = null,
     rate_hz: ?f64 = null,
     test_mode: TestMode = .linear,
+    seed: ?u64 = null,
     dry_run: bool = false,
 
     fn finalize(self: PartialConfig) ParseArgsError!Config {
@@ -83,6 +99,28 @@ const PartialConfig = struct {
             return error.InvalidArguments;
         }
 
+        switch (self.test_mode) {
+            .linear, .reverse => {
+                if (self.seed != null) {
+                    std.debug.print("--seed is only valid with --test-mode shuffle-global\n", .{});
+                    return error.InvalidArguments;
+                }
+            },
+            .shuffle_global => {
+                if (self.seed == null) {
+                    std.debug.print("--test-mode shuffle-global requires --seed\n", .{});
+                    return error.InvalidArguments;
+                }
+                if (self.start_slot == null or self.end_slot == null) {
+                    std.debug.print(
+                        "--test-mode shuffle-global requires both --start-slot and --end-slot\n",
+                        .{},
+                    );
+                    return error.InvalidArguments;
+                }
+            },
+        }
+
         return .{
             .ledger = ledger,
             .target = target,
@@ -90,6 +128,7 @@ const PartialConfig = struct {
             .end_slot = self.end_slot,
             .rate_hz = self.rate_hz,
             .test_mode = self.test_mode,
+            .seed = self.seed,
             .dry_run = self.dry_run,
         };
     }
@@ -112,6 +151,7 @@ const Arg = enum {
     end_slot,
     rate_hz,
     test_mode,
+    seed,
     dry_run,
 
     fn parse(raw: []const u8) ?Arg {
@@ -122,6 +162,7 @@ const Arg = enum {
         if (std.mem.eql(u8, raw, "--end-slot")) return .end_slot;
         if (std.mem.eql(u8, raw, "--rate-hz")) return .rate_hz;
         if (std.mem.eql(u8, raw, "--test-mode")) return .test_mode;
+        if (std.mem.eql(u8, raw, "--seed")) return .seed;
         if (std.mem.eql(u8, raw, "--dry-run")) return .dry_run;
         return null;
     }
@@ -135,6 +176,7 @@ const Arg = enum {
             .end_slot => "--end-slot",
             .rate_hz => "--rate-hz",
             .test_mode => "--test-mode",
+            .seed => "--seed",
             .dry_run => "--dry-run",
         };
     }
@@ -182,6 +224,7 @@ fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
     try stdout.print("  end_slot: {?d}\n", .{config.end_slot});
     try stdout.print("  rate_hz: {?}\n", .{config.rate_hz});
     try stdout.print("  test_mode: {s}\n", .{config.test_mode.name()});
+    try stdout.print("  seed: {?}\n", .{config.seed});
     try stdout.print("  dry_run: {}\n", .{config.dry_run});
     try stdout.print("  column_families:\n", .{});
     try stdout.print("    {s}: present\n", .{agave_cf_meta});
@@ -394,6 +437,25 @@ const ShredKind = enum(u8) {
             .data => agave_cf_data_shred,
             .code => agave_cf_code_shred,
         };
+    }
+};
+
+const ShredRef = struct {
+    slot: Slot,
+    index: u64,
+    kind: ShredKind,
+
+    fn key(self: ShredRef) ShredKey {
+        return .{ .slot = self.slot, .index = self.index };
+    }
+};
+
+const RefSchedule = struct {
+    refs: std.ArrayList(ShredRef) = .empty,
+    selected_slots: u64 = 0,
+
+    fn deinit(self: *RefSchedule, allocator: Allocator) void {
+        self.refs.deinit(allocator);
     }
 };
 
@@ -784,6 +846,13 @@ fn produceLedgerPackets(
             stop,
             progress,
         ),
+        .shuffle_global => produceGlobalShuffledRefSchedule(
+            blockstore,
+            config,
+            writer,
+            stop,
+            progress,
+        ),
     };
 }
 
@@ -825,7 +894,7 @@ fn produceOrderedLedgerPackets(
             std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
             return err;
         };
-        if (pastSlotRange(config, slot, direction)) break;
+        if (config.pastSlotRange(slot, direction)) break;
         if (!config.slotSelected(slot)) continue;
 
         progress.current_slot.store(slot, .release);
@@ -879,15 +948,171 @@ fn produceOrderedLedgerPackets(
     return stats;
 }
 
-fn pastSlotRange(
+fn produceGlobalShuffledRefSchedule(
+    blockstore: *const AgaveBlockstore,
     config: Config,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
+) !ProducerStats {
+    var schedule = try buildOrderedRefSchedule(blockstore, config, stop);
+    defer schedule.deinit(blockstore.allocator);
+
+    var prng = std.Random.DefaultPrng.init(config.seed.?);
+    prng.random().shuffleWithIndex(ShredRef, schedule.refs.items, u64);
+
+    return produceRefSchedule(blockstore, schedule, writer, stop, progress);
+}
+
+fn buildOrderedRefSchedule(
+    blockstore: *const AgaveBlockstore,
+    config: Config,
+    stop: *std.atomic.Value(bool),
+) !RefSchedule {
+    var schedule: RefSchedule = .{};
+    errdefer schedule.deinit(blockstore.allocator);
+
+    var start_key_buf: [8]u8 = undefined;
+    const start_key: ?[]const u8 = if (config.start_slot) |slot| start_key: {
+        writeSlotKey(&start_key_buf, slot);
+        break :start_key start_key_buf[0..];
+    } else null;
+
+    var slot_iter = blockstore.db.iterator(
+        try blockstore.columnFamily(agave_cf_meta),
+        .forward,
+        start_key,
+    );
+    defer slot_iter.deinit();
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    while (try slot_iter.next(&err_data)) |entry| {
+        if (stop.load(.acquire)) break;
+
+        const slot = parseSlotKey(entry[0].data) catch |err| {
+            std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
+            return err;
+        };
+        if (config.pastEndSlot(slot)) break;
+        if (!config.slotSelected(slot)) continue;
+
+        schedule.selected_slots += 1;
+        try collectSlotShredRefs(blockstore, slot, .data, &schedule.refs, stop);
+        if (blockstore.has_code_shred) {
+            try collectSlotShredRefs(blockstore, slot, .code, &schedule.refs, stop);
+        }
+    }
+
+    return schedule;
+}
+
+fn collectSlotShredRefs(
+    blockstore: *const AgaveBlockstore,
     slot: Slot,
-    comptime direction: rocks.IteratorDirection,
-) bool {
-    return switch (direction) {
-        .forward => config.pastEndSlot(slot),
-        .reverse => if (config.start_slot) |start_slot| slot < start_slot else false,
-    };
+    kind: ShredKind,
+    refs: *std.ArrayList(ShredRef),
+    stop: *std.atomic.Value(bool),
+) !void {
+    var start_key_buf: [16]u8 = undefined;
+    writeShredKey(&start_key_buf, .{ .slot = slot, .index = 0 });
+
+    var iter = blockstore.db.iterator(
+        try blockstore.columnFamily(kind.columnFamilyName()),
+        .forward,
+        start_key_buf[0..],
+    );
+    defer iter.deinit();
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    while (try iter.next(&err_data)) |entry| {
+        if (stop.load(.acquire)) break;
+
+        const key = parseShredKey(entry[0].data) catch |err| {
+            std.debug.print(
+                "invalid {s} key length: {d}\n",
+                .{ kind.columnFamilyName(), entry[0].data.len },
+            );
+            return err;
+        };
+        if (key.slot != slot) break;
+        try refs.append(
+            blockstore.allocator,
+            .{ .slot = key.slot, .index = key.index, .kind = kind },
+        );
+    }
+}
+
+fn produceRefSchedule(
+    blockstore: *const AgaveBlockstore,
+    schedule: RefSchedule,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
+) !ProducerStats {
+    var stats: ProducerStats = .{ .slots = schedule.selected_slots };
+    var unpublished_packets: usize = 0;
+
+    for (schedule.refs.items) |shred_ref| {
+        if (stop.load(.acquire)) break;
+        progress.current_slot.store(shred_ref.slot, .release);
+        progress.store(stats);
+        try produceShredByRef(
+            blockstore,
+            shred_ref,
+            writer,
+            stop,
+            progress,
+            &unpublished_packets,
+            &stats,
+        );
+    }
+
+    if (unpublished_packets != 0 and !stop.load(.acquire)) {
+        progress.store(stats);
+        writer.markUsed();
+    }
+
+    progress.store(stats);
+    return stats;
+}
+
+fn produceShredByRef(
+    blockstore: *const AgaveBlockstore,
+    shred_ref: ShredRef,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
+    unpublished_packets: *usize,
+    stats: *ProducerStats,
+) !void {
+    var key_buf: [16]u8 = undefined;
+    writeShredKey(&key_buf, shred_ref.key());
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    const cf = try blockstore.columnFamily(shred_ref.kind.columnFamilyName());
+    const packet = try blockstore.db.get(
+        cf,
+        key_buf[0..],
+        &err_data,
+    ) orelse return error.MissingShred;
+    defer packet.deinit();
+
+    try publishPacket(
+        shred_ref.key(),
+        shred_ref.kind,
+        packet.data,
+        writer,
+        stop,
+        progress,
+        unpublished_packets,
+        stats,
+    );
 }
 
 fn publishPacket(
@@ -1267,6 +1492,7 @@ fn parseArgs(args: []const []const u8) ParseArgsError!ParseResult {
             .test_mode => config.test_mode = try parseTestMode(
                 try nextValue(args, &i, parsed_arg.name()),
             ),
+            .seed => config.seed = try parseSeed(try nextValue(args, &i, parsed_arg.name())),
             .dry_run => config.dry_run = true,
         }
     }
@@ -1308,7 +1534,21 @@ fn parseRateHz(value: []const u8) ParseArgsError!f64 {
 fn parseTestMode(value: []const u8) ParseArgsError!TestMode {
     return TestMode.parse(value) orelse {
         std.debug.print("invalid test mode for --test-mode: {s}\n", .{value});
-        std.debug.print("valid test modes: linear, reverse\n", .{});
+        std.debug.print("valid test modes: linear, reverse, shuffle-global\n", .{});
+        return error.InvalidArguments;
+    };
+}
+
+fn parseSeed(value: []const u8) ParseArgsError!u64 {
+    if (std.mem.startsWith(u8, value, "0x") or std.mem.startsWith(u8, value, "0X")) {
+        return std.fmt.parseUnsigned(u64, value[2..], 16) catch {
+            std.debug.print("invalid seed for --seed: {s}\n", .{value});
+            return error.InvalidArguments;
+        };
+    }
+
+    return std.fmt.parseUnsigned(u64, value, 10) catch {
+        std.debug.print("invalid seed for --seed: {s}\n", .{value});
         return error.InvalidArguments;
     };
 }
@@ -1325,7 +1565,8 @@ fn printHelp() void {
         \\  --start-slot <slot>   First slot to stream
         \\  --end-slot <slot>     Inclusive last slot to stream
         \\  --rate-hz <float>     Maximum packets per second
-        \\  --test-mode <mode>    linear or reverse
+        \\  --test-mode <mode>    linear, reverse, or shuffle-global
+        \\  --seed <seed>         Decimal or 0x-prefixed seed for randomized test modes
         \\  --dry-run             Read and print stats without sending UDP
         \\  -h, --help            Print this help
         \\
@@ -1342,6 +1583,7 @@ test "parse arguments" {
         try std.testing.expectEqual(@as(?Slot, null), config.end_slot);
         try std.testing.expectEqual(@as(?f64, null), config.rate_hz);
         try std.testing.expectEqual(.linear, config.test_mode);
+        try std.testing.expectEqual(@as(?u64, null), config.seed);
         try std.testing.expect(!config.dry_run);
     }
 
@@ -1360,6 +1602,7 @@ test "parse arguments" {
         try std.testing.expectEqual(@as(?Slot, 20), config.end_slot);
         try std.testing.expectEqual(@as(?f64, 100.5), config.rate_hz);
         try std.testing.expectEqual(.reverse, config.test_mode);
+        try std.testing.expectEqual(@as(?u64, null), config.seed);
         try std.testing.expect(config.dry_run);
     }
 
@@ -1372,10 +1615,66 @@ test "parse arguments" {
         try std.testing.expectEqual(.linear, result.config.test_mode);
     }
 
+    {
+        const result = try parseArgs(&.{
+            "--ledger",     "ledger",
+            "--target",     "127.0.0.1:8002",
+            "--start-slot", "10",
+            "--end-slot",   "20",
+            "--test-mode",  "shuffle-global",
+            "--seed",       "0xdeadbeef",
+        });
+        try std.testing.expectEqual(.shuffle_global, result.config.test_mode);
+        try std.testing.expectEqual(@as(?u64, 0xdeadbeef), result.config.seed);
+    }
+
+    {
+        const result = try parseArgs(&.{
+            "--ledger",     "ledger",
+            "--target",     "127.0.0.1:8002",
+            "--start-slot", "10",
+            "--end-slot",   "20",
+            "--test-mode",  "shuffle-global",
+            "--seed",       "12345",
+        });
+        try std.testing.expectEqual(@as(?u64, 12345), result.config.seed);
+    }
+
     try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "shuffle-global",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",    "ledger",
+        "--target",    "127.0.0.1:8002",
+        "--test-mode", "shuffle-global",
+        "--seed",      "1",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",     "ledger",
+        "--target",     "127.0.0.1:8002",
+        "--start-slot", "10",
+        "--end-slot",   "20",
+        "--seed",       "1",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",    "ledger",
+        "--target",    "127.0.0.1:8002",
+        "--test-mode", "reverse",
+        "--seed",      "1",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",     "ledger",
+        "--target",     "127.0.0.1:8002",
+        "--start-slot", "10",
+        "--end-slot",   "20",
+        "--test-mode",  "shuffle-global",
+        "--seed",       "not-a-seed",
     }));
 
     try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
