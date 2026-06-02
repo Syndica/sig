@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build-options");
 const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
 const sig = @import("sig");
 
@@ -175,6 +176,10 @@ pub fn deinitTransactionContext(
     tc.deinit();
 }
 
+/// Create a `FeatureSet` based on the feature IDs provided in the protobuf message.
+///
+/// Iterate over the feature IDs in the protobuf message and set the corresponding features in the `FeatureSet`.
+/// Unknown, unsupported, or reverted debug logs indicate Sig is not compatible with the fixtures active features.
 pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
     const pb_features = switch (@TypeOf(ctx)) {
         *pb.TxnContext, *const pb.TxnContext => (ctx.bank orelse return .ALL_DISABLED).features,
@@ -185,10 +190,25 @@ pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
 
     var feature_set: FeatureSet = .ALL_DISABLED;
     for (pb_features.features.items) |id| {
-        // only way for `setSlotId` to fail is if the `id` doesn't exist in runtime features.
-        feature_set.setSlotId(id, 0) catch if (!sig.core.features.isKnownFeatureId(id)) {
-            std.debug.print("unknown feature id: 0x{x}\n", .{id});
+        // Convert the feature ID from the protobuf message to the corresponding `Feature` enum value.
+        // Log features which do not correspond to a `Feature` variant and are otherwise unknown (i.e. not present in `src/core/features.zon`).
+        const feature = feature_set.getById(id) catch {
+            if (build_options.log_feature_status and
+                !sig.core.features.isKnownFeatureId(id)) std.debug.print(
+                "feature 0x{x} is unknown\n",
+                .{id},
+            );
+            continue;
         };
+
+        // Log features which appear in a fixture but are marked as reverted or unsupported in Sig.
+        if (build_options.log_feature_status) switch (sig.core.features.status_map.get(feature)) {
+            .reverted => std.debug.print("feature {} (0x{x}) is reverted\n", .{ feature, id }),
+            .unsupported => std.debug.print("feature {} (0x{x}) is unsupported\n", .{ feature, id }),
+            .supported, .hardcoded_for_fuzzing, .hardcoded => {},
+        };
+
+        feature_set.setSlot(feature, 0);
     }
     return feature_set;
 }
