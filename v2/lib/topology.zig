@@ -134,7 +134,7 @@ pub fn Unbound(comptime schema: Schema) type {
         } });
 
         /// `.@"foo:bar"` -> `.{ .foo = .bar }`
-        pub inline fn serviceRegionIdFromRegionId(region_id: RegionId) ServiceRegionId {
+        pub fn serviceRegionIdFromRegionId(region_id: RegionId) ServiceRegionId {
             if (@inComptime()) {
                 const str = @tagName(region_id);
                 const colon = std.mem.indexOfScalar(u8, str, ':').?;
@@ -158,7 +158,7 @@ pub fn Unbound(comptime schema: Schema) type {
         }
 
         /// Returns the read/write access associated with the region id.
-        pub inline fn getServiceRegionIdAccess(
+        pub fn getServiceRegionIdAccess(
             region_id: RegionId,
         ) Schema.Service.Region.Access {
             return switch (region_id) {
@@ -203,11 +203,63 @@ pub fn Unbound(comptime schema: Schema) type {
             };
         }
 
-        pub fn BindingsMap(comptime RegionTag: type) type {
+        pub fn BindingsMap(comptime BindingTag: type) type {
             return std.EnumArray(
-                RegionTag,
+                BindingTag,
                 std.EnumSet(Unbound(schema).RegionId),
             );
+        }
+
+        // -- Binding Validation -- //
+
+        pub fn ValidateBindingsMapResult(comptime BindingTag: type) type {
+            return union(enum) {
+                /// The specified tag's value is not in the expected ascending order.
+                unordered_binding: struct {
+                    tag: BindingTag,
+                    expected: usize,
+                },
+                /// The tags in this set were specified in two bindings.
+                duplicated: std.EnumSet(RegionId),
+                /// The tags in this set were not specified in any binding.
+                missing: std.EnumSet(RegionId),
+            };
+        }
+
+        /// Returns null on success.
+        /// Otherwise returns a diagnostic describing the problem.
+        pub inline fn validateBindingsMap(
+            /// A union of all the intended shared region bindings.
+            comptime BindingTag: type,
+            /// Defines the equivalences between regions across all services, unifying them under one binding (the `Binding` tag name).
+            comptime bindings_map: BindingsMap(BindingTag),
+        ) ?ValidateBindingsMapResult(BindingTag) {
+            comptime {
+                const region_tag_info = @typeInfo(BindingTag).@"enum";
+                for (region_tag_info.fields, 0..) |field, field_i| {
+                    if (field.value != field_i) return .{
+                        .unordered_binding = .{
+                            .tag = @enumFromInt(field.value),
+                            .expected = field_i,
+                        },
+                    };
+                }
+
+                var accumulated_set: std.EnumSet(RegionId) = .{};
+                for (bindings_map.values) |region_id_set| {
+                    const intersection = accumulated_set.intersectWith(region_id_set);
+                    if (intersection.count() == 0) {
+                        accumulated_set.setUnion(region_id_set);
+                        continue;
+                    }
+                    return .{ .duplicated = intersection };
+                }
+                if (accumulated_set.count() != @typeInfo(RegionId).@"enum".fields.len) {
+                    const missing = accumulated_set.complement();
+                    return .{ .missing = missing };
+                }
+                return null;
+            }
         }
     };
 }
@@ -220,58 +272,64 @@ pub fn Bind(
     /// The associated payload should be the type that will be used to initialize the region.
     /// Expected methods:
     /// ```zig
-    /// /// returns the required mapped size of the region.
+    /// /// returns the required mapped size of the bound region.
     /// fn size(r: Region) usize;
     ///
     /// /// asserts `buf.len == r.size()`, and initializes `buf` as a region as described by the union payload.
     /// fn init(r: Region, buf: []align(std.heap.page_size_min) u8) E!void;
     /// ```
-    comptime Region: type,
-    /// Defines the equivalences between regions across all services, unifying them under one binding (the `Region` tag name).
-    comptime bindings_map_init: Unbound(schema).BindingsMap(@typeInfo(Region).@"union".tag_type.?),
+    comptime Binding: type,
+    /// Defines the equivalences between regions across all services, unifying them under one binding (the `Binding` tag name).
+    comptime bindings_map_init: Unbound(schema).BindingsMap(@typeInfo(Binding).@"union".tag_type.?),
 ) type {
     return struct {
         pub const unbound = Unbound(schema);
 
-        pub const RegionTag = @typeInfo(Region).@"union".tag_type.?;
-        pub const BindingsMap = unbound.BindingsMap(RegionTag);
-        const BindingsIndexer = BindingsMap.Indexer;
+        /// Members validated to be tightly-packed and ordered, usable as a scalar index.
+        pub const BindingTag = @typeInfo(Binding).@"union".tag_type.?;
+        pub const BindingsMap = unbound.BindingsMap(BindingTag);
         pub const bindings_map = bindings_map_init;
 
-        fn regionSize(r: Region) usize {
-            return r.size();
+        fn bindingSize(binding: Binding) usize {
+            return binding.size();
         }
 
-        fn regionInit(r: Region, buf: []align(std.heap.page_size_min) u8) !void {
-            try r.init(buf);
+        fn bindingInit(binding: Binding, buf: []align(std.heap.page_size_min) u8) !void {
+            try binding.init(buf);
         }
 
-        fn regionFmtShareInfo(region_tag: RegionTag) std.fmt.Alt(RegionTag, regionWriteShareInfo) {
-            return .{ .data = region_tag };
+        fn bindingFmtShareInfo(
+            binding_tag: BindingTag,
+        ) std.fmt.Alt(BindingTag, bindingWriteRegionShareInfo) {
+            return .{ .data = binding_tag };
         }
 
-        fn regionWriteShareInfo(
-            region: RegionTag,
+        fn bindingWriteRegionShareInfo(
+            binding_tag: BindingTag,
             w: *std.Io.Writer,
         ) std.Io.Writer.Error!void {
-            try w.print("Region `{t}` shared with [ ", .{region});
+            try w.print("Region `{t}` shared with [ ", .{binding_tag});
 
-            var shares_copy = getRegionBindingShares(region);
-            var shares_iter = shares_copy.iterator();
-            for (0..shares_copy.count()) |i| {
-                const share_entry = shares_iter.next().?;
+            const region_id_set = bindings_map.getPtrConst(binding_tag);
+
+            var iter = region_id_set.iterator();
+            for (0..region_id_set.count()) |i| {
+                const region_id = iter.next().?;
+                const service_id: unbound.ServiceId =
+                    unbound.serviceRegionIdFromRegionId(region_id);
+                const access = unbound.getServiceRegionIdAccess(region_id);
 
                 if (i != 0) try w.writeAll(", ");
-                const mode = if (share_entry.value.access == .rw) "rw" else "ro";
-                try w.print("{t} ({s})", .{ share_entry.key, mode });
+                const mode = if (access == .rw) "rw" else "ro";
+                try w.print("{t} ({s})", .{ service_id, mode });
             }
-            if (shares_iter.next() != null) unreachable;
+            if (iter.next() != null) unreachable;
 
             try w.writeAll(" ]");
         }
 
         comptime {
-            if (validateBindingsMap(schema, RegionTag, bindings_map)) |result| switch (result) {
+            if (unbound.validateBindingsMap(BindingTag, bindings_map)) |result| switch (result) {
                 .unordered_binding => |unordered| @compileError(std.fmt.comptimePrint(
                     "Expected Binding tag " ++ @tagName(unordered.tag) ++
                         " has value {d}, expected to have value {d}.",
@@ -294,14 +352,16 @@ pub fn Bind(
             };
         }
 
-        /// Returns the total number of spawned services that will be sharing the specified `region`.
-        pub fn countTotalRegionShares(region: RegionTag) usize {
-            return bindings_map.get(region).count();
+        /// Returns the total number of spawned services that will be sharing the specified `binding`.
+        pub fn countTotalBindingShares(binding: BindingTag) usize {
+            return bindings_map.get(binding).count();
         }
 
-        pub const SharedRegionInstances = @Type(.{ .@"struct" = info: {
+        /// A struct whose fields consist of every Binding union payload in the topology.
+        /// This is used to exhaustively initialize every Binding exactly once.
+        pub const BindingsInit = @Type(.{ .@"struct" = info: {
             var fields: [bindings_map.values.len]std.builtin.Type.StructField = undefined;
-            for (&fields, @typeInfo(Region).@"union".fields) |*s_field, u_field| {
+            for (&fields, @typeInfo(Binding).@"union".fields) |*s_field, u_field| {
                 s_field.* = .{
                     .name = u_field.name,
                     .type = u_field.type,
@@ -319,31 +379,10 @@ pub fn Bind(
             };
         } });
 
-        const RegionBindingSharesMap = std.EnumMap(unbound.ServiceId, struct {
-            access: Schema.Service.Region.Access,
-        });
-
-        /// Returns a set of all the services which the specified region binding is shared with,
-        /// with each entry accompanied by properties of the share.
-        fn getRegionBindingShares(region_binding_tag: RegionTag) RegionBindingSharesMap {
-            const region_id_set = bindings_map.getPtrConst(region_binding_tag);
-            var shares: RegionBindingSharesMap = .{};
-            var iter = region_id_set.iterator();
-            for (0..region_id_set.count()) |_| {
-                const region_id = iter.next().?;
-                const region_info = unbound.serviceRegionIdFromRegionId(region_id);
-                const prev_opt = shares.fetchPut(region_info, .{
-                    .access = unbound.getServiceRegionIdAccess(region_id),
-                });
-                if (prev_opt != null) unreachable;
-            }
-            if (iter.next() != null) unreachable;
-            return shares;
-        }
-
-        fn getRegionBinding(region_id: unbound.RegionId) RegionTag {
+        /// Returns the binding that the specified `region_id` is bound to.
+        fn getRegionBinding(region_id: unbound.RegionId) BindingTag {
             return for (bindings_map.values, 0..) |region_id_set, i| {
-                const binding_tag = BindingsIndexer.keyForIndex(i);
+                const binding_tag: BindingTag = @enumFromInt(i);
                 if (!region_id_set.contains(region_id)) continue;
                 break binding_tag;
             } else unreachable;
@@ -356,39 +395,39 @@ pub fn Bind(
 
             pub const Entry = struct {
                 runner: memfd.RW,
-                bindings: Bindings,
+                bindings: BindingInfos,
 
-                pub const Bindings = lib.util.ArrayEnumMap(RegionTag, Binding);
+                pub const BindingInfos = lib.util.ArrayEnumMap(BindingTag, BindingInfo);
             };
 
-            pub const Binding = struct {
+            pub const BindingInfo = struct {
                 access: Schema.Service.Region.Access,
                 memfd: lib.linux.memfd.RW,
             };
         };
 
-        /// Pairs services up with their respective required regions and their read/write permissions.
-        pub fn serviceMap(instances: SharedRegionInstances) !ServiceMap {
-            const regions: [bindings_map.values.len]Region = regions: {
-                var regions: [bindings_map.values.len]Region = undefined;
+        /// Pairs services up with their respective required bound regions and their read/write permissions.
+        pub fn serviceMap(instances: BindingsInit) !ServiceMap {
+            const bindings: [bindings_map.values.len]Binding = regions: {
+                var bindings: [bindings_map.values.len]Binding = undefined;
 
                 @setEvalBranchQuota(bindings_map.values.len * schema.services.len);
-                inline for (&regions, 0..bindings_map.values.len) |*region, binding_i| {
-                    const region_binding_tag = comptime BindingsIndexer.keyForIndex(binding_i);
+                inline for (&bindings, 0..bindings_map.values.len) |*region, binding_i| {
+                    const region_binding_tag: BindingTag = @enumFromInt(binding_i);
                     region.* = @unionInit(
-                        Region,
+                        Binding,
                         @tagName(region_binding_tag),
                         @field(instances, @tagName(region_binding_tag)),
                     );
                 }
 
-                break :regions regions;
+                break :regions bindings;
             };
 
             var region_memfds: [bindings_map.values.len]memfd.RW = @splat(.empty);
-            for (&regions, &region_memfds) |binding, *region_memfd| {
+            for (&bindings, &region_memfds) |binding, *region_memfd| {
                 region_memfd.* = try createAndInitSharedRegionMemfd(binding);
-                std.log.info("Initialised: {f}", .{regionFmtShareInfo(binding)});
+                std.log.info("Initialised: {f}", .{bindingFmtShareInfo(binding)});
             }
 
             var runner_memfds: [schema.services.len]memfd.RW = @splat(.empty);
@@ -443,7 +482,7 @@ pub fn Bind(
             params: struct {
                 runner: memfd.RW,
                 stderr: std.fs.File,
-                bindings: *const ServiceMap.Entry.Bindings,
+                bindings: *const ServiceMap.Entry.BindingInfos,
             },
         ) !lib.ipc.ResolvedArgs {
             std.debug.assert(std.os.linux.elf_aux_maybe != null);
@@ -468,17 +507,17 @@ pub fn Bind(
             var binding_iter = params.bindings.iteratorImmut();
             for (0..params.bindings.len) |_| {
                 const binding = binding_iter.next().?.value.*;
-                const region_size = binding.memfd.size;
+                const binding_size = binding.memfd.size;
                 switch (binding.access) {
                     .rw => {
                         args.rw[i_rw] = (try binding.memfd.mmap(null)).ptr;
-                        args.rw_len[i_rw] = region_size;
+                        args.rw_len[i_rw] = binding_size;
                         i_rw += 1;
                     },
                     .readonly => {
                         const ro_memfd = try memfd.RO.fromRW(binding.memfd);
                         args.ro[i_ro] = (try ro_memfd.mmap(null)).ptr;
-                        args.ro_len[i_ro] = region_size;
+                        args.ro_len[i_ro] = binding_size;
                         i_ro += 1;
                     },
                 }
@@ -490,21 +529,21 @@ pub fn Bind(
 
         /// Create and initialize a memfd for the shared memory region (map it, initialize it, and then unmap it).
         /// We must unmap it to avoid sharing regions with services that don't need them.
-        fn createAndInitSharedRegionMemfd(binding_init: Region) !memfd.RW {
+        fn createAndInitSharedRegionMemfd(binding_init: Binding) !memfd.RW {
             // This name should be visible from a debugger, but serves no other purpose.
             var fmt_buf: [4096]u8 = undefined;
             const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{
-                regionFmtShareInfo(binding_init),
+                bindingFmtShareInfo(binding_init),
             });
 
             const region_memfd: memfd.RW = try .init(.{
                 .name = name,
-                .size = regionSize(binding_init),
+                .size = bindingSize(binding_init),
             });
 
             const buf = try region_memfd.mmap(null);
             defer std.posix.munmap(buf);
-            try regionInit(binding_init, buf);
+            try bindingInit(binding_init, buf);
 
             return region_memfd;
         }
@@ -573,7 +612,7 @@ pub fn Bind(
                 const child_pid = try spawnService(service_schema.name, .{
                     .runner = entry.runner,
                     .stderr = .stderr(),
-                    .regions = &entry.bindings,
+                    .bindings = &entry.bindings,
                 });
                 const index = sandboxed.services_index.len;
                 sandboxed.services_index.putNoClobber(service_schema.name, {});
@@ -595,7 +634,7 @@ pub fn Bind(
             params: struct {
                 runner: memfd.RW,
                 stderr: std.fs.File,
-                regions: *const ServiceMap.Entry.Bindings,
+                bindings: *const ServiceMap.Entry.BindingInfos,
             },
         ) !i32 {
             const parent_pid = std.os.linux.getpid();
@@ -667,7 +706,7 @@ pub fn Bind(
             const resolved_args = try resolveArgs(.{
                 .runner = params.runner,
                 .stderr = params.stderr,
-                .bindings = params.regions,
+                .bindings = params.bindings,
             });
 
             // mseal our shared VMAs (essentially making sure their mapping can't be tampered with)
@@ -765,7 +804,7 @@ pub fn Bind(
                 _ = try spawnServiceNoSandbox(service_entry.name, .{
                     .runner = entry.runner,
                     .stderr = .stderr(),
-                    .regions = &map.entries.get(service_entry.name).?.bindings,
+                    .bindings = &map.entries.get(service_entry.name).?.bindings,
                     .service_idx = i,
                     .thread_exit_ctx = &state.thread_exit_ctx,
                 });
@@ -783,7 +822,7 @@ pub fn Bind(
             params: struct {
                 runner: memfd.RW,
                 stderr: std.fs.File,
-                regions: *const ServiceMap.Entry.Bindings,
+                bindings: *const ServiceMap.Entry.BindingInfos,
                 service_idx: u16,
                 thread_exit_ctx: *ThreadExitContext,
             },
@@ -791,7 +830,7 @@ pub fn Bind(
             var resolved_args = try resolveArgs(.{
                 .runner = params.runner,
                 .stderr = params.stderr,
-                .bindings = params.regions,
+                .bindings = params.bindings,
             });
             resolved_args.thread_crash_ctx = params.thread_exit_ctx;
             resolved_args.thread_crash_fn = signalThreadCrash;
@@ -894,60 +933,4 @@ pub fn Bind(
             }
         }
     };
-}
-
-fn ValidateBindingsMapResult(
-    comptime schema: Schema,
-    comptime BindingTag: type,
-) type {
-    const unbound = Unbound(schema);
-    return union(enum) {
-        /// The specified tag's value is not in the expected ascending order.
-        unordered_binding: struct {
-            tag: BindingTag,
-            expected: usize,
-        },
-        /// The tags in this set were specified in two bindings.
-        duplicated: std.EnumSet(unbound.RegionId),
-        /// The tags in this set were not specified in any binding.
-        missing: std.EnumSet(unbound.RegionId),
-    };
-}
-
-/// Returns null on success.
-/// Otherwise returns a diagnostic describing the problem.
-inline fn validateBindingsMap(
-    comptime schema: Schema,
-    /// A union of all the intended shared region bindings.
-    comptime BindingTag: type,
-    /// Defines the equivalences between regions across all services, unifying them under one binding (the `Region` tag name).
-    comptime bindings_map: Unbound(schema).BindingsMap(BindingTag),
-) ?ValidateBindingsMapResult(schema, BindingTag) {
-    comptime {
-        const unbound = Unbound(schema);
-        const region_tag_info = @typeInfo(BindingTag).@"enum";
-        for (region_tag_info.fields, 0..) |field, field_i| {
-            if (field.value != field_i) return .{
-                .unordered_binding = .{
-                    .tag = @enumFromInt(field.value),
-                    .expected = field_i,
-                },
-            };
-        }
-
-        var accumulated_set: std.EnumSet(unbound.RegionId) = .{};
-        for (bindings_map.values) |region_id_set| {
-            const intersection = accumulated_set.intersectWith(region_id_set);
-            if (intersection.count() == 0) {
-                accumulated_set.setUnion(region_id_set);
-                continue;
-            }
-            return .{ .duplicated = intersection };
-        }
-        if (accumulated_set.count() != @typeInfo(unbound.RegionId).@"enum".fields.len) {
-            const missing = accumulated_set.complement();
-            return .{ .missing = missing };
-        }
-        return null;
-    }
 }
