@@ -73,6 +73,7 @@ pub fn build(b: *Build) !void {
     const lint_step = b.step("lint", "Run lint checks");
     const lint_test_step = b.step("lint-test", "Run lint unit tests");
     const ci_step = b.step("ci", "Run all checks used for CI");
+    const sig_step = b.step("sig", "Build only the sig binary");
     const docs_step = b.step("docs", "Emit docs");
 
     ci_step.dependOn(test_step);
@@ -162,6 +163,10 @@ pub fn build(b: *Build) !void {
             .use_llvm = true,
         });
         const sig_init_out = addExeOutputs(b, sig_init_exe, run_step, artifact_opts, .{});
+        sig_step.dependOn(&sig_init_exe.step);
+        if (sig_init_out.install) |install| {
+            sig_step.dependOn(&install.step);
+        }
         if (sig_init_out.run) |sig_init_run| {
             sig_init_run.addArgs(b.args orelse &.{});
         }
