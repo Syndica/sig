@@ -6995,3 +6995,126 @@ test "vote_program: authorize zero-tag short data returns InvalidAccountData (v4
         .{},
     );
 }
+
+// Regression: vote account whose data is shorter than the leading u32 variant
+// tag must short-circuit with InvalidAccountData before any bincode decode.
+// Exercises the `data.len < @sizeOf(u32)` guard in getVoteStateChecked,
+// matching agave's `VoteStateV3::deserialize_into_ptr` /
+// `VoteStateVersions::deserialize` which both reject buffers that cannot
+// contain a discriminant. The guard is target-independent, so a single
+// fixture (V4 active) covers both code paths.
+test "vote_program: authorize sub-tag-length data returns InvalidAccountData" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const vote_account = Pubkey.initRandom(prng.random());
+    const authority = Pubkey.initRandom(prng.random());
+    const new_authority = Pubkey.initRandom(prng.random());
+
+    // 3 bytes: less than @sizeOf(u32), so the length guard must fire before
+    // peeking the variant tag or invoking bincode.
+    var tiny_data = [_]u8{ 0xAA, 0xBB, 0xCC };
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidAccountData,
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .authorize = .{
+                .new_authority = new_authority,
+                .vote_authorize = VoteAuthorize.voter,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = tiny_data[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authority },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+// Regression: under the V4 feature gate, getVoteStateChecked must reject an
+// uninitialized vote account even when the callsite passes
+// `check_initialized = false` (e.g. authorize / update_validator_identity /
+// update_commission / withdraw). The V3 path keeps the legacy behavior of
+// honoring the flag, so the same fixture only fails on the V4 target.
+//
+// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/programs/vote/src/vote_state/mod.rs#L45-L77
+test "vote_program: authorize uninitialized v3-tagged returns UninitializedAccount (v4 target)" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const vote_account = Pubkey.initRandom(prng.random());
+    const authority = Pubkey.initRandom(prng.random());
+    const new_authority = Pubkey.initRandom(prng.random());
+
+    // Bincode-encoded VoteStateVersions{ .v3 = VoteStateV3.DEFAULT }: leading
+    // u32 tag is 2 (non-zero, so the variant-0 shortcut does not fire) and the
+    // embedded VoteStateV3 has zero voters -> isUninitialized() == true.
+    const uninit_state: VoteStateVersions = .{ .v3 = VoteStateV3.DEFAULT };
+    var uninit_bytes = [_]u8{0} ** 3762;
+    _ = try sig.bincode.writeToSlice(uninit_bytes[0..], uninit_state, .{});
+
+    try testing.expectProgramExecuteError(
+        InstructionError.UninitializedAccount,
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .authorize = .{
+                .new_authority = new_authority,
+                .vote_authorize = VoteAuthorize.voter,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = uninit_bytes[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authority },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
