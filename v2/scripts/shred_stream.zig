@@ -477,6 +477,7 @@ const ProgressSnapshot = struct {
     }
 };
 
+// Adapts the fallible net thread loop to std.Thread.spawn's void entry point.
 fn netThreadMain(
     ring: *StreamPacketRing,
     done: *std.atomic.Value(bool),
