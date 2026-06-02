@@ -129,10 +129,7 @@ pub fn createTransactionContext(
         .return_data = .{},
         .accounts_resize_delta = 0,
         .compute_meter = instr_ctx.cu_avail,
-        .compute_budget = .init(
-            instr_ctx.cu_avail,
-            feature_set.active(.increase_cpi_account_info_limit, slot),
-        ),
+        .compute_budget = .init(instr_ctx.cu_avail),
         .custom_error = null,
         .log_collector = log_collector,
         .rent = sysvar_cache.get(sysvar.Rent) catch sysvar.Rent.INIT,
