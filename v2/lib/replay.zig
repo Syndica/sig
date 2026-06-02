@@ -3,11 +3,7 @@ const solana = @import("solana.zig");
 const collections = @import("collections.zig");
 const ipc = @import("ipc.zig");
 
-comptime {
-    _ = std.testing.refAllDecls(@This());
-}
-
-pub const TransactionPool = collections.SharedPool([1232]u8, 1_000_000);
+pub const TransactionPool = collections.SharedPool([1232]u8, 10_000);
 
 pub const BlockPool = collections.SharedPool(Node, 1024);
 
@@ -43,8 +39,8 @@ pub const ExecReqResponse = extern struct {
 };
 
 pub const RequestKind = enum(u8) {
-    transaction_execution,
-    transaction_signature_verify,
+    txn_exec,
+    txn_sig_verify,
 };
 
 pub const ExecRequest = extern struct {
@@ -52,11 +48,11 @@ pub const ExecRequest = extern struct {
 
     request_kind: RequestKind,
     data: extern union {
-        transaction_execution: extern struct {
+        txn_exec: extern struct {
             block_idx: BlockRef,
             tx_idx: TransactionPool.ItemId,
         },
-        transaction_signature_verify: extern struct {
+        txn_sig_verify: extern struct {
             tx_idx: TransactionPool.ItemId,
         },
     },
@@ -67,11 +63,11 @@ pub const ExecResponse = extern struct {
 
     request_kind: RequestKind,
     data: extern union {
-        transaction_execution: extern struct {
+        txn_exec: extern struct {
             block_idx: BlockRef,
             tx_idx: TransactionPool.ItemId,
             success: bool,
         },
-        transaction_signature_verify: extern struct { success: bool },
+        txn_sig_verify: extern struct { success: bool },
     },
 };

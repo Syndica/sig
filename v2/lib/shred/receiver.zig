@@ -418,7 +418,6 @@ pub const FecSetCtx = extern struct {
     }
 
     // prep for recover64
-    // TODO: clean this code up, it's bad, e.g. we should probably ban constcast
     fn erasureEncoded(self: *FecSetCtx) struct { std.StaticBitSet(64), [64][]u8 } {
         const base_variant = variant: {
             for (&self.data_shreds_buf, 0..) |*data_shred, i| {
