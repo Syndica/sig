@@ -1210,11 +1210,17 @@ fn setVoteState(
                 if (!rent.isExempt(account.account.lamports, VoteStateV4.MAX_VOTE_STATE_SIZE)) {
                     return InstructionError.AccountNotRentExempt;
                 }
-                try account.setDataLength(
+                account.setDataLength(
                     allocator,
                     resize_delta,
                     VoteStateV4.MAX_VOTE_STATE_SIZE,
-                );
+                ) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    // [agave] a failed resize maps to AccountNotRentExempt (the
+                    // `set_data_length(...).is_err()` arm of set_vote_account_state),
+                    // not the raw InstructionError (e.g. ReadonlyDataModified).
+                    else => return InstructionError.AccountNotRentExempt,
+                };
             }
             return account.serializeIntoAccountData(VoteStateVersions{ .v4 = v4_state });
         },

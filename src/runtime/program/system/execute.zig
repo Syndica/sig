@@ -661,6 +661,16 @@ fn advanceNonceAccount(
     }
 }
 
+fn checkWithdrawNonceSigner(
+    ic: *InstructionContext,
+    authority: Pubkey,
+) (error{OutOfMemory} || InstructionError)!void {
+    if (!ic.ixn_info.isPubkeySigner(authority)) {
+        try ic.tc.log("Withdraw nonce account: Account {f} must sign", .{authority});
+        return InstructionError.MissingRequiredSignature;
+    }
+}
+
 //// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_instruction.rs#L73-L74
 fn withdrawNonceAccount(
     allocator: std.mem.Allocator,
@@ -687,8 +697,11 @@ fn withdrawNonceAccount(
             allocator,
             nonce.Versions,
         );
-        const authority = switch (versioned_nonce.getState()) {
-            .uninitialized => blk: {
+        // [agave] The authorized signer is validated before any state mutation
+        // (v4.1's `check_signer` closure runs ahead of `set_state`), so a failed
+        // signer check leaves the nonce account untouched.
+        switch (versioned_nonce.getState()) {
+            .uninitialized => {
                 if (lamports > from_account.account.lamports) {
                     try ic.tc.log(
                         "Withdraw nonce account: insufficient lamports {}, need {}",
@@ -696,9 +709,9 @@ fn withdrawNonceAccount(
                     );
                     return InstructionError.InsufficientFunds;
                 }
-                break :blk from_account.pubkey;
+                try checkWithdrawNonceSigner(ic, from_account.pubkey);
             },
-            .initialized => |data| blk: {
+            .initialized => |data| {
                 if (lamports == from_account.account.lamports) {
                     const durable_nonce = nonce.initDurableNonceFromHash(ic.tc.prev_blockhash);
                     if (durable_nonce.eql(data.durable_nonce)) {
@@ -710,6 +723,7 @@ fn withdrawNonceAccount(
                             @intFromEnum(SystemProgramError.NonceBlockhashNotExpired);
                         return InstructionError.Custom;
                     }
+                    try checkWithdrawNonceSigner(ic, data.authority);
                     try from_account.serializeIntoAccountData(
                         nonce.Versions{ .current = nonce.State.uninitialized },
                     );
@@ -727,14 +741,9 @@ fn withdrawNonceAccount(
                         );
                         return InstructionError.InsufficientFunds;
                     }
+                    try checkWithdrawNonceSigner(ic, data.authority);
                 }
-                break :blk data.authority;
             },
-        };
-
-        if (!ic.ixn_info.isPubkeySigner(authority)) {
-            try ic.tc.log("Withdraw nonce account: Account {f} must sign", .{authority});
-            return InstructionError.MissingRequiredSignature;
         }
 
         try from_account.subtractLamports(lamports);
