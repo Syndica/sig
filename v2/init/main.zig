@@ -179,7 +179,7 @@ pub fn main() !void {
             .port = config.telemetry.port,
             .log_filters_encoded = log_filters.written(),
             .service_count = @intCast(
-                topology.countTotalRegionShares(.telemetry) - 1,
+                topology.countTotalBindingShares(.telemetry) - 1,
             ),
 
             .id_mem_len = 4096 * 16,
