@@ -765,6 +765,7 @@ fn executeTxnContext(
         txn_result,
         runtime_transaction,
         failed_accounts.slice(),
+        feature_set.active(.virtual_address_space_adjustments, slot),
     );
 }
 
@@ -800,6 +801,7 @@ fn serializeOutput(
     result: TransactionResult(ProcessedTransaction),
     sanitized: RuntimeTransaction,
     failed_accounts: []const sig.runtime.account_loader.LoadedAccount,
+    virtual_address_space_adjustments: bool,
 ) !pb.TxnResult {
     const txn = switch (result) {
         .ok => |txn| txn,
@@ -816,7 +818,7 @@ fn serializeOutput(
     if (result.ok.err != null) {
         for (txn.writes.constSlice()) |account| try rollback_accounts.append(
             allocator,
-            try sharedAccountToState(allocator, account.pubkey, account.account),
+            try sharedAccountToState(allocator, account.pubkey, account.account, false),
         );
 
         // In the event that the transaction is executed and fails, agave
@@ -826,6 +828,17 @@ fn serializeOutput(
         // validator, but for compatibility with solfuzz_agave's outputs, we
         // need to return the "modified" loaded accounts that aren't actually
         // modified since the transaction failed.
+        //
+        // Additionally, when `virtual_address_space_adjustments` is active and the
+        // transaction failed with the compute meter fully exhausted (cu_avail == 0),
+        // agave's harness clears the data region of every modified account: under
+        // direct mapping the VM's CU accounting diverges from agave's at the point
+        // of CU exhaustion, so the account data is not comparable. Mirror that here.
+        // cu_avail == compute_unit_limit - executed_units == compute_meter (remaining).
+        // [solfuzz-agave] src/txn.rs `direct_mapping_handle_cu_exhaustion`
+        const clear_modified_data = virtual_address_space_adjustments and
+            if (result.ok.outputs) |out| out.compute_meter == 0 else false;
+
         if (result.ok.outputs != null) for (failed_accounts) |account| {
             const was_an_input_and_is_writable = for (
                 sanitized.accounts.items(.pubkey),
@@ -836,13 +849,18 @@ fn serializeOutput(
 
             if (was_an_input_and_is_writable) try modified_accounts.append(
                 allocator,
-                try sharedAccountToState(allocator, account.pubkey, account.account),
+                try sharedAccountToState(
+                    allocator,
+                    account.pubkey,
+                    account.account,
+                    clear_modified_data,
+                ),
             );
         };
     } else for (txn.writes.constSlice()) |account| {
         try modified_accounts.append(
             allocator,
-            try sharedAccountToState(allocator, account.pubkey, account.account),
+            try sharedAccountToState(allocator, account.pubkey, account.account, false),
         );
     }
 
@@ -877,11 +895,13 @@ fn sharedAccountToState(
     allocator: std.mem.Allocator,
     address: Pubkey,
     value: sig.runtime.AccountSharedData,
+    clear_data: bool,
 ) !pb.AcctState {
     const address_duped = try allocator.dupe(u8, &address.data);
     errdefer allocator.free(address_duped);
 
-    const data_duped = try allocator.dupe(u8, value.data);
+    const data_src: []const u8 = if (clear_data) &.{} else value.data;
+    const data_duped = try allocator.dupe(u8, data_src);
     errdefer allocator.free(data_duped);
 
     const owner_duped = try allocator.dupe(u8, &value.owner.data);
