@@ -116,6 +116,12 @@ fn serviceMain(params: lib.ipc.ResolvedArgs) callconv(.c) void {
     };
 
     root.serviceMain(connection, ro, rw) catch |err| {
+        if (err == error.Canceled and
+            activity.signalIdleAfterNCalls(0) == error.Canceled //
+        ) {
+            return;
+        }
+
         // write back error name
         const err_len = @min(@errorName(err).len, exit.error_name.len);
         @memcpy(exit.error_name[0..err_len], @errorName(err)[0..err_len]);
