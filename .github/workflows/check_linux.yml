@@ -34,9 +34,10 @@ jobs:
           cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
 
       - name: Build
-        run: zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36
-          -Denable-tsan=false -Dno-network-tests -Dallow-no-sha
-          -Dallow-no-avx512 --summary all
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig
+          zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Denable-tsan=false -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Configure docker user/mount defaults
         run: |
@@ -180,19 +181,21 @@ jobs:
 
       - name: V2 checks
         run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig v2/build.zig.zon
           cd v2/
           zig build ci -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Build and test hashmap ledger (linux)
         run: |
           set -eo pipefail
-          sudo apt-get update -y && sudo apt-get install wget -y
           ./scripts/proxy_workaround.sh zig
           zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" -Dallow-no-sha -Dallow-no-avx512 --summary all
           zig-out/bin/test 2>&1 | cat
 
       - name: Webzockets tests (linux)
         run: |
+          ./scripts/proxy_workaround.sh zig src/rpc/webzockets/build.zig.zon
           cd src/rpc/webzockets
           zig build test --summary all
 
@@ -273,6 +276,8 @@ jobs:
 
       - name: Build Sig target and Agave target
         run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig conformance/build.zig.zon
           cd conformance
           zig build solfuzz_sig -Dallow-no-sha -Dallow-no-avx512 --summary all
           . commits.env
