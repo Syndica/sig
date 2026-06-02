@@ -157,8 +157,8 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
 
             zone.value(response.task_id);
 
-            std.debug.assert(response.request_kind == .transaction_execution); // others unimplemented
-            const response_data = response.data.transaction_execution;
+            std.debug.assert(response.request_kind == .txn_exec); // others unimplemented
+            const response_data = response.data.txn_exec;
 
             defer rw.replay_transaction_pool.destroyId(response_data.tx_idx);
 
@@ -677,9 +677,9 @@ fn maybeContinueBlockExec(
             defer exec_request_sender.markUsed();
             request.* = .{
                 .task_id = tx_index,
-                .request_kind = .transaction_execution,
+                .request_kind = .txn_exec,
                 .data = .{
-                    .transaction_execution = .{
+                    .txn_exec = .{
                         .block_idx = block_ref,
                         .tx_idx = tx_ref,
                     },

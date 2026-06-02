@@ -40,15 +40,13 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
         const zone = tracy.Zone.init(@src(), .{});
         defer zone.deinit();
-        zone.name(switch (request.request_kind) {
-            inline else => |val| @as([:0]const u8, @tagName(val)),
-        });
+        zone.name(@tagName(request.request_kind));
 
         zone.value(request.task_id);
 
         switch (request.request_kind) {
-            .transaction_execution => {
-                const data = &request.data.transaction_execution;
+            .txn_exec => {
+                const data = &request.data.txn_exec;
 
                 const slot = data.block_idx.constPtr(ro.block_pool).?.slot;
                 zone.value(slot);
@@ -70,9 +68,9 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
                     @panic("cant write");
                 response.* = .{
                     .task_id = request.task_id,
-                    .request_kind = .transaction_execution,
+                    .request_kind = .txn_exec,
                     .data = .{
-                        .transaction_execution = .{
+                        .txn_exec = .{
                             .success = true,
                             .block_idx = data.block_idx,
                             .tx_idx = data.tx_idx,
@@ -81,7 +79,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
                 };
                 response_writer.markUsed();
             },
-            .transaction_signature_verify => return error.SigVerifyExecUnimpl,
+            .txn_sig_verify => return error.SigVerifyExecUnimpl,
         }
     }
 }

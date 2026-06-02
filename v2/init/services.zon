@@ -72,8 +72,8 @@
         .name = .exec,
         .regions = .{
             .{ .name = .exec_req_response, .access = .rw },
-            .{ .name = .transaction_pool, .access = .rw },
-            .{ .name = .block_pool, .access = .rw },
+            .{ .name = .transaction_pool, .access = .readonly },
+            .{ .name = .block_pool, .access = .readonly },
         },
     },
 }
