@@ -17,12 +17,31 @@ const producer_publish_packets: usize = 32;
 const stream_queue_packets = 8192;
 const no_current_slot = std.math.maxInt(Slot);
 
+const TestMode = enum {
+    linear,
+    reverse,
+
+    fn parse(raw: []const u8) ?TestMode {
+        if (std.mem.eql(u8, raw, "linear")) return .linear;
+        if (std.mem.eql(u8, raw, "reverse")) return .reverse;
+        return null;
+    }
+
+    fn name(self: TestMode) []const u8 {
+        return switch (self) {
+            .linear => "linear",
+            .reverse => "reverse",
+        };
+    }
+};
+
 const Config = struct {
     ledger: []const u8,
     target: []const u8,
     start_slot: ?Slot = null,
     end_slot: ?Slot = null,
     rate_hz: ?f64 = null,
+    test_mode: TestMode = .linear,
     dry_run: bool = false,
 
     fn slotSelected(self: Config, slot: Slot) bool {
@@ -43,6 +62,7 @@ const PartialConfig = struct {
     start_slot: ?Slot = null,
     end_slot: ?Slot = null,
     rate_hz: ?f64 = null,
+    test_mode: TestMode = .linear,
     dry_run: bool = false,
 
     fn finalize(self: PartialConfig) ParseArgsError!Config {
@@ -69,6 +89,7 @@ const PartialConfig = struct {
             .start_slot = self.start_slot,
             .end_slot = self.end_slot,
             .rate_hz = self.rate_hz,
+            .test_mode = self.test_mode,
             .dry_run = self.dry_run,
         };
     }
@@ -90,6 +111,7 @@ const Arg = enum {
     start_slot,
     end_slot,
     rate_hz,
+    test_mode,
     dry_run,
 
     fn parse(raw: []const u8) ?Arg {
@@ -99,6 +121,7 @@ const Arg = enum {
         if (std.mem.eql(u8, raw, "--start-slot")) return .start_slot;
         if (std.mem.eql(u8, raw, "--end-slot")) return .end_slot;
         if (std.mem.eql(u8, raw, "--rate-hz")) return .rate_hz;
+        if (std.mem.eql(u8, raw, "--test-mode")) return .test_mode;
         if (std.mem.eql(u8, raw, "--dry-run")) return .dry_run;
         return null;
     }
@@ -111,6 +134,7 @@ const Arg = enum {
             .start_slot => "--start-slot",
             .end_slot => "--end-slot",
             .rate_hz => "--rate-hz",
+            .test_mode => "--test-mode",
             .dry_run => "--dry-run",
         };
     }
@@ -157,6 +181,7 @@ fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
     try stdout.print("  start_slot: {?d}\n", .{config.start_slot});
     try stdout.print("  end_slot: {?d}\n", .{config.end_slot});
     try stdout.print("  rate_hz: {?}\n", .{config.rate_hz});
+    try stdout.print("  test_mode: {s}\n", .{config.test_mode.name()});
     try stdout.print("  dry_run: {}\n", .{config.dry_run});
     try stdout.print("  column_families:\n", .{});
     try stdout.print("    {s}: present\n", .{agave_cf_meta});
@@ -742,18 +767,50 @@ fn produceLedgerPackets(
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
 ) !ProducerStats {
+    return switch (config.test_mode) {
+        .linear => produceOrderedLedgerPackets(
+            blockstore,
+            config,
+            .forward,
+            writer,
+            stop,
+            progress,
+        ),
+        .reverse => produceOrderedLedgerPackets(
+            blockstore,
+            config,
+            .reverse,
+            writer,
+            stop,
+            progress,
+        ),
+    };
+}
+
+fn produceOrderedLedgerPackets(
+    blockstore: *const AgaveBlockstore,
+    config: Config,
+    comptime direction: rocks.IteratorDirection,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
+) !ProducerStats {
     var stats: ProducerStats = .{};
     var unpublished_packets: usize = 0;
 
     var start_key_buf: [8]u8 = undefined;
-    const start_key: ?[]const u8 = if (config.start_slot) |slot| start_key: {
+    const start_key_slot = switch (direction) {
+        .forward => config.start_slot,
+        .reverse => config.end_slot,
+    };
+    const start_key: ?[]const u8 = if (start_key_slot) |slot| start_key: {
         writeSlotKey(&start_key_buf, slot);
         break :start_key start_key_buf[0..];
     } else null;
 
     var slot_iter = blockstore.db.iterator(
         try blockstore.columnFamily(agave_cf_meta),
-        .forward,
+        direction,
         start_key,
     );
     defer slot_iter.deinit();
@@ -768,27 +825,42 @@ fn produceLedgerPackets(
             std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
             return err;
         };
-        if (config.pastEndSlot(slot)) break;
+        if (pastSlotRange(config, slot, direction)) break;
         if (!config.slotSelected(slot)) continue;
 
         progress.current_slot.store(slot, .release);
         stats.recordSlot();
         progress.store(stats);
+        if (direction == .reverse and blockstore.has_code_shred) {
+            try produceSlotShreds(
+                blockstore,
+                slot,
+                .code,
+                direction,
+                writer,
+                stop,
+                progress,
+                &unpublished_packets,
+                &stats,
+            );
+        }
         try produceSlotShreds(
             blockstore,
             slot,
             .data,
+            direction,
             writer,
             stop,
             progress,
             &unpublished_packets,
             &stats,
         );
-        if (blockstore.has_code_shred) {
+        if (direction == .forward and blockstore.has_code_shred) {
             try produceSlotShreds(
                 blockstore,
                 slot,
                 .code,
+                direction,
                 writer,
                 stop,
                 progress,
@@ -805,6 +877,17 @@ fn produceLedgerPackets(
 
     progress.store(stats);
     return stats;
+}
+
+fn pastSlotRange(
+    config: Config,
+    slot: Slot,
+    comptime direction: rocks.IteratorDirection,
+) bool {
+    return switch (direction) {
+        .forward => config.pastEndSlot(slot),
+        .reverse => if (config.start_slot) |start_slot| slot < start_slot else false,
+    };
 }
 
 fn publishPacket(
@@ -851,6 +934,7 @@ fn produceSlotShreds(
     blockstore: *const AgaveBlockstore,
     slot: Slot,
     kind: ShredKind,
+    comptime direction: rocks.IteratorDirection,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
@@ -858,11 +942,17 @@ fn produceSlotShreds(
     stats: *ProducerStats,
 ) !void {
     var start_key_buf: [16]u8 = undefined;
-    writeShredKey(&start_key_buf, .{ .slot = slot, .index = 0 });
+    writeShredKey(&start_key_buf, .{
+        .slot = slot,
+        .index = switch (direction) {
+            .forward => 0,
+            .reverse => std.math.maxInt(u64),
+        },
+    });
 
     var iter = blockstore.db.iterator(
         try blockstore.columnFamily(kind.columnFamilyName()),
-        .forward,
+        direction,
         start_key_buf[0..],
     );
     defer iter.deinit();
@@ -1174,6 +1264,9 @@ fn parseArgs(args: []const []const u8) ParseArgsError!ParseResult {
             .rate_hz => config.rate_hz = try parseRateHz(
                 try nextValue(args, &i, parsed_arg.name()),
             ),
+            .test_mode => config.test_mode = try parseTestMode(
+                try nextValue(args, &i, parsed_arg.name()),
+            ),
             .dry_run => config.dry_run = true,
         }
     }
@@ -1212,6 +1305,14 @@ fn parseRateHz(value: []const u8) ParseArgsError!f64 {
     return rate_hz;
 }
 
+fn parseTestMode(value: []const u8) ParseArgsError!TestMode {
+    return TestMode.parse(value) orelse {
+        std.debug.print("invalid test mode for --test-mode: {s}\n", .{value});
+        std.debug.print("valid test modes: linear, reverse\n", .{});
+        return error.InvalidArguments;
+    };
+}
+
 fn printHelp() void {
     std.debug.print(
         \\usage: shred-stream --ledger <path> --target <ip:port> [options]
@@ -1224,6 +1325,7 @@ fn printHelp() void {
         \\  --start-slot <slot>   First slot to stream
         \\  --end-slot <slot>     Inclusive last slot to stream
         \\  --rate-hz <float>     Maximum packets per second
+        \\  --test-mode <mode>    linear or reverse
         \\  --dry-run             Read and print stats without sending UDP
         \\  -h, --help            Print this help
         \\
@@ -1239,6 +1341,7 @@ test "parse arguments" {
         try std.testing.expectEqual(@as(?Slot, null), config.start_slot);
         try std.testing.expectEqual(@as(?Slot, null), config.end_slot);
         try std.testing.expectEqual(@as(?f64, null), config.rate_hz);
+        try std.testing.expectEqual(.linear, config.test_mode);
         try std.testing.expect(!config.dry_run);
     }
 
@@ -1249,14 +1352,31 @@ test "parse arguments" {
             "--start-slot", "10",
             "--end-slot",   "20",
             "--rate-hz",    "100.5",
+            "--test-mode",  "reverse",
             "--dry-run",
         });
         const config = result.config;
         try std.testing.expectEqual(@as(?Slot, 10), config.start_slot);
         try std.testing.expectEqual(@as(?Slot, 20), config.end_slot);
         try std.testing.expectEqual(@as(?f64, 100.5), config.rate_hz);
+        try std.testing.expectEqual(.reverse, config.test_mode);
         try std.testing.expect(config.dry_run);
     }
+
+    {
+        const result = try parseArgs(&.{
+            "--ledger",    "ledger",
+            "--target",    "127.0.0.1:8002",
+            "--test-mode", "linear",
+        });
+        try std.testing.expectEqual(.linear, result.config.test_mode);
+    }
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",    "ledger",
+        "--target",    "127.0.0.1:8002",
+        "--test-mode", "shuffle-global",
+    }));
 
     try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
         "--ledger",     "ledger",
