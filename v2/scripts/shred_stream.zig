@@ -182,7 +182,9 @@ fn run(allocator: Allocator, config: Config) !void {
             std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC,
             std.posix.IPPROTO.UDP,
         );
-        errdefer std.posix.close(sockfd);
+        // The net thread borrows this fd. Keep ownership here so every path joins
+        // the net thread before closing the fd exactly once.
+        defer std.posix.close(sockfd);
 
         var ring: StreamPacketRing = undefined;
         ring.init();
@@ -195,7 +197,16 @@ fn run(allocator: Allocator, config: Config) !void {
         var producer_progress: ProducerProgress = .{};
         var producer_result: ProducerThreadResult = .{};
 
-        const net_thread = try std.Thread.spawn(
+        var maybe_net_thread: ?std.Thread = null;
+        var maybe_producer_thread: ?std.Thread = null;
+        errdefer {
+            stop.store(true, .release);
+            producer_done.store(true, .release);
+            if (maybe_producer_thread) |thread| thread.join();
+            if (maybe_net_thread) |thread| thread.join();
+        }
+
+        maybe_net_thread = try std.Thread.spawn(
             .{},
             netThreadMain,
             .{
@@ -210,13 +221,8 @@ fn run(allocator: Allocator, config: Config) !void {
                 config.rate_hz,
             },
         );
-        errdefer {
-            stop.store(true, .release);
-            producer_done.store(true, .release);
-            net_thread.join();
-        }
 
-        const producer_thread = try std.Thread.spawn(
+        maybe_producer_thread = try std.Thread.spawn(
             .{},
             producerThreadMain,
             .{
@@ -230,7 +236,7 @@ fn run(allocator: Allocator, config: Config) !void {
             },
         );
 
-        monitorProgress(
+        try monitorProgress(
             stdout,
             &ring,
             &producer_done,
@@ -238,15 +244,12 @@ fn run(allocator: Allocator, config: Config) !void {
             &producer_progress,
             &net_progress,
             config.rate_hz,
-        ) catch |err| {
-            stop.store(true, .release);
-            producer_done.store(true, .release);
-            producer_thread.join();
-            net_thread.join();
-            return err;
-        };
-        producer_thread.join();
-        net_thread.join();
+        );
+
+        maybe_producer_thread.?.join();
+        maybe_producer_thread = null;
+        maybe_net_thread.?.join();
+        maybe_net_thread = null;
 
         try printProducerStats(stdout, producer_result.stats);
         try printNetThreadStats(stdout, net_thread_stats);
@@ -477,6 +480,7 @@ const ProgressSnapshot = struct {
     }
 };
 
+// Adapts the fallible net thread loop to std.Thread.spawn's void entry point.
 fn netThreadMain(
     ring: *StreamPacketRing,
     done: *std.atomic.Value(bool),
@@ -488,8 +492,6 @@ fn netThreadMain(
     target: std.net.Address,
     rate_hz: ?f64,
 ) void {
-    defer std.posix.close(sockfd);
-
     var reader = ring.get(.reader);
     netThreadMainInner(
         &reader,
@@ -1105,10 +1107,15 @@ fn listColumnFamilies(allocator: Allocator, rocksdb_path: []const u8) !ColumnFam
     defer rocks_c.rocksdb_list_column_families_destroy(raw_names, count);
 
     const names = try allocator.alloc([]const u8, count);
-    errdefer allocator.free(names);
+    var names_len: usize = 0;
+    errdefer {
+        for (names[0..names_len]) |name| allocator.free(name);
+        allocator.free(names);
+    }
 
     for (names, raw_names[0..count]) |*name, raw_name| {
         name.* = try allocator.dupe(u8, std.mem.span(raw_name));
+        names_len += 1;
     }
 
     return .{ .allocator = allocator, .names = names };

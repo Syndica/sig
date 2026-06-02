@@ -206,18 +206,25 @@ pub fn build(b: *Build) !void {
     }
 
     {
+        const module = b.createModule(.{
+            .root_source_file = b.path("scripts/shred_stream.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ipc-ring", .module = ipc_ring_mod },
+                .{ .name = "rocksdb", .module = rocksdb_mod },
+                .{ .name = "rocksdb-c", .module = rocksdb_c_mod },
+            },
+        });
         const shred_stream_exe = b.addExecutable(.{
             .name = "shred-stream",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("scripts/shred_stream.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "ipc-ring", .module = ipc_ring_mod },
-                    .{ .name = "rocksdb", .module = rocksdb_mod },
-                    .{ .name = "rocksdb-c", .module = rocksdb_c_mod },
-                },
-            }),
+            .root_module = module,
+            .use_llvm = true,
+        });
+        _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+            .name = "shred-stream",
+            .root_module = module,
+            .filters = filters,
             .use_llvm = true,
         });
         const shred_stream_out = addExeOutputs(
