@@ -199,6 +199,18 @@ jobs:
   solana_conformance:
     runs-on: ubuntu-latest
     steps:
+      - name: "Disk report: initial"
+        run: |
+          echo "=== df -h / ==="
+          df -h /
+          echo ""
+          echo "=== Top space consumers ==="
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache \
+            /usr/lib/google-cloud-sdk /opt/ghc /usr/share/swift 2>/dev/null | sort -rh
+          echo ""
+          echo "=== Docker images ==="
+          docker image ls --format '{{.Repository}}:{{.Tag}} {{.Size}}'
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -211,12 +223,25 @@ jobs:
           cache-key: build_conformance-v1-${{ hashFiles('build.zig', 'build.zig.zon',
             'conformance/build.zig', 'conformance/build.zig.zon') }}
 
+      - name: "Disk report: after checkout + zig setup"
+        run: df -h /
+
       - name: Build Conformance
         run: |
           sudo apt-get update -y && sudo apt-get install wget -y
           ./scripts/proxy_workaround.sh zig
           cd conformance
           zig build -Dallow-no-sha -Dallow-no-avx512 --summary all
+
+      - name: "Disk report: after build"
+        run: |
+          df -h /
+          echo "=== Zig cache size ==="
+          du -sh ~/.cache/zig 2>/dev/null || true
+          du -sh conformance/zig-out 2>/dev/null || true
+          du -sh conformance/.zig-cache 2>/dev/null || true
+          du -sh .zig-cache 2>/dev/null || true
+          du -sh zig-out 2>/dev/null || true
 
       - id: test_vectors_cache
         uses: actions/cache@v4
@@ -234,6 +259,12 @@ jobs:
           git clone https://github.com/firedancer-io/test-vectors.git
           cd test-vectors
           git checkout $TEST_VECTORS_COMMIT
+
+      - name: "Disk report: after fixtures"
+        run: |
+          df -h /
+          echo "=== test-vectors size ==="
+          du -sh conformance/env/test-vectors 2>/dev/null || true
 
       - name: Run Fixtures
         run: conformance/scripts/ci-run.sh
