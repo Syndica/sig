@@ -22,6 +22,9 @@ jobs:
   build_check_macos:
     runs-on: macos-15
     steps:
+      - name: "Disk report: initial"
+        run: df -h /
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -36,9 +39,17 @@ jobs:
       - name: Build Check
         run: zig build -Denable-tsan=false --summary all -Dno-run -Dno-bin
 
+      - name: "Disk report: after build"
+        run: |
+          df -h /
+          du -sh .zig-cache 2>/dev/null || true
+
   test_macos:
     runs-on: macos-15
     steps:
+      - name: "Disk report: initial"
+        run: df -h /
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -53,6 +64,11 @@ jobs:
       - name: Build Tests
         run: zig build test -Dno-run -Denable-tsan=false --summary all
 
+      - name: "Disk report: after build tests"
+        run: |
+          df -h /
+          du -sh .zig-cache zig-out 2>/dev/null || true
+
       - name: Run Tests
         run: |
           set -eo pipefail
@@ -61,6 +77,9 @@ jobs:
   test_macos_hashmap_ledger:
     runs-on: macos-15
     steps:
+      - name: "Disk report: initial"
+        run: df -h /
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -76,6 +95,11 @@ jobs:
         run: zig build test -Dno-run -Denable-tsan=false --summary all -Dlong-tests
           -Dledger=hashmap -Dfilter="ledger"
 
+      - name: "Disk report: after build tests"
+        run: |
+          df -h /
+          du -sh .zig-cache zig-out 2>/dev/null || true
+
       - name: Run Tests
         run: |
           set -eo pipefail
@@ -84,6 +108,9 @@ jobs:
   test_webzockets_macos:
     runs-on: macos-15
     steps:
+      - name: "Disk report: initial"
+        run: df -h /
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -101,3 +128,8 @@ jobs:
         run: |
           cd src/rpc/webzockets
           zig build test --summary all
+
+      - name: "Disk report: after webzockets"
+        run: |
+          df -h /
+          du -sh .zig-cache src/rpc/webzockets/.zig-cache 2>/dev/null || true
