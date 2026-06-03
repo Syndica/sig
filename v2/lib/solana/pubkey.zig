@@ -56,7 +56,7 @@ pub const Pubkey = extern struct {
         return @truncate(h);
     }
 
-    pub fn order(self: *const Pubkey, other: Pubkey) std.math.Order {
+    pub fn order(self: Pubkey, other: Pubkey) std.math.Order {
         const xx: @Vector(SIZE, u8) = self.data;
         const yy: @Vector(SIZE, u8) = other.data;
 
