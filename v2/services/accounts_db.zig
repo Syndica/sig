@@ -54,7 +54,7 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     var in = rw.ready_snapshot_in.getView(.reader);
     defer in.close();
 
-    if (rooted.table.count == 0) {
+    if (rooted.table.count() == 0) {
         logger.info().logf("no existing rooted db. reading from snapshot", .{});
 
         var fba = std.heap.FixedBufferAllocator.init(&Global.fba_memory);

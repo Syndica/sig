@@ -1,6 +1,5 @@
 const std = @import("std");
 const lib = @import("../lib.zig");
-const tracy = @import("tracy");
 
 const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
@@ -8,16 +7,22 @@ const Slot = lib.solana.Slot;
 const FastDiv = lib.util.FastDiv;
 
 pub const Table = struct {
-    seed: u64, // runtime-provided hashing seed (if wanting to help lower collision attacks)
-    count: u64, // number of entries present in the table
-    reducer: FastDiv, // for fast hash % entries.len
-    zero_entry: Entry, // special case for a valid zero pubkey
+    seed: u64, // runtime-provided hashing seed (to help decrease chance of collision attacks)
+    size: u64, // number of entries present in the table (including the zero_entry)
+    zero_entry: Entry, // special cased Value for the zero Key (given 0 is empty for Entry)
+    reducer: FastDiv, // for fast hash % capacity
     entries: []Entry,
 
+    // Need to store the slot as put()s from the snapshot can appear out of slot-order.
+    // Slot could be u32 here (as its enough to represent another 50yrs of 400ms mainnet slots),
+    // but keeping it u64 allows separate slot/value access to be done in single simd operations.
     const Entry = extern struct {
-        key: Key align(1),
+        key: Key,
+        slot: Slot align(1),
         value: Value align(1),
-        slot: u32 align(1), // can represent another 50yrs of 400ms slots from current mainnet
+
+        // Must be all zeroes: see init()
+        const empty: Entry = .{ .key = .ZEROES, .slot = 0, .value = .empty };
 
         comptime {
             std.debug.assert(@alignOf(Entry) == 1);
@@ -29,6 +34,7 @@ pub const Table = struct {
         len: u24, // can address up to 16MB range
         offset: u40, // can address up to 1TB offset
 
+        // Must be all zeroes: see get().
         const empty: Value = .{ .len = 0, .offset = 0 };
 
         pub fn isEmpty(self: Value) bool {
@@ -36,27 +42,37 @@ pub const Table = struct {
         }
     };
 
+    /// Initializes the table using the provided memory.
+    /// Relies on the memory already being zero-initialized (default property of mmap).
     pub fn init(seed: u64, memory: []u8) Table {
-        const num_entries = @divFloor(memory.len, @sizeOf(Entry));
-        std.debug.assert(num_entries > 0);
+        const capacity = @divFloor(memory.len, @sizeOf(Entry));
+        std.debug.assert(capacity > 1);
 
         return .{
             .seed = seed,
-            .count = 0,
-            .reducer = .init(num_entries),
-            .zero_entry = .{ .key = .ZEROES, .value = .empty, .slot = 0 },
-            .entries = @ptrCast(memory[0 .. num_entries * @sizeOf(Entry)]),
+            .size = 0,
+            .zero_entry = .empty,
+            .reducer = .init(capacity),
+            .entries = std.mem.bytesAsSlice(Entry, memory[0 .. capacity * @sizeOf(Entry)]),
         };
     }
 
-    // Number of hash map probes to do together with ILP to amortize DRAM cache-miss latency.
-    const PARALLEL_SCAN = 8;
+    pub fn count(self: *const Table) u64 {
+        return self.size;
+    }
+
+    // Number of hash map probes to do together with memory-level-parallelism (MLP)
+    // to amortize DRAM cache-miss latency when accessing random table locations.
+    const PARALLEL_SCAN = 16;
 
     pub const PutBatch = extern struct {
         len: u32,
-        items: [PARALLEL_SCAN]Entry,
+        entries: [PARALLEL_SCAN]Entry,
 
-        pub const empty: PutBatch = .{ .len = 0, .items = undefined };
+        pub const empty: PutBatch = .{
+            .len = 0,
+            .entries = @splat(.empty),
+        };
     };
 
     pub fn put(
@@ -66,114 +82,84 @@ pub const Table = struct {
         slot: Slot,
         value: Value,
     ) void {
-        std.debug.assert(slot <= std.math.maxInt(u32));
         std.debug.assert(!value.isEmpty());
+        std.debug.assert(batch.len <= PARALLEL_SCAN);
 
         // We use a zero pubkey in the map to denote empty Entry.
-        // If actualy inserting to the zero pubkey, update the one in the table instead.
+        // If actualy putting to the zero pubkey, access the one in the table instead.
         if (pubkey.isZeroed()) {
-            @branchHint(.unlikely); // zero pubkey is System Program. Should rarely be written.
-            if (slot >= self.zero_entry.slot) self.zero_entry.value = value;
+            @branchHint(.unlikely); // zero pubkey is System Program, which is rarely modified.
+            if (slot >= self.zero_entry.slot) {
+                // Bump size on first populate
+                self.size += @intFromBool(self.zero_entry.value.isEmpty());
+                self.zero_entry = .{ .key = .ZEROES, .slot = slot, .value = value };
+            }
             return;
         }
 
-        std.debug.assert(batch.len <= PARALLEL_SCAN);
         if (batch.len == PARALLEL_SCAN) {
             @branchHint(.unlikely);
             self.flushPuts(batch);
         }
 
-        batch.items[batch.len] = .{
-            .key = pubkey.*,
-            .value = value,
-            .slot = @intCast(slot),
-        };
+        batch.entries[batch.len] = .{ .key = pubkey.*, .slot = slot, .value = value };
         batch.len += 1;
     }
 
     pub fn flushPuts(noalias self: *Table, noalias batch: *PutBatch) void {
-        const zone = tracy.Zone.init(@src(), .{ .name = "Table.flushPuts" });
-        defer zone.deinit();
-
         const batch_len = batch.len;
-        std.debug.assert(batch_len <= PARALLEL_SCAN);
         if (batch_len == 0) return;
-        batch.len = 0; // mark as flushed
+        std.debug.assert(batch_len <= PARALLEL_SCAN);
 
-        // table should never fill up fully (means it shouldve been given more memory)
-        const entries: []Entry = self.entries;
-        std.debug.assert(self.count + batch_len < entries.len);
+        // mark as flushed at the end.
+        defer batch.* = .empty;
 
-        // phase-0: zero out unused batch items
-        const zero: @Vector(32, u8) = @splat(0);
-        var item_keys: [PARALLEL_SCAN]@Vector(32, u8) = undefined;
-        for (0..PARALLEL_SCAN) |i| {
-            const valid: @Vector(32, bool) = @splat(i < batch_len);
-            const key: @Vector(32, u8) = @bitCast(batch.items[i].key);
-            item_keys[i] = @bitCast(@select(u8, valid, key, zero)); // valid ? key : 0
-        }
+        // table should never be near full (means it shouldve been given more memory)
+        std.debug.assert(self.size + batch_len < self.entries.len);
 
-        // phase-1: hash pubkeys into table entry pointers
+        // phase-1: compute table locations from the keys and prefetch them upfront for probing
         var ptrs: [PARALLEL_SCAN][*]Entry = undefined;
         for (0..PARALLEL_SCAN) |i| {
-            const pubkey: Pubkey = @bitCast(item_keys[i]);
-            ptrs[i] = entries.ptr + self.hashKeyToIndex(&pubkey);
+            ptrs[i] = self.entries.ptr + self.hashToIndex(&batch.entries[i].key);
+            @prefetch(ptrs[i], .{});
         }
 
-        // phase-2: parallel-loads of entries
-        var keys: [PARALLEL_SCAN]@Vector(32, u8) = undefined;
+        // phase-2: do the probes one by one to handle intra-batch duplicates/hash-index-collisions
         for (0..PARALLEL_SCAN) |i| {
-            keys[i] = @bitCast(ptrs[i][0].key);
-        }
-
-        // phase-3: parallel-probe of entries
-        while (true) {
-            var had_collision = false;
-            for (0..PARALLEL_SCAN) |i| {
-                const item_key = item_keys[i];
-                const empty_mask = @select(u8, keys[i] == zero, ~zero, zero);
-                const eq_mask = @select(u8, keys[i] == item_key, ~zero, zero);
-
-                // check for collisions (!eq and !empty = populated with unrelated entry)
-                const collided = @reduce(.Or, (empty_mask | eq_mask) == zero);
-                if (collided) had_collision = true;
-
-                // probe next item if collided
-                ptrs[i] += @intFromBool(collided);
-                if (ptrs[i] == entries.ptr + entries.len) ptrs[i] = entries.ptr;
-                keys[i] = @bitCast(ptrs[i][0].key);
-            }
-            if (!had_collision) break;
-        }
-
-        // phase-4: do the updates
-        var stub: Entry = undefined;
-        for (0..PARALLEL_SCAN) |i| {
-            const item_slot = batch.items[i].slot;
-            const newer_slot = @intFromBool(item_slot >= ptrs[i][0].slot);
-
-            const item_key: Pubkey = @bitCast(item_keys[i]);
-            const valid = @intFromBool(!item_key.isZeroed());
-
-            const overwrite = valid & newer_slot;
-            const was_empty = @intFromBool(ptrs[i][0].key.isZeroed());
-            self.count += overwrite & was_empty;
-
-            var dst = if (overwrite > 0) &ptrs[i][0] else &stub;
+            // disable unrolling by forcing index into a register
             asm volatile (""
-                : [_] "=r" (dst),
-                : [_] "r" (dst),
-            ); // hide from compiler to not branch
+                :
+                : [_] "r" (i),
+            );
 
-            dst.* = .{
-                .key = item_key,
-                .slot = item_slot,
-                .value = batch.items[i].value,
-            };
+            // stop at unfilled batch items
+            const batch_entry = batch.entries[i];
+            if (batch_entry.key.isZeroed()) break;
+
+            while (true) {
+                // Observe ptr & increment it upfront to keep a single loop-back branch below.
+                const entry = &ptrs[i][0];
+                ptrs[i] += 1;
+                if (ptrs[i] == self.entries.ptr + self.entries.len) ptrs[i] = self.entries.ptr;
+
+                const empty = entry.key.isZeroed();
+                const eq = entry.key.equals(&batch_entry.key);
+                if (eq or empty) {
+                    @branchHint(.likely);
+                    if (batch_entry.slot >= entry.slot) {
+                        self.size += @intFromBool(entry.key.isZeroed()); // was empty
+                        entry.* = batch_entry;
+                    }
+                    break;
+                }
+            }
         }
     }
 
     pub fn get(self: *const Table, pubkey: *const Pubkey) Value {
+        // Searching on a full table can deadlock the loop below + shouldnt happen given flushPuts.
+        std.debug.assert(self.size < self.entries.len);
+
         // We use a zero pubkey in the map to denote empty Entry.
         // If actualy fetching from the zero pubkey, access the one in the table instead.
         if (pubkey.isZeroed()) {
@@ -181,59 +167,29 @@ pub const Table = struct {
             return self.zero_entry.value;
         }
 
-        const entries: []Entry = self.entries;
-        var ptr = entries.ptr + self.hashKeyToIndex(pubkey);
+        var idx = self.hashToIndex(pubkey);
         while (true) {
-            // load the entry values out
-            const key = ptr[0].key;
-            const value = ptr[0].value;
+            // Observe idx & increment it upfront to keep a single loop-back branch below.
+            const entry = &self.entries.ptr[idx];
+            idx +%= 1;
+            if (idx == self.entries.len) idx = 0;
 
-            // branchless increment
-            ptr += 1;
-            if (ptr == entries.ptr + entries.len) ptr = entries.ptr;
-
-            // branch out for empty (looking up unfound accounts is rare)
-            if (key.isZeroed()) {
-                @branchHint(.unlikely);
-                return .empty;
-            }
-
-            // branch back to loop on collision (entry, but not matching one)
-            if (key.equals(pubkey)) {
-                std.debug.assert(!value.isEmpty());
-                return value;
+            const empty = entry.key.isZeroed();
+            const eq = entry.key.equals(pubkey);
+            if (eq or empty) {
+                @branchHint(.likely);
+                return entry.value; // on empty its Value.empty
             }
         }
     }
 
-    fn hashKeyToIndex(self: *const Table, pubkey: *const Pubkey) u64 {
-        // based on xxh3 / rapidhash / wyhash mixing
-        const sd = self.seed;
-        const sk: [4]u64 = .{
-            0xbe4ba423396cfeb8,
-            0x1cad21f72c81017c,
-            0xdb979083e96dd4de,
-            0x1f67b3b7a4a44072,
-        };
+    /// Reduce a hash into a table index.
+    fn hashToIndex(self: *const Table, pubkey: *const Pubkey) u64 {
+        const hash = pubkey.hash(self.seed);
+        const len = self.entries.len;
 
-        // XXH3_mix16B
-        const in: [4]u64 = @bitCast(pubkey.*);
-        const a: [2]u64 = @bitCast(@as(u128, in[0] ^ (sk[0] +% sd)) * (in[1] ^ (sk[1] -% sd)));
-        const b: [2]u64 = @bitCast(@as(u128, in[2] ^ (sk[2] +% sd)) * (in[3] ^ (sk[3] -% sd)));
-
-        // XXH3_len_17to128_64b
-        var acc = @as(u64, 0x9E3779B185EBCA87) *% 32;
-        acc +%= a[0] ^ a[1];
-        acc +%= b[0] ^ b[1];
-
-        // XXH3_avalanche
-        acc ^= acc >> 37;
-        acc *%= 0x165667919E3779F9;
-        acc ^= acc >> 32;
-
-        // reduce into table index
-        const acc_mod_len = acc - (self.reducer.div(acc) * self.entries.len);
-        std.debug.assert(acc_mod_len < self.entries.len);
-        return acc_mod_len;
+        const hash_mod_len = hash - (self.reducer.div(hash) * len);
+        std.debug.assert(hash_mod_len < len);
+        return hash_mod_len;
     }
 };

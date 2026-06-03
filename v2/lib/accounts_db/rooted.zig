@@ -304,7 +304,7 @@ pub const Rooted = struct {
         }
 
         self.table.flushPuts(&self.put_batch);
-        logger.info().logf("loaded rooted db: {} accounts", .{self.table.count});
+        logger.info().logf("loaded rooted db: {} accounts", .{self.table.count()});
     }
 
     fn readExisting(
@@ -374,7 +374,7 @@ pub const Rooted = struct {
         }
 
         try self.commitTransaction(.from(logger));
-        logger.info().logf("populated from snapshot: {} accounts", .{self.table.count});
+        logger.info().logf("populated from snapshot: {} accounts", .{self.table.count()});
     }
 
     pub fn beginTransaction(
