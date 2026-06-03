@@ -209,7 +209,7 @@ pub const Rooted = struct {
                     @intFromEnum(@TypeOf(self.journal.magic).valid),
                     @intFromEnum(self.journal.magic),
                 });
-                return;
+                return error.InvalidJournal;
             }
 
             switch (self.journal.state) {

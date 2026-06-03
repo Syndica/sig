@@ -193,3 +193,152 @@ pub const Table = struct {
         return hash_mod_len;
     }
 };
+
+fn testKey(byte: u8) Pubkey {
+    var key = Pubkey.ZEROES;
+    key.data[31] = byte;
+    return key;
+}
+
+fn testValue(len: u24, offset: u40) Table.Value {
+    return .{ .len = len, .offset = offset };
+}
+
+fn TestTableState(comptime capacity: usize) type {
+    return struct {
+        const Self = @This();
+
+        memory: [capacity * @sizeOf(Table.Entry)]u8,
+        table: Table,
+        batch: Table.PutBatch,
+
+        fn init(self: *Self) void {
+            self.memory = @splat(0);
+            self.table = .init(0, &self.memory);
+            self.batch = .empty;
+        }
+    };
+}
+
+test "accounts table returns empty for missing key" {
+    var state: TestTableState(8) = undefined;
+    state.init();
+    const missing = testKey(1);
+
+    try std.testing.expect(state.table.get(&missing).isEmpty());
+    try std.testing.expectEqual(@as(u64, 0), state.table.count());
+}
+
+test "accounts table inserts and retrieves flushed puts" {
+    var state: TestTableState(8) = undefined;
+    state.init();
+
+    const key = testKey(1);
+    const value = testValue(123, 456);
+    state.table.put(&state.batch, &key, 10, value);
+
+    try std.testing.expect(state.table.get(&key).isEmpty());
+    state.table.flushPuts(&state.batch);
+
+    try std.testing.expectEqual(value, state.table.get(&key));
+    try std.testing.expectEqual(@as(u64, 1), state.table.count());
+    try std.testing.expectEqual(@as(u32, 0), state.batch.len);
+}
+
+test "accounts table keeps newest slot for duplicate key" {
+    var state: TestTableState(8) = undefined;
+    state.init();
+
+    const key = testKey(1);
+    const old_value = testValue(11, 111);
+    const new_value = testValue(22, 222);
+
+    state.table.put(&state.batch, &key, 20, new_value);
+    state.table.put(&state.batch, &key, 10, old_value);
+    state.table.flushPuts(&state.batch);
+
+    try std.testing.expectEqual(new_value, state.table.get(&key));
+    try std.testing.expectEqual(@as(u64, 1), state.table.count());
+
+    state.table.put(&state.batch, &key, 30, old_value);
+    state.table.flushPuts(&state.batch);
+
+    try std.testing.expectEqual(old_value, state.table.get(&key));
+    try std.testing.expectEqual(@as(u64, 1), state.table.count());
+}
+
+test "accounts table handles same-batch initial-index collisions" {
+    var state: TestTableState(8) = undefined;
+    state.init();
+
+    const key_a = testKey(1);
+    const index = state.table.hashToIndex(&key_a);
+    var key_b: Pubkey = undefined;
+    for (2..std.math.maxInt(u8)) |byte| {
+        const candidate = testKey(@intCast(byte));
+        if (state.table.hashToIndex(&candidate) == index) {
+            key_b = candidate;
+            break;
+        }
+    } else return error.NoCollisionFound;
+
+    const value_a = testValue(10, 100);
+    const value_b = testValue(20, 200);
+    state.table.put(&state.batch, &key_a, 1, value_a);
+    state.table.put(&state.batch, &key_b, 1, value_b);
+    state.table.flushPuts(&state.batch);
+
+    try std.testing.expectEqual(value_a, state.table.get(&key_a));
+    try std.testing.expectEqual(value_b, state.table.get(&key_b));
+    try std.testing.expectEqual(@as(u64, 2), state.table.count());
+}
+
+test "accounts table stores zero pubkey separately" {
+    var state: TestTableState(8) = undefined;
+    state.init();
+
+    const zero = Pubkey.ZEROES;
+    const normal_key = testKey(1);
+    const zero_old = testValue(1, 10);
+    const zero_new = testValue(2, 20);
+    const normal_value = testValue(3, 30);
+
+    state.table.put(&state.batch, &zero, 20, zero_new);
+    state.table.put(&state.batch, &zero, 10, zero_old);
+    state.table.put(&state.batch, &normal_key, 1, normal_value);
+    state.table.flushPuts(&state.batch);
+
+    try std.testing.expectEqual(zero_new, state.table.get(&zero));
+    try std.testing.expectEqual(normal_value, state.table.get(&normal_key));
+    try std.testing.expectEqual(@as(u64, 2), state.table.count());
+}
+
+test "accounts table flushes automatically when put batch fills" {
+    var state: TestTableState(Table.PARALLEL_SCAN + 8) = undefined;
+    state.init();
+
+    var keys: [Table.PARALLEL_SCAN + 1]Pubkey = undefined;
+    for (&keys, 0..) |*key, i| {
+        key.* = testKey(@intCast(i + 1));
+    }
+
+    for (keys[0..Table.PARALLEL_SCAN], 0..) |*key, i| {
+        state.table.put(
+            &state.batch,
+            key,
+            @intCast(i + 1),
+            testValue(@intCast(i + 1), @intCast(i + 100)),
+        );
+    }
+    try std.testing.expectEqual(@as(u32, Table.PARALLEL_SCAN), state.batch.len);
+
+    const last_value = testValue(99, 999);
+    state.table.put(&state.batch, &keys[Table.PARALLEL_SCAN], 99, last_value);
+
+    try std.testing.expectEqual(@as(u64, Table.PARALLEL_SCAN), state.table.count());
+    try std.testing.expectEqual(@as(u32, 1), state.batch.len);
+
+    state.table.flushPuts(&state.batch);
+    try std.testing.expectEqual(last_value, state.table.get(&keys[Table.PARALLEL_SCAN]));
+    try std.testing.expectEqual(@as(u64, Table.PARALLEL_SCAN + 1), state.table.count());
+}

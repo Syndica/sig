@@ -363,18 +363,13 @@ pub const AccountsDbFields = struct {
         }
 
         pub fn getPtr(self: *const AccountFileMap, slot: u64) ?*Entry {
-            // NOTE: Doesn't seem like an interesting zone to record:
-            //
-            // const zone = tracy.Zone.init(@src(), .{ .name = "AccountFileMap.get" });
-            // defer zone.deinit();
-
             const entries = self.entries;
             var idx = (slot *% HASH_MULT) >> @intCast(@as(u7, 64) - @ctz(entries.len));
             while (true) {
                 const e = &entries[idx];
                 idx = (idx +% 1) & (entries.len - 1);
-                if (@as(u128, @bitCast(e.*)) == @as(u128, @bitCast(Entry.empty))) continue;
                 if (e.slot == slot) return e;
+                if (@as(u128, @bitCast(e.*)) == @as(u128, @bitCast(Entry.empty))) return null;
             }
         }
     };
