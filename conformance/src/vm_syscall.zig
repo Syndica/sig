@@ -7,6 +7,8 @@ const executor = sig.runtime.executor;
 const serialize = sig.runtime.program.bpf.serialize;
 const syscalls = sig.vm.syscalls;
 const memory = sig.vm.memory;
+const AccessViolationHandlerCtx =
+    sig.runtime.program.bpf_loader.AccessViolationHandlerCtx;
 
 const Vm = sig.vm.Vm;
 const TransactionContext = sig.runtime.transaction_context.TransactionContext;
@@ -298,6 +300,24 @@ fn executeSyscall(
         return error.SyscallNotFound;
     };
     const syscall_fn = syscalls.Syscall.map.get(syscall_tag);
+
+    // SIMD-0460: install the access-violation handler so the syscall sees
+    // writable+owned account regions auto-grown on write, matching the
+    // `MemoryMapping::new_with_access_violation_handler` setup in solfuzz-agave's
+    // fuzz_syscall harness.
+    // [solfuzz-agave] https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.1.0-beta.1/src/vm_syscalls.rs#L289-L297
+    var avh_ctx: AccessViolationHandlerCtx = .{
+        .tc = &tc,
+        .allocator = allocator,
+        .direct_mapping = direct_mapping,
+    };
+    if (virtual_address_space_adjustments) {
+        tc.last_access_violation = null;
+        vm.memory_map.setAccessViolationHandler(.{
+            .ctx = @ptrCast(&avh_ctx),
+            .call = AccessViolationHandlerCtx.handle,
+        });
+    }
 
     var execution_error: ?sig.vm.ExecutionError = null;
     syscall_fn(&tc, &vm.memory_map, &vm.registers) catch |err| {
