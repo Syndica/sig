@@ -68,22 +68,26 @@ pub fn main() !void {
         packet.len = @intCast(fbw.end);
     }
 
-    const sandboxed = try topology.spawnSandboxed(&service_map);
+    var spawned = try topology.spawnSandboxed(&service_map);
 
-    var activities: [sandboxed.meta.runners_buf.len]lib.runner.Activity.RunnerView = undefined;
-    for (&activities, sandboxed.runners()) |*view, runner| view.* = runner.activity.runnerView();
+    // var spawned: topology.NoSandbox = undefined;
+    // try topology.spawnNoSandbox(&spawned, &service_map);
+
+    const activities = spawned.activityViews();
 
     // wait for gossip and telemetry to go idle
     blk: while (true) {
-        for (&activities) |*view| {
+        for (activities) |*view| {
             if (view.isActive()) continue :blk;
         }
         break :blk;
     }
 
     // go and ask all the services to cancel
-    for (&activities) |*view| view.cancel();
-    sandboxed.wait();
+    for (activities) |*view| view.cancel();
+
+    // and then actually wait for the services to exit
+    try spawned.wait(10 * std.time.ns_per_ms);
 
     const net_pair = try net_to_gossip_memfd.memfd.mmapStaticSize(lib.net.Pair, null);
     defer std.posix.munmap(@ptrCast(net_pair));
