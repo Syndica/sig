@@ -667,12 +667,9 @@ pub const Rooted = struct {
     }
 
     fn pollCompletedReads(self: *Rooted, logger: tel.Logger("Rooted.pollCompletedReads")) !void {
-        var cqes: [max_active_lookups]std.os.linux.io_uring_cqe = comptime blk: {
-            @setRuntimeSafety(false);
-            break :blk undefined;
-        };
-
+        var cqes: [max_active_lookups]std.os.linux.io_uring_cqe = undefined;
         const n = try self.ring.copy_cqes(&cqes, 0);
+
         for (cqes[0..n]) |*cqe| {
             var data: RingUserData = @bitCast(cqe.user_data);
 

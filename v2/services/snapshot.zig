@@ -86,12 +86,9 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         },
     };
 
-    {
+    { // Send the decompressed snapshot data to accounts_db service
         const Global = struct {
-            var zst_reader: lib.solana.snapshot.ZstReader = blk: {
-                @setRuntimeSafety(false);
-                break :blk undefined;
-            };
+            var zst_reader: lib.solana.snapshot.ZstReader = undefined;
         };
 
         var snapshot_path_buf: [std.fs.max_path_bytes]u8 = undefined;
