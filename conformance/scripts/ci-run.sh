@@ -17,8 +17,8 @@ comm -23 \
         -path 'env/test-vectors/block/*' -prune \
         -o -type f -name '*.fix' -printf '%P\n' | sort) \
     <(sort scripts/failing.txt) \
-    | sed 's_^_env/test-vectors/_' \
-    | xargs -d '\n' cp -t env/split-fixtures/
+    | sed "s_^_$PWD/env/test-vectors/_" \
+    | xargs -d '\n' ln -s -t env/split-fixtures/
 
 echo Running fixtures
 zig-out/bin/run env/split-fixtures/ 2>&1 | tee /dev/stderr | grep -qE "Failed:\s+0$"
