@@ -611,12 +611,13 @@ pub fn Bind(
         /// Blocks until the first service has exited, before dumping out traces.
         pub fn spawnAndWait(map: *const ServiceMap) !void {
             const sandboxed = try spawnSandboxed(map);
-            sandboxed.wait();
+            try sandboxed.wait(null);
         }
 
         pub fn spawnAndWaitNoSandbox(map: *const ServiceMap) !void {
             var state: NoSandbox = undefined;
             try spawnNoSandbox(&state, map);
+            try state.wait(null);
         }
 
         // -- Sandboxed -- //
@@ -626,17 +627,32 @@ pub fn Bind(
             meta: struct {
                 pids_buf: [schema.services.len]i32,
                 runners_buf: [schema.services.len]*lib.runner.Region,
+                activity_views_buf: [schema.services.len]lib.runner.Activity.RunnerView,
             },
 
             pub fn pids(self: *const Sandboxed) []const i32 {
                 return self.meta.pids_buf[0..self.services_index.len];
             }
 
+            pub fn ids(self: *const Sandboxed) []const unbound.ServiceId {
+                return self.services_index.keys();
+            }
+
             pub fn runners(self: *const Sandboxed) []const *lib.runner.Region {
                 return self.meta.runners_buf[0..self.services_index.len];
             }
 
-            pub fn wait(self: *const Sandboxed) void {
+            /// Returns the runner views for all of the service activity states.
+            pub fn activityViews(self: *Sandboxed) []lib.runner.Activity.RunnerView {
+                return self.meta.activity_views_buf[0..self.services_index.len];
+            }
+
+            pub fn wait(self: *const Sandboxed, timeout_ns_opt: ?u64) error{Timeout}!void {
+                const timeout_pid_opt = if (timeout_ns_opt) |timeout_ns|
+                    spawnSandboxedTimeout(timeout_ns)
+                else
+                    null;
+
                 // Wait for the first child to exit
                 var status: u32 = 0;
                 const exited_pid: i32 = pid: {
@@ -644,6 +660,10 @@ pub fn Bind(
                     std.debug.assert(e(ret) == .SUCCESS);
                     break :pid @intCast(ret);
                 };
+                if (exited_pid == timeout_pid_opt) {
+                    return error.Timeout;
+                }
+
                 const exited_index = std.mem.indexOfScalar(i32, self.pids(), exited_pid) orelse
                     std.debug.panic("Unknown child pid {} exited\n", .{exited_pid});
                 const id = self.services_index.keys()[exited_index];
@@ -659,6 +679,7 @@ pub fn Bind(
                 .meta = .{
                     .pids_buf = @splat(undefined),
                     .runners_buf = @splat(undefined),
+                    .activity_views_buf = @splat(undefined),
                 },
             };
 
@@ -677,12 +698,64 @@ pub fn Bind(
 
             // We only mmap the exit regions after spawning the child processes, as we don't want them
             // mapped in children
-            for (sandboxed.services_index.keys(), &sandboxed.meta.runners_buf) |id, *meta| {
+            for (
+                sandboxed.services_index.keys(),
+                &sandboxed.meta.runners_buf,
+                &sandboxed.meta.activity_views_buf,
+            ) |id, *meta, *view| {
                 const entry = map.entries.get(id).?;
                 meta.* = try entry.runner.mmapStaticSize(lib.runner.Region, .{});
+                view.* = meta.*.activity.runnerView();
             }
 
             return sandboxed;
+        }
+
+        fn spawnSandboxedTimeout(timeout_ns: u64) i32 {
+            const parent_pid = std.os.linux.getpid();
+
+            const maybe_child_pid = lib.linux.clone3.clone3(&.{
+                .flags = .{},
+                .exit_signal = std.os.linux.SIG.CHLD,
+            });
+
+            if (maybe_child_pid) |child_pid| {
+                return child_pid;
+            }
+
+            // Make sure that the services die when the parent exits
+            {
+                const ret = linux.prctl(
+                    @intFromEnum(linux.PR.SET_PDEATHSIG),
+                    linux.SIG.KILL,
+                    0,
+                    0,
+                    0,
+                );
+                if (e(ret) != .SUCCESS) std.debug.panic("prctl failed with: {}\n", .{e(ret)});
+
+                // NOTE: this check does not work if we spawn each service into a new pid namespace, as
+                // getppid will return 0 (including when the parent is dead).
+                const parent_pid_now = std.os.linux.getppid();
+                if (parent_pid != parent_pid_now) {
+                    // The parent died. In case this happened before we set SET_PDEATHSIG, let's exit
+                    // ourselves.
+                    @branchHint(.cold);
+                    std.debug.panic(
+                        "Parent died, parent pid changed ({}->{})\n",
+                        .{ parent_pid, parent_pid_now },
+                    );
+                }
+            }
+
+            // wait the specified amount of time; if the service processes take longer than this
+            // to finish, this will awaken and exit, causing the `waitpid` to exit and thus terminate
+            // all processes.
+            std.posix.nanosleep(
+                timeout_ns / std.time.ns_per_s,
+                timeout_ns % std.time.ns_per_s,
+            );
+            std.process.exit(255);
         }
 
         fn spawnService(
@@ -825,18 +898,39 @@ pub fn Bind(
         // -- No Sandbox -- //
 
         pub const NoSandbox = struct {
-            runners: lib.util.ArrayEnumMap(unbound.ServiceId, *lib.runner.Region),
+            services_index: lib.util.ArrayEnumMap(unbound.ServiceId, void),
+            meta: struct {
+                runners_buf: [schema.services.len]*lib.runner.Region,
+                activity_views_buf: [schema.services.len]lib.runner.Activity.RunnerView,
+            },
             thread_exit_ctx: ThreadExitContext,
 
-            pub fn wait(state: *NoSandbox) !void {
+            pub fn ids(self: *const NoSandbox) []const unbound.ServiceId {
+                return self.services_index.keys();
+            }
+
+            pub fn runners(self: *const NoSandbox) []const *lib.runner.Region {
+                return self.meta.runners_buf[0..self.services_index.len];
+            }
+
+            /// Returns the runner views for all of the service activity states.
+            pub fn activityViews(self: *NoSandbox) []lib.runner.Activity.RunnerView {
+                return self.meta.activity_views_buf[0..self.services_index.len];
+            }
+
+            pub fn wait(state: *NoSandbox, timeout_ns_opt: ?u64) error{Timeout}!void {
                 // Wait for first service to exit
-                state.thread_exit_ctx.reset_event.wait();
+                if (timeout_ns_opt) |timeout_ns| {
+                    state.thread_exit_ctx.reset_event.timedWait(timeout_ns) catch {}; // check the `finished_idx`.
+                } else {
+                    state.thread_exit_ctx.reset_event.wait();
+                }
 
                 const exited_idx = state.thread_exit_ctx.finished_idx.load(.seq_cst);
-                std.debug.assert(exited_idx != std.math.maxInt(u16));
+                if (exited_idx == std.math.maxInt(u16)) return error.Timeout;
 
                 const exited_service_id: unbound.ServiceId = @enumFromInt(exited_idx);
-                const exited_runner = state.runners.get(exited_service_id).?.*;
+                const exited_runner = state.runners()[exited_idx];
                 dumpOnExit(&exited_runner.exit, exited_service_id, 0, 0);
             }
         };
@@ -847,7 +941,11 @@ pub fn Bind(
             map: *const ServiceMap,
         ) !void {
             state.* = .{
-                .runners = .empty,
+                .services_index = .empty,
+                .meta = .{
+                    .runners_buf = @splat(undefined),
+                    .activity_views_buf = @splat(undefined),
+                },
                 .thread_exit_ctx = .{
                     .finished_idx = .init(std.math.maxInt(u16)),
                     .reset_event = .{},
@@ -869,7 +967,11 @@ pub fn Bind(
             // We only mmap the exit regions after spawning the child processes, as we don't want them
             // mapped in children
             for (map.entries.keys(), map.entries.values()) |k, v| {
-                state.runners.putNoClobber(k, try v.runner.mmapStaticSize(lib.runner.Region, .{}));
+                const index = state.services_index.len;
+                state.services_index.putNoClobber(k, {});
+                const runner = try v.runner.mmapStaticSize(lib.runner.Region, .{});
+                state.meta.runners_buf[index] = runner;
+                state.meta.activity_views_buf[index] = runner.activity.runnerView();
             }
         }
 
