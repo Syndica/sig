@@ -103,7 +103,7 @@ pub fn load(
 /// [sbpf] https://github.com/anza-xyz/sbpf/blob/v0.20.0/src/elf.rs#L467
 fn parseStrict(
     allocator: std.mem.Allocator,
-    bytes: []u8,
+    bytes: []const u8,
     sbpf_version: sbpf.Version,
     config: Config,
 ) LoadError!Executable {
@@ -238,6 +238,11 @@ fn parseLenient(
     loader: *const SyscallMap,
     version: sbpf.Version,
 ) !Executable {
+    // `relocate` reads ELF metadata (reloc table, dynsym, dynstr) from
+    // `Elf64.bytes` while writing relocated values back into `bytes`. The
+    // parser must see the original, pre-relocation bytes; otherwise an
+    // earlier write landing in `.rel.dyn`/`.dynsym`/`.dynstr` could corrupt
+    // later reads.
     // [sbpf] https://github.com/anza-xyz/sbpf/blob/v0.20.0/src/elf.rs#L660
     const unrelocated_bytes = try allocator.dupe(u8, bytes);
     defer allocator.free(unrelocated_bytes);
