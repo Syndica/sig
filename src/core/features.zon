@@ -1296,12 +1296,7 @@
         .name = "enable_sbpf_v3_deployment_and_execution",
         .pubkey = "5cC3foj77CWun58pC51ebHFUWavHWKarWyR5UUik7dnC",
         .description = "SIMD-0178, SIMD-0189 and SIMD-0377: Enable deployment and execution of SBPFv3 programs",
-        .status = .unsupported,
-        .note =
-        \\ TODO: High priority
-        \\ Pending devnet activation.
-        \\ Implement SIMD-0178, SIMD-0189 and SIMD-0377: Enable deployment and execution of SBPFv3
-        ,
+        .status = .supported,
     },
     .{
         .name = "migrate_feature_gate_program_to_core_bpf",

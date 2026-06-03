@@ -19,72 +19,75 @@ pub const Version = enum(u32) {
     v2,
     /// SIMD-0178, SIMD-0179, SIMD-0189
     v3,
+    /// Used for future versions
     reserved,
 
-    /// Enable SIMD-0166: SBPF dynamic stack frames
-    pub fn enableDynamicStackFrames(version: Version) bool {
-        return version.gte(.v1);
+    /// SIMD-0166: Dynamic stack frames
+    ///
+    /// Allows usage of `add64 r10, imm` to manually bump the stack frame.
+    pub fn manualStackFrameBump(version: Version) bool {
+        return version == .v1 or version == .v2;
+    }
+    /// ... SIMD-0166
+    pub fn stackFrameGaps(version: Version) bool {
+        return version == .v0;
     }
 
     /// Enable SIMD-0174: SBPF arithmetics improvements
     pub fn enablePqr(version: Version) bool {
-        return version.gte(.v2);
-    }
-    /// ... SIMD-0174
-    pub fn swapSubRegImmOperands(version: Version) bool {
-        return version.gte(.v2);
-    }
-    /// ... SIMD-0174
-    pub fn disableNegation(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0174
     pub fn explicitSignExtensionOfResults(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
+    }
+    /// ... SIMD-0174
+    pub fn swapSubRegImmOperands(version: Version) bool {
+        return version == .v2;
+    }
+    /// ... SIMD-0174
+    pub fn disableNegation(version: Version) bool {
+        return version == .v2;
     }
 
-    /// Enable SIMD-0173: SBPF instruction encoding improvements
-    pub fn callRegUsesSrcReg(version: Version) bool {
-        return version.gte(.v2);
+    /// Enable SIMD-0173: callx target register lives in `src` field. Only true for v2;
+    /// in v3 it moves to `dst` (see SIMD-0377 `callxUsesDstReg`).
+    pub fn callxUsesSrcReg(version: Version) bool {
+        return version == .v2;
     }
     /// ... SIMD-0173
     pub fn disableLddw(version: Version) bool {
-        return version.gte(.v2);
-    }
-    pub fn moveMemoryInstructionClasses(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
     }
     /// ... SIMD-0173
     pub fn disableLe(version: Version) bool {
-        return version.gte(.v2);
+        return version == .v2;
+    }
+    /// ... SIMD-0173
+    pub fn moveMemoryInstructionClasses(version: Version) bool {
+        return version == .v2;
     }
 
     /// Enable SIMD-0178: SBPF Static Syscalls
     pub fn enableStaticSyscalls(version: Version) bool {
         return version.gte(.v3);
     }
-    /// Enable SIMD-0179: SBPF stricter verification constraints
-    pub fn enableStricterVerification(version: Version) bool {
-        return version.gte(.v3);
-    }
+
     /// Enable SIMD-0189: SBPF stricter ELF headers
     pub fn enableStricterElfHeaders(version: Version) bool {
         return version.gte(.v3);
     }
     /// ... SIMD-0189
-    pub fn enableLowerBytecodeVaddr(version: Version) bool {
+    pub fn enableLowerRodataVaddr(version: Version) bool {
         return version.gte(.v3);
     }
-
-    /// Ensure that rodata sections don't exceed their maximum allowed size and
-    /// overlap with the stack
-    pub fn rejectRodataStackOverlap(version: Version) bool {
-        return version != .v0;
+    /// ... SIMD-0189
+    pub fn enableJmp32(version: Version) bool {
+        return version.gte(.v3);
     }
-
-    /// Allow sh_addr != sh_offset in elf sections.
-    pub fn enableElfVaddr(version: Version) bool {
-        return version != .v0;
+    /// ... SIMD-0189
+    pub fn callxUsesDstReg(version: Version) bool {
+        return version.gte(.v3);
     }
 
     pub fn gte(version: Version, other: Version) bool {
@@ -360,15 +363,25 @@ pub const Instruction = packed struct(u64) {
         /// bpf opcode: `jsle dst, src, +off` /// `pc += off if dst <= src (signed)`.
         jsle_reg = jmp | x | jsle,
 
+        // SIMD-0377: 32-bit conditional jumps (class 0x06 = jmp32). Class 0x06 is
+        // shared with the deprecated `pqr` instructions. Where the full opcode byte
+        // coincides with an existing pqr opcode, the JMP32 mnemonic is exposed via a
+        // compile-time alias below (see `jge32_imm` etc.); where it does not, a new
+        // enum tag is added here.
+        jeq32_imm = pqr | k | jeq, // 0x16
+        jeq32_reg = pqr | x | jeq, // 0x1e
+        jgt32_imm = pqr | k | jgt, // 0x26
+        jgt32_reg = pqr | x | jgt, // 0x2e
+        jlt32_imm = pqr | k | jlt, // 0xa6
+        jlt32_reg = pqr | x | jlt, // 0xae
+
         /// bpf opcode: `call imm` /// syscall function call to syscall with key `imm`.
         call_imm = jmp | call,
         /// bpf opcode: tail call.
         call_reg = jmp | x | call,
 
-        /// bpf opcode: `exit` /// `return r0`. /// valid only until sbpfv3
+        /// bpf opcode: `exit` /// `return r0`.
         exit_or_syscall = jmp | exit_code,
-        /// bpf opcode: `return` /// `return r0`. /// Valid only since sbpfv3
-        @"return" = jmp | x | exit_code,
         _,
 
         // The commented out opcodes are unique, and already have an entry in the enum.
@@ -385,6 +398,26 @@ pub const Instruction = packed struct(u64) {
         pub const st_2b_reg: OpCode = .div64_reg;
         // pub const st_4b_reg: OpCode = .st_4b_reg;
         pub const st_8b_reg: OpCode = .mod64_reg;
+
+        // SIMD-0377: JMP32 mnemonics that share an opcode byte with deprecated pqr
+        // instructions. These aliases let dispatchers/assemblers refer to the JMP32
+        // names while the underlying enum tag remains the pqr one.
+        pub const jge32_imm: OpCode = .uhmul64_imm; // 0x36
+        pub const jge32_reg: OpCode = .uhmul64_reg; // 0x3e
+        pub const jset32_imm: OpCode = .udiv32_imm; // 0x46
+        pub const jset32_reg: OpCode = .udiv32_reg; // 0x4e
+        pub const jne32_imm: OpCode = .udiv64_imm; // 0x56
+        pub const jne32_reg: OpCode = .udiv64_reg; // 0x5e
+        pub const jsgt32_imm: OpCode = .urem32_imm; // 0x66
+        pub const jsgt32_reg: OpCode = .urem32_reg; // 0x6e
+        pub const jsge32_imm: OpCode = .urem64_imm; // 0x76
+        pub const jsge32_reg: OpCode = .urem64_reg; // 0x7e
+        pub const jle32_imm: OpCode = .shmul64_imm; // 0xb6
+        pub const jle32_reg: OpCode = .shmul64_reg; // 0xbe
+        pub const jslt32_imm: OpCode = .sdiv32_imm; // 0xc6
+        pub const jslt32_reg: OpCode = .sdiv32_reg; // 0xce
+        pub const jsle32_imm: OpCode = .sdiv64_imm; // 0xd6
+        pub const jsle32_reg: OpCode = .sdiv64_reg; // 0xde
 
         pub inline fn isReg(opcode: OpCode) bool {
             const is_reg_bit: u1 = @truncate(@intFromEnum(opcode) >> 3);
@@ -530,6 +563,19 @@ pub const Instruction = packed struct(u64) {
         .{ "jslt" , Entry{ .inst = .jump_conditional, .opc = jslt |  jmp  } },
         .{ "jsle" , Entry{ .inst = .jump_conditional, .opc = jsle |  jmp  } },
 
+        // SIMD-0377: JMP32 (class 0x06, shares the byte with pqr)
+        .{ "jeq32"  , Entry{ .inst = .jump_conditional, .opc = jeq  | pqr } },
+        .{ "jgt32"  , Entry{ .inst = .jump_conditional, .opc = jgt  | pqr } },
+        .{ "jge32"  , Entry{ .inst = .jump_conditional, .opc = jge  | pqr } },
+        .{ "jlt32"  , Entry{ .inst = .jump_conditional, .opc = jlt  | pqr } },
+        .{ "jle32"  , Entry{ .inst = .jump_conditional, .opc = jle  | pqr } },
+        .{ "jset32" , Entry{ .inst = .jump_conditional, .opc = jset | pqr } },
+        .{ "jne32"  , Entry{ .inst = .jump_conditional, .opc = jne  | pqr } },
+        .{ "jsgt32" , Entry{ .inst = .jump_conditional, .opc = jsgt | pqr } },
+        .{ "jsge32" , Entry{ .inst = .jump_conditional, .opc = jsge | pqr } },
+        .{ "jslt32" , Entry{ .inst = .jump_conditional, .opc = jslt | pqr } },
+        .{ "jsle32" , Entry{ .inst = .jump_conditional, .opc = jsle | pqr } },
+
         .{ "ldxb" , Entry{ .inst = .load_reg, .opc = mem | ldx | b, .alt = alu32 | x | @"1b" } },
         .{ "ldxh" , Entry{ .inst = .load_reg, .opc = mem | ldx | h, .alt = alu32 | x | @"2b" } },
         .{ "ldxw" , Entry{ .inst = .load_reg, .opc = mem | ldx | w, .alt = alu32 | x | @"4b" } },
@@ -554,7 +600,6 @@ pub const Instruction = packed struct(u64) {
         .{ "le64", Entry{ .inst = .{.endian = 64 }, .opc = alu32 | k | end } },
 
         .{ "exit"  , Entry{ .inst = .no_operand,       .opc = jmp | exit_code } },
-        .{ "return", Entry{ .inst = .no_operand,       .opc = jmp | x | exit_code } },
         .{ "lddw"  , Entry{ .inst = .load_dw_imm,      .opc = ld  | immediate | dw  } },
         .{ "call"  , Entry{ .inst = .call_imm,         .opc = jmp | call      } },
         .{ "callx" , Entry{ .inst = .call_reg,         .opc = jmp | call | x  } },
@@ -729,16 +774,12 @@ pub const Instruction = packed struct(u64) {
             // If it's a store instruction and the destination is `r10`, it's legal.
             if (store) return;
             // You may add to the `r10` register in SBPFv1 and above.
-            if (version.enableDynamicStackFrames() and inst.opcode == .add64_imm) {
+            if (version.manualStackFrameBump() and inst.opcode == .add64_imm) {
                 return;
             }
             return error.CannotWriteR10;
         }
         return error.InvalidDestinationRegister;
-    }
-
-    pub fn isFunctionStartMarker(inst: Instruction) bool {
-        return inst.opcode == .add64_imm and inst.dst == .r10;
     }
 
     pub fn format(

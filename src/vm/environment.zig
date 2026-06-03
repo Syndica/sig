@@ -76,6 +76,12 @@ pub const Environment = struct {
             .virtual_address_space_adjustments,
             slot,
         );
+
+        const enable_sbpf_v3_deployment_and_execution = feature_set.active(
+            .enable_sbpf_v3_deployment_and_execution,
+            slot,
+        );
+
         // [agave] https://github.com/anza-xyz/agave/blob/v4.0/syscalls/src/lib.rs#L331
         return .{
             .max_call_depth = compute_budget.max_call_depth,
@@ -86,6 +92,7 @@ pub const Environment = struct {
             .reject_broken_elfs = reject_deployment_of_broken_elfs,
             .optimize_rodata = false,
             .aligned_memory_mapping = !virtual_address_space_adjustments,
+            .allow_memory_region_zero = enable_sbpf_v3_deployment_and_execution,
             .virtual_address_space_adjustments = virtual_address_space_adjustments,
             .minimum_version = min_sbpf_version,
             .maximum_version = max_sbpf_version,

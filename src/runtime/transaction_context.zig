@@ -87,9 +87,6 @@ pub const TransactionContext = struct {
         InstructionInfo.MAX_ACCOUNT_METAS,
     ) = .{},
 
-    /// Used by syscall.allocFree to implement sbrk bump allocation
-    bpf_alloc_pos: u64 = 0,
-
     /// Instruction datas used when executing precompiles in the SVM
     /// Only set if a precompile is present and the move precompiles to svm feature is enabled
     instruction_datas: ?[]const []const u8 = null,

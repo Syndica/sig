@@ -190,19 +190,21 @@ fn executeSyscall(
     defer allocator.free(rodata);
     @memcpy(rodata, pb_vm.rodata);
 
+    // Legacy SBPF (v0/v1/v2): rodata lives at MM_BYTECODE_START (SIMD-0189
+    // moves it for v3). The vm_syscalls harness uses v0.
     const executable: sig.vm.Executable = .{
         .instructions = &.{},
         .bytes = rodata,
         .text_section_len = 0,
         .version = .v0,
         .ro_section = .{ .borrowed = .{
-            .offset = memory.RODATA_START,
+            .offset = memory.BYTECODE_START,
             .start = 0,
             .end = rodata.len,
         } },
         .entry_pc = 0,
         .config = config,
-        .text_vaddr = memory.RODATA_START,
+        .text_vaddr = memory.BYTECODE_START,
         .function_registry = .{},
         .from_asm = false,
     };
@@ -241,7 +243,8 @@ fn executeSyscall(
     defer input_memory_regions.deinit(allocator);
 
     try input_memory_regions.appendSlice(allocator, &.{
-        memory.Region.init(.constant, rodata, memory.RODATA_START),
+        // v0 lenient layout: rodata at MM_BYTECODE_START, matching Agave.
+        memory.Region.init(.constant, rodata, memory.BYTECODE_START),
         memory.Region.initGapped(
             .mutable,
             stack,

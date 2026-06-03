@@ -61,7 +61,7 @@ pub fn prepareBpfV3Test(
         program_data_key,
         .{
             .lamports = 1,
-            .owner = program_key,
+            .owner = program.bpf_loader.v3.ID,
             .data = program_data_bytes,
             .executable = false,
             .rent_epoch = std.math.maxInt(u64),

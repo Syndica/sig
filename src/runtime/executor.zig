@@ -71,12 +71,20 @@ pub fn pushInstruction(
 
     // [agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/program-runtime/src/invoke_context.rs#L245-L283
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1048-L1070
-    for (tc.instruction_stack.constSlice(), 0..) |ic, level| {
-        // If the program is on the stack, it must be the last entry otherwise it is a reentrancy violation
-        if (program_id.equals(&ic.ixn_info.program_meta.pubkey) and
-            level != tc.instruction_stack.len - 1)
-        {
-            return InstructionError.ReentrancyNotAllowed;
+    const stack = tc.instruction_stack.constSlice();
+    if (stack.len > 0) {
+        // Reentrancy is only forbidden when the caller (current top of stack)
+        // is *not* the program being invoked. A program calling itself is
+        // always permitted (subject to the call-depth limit checked below),
+        // even if the program already appears deeper in the stack via a
+        // chain of self-CPIs.
+        const caller_pid = stack[stack.len - 1].ixn_info.program_meta.pubkey;
+        if (!program_id.equals(&caller_pid)) {
+            for (stack) |ic| {
+                if (program_id.equals(&ic.ixn_info.program_meta.pubkey)) {
+                    return InstructionError.ReentrancyNotAllowed;
+                }
+            }
         }
     }
 
@@ -348,13 +356,8 @@ pub fn prepareCpiInstructionInfo(
         break :blk program_account_meta.index_in_transaction;
     };
 
-    // Clone instruction data so the trace preserves each CPI's data after
-    // the caller's serialized VM memory is freed.
-    // Without this, trace entries hold dangling pointers into the caller's
-    // serialized input buffer (freed in executeBpfProgram via
-    // `defer serialized.deinit`), resulting in use-after-free when the
-    // trace is later read during transaction status construction.
-    // [agave] Uses Cow::Owned(instruction.data) for CPI instructions.
+    // Clone instruction data so the trace outlives the caller's serialized VM
+    // memory (freed in executeBpfProgram). Mirrors agave's Cow::Owned for CPI.
     const owned_data = try tc.allocator.dupe(u8, callee.data);
     errdefer tc.allocator.free(owned_data);
 
@@ -374,6 +377,7 @@ pub fn prepareCpiInstructionInfo(
 test pushInstruction {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system;
+    const compute_budget_program = sig.runtime.program.compute_budget;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -386,6 +390,7 @@ test pushInstruction {
                 .{ .lamports = 2_000, .owner = system_program.ID },
                 .{ .lamports = 0 },
                 .{ .pubkey = system_program.ID },
+                .{ .pubkey = compute_budget_program.ID },
             },
         },
     );
@@ -407,12 +412,13 @@ test pushInstruction {
             .{ .index_in_transaction = 1 },
         },
     );
-    // NOTE: instruction_info is not deinitialized here because it gets copied into
-    // tc.instruction_trace multiple times (sharing the same account_metas memory).
-    // The trace entry with depth > 1 will be cleaned up by tc.deinit(), which frees
-    // the shared account_metas. The depth == 1 entry is not cleaned up by tc.deinit()
-    // (as it's considered owned externally), but since both share the same memory,
-    // it's already freed when the depth > 1 entry is cleaned up.
+
+    const other_instruction_info = try testing.createInstructionInfo(
+        &tc,
+        compute_budget_program.ID,
+        @as([]const u8, &.{}),
+        &.{},
+    );
 
     // Success
     try pushInstruction(&tc, instruction_info);
@@ -437,16 +443,21 @@ test pushInstruction {
         );
     }
 
-    // Success
+    // Success: self-CPI is permitted. Stack: [system, system]
     try pushInstruction(&tc, instruction_info);
     try std.testing.expectEqual(
         2,
         tc.instruction_stack.len,
     );
 
-    // Failure: ReentrancyNotAllowed
-    // Pushing an instruction to the stack causes a reentrancy violation if there is already
-    // an instruction context on the stack with the same program id that is not the last entry
+    // Success: invoking a different program. Stack: [system, system, compute_budget]
+    try pushInstruction(&tc, other_instruction_info);
+    try std.testing.expectEqual(
+        3,
+        tc.instruction_stack.len,
+    );
+
+    // Failure: ReentrancyNotAllowed (compute_budget reentering system)
     try std.testing.expectError(
         InstructionError.ReentrancyNotAllowed,
         pushInstruction(&tc, instruction_info),

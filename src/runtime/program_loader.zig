@@ -131,7 +131,7 @@ fn loadProgram(
         environment.config,
     ) catch return .failed;
 
-    executable.verify(&environment.loader) catch {
+    executable.verify() catch {
         executable.deinit(allocator);
         return .failed;
     };
@@ -167,6 +167,11 @@ fn loadDeploymentSlotAndExecutableBytes(
         const program_data_account = try accounts.get(allocator, program_data_key) orelse
             return null;
         defer program_data_account.deinit(allocator);
+
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0/svm/src/program_loader.rs#L53
+        if (!program_data_account.owner.equals(&bpf_loader.v3.ID)) {
+            return null;
+        }
 
         const meta_size = bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE;
         const account_len = program_data_account.data.len;
@@ -319,7 +324,7 @@ test "loadPrograms: load v3 program" {
         program_data_key,
         .{
             .lamports = 1,
-            .owner = program_key,
+            .owner = bpf_loader.v3.ID,
             .data = program_data_bytes,
             .executable = false,
             .rent_epoch = std.math.maxInt(u64),
