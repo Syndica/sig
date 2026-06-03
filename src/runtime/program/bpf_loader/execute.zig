@@ -302,12 +302,12 @@ fn handleExecutionResult(
 ///      "extend the account with zeros to the maximum allowed" rule.
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/transaction.rs#L519-L543
-const AccessViolationHandlerCtx = struct {
+pub const AccessViolationHandlerCtx = struct {
     tc: *TransactionContext,
     allocator: std.mem.Allocator,
     direct_mapping: bool,
 
-    fn handle(
+    pub fn handle(
         ctx_raw: *anyopaque,
         region: *vm.memory.Region,
         address_space_reserved_for_account: u64,
