@@ -415,9 +415,6 @@ fn loadTransactionAccount(
 
     const rent_collected = collectRentFromAccount(
         &account.account,
-        key,
-        feature_set,
-        slot,
         rent_collector,
     );
 
@@ -465,16 +462,8 @@ fn loadAccount(
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L293
 pub fn collectRentFromAccount(
     account: *AccountSharedData,
-    account_key: *const Pubkey,
-    feature_set: *const sig.core.FeatureSet,
-    slot: sig.core.Slot,
     rent_collector: *const RentCollector,
 ) CollectedInfo {
-    if (!feature_set.active(.disable_rent_fees_collection, slot)) {
-        @branchHint(.unlikely); // this feature should always be enabled?
-        return rent_collector.collectFromExistingAccount(account_key, account);
-    }
-
     if (account.rent_epoch != RENT_EXEMPT_RENT_EPOCH and
         rent_collector.getRentDue(
             account.lamports,
@@ -730,9 +719,6 @@ test "load accounts rent paid" {
     };
     _ = collectRentFromAccount(
         &fee_payer_account,
-        &fee_payer_address,
-        &env.feature_set,
-        env.slot,
         &env.rent_collector,
     );
 
