@@ -749,9 +749,11 @@ const Elf64 = struct {
         return text_section;
     }
 
+    /// Perform relocations on the ELF file provided in `bytes`.
+    /// The provided `bytes` must match be a mutable copy of the original bytes used to construct `self`.
     /// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf.rs#L966-L967
     fn relocate(
-        self: *Elf64,
+        self: *const Elf64,
         allocator: std.mem.Allocator,
         bytes: []u8,
         function_registry: *Registry,

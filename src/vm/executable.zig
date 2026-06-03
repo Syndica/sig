@@ -109,7 +109,7 @@ pub const Executable = struct {
         JumpToMiddleOfLddw,
     };
 
-    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/verifier.rs#L227
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.20.0/src/verifier.rs#L222
     pub fn verify(self: *const Executable) VerifierError!void {
         const zone = tracy.Zone.init(@src(), .{ .name = "Executable.Verify" });
         defer zone.deinit();
