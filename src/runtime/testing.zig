@@ -9,8 +9,6 @@ const vm = sig.vm;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
-const EpochStakes = sig.core.EpochStakes;
-
 const FeatureSet = sig.core.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const LogCollector = sig.runtime.LogCollector;
@@ -21,6 +19,7 @@ const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnD
 const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
+const TestEpochStakeReaderContext = sig.runtime.execution_interfaces.TestEpochStakeReaderContext;
 
 pub const ExecuteContextsParams = struct {
     feature_set: []const FeatureParams = &.{},
@@ -58,10 +57,7 @@ pub const ExecuteContextsParams = struct {
         slot: Slot = 0,
     };
 
-    pub const EpochStakeParam = struct {
-        pubkey: Pubkey,
-        stake: u64,
-    };
+    pub const EpochStakeParam = TestEpochStakeReaderContext.StakeParam;
 
     pub const SysvarCacheParams = struct {
         clock: ?sysvar.Clock = null,
@@ -140,8 +136,14 @@ fn initTransactionContext(
     };
 
     // Create EpochStakes
-    const epoch_stakes = try allocator.create(EpochStakes);
-    epoch_stakes.* = try createEpochStakes(allocator, params.epoch_stakes);
+    const epoch_stake_reader_context = try allocator.create(TestEpochStakeReaderContext);
+    errdefer allocator.destroy(epoch_stake_reader_context);
+    const epoch_stakes = try allocator.dupe(
+        TestEpochStakeReaderContext.StakeParam,
+        params.epoch_stakes,
+    );
+    errdefer allocator.free(epoch_stakes);
+    epoch_stake_reader_context.* = .{ .stakes = epoch_stakes };
 
     // Create SysvarCache
     const sysvar_cache = try allocator.create(SysvarCache);
@@ -199,7 +201,11 @@ fn initTransactionContext(
         .programs_allocator = allocator,
         .feature_set = feature_set,
         .sysvar_cache = sysvar_cache,
-        .epoch_stakes = epoch_stakes,
+        .epoch_stake_reader = .{
+            .ctx = epoch_stake_reader_context,
+            .totalStakeFn = TestEpochStakeReaderContext.totalStake,
+            .stakeForVoteAccountFn = TestEpochStakeReaderContext.stakeForVoteAccount,
+        },
         .vm_environment = params.vm_environment,
         .next_vm_environment = params.next_vm_environment,
         .program_map = program_map,
@@ -238,8 +244,11 @@ pub fn deinitTransactionContext(
     tc.sysvar_cache.deinit(allocator);
     allocator.destroy(tc.sysvar_cache);
 
-    tc.epoch_stakes.deinit(allocator);
-    allocator.destroy(tc.epoch_stakes);
+    const epoch_stake_reader_context: *const TestEpochStakeReaderContext = @ptrCast(@alignCast(
+        tc.epoch_stake_reader.ctx,
+    ));
+    allocator.free(epoch_stake_reader_context.stakes);
+    allocator.destroy(epoch_stake_reader_context);
 
     for (tc.accounts) |a| {
         a.account.deinit(allocator);
@@ -247,32 +256,6 @@ pub fn deinitTransactionContext(
     }
 
     tc.deinit();
-}
-
-pub fn createEpochStakes(
-    allocator: std.mem.Allocator,
-    params: []const ExecuteContextsParams.EpochStakeParam,
-) !EpochStakes {
-    var self: EpochStakes = .{
-        .stakes = .EMPTY,
-        .total_stake = 0,
-        .node_id_to_vote_accounts = .{},
-        .epoch_authorized_voters = .{},
-    };
-    errdefer self.stakes.deinit(allocator);
-
-    for (params) |param| {
-        self.total_stake += param.stake;
-        try self.stakes.stake_accounts.put(allocator, param.pubkey, .{
-            .voter_pubkey = param.pubkey,
-            .stake = param.stake,
-            .activation_epoch = 0,
-            .deactivation_epoch = 0,
-            .deprecated_warmup_cooldown_rate = 0.0,
-        });
-    }
-
-    return self;
 }
 
 pub fn createFeatureSet(params: []const ExecuteContextsParams.FeatureParams) !FeatureSet {

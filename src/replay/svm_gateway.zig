@@ -35,11 +35,14 @@ pub fn executeTransaction(
 
     const environment = try svm_gateway.environment();
 
+    const account_reader_adapter = sig.runtime.SlotAccountReaderAdapter{
+        .reader = svm_gateway.params.account_store.reader(),
+    };
     const result = try sig.runtime.transaction_execution.loadAndExecuteTransaction(
         programs_allocator,
         tmp_allocator,
         transaction,
-        svm_gateway.params.account_store.reader(),
+        account_reader_adapter.accountReader(),
         &environment,
         &.{ .log = true, .log_messages_byte_limit = null },
         &svm_gateway.state.programs,
@@ -70,6 +73,8 @@ pub const SvmGateway = struct {
         vm_environment: vm.Environment,
         next_vm_environment: ?vm.Environment,
         programs: ProgramMap,
+        status_checker_adapter: sig.runtime.StatusCacheStatusCheckerAdapter,
+        epoch_stake_reader_adapter: sig.runtime.EpochStakeReaderAdapter,
 
         /// This is an ugly solution, but it doesn't actually lead to any issues
         /// with contention due to how replay works. Long term, this will be
@@ -122,6 +127,11 @@ pub const SvmGateway = struct {
                 .vm_environment = vm_environment,
                 .next_vm_environment = null, // TODO epoch boundary
                 .programs = .empty,
+                .status_checker_adapter = .{
+                    .ancestors = params.ancestors,
+                    .status_cache = params.status_cache,
+                },
+                .epoch_stake_reader_adapter = .{ .epoch_stakes = params.epoch_stakes },
 
                 // blockhash queue is only written when freezing a slot,
                 // which comes *after* executing all transactions, not
@@ -154,13 +164,12 @@ pub const SvmGateway = struct {
             return error.MissingLastBlockhashInfo;
 
         return .{
-            .ancestors = self.params.ancestors,
             .feature_set = &self.params.feature_set,
-            .status_cache = self.params.status_cache,
+            .status_checker = self.state.status_checker_adapter.statusChecker(),
             .sysvar_cache = &self.state.sysvar_cache,
             .rent_collector = self.params.rent_collector,
             .blockhash_queue = self.state.blockhash_queue.get(),
-            .epoch_stakes = self.params.epoch_stakes,
+            .epoch_stake_reader = self.state.epoch_stake_reader_adapter.epochStakeReader(),
             .vm_environment = &self.state.vm_environment,
             .next_vm_environment = if (self.state.next_vm_environment) |env| &env else null,
 

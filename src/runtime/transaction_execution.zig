@@ -10,18 +10,18 @@ const compute_budget_program = sig.runtime.program.compute_budget;
 const cost_model = sig.runtime.cost_model;
 const vm = sig.vm;
 
-const Ancestors = sig.core.Ancestors;
 const BlockhashQueue = sig.core.BlockhashQueue;
-const EpochStakes = sig.core.EpochStakes;
 const Hash = sig.core.Hash;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
-const StatusCache = sig.core.StatusCache;
 const Slot = sig.core.Slot;
 const RentState = sig.core.RentCollector.RentState;
 
-const SlotAccountReader = sig.accounts_db.SlotAccountReader;
+const AccountReader = sig.runtime.execution_interfaces.AccountReader;
+const TestEpochStakeReaderContext = sig.runtime.execution_interfaces.TestEpochStakeReaderContext;
+const StatusChecker = sig.runtime.execution_interfaces.StatusChecker;
+const EpochStakeReader = sig.runtime.execution_interfaces.EpochStakeReader;
 
 const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const FeatureSet = sig.core.FeatureSet;
@@ -36,7 +36,7 @@ const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnD
 const AccountMeta = sig.core.instruction.InstructionAccount;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
-const TransactionError = sig.ledger.transaction_status.TransactionError;
+const TransactionError = sig.core.transaction_error.TransactionError;
 const ComputeBudgetLimits = compute_budget_program.ComputeBudgetLimits;
 const ComputeBudgetInstructionDetails = compute_budget_program.ComputeBudgetInstructionDetails;
 const InstructionTrace = TransactionContext.InstructionTrace;
@@ -77,13 +77,12 @@ pub const RuntimeTransaction = struct {
 };
 
 pub const TransactionExecutionEnvironment = struct {
-    ancestors: *const Ancestors,
     feature_set: *const FeatureSet,
-    status_cache: *StatusCache,
+    status_checker: StatusChecker,
     sysvar_cache: *const SysvarCache,
     rent_collector: *const RentCollector,
     blockhash_queue: *const BlockhashQueue,
-    epoch_stakes: *const EpochStakes,
+    epoch_stake_reader: EpochStakeReader,
     vm_environment: *const vm.Environment,
     next_vm_environment: ?*const vm.Environment,
 
@@ -181,7 +180,7 @@ pub fn loadAndExecuteTransaction(
     programs_allocator: std.mem.Allocator,
     tmp_allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
-    account_reader: SlotAccountReader,
+    account_reader: AccountReader,
     env: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
     program_map: *ProgramMap,
@@ -230,11 +229,9 @@ pub fn loadAndExecuteTransaction(
     var nonce_account_is_owned = true;
     defer if (nonce_account_is_owned) if (maybe_nonce_info) |n| tmp_allocator.free(n.account.data);
 
-    if (sig.runtime.check_transactions.checkStatusCache(
+    if (env.status_checker.check(
         &transaction.msg_hash,
         &transaction.recent_blockhash,
-        env.ancestors,
-        env.status_cache,
     )) |err| return .{ .err = err };
 
     nonce_account_is_owned = false;
@@ -474,7 +471,7 @@ pub fn executeTransaction(
         .allocator = allocator,
         .programs_allocator = programs_allocator,
         .feature_set = environment.feature_set,
-        .epoch_stakes = environment.epoch_stakes,
+        .epoch_stake_reader = environment.epoch_stake_reader,
         .sysvar_cache = environment.sysvar_cache,
         .vm_environment = environment.vm_environment,
         .next_vm_environment = environment.next_vm_environment,
@@ -515,13 +512,7 @@ pub fn executeTransaction(
                     error.OutOfMemory => return error.OutOfMemory,
                     else => |ixn_err| break .{ .InstructionError = .{
                         @intCast(index),
-                        InstructionErrorEnum.fromError(
-                            ixn_err,
-                            tc.custom_error,
-                            null,
-                        ) catch |err| {
-                            std.debug.panic("Error conversion failed: error={}", .{err});
-                        },
+                        InstructionErrorEnum.fromError(ixn_err, tc.custom_error),
                     } },
                 }
             };
@@ -724,42 +715,6 @@ test getInstructionDatasSliceForPrecompiles {
     }
 }
 
-test "preprocessTransaction: invalid compute budget instruction" {
-    const Signature = sig.core.Signature;
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-
-    const recent_blockhash = Hash.initRandom(prng.random());
-
-    const transaction = sig.core.Transaction{
-        .signatures = &.{Signature.ZEROES},
-        .version = .legacy,
-        .msg = .{
-            .signature_count = 1,
-            .readonly_signed_count = 0,
-            .readonly_unsigned_count = 1,
-            .account_keys = &.{ Pubkey.ZEROES, sig.runtime.program.compute_budget.ID },
-            .recent_blockhash = recent_blockhash,
-            .instructions = &.{.{ // invalid compute budget instruction
-                .program_index = 1,
-                .account_indexes = &.{},
-                .data = &.{},
-            }},
-        },
-    };
-
-    const result = sig.replay.preprocess_transaction.preprocessTransaction(
-        transaction,
-        .skip_sig_verify,
-        &.ALL_DISABLED,
-        0,
-    );
-
-    try std.testing.expectEqual(
-        TransactionError{ .InstructionError = .{ 0, .InvalidInstructionData } },
-        result.err,
-    );
-}
-
 test "loadAndExecuteTransaction: simple transfer transaction" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -878,13 +833,22 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         },
     );
 
-    var ancestors: Ancestors = .{};
-    defer ancestors.deinit(allocator);
-
     const feature_set: FeatureSet = .ALL_ENABLED_AT_GENESIS;
 
-    var status_cache: StatusCache = .DEFAULT;
-    defer status_cache.deinit(allocator);
+    const PassingStatusChecker = struct {
+        fn check(
+            _: *const anyopaque,
+            _: *const Hash,
+            _: *const Hash,
+        ) ?TransactionError {
+            return null;
+        }
+    };
+    const status_checker_context = PassingStatusChecker{};
+    const status_checker = StatusChecker{
+        .ctx = &status_checker_context,
+        .checkFn = PassingStatusChecker.check,
+    };
 
     const sysvar_cache: SysvarCache = .{};
     defer sysvar_cache.deinit(allocator);
@@ -898,17 +862,19 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     );
     defer blockhash_queue.deinit(allocator);
 
-    const epoch_stakes = EpochStakes.EMPTY_WITH_GENESIS;
-    defer epoch_stakes.deinit(allocator);
+    const epoch_stake_reader_context: TestEpochStakeReaderContext = .{};
 
     const environment = TransactionExecutionEnvironment{
-        .ancestors = &ancestors,
         .feature_set = &feature_set,
-        .status_cache = &status_cache,
+        .status_checker = status_checker,
         .sysvar_cache = &sysvar_cache,
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,
-        .epoch_stakes = &epoch_stakes,
+        .epoch_stake_reader = .{
+            .ctx = &epoch_stake_reader_context,
+            .totalStakeFn = TestEpochStakeReaderContext.totalStake,
+            .stakeForVoteAccountFn = TestEpochStakeReaderContext.stakeForVoteAccount,
+        },
         .vm_environment = &.{
             .loader = .ALL_DISABLED,
             .config = .{},
@@ -935,7 +901,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             allocator,
             allocator,
             &transaction,
-            .{ .account_shared_data_map = &account_map },
+            AccountReader.fromMap(&account_map),
             &environment,
             &config,
             &program_map,
@@ -980,7 +946,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             allocator,
             allocator,
             &transaction,
-            .{ .account_shared_data_map = &account_map },
+            AccountReader.fromMap(&account_map),
             &environment,
             &config,
             &program_map,

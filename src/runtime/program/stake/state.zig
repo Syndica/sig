@@ -418,14 +418,11 @@ pub const StakeStateV2 = union(enum) {
         };
     }
 
-    pub fn fromAccount(allocator: std.mem.Allocator, account: sig.core.Account) !StakeStateV2 {
-        const buffer = try allocator.alloc(u8, account.data.len());
-        defer allocator.free(buffer);
-        account.data.readAll(buffer);
+    pub fn fromAccountData(data: []const u8) !StakeStateV2 {
         return sig.bincode.readFromSlice(
             sig.utils.allocators.failing.allocator(.{}),
             StakeStateV2,
-            buffer,
+            data,
             .{},
         );
     }
@@ -458,15 +455,7 @@ test StakeStateV2 {
     const serialized = try sig.bincode.writeAlloc(allocator, state, .{});
     defer allocator.free(serialized);
 
-    const account = sig.core.Account{
-        .lamports = 2_000_000,
-        .owner = sig.runtime.program.stake.ID,
-        .data = .initAllocated(serialized),
-        .executable = false,
-        .rent_epoch = 0,
-    };
-
-    const from_account = try StakeStateV2.fromAccount(allocator, account);
+    const from_account = try StakeStateV2.fromAccountData(serialized);
 
     try std.testing.expect(from_account.getDelegation().?.eql(&state.getDelegation().?));
 

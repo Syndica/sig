@@ -30,8 +30,8 @@
             .hash = "libxev-0.0.0-86vtcwE9EwB942iWRnaNMXHv3n0BeLAs_tVhrs5cT8cQ",
         },
         .prettytable = .{
-            .url = "git+https://github.com/dying-will-bullet/prettytable-zig#43e8fbbff4cbacbef195aa4fea281375a77c2026",
-            .hash = "prettytable-0.3.0--Be65yOGAQBntw96PFuz_YR5FcewxN1yOYuPUXb5NV9y",
+            .url = "git+https://github.com/Syndica/prettytable-zig/#a7880b32606be9f2130b69ca0713c417fece8a64",
+            .hash = "prettytable-0.3.0--Be650WGAQAlzZu1XrC-FnA70LT4zLC9vlmrEvThvwi0",
         },
         .base58 = .{
             .url = "git+https://github.com/Syndica/base58-zig#2acfa605d23d4d565a7e5a8ff35ea4a827eaaab9",

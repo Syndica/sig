@@ -835,14 +835,23 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                 }
                 processed_a_slot = true;
 
-                if (state.event_sink) |event_sink| {
+                if (state.event_sink) |event_sink| skip_event: {
                     const slot_state = slot_info.state();
                     const parent_slot = slot_info.constants().parent_slot;
 
-                    const parent_tx_count = if (slot_tracker.get(parent_slot)) |parent_info| blk: {
-                        defer parent_info.release();
-                        break :blk parent_info.state().transaction_count.load(.monotonic);
-                    } else return error.MissingParent;
+                    const parent_info = slot_tracker.get(parent_slot) orelse {
+                        // Parent already pruned because root advanced past this slot mid-replay.
+                        // The slot-frozen event would not have a meaningful tx-count delta, so
+                        // skip it rather than crashing replay.
+                        state.logger.warn().logf(
+                            "skipping slot_frozen event for " ++
+                                "slot {}: parent {} no longer tracked (below consensus root)",
+                            .{ slot, parent_slot },
+                        );
+                        break :skip_event;
+                    };
+                    defer parent_info.release();
+                    const parent_tx_count = parent_info.state().transaction_count.load(.monotonic);
 
                     const num_processed_transactions =
                         slot_state.transaction_count.load(.monotonic) - parent_tx_count;
@@ -2199,6 +2208,70 @@ test "freezeCompletedSlots emits slot_frozen event with success-only transaction
         else => return error.TestUnexpectedResult,
     }
     try std.testing.expect(event_sink.channel.tryReceive() == null);
+}
+
+// Regression test: a slot whose parent has been pruned out of the slot tracker
+// (because the consensus/state root advanced past it on a winning sibling fork)
+// must not crash `freezeCompletedSlots` with `error.MissingParent`. The slot
+// should still freeze; only the slot_frozen event emission is skipped.
+test "freezeCompletedSlots skips slot_frozen event when parent was pruned" {
+    const allocator = std.testing.allocator;
+
+    var logger = sig.trace.log.TestLogger.init(allocator);
+    defer logger.deinit();
+
+    var dep_stubs = try DependencyStubs.init(allocator, .from(logger.logger("", .warn)));
+    defer dep_stubs.deinit();
+
+    var replay_state = try dep_stubs.stubbedState(
+        allocator,
+        .from(logger.logger("", .warn)),
+        .enabled,
+    );
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit();
+        allocator.destroy(replay_state.epoch_tracker);
+    }
+
+    const event_sink = try jrpc_types.EventSink.create(allocator);
+    defer event_sink.destroy();
+    replay_state.event_sink = event_sink;
+
+    // slot 1 has parent 0, slot 2 has parent 1.
+    try addReplayStateSlotForTest(&replay_state, 1, 0, Pubkey.ZEROES, Hash.ZEROES);
+    try addReplayStateSlotForTest(&replay_state, 2, 1, Pubkey.ZEROES, null);
+
+    const slot_ref = replay_state.slot_tracker.get(2) orelse return error.MissingSlotInTracker;
+    defer slot_ref.release();
+    slot_ref.state().tick_height.store(slot_ref.constants().max_tick_height, .monotonic);
+
+    // simulate the race: state root advances to slot 2 between when slot 2
+    // was scheduled for replay and when it finishes freezing, pruning slot 1
+    // (its parent) out of the slot tracker
+    replay_state.slot_tracker.prune(null, 2);
+    try std.testing.expect(replay_state.slot_tracker.get(1) == null);
+
+    const processed_a_slot = try freezeCompletedSlots(&replay_state, &.{.{
+        .slot = 2,
+        .output = .{ .last_entry_hash = Hash.ZEROES },
+    }});
+    try std.testing.expect(processed_a_slot);
+
+    // no slot_frozen event should have been emitted for the orphaned slot.
+    try std.testing.expect(event_sink.channel.tryReceive() == null);
+
+    // warn-level skip message should have been logged.
+    var saw_skip_warning = false;
+    for (logger.messages.items) |msg| {
+        if (msg.level == .warn and
+            std.mem.indexOf(u8, msg.content, "skipping slot_frozen event for slot 2") != null)
+        {
+            saw_skip_warning = true;
+            break;
+        }
+    }
+    try std.testing.expect(saw_skip_warning);
 }
 
 fn testExecuteBlock(allocator: Allocator, config: struct {

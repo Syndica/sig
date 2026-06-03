@@ -10,7 +10,7 @@ const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const FeatureSet = sig.core.FeatureSet;
 const InstructionContext = sig.runtime.InstructionContext;
-const TransactionError = sig.ledger.transaction_status.TransactionError;
+const TransactionError = sig.core.transaction_error.TransactionError;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 
 const MIGRATING_BUILTIN_COSTS = builtin_program_costs.MIGRATING_BUILTIN_COSTS;

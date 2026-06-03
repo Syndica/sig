@@ -171,13 +171,6 @@ pub fn curveGroupOp(
         }
     }
 
-    // For `mul` group operations, the "left" side is the scalar.
-    const left_input_addr = registers.get(.r3);
-    const right_input_addr = registers.get(.r4);
-    const result_point_addr = registers.get(.r5);
-    const cost = tc.compute_budget.curveGroupOperationCost(curve_id, group_op);
-    try tc.consumeCompute(cost);
-
     switch (curve_id) {
         inline //
         .edwards,
@@ -187,6 +180,13 @@ pub fn curveGroupOp(
         .bls12_381_g2_be,
         .bls12_381_g2_le,
         => |id| {
+            // For `mul` group operations, the "left" side is the scalar.
+            const left_input_addr = registers.get(.r3);
+            const right_input_addr = registers.get(.r4);
+            const result_point_addr = registers.get(.r5);
+            const cost = tc.compute_budget.curveGroupOperationCost(id, group_op);
+            try tc.consumeCompute(cost);
+
             const T = switch (id) {
                 .edwards => Edwards25519,
                 .ristretto => Ristretto255,
@@ -548,18 +548,23 @@ pub fn altBn128GroupOp(
 
     try tc.consumeCompute(cost);
 
-    const input = try memory_map.translateSlice(
-        u8,
-        .constant,
-        input_addr,
-        input_size,
-        tc.getCheckAligned(),
-    );
+    // Translate the result buffer before the input buffer to match agave's
+    // ordering. When both pointers are invalid the access violation that gets
+    // surfaced is whichever buffer is translated first, and that error is
+    // observable (e.g. `AccessViolation` vs `StackAccessViolation`).
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0/syscalls/src/lib.rs#L2172-L2182
     const ptr = try memory_map.translateSlice(
         u8,
         .mutable,
         result_addr,
         length,
+        tc.getCheckAligned(),
+    );
+    const input = try memory_map.translateSlice(
+        u8,
+        .constant,
+        input_addr,
+        input_size,
         tc.getCheckAligned(),
     );
 
@@ -1938,6 +1943,53 @@ test "alt_bn128 group op failure cases" {
     }
 
     try std.testing.expectEqual(0, tc.compute_meter);
+}
+
+test "alt_bn128 group op translates result buffer before input buffer" {
+    // Regression test for a sig/agave conformance divergence: altBn128GroupOp
+    // must translate the result buffer (r4) before the input buffer (r2), the
+    // same order as agave's SyscallAltBn128. When both pointers are invalid the
+    // access violation that surfaces depends on which buffer is translated
+    // first, and AccessViolation vs StackAccessViolation is observable.
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{ .accounts = &.{.{
+            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        }}, .compute_meter = 100_000 },
+    );
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
+        cache.deinit(allocator);
+    }
+
+    // Empty memory map built as SBPFv0: every translation misses, so the error
+    // is decided purely by accessViolation() classifying the faulting address,
+    // and StackAccessViolation (reachable only on v0) can be produced.
+    var memory_map = try MemoryMap.init(allocator, &.{}, .v0, .{});
+    defer memory_map.deinit(allocator);
+
+    // input_addr  -> stack frame 0   -> within max_call_depth -> StackAccessViolation
+    // result_addr -> stack frame 256 -> beyond max_call_depth -> AccessViolation
+    const input_addr = memory.STACK_START;
+    const result_addr = memory.STACK_START + 0x100000;
+
+    var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+    registers.set(.r1, 0); // ALT_BN128_ADD, G1, big-endian
+    registers.set(.r2, input_addr);
+    registers.set(.r3, 128); // G1 addition input size
+    registers.set(.r4, result_addr);
+
+    // The result buffer is translated first, so its classification wins.
+    // If the order regresses to input-first this returns StackAccessViolation.
+    try std.testing.expectError(
+        error.AccessViolation,
+        altBn128GroupOp(&tc, &memory_map, &registers),
+    );
 }
 
 test "secp256k1_recover" {
