@@ -128,10 +128,6 @@ fn executeBpfProgram(
         .mask_out_rent_epoch_in_vm_serialization,
         ic.tc.slot,
     );
-    const provide_instruction_data_offset = ic.tc.feature_set.active(
-        .provide_instruction_data_offset_in_vm_r2,
-        ic.tc.slot,
-    );
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
     var serialized = try bpf_serialize.serializeParameters(
@@ -169,7 +165,10 @@ fn executeBpfProgram(
             &executable,
             serialized.regions.items,
             &ic.tc.vm_environment.loader,
-            if (provide_instruction_data_offset) serialized.instruction_data_offset else 0,
+            // SIMD-0321 is now unconditional in agave (no feature gate); always
+            // pass the instruction-data offset so r2 is initialized to match.
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.1/program-runtime/src/vm.rs#L309
+            serialized.instruction_data_offset,
         ) catch |err| {
             try ic.tc.log("Failed to create SBPF VM: {s}", .{@errorName(err)});
             return InstructionError.ProgramEnvironmentSetupFailure;
