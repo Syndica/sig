@@ -64,83 +64,52 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
         try rooted.loadSnapshot(.from(logger), &snapshot_iter);
     }
 
-    // {
-    //     logger.info().logf("looking up feature accounts", .{});
+    { // Load feature accounts (TODO: use this to then load leader schedule & stake/vote data)
+        const account_reader: struct {
+            r: *Rooted,
+            l: @TypeOf(logger),
 
-    //     const features = lib.solana.features;
-    //     const FeatureSet = features.Set;
+            pub const AccountRef = AccountPool.Index;
 
-    //     var feature_set = FeatureSet.ALL_DISABLED;
-    //     const slot = rooted.journal.committed_slot;
-    //     const allow_new_activations = true;
+            pub fn load(self: @This(), pubkey: *const lib.solana.Pubkey) ?AccountRef {
+                errdefer |err| std.debug.panic("AccountReader: {}", .{err});
 
-    //     try rooted.beginTransaction(.from(logger), slot);
+                if (!(try self.r.queueRead(.from(self.l), pubkey)))
+                    return error.RootedQueueFull;
+                const result: Rooted.LookupResult = while (true) : (std.atomic.spinLoopHint())
+                    break (try self.r.pollRead(.from(self.l))) orelse continue;
 
-    //     var new_activations = FeatureSet.ALL_DISABLED;
-    //     var inactive_iterator = feature_set.iterator(slot, .inactive);
-    //     while (inactive_iterator.next()) |feature| {
-    //         const feature_id = features.pubkey_map.get(feature);
+                if (result.account_index == AccountPool.invalid_index) return null;
+                return result.account_index;
+            }
 
-    //         std.debug.assert(try rooted.queueRead(.from(logger), &feature_id));
-    //         const result = while (true) break (try rooted.pollRead(.from(logger))) orelse {
-    //             std.atomic.spinLoopHint();
-    //             continue;
-    //         };
+            pub fn free(self: @This(), account: AccountRef) void {
+                if (self.r.account_pool.getAccount(account).unref())
+                    self.r.account_pool.free(account);
+            }
 
-    //         logger.info().logf(
-    //             "feature lookup: {s}: pubkey:{f} idx:{}",
-    //             .{ @tagName(feature), result.pubkey, result.account_index },
-    //         );
+            pub fn getOwner(self: @This(), account: AccountRef) lib.solana.Pubkey {
+                return self.r.account_pool.getAccount(account).owner;
+            }
 
-    //         if (result.account_index == AccountPool.invalid_index) {
-    //             continue;
-    //         }
+            pub fn getData(self: @This(), account: AccountRef) []const u8 {
+                return self.r.account_pool.getAccount(account).getData();
+            }
+        } = .{ .r = rooted, .l = logger };
 
-    //         const acc = rooted.account_pool.getAccount(result.account_index);
-    //         logger.info().logf("feature:{s} pubkey:{f} owner:{f} lamports:{} data:{} ({any})\n", .{
-    //             @tagName(feature),
-    //             acc.pubkey,
-    //             acc.owner,
-    //             acc.lamports,
-    //             acc.getData().len,
-    //             acc.getData(),
-    //         });
+        logger.info().logf("fetching feature accounts", .{});
 
-    //         switch (try features.activationStateFromAccount(acc.owner, acc.getData())) {
-    //             .activated => |activation_slot| if (slot >= activation_slot) feature_set.setSlot(
-    //                 feature,
-    //                 activation_slot,
-    //             ),
-    //             .pending => if (allow_new_activations) {
-    //                 feature_set.setSlot(feature, slot);
-    //                 new_activations.setSlot(feature, slot);
+        const slot = rooted.journal.committed_slot;
+        var feature_set = lib.solana.features.Set.ALL_DISABLED;
+        var pending_set =
+            try lib.solana.features.computeInactiveFeatureSet(&feature_set, slot, account_reader);
 
-    //                 var new_data: [9]u8 = undefined;
-    //                 new_data[0] = 1;
-    //                 std.mem.writeInt(u64, new_data[1..9], slot, .little);
+        var it = feature_set.iterator(slot, .active);
+        while (it.next()) |feature| logger.info().logf("Feature(active) {}", .{feature});
 
-    //                 var r = std.Io.Reader.fixed(&new_data);
-    //                 try rooted.put(
-    //                     .from(logger),
-    //                     slot,
-    //                     acc.pubkey,
-    //                     acc.owner,
-    //                     acc.lamports,
-    //                     acc.rent_epoch,
-    //                     acc.data.executable,
-    //                     acc.data.len,
-    //                     &r,
-    //                 );
-    //                 logger.info().logf("Feature {} activated at slot {}", .{ feature, slot });
-    //             },
-    //             .invalid => continue,
-    //         }
-    //     }
-
-    //     if (allow_new_activations) feature_set = new_activations;
-
-    //     try rooted.commitTransaction(.from(logger));
-    // }
+        it = pending_set.iterator(slot, .active);
+        while (it.next()) |feature| logger.info().logf("Feature(pending) {}", .{feature});
+    }
 
     logger.info().logf("accounts_db loaded - servicing replay requests", .{});
 

@@ -44,7 +44,7 @@ pub const Rooted = struct {
     const LookupIndex = std.math.IntFittingRange(0, max_active_lookups + 1);
     const invalid_lookup_index = max_active_lookups;
 
-    const LookupResult = AccountLookups.Result;
+    pub const LookupResult = AccountLookups.Result;
     const LookupNode = struct {
         next: LookupIndex,
         result: LookupResult,
@@ -579,8 +579,13 @@ pub const Rooted = struct {
             return false; // no available lookups to use.
         }
 
+        // pop from free list (add back on error)
         const node = &self.lookup_nodes[lookup_idx];
         self.free_lookups = node.next;
+        errdefer {
+            node.next = self.free_lookups;
+            self.free_lookups = lookup_idx;
+        }
 
         const entry = self.table.get(pubkey);
         if (entry.isEmpty()) { // not found. complete immediately.
@@ -597,6 +602,7 @@ pub const Rooted = struct {
         const account = self.account_pool.getAccount(acc_idx);
         account.ref_count = .init(0);
         account.data = .{ .executable = false, .len = @intCast(entry.len) };
+        errdefer self.account_pool.free(acc_idx);
 
         node.file_offset = entry.offset;
         try self.submitRead(.from(logger), .{

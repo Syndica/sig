@@ -38,7 +38,7 @@ pub fn assertInterface(comptime InterfaceType: type, comptime ContractStruct: ty
     }
 
     // Check interface has matching decls/functions.
-    for (info.decls) |decl| {
+    inline for (info.decls) |decl| {
         const Decl = @TypeOf(@field(Contract, decl.name));
         if (!@hasDecl(Interface, decl.name)) {
             @compileError(std.fmt.comptimePrint("{s} missing decl {s}:{s}", .{

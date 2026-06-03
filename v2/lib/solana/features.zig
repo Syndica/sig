@@ -1,6 +1,8 @@
 const std = @import("std");
 const lib = @import("../lib.zig");
 
+const ids = lib.solana.ids;
+
 const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
 const EpochSchedule = lib.solana.EpochSchedule;
@@ -224,32 +226,6 @@ pub const Set = struct {
     };
 };
 
-/// Returns the activation slot from a feature account.
-/// - Returns `.pending` if the feature is pending activation (valid 9-byte account with null slot)
-/// - Returns `.{ .activated = slot }` if already activated
-/// - Returns `.invalid` if the account is not a valid feature account
-const FeatureActivationState = union(enum) {
-    pending,
-    activated: u64,
-    invalid,
-};
-
-/// Feature accounts must have at least 9 bytes of data (bincode-serialized ?u64)
-/// An empty account (0 bytes) is not a valid pending feature
-/// [solana-sdk] https://github.com/anza-xyz/solana-sdk/blob/54449336c03ae8a99bc37745ac97ab90a77eb24b/feature-gate-interface/src/state.rs#L37
-pub fn activationStateFromAccount(owner: Pubkey, data: []const u8) !FeatureActivationState {
-    if (data.len < 9 or
-        !owner.equals(&lib.solana.ids.FEATURE_PROGRAM_ID)) return .invalid;
-
-    const maybe_slot: ?Slot = switch (data[0]) {
-        0 => null,
-        1 => std.mem.readInt(u64, data[1..9], .little),
-        else => return error.InvalidFeatureAccount,
-    };
-
-    return if (maybe_slot) |slot| .{ .activated = slot } else .pending;
-}
-
 test "full inflation enabled" {
     var feature_set: Set = .ALL_DISABLED;
     var new_feature_set: Set = .ALL_DISABLED;
@@ -300,4 +276,100 @@ test "runtime feature map excludes reverted entries" {
             try std.testing.expect(!std.mem.eql(u8, field.name, excluded_name));
         }
     }
+}
+
+/// Returns the activation slot from a feature account.
+/// - Returns `.pending` if the feature is pending activation (valid 9-byte account with null slot)
+/// - Returns `.{ .activated = slot }` if already activated
+/// - Returns `.invalid` if the account is not a valid feature account
+pub const ActivationState = union(enum) {
+    pending,
+    activated: Slot,
+    invalid,
+
+    pub fn fromAccountData(owner: Pubkey, data: []const u8) !ActivationState {
+        if (data.len < 9 or !owner.equals(&ids.FEATURE_PROGRAM_ID)) {
+            return .invalid;
+        }
+
+        const maybe_slot: ?Slot = switch (data[0]) {
+            0 => null,
+            1 => std.mem.readInt(u64, data[1..9], .little),
+            else => return error.InvalidFeatureAccount,
+        };
+
+        return if (maybe_slot) |slot| .{ .activated = slot } else .pending;
+    }
+
+    pub fn toAccountData(self: ActivationState) ![9]u8 {
+        switch (self) {
+            .invalid => return error.InvalidFeatureAccount,
+            .pending => return @splat(0), // `None` optional byte + unused data length
+            .activated => |slot| {
+                var buf: [9]u8 = undefined;
+                buf[0] = 1; // `Some` optional byte
+                std.mem.writeInt(u64, buf[1..9], slot, .little);
+                return buf;
+            },
+        }
+    }
+};
+
+/// Iterate through the inactive features and:
+/// 1. Try and load the feature account from the accounts db.
+/// 2. If the account exists, check if it has been activated already.
+/// 3. If it has been activated, add it to the active set.
+/// 4. If it has not been activated, it will be returned as an activated feature in the result
+pub fn computeInactiveFeatureSet(
+    active_set: *Set,
+    slot: Slot,
+    account_reader: anytype,
+) !Set {
+    const AccountReader = @TypeOf(account_reader);
+    lib.util.assertInterface(AccountReader, struct {
+        const AccountRef = AccountReader.AccountRef;
+
+        pub fn load(self: AccountReader, pubkey: *const Pubkey) ?AccountRef {
+            _ = .{ self, pubkey };
+            return undefined;
+        }
+
+        pub fn free(self: AccountReader, account: AccountRef) void {
+            _ = .{ self, account };
+            return undefined;
+        }
+
+        pub fn getOwner(self: AccountReader, account: AccountRef) Pubkey {
+            _ = .{ self, account };
+            return undefined;
+        }
+
+        pub fn getData(self: AccountReader, account: AccountRef) []const u8 {
+            _ = .{ self, account };
+            return undefined;
+        }
+    });
+
+    var pending_set = Set.ALL_DISABLED;
+    var inactive_iterator = active_set.iterator(slot, .inactive);
+    while (inactive_iterator.next()) |feature| {
+        const feature_id = pubkey_map.get(feature);
+
+        const feature_account = account_reader.load(&feature_id) orelse continue;
+        defer account_reader.free(feature_account);
+
+        switch (try ActivationState.fromAccountData(
+            account_reader.getOwner(feature_account),
+            account_reader.getData(feature_account),
+        )) {
+            .activated => |activation_slot| if (slot >= activation_slot) active_set.setSlot(
+                feature,
+                activation_slot,
+            ),
+            .pending => pending_set.setSlot(feature, slot),
+            .invalid => continue,
+        }
+    }
+
+    return pending_set;
 }
