@@ -341,14 +341,16 @@ pub const Rooted = struct {
             n_transfer += @sizeOf(AccountMeta) + @sizeOf(SectorHeader) + acc.data.len;
             try self.put(
                 .from(logger),
-                acc.slot,
-                acc.pubkey,
-                acc.owner,
-                acc.lamports,
-                acc.rent_epoch,
-                acc.data.executable,
-                acc.data.len,
-                snapshot_iter,
+                snapshot_iter, // data reader
+                .{
+                    .slot = acc.slot,
+                    .pubkey = acc.pubkey,
+                    .owner = acc.owner,
+                    .lamports = acc.lamports,
+                    .rent_epoch = acc.rent_epoch,
+                    .executable = acc.data.executable,
+                    .data_len = acc.data.len,
+                },
             );
 
             const elapsed_ns = timer.read();
@@ -422,28 +424,30 @@ pub const Rooted = struct {
     pub fn put(
         self: *Rooted,
         logger: tel.Logger("Rooted.put"),
-        slot: Slot,
-        pubkey: Pubkey,
-        owner: Pubkey,
-        lamports: u64,
-        rent_epoch: Epoch,
-        executable: bool,
-        data_len: usize,
-        data_reader: anytype, // anything with a std.Io.Reader.readSliceAll API
+        /// std.Io.Reader
+        data_reader: anytype, // readSliceAll()
+        account_meta: struct {
+            slot: Slot,
+            pubkey: Pubkey,
+            owner: Pubkey,
+            lamports: u64,
+            rent_epoch: Epoch,
+            executable: bool,
+            data_len: usize,
+        },
     ) !void {
         std.debug.assert(self.journal.state == .writing);
-        std.debug.assert(data_len <= 10 * 1024 * 1024);
-        std.debug.assert(rent_epoch != std.math.maxInt(SectorHeader.SmallEpoch));
+        std.debug.assert(account_meta.data_len <= 10 * 1024 * 1024);
+        std.debug.assert(account_meta.rent_epoch != std.math.maxInt(SectorHeader.SmallEpoch));
 
-        const offset = self.io.writer.getOffset();
-        self.table.put(&self.put_batch, &pubkey, slot, .{
-            .offset = @intCast(offset),
-            .len = @intCast(data_len),
+        self.table.put(&self.put_batch, &account_meta.pubkey, account_meta.slot, .{
+            .offset = @intCast(self.io.writer.getOffset()),
+            .len = @intCast(account_meta.data_len),
         });
 
         self.journal.writing_slot = @max(
             self.journal.writing_slot,
-            @as(u32, @intCast(slot)),
+            @as(u32, @intCast(account_meta.slot)),
         );
 
         { // write SectorHeader + AccountMeta
@@ -457,16 +461,19 @@ pub const Rooted = struct {
                 .sector = .{
                     .type = .account,
                     .info = .{ .account = .{
-                        .data_len = @intCast(data_len),
-                        .executable = executable,
-                        .rent_epoch = std.math.lossyCast(SectorHeader.SmallEpoch, rent_epoch),
+                        .data_len = @intCast(account_meta.data_len),
+                        .executable = account_meta.executable,
+                        .rent_epoch = std.math.lossyCast(
+                            SectorHeader.SmallEpoch,
+                            account_meta.rent_epoch,
+                        ),
                     } },
                 },
                 .meta = .{
-                    .slot = @intCast(slot),
-                    .pubkey = pubkey,
-                    .owner = owner,
-                    .lamports = lamports,
+                    .slot = @intCast(account_meta.slot),
+                    .pubkey = account_meta.pubkey,
+                    .owner = account_meta.owner,
+                    .lamports = account_meta.lamports,
                 },
             };
 
@@ -474,11 +481,11 @@ pub const Rooted = struct {
             try self.queueWrite(.from(logger), @sizeOf(@TypeOf(header)), &r);
         }
 
-        if (data_len > 0) { // write account data
+        if (account_meta.data_len > 0) { // write account data
             const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.writeAccountData" });
             defer zone.deinit();
 
-            try self.queueWrite(.from(logger), data_len, data_reader);
+            try self.queueWrite(.from(logger), account_meta.data_len, data_reader);
         }
     }
 
@@ -486,7 +493,8 @@ pub const Rooted = struct {
         self: *Rooted,
         logger: tel.Logger("Rooted.queueWrite"),
         len: usize,
-        reader: anytype, // anything that impls an interface like std.Io.Reader
+        /// std.Io.Reader
+        reader: anytype, // readSliceAll()
     ) !void {
         var n: usize = 0;
         while (n < len) {
