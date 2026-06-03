@@ -243,29 +243,28 @@ pub fn build(b: *Build) !void {
         );
     }
 
-    const gossip_bbt_exe = b.addExecutable(.{
-        .name = "bbt-" ++ "gossip",
-        .root_module = createRunnerModule(b, .{
+    const black_box_tests = &.{
+        BlackBoxTest{
+            .name = "gossip",
             .root_source_file = b.path("tests/gossip/main.zig"),
+            .services = .initMany(&.{ .gossip, .telemetry }),
+        },
+        BlackBoxTest{
+            .name = "replay",
+            .root_source_file = b.path("tests/replay/main.zig"),
+            .services = .initMany(&.{ .shred_receiver, .replay, .telemetry }),
+        },
+    };
+
+    inline for (black_box_tests) |black_box_test| {
+        addBlackBoxTest(b, bb_test_step, artifact_opts, .{
+            .test_config = black_box_test,
             .target = target,
             .optimize = optimize,
             .imports = runner_imports,
-        }),
-        .use_llvm = true,
-    });
-    gossip_bbt_exe.linkLibrary(service_libs.get(.gossip));
-    gossip_bbt_exe.linkLibrary(service_libs.get(.telemetry));
-    gossip_bbt_exe.root_module.addAnonymousImport("schema", .{
-        .root_source_file = topoSchemaSubsetFile(
-            b,
-            "schema.zon",
-            .initMany(&.{ .gossip, .telemetry }),
-        ),
-    });
-
-    _ = addExeOutputs(b, gossip_bbt_exe, bb_test_step, artifact_opts, .{
-        .dest_dir = test_install_dir,
-    });
+            .service_libs = &service_libs,
+        });
+    }
 
     // generates unified docs for all modules
     // NOTE: have to specify `-Dno-bin` & `-Dno-run` in order to
@@ -330,6 +329,53 @@ const RunnerModuleOptions = struct {
         tracy: *Build.Module,
     };
 };
+
+const BlackBoxTest = struct {
+    name: []const u8,
+    root_source_file: Build.LazyPath,
+    services: std.EnumSet(topo_types.ServiceId),
+};
+
+fn addBlackBoxTest(
+    b: *Build,
+    bb_test_step: *Build.Step,
+    artifact_opts: ExeOutput.InitOptions,
+    options: struct {
+        test_config: BlackBoxTest,
+        target: Build.ResolvedTarget,
+        optimize: std.builtin.OptimizeMode,
+        imports: RunnerModuleOptions.Imports,
+        service_libs: *const std.EnumArray(topo_types.ServiceId, *Build.Step.Compile),
+    },
+) void {
+    const exe = b.addExecutable(.{
+        .name = b.fmt("bbt-{s}", .{options.test_config.name}),
+        .root_module = createRunnerModule(b, .{
+            .root_source_file = options.test_config.root_source_file,
+            .target = options.target,
+            .optimize = options.optimize,
+            .imports = options.imports,
+        }),
+        .use_llvm = true,
+    });
+
+    var service_iter = options.test_config.services.iterator();
+    while (service_iter.next()) |service_id| {
+        exe.linkLibrary(options.service_libs.get(service_id));
+    }
+
+    exe.root_module.addAnonymousImport("schema", .{
+        .root_source_file = topoSchemaSubsetFile(
+            b,
+            b.fmt("{s}-schema.zon", .{options.test_config.name}),
+            options.test_config.services,
+        ),
+    });
+
+    _ = addExeOutputs(b, exe, bb_test_step, artifact_opts, .{
+        .dest_dir = test_install_dir,
+    });
+}
 
 fn createRunnerModule(
     b: *Build,

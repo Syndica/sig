@@ -28,7 +28,6 @@ pub const ReadWrite = struct {
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
-    _ = runner;
     const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
     defer zone.deinit();
 
@@ -40,9 +39,12 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     var deshredded_iter = rw.deshredded_in.get(.reader);
 
     while (true) {
-        const deshredded_fec_set: *const lib.shred.DeshreddedFecSet = deshredded_iter.next() orelse
+        const deshredded_fec_set: *const lib.shred.DeshreddedFecSet = deshredded_iter.next() orelse {
+            try runner.activity.signalIdleAfterNCalls(1000);
             continue;
+        };
         defer deshredded_iter.markUsed();
+        try runner.activity.signalActive();
 
         const received_zone = tracy.Zone.init(@src(), .{ .name = "received fec set" });
         defer received_zone.deinit();
