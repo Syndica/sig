@@ -1126,10 +1126,12 @@ fn getVoteStateChecked(
 ) (error{OutOfMemory} || InstructionError)!VoteState {
     // Peek the leading u32 variant tag before attempting a full bincode decode,
     // mirroring agave's `VoteStateV3::deserialize_into_ptr` (V3 path) and
-    // `VoteStateVersions::deserialize` (V4 path) in solana-vote-interface 5.0.0.
-    // Both helpers shortcut on variant 0 with version-specific errors rather
-    // than letting bincode propagate a generic InvalidAccountData on a short
-    // or zero-tagged buffer.
+    // `VoteStateVersions::deserialize` (V4 path). Both helpers shortcut on
+    // variant 0 (the unsupported V0_23_5 layout) with InvalidAccountData
+    // rather than letting bincode propagate a generic error on a short or
+    // zero-tagged buffer.
+    // [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v5.1.1/vote-interface/src/state/vote_state_v3.rs#L159
+    // [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v5.1.1/vote-interface/src/state/vote_state_versions.rs#L155
     const data = vote_account.constAccountData();
     if (data.len < @sizeOf(u32)) {
         return InstructionError.InvalidAccountData;
@@ -1137,15 +1139,7 @@ fn getVoteStateChecked(
     const variant = std.mem.readInt(u32, data[0..@sizeOf(u32)], .little);
     if (variant == 0) {
         return switch (target_version) {
-            // V3 path: agave's VoteStateV3::deserialize_into_ptr rejects
-            // variant 0 with InvalidAccountData (V0_23_5 is unsupported in
-            // SBPF context).
-            // [agave] https://github.com/anza-xyz/solana-sdk/blob/ddbf3430b08eb375de695328ae298dd61c2e1471/vote-interface/src/state/vote_state_v3.rs#L159
-            .v3 => InstructionError.InvalidAccountData,
-            // V4 path: agave's VoteStateVersions::deserialize repurposed
-            // variant 0 to mean Uninitialized after SIMD-0185.
-            // [agave] https://github.com/anza-xyz/solana-sdk/blob/ddbf3430b08eb375de695328ae298dd61c2e1471/vote-interface/src/state/vote_state_versions.rs#L155
-            .v4 => InstructionError.UninitializedAccount,
+            .v3, .v4 => InstructionError.InvalidAccountData,
         };
     }
 
@@ -6949,7 +6943,7 @@ test "vote_program: authorize zero-tag short data returns InvalidAccountData (v3
     );
 }
 
-test "vote_program: authorize zero-tag short data returns UninitializedAccount (v4 target)" {
+test "vote_program: authorize zero-tag short data returns InvalidAccountData (v4 target)" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
@@ -6966,7 +6960,7 @@ test "vote_program: authorize zero-tag short data returns UninitializedAccount (
     var short_zero_data = [_]u8{0} ** 40;
 
     try testing.expectProgramExecuteError(
-        InstructionError.UninitializedAccount,
+        InstructionError.InvalidAccountData,
         std.testing.allocator,
         vote_program.ID,
         VoteProgramInstruction{
