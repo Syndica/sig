@@ -1547,7 +1547,7 @@
         .name = "fix_alt_bn128_pairing_length_check",
         .pubkey = "bnYzodLwmybj7e1HAe98yZrdJTd7we69eMMLgCXqKZm",
         .description = "SIMD-0334: Fix alt_bn128_pairing length check",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "poseidon_enforce_padding",

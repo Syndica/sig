@@ -12,7 +12,6 @@ const TransactionContext = sig.runtime.TransactionContext;
 const Error = sig.vm.syscalls.Error;
 const SyscallError = sig.vm.SyscallError;
 const memory = sig.vm.memory;
-const FeatureSet = sig.core.FeatureSet;
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
@@ -413,8 +412,6 @@ const AltBn128GroupOp = packed struct(u8) {
         group_op: AltBn128GroupOp,
         input: []const u8,
         out: *[128]u8,
-        feature_set: *const FeatureSet,
-        slot: sig.core.Slot,
     ) ![]const u8 {
         const endian: std.builtin.Endian = switch (group_op.endian) {
             .little => .little,
@@ -461,21 +458,9 @@ const AltBn128GroupOp = packed struct(u8) {
                 },
             },
             .pairing => {
-                // Originally Agave did not check that the input length is a multiple
-                // of the pair size (192 bytes). They used `input.len().check_rem(192).is_none()`,
-                // which made little sense, as `check_rem` only returns `None` if the RHS is zero.
-                //
-                // This ended up sort of working, since we perform a truncating integer division
-                // in `pairingSyscall`, which ensures that the number of pairs read will always fit
-                // the input size and ignores the remaining bytes.
-                //
-                // This is all fixed by the feature gate which enables us to perform the correct check.
-                //
-                // [fd] https://github.com/firedancer-io/firedancer/blob/d848e9b27a80cc344772521689671ef05de28653/src/ballet/bn254/fd_bn254.c#L227-L236
-                // [agave] https://github.com/anza-xyz/solana-sdk/blob/f2d15de6f7a1715ff806f0c39bba8f64bf6a587d/bn254/src/pairing.rs#L66-L83
-                if (feature_set.active(.fix_alt_bn128_pairing_length_check, slot)) {
-                    if (input.len % 192 != 0) return error.InvalidLength;
-                }
+                // [fd] https://github.com/firedancer-io/firedancer/blob/84a77882d57a9104de202d4bca09f6c369062cd5/src/ballet/bn254/fd_bn254.c#L305-L306
+                // [agave] https://github.com/anza-xyz/solana-sdk/blob/bn254%40v3.2.1/bn254/src/pairing.rs#L66-L69
+                if (input.len % 192 != 0) return error.InvalidLength;
 
                 try bn254.pairingSyscall(out[0..32], input, endian);
                 return out[0..32];
@@ -570,7 +555,7 @@ pub fn altBn128GroupOp(
 
     // 128-bytes is the largest result we'll need (1x uncompressed G2 point)
     var buffer: [128]u8 = undefined;
-    const result = group_op.operation(input, &buffer, tc.feature_set, tc.slot) catch {
+    const result = group_op.operation(input, &buffer) catch {
         registers.set(.r0, 1);
         return;
     };
