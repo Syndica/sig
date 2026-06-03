@@ -88,8 +88,10 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
 
     {
         const Global = struct {
-            // avoid memset(0xaa)
-            var zst_reader = lib.util.initUndefUnchecked(lib.solana.snapshot.ZstReader);
+            var zst_reader: lib.solana.snapshot.ZstReader = blk: {
+                @setRuntimeSafety(false);
+                break :blk undefined;
+            };
         };
 
         var snapshot_path_buf: [std.fs.max_path_bytes]u8 = undefined;

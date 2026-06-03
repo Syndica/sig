@@ -700,9 +700,7 @@ pub fn TarZstIter(comptime BufReader: type) type {
                     const buf = self.header[124..][0..12];
                     if (buf[0] == 0xff) return error.InvalidTar; // negative size
                     if (buf[0] == 0x80) {
-                        if (std.mem.readInt(u32, buf[0..4], .little) != 0x80) {
-                            return error.InvalidTar;
-                        }
+                        if (std.mem.readInt(u32, buf[0..4], .little) != 0x80) return error.InvalidTar;
                         break :blk std.mem.readInt(u64, buf[4..12], .big);
                     }
                     const trimmed = std.mem.trimRight(u8, std.mem.trimLeft(u8, buf, "0 "), " \x00");

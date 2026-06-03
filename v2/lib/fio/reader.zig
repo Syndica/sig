@@ -191,9 +191,10 @@ pub fn FileReader(
             const zone = tracy.Zone.init(@src(), .{ .name = "FileReader.poll" });
             defer zone.deinit();
 
-            // Avoid needless memset(0xAA) in safe modes.
-            var cqes = lib.util.initUndefUnchecked([num_blocks]std.os.linux.io_uring_cqe);
-
+            var cqes: [num_blocks]std.os.linux.io_uring_cqe = blk: {
+                @setRuntimeSafety(false);
+                break :blk undefined; // avoid needless memset
+            };
             const n = try self.ring.copy_cqes(&cqes, 0); // dont wait: non-blocking poll is fastest
             for (cqes[0..n]) |*cqe| {
                 var data: RingUserData = @bitCast(cqe.user_data);
