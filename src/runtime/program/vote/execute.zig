@@ -2404,10 +2404,6 @@ test "vote_program: update_commission increasing commission" {
             },
             .feature_set = &.{
                 .{
-                    .feature = .allow_commission_decrease_at_any_time,
-                    .slot = 0,
-                },
-                .{
                     .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
                     .slot = 0,
                 },
@@ -2514,10 +2510,6 @@ test "vote_program: update_commission decreasing commission" {
                 .epoch_schedule = epoch_schedule,
             },
             .feature_set = &.{
-                .{
-                    .feature = .allow_commission_decrease_at_any_time,
-                    .slot = 0,
-                },
                 .{
                     .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
                     .slot = 0,
@@ -2811,10 +2803,6 @@ test "vote_program: update_commission error commission update too late failure" 
             },
             .feature_set = &.{
                 .{
-                    .feature = .allow_commission_decrease_at_any_time,
-                    .slot = 0,
-                },
-                .{
                     .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
                     .slot = 0,
                 },
@@ -2926,10 +2914,6 @@ test "vote_program: update_commission missing signature" {
                 .epoch_schedule = epoch_schedule,
             },
             .feature_set = &.{
-                .{
-                    .feature = .allow_commission_decrease_at_any_time,
-                    .slot = 0,
-                },
                 .{
                     .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
                     .slot = 0,
@@ -5756,10 +5740,6 @@ test "vote_program: update_commission with v4 feature" {
             .feature_set = &.{
                 .{
                     .feature = .vote_state_v4,
-                    .slot = 0,
-                },
-                .{
-                    .feature = .allow_commission_decrease_at_any_time,
                     .slot = 0,
                 },
                 .{
