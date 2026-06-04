@@ -29,10 +29,7 @@ const Config = struct {
         if (self.start_slot) |start_slot| {
             if (slot < start_slot) return false;
         }
-        if (self.end_slot) |end_slot| {
-            if (slot > end_slot) return false;
-        }
-        return true;
+        return !self.pastEndSlot(slot);
     }
 
     fn pastEndSlot(self: Config, slot: Slot) bool {
