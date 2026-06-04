@@ -681,7 +681,7 @@
         .name = "loosen_cpi_size_restriction",
         .pubkey = "GDH5TVdbTPUpRnXaRyQqiKUa7uZAbZ28Q2N9bhbKoMLm",
         .description = "loosen cpi size restrictions #26641",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "use_default_units_in_fee_calculation",
