@@ -87,7 +87,7 @@
         .name = "system_transfer_zero_check",
         .pubkey = "BrTR9hzw4WBGFP65AJMbpAo64DcA3U6jdPSga9fMV5cS",
         .description = "perform all checks for transfers of 0 lamports",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "blake3_syscall_enabled",
