@@ -1037,7 +1037,7 @@
         .name = "enable_alt_bn128_compression_syscall",
         .pubkey = "EJJewYSddEEtSZHiqugnvhQHiWyZKjkFDQASd7oKSagn",
         .description = "add alt_bn128 compression syscalls",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "programify_feature_gate_program",
