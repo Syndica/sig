@@ -65,24 +65,12 @@ fn createLookupTable(
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = instruction.CreateLookupTable.AccountIndex;
 
-    const has_relax_authority_signer_check_for_lookup_table_creation = ic.tc.feature_set.active(
-        .relax_authority_signer_check_for_lookup_table_creation,
-        ic.tc.slot,
-    );
-
     // [agave] https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L59
     const lookup_table_lamports, const table_key: Pubkey, const lookup_table_owner: Pubkey = blk: {
         const lookup_table_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.lookup_table_account),
         );
         defer lookup_table_account.release();
-
-        if (!has_relax_authority_signer_check_for_lookup_table_creation and
-            lookup_table_account.account.data.len > 0)
-        {
-            try ic.tc.log("Table account must not be allocated", .{});
-            return error.AccountAlreadyInitialized;
-        }
 
         break :blk .{
             lookup_table_account.account.lamports,
@@ -97,13 +85,6 @@ fn createLookupTable(
             @intFromEnum(AccountIndex.authority_account),
         );
         defer authority_account.release();
-
-        if (!has_relax_authority_signer_check_for_lookup_table_creation and
-            !authority_account.context.is_signer)
-        {
-            try ic.tc.log("Authority account must be a signer", .{});
-            return error.MissingRequiredSignature;
-        }
 
         break :blk authority_account.pubkey;
     };
@@ -153,9 +134,7 @@ fn createLookupTable(
         return error.InvalidArgument;
     }
 
-    if (has_relax_authority_signer_check_for_lookup_table_creation and
-        lookup_table_owner.equals(&program.ID))
-    {
+    if (lookup_table_owner.equals(&program.ID)) {
         return; // success
     }
 
