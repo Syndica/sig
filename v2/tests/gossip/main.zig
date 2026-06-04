@@ -47,12 +47,12 @@ pub fn main() !void {
     });
 
     const net_to_gossip_memfd = service_map.entries.get(.gossip).?.bindings.get(.net_to_gossip).?;
+    const net_pair = try net_to_gossip_memfd.memfd.mmapStaticSize(lib.net.Pair, .{});
+    defer std.posix.munmap(@ptrCast(net_pair));
+
     const ping_token: [32]u8 = @splat(12);
     const ping_token_hash: lib.solana.Hash = .initMany(&.{ "SOLANA_PING_PONG", &ping_token });
     {
-        const net_pair = try net_to_gossip_memfd.memfd.mmapStaticSize(lib.net.Pair, .{});
-        defer std.posix.munmap(@ptrCast(net_pair));
-
         var iter = net_pair.recv.get(.writer);
         defer iter.markUsed();
 
@@ -89,9 +89,6 @@ pub fn main() !void {
 
     // and then actually wait for the services to exit
     try spawned.wait(10 * std.time.ns_per_ms);
-
-    const net_pair = try net_to_gossip_memfd.memfd.mmapStaticSize(lib.net.Pair, .{});
-    defer std.posix.munmap(@ptrCast(net_pair));
 
     var msgs: std.ArrayList(lib.gossip.GossipMessage) = .empty;
     defer msgs.deinit(gpa);
