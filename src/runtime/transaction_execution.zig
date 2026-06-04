@@ -15,7 +15,6 @@ const Hash = sig.core.Hash;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
-const Slot = sig.core.Slot;
 const RentState = sig.core.RentCollector.RentState;
 
 const AccountReader = sig.runtime.execution_interfaces.AccountReader;
@@ -462,8 +461,6 @@ pub fn executeTransaction(
     const instruction_datas = try getInstructionDatasSliceForPrecompiles(
         allocator,
         transaction.instructions,
-        environment.feature_set,
-        environment.slot,
     );
     defer if (instruction_datas) |ids| allocator.free(ids);
 
@@ -605,8 +602,6 @@ fn transactionAccountsRentState(
 fn getInstructionDatasSliceForPrecompiles(
     allocator: std.mem.Allocator,
     instructions: []const InstructionInfo,
-    feature_set: *const FeatureSet,
-    slot: Slot,
 ) !?[]const []const u8 {
     const contains_precompile = for (instructions) |ixn_info| {
         if (ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.ed25519.ID) or
@@ -615,12 +610,7 @@ fn getInstructionDatasSliceForPrecompiles(
             break true;
     } else false;
 
-    const move_verify_precompiles_to_svm = feature_set.active(
-        .move_precompile_verification_to_svm,
-        slot,
-    );
-
-    const instruction_datas = if (contains_precompile and move_verify_precompiles_to_svm) blk: {
+    const instruction_datas = if (contains_precompile) blk: {
         const instruction_datas = try allocator.alloc([]const u8, instructions.len);
         for (instructions, 0..) |instruction_info, index| {
             instruction_datas[index] = instruction_info.instruction_data;
@@ -636,9 +626,6 @@ test getInstructionDatasSliceForPrecompiles {
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
-
-    var feature_set = sig.core.FeatureSet.ALL_DISABLED;
-    feature_set.setSlot(.move_precompile_verification_to_svm, 0);
 
     {
         const instructions = [_]InstructionInfo{.{
@@ -656,8 +643,6 @@ test getInstructionDatasSliceForPrecompiles {
         const maybe_instruction_datas = try getInstructionDatasSliceForPrecompiles(
             allocator,
             &instructions,
-            &feature_set,
-            0,
         );
         defer if (maybe_instruction_datas) |data| allocator.free(data);
 
@@ -704,8 +689,6 @@ test getInstructionDatasSliceForPrecompiles {
         const maybe_instruction_datas = try getInstructionDatasSliceForPrecompiles(
             allocator,
             &instructions,
-            &feature_set,
-            0,
         );
         defer if (maybe_instruction_datas) |datas| allocator.free(datas);
 

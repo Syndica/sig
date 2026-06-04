@@ -1403,7 +1403,7 @@
         .name = "move_precompile_verification_to_svm",
         .pubkey = "9ypxGLzkMxi89eDerRKXWDXe44UY2z4hBig4mDhNq5Dp",
         .description = "SIMD-0159: Move precompile verification into SVM",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_transaction_loading_failure_fees",
