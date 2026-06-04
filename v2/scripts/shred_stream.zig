@@ -188,9 +188,10 @@ fn run(allocator: Allocator, config: Config) !void {
 
         var producer_done: std.atomic.Value(bool) = .init(false);
         var stop: std.atomic.Value(bool) = .init(false);
-        var net_thread_error: ?anyerror = null;
+        var net_thread_failed: std.atomic.Value(bool) = .init(false);
         var net_thread_stats: NetThreadStats = .{};
         var net_progress: NetThreadProgress = .{};
+        var producer_failed: std.atomic.Value(bool) = .init(false);
         var producer_progress: ProducerProgress = .{};
         var producer_result: ProducerThreadResult = .{};
 
@@ -212,7 +213,7 @@ fn run(allocator: Allocator, config: Config) !void {
                 &stop,
                 &net_thread_stats,
                 &net_progress,
-                &net_thread_error,
+                &net_thread_failed,
                 sockfd,
                 target,
                 config.rate_hz,
@@ -229,6 +230,7 @@ fn run(allocator: Allocator, config: Config) !void {
                 &producer_done,
                 &stop,
                 &producer_progress,
+                &producer_failed,
                 &producer_result,
             },
         );
@@ -251,8 +253,8 @@ fn run(allocator: Allocator, config: Config) !void {
         try printProducerStats(stdout, producer_result.stats);
         try printNetThreadStats(stdout, net_thread_stats);
 
-        if (producer_result.err) |err| return err;
-        if (net_thread_error) |err| return err;
+        if (producer_failed.load(.monotonic)) return error.ProducerThreadFailed;
+        if (net_thread_failed.load(.monotonic)) return error.NetThreadFailed;
     }
 
     try stdout.flush();
@@ -450,7 +452,6 @@ const ProducerProgress = struct {
 
 const ProducerThreadResult = struct {
     stats: ProducerStats = .{},
-    err: ?anyerror = null,
 };
 
 const ProgressSnapshot = struct {
@@ -477,18 +478,17 @@ const ProgressSnapshot = struct {
     }
 };
 
-// Adapts the fallible net thread loop to std.Thread.spawn's void entry point.
 fn netThreadMain(
     ring: *StreamPacketRing,
     done: *std.atomic.Value(bool),
     stop: *std.atomic.Value(bool),
     stats: *NetThreadStats,
     progress: *NetThreadProgress,
-    net_thread_error: *?anyerror,
+    failed: *std.atomic.Value(bool),
     sockfd: std.posix.fd_t,
     target: std.net.Address,
     rate_hz: ?f64,
-) void {
+) !void {
     var reader = ring.get(.reader);
     netThreadMainInner(
         &reader,
@@ -496,11 +496,16 @@ fn netThreadMain(
         stop,
         stats,
         progress,
-        net_thread_error,
         sockfd,
         target,
         rate_hz,
-    ) catch {};
+    ) catch |err| {
+        failed.store(true, .release);
+        stats.send_errors += 1;
+        progress.store(stats.*);
+        stop.store(true, .release);
+        return err;
+    };
 }
 
 fn netThreadMainInner(
@@ -509,18 +514,11 @@ fn netThreadMainInner(
     stop: *std.atomic.Value(bool),
     stats: *NetThreadStats,
     progress: *NetThreadProgress,
-    net_thread_error: *?anyerror,
     sockfd: std.posix.fd_t,
     target: std.net.Address,
     rate_hz: ?f64,
 ) !void {
     defer reader.markUsed();
-    errdefer |err| {
-        net_thread_error.* = err;
-        stats.send_errors += 1;
-        progress.store(stats.*);
-        stop.store(true, .release);
-    }
 
     const packet_interval_ns: ?u64 = if (rate_hz) |rate|
         @max(1, @as(u64, @intFromFloat(@ceil(@as(f64, @floatFromInt(std.time.ns_per_s)) / rate))))
@@ -595,14 +593,15 @@ fn producerThreadMain(
     done: *std.atomic.Value(bool),
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
+    failed: *std.atomic.Value(bool),
     result: *ProducerThreadResult,
-) void {
+) !void {
     var writer = ring.get(.writer);
     result.stats = produceLedgerPackets(blockstore, config, &writer, stop, progress) catch |err| {
-        result.err = err;
+        failed.store(true, .release);
         stop.store(true, .release);
         done.store(true, .release);
-        return;
+        return err;
     };
     progress.store(result.stats);
     done.store(true, .release);
