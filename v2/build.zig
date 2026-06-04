@@ -92,7 +92,14 @@ pub fn build(b: *Build) !void {
         .tracy_callstack = 6,
     }).module("tracy");
     const binkode_mod = b.dependency("binkode", .{}).module("binkode");
-    const base58_mod = b.dependency("base58", .{}).module("base58");
+    const base58_mod = b.dependency("base58", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("base58");
+    const zstd_mod = b.dependency("zstd", .{
+        .target = target,
+        .optimize = .ReleaseFast, // fast to compile once, no need to recompile when changing modes,
+    }).module("zstd");
 
     const fmt_check_step = b.addFmt(.{
         .check = true,
@@ -122,6 +129,15 @@ pub fn build(b: *Build) !void {
     const run_lint_tests = b.addRunArtifact(lint_tests);
     lint_test_step.dependOn(&run_lint_tests.step);
 
+    const features = b.createModule(.{
+        .root_source_file = b.path("../src/core/features.zon"),
+    });
+    const feature_set_id = b.createModule(.{
+        .root_source_file = b
+            .addRunArtifact(addFeatureSetIdGenerator(b, features, use_llvm))
+            .addOutputFileArg("feature-set-id.zig"),
+    });
+
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("lib/lib.zig"),
         .target = target,
@@ -131,6 +147,9 @@ pub fn build(b: *Build) !void {
             .{ .name = "binkode", .module = binkode_mod },
             .{ .name = "tracy", .module = tracy_mod },
             .{ .name = "build-options", .module = build_options_mod },
+            .{ .name = "zstd", .module = zstd_mod },
+            .{ .name = "features-zon", .module = features },
+            .{ .name = "feature-set-id", .module = feature_set_id },
         },
     });
     _ = addTestOutputs(b, test_step, null, artifact_opts, .{
@@ -335,4 +354,34 @@ fn addExeOutputs(
         .install = install_opt,
         .run = run_opt,
     };
+}
+
+fn addFeatureSetIdGenerator(
+    b: *Build,
+    features: *Build.Module,
+    use_llvm: ?bool,
+) *Build.Step.Compile {
+    // This generator runs on the host at build time, so its dependencies must
+    // be fetched with default (host) target options — not the cross-compilation
+    // target used for the main build. This should be repeated for other scripts if they
+    // import a library in the future.
+    return b.addExecutable(.{
+        .name = "gen_feature_set_id",
+        .root_module = b.createModule(.{
+            .target = b.graph.host,
+            .optimize = .Debug,
+            .root_source_file = b.path("../scripts/gen_feature_set_id.zig"),
+            .imports = &.{
+                .{
+                    .name = "base58",
+                    .module = b.dependency("base58", .{}).module("base58"),
+                },
+                .{
+                    .name = "features",
+                    .module = features,
+                },
+            },
+        }),
+        .use_llvm = use_llvm,
+    });
 }

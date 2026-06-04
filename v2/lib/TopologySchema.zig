@@ -339,6 +339,8 @@ pub fn Bind(
             comptime service_id: bound.bound.ServiceId,
         ) []const RequiredRegion {
             comptime {
+                @setEvalBranchQuota(100_000);
+
                 const service_entry = topo.services[@intFromEnum(service_id)];
                 var required: []const RequiredRegion = &.{};
                 for (service_entry.regions) |region| {
@@ -481,11 +483,9 @@ pub fn Bind(
             },
         ) !lib.ipc.ResolvedArgs {
             std.debug.assert(params.exit.size == @sizeOf(lib.ipc.Exit));
-            std.debug.assert(std.os.linux.elf_aux_maybe != null);
             var args: lib.ipc.ResolvedArgs = .{
                 .stderr = params.stderr.handle,
-                .exit = @ptrCast((try params.exit.mmap(null)).ptr),
-                .linux_auxv = std.os.linux.elf_aux_maybe,
+                .exit = @ptrCast((try params.exit.mmap(.{})).ptr),
 
                 .rw = @splat(null),
                 .rw_len = @splat(0),
@@ -513,12 +513,18 @@ pub fn Bind(
                 }
 
                 if (region.rw) {
-                    args.rw[i_rw] = (try region.memfd.mmap(region.shared.requested_location)).ptr;
+                    args.rw[i_rw] = (try region.memfd.mmap(.{
+                        .at_ptr = region.shared.requested_location,
+                        .populate = true,
+                    })).ptr;
                     args.rw_len[i_rw] = region_size;
                     i_rw += 1;
                 } else {
                     const ro_memfd = try memfd.RO.fromRW(region.memfd);
-                    args.ro[i_ro] = (try ro_memfd.mmap(region.shared.requested_location)).ptr;
+                    args.ro[i_ro] = (try ro_memfd.mmap(.{
+                        .at_ptr = region.shared.requested_location,
+                        .populate = true,
+                    })).ptr;
                     args.ro_len[i_ro] = region_size;
                     i_ro += 1;
                 }
@@ -547,7 +553,7 @@ pub fn Bind(
                     .size = shared_region.region.size(),
                 });
 
-                const buf = try region_memfd.mmap(shared_region.requested_location);
+                const buf = try region_memfd.mmap(.{ .at_ptr = shared_region.requested_location });
                 defer std.posix.munmap(buf);
                 try shared_region.region.init(buf);
                 std.log.info("Initialised: {f}", .{shared_region});
@@ -619,7 +625,7 @@ pub fn Bind(
             // We only mmap the exit regions after spawning the child processes, as we don't want them
             // mapped in children
             for (exit_meta.items(.exit), exit_memfds) |*exit, exit_fd| {
-                exit.* = @ptrCast(try exit_fd.mmap(null));
+                exit.* = @ptrCast(try exit_fd.mmap(.{}));
             }
 
             // Wait for the first child to exit
@@ -871,7 +877,7 @@ pub fn Bind(
             std.debug.assert(exited_idx != std.math.maxInt(u16));
 
             dumpOnExit(
-                @ptrCast(try exit_memfds[exited_idx].mmap(null)),
+                @ptrCast(try exit_memfds[exited_idx].mmap(.{})),
                 services[exited_idx],
                 0,
                 0,
