@@ -133,15 +133,18 @@ pub fn main() !void {
 
     switch (parse_result) {
         .help => printHelp(),
-        .config => |config| try run(gpa, config),
+        .config => |config| {
+            var stdout_buf: [1024]u8 = undefined;
+            var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+            const stdout = &stdout_writer.interface;
+
+            try run(gpa, stdout, config);
+            try stdout.flush();
+        },
     }
 }
 
-fn run(allocator: Allocator, config: Config) !void {
-    var stdout_buf: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
-    const stdout = &stdout_writer.interface;
-
+fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
     const target = try std.net.Address.parseIpAndPort(config.target);
 
     var blockstore = try AgaveBlockstore.open(allocator, config.ledger);
@@ -256,8 +259,6 @@ fn run(allocator: Allocator, config: Config) !void {
         if (producer_failed.load(.monotonic)) return error.ProducerThreadFailed;
         if (net_thread_failed.load(.monotonic)) return error.NetThreadFailed;
     }
-
-    try stdout.flush();
 }
 
 const AgaveBlockstore = struct {
