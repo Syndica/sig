@@ -113,7 +113,9 @@ fn parseStrict(
 
     // [sbpf] https://github.com/anza-xyz/sbpf/blob/v0.20.0/src/elf.rs#L480-507
     const ident: ElfIdent = @bitCast(header.e_ident);
-    const phdr_table_end = (@sizeOf(elf.Elf64_Phdr) *| header.e_phnum) +| @sizeOf(elf.Elf64_Ehdr);
+    const phdr_table_end = (@sizeOf(elf.Elf64_Phdr) *|
+        @as(u64, header.e_phnum)) +|
+        @sizeOf(elf.Elf64_Ehdr);
     if (!std.mem.eql(u8, ident.magic[0..4], elf.MAGIC) or
         ident.class != elf.ELFCLASS64 or
         ident.data != elf.ELFDATA2LSB or
