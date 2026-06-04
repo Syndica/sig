@@ -11,7 +11,8 @@ const TransactionError = sig.core.transaction_error.TransactionError;
 pub const RENT_EXEMPT_RENT_EPOCH: Epoch = std.math.maxInt(Epoch);
 /// Derived from `src/core/genesis_config.zig` as `GenesisConfig.default().slotsPerYear()`.
 /// The default genesis config uses `DEFAULT_TICKS_PER_SECOND` of 160 and
-/// `DEFAULT_TICKS_PER_SLOT` of 64.
+/// `DEFAULT_TICKS_PER_SLOT` of 64. Note this is enough decimal digits to saturate what the f64 can
+/// represent (this must match for conformance).
 pub const DEFAULT_SLOTS_PER_YEAR: f64 = 78892314.983999997;
 
 pub const RentResult = union(enum) {

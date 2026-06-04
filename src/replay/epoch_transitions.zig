@@ -198,7 +198,9 @@ pub fn computeFeatureSet(
         ) orelse continue;
         defer feature_account.deinit(arena.allocator());
 
-        // TODO(shared): this is a bit hacky, done to decouple shared dependence on `Account`
+        // Read out first 9 bytes needed to extract activation state from account,
+        // note that we have to memcpy to read from `Account`, we read out only
+        // the bytes needed.
         var feature_data_buf: [9]u8 = undefined;
         const feature_data: []const u8 =
             if (feature_account.data.len() >= feature_data_buf.len) blk: {
