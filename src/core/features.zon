@@ -1201,7 +1201,7 @@
         .name = "add_new_reserved_account_keys",
         .pubkey = "8U4skmMVnF6k2kMvrWbQuRUT3qQSiTYpSjqmhmgfthZu",
         .description = "add new unwritable reserved accounts #34899",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "chained_merkle_conflict_duplicate_proofs",
