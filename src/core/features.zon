@@ -1502,7 +1502,7 @@
         .name = "enable_vote_address_leader_schedule",
         .pubkey = "5JsG4NWH8Jbrqdd8uL6BNwnyZK3dQSoieRXG5vmofj9y",
         .description = "SIMD-0180: Enable vote address leader schedule #4573",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enshrine_slashing_program",

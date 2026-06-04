@@ -1,9 +1,11 @@
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("TopologySchema.zig");
+        _ = @import("accounts_db.zig");
         _ = @import("clock.zig");
         _ = @import("collections.zig");
         _ = @import("crypto.zig");
+        _ = @import("fio.zig");
         _ = @import("gossip.zig");
         _ = @import("ipc.zig");
         _ = @import("linux.zig");
@@ -29,5 +31,7 @@ pub const util = @import("util.zig");
 pub const collections = @import("collections.zig");
 pub const snapshot = @import("snapshot.zig");
 pub const telemetry = @import("telemetry.zig");
+pub const accounts_db = @import("accounts_db.zig");
+pub const fio = @import("fio.zig");
 
 pub const test_data_dir = "../data/test-data/";
