@@ -1472,7 +1472,7 @@
         .name = "disable_zk_elgamal_proof_program",
         .pubkey = "zkdoVwnSFnSLtGJG7irJPEYUpmb4i7sGMGcnN6T9rnC",
         .description = "Disables zk-elgamal-proof program",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "reenable_zk_elgamal_proof_program",
