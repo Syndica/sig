@@ -1126,10 +1126,12 @@ fn getVoteStateChecked(
 ) (error{OutOfMemory} || InstructionError)!VoteState {
     // Peek the leading u32 variant tag before attempting a full bincode decode,
     // mirroring agave's `VoteStateV3::deserialize_into_ptr` (V3 path) and
-    // `VoteStateVersions::deserialize` (V4 path) in solana-vote-interface 5.0.0.
-    // Both helpers shortcut on variant 0 with version-specific errors rather
-    // than letting bincode propagate a generic InvalidAccountData on a short
-    // or zero-tagged buffer.
+    // `VoteStateVersions::deserialize` (V4 path). Both helpers shortcut on
+    // variant 0 (the unsupported V0_23_5 layout) with InvalidAccountData
+    // rather than letting bincode propagate a generic error on a short or
+    // zero-tagged buffer.
+    // [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v5.1.1/vote-interface/src/state/vote_state_v3.rs#L159
+    // [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v5.1.1/vote-interface/src/state/vote_state_versions.rs#L155
     const data = vote_account.constAccountData();
     if (data.len < @sizeOf(u32)) {
         return InstructionError.InvalidAccountData;
@@ -1137,15 +1139,7 @@ fn getVoteStateChecked(
     const variant = std.mem.readInt(u32, data[0..@sizeOf(u32)], .little);
     if (variant == 0) {
         return switch (target_version) {
-            // V3 path: agave's VoteStateV3::deserialize_into_ptr rejects
-            // variant 0 with InvalidAccountData (V0_23_5 is unsupported in
-            // SBPF context).
-            // [agave] https://github.com/anza-xyz/solana-sdk/blob/ddbf3430b08eb375de695328ae298dd61c2e1471/vote-interface/src/state/vote_state_v3.rs#L159
-            .v3 => InstructionError.InvalidAccountData,
-            // V4 path: agave's VoteStateVersions::deserialize repurposed
-            // variant 0 to mean Uninitialized after SIMD-0185.
-            // [agave] https://github.com/anza-xyz/solana-sdk/blob/ddbf3430b08eb375de695328ae298dd61c2e1471/vote-interface/src/state/vote_state_versions.rs#L155
-            .v4 => InstructionError.UninitializedAccount,
+            .v3, .v4 => InstructionError.InvalidAccountData,
         };
     }
 
@@ -1210,11 +1204,17 @@ fn setVoteState(
                 if (!rent.isExempt(account.account.lamports, VoteStateV4.MAX_VOTE_STATE_SIZE)) {
                     return InstructionError.AccountNotRentExempt;
                 }
-                try account.setDataLength(
+                account.setDataLength(
                     allocator,
                     resize_delta,
                     VoteStateV4.MAX_VOTE_STATE_SIZE,
-                );
+                ) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    // [agave] a failed resize maps to AccountNotRentExempt (the
+                    // `set_data_length(...).is_err()` arm of set_vote_account_state),
+                    // not the raw InstructionError (e.g. ReadonlyDataModified).
+                    else => return InstructionError.AccountNotRentExempt,
+                };
             }
             return account.serializeIntoAccountData(VoteStateVersions{ .v4 = v4_state });
         },
@@ -6943,7 +6943,7 @@ test "vote_program: authorize zero-tag short data returns InvalidAccountData (v3
     );
 }
 
-test "vote_program: authorize zero-tag short data returns UninitializedAccount (v4 target)" {
+test "vote_program: authorize zero-tag short data returns InvalidAccountData (v4 target)" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
@@ -6958,6 +6958,129 @@ test "vote_program: authorize zero-tag short data returns UninitializedAccount (
     // 40 bytes of zeros: leading u32 tag is 0 and body is too short to
     // bincode-decode as any VoteStateVersions variant.
     var short_zero_data = [_]u8{0} ** 40;
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidAccountData,
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .authorize = .{
+                .new_authority = new_authority,
+                .vote_authorize = VoteAuthorize.voter,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = short_zero_data[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authority },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+// Regression: vote account whose data is shorter than the leading u32 variant
+// tag must short-circuit with InvalidAccountData before any bincode decode.
+// Exercises the `data.len < @sizeOf(u32)` guard in getVoteStateChecked,
+// matching agave's `VoteStateV3::deserialize_into_ptr` /
+// `VoteStateVersions::deserialize` which both reject buffers that cannot
+// contain a discriminant. The guard is target-independent, so a single
+// fixture (V4 active) covers both code paths.
+test "vote_program: authorize sub-tag-length data returns InvalidAccountData" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const vote_account = Pubkey.initRandom(prng.random());
+    const authority = Pubkey.initRandom(prng.random());
+    const new_authority = Pubkey.initRandom(prng.random());
+
+    // 3 bytes: less than @sizeOf(u32), so the length guard must fire before
+    // peeking the variant tag or invoking bincode.
+    var tiny_data = [_]u8{ 0xAA, 0xBB, 0xCC };
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidAccountData,
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .authorize = .{
+                .new_authority = new_authority,
+                .vote_authorize = VoteAuthorize.voter,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = tiny_data[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authority },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+// Regression: under the V4 feature gate, getVoteStateChecked must reject an
+// uninitialized vote account even when the callsite passes
+// `check_initialized = false` (e.g. authorize / update_validator_identity /
+// update_commission / withdraw). The V3 path keeps the legacy behavior of
+// honoring the flag, so the same fixture only fails on the V4 target.
+//
+// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/programs/vote/src/vote_state/mod.rs#L45-L77
+test "vote_program: authorize uninitialized v3-tagged returns UninitializedAccount (v4 target)" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const vote_account = Pubkey.initRandom(prng.random());
+    const authority = Pubkey.initRandom(prng.random());
+    const new_authority = Pubkey.initRandom(prng.random());
+
+    // Bincode-encoded VoteStateVersions{ .v3 = VoteStateV3.DEFAULT }: leading
+    // u32 tag is 2 (non-zero, so the variant-0 shortcut does not fire) and the
+    // embedded VoteStateV3 has zero voters -> isUninitialized() == true.
+    const uninit_state: VoteStateVersions = .{ .v3 = VoteStateV3.DEFAULT };
+    var uninit_bytes = [_]u8{0} ** 3762;
+    _ = try sig.bincode.writeToSlice(uninit_bytes[0..], uninit_state, .{});
 
     try testing.expectProgramExecuteError(
         InstructionError.UninitializedAccount,
@@ -6980,7 +7103,7 @@ test "vote_program: authorize zero-tag short data returns UninitializedAccount (
                     .pubkey = vote_account,
                     .lamports = 27074400,
                     .owner = vote_program.ID,
-                    .data = short_zero_data[0..],
+                    .data = uninit_bytes[0..],
                 },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = authority },
