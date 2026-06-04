@@ -47,7 +47,7 @@ pub fn main() !void {
     });
 
     const net_to_gossip_memfd = service_map.entries.get(.gossip).?.bindings.get(.net_to_gossip).?;
-    const net_pair = try net_to_gossip_memfd.memfd.mmapStaticSize(lib.net.Pair, .{});
+    const net_pair = try net_to_gossip_memfd.memfd.mmapStaticSize(.rw, lib.net.Pair, .{});
     defer std.posix.munmap(@ptrCast(net_pair));
 
     const ping_token: [32]u8 = @splat(12);

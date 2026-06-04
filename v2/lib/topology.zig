@@ -16,7 +16,7 @@ const e = E.init;
 const SigactionFn = linux.Sigaction.sigaction_fn;
 const ServiceEntrypoint = lib.ipc.ServiceFn;
 
-const memfd = lib.linux.memfd;
+const Memfd = lib.linux.Memfd;
 
 pub const Schema = struct {
     services: []const Service,
@@ -453,7 +453,7 @@ pub fn Bind(
             pub const empty: ServiceMap = .{ .entries = .empty };
 
             pub const Entry = struct {
-                runner: memfd.RW,
+                runner: Memfd,
                 bindings: BindingInfos,
 
                 pub const BindingInfos = lib.util.ArrayEnumMap(BindingTag, BindingInfo);
@@ -461,7 +461,7 @@ pub fn Bind(
 
             pub const BindingInfo = struct {
                 access: Schema.Service.Region.Access,
-                memfd: lib.linux.memfd.RW,
+                memfd: Memfd,
             };
         };
 
@@ -483,13 +483,13 @@ pub fn Bind(
                 break :regions bindings;
             };
 
-            var region_memfds: [bindings_map.values.len]memfd.RW = @splat(.empty);
+            var region_memfds: [bindings_map.values.len]Memfd = @splat(.empty);
             for (&bindings, &region_memfds) |binding, *region_memfd| {
                 region_memfd.* = try createAndInitSharedRegionMemfd(binding);
                 std.log.info("Initialised: {f}", .{bindingFmtShareInfo(binding)});
             }
 
-            var runner_memfds: [schema.services.len]memfd.RW = @splat(.empty);
+            var runner_memfds: [schema.services.len]Memfd = @splat(.empty);
             inline for (&runner_memfds, schema.services) |*runner_memfd, service_entry| {
                 runner_memfd.* = try .init(.{
                     .name = std.fmt.comptimePrint("runner_{s}", .{@tagName(service_entry.name)}),
@@ -539,14 +539,14 @@ pub fn Bind(
         /// Mmap in our memfds, putting the regions in a type-erased extern struct.
         fn resolveArgs(
             params: struct {
-                runner: memfd.RW,
+                runner: Memfd,
                 stderr: std.fs.File,
                 bindings: *const ServiceMap.Entry.BindingInfos,
             },
         ) !lib.ipc.ResolvedArgs {
             var args: lib.ipc.ResolvedArgs = .{
                 .stderr = params.stderr.handle,
-                .runner = try params.runner.mmapStaticSize(lib.runner.Region, .{}),
+                .runner = try params.runner.mmapStaticSize(.rw, lib.runner.Region, .{}),
 
                 .rw = @splat(null),
                 .rw_len = @splat(0),
@@ -567,13 +567,12 @@ pub fn Bind(
                 const binding_size = binding.memfd.size;
                 switch (binding.access) {
                     .rw => {
-                        args.rw[i_rw] = (try binding.memfd.mmap(.{ .populate = true })).ptr;
+                        args.rw[i_rw] = (try binding.memfd.mmapRaw(.rw, .{ .populate = true })).ptr;
                         args.rw_len[i_rw] = binding_size;
                         i_rw += 1;
                     },
                     .readonly => {
-                        const ro_memfd = try memfd.RO.fromRW(binding.memfd);
-                        args.ro[i_ro] = (try ro_memfd.mmap(.{ .populate = true })).ptr;
+                        args.ro[i_ro] = (try binding.memfd.mmapRaw(.ro, .{ .populate = true })).ptr;
                         args.ro_len[i_ro] = binding_size;
                         i_ro += 1;
                     },
@@ -586,19 +585,19 @@ pub fn Bind(
 
         /// Create and initialize a memfd for the shared memory region (map it, initialize it, and then unmap it).
         /// We must unmap it to avoid sharing regions with services that don't need them.
-        fn createAndInitSharedRegionMemfd(binding_init: Binding) !memfd.RW {
+        fn createAndInitSharedRegionMemfd(binding_init: Binding) !Memfd {
             // This name should be visible from a debugger, but serves no other purpose.
             var fmt_buf: [4096]u8 = undefined;
             const name = try std.fmt.bufPrintZ(&fmt_buf, "{f}", .{
                 bindingFmtShareInfo(binding_init),
             });
 
-            const region_memfd: memfd.RW = try .init(.{
+            const region_memfd: Memfd = try .init(.{
                 .name = name,
                 .size = bindingSize(binding_init),
             });
 
-            const buf = try region_memfd.mmap(.{});
+            const buf = try region_memfd.mmapRaw(.rw, .{});
             defer std.posix.munmap(buf);
             try bindingInit(binding_init, buf);
 
@@ -714,7 +713,7 @@ pub fn Bind(
                     &self.meta_bufs.runners,
                     &self.meta_bufs.activity_views,
                 ) |entry, *runner, *view| {
-                    runner.* = try entry.runner.mmapStaticSize(lib.runner.Region, .{});
+                    runner.* = try entry.runner.mmapStaticSize(.rw, lib.runner.Region, .{});
                     view.* = runner.*.activity.runnerView();
                 }
             }
@@ -834,7 +833,7 @@ pub fn Bind(
         fn spawnService(
             service: unbound.ServiceId,
             params: struct {
-                runner: memfd.RW,
+                runner: Memfd,
                 stderr: std.fs.File,
                 bindings: *const ServiceMap.Entry.BindingInfos,
             },
@@ -973,7 +972,7 @@ pub fn Bind(
         fn spawnServiceNoSandbox(
             service: unbound.ServiceId,
             params: struct {
-                runner: memfd.RW,
+                runner: Memfd,
                 stderr: std.fs.File,
                 bindings: *const ServiceMap.Entry.BindingInfos,
                 service_idx: u16,
