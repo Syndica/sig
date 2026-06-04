@@ -393,10 +393,6 @@ fn defaultComputeUnitLimit(
     slot: sig.core.Slot,
     details: *const ComputeBudgetInstructionDetails,
 ) u32 {
-    if (!feature_set.active(.reserve_minimal_cus_for_builtin_instructions, slot)) {
-        return details.num_non_compute_budget_instructions *| DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT;
-    }
-
     var num_migrated: u32 = 0;
     var num_not_migrated: u32 = 0;
 
@@ -679,7 +675,8 @@ test execute {
         },
         .{
             .heap_size = 40 * 1024,
-            .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT,
+            .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT +
+                MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT,
         },
     );
 
@@ -757,7 +754,8 @@ test execute {
         },
         .{
             .heap_size = MAX_HEAP_FRAME_BYTES,
-            .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT,
+            .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT +
+                MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT,
             .compute_unit_price = 0,
             .loaded_accounts_bytes = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES,
         },
@@ -928,7 +926,8 @@ test execute {
             testCreateEmptyInstruction(0),
         },
         .{
-            .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT,
+            .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT +
+                MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT,
             .loaded_accounts_bytes = 1,
         },
     );
@@ -961,7 +960,8 @@ test execute {
             testCreateEmptyInstruction(0),
         },
         .{
-            .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT,
+            .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT +
+                MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT,
             .loaded_accounts_bytes = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES,
         },
     );

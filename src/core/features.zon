@@ -1374,7 +1374,7 @@
         .name = "reserve_minimal_cus_for_builtin_instructions",
         .pubkey = "C9oAhLxDBm3ssWtJx1yBGzPY55r2rArHmN1pbQn6HogH",
         .description = "SIMD-0170: Reserve minimal CUs for builtin instructions #2562",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "raise_block_limits_to_50m",
