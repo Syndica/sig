@@ -169,11 +169,18 @@ fn collectPathRecursive(
     path: []const u8,
     paths: *std.ArrayList([]const u8),
 ) anyerror!void {
-    const stat = try std.fs.cwd().statFile(path);
-    switch (stat.kind) {
+    switch (blk: {
+        const stat = std.fs.cwd().statFile(path) catch |err| switch (err) {
+            error.IsDir => break :blk .directory,
+            else => |e| return e,
+        };
+        break :blk stat.kind;
+    }) {
         .file => {
             if (std.mem.endsWith(u8, path, ".zig")) {
-                try paths.append(arena, path);
+                const normalized_path = try arena.dupe(u8, path);
+                std.mem.replaceScalar(u8, normalized_path, std.fs.path.sep, '/');
+                try paths.append(arena, normalized_path);
             }
         },
         .directory => if (!isSkippedDir(std.fs.path.basename(path))) {
