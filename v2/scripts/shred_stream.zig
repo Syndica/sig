@@ -145,7 +145,7 @@ fn run(allocator: Allocator, config: Config) !void {
     const target = try std.net.Address.parseIpAndPort(config.target);
 
     var blockstore = try AgaveBlockstore.open(allocator, config.ledger);
-    defer blockstore.deinit();
+    defer blockstore.deinit(allocator);
 
     try stdout.print("shred-stream config:\n", .{});
     try stdout.print("  ledger: {s}\n", .{config.ledger});
@@ -261,7 +261,6 @@ fn run(allocator: Allocator, config: Config) !void {
 }
 
 const AgaveBlockstore = struct {
-    allocator: Allocator,
     rocksdb_path: []const u8,
     db: rocks.DB,
     column_families: []const rocks.ColumnFamily,
@@ -272,7 +271,7 @@ const AgaveBlockstore = struct {
         errdefer allocator.free(rocksdb_path);
 
         var available_cfs = try listColumnFamilies(allocator, rocksdb_path);
-        defer available_cfs.deinit();
+        defer available_cfs.deinit(allocator);
 
         try requireColumnFamily(&available_cfs, agave_cf_default);
         try requireColumnFamily(&available_cfs, agave_cf_meta);
@@ -308,7 +307,6 @@ const AgaveBlockstore = struct {
         errdefer allocator.free(opened_cfs);
 
         return .{
-            .allocator = allocator,
             .rocksdb_path = rocksdb_path,
             .db = db,
             .column_families = opened_cfs,
@@ -316,10 +314,10 @@ const AgaveBlockstore = struct {
         };
     }
 
-    fn deinit(self: *AgaveBlockstore) void {
-        self.allocator.free(self.column_families);
+    fn deinit(self: *AgaveBlockstore, allocator: Allocator) void {
+        allocator.free(self.column_families);
         self.db.deinit();
-        self.allocator.free(self.rocksdb_path);
+        allocator.free(self.rocksdb_path);
     }
 
     fn columnFamily(self: *const AgaveBlockstore, name: []const u8) !rocks.ColumnFamilyHandle {
@@ -1060,12 +1058,11 @@ fn resolveRocksDbPath(allocator: Allocator, ledger_path: []const u8) ![]const u8
 }
 
 const ColumnFamilyNames = struct {
-    allocator: Allocator,
     names: []const []const u8,
 
-    fn deinit(self: *ColumnFamilyNames) void {
-        for (self.names) |name| self.allocator.free(name);
-        self.allocator.free(self.names);
+    fn deinit(self: *ColumnFamilyNames, allocator: Allocator) void {
+        for (self.names) |name| allocator.free(name);
+        allocator.free(self.names);
     }
 
     fn contains(self: *const ColumnFamilyNames, name: []const u8) bool {
@@ -1114,7 +1111,7 @@ fn listColumnFamilies(allocator: Allocator, rocksdb_path: []const u8) !ColumnFam
         names_len += 1;
     }
 
-    return .{ .allocator = allocator, .names = names };
+    return .{ .names = names };
 }
 
 fn requireColumnFamily(available_cfs: *const ColumnFamilyNames, name: []const u8) !void {
