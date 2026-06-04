@@ -130,7 +130,7 @@ pub fn build(b: *Build) !void {
     lint_test_step.dependOn(&run_lint_tests.step);
 
     const features = b.createModule(.{
-        .root_source_file = b.path("../src/core/features.zon"),
+        .root_source_file = b.path("../shared/core/features.zon"),
     });
     const feature_set_id = b.createModule(.{
         .root_source_file = b
