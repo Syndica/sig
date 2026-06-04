@@ -2407,10 +2407,6 @@ test "vote_program: update_commission increasing commission" {
                     .feature = .allow_commission_decrease_at_any_time,
                     .slot = 0,
                 },
-                .{
-                    .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
-                    .slot = 0,
-                },
             },
         },
         .{
@@ -2516,10 +2512,6 @@ test "vote_program: update_commission decreasing commission" {
             .feature_set = &.{
                 .{
                     .feature = .allow_commission_decrease_at_any_time,
-                    .slot = 0,
-                },
-                .{
-                    .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
                     .slot = 0,
                 },
             },
@@ -2814,10 +2806,6 @@ test "vote_program: update_commission error commission update too late failure" 
                     .feature = .allow_commission_decrease_at_any_time,
                     .slot = 0,
                 },
-                .{
-                    .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
-                    .slot = 0,
-                },
             },
         },
         .{
@@ -2928,10 +2916,6 @@ test "vote_program: update_commission missing signature" {
             .feature_set = &.{
                 .{
                     .feature = .allow_commission_decrease_at_any_time,
-                    .slot = 0,
-                },
-                .{
-                    .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
                     .slot = 0,
                 },
             },
@@ -5760,10 +5744,6 @@ test "vote_program: update_commission with v4 feature" {
                 },
                 .{
                     .feature = .allow_commission_decrease_at_any_time,
-                    .slot = 0,
-                },
-                .{
-                    .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
                     .slot = 0,
                 },
             },
