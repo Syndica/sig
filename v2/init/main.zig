@@ -39,11 +39,11 @@ const Config = struct {
 
     const Gossip = struct {
         port: u16,
+        advertise_tvu_port: bool,
     };
 
     const ShredNetwork = struct {
         recv_port: u16,
-        advertise_in_gossip: bool,
     };
 
     const Telemetry = struct {
@@ -149,7 +149,7 @@ pub fn main() !void {
             // TODO: read this from identity file in signer service
             .keypair = .fromKeyPair(.generate()),
             .turbine_recv_port = config.shred_network.recv_port,
-            .advertise_tvu = config.shred_network.advertise_in_gossip,
+            .advertise_tvu_port = config.gossip.advertise_tvu_port,
         },
         // shred constants
         .shred_recv_config = .{
@@ -271,7 +271,7 @@ pub const Region = union(enum) {
         // TODO: this should live in signing service
         keypair: lib.gossip.KeyPair,
         turbine_recv_port: u16,
-        advertise_tvu: bool,
+        advertise_tvu_port: bool,
     },
     shred_recv_config: struct {
         // TODO: this should not exist - remove once we can open snapshots again
@@ -348,7 +348,7 @@ pub const Region = union(enum) {
                 data.keypair = cfg.keypair;
                 data.cluster_info = cfg.cluster_info;
                 data.turbine_recv_port = cfg.turbine_recv_port;
-                data.advertise_tvu = cfg.advertise_tvu;
+                data.advertise_tvu_port = cfg.advertise_tvu_port;
             },
             .shred_recv_config => |cfg| {
                 std.debug.assert(buf.len == @sizeOf(lib.shred.RecvConfig));

@@ -42,7 +42,7 @@ pub const Config = extern struct {
     keypair: KeyPair,
     cluster_info: ClusterInfo,
     turbine_recv_port: u16,
-    advertise_tvu: bool,
+    advertise_tvu_port: bool,
 };
 
 // For std.meta.eql compatibility inside `serviceMap` & defined repr across processes

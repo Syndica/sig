@@ -103,7 +103,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     // TODO: add .rpc for serving snapshots
     var sockets: lib.gossip.SocketMap.Builder = .{};
     sockets.set(.gossip, ro.config.cluster_info.public_ip.withPort(rw.net_pair.port));
-    if (ro.config.advertise_tvu) {
+    if (ro.config.advertise_tvu_port) {
         sockets.set(.tvu, ro.config.cluster_info.public_ip.withPort(ro.config.turbine_recv_port));
     }
 
