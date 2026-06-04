@@ -402,11 +402,9 @@ fn executeTxnContext(
     // fixture_slot collides (i.e. fixture_slot % MAX_SLOTS == 0).
     try account_store.updateRoot(0, &ancestors);
 
-    const slot_hash = try hashSlot(
-        allocator,
+    const slot_hash = hashSlot(
         blockhash_queue.last_hash.?,
         &feature_set,
-        account_store.reader(),
     );
 
     slot = fixture_slot;
@@ -1156,20 +1154,14 @@ fn accountFromAccountSharedData(
 /// Specifically if accounts lt hash is enabled, the returned hash is the initial hash combined with
 /// the identity hash, as there is not parent lt hash in the txn fuzzing context.
 pub fn hashSlot(
-    allocator: Allocator,
     blockhash: Hash,
     feature_set: *const FeatureSet,
-    account_reader: sig.accounts_db.AccountReader,
-) !Hash {
+) Hash {
     var signature_count_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &signature_count_bytes, 0, .little);
 
     var hash = std.crypto.hash.sha2.Sha256.init(.{});
     hash.update(&sig.core.Hash.ZEROES.data); // no parent lt hash, start with zeroes
-    if (!feature_set.active(.remove_accounts_delta_hash, 0)) {
-        const delta_hash = try freeze.deltaMerkleHash(account_reader, allocator, 0);
-        hash.update(&delta_hash.data);
-    }
     hash.update(&signature_count_bytes);
     hash.update(&blockhash.data);
     const initial_hash = hash.finalResult();

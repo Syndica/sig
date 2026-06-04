@@ -457,11 +457,6 @@ pub fn hashSlot(
 
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(&params.parent_slot_hash.data);
-    const remove_delta_hash = params.feature_set.active(.remove_accounts_delta_hash, params.slot);
-    if (!remove_delta_hash) {
-        const merkle_hash = try deltaMerkleHash(params.account_reader, allocator, params.slot);
-        hasher.update(&merkle_hash.data);
-    }
     hasher.update(&signature_count_bytes);
     hasher.update(&params.blockhash.data);
 
@@ -667,65 +662,10 @@ test "deltaMerkleHash for 0 accounts" {
 
 // Equivalent to this in agave:
 // ```rust
-// let bank = Bank::default_for_tests();
-//
-// let mut w_blockhash_queue = bank.blockhash_queue.write().unwrap();
-// w_blockhash_queue.register_hash(&Hash::default(), 0);
-// bank.update_recent_blockhashes_locked(&w_blockhash_queue);
-// drop(w_blockhash_queue);
-//
-// bank.freeze();
-// println!("{}", bank.hash());
-// ```
-test "freezeSlot: trivial e2e merkle hash test" {
-    const allocator = std.testing.allocator;
-
-    var test_state = try sig.accounts_db.Db.initTest(allocator);
-    defer test_state.deinit();
-    const account_store: AccountStore = .{ .accounts_db = &test_state.db };
-
-    const constants = try SlotConstants.genesis(allocator, .DEFAULT);
-    defer constants.deinit(allocator);
-
-    var state: SlotState = .GENESIS;
-    defer state.deinit(allocator);
-
-    var tp: sig.sync.ThreadPool = .init(.{});
-    defer {
-        tp.shutdown();
-        tp.deinit();
-    }
-    var ledger, var ledger_dir = try sig.ledger.Ledger.initForTest(allocator);
-    defer {
-        ledger.deinit();
-        ledger_dir.cleanup();
-    }
-
-    var distributed = try freezeSlot(allocator, .init(
-        .FOR_TESTS,
-        account_store,
-        &tp,
-        &state,
-        &constants,
-        0,
-        .ZEROES,
-        &ledger,
-    ));
-    distributed.deinit(allocator);
-
-    try std.testing.expectEqual(
-        Hash.parse("8C4gpDhMz9RfajteNCf9nFb5pyj3SkFcpTs6uXAzYKoF"),
-        state.hash.readCopy().?,
-    );
-}
-
-// Equivalent to this in agave:
-// ```rust
 // let mut bank = Bank::default_for_tests();
 //
 // let mut features = FeatureSet::default();
 // features.activate(&feature_set::accounts_lt_hash::id(), 0);
-// features.activate(&feature_set::remove_accounts_delta_hash::id(), 0);
 // bank.feature_set = Arc::new(features);
 //
 // let mut w_blockhash_queue = bank.blockhash_queue.write().unwrap();
@@ -755,7 +695,6 @@ test "freezeSlot: trivial e2e lattice hash test" {
     var constants = try SlotConstants.genesis(allocator, .DEFAULT);
     defer constants.deinit(allocator);
     constants.feature_set.setSlot(.accounts_lt_hash, 0);
-    constants.feature_set.setSlot(.remove_accounts_delta_hash, 0);
 
     var state: SlotState = .GENESIS;
     defer state.deinit(allocator);
