@@ -45,8 +45,7 @@ jobs:
           echo "$PWD/kcov-v43-bin-linux-x86_64/bin" >> "$GITHUB_PATH"
 
       - name: Build
-        run:
-          zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 \
+        run: zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36
           -Denable-tsan=false -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Collect v1 coverage
