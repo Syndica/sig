@@ -5,8 +5,6 @@ pub const ed25519 = @import("ed25519.zig");
 pub const secp256k1 = @import("secp256k1.zig");
 pub const secp256r1 = @import("secp256r1.zig");
 
-const Slot = sig.core.Slot;
-const FeatureSet = sig.core.FeatureSet;
 const Feature = sig.core.features.Feature;
 const Pubkey = sig.core.Pubkey;
 const Ed25519 = std.crypto.sign.Ed25519;
@@ -102,7 +100,7 @@ pub fn verifyPrecompiles(
                 break :blk buf;
             };
 
-            precompile.function(instruction.data, datas, feature_set, slot) catch {
+            precompile.function(instruction.data, datas) catch {
                 return .{ .InstructionError = .{
                     @intCast(index),
                     .{ .Custom = 0 },
@@ -117,8 +115,6 @@ pub fn verifyPrecompiles(
 pub const PrecompileFn = fn (
     current_instruction_data: []const u8,
     all_instruction_datas: []const []const u8,
-    feature_set: *const FeatureSet,
-    slot: Slot,
 ) PrecompileProgramError!void;
 
 pub const Precompile = struct {

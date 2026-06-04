@@ -2,7 +2,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../../../sig.zig");
 
-const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const FeatureSet = sig.core.FeatureSet;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -50,7 +49,7 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
     const instruction_data = ic.ixn_info.instruction_data;
     const instruction_datas = ic.tc.instruction_datas.?;
 
-    verify(instruction_data, instruction_datas, ic.tc.feature_set, ic.tc.slot) catch {
+    verify(instruction_data, instruction_datas) catch {
         return error.Custom;
     };
 }
@@ -60,8 +59,6 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
 pub fn verify(
     data: []const u8,
     all_instruction_datas: []const []const u8,
-    feature_set: *const FeatureSet,
-    slot: Slot,
 ) PrecompileProgramError!void {
     if (data.len < ED25519_DATA_START) {
         if (data.len == 2 and data[0] == 0) return;
@@ -113,7 +110,7 @@ pub fn verify(
             signature,
             pubkey,
             msg,
-            feature_set.active(.ed25519_precompile_verify_strict, slot),
+            true,
         ) catch return error.InvalidSignature;
     }
 }
@@ -178,8 +175,8 @@ fn testCase(
     @memcpy(instruction_data[0..2], std.mem.asBytes(&num_signatures));
     @memcpy(instruction_data[2..], std.mem.asBytes(&offsets));
 
-    try verify(&instruction_data, &.{&(.{0} ** 100)}, &.ALL_DISABLED, 0);
-    try verify(&instruction_data, &.{&(.{0} ** 100)}, &.ALL_ENABLED_AT_GENESIS, 0);
+    try verify(&instruction_data, &.{&(.{0} ** 100)});
+    try verify(&instruction_data, &.{&(.{0} ** 100)});
 }
 
 test "execute" {
@@ -228,7 +225,7 @@ test "ed25519 invalid offsets" {
 
     try std.testing.expectEqual(
         error.InvalidInstructionDataSize,
-        verify(instruction_data.items, &.{}, &.ALL_DISABLED, 0),
+        verify(instruction_data.items, &.{}),
     );
 
     // invalid signature instruction index

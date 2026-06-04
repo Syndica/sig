@@ -162,10 +162,7 @@ fn getSignatureCost(
 ) u64 {
     const precompiles = sig.runtime.program.precompiles;
 
-    const ed25519_verify_cost = if (feature_set.active(.ed25519_precompile_verify_strict, slot))
-        precompiles.ED25519_VERIFY_STRICT_COST
-    else
-        precompiles.ED25519_VERIFY_COST;
+    const ed25519_verify_cost = precompiles.ED25519_VERIFY_STRICT_COST;
 
     const secp256r1_verify_cost = if (feature_set.active(.enable_secp256r1_precompile, slot))
         precompiles.SECP256R1_VERIFY_COST

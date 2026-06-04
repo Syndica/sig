@@ -4,7 +4,6 @@ const sig = @import("../../../sig.zig");
 
 const precompile_programs = sig.runtime.program.precompiles;
 
-const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const FeatureSet = sig.core.FeatureSet;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -48,7 +47,7 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
     const instruction_data = ic.ixn_info.instruction_data;
     const instruction_datas = ic.tc.instruction_datas.?;
 
-    verify(instruction_data, instruction_datas, ic.tc.feature_set, ic.tc.slot) catch {
+    verify(instruction_data, instruction_datas) catch {
         return error.Custom;
     };
 }
@@ -58,8 +57,6 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
 pub fn verify(
     data: []const u8,
     all_instruction_datas: []const []const u8,
-    _: *const FeatureSet,
-    _: Slot,
 ) PrecompileProgramError!void {
     if (data.len < OFFSETS_START) return error.InvalidInstructionDataSize;
     const num_signatures = data[0];
@@ -121,7 +118,7 @@ fn testCase(
     @memcpy(instruction_data[0..2], std.mem.asBytes(&num_signatures));
     @memcpy(instruction_data[2..], std.mem.asBytes(&offsets));
 
-    try verify(&instruction_data, &.{&(.{0} ** 100)}, &.ALL_ENABLED_AT_GENESIS, 0);
+    try verify(&instruction_data, &.{&(.{0} ** 100)});
 }
 
 pub fn newInstruction(
@@ -197,7 +194,7 @@ test "invalid offsets" {
 
     try std.testing.expectEqual(
         error.InvalidInstructionDataSize,
-        verify(instruction_data.items, &.{}, &.ALL_ENABLED_AT_GENESIS, 0),
+        verify(instruction_data.items, &.{}),
     );
 
     // invalid signature instruction index
@@ -233,7 +230,7 @@ test "invalid signature data size" {
     const small_data: [OFFSETS_START - 1]u8 = @splat(0);
     try std.testing.expectEqual(
         error.InvalidInstructionDataSize,
-        verify(&small_data, &.{&.{}}, &.ALL_ENABLED_AT_GENESIS, 0),
+        verify(&small_data, &.{&.{}}),
     );
 
     // Test num_signatures == 0
@@ -241,7 +238,7 @@ test "invalid signature data size" {
     zero_sigs_data[0] = 0; // Set num_signatures to 0
     try std.testing.expectEqual(
         error.InvalidInstructionDataSize,
-        verify(&zero_sigs_data, &.{&.{}}, &.ALL_ENABLED_AT_GENESIS, 0),
+        verify(&zero_sigs_data, &.{&.{}}),
     );
 
     // Test num_signatures > 8
@@ -249,7 +246,7 @@ test "invalid signature data size" {
     too_many_sigs[0] = 9; // Set num_signatures to 9
     try std.testing.expectEqual(
         error.InvalidInstructionDataSize,
-        verify(&too_many_sigs, &.{&.{}}, &.ALL_ENABLED_AT_GENESIS, 0),
+        verify(&too_many_sigs, &.{&.{}}),
     );
 }
 
