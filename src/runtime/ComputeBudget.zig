@@ -126,10 +126,10 @@ bls12_381_one_pair_cost: u64,
 /// Incremental number of compute units consumed per pair in a bls12_381 pairing.
 bls12_381_additional_pair_cost: u64,
 
-pub const DEFAULT: ComputeBudget = ComputeBudget.init(1_400_000, false);
+pub const DEFAULT: ComputeBudget = ComputeBudget.init(1_400_000);
 
-/// [agave] https://github.com/anza-xyz/agave/blob/8363752bd5e41aaf8eaf9137711e8d8b11d84be6/program-runtime/src/execution_budget.rs#L162
-pub fn init(compute_unit_limit: u64, simd_0339_active: bool) ComputeBudget {
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/program-runtime/src/execution_budget.rs#L162
+pub fn init(compute_unit_limit: u64) ComputeBudget {
     return .{
         .compute_unit_limit = compute_unit_limit,
         .log_64_units = 100,
@@ -146,11 +146,11 @@ pub fn init(compute_unit_limit: u64, simd_0339_active: bool) ComputeBudget {
         .poseidon_cost_coefficient_a = 61,
         .poseidon_cost_coefficient_c = 542,
         .max_cpi_instruction_size = 1280, // IPv6 Min MTU size
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/execution_budget.rs#L25-L31
-        .invoke_units = if (simd_0339_active)
-            946
-        else
-            1000,
+        // [agave] DEFAULT_INVOCATION_COST: the `increase_cpi_account_info_limit`
+        // (SIMD-0339) feature gate was removed in agave v4.1.0-beta.1, so this
+        // is now unconditionally 946.
+        // https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/program-runtime/src/execution_budget.rs#L33
+        .invoke_units = 946,
         .sha256_base_cost = 85,
         .sha256_byte_cost = 1,
         .sha256_max_slices = 20_000,
