@@ -313,52 +313,15 @@ fn executeTxnContext(
             //     @panic("background account hasher not implemented");
             // }
 
-            const account_reader_for_ancestors = account_store.reader().forSlot(&ancestors);
-            // Add builtin programs
-            for (builtin_programs.BUILTINS) |builtin_program| {
-                // If the feature id is not null, and the builtin program is not migrated, add
-                // to the builtin accounts map. If the builtin program has been migrated it will
-                // have an entry in accounts db with owner bpf_loader.v3.ID (i.e. it is now a BPF program).
-                // For fuzzing purposes, accounts db is currently empty so we do not need to check if
-                // the builtin program is migrated or not.
-                const builtin_is_bpf_program: bool = blk: {
-                    const account = try account_reader_for_ancestors.get(
-                        allocator,
-                        builtin_program.program_id,
-                    ) orelse break :blk false;
-                    defer account.deinit(allocator);
-                    break :blk account.owner.equals(&program.bpf_loader.v3.ID);
-                };
-
-                if (builtin_program.enable_feature_id != null or builtin_is_bpf_program) continue;
-
-                const data = try allocator.dupe(u8, builtin_program.data);
-                defer allocator.free(data);
-
-                try account_store.put(
-                    slot,
-                    builtin_program.program_id,
-                    .{
-                        .lamports = 1,
-                        .data = data,
-                        .executable = true,
-                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-                        .rent_epoch = 0,
-                    },
-                );
-            }
-
-            // Add precompiles
-            for (program.precompiles.PRECOMPILES) |precompile| {
-                if (precompile.required_feature != null) continue;
-                try account_store.put(slot, precompile.program_id, .{
-                    .lamports = 1,
-                    .data = &.{},
-                    .executable = true,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-                    .rent_epoch = 0,
-                });
-            }
+            // NOTE: Mirror Agave's `Bank::new_for_txn_tests`, which calls
+            // `apply_activated_features()` (program-cache only, via
+            // `add_active_builtin_programs()`) and does NOT call
+            // `add_builtin_program_accounts()`. Builtin and precompile program
+            // accounts are therefore intentionally not seeded into accounts-db
+            // here: fixtures must include any program account they invoke, and
+            // missing ones must surface as `TransactionError::ProgramAccountNotFound`
+            // during account loading rather than executing against a synthetic
+            // native-loader stub.
 
             vm_environment = vm.Environment.initV1(
                 &feature_set,
