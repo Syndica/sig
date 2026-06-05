@@ -65,7 +65,6 @@ pub export fn sol_compat_txn_execute_v1(
 }
 
 const bank_methods = @import("bank_methods.zig");
-const builtin_programs = sig.runtime.builtin_programs;
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
