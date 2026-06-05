@@ -47,6 +47,12 @@ pub const MAX_DATA_LEN = 10_240;
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L68
 const ACCOUNT_INFO_BYTE_SIZE = 80;
 
+/// Maximum number of account info structs that can be used in a single CPI
+/// invocation. Hardcoded in agave v4.1.0-beta.1 after the removal of the
+/// `increase_cpi_account_info_limit` feature gate.
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/program-runtime/src/cpi.rs#L139
+const MAX_CPI_ACCOUNT_INFOS: usize = 255;
+
 /// [agave] StableVec: https://github.com/anza-xyz/solana-sdk/blob/c54daf5355ad43448786cafdb66ff07d3add8be5/stable-layout/src/stable_vec.rs#L30
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/0666fa5999750153070e5c43d64813467bfdc38e/stable-layout/src/stable_instruction.rs#L33
 const StableInstructionRust = extern struct {
@@ -643,7 +649,6 @@ fn translateAccounts(
         .syscall_parameter_address_restrictions,
         tc.slot,
     );
-    const increase_info_limit = tc.feature_set.active(.increase_cpi_account_info_limit, tc.slot);
 
     // In the same vein as the other checkAccountInfoPtr() checks, we don't lock
     // this pointer to a specific address but we don't want it to be inside accounts, or
@@ -662,22 +667,19 @@ fn translateAccounts(
         ic.getCheckAligned(),
     );
 
-    // check_account_infos():
-    const max_cpi_account_infos: u32 = if (increase_info_limit)
-        255
-    else if (tc.feature_set.active(.increase_tx_account_lock_limit, tc.slot))
-        128
-    else
-        64;
-    if (account_infos.len > max_cpi_account_infos) {
+    // check_account_infos(): the `increase_cpi_account_info_limit` feature gate
+    // was removed in agave v4.1.0-beta.1, so the limit is now a hardcoded 255.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/program-runtime/src/cpi.rs#L139
+    if (account_infos.len > MAX_CPI_ACCOUNT_INFOS) {
         return SyscallError.MaxInstructionAccountInfosExceeded;
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L969-L981
-    if (increase_info_limit) {
-        const account_info_bytes = account_infos.len *| ACCOUNT_INFO_BYTE_SIZE;
-        try tc.consumeCompute(account_info_bytes / tc.compute_budget.cpi_bytes_per_unit);
-    }
+    // The account-info translation cost is consumed unconditionally — the
+    // `increase_cpi_account_info_limit` feature gate was removed in agave
+    // v4.1.0-beta.1.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/program-runtime/src/cpi.rs#L1031-L1036
+    const account_info_bytes = account_infos.len *| ACCOUNT_INFO_BYTE_SIZE;
+    try tc.consumeCompute(account_info_bytes / tc.compute_budget.cpi_bytes_per_unit);
 
     // translate keys upfront before inner loop below.
     var account_info_keys: std14.BoundedArray(
@@ -854,8 +856,10 @@ fn translateInstruction(
 
     const tc = ic.tc;
     const loosen_cpi_size = tc.feature_set.active(.loosen_cpi_size_restriction, tc.slot);
-    const increase_info_limit = tc.feature_set.active(.increase_cpi_account_info_limit, tc.slot);
 
+    // check_instruction_size(): only the size *limits* depend on the
+    // `loosen_cpi_size_restriction` feature. The translation *cost* below is
+    // charged regardless (see consumeCompute after this block).
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L146-L161
     if (loosen_cpi_size) {
         if (account_metas.len >= InstructionInfo.MAX_ACCOUNT_METAS) {
@@ -864,15 +868,6 @@ fn translateInstruction(
         if (data.len > MAX_DATA_LEN) {
             return SyscallError.MaxInstructionDataLenExceeded;
         }
-
-        var total_cu_cost = data.len / tc.compute_budget.cpi_bytes_per_unit;
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L555-L567
-        if (increase_info_limit) {
-            // NOTE: Agave uses the same size here (34 bytes) no matter which type it is.
-            total_cu_cost +|= account_metas.len *| @sizeOf(AccountMetaRust) /
-                tc.compute_budget.cpi_bytes_per_unit;
-        }
-        try tc.consumeCompute(total_cu_cost);
     } else {
         // [agave] https://github.com/solana-labs/solana/blob/dbf06e258ae418097049e845035d7d5502fe1327/programs/bpf_loader/src/syscalls/cpi.rs#L1114-L1120
         const total_size = account_metas.len *| @sizeOf(AccountInfoRust) +| data.len;
@@ -880,6 +875,17 @@ fn translateInstruction(
             return SyscallError.InstructionTooLarge;
         }
     }
+
+    // The translation cost is consumed unconditionally — agave charges it after
+    // check_instruction_size(), regardless of `loosen_cpi_size_restriction`.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/program-runtime/src/cpi.rs#L572-L580
+    // The `increase_cpi_account_info_limit` feature gate was removed in agave
+    // v4.1.0-beta.1, so the account-meta cost is now always charged.
+    // NOTE: Agave uses the same size here (34 bytes) no matter which type it is.
+    var total_cu_cost = data.len / tc.compute_budget.cpi_bytes_per_unit;
+    total_cu_cost +|= account_metas.len *| @sizeOf(AccountMetaRust) /
+        tc.compute_budget.cpi_bytes_per_unit;
+    try tc.consumeCompute(total_cu_cost);
 
     var accounts = try allocator.alloc(InstructionAccount, account_metas.len);
     errdefer allocator.free(accounts);

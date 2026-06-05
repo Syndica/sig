@@ -661,6 +661,16 @@ fn advanceNonceAccount(
     }
 }
 
+fn checkWithdrawNonceSigner(
+    ic: *InstructionContext,
+    authority: Pubkey,
+) (error{OutOfMemory} || InstructionError)!void {
+    if (!ic.ixn_info.isPubkeySigner(authority)) {
+        try ic.tc.log("Withdraw nonce account: Account {f} must sign", .{authority});
+        return InstructionError.MissingRequiredSignature;
+    }
+}
+
 //// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_instruction.rs#L73-L74
 fn withdrawNonceAccount(
     allocator: std.mem.Allocator,
@@ -687,8 +697,11 @@ fn withdrawNonceAccount(
             allocator,
             nonce.Versions,
         );
-        const authority = switch (versioned_nonce.getState()) {
-            .uninitialized => blk: {
+        // [agave] The authorized signer is validated before any state mutation
+        // (v4.1's `check_signer` closure runs ahead of `set_state`), so a failed
+        // signer check leaves the nonce account untouched.
+        switch (versioned_nonce.getState()) {
+            .uninitialized => {
                 if (lamports > from_account.account.lamports) {
                     try ic.tc.log(
                         "Withdraw nonce account: insufficient lamports {}, need {}",
@@ -696,9 +709,9 @@ fn withdrawNonceAccount(
                     );
                     return InstructionError.InsufficientFunds;
                 }
-                break :blk from_account.pubkey;
+                try checkWithdrawNonceSigner(ic, from_account.pubkey);
             },
-            .initialized => |data| blk: {
+            .initialized => |data| {
                 if (lamports == from_account.account.lamports) {
                     const durable_nonce = nonce.initDurableNonceFromHash(ic.tc.prev_blockhash);
                     if (durable_nonce.eql(data.durable_nonce)) {
@@ -710,6 +723,7 @@ fn withdrawNonceAccount(
                             @intFromEnum(SystemProgramError.NonceBlockhashNotExpired);
                         return InstructionError.Custom;
                     }
+                    try checkWithdrawNonceSigner(ic, data.authority);
                     try from_account.serializeIntoAccountData(
                         nonce.Versions{ .current = nonce.State.uninitialized },
                     );
@@ -727,14 +741,9 @@ fn withdrawNonceAccount(
                         );
                         return InstructionError.InsufficientFunds;
                     }
+                    try checkWithdrawNonceSigner(ic, data.authority);
                 }
-                break :blk data.authority;
             },
-        };
-
-        if (!ic.ixn_info.isPubkeySigner(authority)) {
-            try ic.tc.log("Withdraw nonce account: Account {f} must sign", .{authority});
-            return InstructionError.MissingRequiredSignature;
         }
 
         try from_account.subtractLamports(lamports);
@@ -1375,6 +1384,81 @@ test "executeWithdrawNonceAccount" {
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = nonce_authority },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+        },
+        .{},
+    );
+}
+
+// Regression for the signer-before-set_state ordering fix in
+// withdrawNonceAccount: the affected branch is the initialized full-withdraw
+// path, which previously wrote `uninitialized` to the account before the
+// signer check ran. With the fix, the signer check runs first and the
+// MissingRequiredSignature error is surfaced from that branch.
+//
+// Note: expectProgramExecuteError only asserts the returned error code (not
+// post-execution account state), so this guards the branch reachability but
+// not the data-preservation aspect of the fix. The remaining state-mutation
+// invariant is covered by conformance fixtures.
+test "executeWithdrawNonceAccount: initialized full-withdraw missing signer" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+    const Hash = sig.core.Hash;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const nonce_authority = Pubkey.initRandom(prng.random());
+    // Random durable nonce; default prev_blockhash is zero so they will not
+    // match and the "nonce can only advance once per slot" path is avoided.
+    const initial_durable_nonce = nonce.initDurableNonceFromHash(Hash.initRandom(prng.random()));
+    const nonce_state = nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
+        nonce_authority,
+        initial_durable_nonce,
+        0,
+    ) } };
+    const nonce_state_bytes = try sig.bincode.writeAlloc(allocator, nonce_state, .{});
+    defer allocator.free(nonce_state_bytes);
+
+    const recent_blockhashes: RecentBlockhashes = .INIT;
+    const rent = Rent.INIT;
+    // Full-withdraw path requires lamports == from_account.lamports.
+    const from_lamports = 2 * rent.minimumBalance(sig.bincode.sizeOf(nonce_state, .{}));
+
+    const account_0_key = Pubkey.initRandom(prng.random());
+    const account_1_key = Pubkey.initRandom(prng.random());
+
+    try testing.expectProgramExecuteError(
+        InstructionError.MissingRequiredSignature,
+        allocator,
+        system_program.ID,
+        SystemProgramInstruction{ .withdraw_nonce_account = from_lamports },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
+            // Authority is NOT a signer.
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = account_0_key,
+                    .lamports = from_lamports,
+                    .data = nonce_state_bytes,
+                    .owner = system_program.ID,
+                },
+                .{ .pubkey = account_1_key },
+                .{ .pubkey = RecentBlockhashes.ID },
+                .{ .pubkey = Rent.ID },
+                .{ .pubkey = nonce_authority },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = system_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .recent_blockhashes = recent_blockhashes,
+                .rent = rent,
             },
         },
         .{},

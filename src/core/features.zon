@@ -1560,7 +1560,7 @@
         .name = "provide_instruction_data_offset_in_vm_r2",
         .pubkey = "5xXZc66h4UdB6Yq7FzdBxBiRAFMMScMLwHxk2QZDaNZL",
         .description = "SIMD-0321: Provide instruction data offset in VM r2",
-        .status = .supported,
+        .status = .hardcoded,
     },
     .{
         .name = "enforce_fixed_fec_set",
@@ -1572,7 +1572,7 @@
         .name = "increase_cpi_account_info_limit",
         .pubkey = "H6iVbVaDZgDphcPbcZwc5LoznMPWQfnJ1AM7L1xzqvt5",
         .description = "SIMD-0339: Increase CPI Account Infos Limit",
-        .status = .supported,
+        .status = .hardcoded,
     },
     .{
         .name = "deprecate_rent_exemption_threshold",
