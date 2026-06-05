@@ -625,12 +625,12 @@ pub fn Bind(
         pub const Sandboxed = struct {
             services_index: lib.util.ArrayEnumMap(unbound.ServiceId, void),
             meta: struct {
-                pids_buf: [schema.services.len]i32,
+                pids_buf: [schema.services.len]linux.pid_t,
                 runners_buf: [schema.services.len]*lib.runner.Region,
                 activity_views_buf: [schema.services.len]lib.runner.Activity.RunnerView,
             },
 
-            pub fn pids(self: *const Sandboxed) []const i32 {
+            pub fn pids(self: *const Sandboxed) []const linux.pid_t {
                 return self.meta.pids_buf[0..self.services_index.len];
             }
 
@@ -655,7 +655,7 @@ pub fn Bind(
 
                 // Wait for the first child to exit
                 var status: u32 = 0;
-                const exited_pid: i32 = pid: {
+                const exited_pid: linux.pid_t = pid: {
                     const ret: usize = linux.waitpid(-1, &status, 0);
                     std.debug.assert(e(ret) == .SUCCESS);
                     break :pid @intCast(ret);
@@ -664,8 +664,11 @@ pub fn Bind(
                     return error.Timeout;
                 }
 
-                const exited_index = std.mem.indexOfScalar(i32, self.pids(), exited_pid) orelse
-                    std.debug.panic("Unknown child pid {} exited\n", .{exited_pid});
+                const exited_index = std.mem.indexOfScalar(
+                    linux.pid_t,
+                    self.pids(),
+                    exited_pid,
+                ) orelse std.debug.panic("Unknown child pid {} exited\n", .{exited_pid});
                 const id = self.services_index.keys()[exited_index];
                 const pid = self.pids()[exited_index];
                 const runner = self.runners()[exited_index];
@@ -711,7 +714,7 @@ pub fn Bind(
             return sandboxed;
         }
 
-        fn spawnSandboxedTimeout(timeout_ns: u64) i32 {
+        fn spawnSandboxedTimeout(timeout_ns: u64) linux.pid_t {
             const parent_pid = std.os.linux.getpid();
 
             const maybe_child_pid = lib.linux.clone3.clone3(&.{
@@ -765,7 +768,7 @@ pub fn Bind(
                 stderr: std.fs.File,
                 bindings: *const ServiceMap.Entry.BindingInfos,
             },
-        ) !i32 {
+        ) !linux.pid_t {
             const parent_pid = std.os.linux.getpid();
 
             const maybe_child_pid = lib.linux.clone3.clone3(&.{
@@ -1046,7 +1049,7 @@ pub fn Bind(
         fn dumpOnExit(
             meta: *lib.runner.Exit,
             service: unbound.ServiceId,
-            pid: i32,
+            pid: linux.pid_t,
             status: u32,
         ) void {
             if (meta.panicMsg()) |panic_msg| {
