@@ -856,9 +856,6 @@ fn translateInstruction(
 
     const tc = ic.tc;
 
-    // check_instruction_size(): The `loosen_cpi_size_restriction` feature gate
-    // has been hardcoded (always active), so we always check the individual
-    // limits rather than the combined size.
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L146-L161
     if (account_metas.len >= InstructionInfo.MAX_ACCOUNT_METAS) {
         return SyscallError.MaxInstructionAccountsExceeded;
@@ -1852,6 +1849,113 @@ test "translateInstructionRust" {
 
 test "translateInstructionC" {
     try testTranslateInstruction(AccountInfoC);
+}
+
+test "translateInstruction rejects too many account metas" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    var ctx = try TestContext.init(allocator, prng.random(), "foo");
+    defer ctx.deinit(allocator);
+
+    const data = "ins data";
+    const program_id = Pubkey.initRandom(prng.random());
+
+    // Use exactly MAX_ACCOUNT_METAS (256) accounts to trigger the >= check.
+    var accounts: [InstructionInfo.MAX_ACCOUNT_METAS]InstructionAccount = undefined;
+    for (&accounts) |*a| {
+        a.* = .{
+            .pubkey = Pubkey.initRandom(prng.random()),
+            .is_signer = false,
+            .is_writable = false,
+        };
+    }
+
+    const vm_addr = MM_INPUT_START;
+    const buffer = try intoStableInstruction(
+        allocator,
+        AccountInfoRust,
+        vm_addr,
+        data,
+        program_id,
+        &accounts,
+    );
+    defer allocator.free(buffer);
+
+    const memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.constant, &.{}, memory.RODATA_START),
+            memory.Region.init(.mutable, &.{}, memory.STACK_START),
+            memory.Region.init(.mutable, &.{}, memory.HEAP_START),
+            memory.Region.init(.mutable, buffer, vm_addr),
+        },
+        .v2,
+        .{ .aligned_memory_mapping = false },
+    );
+    defer memory_map.deinit(allocator);
+
+    const result = translateInstruction(
+        allocator,
+        &ctx.ic,
+        &memory_map,
+        AccountInfoRust,
+        vm_addr,
+    );
+    try std.testing.expectError(SyscallError.MaxInstructionAccountsExceeded, result);
+}
+
+test "translateInstruction rejects oversized data" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    var ctx = try TestContext.init(allocator, prng.random(), "foo");
+    defer ctx.deinit(allocator);
+
+    // Data exceeding MAX_DATA_LEN (10_240).
+    const data = try allocator.alloc(u8, MAX_DATA_LEN + 1);
+    defer allocator.free(data);
+    @memset(data, 0);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const accounts = [_]InstructionAccount{.{
+        .pubkey = Pubkey.initRandom(prng.random()),
+        .is_signer = true,
+        .is_writable = false,
+    }};
+
+    const vm_addr = MM_INPUT_START;
+    const buffer = try intoStableInstruction(
+        allocator,
+        AccountInfoRust,
+        vm_addr,
+        data,
+        program_id,
+        &accounts,
+    );
+    defer allocator.free(buffer);
+
+    const memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.constant, &.{}, memory.RODATA_START),
+            memory.Region.init(.mutable, &.{}, memory.STACK_START),
+            memory.Region.init(.mutable, &.{}, memory.HEAP_START),
+            memory.Region.init(.mutable, buffer, vm_addr),
+        },
+        .v2,
+        .{ .aligned_memory_mapping = false },
+    );
+    defer memory_map.deinit(allocator);
+
+    const result = translateInstruction(
+        allocator,
+        &ctx.ic,
+        &memory_map,
+        AccountInfoRust,
+        vm_addr,
+    );
+    try std.testing.expectError(SyscallError.MaxInstructionDataLenExceeded, result);
 }
 
 test "translateSigners" {
