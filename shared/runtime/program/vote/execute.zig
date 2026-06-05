@@ -170,7 +170,7 @@ pub fn execute(
             &vote_account,
             args.tower_sync,
         ),
-        ._reserved_initialize_account_v2 => return InstructionError.InvalidInstructionData,
+        .initialize_account_v2 => return InstructionError.InvalidInstructionData,
         .update_commission_collector => |kind| return try executeUpdateCommissionCollector(
             allocator,
             ic,
@@ -369,6 +369,10 @@ fn authorize(
             try validateIsSigner(vote_state.withdrawerKey().*, signers);
             vote_state.withdrawerMut().* = authorized;
         },
+        // SIMD-0387 wiring lands in a follow-up commit; reject for now
+        // so that the bincode-level union switch is exhaustive without
+        // changing observable behavior.
+        .voter_with_bls => return InstructionError.InvalidInstructionData,
     }
 
     try setVoteState(
