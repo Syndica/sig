@@ -1241,17 +1241,31 @@ pub const VoteState = union(enum(u32)) {
         }
     }
 
+    /// Dispatch `setNewAuthorizedVoter`. The optional `maybe_bls_pubkey`
+    /// only takes effect on `VoteStateV4` (SIMD-0387); passing it through
+    /// while the underlying state is still V3 is a programming error
+    /// (the BLS variants are only reachable through the V4 path).
     pub fn setNewAuthorizedVoter(
         self: *VoteState,
         allocator: Allocator,
         new_authorized_voter: Pubkey,
         target_epoch: Epoch,
+        maybe_bls_pubkey: ?*const [48]u8,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline .v3, .v4 => |*s| try s.setNewAuthorizedVoter(
+            .v3 => |*s| blk: {
+                std.debug.assert(maybe_bls_pubkey == null);
+                break :blk try s.setNewAuthorizedVoter(
+                    allocator,
+                    new_authorized_voter,
+                    target_epoch,
+                );
+            },
+            .v4 => |*s| try s.setNewAuthorizedVoter(
                 allocator,
                 new_authorized_voter,
                 target_epoch,
+                maybe_bls_pubkey,
             ),
         };
     }

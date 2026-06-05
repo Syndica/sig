@@ -359,6 +359,7 @@ fn authorize(
                 allocator,
                 authorized,
                 target_epoch,
+                null,
             );
             if (maybe_err) |err| {
                 ic.tc.custom_error = @intFromEnum(err);
