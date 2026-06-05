@@ -3,7 +3,15 @@ const c = @import("blst").c;
 pub const tests = @import("tests.zig");
 
 /// We do not need to provide any more granular errors than a simple pass/fail.
-const Error = error{Failed};
+pub const Error = error{Failed};
+
+/// Domain separation tag used by Solana's BLS proof-of-possession scheme.
+/// Matches the value used by agave's solana-sdk bls-signatures crate and by
+/// firedancer's `fd_bls12_381.c::FD_BLS_SIG_DOMAIN_POP`.
+///
+/// [firedancer] https://github.com/firedancer-io/firedancer/blob/main/src/ballet/bls/fd_bls12_381.c#L437
+pub const PROOF_OF_POSSESSION_DST: []const u8 =
+    "BLS_POP_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 
 const Scalar = struct {
     scalar: c.scalar,
@@ -257,4 +265,133 @@ pub fn pairingSyscall(
         };
         func(out[48 * offset ..][0..48], &r.fp6[i / 6].fp2[(i / 2) % 3].fp[i % 2]);
     }
+}
+
+/// Verifies a BLS proof of possession in the min-pubkey-size scheme used by
+/// Solana's vote program (SIMD-0387):
+///   - public key in G1 (48-byte compressed)
+///   - signature   in G2 (96-byte compressed)
+///   - hash-to-curve domain separator: `PROOF_OF_POSSESSION_DST`
+///
+/// The check performed is `e(pk, H(msg)) == e(g1, sig)`, equivalently
+/// `e(pk, H(msg)) * e(-g1, sig) == 1` in GT.
+///
+/// Mirrors firedancer's `fd_bls12_381_core_verify` /
+/// `fd_bls12_381_proof_of_possession_verify`. As in firedancer, we explicitly
+/// reject empty messages (msg.len == 0) to match agave's behavior of binding
+/// the public key into the message in this scheme; in practice the SIMD-0387
+/// PoP message is always 89 bytes so this branch is defensive.
+///
+/// [firedancer] https://github.com/firedancer-io/firedancer/blob/main/src/ballet/bls/fd_bls12_381.c#L460-L527
+pub fn proofOfPossessionVerify(
+    msg: []const u8,
+    proof_compressed: *const [96]u8,
+    pubkey_compressed: *const [48]u8,
+) Error!void {
+    // Match firedancer's defensive minimum length. The Solana PoP message is
+    // always "ALPENGLOW" || vote_pubkey (32) || bls_pubkey (48) = 89 bytes, so
+    // any caller-driven shorter message indicates a programming error.
+    if (msg.len < 48) return error.Failed;
+
+    // 1. Decompress public key into G1 affine and validate.
+    var pk: c.p1_affine = undefined;
+    if (c.p1_uncompress(&pk, pubkey_compressed) != c.SUCCESS) return error.Failed;
+    if (!c.p1_affine_in_g1(&pk)) return error.Failed;
+    // Reject the identity element. Matches solana-sdk bls-signatures.
+    // [agave] https://github.com/anza-xyz/solana-sdk/blob/b66abfddd564aef5b4b82cf4e76381e96f2459f0/bls-signatures/src/pubkey/verify.rs#L120
+    if (c.p1_affine_is_inf(&pk)) return error.Failed;
+
+    // 2. Hash the message into G2 (validity in G2 is implicit in hash_to_g2).
+    var hashed_msg: c.p2 = undefined;
+    var hashed_msg_affine: c.p2_affine = undefined;
+    c.hash_to_g2(
+        &hashed_msg,
+        msg.ptr,
+        msg.len,
+        PROOF_OF_POSSESSION_DST.ptr,
+        PROOF_OF_POSSESSION_DST.len,
+        null,
+        0,
+    );
+    c.p2_to_affine(&hashed_msg_affine, &hashed_msg);
+
+    // 3. Decompress signature into G2 affine and validate.
+    var sig: c.p2_affine = undefined;
+    if (c.p2_uncompress(&sig, proof_compressed) != c.SUCCESS) return error.Failed;
+    if (!c.p2_affine_in_g2(&sig)) return error.Failed;
+
+    // 4. Compute -g1 in affine form (g1 is the canonical generator of G1).
+    var neg_g1_proj: c.p1 = c.p1_generator().*;
+    c.p1_cneg(&neg_g1_proj, true);
+    var neg_g1: c.p1_affine = undefined;
+    c.p1_to_affine(&neg_g1, &neg_g1_proj);
+
+    // 5. Pairing check: miller_loop_n over both pairs, then final_verify
+    //    against fp12_one (which performs the final exponentiation).
+    const g1_pts = [2]*const c.p1_affine{ &pk, &neg_g1 };
+    const g2_pts = [2]*const c.p2_affine{ &hashed_msg_affine, &sig };
+    var r: c.fp12 = c.fp12_one().*;
+    c.miller_loop_n(&r, &g2_pts, &g1_pts, 2);
+    if (!c.fp12_finalverify(&r, c.fp12_one())) return error.Failed;
+}
+
+// Test vectors are intentionally minimal; the agave-side conformance harness
+// in solfuzz-agave covers exhaustive matrices. These ensure the wire-up is
+// correct.
+test "proofOfPossessionVerify: rejects too-short message" {
+    const proof: [96]u8 = @splat(0);
+    const pk: [48]u8 = @splat(0);
+    try std.testing.expectError(error.Failed, proofOfPossessionVerify("", &proof, &pk));
+    try std.testing.expectError(error.Failed, proofOfPossessionVerify("short", &proof, &pk));
+}
+
+test "proofOfPossessionVerify: rejects all-zero pubkey/proof" {
+    // All-zero compressed form is invalid (0xA0 / 0xC0 prefix bits required).
+    const proof: [96]u8 = @splat(0);
+    const pk: [48]u8 = @splat(0);
+    var msg: [89]u8 = @splat(0);
+    @memcpy(msg[0..9], "ALPENGLOW");
+    try std.testing.expectError(error.Failed, proofOfPossessionVerify(&msg, &proof, &pk));
+}
+
+// Test vector lifted from firedancer's `test_bls12_381.c` POP success case 1:
+// m = "ALPENGLOW" || vote_account_pubkey (32B) || bls_pubkey (48B).
+// [firedancer] https://github.com/firedancer-io/firedancer/blob/main/src/ballet/bls/test_bls12_381.c#L1162-L1176
+test "proofOfPossessionVerify: firedancer alpenglow vector verifies" {
+    var msg: [89]u8 = undefined;
+    var proof: [96]u8 = undefined;
+    var pk: [48]u8 = undefined;
+    _ = try std.fmt.hexToBytes(
+        &msg,
+        "414c50454e474c4f57" ++
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ++
+            "b8778284f744f6ae2791145183ef8fcb66dcd6602da8ca1add3e6828904db482708fb1d9bd2cbeb72320cdef56d173bc",
+    );
+    _ = try std.fmt.hexToBytes(
+        &proof,
+        "b21b2bc4933e1d2cd32e9b976cc89a98d14f45c89356bb67afab0bc48a6ff9c2" ++
+            "d3c4d2394d68706077e5dd7596459da70227c70f2f14adbfbcf6b46ae34f970f" ++
+            "88b49dd8185f705333f682eb27674e8abbdf21519dd01424f6993713c9e4632d",
+    );
+    _ = try std.fmt.hexToBytes(
+        &pk,
+        "b8778284f744f6ae2791145183ef8fcb66dcd6602da8ca1add3e6828904db482708fb1d9bd2cbeb72320cdef56d173bc",
+    );
+    try proofOfPossessionVerify(&msg, &proof, &pk);
+
+    // Tampering: flip one byte in the message and verification must fail.
+    var bad_msg = msg;
+    bad_msg[0] ^= 0xFF;
+    try std.testing.expectError(
+        error.Failed,
+        proofOfPossessionVerify(&bad_msg, &proof, &pk),
+    );
+
+    // Tampering: flip a byte of the proof.
+    var bad_proof = proof;
+    bad_proof[0] ^= 0x01;
+    try std.testing.expectError(
+        error.Failed,
+        proofOfPossessionVerify(&msg, &bad_proof, &pk),
+    );
 }
