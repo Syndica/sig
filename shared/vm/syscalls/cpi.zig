@@ -1487,6 +1487,7 @@ const TestAccount = struct {
         @memcpy(buffer[data_addr - vm_addr ..][0..data_len], self.data);
 
         return .{ buffer, SerializedAccountMetadata{
+            .vm_addr = vm_addr,
             .original_data_len = data_len,
             .vm_data_addr = actual_data_addr,
             .vm_key_addr = key_addr,
@@ -1616,6 +1617,7 @@ test "CallerAccount.fromAccountInfoC" {
         vm_addr,
         account_info,
         &SerializedAccountMetadata{
+            .vm_addr = vm_addr,
             .original_data_len = account.data.len,
             .vm_data_addr = data_addr,
             .vm_key_addr = key_addr,
