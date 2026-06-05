@@ -1309,6 +1309,8 @@ pub const vote_parser = struct {
             .withdraw,
             ._reserved_initialize_account_v2,
             .update_commission_collector,
+            .update_commission_bps,
+            ._reserved_deposit_delegator_rewards,
             => null,
         };
     }

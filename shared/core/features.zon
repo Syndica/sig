@@ -1770,4 +1770,10 @@
         .description = "SIMD-0431: Loader V3 minimum extend program size",
         .status = .supported,
     },
+    .{
+        .name = "commission_rate_in_basis_points",
+        .pubkey = "Eg7tXEwMZzS98xaZ1YHUbdRHsaYZiCsSaR6sKgxreoaj",
+        .description = "SIMD-0291: Commission Rate in Basis Points",
+        .status = .supported,
+    },
 }
