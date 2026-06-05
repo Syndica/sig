@@ -995,7 +995,7 @@ test "GossipDuplicateShredHandler: reconstructShredsFromData returns shreds on v
             );
         }
 
-        try epoch_stakes.stakes.vote_accounts.staked_nodes.put(
+        try epoch_stakes.stakes.vote_accounts.addStake(
             gpa,
             .fromPublicKey(&keypair.public_key),
             123,
