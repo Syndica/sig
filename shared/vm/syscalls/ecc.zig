@@ -630,18 +630,25 @@ pub fn altBn128Compression(
 
     try tc.consumeCompute(cost);
 
-    const input = try memory_map.translateSlice(
-        u8,
-        .constant,
-        input_addr,
-        input_size,
-        tc.getCheckAligned(),
-    );
+    // Agave translates the OUTPUT buffer (`call_result`) before the INPUT
+    // slice. The order matters: under SIMD-0460 a program that passes a
+    // readonly account pointer as the output and a bogus pointer as the input
+    // must surface as `ReadonlyDataModified` (from the failed write
+    // translation), not as a generic `AccessViolation` produced by failing
+    // the read translation first.
+    // [agave] https://github.com/anza-xyz/agave/blob/8e81e22a96/syscalls/src/lib.rs#L2514
     const call_result = try memory_map.translateSlice(
         u8,
         .mutable,
         result_addr,
         output_length,
+        tc.getCheckAligned(),
+    );
+    const input = try memory_map.translateSlice(
+        u8,
+        .constant,
+        input_addr,
+        input_size,
         tc.getCheckAligned(),
     );
 
