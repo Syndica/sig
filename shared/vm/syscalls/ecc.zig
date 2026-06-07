@@ -48,13 +48,8 @@ pub const GroupOp = enum(u64) {
     }
 };
 
-fn invalidError(tc: *const TransactionContext, registers: *RegisterMap) !void {
-    if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
-        return SyscallError.InvalidAttribute;
-    } else {
-        registers.set(.r0, 1);
-        return;
-    }
+fn invalidError(_: *const TransactionContext, _: *RegisterMap) !void {
+    return SyscallError.InvalidAttribute;
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a3e2a62a942a497e00e4e091e888a1945dcdad53/syscalls/src/lib.rs#L978-L1111
@@ -877,7 +872,7 @@ test "edwards curve point validation" {
         &.{
             .{ .{ 0, valid_bytes_addr,   0, 0, 0 }, 0 }, // success
             .{ .{ 0, invalid_bytes_addr, 0, 0, 0 }, 1 }, // failed
-            .{ .{ 8, valid_bytes_addr,   0, 0, 0 }, 1 }, // invalid curve ID
+            .{ .{ 8, valid_bytes_addr,   0, 0, 0 }, error.InvalidAttribute }, // invalid curve ID
             .{ .{ 0, valid_bytes_addr,   0, 0, 0 }, error.ComputationalBudgetExceeded },
         },
         // zig fmt: on
@@ -914,7 +909,7 @@ test "ristretto curve point validation" {
         &.{
             .{ .{ 1, valid_bytes_addr,   0, 0, 0 }, 0 }, // success
             .{ .{ 1, invalid_bytes_addr, 0, 0, 0 }, 1 }, // failed
-            .{ .{ 8, valid_bytes_addr,   0, 0, 0 }, 1 }, // invalid curve ID
+            .{ .{ 8, valid_bytes_addr,   0, 0, 0 }, error.InvalidAttribute }, // invalid curve ID
             .{ .{ 1, valid_bytes_addr,   0, 0, 0 }, error.ComputationalBudgetExceeded },
         },
         // zig fmt: on
