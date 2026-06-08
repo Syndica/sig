@@ -1626,12 +1626,7 @@
         .name = "bls_pubkey_management_in_vote_account",
         .pubkey = "AnAP9zPV4KL7czAPQbFhpDKV2tx7g4UGNbK9wvXwjaRo",
         .description = "SIMD-0387: BLS Pubkey Management in Vote Account",
-        .status = .unsupported,
-        .note =
-        \\ TODO: Low Priority
-        \\ Not currently scheduled for activation.
-        \\ Implement as part of alpenglow in v2.
-        ,
+        .status = .supported,
     },
     .{
         .name = "relax_programdata_account_check_migration",
