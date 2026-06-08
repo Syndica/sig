@@ -71,7 +71,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
                     .request_kind = .txn_exec,
                     .data = .{
                         .txn_exec = .{
-                            .success = true,
+                            .result = .{ .success = true },
                             .block_idx = data.block_idx,
                             .tx_idx = data.tx_idx,
                         },
