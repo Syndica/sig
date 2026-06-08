@@ -75,6 +75,7 @@ pub fn build(b: *Build) !void {
     const ci_step = b.step("ci", "Run all checks used for CI");
     const sig_step = b.step("sig", "Build only the sig binary");
     const docs_step = b.step("docs", "Emit docs");
+    const shred_stream_step = b.step("shred-stream", "Stream shreds from an Agave ledger");
 
     ci_step.dependOn(test_step);
     ci_step.dependOn(install_step);
@@ -100,10 +101,23 @@ pub fn build(b: *Build) !void {
         .target = target,
         .optimize = .ReleaseFast, // fast to compile once, no need to recompile when changing modes,
     }).module("zstd");
+    const ipc_ring_mod = b.createModule(.{
+        .root_source_file = b.path("lib/ipc/ring.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const rocksdb_dep = b.dependency("rocksdb", .{
+        .target = target,
+        .optimize = optimize,
+        .enable_snappy = true,
+    });
+    const rocksdb_mod = rocksdb_dep.module("bindings");
+    const rocksdb_c_mod = rocksdb_dep.module("rocksdb");
+    rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = .off;
 
     const fmt_check_step = b.addFmt(.{
         .check = true,
-        .paths = &.{ "init/", "lib/", "services/", "build.zig", "lint/" },
+        .paths = &.{ "init/", "lib/", "services/", "scripts/", "build.zig", "lint/" },
     });
     ci_step.dependOn(&fmt_check_step.step);
 
@@ -130,7 +144,7 @@ pub fn build(b: *Build) !void {
     lint_test_step.dependOn(&run_lint_tests.step);
 
     const features = b.createModule(.{
-        .root_source_file = b.path("../src/core/features.zon"),
+        .root_source_file = b.path("../shared/core/features.zon"),
     });
     const feature_set_id = b.createModule(.{
         .root_source_file = b
@@ -188,6 +202,40 @@ pub fn build(b: *Build) !void {
         }
         if (sig_init_out.run) |sig_init_run| {
             sig_init_run.addArgs(b.args orelse &.{});
+        }
+    }
+
+    {
+        const module = b.createModule(.{
+            .root_source_file = b.path("scripts/shred_stream.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ipc-ring", .module = ipc_ring_mod },
+                .{ .name = "rocksdb", .module = rocksdb_mod },
+                .{ .name = "rocksdb-c", .module = rocksdb_c_mod },
+            },
+        });
+        const shred_stream_exe = b.addExecutable(.{
+            .name = "shred-stream",
+            .root_module = module,
+            .use_llvm = true,
+        });
+        _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+            .name = "shred-stream",
+            .root_module = module,
+            .filters = filters,
+            .use_llvm = true,
+        });
+        const shred_stream_out = addExeOutputs(
+            b,
+            shred_stream_exe,
+            shred_stream_step,
+            artifact_opts,
+            .{},
+        );
+        if (shred_stream_out.run) |shred_stream_run| {
+            shred_stream_run.addArgs(b.args orelse &.{});
         }
     }
 
