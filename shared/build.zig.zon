@@ -8,6 +8,7 @@
         "bloom",
         "core",
         "crypto",
+        "data",
         "lib.zig",
         "runtime",
         "std14.zig",

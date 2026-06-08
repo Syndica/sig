@@ -2,6 +2,16 @@ const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../../lib.zig");
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("cpi.zig");
+        _ = @import("ecc.zig");
+        _ = @import("hash.zig");
+        _ = @import("memops.zig");
+        _ = @import("sysvar.zig");
+    }
+}
+
 pub const cpi = @import("cpi.zig");
 pub const memops = @import("memops.zig");
 pub const hash = @import("hash.zig");

@@ -16,8 +16,8 @@ C_FLAGS_V3="${C_FLAGS} -mcpu=v3"
 CC_V0="${CC} ${C_FLAGS}"
 CC_V2="${CC} ${C_FLAGS_V3}"
 
-LD_V0="${LD_FLAGS} --script data/test-elfs/elf_sbpfv0.ld"
-LD_V2="${LD_FLAGS} -Bsymbolic --script data/test-elfs/elf.ld"
+LD_V0="${LD_FLAGS} --script shared/data/test-elfs/elf_sbpfv0.ld"
+LD_V2="${LD_FLAGS} -Bsymbolic --script shared/data/test-elfs/elf.ld"
 
 V0_FILES=(reloc_64_64 
           reloc_64_relative 
@@ -35,23 +35,23 @@ EXCLUDE_V2=(bss_section data_section
             hash_collision
             relative_call)
 
-for ZIG_FILE in data/test-elfs/*.zig; do
+for ZIG_FILE in shared/data/test-elfs/*.zig; do
     BASE_NAME=$(basename "$ZIG_FILE" .zig)
     
-    $ZIG build-obj "$ZIG_FILE" -target bpfel-freestanding -OReleaseSmall -fstrip -fno-emit-bin -femit-llvm-bc="data/test-elfs/${BASE_NAME}.bc"
+    $ZIG build-obj "$ZIG_FILE" -target bpfel-freestanding -OReleaseSmall -fstrip -fno-emit-bin -femit-llvm-bc="shared/data/test-elfs/${BASE_NAME}.bc"
     if [[ ! " ${EXCLUDE_V2[@]} " =~ " ${BASE_NAME} " ]]; then
-        $CC_V2 "data/test-elfs/${BASE_NAME}.bc" -c -o "data/test-elfs/${BASE_NAME}.o"
-        $LD_V2 "data/test-elfs/${BASE_NAME}.o" -o "data/test-elfs/${BASE_NAME}.so"
+        $CC_V2 "shared/data/test-elfs/${BASE_NAME}.bc" -c -o "shared/data/test-elfs/${BASE_NAME}.o"
+        $LD_V2 "shared/data/test-elfs/${BASE_NAME}.o" -o "shared/data/test-elfs/${BASE_NAME}.so"
     fi
     
     if [[ " ${V0_FILES[@]} " =~ " ${BASE_NAME} " ]]; then
-        $CC_V0 "data/test-elfs/${BASE_NAME}.bc" -c -o "data/test-elfs/${BASE_NAME}_sbpfv0.o"
-        $LD_V0 "data/test-elfs/${BASE_NAME}_sbpfv0.o" -o "data/test-elfs/${BASE_NAME}_sbpfv0.so"
+        $CC_V0 "shared/data/test-elfs/${BASE_NAME}.bc" -c -o "shared/data/test-elfs/${BASE_NAME}_sbpfv0.o"
+        $LD_V0 "shared/data/test-elfs/${BASE_NAME}_sbpfv0.o" -o "shared/data/test-elfs/${BASE_NAME}_sbpfv0.so"
     fi
 done
 
-rm data/test-elfs/*.o
-rm data/test-elfs/*.bc
+rm shared/data/test-elfs/*.o
+rm shared/data/test-elfs/*.bc
 
 # SIMD-0189 mandates `e_machine = EM_BPF (0xF7)` in the ELF header for SBPF v3,
 # and the strict parser in src/vm/elf.zig (parseStrict) rejects anything else,
@@ -75,9 +75,9 @@ rm data/test-elfs/*.bc
 # in-place so the produced fixtures are SIMD-0189 compliant.
 python3 -c "
 import struct, os
-for fn in os.listdir('data/test-elfs'):
+for fn in os.listdir('shared/data/test-elfs'):
     if not fn.endswith('.so'): continue
-    path = f'data/test-elfs/{fn}'
+    path = f'shared/data/test-elfs/{fn}'
     with open(path, 'rb') as f:
         e = bytearray(f.read())
     if e[:4] != b'\x7fELF': continue
