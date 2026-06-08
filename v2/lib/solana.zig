@@ -1,7 +1,6 @@
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("solana/bincode.zig");
-        _ = @import("solana/bincode_2.zig");
         _ = @import("solana/cluster.zig");
         _ = @import("solana/epoch_schedule.zig");
         _ = @import("solana/features.zig");
@@ -16,7 +15,6 @@ comptime {
 }
 
 pub const bincode = @import("solana/bincode.zig");
-pub const bincode_2 = @import("solana/bincode_2.zig");
 
 pub const ids = @import("solana/ids.zig");
 pub const features = @import("solana/features.zig");

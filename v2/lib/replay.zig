@@ -1,4 +1,3 @@
-const std = @import("std");
 const solana = @import("solana.zig");
 const collections = @import("collections.zig");
 const ipc = @import("ipc.zig");
@@ -66,8 +65,12 @@ pub const ExecResponse = extern struct {
         txn_exec: extern struct {
             block_idx: BlockRef,
             tx_idx: TransactionPool.ItemId,
-            success: bool,
+            result: TxExecResult,
         },
         txn_sig_verify: extern struct { success: bool },
     },
+};
+
+pub const TxExecResult = extern struct {
+    success: bool,
 };

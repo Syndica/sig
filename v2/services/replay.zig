@@ -85,8 +85,6 @@ const tracy = @import("tracy");
 
 const replay = lib.replay;
 
-const bincode_2 = lib.solana.bincode_2;
-
 const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;
 
@@ -422,8 +420,8 @@ fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
                 children_head = next_node;
             }
 
-            // Remove the node from the map + delete it
             if (child_node.child != .null)
+                // Remove the node from the map + delete it
                 // if this orphan has invalid chaining, this means *all* of its children are also invalid
                 @panic("TODO: handle recursive removal from invalid orphan chaining");
             const removed = forest.map.swapRemoveAdapted(&child_node.merkle_root, map_ctx);
@@ -641,21 +639,14 @@ fn maybeContinueBlockExec(
         break :blk &current.*.?;
     };
 
-    // TODO: remove this, it's just a copy for nothing
-    var deserialised_buf: [128 * 1024]u8 = undefined;
-    var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
-
     // Read transactions until we can't anymore, sending to exec as we go
     while (true) {
-        defer deserial_fba.reset();
-
         const tx_ref = try transaction_pool.createId();
         // TODO: this is a major leak risk, should use comptime errdefer unreachable
 
         const tx_buf: *[1232]u8 = transaction_pool.indexToPtr(tx_ref);
 
         const tx = try block_deserial_state.nextTransaction(
-            &deserial_fba,
             forest_pool,
             tx_buf,
         ) orelse {
@@ -694,7 +685,7 @@ fn maybeContinueBlockExec(
         while (true) {
             const was_data_complete = block_deserial_state.pos_node.data_complete;
             block_deserial_state.pos_offset = block_deserial_state.pos_node.payload_len;
-            reader.advance() catch break;
+            reader.nextNode() catch break;
             if (was_data_complete) break;
         }
         block_deserial_state.start_of_batch = true;
@@ -760,9 +751,125 @@ const BlockDeserialState = struct {
     const Reader = struct {
         deserial_state: *BlockDeserialState,
         merkle_pool: *const MerkleForest.NodePool,
-        interface: std.Io.Reader,
 
-        fn advance(self: *Reader) error{EndOfStream}!void {
+        fn currentReadableSlice(self: *Reader) []const u8 {
+            return self.deserial_state.pos_node.payload()[self.deserial_state.pos_offset..];
+        }
+
+        fn advanceBytes(
+            self: *Reader,
+            comptime mode: enum { copy, no_copy },
+            out: if (mode == .copy) []u8 else void,
+            len: if (mode == .no_copy) usize else void,
+        ) !void {
+            const n_bytes = switch (mode) {
+                .copy => out.len,
+                .no_copy => len,
+            };
+
+            const current_readable_slice = self.currentReadableSlice();
+
+            if (current_readable_slice.len >= n_bytes) {
+                @branchHint(.likely);
+
+                if (mode == .copy) {
+                    @memcpy(out, current_readable_slice[0..n_bytes]);
+                }
+                self.deserial_state.pos_offset += n_bytes;
+                return;
+            }
+
+            var next_copy: []const u8 = current_readable_slice;
+            var offset: usize = 0;
+
+            while (offset < n_bytes) {
+                if (mode == .copy) {
+                    @memcpy(out[offset..next_copy.len], next_copy);
+                }
+                self.deserial_state.pos_offset += next_copy.len;
+
+                offset += next_copy.len;
+                try self.nextNode();
+                next_copy = self.currentReadableSlice();
+            }
+
+            std.debug.assert(offset == n_bytes); // no overshooting
+        }
+
+        fn copyValue(self: *Reader, T: type) !T {
+            var tmp: T = undefined;
+            try self.advanceBytes(.copy, std.mem.asBytes(&tmp), {});
+            return tmp;
+        }
+
+        fn readShortu16(self: *Reader) !u16 {
+            var val: u32 = 0;
+            for (0..3) |nth_byte| {
+                const b = try self.copyValue(u8);
+                if (b == 0 and nth_byte != 0) return error.AliasEncoding;
+                val |= @as(u32, b & 0x7f) << @intCast(nth_byte * 7);
+                if (b & 0x80 == 0) {
+                    return std.math.cast(u16, val) orelse return error.Overflow;
+                }
+                if (nth_byte == 2) return error.ByteThreeContinues;
+            }
+            unreachable;
+        }
+
+        fn skipBytes(self: *Reader, n_bytes: usize) !void {
+            try self.advanceBytes(.no_copy, {}, n_bytes);
+        }
+
+        fn skipTransaction(self: *Reader) !void {
+            const n_signatures = try self.readShortu16();
+            try self.skipBytes(32 * n_signatures);
+
+            const is_legacy: bool = blk: {
+                const first_byte = try self.copyValue(u8);
+
+                if (first_byte & (1 << 7) == 0) {
+                    break :blk true; // num_required_signatures
+                } else {
+                    const version: u8 = first_byte & 0x7f;
+                    if (version != 0) return error.InvalidVersion;
+
+                    try self.skipBytes(1); // num_required_signatures
+                    break :blk false;
+                }
+            };
+
+            try self.skipBytes(2); // num_readonly_signed + num_readonly_unsigned
+
+            const n_account_keys = try self.readShortu16();
+            try self.skipBytes(32 * n_account_keys);
+
+            try self.skipBytes(32); // recent blockhash
+
+            // ShortVec(CompiledInstruction)
+            const n_instructions = try self.readShortu16();
+            for (0..n_instructions) |_| {
+                try self.skipBytes(1); // program_id_index
+
+                const n_accounts = try self.readShortu16();
+                try self.skipBytes(n_accounts);
+
+                const data_len = try self.readShortu16();
+                try self.skipBytes(data_len);
+            }
+
+            if (!is_legacy) {
+                const n_address_table_lookups = try self.readShortu16();
+                for (0..n_address_table_lookups) |_| {
+                    try self.skipBytes(32); // table pubkey
+                    const n_writable_indexes = try self.readShortu16();
+                    try self.skipBytes(n_writable_indexes);
+                    const n_readonly_indeces = try self.readShortu16();
+                    try self.skipBytes(n_readonly_indeces);
+                }
+            }
+        }
+
+        fn nextNode(self: *Reader) error{EndOfStream}!void {
             const child = self.deserial_state.pos_node.child.constPtr(self.merkle_pool) orelse
                 return error.EndOfStream;
 
@@ -774,48 +881,6 @@ const BlockDeserialState = struct {
 
             self.deserial_state.pos_node = child;
             self.deserial_state.pos_offset = 0;
-        }
-
-        fn maybeAdvance(self: *Reader) error{EndOfStream}!void {
-            if (self.deserial_state.pos_offset < self.deserial_state.pos_node.payload_len) return;
-            std.debug.assert(self.deserial_state.pos_offset ==
-                self.deserial_state.pos_node.payload_len);
-
-            try self.advance();
-        }
-
-        fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) !usize {
-            const self: *Reader = @alignCast(@fieldParentPtr("interface", r));
-            try self.maybeAdvance();
-
-            const read_slice = limit.sliceConst(
-                self.deserial_state.pos_node.payload()[self.deserial_state.pos_offset..],
-            );
-            try w.writeAll(read_slice);
-            self.deserial_state.pos_offset += read_slice.len;
-            return read_slice.len;
-        }
-
-        fn rebase(r: *std.Io.Reader, capacity: usize) !void {
-            _ = .{ r, capacity };
-            @panic("rebase is illegal");
-        }
-
-        fn readVec(r: *std.Io.Reader, data: [][]u8) !usize {
-            const self: *Reader = @alignCast(@fieldParentPtr("interface", r));
-            try self.maybeAdvance();
-
-            const first = data[0];
-            var writer: std.Io.Writer = .{
-                .buffer = first,
-                .end = 0,
-                .vtable = &.{ .drain = std.Io.Writer.fixedDrain },
-            };
-            const limit: std.Io.Limit = .limited(writer.buffer.len - writer.end);
-            return r.vtable.stream(r, &writer, limit) catch |err| switch (err) {
-                error.WriteFailed => unreachable,
-                else => |e| return e,
-            };
         }
     };
 
@@ -837,20 +902,7 @@ const BlockDeserialState = struct {
     }
 
     fn getReader(self: *BlockDeserialState, merkle_pool: *const MerkleForest.NodePool) Reader {
-        return .{
-            .deserial_state = self,
-            .merkle_pool = merkle_pool,
-            .interface = .{
-                .vtable = &.{
-                    .stream = Reader.stream,
-                    .rebase = Reader.rebase,
-                    .readVec = Reader.readVec,
-                },
-                .buffer = &.{},
-                .seek = 0,
-                .end = 0,
-            },
-        };
+        return .{ .deserial_state = self, .merkle_pool = merkle_pool };
     }
 
     fn diff(
@@ -874,7 +926,6 @@ const BlockDeserialState = struct {
     // TODO: this is *incredibly* slow
     fn nextTransaction(
         self: *BlockDeserialState,
-        fba: *std.heap.FixedBufferAllocator,
         merkle_pool: *const MerkleForest.NodePool,
         tx_buf: *[1232]u8,
     ) !?[]const u8 {
@@ -883,7 +934,7 @@ const BlockDeserialState = struct {
 
         const backup = self.*;
 
-        return nextTransactionInner(self, fba, merkle_pool, tx_buf) catch |err| switch (err) {
+        return nextTransactionInner(self, merkle_pool, tx_buf) catch |err| switch (err) {
             error.EndOfStream => {
                 zone.text("EndOfStream");
                 self.* = backup;
@@ -895,7 +946,6 @@ const BlockDeserialState = struct {
 
     fn nextTransactionInner(
         self: *BlockDeserialState,
-        fba: *std.heap.FixedBufferAllocator,
         merkle_pool: *const MerkleForest.NodePool,
         tx_buf: *[1232]u8,
     ) !?[]const u8 {
@@ -907,7 +957,7 @@ const BlockDeserialState = struct {
             .n_entries => {
                 std.debug.assert(self.start_of_batch);
 
-                self.n_entries_left = try bincode_2.read(fba, &reader.interface, u64);
+                self.n_entries_left = try reader.copyValue(u64);
                 if (self.n_entries_left.? == 0) {
                     self.next_read = .n_entries;
                     return null; // advance to next?
@@ -918,19 +968,20 @@ const BlockDeserialState = struct {
             },
             // start of entry
             .num_hashes => {
-                _ = try bincode_2.read(fba, &reader.interface, u64);
+                try reader.skipBytes(8); // num_hashes: u64
 
                 self.next_read = .hash;
                 continue :loopback .hash;
             },
             .hash => {
-                _ = try bincode_2.read(fba, &reader.interface, Hash);
+                // ignoring PoH
+                try reader.skipBytes(32); // Hash
 
                 self.next_read = .n_transactions;
                 continue :loopback .n_transactions;
             },
             .n_transactions => {
-                self.n_transactions_left = try bincode_2.read(fba, &reader.interface, u64);
+                self.n_transactions_left = try reader.copyValue(u64);
                 if (self.n_transactions_left == 0) {
                     self.n_entries_left.? -= 1;
                     if (self.n_entries_left.? == 0) {
@@ -960,11 +1011,8 @@ const BlockDeserialState = struct {
 
                 var pre_state = self.*;
 
-                _ = try bincode_2.read(
-                    fba,
-                    &reader.interface,
-                    lib.solana.transaction.VersionedTransaction,
-                );
+                try reader.skipTransaction();
+
                 self.n_transactions_left.? -= 1;
 
                 const post_state = self.*;
@@ -972,8 +1020,7 @@ const BlockDeserialState = struct {
                 const tx_bytes_read = diff(pre_state, post_state, merkle_pool);
 
                 var tx_reader = pre_state.getReader(merkle_pool);
-                try tx_reader.interface.readSliceAll(tx_buf[0..tx_bytes_read]);
-
+                try tx_reader.advanceBytes(.copy, tx_buf[0..tx_bytes_read], {});
                 self.next_read = .transaction;
                 return tx_buf[0..tx_bytes_read];
             },

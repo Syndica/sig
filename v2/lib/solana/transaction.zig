@@ -2,7 +2,7 @@ const std = @import("std");
 const tracy = @import("tracy");
 const lib = @import("../lib.zig");
 
-const bincode = lib.solana.bincode_2;
+const bincode = lib.solana.bincode;
 
 const Signature = lib.solana.Signature;
 const Pubkey = lib.solana.Pubkey;
