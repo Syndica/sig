@@ -1237,7 +1237,7 @@
         .name = "move_stake_and_move_lamports_ixs",
         .pubkey = "7bTK6Jis8Xpfrs8ZoUfiMDPazTcdPcTWheZFJTA5Z6X4",
         .description = "Enable MoveStake and MoveLamports stake program instructions #1610",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "deprecate_legacy_vote_ixs",
