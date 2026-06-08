@@ -165,7 +165,7 @@
         .name = "curve25519_syscall_enabled",
         .pubkey = "7rcw5UtqgDTBBv2EcynNfYckgdAaH1MAsCjKgXMkN7Ri",
         .description = "enable curve25519 syscalls",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "versioned_tx_message_enabled",
