@@ -227,10 +227,6 @@ pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
         .@"gossip:source_to_snapshot",
         .@"snapshot:source_from_gossip",
     }),
-    .gossip_source_to_snapshot = .initMany(&.{
-        .@"gossip:source_to_snapshot",
-        .@"snapshot:source_from_gossip",
-    }),
     .snapshot_ready_to_accounts_db = .initMany(&.{
         .@"snapshot:ready_snapshot_out",
         .@"accounts_db:ready_snapshot_in",
