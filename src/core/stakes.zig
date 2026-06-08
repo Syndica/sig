@@ -23,6 +23,7 @@ const Stake = StakeStateV2.Stake;
 const Meta = StakeStateV2.Meta;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateV3 = sig.runtime.program.vote.state.VoteStateV3;
+const VoteStateV4 = sig.runtime.program.vote.state.VoteStateV4;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
 
 const RwMux = sig.sync.RwMux;
@@ -33,6 +34,18 @@ const createTestVoteAccountWithAuthorized =
     sig.runtime.program.vote.state.createTestVoteAccountWithAuthorized;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
+
+/// Maximum number of vote accounts allowed to participate per epoch under
+/// Alpenglow / SIMD-0357 (Validator Admission Ticket).
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/runtime/src/bank.rs#L245
+pub const MAX_ALPENGLOW_VOTE_ACCOUNTS: usize = 2000;
+
+/// Lamports burned from each admitted vote account at every epoch boundary
+/// when both `alpenglow` and `validator_admission_ticket` are active
+/// (1.6 SOL). Per SIMD-0357 the burn is transferred to the incinerator
+/// account.
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/runtime/src/bank.rs#L249
+pub const VAT_TO_BURN_PER_EPOCH: u64 = 1_600_000_000;
 
 pub const StakesType = enum {
     delegation,
@@ -283,6 +296,35 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             };
         }
 
+        /// SIMD-0357: returns a `Stakes(.delegation)` whose vote accounts have
+        /// been filtered to the top participants (see
+        /// `VoteAccounts.cloneAndFilterForVat`). Stake-account delegations and
+        /// stake history are intentionally discarded; the caller only needs
+        /// the filtered vote accounts to derive `EpochStakes`.
+        ///
+        /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/runtime/src/stakes.rs#L200
+        pub fn cloneAndFilterForVat(
+            self: *const Self,
+            allocator: Allocator,
+            max_vote_accounts: usize,
+            minimum_vote_account_balance: u64,
+        ) Allocator.Error!Stakes(.delegation) {
+            const vote_accounts = try self.vote_accounts.cloneAndFilterForVat(
+                allocator,
+                max_vote_accounts,
+                minimum_vote_account_balance,
+            );
+            errdefer vote_accounts.deinit(allocator);
+
+            return .{
+                .vote_accounts = vote_accounts,
+                .stake_accounts = .empty,
+                .unused = 0,
+                .epoch = self.epoch,
+                .stake_history = .INIT,
+            };
+        }
+
         pub fn calculateStake(
             self: *const Self,
             pubkey: Pubkey,
@@ -501,6 +543,97 @@ pub const VoteAccounts = struct {
         deinitMapAndValues(allocator, self.vote_accounts);
         var staked_nodes = self.staked_nodes;
         staked_nodes.deinit(allocator);
+    }
+
+    /// SIMD-0357: Validator Admission Ticket filter.
+    ///
+    /// Returns a cloned `VoteAccounts` containing only those entries that:
+    ///   1. carry a compressed BLS pubkey (VoteStateV4 only),
+    ///   2. have non-zero delegated stake, and
+    ///   3. hold at least `minimum_vote_account_balance` lamports.
+    ///
+    /// If the filtered set exceeds `max_vote_accounts`, the set is truncated
+    /// to the top entries by stake. Per SIMD-0357 we additionally drop *all*
+    /// entries whose stake equals the first truncated entry's stake (the
+    /// "border" stake), so no Pubkey-based tiebreak can be ground.
+    ///
+    /// Uses the caller's allocator for the returned map and for the resulting
+    /// `VoteAccount` reference-counted clones (which acquire, not duplicate,
+    /// the underlying decoded state).
+    ///
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/vote/src/vote_account.rs#L197
+    pub fn cloneAndFilterForVat(
+        self: *const VoteAccounts,
+        allocator: Allocator,
+        max_vote_accounts: usize,
+        minimum_vote_account_balance: u64,
+    ) Allocator.Error!VoteAccounts {
+        std.debug.assert(max_vote_accounts > 0);
+
+        const Entry = struct { pubkey: Pubkey, stake: u64, account: VoteAccount };
+
+        var entries = try std.ArrayListUnmanaged(Entry).initCapacity(
+            allocator,
+            @min(max_vote_accounts, self.vote_accounts.count()),
+        );
+        defer entries.deinit(allocator);
+
+        for (self.vote_accounts.keys(), self.vote_accounts.values()) |pubkey, value| {
+            const has_bls = switch (value.account.state) {
+                .v3 => false,
+                .v4 => |s| s.bls_pubkey_compressed != null,
+            };
+            const has_stake = value.stake != 0;
+            const has_balance = value.account.account.lamports >= minimum_vote_account_balance;
+            if (!has_bls or !has_stake or !has_balance) continue;
+            try entries.append(allocator, .{
+                .pubkey = pubkey,
+                .stake = value.stake,
+                .account = value.account,
+            });
+        }
+
+        if (entries.items.len > max_vote_accounts) {
+            // Sort by stake descending. Agave uses a partial sort
+            // (select_nth_unstable_by) for performance; we use a full unstable
+            // sort here since the boundary stake check below is identical and
+            // the input size (≤ ~10k) makes the asymptotic difference
+            // negligible.
+            std.sort.pdq(Entry, entries.items, {}, struct {
+                fn lessThan(_: void, a: Entry, b: Entry) bool {
+                    return a.stake > b.stake;
+                }
+            }.lessThan);
+            const floor_stake = entries.items[max_vote_accounts].stake;
+            // Per SIMD-0357 drop everything with stake <= the first truncated
+            // entry, so Pubkey ordering can never be the tiebreaker.
+            var write: usize = 0;
+            for (entries.items) |item| {
+                if (item.stake > floor_stake) {
+                    entries.items[write] = item;
+                    write += 1;
+                }
+            }
+            entries.shrinkRetainingCapacity(write);
+        }
+
+        var filtered_map: StakeAndVoteAccountsMap = .{};
+        errdefer deinitMapAndValues(allocator, filtered_map);
+        try filtered_map.ensureTotalCapacity(allocator, entries.items.len);
+        for (entries.items) |item| {
+            filtered_map.putAssumeCapacityNoClobber(item.pubkey, .{
+                .stake = item.stake,
+                .account = item.account.getAcquire(),
+            });
+        }
+
+        var staked_nodes = try computeStakedNodes(allocator, &filtered_map);
+        errdefer staked_nodes.deinit(allocator);
+
+        return .{
+            .vote_accounts = filtered_map,
+            .staked_nodes = staked_nodes,
+        };
     }
 
     pub fn getAccount(self: *const VoteAccounts, pubkey: Pubkey) ?VoteAccount {
@@ -1978,4 +2111,290 @@ test "stakes activate epoch" {
     }
 
     try stakes_cache.activateEpoch(allocator, 1, null);
+}
+
+// ── SIMD-0357: Validator Admission Ticket filter tests ────────────────
+
+/// Build a v4 VoteAccount with the given delegated stake, lamports, and
+/// optional BLS pubkey for the SIMD-0357 filter tests. Mirrors agave's
+/// `new_rand_vote_account` / `new_staked_vote_accounts` (runtime/src/test_utils.rs).
+fn createTestVatVoteAccount(
+    allocator: Allocator,
+    random: std.Random,
+    lamports: u64,
+    set_bls_pubkey: bool,
+) Allocator.Error!VoteAccount {
+    var v4 = VoteStateV4.DEFAULT;
+    v4.node_pubkey = .initRandom(random);
+    v4.withdrawer = .initRandom(random);
+    v4.inflation_rewards_collector = .initRandom(random);
+    v4.block_revenue_collector = v4.node_pubkey;
+    v4.authorized_voters = try sig.runtime.program.vote.state.AuthorizedVoters.init(
+        allocator,
+        0,
+        .initRandom(random),
+    );
+    if (set_bls_pubkey) v4.bls_pubkey_compressed = [_]u8{0xAB} ** 48;
+    errdefer v4.deinit(allocator);
+
+    return VoteAccount.init(
+        allocator,
+        .{ .lamports = lamports, .owner = vote_program.ID },
+        .{ .v4 = v4 },
+    );
+}
+
+/// Insert a fresh v4 vote account with the given stake/lamports/bls into
+/// `vote_accounts`. Takes ownership; freed via the standard deinit path.
+fn insertTestVatVoteAccount(
+    allocator: Allocator,
+    random: std.Random,
+    vote_accounts: *VoteAccounts,
+    stake: u64,
+    lamports: u64,
+    set_bls_pubkey: bool,
+) !void {
+    var account = try createTestVatVoteAccount(allocator, random, lamports, set_bls_pubkey);
+    errdefer account.deinit(allocator);
+    try vote_accounts.vote_accounts.put(
+        allocator,
+        Pubkey.initRandom(random),
+        .{ .stake = stake, .account = account },
+    );
+}
+
+const VAT_TEST_MIN_BALANCE: u64 = 1;
+
+test "VoteAccounts.cloneAndFilterForVat truncates" {
+    // Mirrors agave's test_clone_and_filter_for_vat_truncates.
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+    const current_limit: usize = 300;
+
+    var vote_accounts: VoteAccounts = .{};
+    defer vote_accounts.deinit(allocator);
+    for (0..current_limit) |i| {
+        try insertTestVatVoteAccount(
+            allocator,
+            random,
+            &vote_accounts,
+            @as(u64, @intCast(i)) + 1, // unique stake per account
+            10_000_000_000,
+            true,
+        );
+    }
+
+    // Limit larger than population: keep everyone.
+    {
+        var filtered = try vote_accounts.cloneAndFilterForVat(
+            allocator,
+            current_limit + 50,
+            VAT_TEST_MIN_BALANCE,
+        );
+        defer filtered.deinit(allocator);
+        try std.testing.expectEqual(
+            vote_accounts.vote_accounts.count(),
+            filtered.vote_accounts.count(),
+        );
+    }
+
+    // Limit smaller than population: truncate.
+    const lower_limit: usize = current_limit - 100;
+    var filtered = try vote_accounts.cloneAndFilterForVat(
+        allocator,
+        lower_limit,
+        VAT_TEST_MIN_BALANCE,
+    );
+    defer filtered.deinit(allocator);
+    try std.testing.expect(filtered.vote_accounts.count() <= lower_limit);
+
+    // Every kept account exists in the original with the same stake.
+    for (filtered.vote_accounts.keys(), filtered.vote_accounts.values()) |pubkey, value| {
+        const orig = vote_accounts.vote_accounts.get(pubkey) orelse
+            return error.MissingPubkey;
+        try std.testing.expectEqual(orig.stake, value.stake);
+    }
+
+    // Every kept account has stake strictly greater than every truncated one.
+    var min_kept: u64 = std.math.maxInt(u64);
+    for (filtered.vote_accounts.values()) |v| {
+        if (v.stake < min_kept) min_kept = v.stake;
+    }
+    for (vote_accounts.vote_accounts.keys(), vote_accounts.vote_accounts.values()) |k, v| {
+        if (v.stake < min_kept) {
+            try std.testing.expect(filtered.vote_accounts.get(k) == null);
+        }
+    }
+}
+
+test "VoteAccounts.cloneAndFilterForVat filters non-alpenglow" {
+    // Mirrors agave's test_clone_and_filter_for_vat_filters_non_alpenglow.
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+    const with_bls: usize = MAX_ALPENGLOW_VOTE_ACCOUNTS;
+    const without_bls: usize = 200;
+
+    var vote_accounts: VoteAccounts = .{};
+    defer vote_accounts.deinit(allocator);
+    var stake: u64 = 1;
+    for (0..with_bls) |_| {
+        try insertTestVatVoteAccount(
+            allocator,
+            random,
+            &vote_accounts,
+            stake,
+            10_000_000_000,
+            true,
+        );
+        stake += 1;
+    }
+    for (0..without_bls) |_| {
+        try insertTestVatVoteAccount(
+            allocator,
+            random,
+            &vote_accounts,
+            stake,
+            10_000_000_000,
+            false,
+        );
+        stake += 1;
+    }
+
+    {
+        // High limit: kicks out exactly the non-BLS ones.
+        var filtered = try vote_accounts.cloneAndFilterForVat(
+            allocator,
+            with_bls + 100,
+            VAT_TEST_MIN_BALANCE,
+        );
+        defer filtered.deinit(allocator);
+        try std.testing.expectEqual(with_bls, filtered.vote_accounts.count());
+        for (filtered.vote_accounts.values()) |v| {
+            switch (v.account.state) {
+                .v4 => |*s| try std.testing.expect(s.bls_pubkey_compressed != null),
+                .v3 => return error.UnexpectedV3,
+            }
+        }
+    }
+
+    {
+        // Low limit: still all-BLS, plus truncated.
+        const low_limit: usize = with_bls - 100;
+        var filtered = try vote_accounts.cloneAndFilterForVat(
+            allocator,
+            low_limit,
+            VAT_TEST_MIN_BALANCE,
+        );
+        defer filtered.deinit(allocator);
+        try std.testing.expect(filtered.vote_accounts.count() <= low_limit);
+        for (filtered.vote_accounts.values()) |v| {
+            switch (v.account.state) {
+                .v4 => |*s| try std.testing.expect(s.bls_pubkey_compressed != null),
+                .v3 => return error.UnexpectedV3,
+            }
+        }
+    }
+}
+
+test "VoteAccounts.cloneAndFilterForVat same stake at border" {
+    // Mirrors agave's test_clone_and_filter_for_vat_same_stake_at_border.
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+    const max: usize = MAX_ALPENGLOW_VOTE_ACCOUNTS;
+    const num_accounts: usize = max + 2;
+    // The first `max - 10` accounts get unique stakes 100..(max - 10 + 100);
+    // the remaining 12 accounts all share stake=10. With limit=max the boundary
+    // entry has stake=10, so every tied account is dropped.
+    const expected_kept: usize = max - 10;
+
+    var vote_accounts: VoteAccounts = .{};
+    defer vote_accounts.deinit(allocator);
+    for (0..num_accounts) |index| {
+        const stake: u64 = if (index < max - 10)
+            100 + @as(u64, @intCast(index))
+        else
+            10;
+        try insertTestVatVoteAccount(allocator, random, &vote_accounts, stake, 10_000_000_000, true);
+    }
+
+    // High limit ⇒ keep everything.
+    {
+        var filtered = try vote_accounts.cloneAndFilterForVat(
+            allocator,
+            num_accounts,
+            VAT_TEST_MIN_BALANCE,
+        );
+        defer filtered.deinit(allocator);
+        try std.testing.expectEqual(num_accounts, filtered.vote_accounts.count());
+    }
+
+    // Truncating at max ⇒ all tied border entries dropped.
+    var filtered = try vote_accounts.cloneAndFilterForVat(
+        allocator,
+        max,
+        VAT_TEST_MIN_BALANCE,
+    );
+    defer filtered.deinit(allocator);
+    try std.testing.expectEqual(expected_kept, filtered.vote_accounts.count());
+}
+
+test "VoteAccounts.cloneAndFilterForVat not enough lamports" {
+    // Mirrors agave's test_clone_and_filter_for_vat_not_enough_lamports.
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+    const max: usize = MAX_ALPENGLOW_VOTE_ACCOUNTS;
+    const entries_to_modify: usize = max / 10;
+
+    var vote_accounts: VoteAccounts = .{};
+    defer vote_accounts.deinit(allocator);
+    for (0..max) |index| {
+        const lamports: u64 = if (index < entries_to_modify)
+            VAT_TO_BURN_PER_EPOCH - 1
+        else
+            10_000_000_000;
+        try insertTestVatVoteAccount(
+            allocator,
+            random,
+            &vote_accounts,
+            @as(u64, @intCast(index)) + 1,
+            lamports,
+            true,
+        );
+    }
+
+    var filtered = try vote_accounts.cloneAndFilterForVat(
+        allocator,
+        max,
+        VAT_TO_BURN_PER_EPOCH,
+    );
+    defer filtered.deinit(allocator);
+    try std.testing.expect(filtered.vote_accounts.count() <= max - entries_to_modify);
+}
+
+test "VoteAccounts.cloneAndFilterForVat empty accounts" {
+    // Mirrors agave's test_clone_and_filter_for_vat_empty_accounts.
+    // Everyone shares the same stake, and the limit is smaller than the
+    // population, so the entire set ties at the boundary and is dropped.
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+    const current_limit: usize = 300;
+
+    var vote_accounts: VoteAccounts = .{};
+    defer vote_accounts.deinit(allocator);
+    for (0..current_limit) |_| {
+        try insertTestVatVoteAccount(allocator, random, &vote_accounts, 100, 10_000_000_000, true);
+    }
+
+    var filtered = try vote_accounts.cloneAndFilterForVat(
+        allocator,
+        current_limit - 50,
+        VAT_TEST_MIN_BALANCE,
+    );
+    defer filtered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), filtered.vote_accounts.count());
 }
