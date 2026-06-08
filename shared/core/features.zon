@@ -729,7 +729,7 @@
         .name = "relax_authority_signer_check_for_lookup_table_creation",
         .pubkey = "FKAcEvNgSY79RpqsPNUV5gDyumopH4cEHqUxyfm8b8Ap",
         .description = "relax authority signer check for lookup table creation #27205",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "stop_sibling_instruction_search_at_parent",
