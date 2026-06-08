@@ -312,15 +312,25 @@ fn executeTxnContext(
             //     @panic("background account hasher not implemented");
             // }
 
-            // NOTE: Mirror Agave's `Bank::new_for_txn_tests`, which calls
-            // `apply_activated_features()` (program-cache only, via
-            // `add_active_builtin_programs()`) and does NOT call
-            // `add_builtin_program_accounts()`. Builtin and precompile program
-            // accounts are therefore intentionally not seeded into accounts-db
-            // here: fixtures must include any program account they invoke, and
-            // missing ones must surface as `TransactionError::ProgramAccountNotFound`
-            // during account loading rather than executing against a synthetic
-            // native-loader stub.
+            // NOTE: Mirror the txn-fixture harness used by solfuzz-agave (the
+            // conformance vector generator) at agave-v4.1.0-beta.1. That harness
+            // builds the bank via `Bank::new_for_txn_tests` (a fork-only helper in
+            // firedancer-io/agave, not upstream anza-xyz/agave), which only runs
+            // `apply_activated_features()`, populating the program cache via
+            // `add_active_builtin_programs()`, and deliberately skips
+            // `add_builtin_program_accounts()` (the latter is reached only from
+            // `compute_and_apply_genesis_features()`, which this path bypasses).
+            // Builtin and precompile program accounts are therefore not seeded
+            // into accounts-db here: each fixture is expected to carry any program
+            // account it invokes, and missing ones must surface as
+            // `TransactionError::ProgramAccountNotFound` during account loading
+            // rather than executing against a synthetic native-loader stub.
+            //
+            // [solfuzz-agave] call site:
+            //   https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.1.0-beta.1/src/txn.rs#L364
+            // [agave] `Bank::new_for_txn_tests` (note: only `apply_activated_features`
+            // is invoked, not `add_builtin_program_accounts`):
+            //   https://github.com/firedancer-io/agave/blob/c333acac8d88168384e010c4d08462ab3c226b35/runtime/src/bank.rs#L1822-L1918
 
             vm_environment = vm.Environment.initV1(
                 &feature_set,
