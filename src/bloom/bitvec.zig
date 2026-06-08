@@ -1,6 +1,6 @@
 const std = @import("std");
 const DynamicBitSet = std.bit_set.DynamicBitSet;
-const bincode = @import("../bincode/bincode.zig");
+const bincode = @import("shared").bincode;
 const testing = std.testing;
 
 /// ***BitVec*** uses a u64 as it's Block

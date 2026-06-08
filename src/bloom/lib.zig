@@ -1,5 +1,7 @@
-pub const bit_set = @import("bit_set.zig");
-pub const bit_vec = @import("bit_vec.zig");
+const shared = @import("shared");
+
+pub const bit_set = shared.bloom.bit_set;
+pub const bit_vec = shared.bloom.bit_vec;
 pub const bitvec = @import("bitvec.zig");
 pub const bloom = @import("bloom.zig");
 
