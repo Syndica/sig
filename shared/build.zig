@@ -35,8 +35,15 @@ pub fn build(b: *Build) void {
             "without these features is a compile-time error so the performance hit is " ++
             "not silently accepted.",
     ) orelse (optimize == .Debug);
+    const enable_tracy = b.option(bool, "enable-tracy", "Enables tracy") orelse false;
+    const tracy_on_demand = b.option(
+        bool,
+        "tracy-on-demand",
+        "Enables tracy on-demand mode. Only has an effect if tracy is enabled via enable-tracy.",
+    ) orelse false;
 
     const test_step = b.step("test", "Run shared unit tests");
+    const feature_set_id_step = b.step("feature_set_id", "Print the generated feature set ID");
 
     const build_options = b.addOptions();
     build_options.addOption(bool, "long_tests", long_tests);
@@ -55,19 +62,22 @@ pub fn build(b: *Build) void {
     const tracy_mod = b.dependency("tracy", .{
         .target = target,
         .optimize = optimize,
-        .tracy_enable = false,
-        .tracy_on_demand = false,
+        .tracy_enable = enable_tracy,
+        .tracy_on_demand = tracy_on_demand,
         .tracy_no_system_tracing = false,
         .tracy_callstack = 6,
     }).module("tracy");
     tracy_mod.sanitize_c = .off;
 
-    const std14_mod = b.createModule(.{
+    const std14_mod = b.addModule("std14", .{
         .root_source_file = b.path("std14.zig"),
         .target = target,
         .optimize = optimize,
     });
-    const feature_set_id_gen = b.addRunArtifact(addFeatureSetIdGenerator(b, use_llvm));
+    const feature_set_id_exe = addFeatureSetIdGenerator(b, use_llvm);
+    const print_feature_set_id = b.addRunArtifact(feature_set_id_exe);
+    feature_set_id_step.dependOn(&print_feature_set_id.step);
+    const feature_set_id_gen = b.addRunArtifact(feature_set_id_exe);
     const feature_set_id = b.createModule(.{
         .root_source_file = feature_set_id_gen.addOutputFileArg("feature-set-id.zig"),
     });
@@ -89,7 +99,7 @@ pub fn build(b: *Build) void {
         .{ .name = "tracy", .module = tracy_mod },
     };
 
-    const shared_mod = b.createModule(.{
+    const shared_mod = b.addModule("shared", .{
         .root_source_file = b.path("lib.zig"),
         .target = target,
         .optimize = optimize,
@@ -112,7 +122,7 @@ fn generateTable(b: *Build, use_llvm: bool) Build.LazyPath {
         .root_module = b.createModule(.{
             .target = b.graph.host,
             .optimize = .Debug,
-            .root_source_file = b.path("../scripts/generator_chain.zig"),
+            .root_source_file = b.path("scripts/generator_chain.zig"),
         }),
         .use_llvm = use_llvm,
     });
@@ -130,7 +140,7 @@ fn addFeatureSetIdGenerator(b: *Build, use_llvm: bool) *Build.Step.Compile {
         .root_module = b.createModule(.{
             .target = b.graph.host,
             .optimize = .Debug,
-            .root_source_file = b.path("../scripts/gen_feature_set_id.zig"),
+            .root_source_file = b.path("scripts/gen_feature_set_id.zig"),
             .imports = &.{
                 .{
                     .name = "base58",

@@ -11,6 +11,7 @@
         "data",
         "lib.zig",
         "runtime",
+        "scripts",
         "std14.zig",
         "sync",
         "time",
