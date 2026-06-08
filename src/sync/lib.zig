@@ -1,4 +1,4 @@
-const std = @import("std");
+const shared = @import("shared");
 
 pub const channel = @import("channel.zig");
 pub const mux = @import("mux.zig");
@@ -11,13 +11,7 @@ pub const exit = @import("exit.zig");
 pub const Channel = channel.Channel;
 pub const Mux = mux.Mux;
 pub const RwMux = mux.RwMux;
-
-/// We use DefaultRwLock to avoid UB in pthread's RwLock, which relies on some
-/// assumptions that Sig does not conform to:
-/// - it must be pinned to a memory location
-/// - it does not support recursive lockShared calls from the same thread
-pub const RwLock = std.Thread.RwLock.DefaultRwLock;
-
+pub const RwLock = shared.sync.RwLock;
 pub const OnceCell = once_cell.OnceCell;
 pub const ReferenceCounter = reference_counter.ReferenceCounter;
 pub const Rc = reference_counter.Rc;
