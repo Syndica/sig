@@ -65,6 +65,7 @@ pub fn processNewEpoch(
         slot,
         &slot_constants.ancestors,
         &slot_constants.feature_set,
+        &slot_constants.rent_collector.rent,
         &slot_state.stakes_cache,
         epoch_tracker,
     );
@@ -84,6 +85,7 @@ pub fn updateEpochStakes(
     slot: Slot,
     ancestors: *const Ancestors,
     feature_set: *const FeatureSet,
+    rent: *const Rent,
     stakes_cache: *StakesCache,
     epoch_tracker: *sig.core.EpochTracker,
 ) !void {
@@ -93,8 +95,11 @@ pub fn updateEpochStakes(
     } else {
         const epoch_stakes = try getEpochStakes(
             allocator,
+            slot,
             epoch_tracker.epoch_schedule.getLeaderScheduleEpoch(slot),
             stakes_cache,
+            rent,
+            feature_set,
         );
         errdefer epoch_stakes.deinit(allocator);
 
@@ -115,11 +120,21 @@ pub fn updateEpochStakes(
 ///  - mapping of authorized voters (node IDs) to their vote accounts active in this epoch.
 ///  - mapping of vote accounts to their authorized voters.
 /// The authorized voters are determined based on the vote state and leader schedule epoch.
+///
+/// `slot`, `rent`, and `feature_set` are threaded through so that the SIMD-0357
+/// Validator Admission Ticket filter can be applied here once the
+/// `validator_admission_ticket` feature is wired up (next commit).
 pub fn getEpochStakes(
     allocator: Allocator,
+    slot: Slot,
     leader_schedule_epoch: Epoch,
     stakes_cache: *StakesCache,
+    rent: *const Rent,
+    feature_set: *const FeatureSet,
 ) !EpochStakes {
+    _ = slot;
+    _ = rent;
+    _ = feature_set;
     const new_stakes = blk: {
         const stakes, var stakes_lg = stakes_cache.stakes.readWithLock();
         defer stakes_lg.unlock();
@@ -898,6 +913,7 @@ test updateEpochStakes {
             0,
             &ancestors,
             &.ALL_DISABLED,
+            &Rent.INIT,
             &stakes_cache,
             &epoch_tracker,
         );
@@ -925,8 +941,11 @@ test getEpochStakes {
     { // Empty stakes
         const epoch_stakes = try getEpochStakes(
             allocator,
+            0,
             leader_schedule_epoch,
             &stakes_cache,
+            &Rent.INIT,
+            &.ALL_DISABLED,
         );
         defer epoch_stakes.deinit(allocator);
 
@@ -972,8 +991,11 @@ test getEpochStakes {
     { // Non-Empty stakes
         const epoch_stakes = try getEpochStakes(
             allocator,
+            0,
             leader_schedule_epoch,
             &stakes_cache,
+            &Rent.INIT,
+            &.ALL_DISABLED,
         );
         defer epoch_stakes.deinit(allocator);
 

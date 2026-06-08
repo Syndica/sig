@@ -605,6 +605,7 @@ pub fn trackNewSlots(
                     slot,
                     &constants.ancestors,
                     &constants.feature_set,
+                    &constants.rent_collector.rent,
                     &state.stakes_cache,
                     epoch_tracker,
                 );

@@ -1163,8 +1163,11 @@ pub fn randomEpochStakes(
 
     return sig.replay.epoch_transitions.getEpochStakes(
         allocator,
+        0,
         options.epoch + 1,
         &stakes_cache,
+        &sig.runtime.sysvar.Rent.INIT,
+        &sig.core.FeatureSet.ALL_DISABLED,
     );
 }
 
