@@ -1119,7 +1119,7 @@
         .name = "allow_commission_decrease_at_any_time",
         .pubkey = "decoMktMcnmiq6t3u7g5BfgcQu91nKZr6RvMYf9z1Jb",
         .description = "Allow commission decrease at any time in epoch #33843",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "merkle_conflict_duplicate_proofs",
