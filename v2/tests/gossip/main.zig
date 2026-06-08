@@ -69,10 +69,8 @@ pub fn main() !void {
         packet.len = @intCast(fbw.end);
     }
 
-    var spawned = try topology.spawnSandboxed(&service_map);
-
-    // var spawned: topology.NoSandbox = undefined;
-    // try topology.spawnNoSandbox(&spawned, &service_map);
+    var spawned: topology.Children = undefined;
+    try spawned.spawn(.sandboxed, &service_map);
 
     const activities = spawned.activityViews();
 
