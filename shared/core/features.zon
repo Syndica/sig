@@ -795,7 +795,7 @@
         .name = "enable_alt_bn128_syscall",
         .pubkey = "A16q37opZdQMCbe5qJ6xpBB9usykfv8jZaMkxvZQi4GJ",
         .description = "add alt_bn128 syscalls #27961",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_program_redeployment_cooldown",

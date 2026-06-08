@@ -197,7 +197,6 @@ pub const Syscall = enum {
         .sol_curve_validate_point = .{ .feature = .curve25519_syscall_enabled },
         .sol_curve_group_op = .{ .feature = .curve25519_syscall_enabled },
         .sol_curve_multiscalar_mul = .{ .feature = .curve25519_syscall_enabled },
-        .sol_alt_bn128_group_op = .{ .feature = .enable_alt_bn128_syscall },
 
         .sol_curve_decompress = .{ .feature = .enable_bls12_381_syscall },
         .sol_curve_pairing_map = .{ .feature = .enable_bls12_381_syscall },
