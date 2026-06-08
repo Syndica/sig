@@ -5,6 +5,7 @@
     .leader_schedule_file = "schedule.txt",
     .gossip = .{
         .port = 8001,
+        .advertise_tvu_port = true,
     },
     .shred_network = .{
         .recv_port = 8002,
@@ -17,5 +18,10 @@
         .folder = "./validator",
         // NOTE: currently all validators are allowed as snapshot sources, but this can be configured to a specific set of pubkeys.
         .known_validators = .{"*"},
+    },
+    .accounts_db = .{
+        .file = "./validator/accounts.db",
+        .rooted = .{ .gb = 8 }, // mainnet needs 64, testnet only 8 or so
+        .unrooted = .{ .gb = 8 }, // TODO
     },
 }

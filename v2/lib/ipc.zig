@@ -10,7 +10,6 @@ comptime {
 pub const ResolvedArgs = extern struct {
     stderr: std.os.linux.fd_t,
     exit: *align(page_size_min) Exit,
-    linux_auxv: ?[*]std.elf.Auxv,
 
     rw: [max_regions]?[*]align(page_size_min) u8,
     rw_len: [max_regions]usize,
