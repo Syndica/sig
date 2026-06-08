@@ -5,6 +5,7 @@
     .leader_schedule_file = "schedule.txt",
     .gossip = .{
         .port = 8001,
+        .advertise_tvu_port = true,
     },
     .shred_network = .{
         .recv_port = 8002,

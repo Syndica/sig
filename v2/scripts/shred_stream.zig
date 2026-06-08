@@ -1,0 +1,1335 @@
+//! Streams raw shreds from an Agave ledger to a UDP target.
+
+const std = @import("std");
+const Ring = @import("ipc-ring").Ring;
+const rocks = @import("rocksdb");
+const rocks_c = @import("rocksdb-c");
+
+const Allocator = std.mem.Allocator;
+const Slot = u64;
+
+const agave_cf_default = "default";
+const agave_cf_meta = "meta";
+const agave_cf_data_shred = "data_shred";
+const agave_cf_code_shred = "code_shred";
+const max_shred_packet_bytes: usize = 1232;
+const producer_publish_packets: usize = 32;
+const stream_queue_packets = 8192;
+const no_current_slot = std.math.maxInt(Slot);
+
+const Config = struct {
+    ledger: []const u8,
+    target: []const u8,
+    start_slot: ?Slot = null,
+    end_slot: ?Slot = null,
+    rate_hz: ?f64 = null,
+    dry_run: bool = false,
+
+    fn slotSelected(self: Config, slot: Slot) bool {
+        if (self.start_slot) |start_slot| {
+            if (slot < start_slot) return false;
+        }
+        return !self.pastEndSlot(slot);
+    }
+
+    fn pastEndSlot(self: Config, slot: Slot) bool {
+        return if (self.end_slot) |end_slot| slot > end_slot else false;
+    }
+};
+
+const PartialConfig = struct {
+    ledger: ?[]const u8 = null,
+    target: ?[]const u8 = null,
+    start_slot: ?Slot = null,
+    end_slot: ?Slot = null,
+    rate_hz: ?f64 = null,
+    dry_run: bool = false,
+
+    fn finalize(self: PartialConfig) ParseArgsError!Config {
+        const ledger = self.ledger orelse {
+            std.debug.print("missing required argument: --ledger <path>\n", .{});
+            return error.InvalidArguments;
+        };
+        const target = self.target orelse {
+            std.debug.print("missing required argument: --target <ip:port>\n", .{});
+            return error.InvalidArguments;
+        };
+
+        if (self.start_slot != null and
+            self.end_slot != null and
+            self.end_slot.? < self.start_slot.?)
+        {
+            std.debug.print("--end-slot must be greater than or equal to --start-slot\n", .{});
+            return error.InvalidArguments;
+        }
+
+        return .{
+            .ledger = ledger,
+            .target = target,
+            .start_slot = self.start_slot,
+            .end_slot = self.end_slot,
+            .rate_hz = self.rate_hz,
+            .dry_run = self.dry_run,
+        };
+    }
+};
+
+const ParseResult = union(enum) {
+    config: Config,
+    help,
+};
+
+const ParseArgsError = error{
+    InvalidArguments,
+};
+
+const Arg = enum {
+    help,
+    ledger,
+    target,
+    start_slot,
+    end_slot,
+    rate_hz,
+    dry_run,
+
+    fn parse(raw: []const u8) ?Arg {
+        if (std.mem.eql(u8, raw, "--help") or std.mem.eql(u8, raw, "-h")) return .help;
+        if (std.mem.eql(u8, raw, "--ledger")) return .ledger;
+        if (std.mem.eql(u8, raw, "--target")) return .target;
+        if (std.mem.eql(u8, raw, "--start-slot")) return .start_slot;
+        if (std.mem.eql(u8, raw, "--end-slot")) return .end_slot;
+        if (std.mem.eql(u8, raw, "--rate-hz")) return .rate_hz;
+        if (std.mem.eql(u8, raw, "--dry-run")) return .dry_run;
+        return null;
+    }
+
+    fn name(arg: Arg) []const u8 {
+        return switch (arg) {
+            .help => "--help",
+            .ledger => "--ledger",
+            .target => "--target",
+            .start_slot => "--start-slot",
+            .end_slot => "--end-slot",
+            .rate_hz => "--rate-hz",
+            .dry_run => "--dry-run",
+        };
+    }
+};
+
+pub fn main() !void {
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    const gpa = gpa_state.allocator();
+
+    const argv = try std.process.argsAlloc(gpa);
+    defer std.process.argsFree(gpa, argv);
+
+    const parse_result = parseArgs(argv[1..]) catch |err| switch (err) {
+        error.InvalidArguments => {
+            printHelp();
+            return err;
+        },
+    };
+
+    switch (parse_result) {
+        .help => printHelp(),
+        .config => |config| {
+            var stdout_buf: [1024]u8 = undefined;
+            var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+            const stdout = &stdout_writer.interface;
+
+            try run(gpa, stdout, config);
+            try stdout.flush();
+        },
+    }
+}
+
+fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
+    const target = try std.net.Address.parseIpAndPort(config.target);
+
+    var blockstore = try AgaveBlockstore.open(allocator, config.ledger);
+    defer blockstore.deinit(allocator);
+
+    try stdout.print("shred-stream config:\n", .{});
+    try stdout.print("  ledger: {s}\n", .{config.ledger});
+    try stdout.print("  rocksdb: {s}\n", .{blockstore.rocksdb_path});
+    try stdout.print("  target: {s}\n", .{config.target});
+    try stdout.print("  start_slot: {?d}\n", .{config.start_slot});
+    try stdout.print("  end_slot: {?d}\n", .{config.end_slot});
+    try stdout.print("  rate_hz: {?}\n", .{config.rate_hz});
+    try stdout.print("  dry_run: {}\n", .{config.dry_run});
+    try stdout.print("  column_families:\n", .{});
+    try stdout.print("    {s}: present\n", .{agave_cf_meta});
+    try stdout.print("    {s}: present\n", .{agave_cf_data_shred});
+    try stdout.print("    {s}: {s}\n", .{
+        agave_cf_code_shred,
+        if (blockstore.has_code_shred) "present" else "missing",
+    });
+
+    if (!blockstore.has_code_shred) {
+        try stdout.print(
+            "warning: missing optional {s} column family; streaming data shreds only\n",
+            .{agave_cf_code_shred},
+        );
+    }
+
+    if (config.dry_run) {
+        const stats = try scanLedger(&blockstore, config);
+        try printLedgerStats(stdout, stats);
+    } else {
+        const sockfd = try std.posix.socket(
+            target.any.family,
+            std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC,
+            std.posix.IPPROTO.UDP,
+        );
+        // The net thread borrows this fd. Keep ownership here so every path joins
+        // the net thread before closing the fd exactly once.
+        defer std.posix.close(sockfd);
+
+        var ring: StreamPacketRing = undefined;
+        ring.init();
+
+        var producer_done: std.atomic.Value(bool) = .init(false);
+        var stop: std.atomic.Value(bool) = .init(false);
+        var net_thread_failed: std.atomic.Value(bool) = .init(false);
+        var net_thread_stats: NetThreadStats = .{};
+        var net_progress: NetThreadProgress = .{};
+        var producer_failed: std.atomic.Value(bool) = .init(false);
+        var producer_progress: ProducerProgress = .{};
+        var producer_result: ProducerThreadResult = .{};
+
+        var maybe_net_thread: ?std.Thread = null;
+        var maybe_producer_thread: ?std.Thread = null;
+        errdefer {
+            stop.store(true, .release);
+            producer_done.store(true, .release);
+            if (maybe_producer_thread) |thread| thread.join();
+            if (maybe_net_thread) |thread| thread.join();
+        }
+
+        maybe_net_thread = try std.Thread.spawn(
+            .{},
+            netThreadMain,
+            .{
+                &ring,
+                &producer_done,
+                &stop,
+                &net_thread_stats,
+                &net_progress,
+                &net_thread_failed,
+                sockfd,
+                target,
+                config.rate_hz,
+            },
+        );
+
+        maybe_producer_thread = try std.Thread.spawn(
+            .{},
+            producerThreadMain,
+            .{
+                &blockstore,
+                config,
+                &ring,
+                &producer_done,
+                &stop,
+                &producer_progress,
+                &producer_failed,
+                &producer_result,
+            },
+        );
+
+        try monitorProgress(
+            stdout,
+            &ring,
+            &producer_done,
+            &stop,
+            &producer_progress,
+            &net_progress,
+            config.rate_hz,
+        );
+
+        maybe_producer_thread.?.join();
+        maybe_producer_thread = null;
+        maybe_net_thread.?.join();
+        maybe_net_thread = null;
+
+        try printProducerStats(stdout, producer_result.stats);
+        try printNetThreadStats(stdout, net_thread_stats);
+
+        if (producer_failed.load(.monotonic)) return error.ProducerThreadFailed;
+        if (net_thread_failed.load(.monotonic)) return error.NetThreadFailed;
+    }
+}
+
+const AgaveBlockstore = struct {
+    rocksdb_path: []const u8,
+    db: rocks.DB,
+    column_families: []const rocks.ColumnFamily,
+    has_code_shred: bool,
+
+    fn open(allocator: Allocator, ledger_path: []const u8) !AgaveBlockstore {
+        const rocksdb_path = try resolveRocksDbPath(allocator, ledger_path);
+        errdefer allocator.free(rocksdb_path);
+
+        var available_cfs = try listColumnFamilies(allocator, rocksdb_path);
+        defer available_cfs.deinit(allocator);
+
+        try requireColumnFamily(&available_cfs, agave_cf_default);
+        try requireColumnFamily(&available_cfs, agave_cf_meta);
+        try requireColumnFamily(&available_cfs, agave_cf_data_shred);
+
+        const has_code_shred = available_cfs.contains(agave_cf_code_shred);
+        const cfs = try columnFamilyDescriptions(allocator, has_code_shred);
+        defer allocator.free(cfs);
+
+        const rocksdb_path_z = try allocator.dupeZ(u8, rocksdb_path);
+        defer allocator.free(rocksdb_path_z);
+
+        var err_data: ?rocks.Data = null;
+        defer if (err_data) |err| err.deinit();
+
+        var db, const opened_cfs = rocks.DB.open(
+            allocator,
+            rocksdb_path_z,
+            .{},
+            cfs,
+            true,
+            &err_data,
+        ) catch |err| {
+            if (err_data) |rocks_err| {
+                std.debug.print(
+                    "failed to open RocksDB at {s}: {s}\n",
+                    .{ rocksdb_path, rocks_err.data },
+                );
+            }
+            return err;
+        };
+        errdefer db.deinit();
+        errdefer allocator.free(opened_cfs);
+
+        return .{
+            .rocksdb_path = rocksdb_path,
+            .db = db,
+            .column_families = opened_cfs,
+            .has_code_shred = has_code_shred,
+        };
+    }
+
+    fn deinit(self: *AgaveBlockstore, allocator: Allocator) void {
+        allocator.free(self.column_families);
+        self.db.deinit();
+        allocator.free(self.rocksdb_path);
+    }
+
+    fn columnFamily(self: *const AgaveBlockstore, name: []const u8) !rocks.ColumnFamilyHandle {
+        for (self.column_families) |column_family| {
+            if (std.mem.eql(u8, column_family.name, name)) return column_family.handle;
+        }
+        return error.MissingColumnFamily;
+    }
+};
+
+const LedgerStats = struct {
+    slots: SlotStats,
+    data_shreds: ShredStats,
+    code_shreds: ?ShredStats,
+};
+
+const SlotStats = struct {
+    total: u64 = 0,
+    selected: u64 = 0,
+    first: ?Slot = null,
+    last: ?Slot = null,
+    selected_first: ?Slot = null,
+    selected_last: ?Slot = null,
+
+    fn record(self: *SlotStats, slot: Slot, selected: bool) void {
+        self.total += 1;
+        self.first = if (self.first) |first| @min(first, slot) else slot;
+        self.last = if (self.last) |last| @max(last, slot) else slot;
+
+        if (!selected) return;
+        self.selected += 1;
+        self.selected_first = if (self.selected_first) |first| @min(first, slot) else slot;
+        self.selected_last = if (self.selected_last) |last| @max(last, slot) else slot;
+    }
+};
+
+const ShredKey = struct {
+    slot: Slot,
+    index: u64,
+};
+
+const ShredKind = enum(u8) {
+    data,
+    code,
+
+    fn columnFamilyName(kind: ShredKind) []const u8 {
+        return switch (kind) {
+            .data => agave_cf_data_shred,
+            .code => agave_cf_code_shred,
+        };
+    }
+};
+
+const StreamPacket = extern struct {
+    data: [max_shred_packet_bytes]u8,
+    slot: Slot,
+    shred_index: u64,
+    len: u16,
+    kind: ShredKind,
+};
+
+const StreamPacketRing = Ring(stream_queue_packets, StreamPacket);
+
+const NetThreadStats = struct {
+    data_packets: u64 = 0,
+    code_packets: u64 = 0,
+    payload_bytes: u64 = 0,
+    empty_polls: u64 = 0,
+    send_errors: u64 = 0,
+
+    fn recordPacket(self: *NetThreadStats, packet: *const StreamPacket) void {
+        switch (packet.kind) {
+            .data => self.data_packets += 1,
+            .code => self.code_packets += 1,
+        }
+        self.payload_bytes += packet.len;
+    }
+};
+
+const NetThreadProgress = struct {
+    data_packets: std.atomic.Value(u64) = .init(0),
+    code_packets: std.atomic.Value(u64) = .init(0),
+    payload_bytes: std.atomic.Value(u64) = .init(0),
+    empty_polls: std.atomic.Value(u64) = .init(0),
+    send_errors: std.atomic.Value(u64) = .init(0),
+
+    fn store(self: *NetThreadProgress, stats: NetThreadStats) void {
+        self.data_packets.store(stats.data_packets, .release);
+        self.code_packets.store(stats.code_packets, .release);
+        self.payload_bytes.store(stats.payload_bytes, .release);
+        self.empty_polls.store(stats.empty_polls, .release);
+        self.send_errors.store(stats.send_errors, .release);
+    }
+};
+
+const ProducerStats = struct {
+    slots: u64 = 0,
+    data_packets: u64 = 0,
+    code_packets: u64 = 0,
+    payload_bytes: u64 = 0,
+
+    fn recordSlot(self: *ProducerStats) void {
+        self.slots += 1;
+    }
+
+    fn recordPacket(self: *ProducerStats, kind: ShredKind, payload_len: usize) void {
+        switch (kind) {
+            .data => self.data_packets += 1,
+            .code => self.code_packets += 1,
+        }
+        self.payload_bytes += @intCast(payload_len);
+    }
+};
+
+const ProducerProgress = struct {
+    current_slot: std.atomic.Value(Slot) = .init(no_current_slot),
+    slots: std.atomic.Value(u64) = .init(0),
+    data_packets: std.atomic.Value(u64) = .init(0),
+    code_packets: std.atomic.Value(u64) = .init(0),
+    payload_bytes: std.atomic.Value(u64) = .init(0),
+    full_polls: std.atomic.Value(u64) = .init(0),
+
+    fn store(self: *ProducerProgress, stats: ProducerStats) void {
+        self.slots.store(stats.slots, .release);
+        self.data_packets.store(stats.data_packets, .release);
+        self.code_packets.store(stats.code_packets, .release);
+        self.payload_bytes.store(stats.payload_bytes, .release);
+    }
+};
+
+const ProducerThreadResult = struct {
+    stats: ProducerStats = .{},
+};
+
+const ProgressSnapshot = struct {
+    produced_packets: u64,
+    sent_packets: u64,
+    producer_full_polls: u64,
+    sender_empty_polls: u64,
+
+    fn init(
+        producer_progress: *ProducerProgress,
+        net_progress: *NetThreadProgress,
+    ) ProgressSnapshot {
+        const produced_packets = producer_progress.data_packets.load(.acquire) +
+            producer_progress.code_packets.load(.acquire);
+        const sent_packets = net_progress.data_packets.load(.acquire) +
+            net_progress.code_packets.load(.acquire);
+
+        return .{
+            .produced_packets = produced_packets,
+            .sent_packets = sent_packets,
+            .producer_full_polls = producer_progress.full_polls.load(.acquire),
+            .sender_empty_polls = net_progress.empty_polls.load(.acquire),
+        };
+    }
+};
+
+fn netThreadMain(
+    ring: *StreamPacketRing,
+    done: *std.atomic.Value(bool),
+    stop: *std.atomic.Value(bool),
+    stats: *NetThreadStats,
+    progress: *NetThreadProgress,
+    failed: *std.atomic.Value(bool),
+    sockfd: std.posix.fd_t,
+    target: std.net.Address,
+    rate_hz: ?f64,
+) !void {
+    var reader = ring.get(.reader);
+    netThreadMainInner(
+        &reader,
+        done,
+        stop,
+        stats,
+        progress,
+        sockfd,
+        target,
+        rate_hz,
+    ) catch |err| {
+        failed.store(true, .release);
+        stats.send_errors += 1;
+        progress.store(stats.*);
+        stop.store(true, .release);
+        return err;
+    };
+}
+
+fn netThreadMainInner(
+    reader: *StreamPacketRing.Iterator(.reader),
+    done: *std.atomic.Value(bool),
+    stop: *std.atomic.Value(bool),
+    stats: *NetThreadStats,
+    progress: *NetThreadProgress,
+    sockfd: std.posix.fd_t,
+    target: std.net.Address,
+    rate_hz: ?f64,
+) !void {
+    defer reader.markUsed();
+
+    const packet_interval_ns: ?u64 = if (rate_hz) |rate|
+        @max(1, @as(u64, @intFromFloat(@ceil(@as(f64, @floatFromInt(std.time.ns_per_s)) / rate))))
+    else
+        null;
+    var base_instant: ?std.time.Instant = null;
+    var next_send_offset_ns: u64 = 0;
+
+    while (!stop.load(.acquire) and (!done.load(.acquire) or reader.peek() != null)) {
+        var consumed: usize = 0;
+        while (consumed < producer_publish_packets) {
+            const packet = reader.next() orelse break;
+
+            if (packet_interval_ns) |interval_ns| {
+                const now = try std.time.Instant.now();
+                const now_offset_ns = if (base_instant) |base|
+                    now.since(base)
+                else blk: {
+                    base_instant = now;
+                    break :blk 0;
+                };
+
+                if (now_offset_ns < next_send_offset_ns) {
+                    std.Thread.sleep(next_send_offset_ns - now_offset_ns);
+                }
+
+                const sent = try std.posix.sendto(
+                    sockfd,
+                    packet.data[0..packet.len],
+                    std.posix.MSG.NOSIGNAL,
+                    &target.any,
+                    target.getOsSockLen(),
+                );
+                std.debug.assert(sent == packet.len);
+
+                const after = try std.time.Instant.now();
+                const after_offset_ns = after.since(base_instant.?);
+                next_send_offset_ns = @max(next_send_offset_ns, after_offset_ns) + interval_ns;
+            } else {
+                const sent = try std.posix.sendto(
+                    sockfd,
+                    packet.data[0..packet.len],
+                    std.posix.MSG.NOSIGNAL,
+                    &target.any,
+                    target.getOsSockLen(),
+                );
+                std.debug.assert(sent == packet.len);
+            }
+
+            stats.recordPacket(packet);
+            consumed += 1;
+        }
+
+        if (consumed != 0) {
+            progress.store(stats.*);
+            reader.markUsed();
+            continue;
+        }
+
+        stats.empty_polls += 1;
+        if (stats.empty_polls % 1024 == 0) {
+            progress.empty_polls.store(stats.empty_polls, .release);
+        }
+        std.atomic.spinLoopHint();
+    }
+}
+
+fn producerThreadMain(
+    blockstore: *const AgaveBlockstore,
+    config: Config,
+    ring: *StreamPacketRing,
+    done: *std.atomic.Value(bool),
+    stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
+    failed: *std.atomic.Value(bool),
+    result: *ProducerThreadResult,
+) !void {
+    var writer = ring.get(.writer);
+    result.stats = produceLedgerPackets(blockstore, config, &writer, stop, progress) catch |err| {
+        failed.store(true, .release);
+        stop.store(true, .release);
+        done.store(true, .release);
+        return err;
+    };
+    progress.store(result.stats);
+    done.store(true, .release);
+}
+
+fn monitorProgress(
+    stdout: *std.Io.Writer,
+    ring: *StreamPacketRing,
+    producer_done: *std.atomic.Value(bool),
+    stop: *std.atomic.Value(bool),
+    producer_progress: *ProducerProgress,
+    net_progress: *NetThreadProgress,
+    rate_hz: ?f64,
+) !void {
+    var last_snapshot = ProgressSnapshot.init(producer_progress, net_progress);
+    while (!stop.load(.acquire) and !producer_done.load(.acquire)) {
+        std.Thread.sleep(std.time.ns_per_s);
+        try printProgress(stdout, ring, producer_progress, net_progress, last_snapshot, rate_hz);
+        last_snapshot = ProgressSnapshot.init(producer_progress, net_progress);
+    }
+
+    while (!stop.load(.acquire)) {
+        const queue_packets = ring.tail.value.load(.acquire) -% ring.head.value.load(.acquire);
+        if (queue_packets == 0) break;
+        std.Thread.sleep(std.time.ns_per_s);
+        try printProgress(stdout, ring, producer_progress, net_progress, last_snapshot, rate_hz);
+        last_snapshot = ProgressSnapshot.init(producer_progress, net_progress);
+    }
+}
+
+fn printProgress(
+    stdout: *std.Io.Writer,
+    ring: *StreamPacketRing,
+    producer_progress: *ProducerProgress,
+    net_progress: *NetThreadProgress,
+    last_snapshot: ProgressSnapshot,
+    rate_hz: ?f64,
+) !void {
+    const current_slot = producer_progress.current_slot.load(.acquire);
+    const slots = producer_progress.slots.load(.acquire);
+    const produced_data = producer_progress.data_packets.load(.acquire);
+    const produced_code = producer_progress.code_packets.load(.acquire);
+    const produced_packets = produced_data + produced_code;
+    const sent_data = net_progress.data_packets.load(.acquire);
+    const sent_code = net_progress.code_packets.load(.acquire);
+    const sent_packets = sent_data + sent_code;
+    const send_pps = sent_packets -| last_snapshot.sent_packets;
+    const produced_pps = produced_packets -| last_snapshot.produced_packets;
+    const queue_packets = ring.tail.value.load(.acquire) -% ring.head.value.load(.acquire);
+    const producer_full_polls = producer_progress.full_polls.load(.acquire);
+    const sender_empty_polls = net_progress.empty_polls.load(.acquire);
+    const producer_blocked = queue_packets == stream_queue_packets or
+        producer_full_polls != last_snapshot.producer_full_polls;
+    const net_idle = sender_empty_polls != last_snapshot.sender_empty_polls;
+
+    if (current_slot == no_current_slot) {
+        try stdout.print("slot=-", .{});
+    } else {
+        try stdout.print("slot={d}", .{current_slot});
+    }
+    try stdout.print(
+        " slots={d} produced={d} sent={d} produce_pps={d} send_pps={d}" ++
+            " queue={d}/{d} producer_backpressured={} net_idle={}",
+        .{
+            slots,
+            produced_packets,
+            sent_packets,
+            produced_pps,
+            send_pps,
+            queue_packets,
+            stream_queue_packets,
+            producer_blocked,
+            net_idle,
+        },
+    );
+    if (rate_hz) |rate| {
+        try stdout.print(" rate_hz={d:.0}", .{rate});
+    }
+    try stdout.print("\n", .{});
+    try stdout.flush();
+}
+
+const ShredStats = struct {
+    total_packets: u64 = 0,
+    selected_packets: u64 = 0,
+    total_payload_bytes: u64 = 0,
+    selected_payload_bytes: u64 = 0,
+    max_packet_bytes: usize = 0,
+    selected_max_packet_bytes: usize = 0,
+    oversized_packets: u64 = 0,
+    selected_oversized_packets: u64 = 0,
+    first_slot: ?Slot = null,
+    last_slot: ?Slot = null,
+    selected_first_slot: ?Slot = null,
+    selected_last_slot: ?Slot = null,
+
+    fn record(self: *ShredStats, key: ShredKey, packet_len: usize, selected: bool) void {
+        self.total_packets += 1;
+        self.total_payload_bytes += @intCast(packet_len);
+        self.max_packet_bytes = @max(self.max_packet_bytes, packet_len);
+        if (packet_len > max_shred_packet_bytes) self.oversized_packets += 1;
+        self.first_slot = if (self.first_slot) |first| @min(first, key.slot) else key.slot;
+        self.last_slot = if (self.last_slot) |last| @max(last, key.slot) else key.slot;
+
+        if (!selected) return;
+        self.selected_packets += 1;
+        self.selected_payload_bytes += @intCast(packet_len);
+        self.selected_max_packet_bytes = @max(self.selected_max_packet_bytes, packet_len);
+        if (packet_len > max_shred_packet_bytes) self.selected_oversized_packets += 1;
+
+        self.selected_first_slot = if (self.selected_first_slot) |first|
+            @min(first, key.slot)
+        else
+            key.slot;
+
+        self.selected_last_slot = if (self.selected_last_slot) |last|
+            @max(last, key.slot)
+        else
+            key.slot;
+    }
+};
+
+fn scanLedger(blockstore: *const AgaveBlockstore, config: Config) !LedgerStats {
+    return .{
+        .slots = try scanSlots(blockstore, config),
+        .data_shreds = try scanShreds(blockstore, config, agave_cf_data_shred),
+        .code_shreds = if (blockstore.has_code_shred)
+            try scanShreds(blockstore, config, agave_cf_code_shred)
+        else
+            null,
+    };
+}
+
+fn produceLedgerPackets(
+    blockstore: *const AgaveBlockstore,
+    config: Config,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
+) !ProducerStats {
+    var stats: ProducerStats = .{};
+    var unpublished_packets: usize = 0;
+
+    var start_key_buf: [8]u8 = undefined;
+    const start_key: ?[]const u8 = if (config.start_slot) |slot| start_key: {
+        writeSlotKey(&start_key_buf, slot);
+        break :start_key start_key_buf[0..];
+    } else null;
+
+    var slot_iter = blockstore.db.iterator(
+        try blockstore.columnFamily(agave_cf_meta),
+        .forward,
+        start_key,
+    );
+    defer slot_iter.deinit();
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    while (try slot_iter.next(&err_data)) |entry| {
+        if (stop.load(.acquire)) break;
+
+        const slot = parseSlotKey(entry[0].data) catch |err| {
+            std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
+            return err;
+        };
+        if (config.pastEndSlot(slot)) break;
+        if (!config.slotSelected(slot)) continue;
+
+        progress.current_slot.store(slot, .release);
+        stats.recordSlot();
+        progress.store(stats);
+        try produceSlotShreds(
+            blockstore,
+            slot,
+            .data,
+            writer,
+            stop,
+            progress,
+            &unpublished_packets,
+            &stats,
+        );
+        if (blockstore.has_code_shred) {
+            try produceSlotShreds(
+                blockstore,
+                slot,
+                .code,
+                writer,
+                stop,
+                progress,
+                &unpublished_packets,
+                &stats,
+            );
+        }
+    }
+
+    if (unpublished_packets != 0 and !stop.load(.acquire)) {
+        progress.store(stats);
+        writer.markUsed();
+    }
+
+    progress.store(stats);
+    return stats;
+}
+
+fn publishPacket(
+    key: ShredKey,
+    kind: ShredKind,
+    packet_data: []const u8,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
+    unpublished_packets: *usize,
+    stats: *ProducerStats,
+) !void {
+    if (packet_data.len > max_shred_packet_bytes) return error.ShredPacketTooLarge;
+
+    const out = while (true) {
+        if (stop.load(.acquire)) return;
+        if (writer.next()) |out| break out;
+        if (unpublished_packets.* != 0) {
+            writer.markUsed();
+            unpublished_packets.* = 0;
+            continue;
+        }
+        _ = progress.full_polls.fetchAdd(1, .monotonic);
+        std.atomic.spinLoopHint();
+    };
+
+    out.slot = key.slot;
+    out.shred_index = key.index;
+    out.kind = kind;
+    out.len = @intCast(packet_data.len);
+    @memcpy(out.data[0..packet_data.len], packet_data);
+
+    stats.recordPacket(kind, packet_data.len);
+    unpublished_packets.* += 1;
+
+    if (unpublished_packets.* == producer_publish_packets) {
+        progress.store(stats.*);
+        writer.markUsed();
+        unpublished_packets.* = 0;
+    }
+}
+
+fn produceSlotShreds(
+    blockstore: *const AgaveBlockstore,
+    slot: Slot,
+    kind: ShredKind,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
+    unpublished_packets: *usize,
+    stats: *ProducerStats,
+) !void {
+    var start_key_buf: [16]u8 = undefined;
+    writeShredKey(&start_key_buf, .{ .slot = slot, .index = 0 });
+
+    var iter = blockstore.db.iterator(
+        try blockstore.columnFamily(kind.columnFamilyName()),
+        .forward,
+        start_key_buf[0..],
+    );
+    defer iter.deinit();
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    // TODO(perf): Use the ipc-ring as backing stable memory for RocksDB shred storage and
+    // remove the memcpys here.
+    while (try iter.next(&err_data)) |entry| {
+        if (stop.load(.acquire)) break;
+
+        const key = parseShredKey(entry[0].data) catch |err| {
+            std.debug.print(
+                "invalid {s} key length: {d}\n",
+                .{ kind.columnFamilyName(), entry[0].data.len },
+            );
+            return err;
+        };
+        if (key.slot != slot) break;
+        try publishPacket(
+            key,
+            kind,
+            entry[1].data,
+            writer,
+            stop,
+            progress,
+            unpublished_packets,
+            stats,
+        );
+    }
+    progress.store(stats.*);
+}
+
+fn scanSlots(blockstore: *const AgaveBlockstore, config: Config) !SlotStats {
+    var stats: SlotStats = .{};
+
+    var start_key_buf: [8]u8 = undefined;
+    const start_key: ?[]const u8 = if (config.start_slot) |slot| start_key: {
+        writeSlotKey(&start_key_buf, slot);
+        break :start_key start_key_buf[0..];
+    } else null;
+
+    var iter = blockstore.db.iterator(
+        try blockstore.columnFamily(agave_cf_meta),
+        .forward,
+        start_key,
+    );
+    defer iter.deinit();
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    while (try iter.next(&err_data)) |entry| {
+        const slot = parseSlotKey(entry[0].data) catch |err| {
+            std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
+            return err;
+        };
+        if (config.pastEndSlot(slot)) break;
+        stats.record(slot, config.slotSelected(slot));
+    }
+
+    return stats;
+}
+
+fn scanShreds(
+    blockstore: *const AgaveBlockstore,
+    config: Config,
+    column_family_name: []const u8,
+) !ShredStats {
+    var stats: ShredStats = .{};
+
+    var start_key_buf: [16]u8 = undefined;
+    const start_key: ?[]const u8 = if (config.start_slot) |slot| start_key: {
+        writeShredKey(&start_key_buf, .{ .slot = slot, .index = 0 });
+        break :start_key start_key_buf[0..];
+    } else null;
+
+    var iter = blockstore.db.iterator(
+        try blockstore.columnFamily(column_family_name),
+        .forward,
+        start_key,
+    );
+    defer iter.deinit();
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    while (try iter.next(&err_data)) |entry| {
+        const key = parseShredKey(entry[0].data) catch |err| {
+            std.debug.print(
+                "invalid {s} key length: {d}\n",
+                .{ column_family_name, entry[0].data.len },
+            );
+            return err;
+        };
+        if (config.pastEndSlot(key.slot)) break;
+        stats.record(key, entry[1].data.len, config.slotSelected(key.slot));
+    }
+
+    return stats;
+}
+
+fn printLedgerStats(stdout: *std.Io.Writer, stats: LedgerStats) !void {
+    try stdout.print("ledger_stats:\n", .{});
+    try stdout.print("  max_packet_bytes: {d}\n", .{max_shred_packet_bytes});
+
+    try stdout.print("  slots:\n", .{});
+    try stdout.print("    total: {d}\n", .{stats.slots.total});
+    try stdout.print("    first: {?d}\n", .{stats.slots.first});
+    try stdout.print("    last: {?d}\n", .{stats.slots.last});
+    try stdout.print("    selected: {d}\n", .{stats.slots.selected});
+    try stdout.print("    selected_first: {?d}\n", .{stats.slots.selected_first});
+    try stdout.print("    selected_last: {?d}\n", .{stats.slots.selected_last});
+
+    try printShredStats(stdout, agave_cf_data_shred, stats.data_shreds);
+    if (stats.code_shreds) |code_shreds| {
+        try printShredStats(stdout, agave_cf_code_shred, code_shreds);
+    } else {
+        try stdout.print("  {s}: missing\n", .{agave_cf_code_shred});
+    }
+}
+
+fn printProducerStats(stdout: *std.Io.Writer, stats: ProducerStats) !void {
+    try stdout.print("producer_walk:\n", .{});
+    try stdout.print("  slots: {d}\n", .{stats.slots});
+    try stdout.print("  data_packets: {d}\n", .{stats.data_packets});
+    try stdout.print("  code_packets: {d}\n", .{stats.code_packets});
+    try stdout.print("  total_packets: {d}\n", .{stats.data_packets + stats.code_packets});
+    try stdout.print("  payload_bytes: {d}\n", .{stats.payload_bytes});
+}
+
+fn printNetThreadStats(stdout: *std.Io.Writer, stats: NetThreadStats) !void {
+    try stdout.print("net_thread:\n", .{});
+    try stdout.print("  data_packets: {d}\n", .{stats.data_packets});
+    try stdout.print("  code_packets: {d}\n", .{stats.code_packets});
+    try stdout.print("  total_packets: {d}\n", .{stats.data_packets + stats.code_packets});
+    try stdout.print("  payload_bytes: {d}\n", .{stats.payload_bytes});
+    try stdout.print("  empty_polls: {d}\n", .{stats.empty_polls});
+    try stdout.print("  send_errors: {d}\n", .{stats.send_errors});
+}
+
+fn printShredStats(stdout: *std.Io.Writer, name: []const u8, stats: ShredStats) !void {
+    try stdout.print("  {s}:\n", .{name});
+    try stdout.print("    total_packets: {d}\n", .{stats.total_packets});
+    try stdout.print("    total_payload_bytes: {d}\n", .{stats.total_payload_bytes});
+    try stdout.print("    first_slot: {?d}\n", .{stats.first_slot});
+    try stdout.print("    last_slot: {?d}\n", .{stats.last_slot});
+    try stdout.print("    max_packet_bytes: {d}\n", .{stats.max_packet_bytes});
+    try stdout.print("    oversized_packets: {d}\n", .{stats.oversized_packets});
+    try stdout.print("    selected_packets: {d}\n", .{stats.selected_packets});
+    try stdout.print("    selected_payload_bytes: {d}\n", .{stats.selected_payload_bytes});
+    try stdout.print("    selected_first_slot: {?d}\n", .{stats.selected_first_slot});
+    try stdout.print("    selected_last_slot: {?d}\n", .{stats.selected_last_slot});
+    try stdout.print("    selected_max_packet_bytes: {d}\n", .{stats.selected_max_packet_bytes});
+    try stdout.print("    selected_oversized_packets: {d}\n", .{stats.selected_oversized_packets});
+}
+
+fn parseSlotKey(key: []const u8) !Slot {
+    if (key.len != 8) return error.InvalidSlotKey;
+    return std.mem.readInt(u64, key[0..8], .big);
+}
+
+fn writeSlotKey(key: *[8]u8, slot: Slot) void {
+    std.mem.writeInt(u64, key, slot, .big);
+}
+
+fn parseShredKey(key: []const u8) !ShredKey {
+    if (key.len != 16) return error.InvalidShredKey;
+    return .{
+        .slot = std.mem.readInt(u64, key[0..8], .big),
+        .index = std.mem.readInt(u64, key[8..16], .big),
+    };
+}
+
+fn writeShredKey(key: *[16]u8, shred_key: ShredKey) void {
+    std.mem.writeInt(u64, key[0..8], shred_key.slot, .big);
+    std.mem.writeInt(u64, key[8..16], shred_key.index, .big);
+}
+
+fn resolveRocksDbPath(allocator: Allocator, ledger_path: []const u8) ![]const u8 {
+    const nested_rocksdb_path = try std.fs.path.join(allocator, &.{ ledger_path, "rocksdb" });
+
+    if (std.fs.cwd().statFile(nested_rocksdb_path)) |stat| {
+        if (stat.kind == .directory) return nested_rocksdb_path;
+    } else |_| {}
+    allocator.free(nested_rocksdb_path);
+
+    if (std.fs.cwd().statFile(ledger_path)) |stat| {
+        if (stat.kind == .directory) return try allocator.dupe(u8, ledger_path);
+    } else |_| {}
+
+    std.debug.print("ledger path does not exist or is not a directory: {s}\n", .{ledger_path});
+    return error.InvalidLedgerPath;
+}
+
+const ColumnFamilyNames = struct {
+    names: []const []const u8,
+
+    fn deinit(self: *ColumnFamilyNames, allocator: Allocator) void {
+        for (self.names) |name| allocator.free(name);
+        allocator.free(self.names);
+    }
+
+    fn contains(self: *const ColumnFamilyNames, name: []const u8) bool {
+        for (self.names) |candidate| {
+            if (std.mem.eql(u8, candidate, name)) return true;
+        }
+        return false;
+    }
+};
+
+fn listColumnFamilies(allocator: Allocator, rocksdb_path: []const u8) !ColumnFamilyNames {
+    const options = rocks_c.rocksdb_options_create() orelse return error.RocksDBOptionsCreate;
+    defer rocks_c.rocksdb_options_destroy(options);
+
+    const rocksdb_path_z = try allocator.dupeZ(u8, rocksdb_path);
+    defer allocator.free(rocksdb_path_z);
+
+    var err_ptr: ?[*:0]u8 = null;
+    var count: usize = 0;
+    const raw_names = rocks_c.rocksdb_list_column_families(
+        options,
+        rocksdb_path_z.ptr,
+        &count,
+        @ptrCast(&err_ptr),
+    );
+    if (err_ptr) |err_z| {
+        defer rocks_c.rocksdb_free(err_z);
+        std.debug.print(
+            "failed to list RocksDB column families at {s}: {s}\n",
+            .{ rocksdb_path, std.mem.span(err_z) },
+        );
+        return error.RocksDBListColumnFamilies;
+    }
+    if (raw_names == null) return error.RocksDBListColumnFamilies;
+    defer rocks_c.rocksdb_list_column_families_destroy(raw_names, count);
+
+    const names = try allocator.alloc([]const u8, count);
+    var names_len: usize = 0;
+    errdefer {
+        for (names[0..names_len]) |name| allocator.free(name);
+        allocator.free(names);
+    }
+
+    for (names, raw_names[0..count]) |*name, raw_name| {
+        name.* = try allocator.dupe(u8, std.mem.span(raw_name));
+        names_len += 1;
+    }
+
+    return .{ .names = names };
+}
+
+fn requireColumnFamily(available_cfs: *const ColumnFamilyNames, name: []const u8) !void {
+    if (available_cfs.contains(name)) return;
+    std.debug.print("missing required column family: {s}\n", .{name});
+    return error.MissingRequiredColumnFamily;
+}
+
+fn columnFamilyDescriptions(
+    allocator: Allocator,
+    has_code_shred: bool,
+) Allocator.Error![]const rocks.ColumnFamilyDescription {
+    const count: usize = if (has_code_shred) 4 else 3;
+    const cfs = try allocator.alloc(rocks.ColumnFamilyDescription, count);
+    cfs[0] = .{ .name = agave_cf_default };
+    cfs[1] = .{ .name = agave_cf_meta };
+    cfs[2] = .{ .name = agave_cf_data_shred };
+    if (has_code_shred) cfs[3] = .{ .name = agave_cf_code_shred };
+    return cfs;
+}
+
+fn parseArgs(args: []const []const u8) ParseArgsError!ParseResult {
+    var config: PartialConfig = .{};
+    var seen: std.EnumSet(Arg) = .initEmpty();
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        const parsed_arg = Arg.parse(arg) orelse {
+            if (std.mem.startsWith(u8, arg, "-")) {
+                std.debug.print("unknown flag: {s}\n", .{arg});
+            } else {
+                std.debug.print("unexpected argument: {s}\n", .{arg});
+            }
+            return error.InvalidArguments;
+        };
+
+        if (parsed_arg == .help) return .help;
+
+        if (seen.contains(parsed_arg)) {
+            std.debug.print("duplicate argument: {s}\n", .{parsed_arg.name()});
+            return error.InvalidArguments;
+        }
+        seen.insert(parsed_arg);
+
+        switch (parsed_arg) {
+            .help => unreachable,
+            .ledger => config.ledger = try nextValue(args, &i, parsed_arg.name()),
+            .target => config.target = try nextValue(args, &i, parsed_arg.name()),
+            .start_slot => config.start_slot = try parseSlot(
+                try nextValue(args, &i, parsed_arg.name()),
+                parsed_arg.name(),
+            ),
+            .end_slot => config.end_slot = try parseSlot(
+                try nextValue(args, &i, parsed_arg.name()),
+                parsed_arg.name(),
+            ),
+            .rate_hz => config.rate_hz = try parseRateHz(
+                try nextValue(args, &i, parsed_arg.name()),
+            ),
+            .dry_run => config.dry_run = true,
+        }
+    }
+
+    return .{ .config = try config.finalize() };
+}
+
+fn nextValue(args: []const []const u8, index: *usize, flag: []const u8) ParseArgsError![]const u8 {
+    if (index.* + 1 >= args.len) {
+        std.debug.print("missing value for {s}\n", .{flag});
+        return error.InvalidArguments;
+    }
+
+    index.* += 1;
+    return args[index.*];
+}
+
+fn parseSlot(value: []const u8, flag: []const u8) ParseArgsError!Slot {
+    return std.fmt.parseUnsigned(Slot, value, 10) catch {
+        std.debug.print("invalid slot for {s}: {s}\n", .{ flag, value });
+        return error.InvalidArguments;
+    };
+}
+
+fn parseRateHz(value: []const u8) ParseArgsError!f64 {
+    const rate_hz = std.fmt.parseFloat(f64, value) catch {
+        std.debug.print("invalid rate for --rate-hz: {s}\n", .{value});
+        return error.InvalidArguments;
+    };
+
+    if (!(rate_hz > 0) or !std.math.isFinite(rate_hz)) {
+        std.debug.print("--rate-hz must be a finite positive value\n", .{});
+        return error.InvalidArguments;
+    }
+
+    return rate_hz;
+}
+
+fn printHelp() void {
+    std.debug.print(
+        \\usage: shred-stream --ledger <path> --target <ip:port> [options]
+        \\
+        \\required:
+        \\  --ledger <path>       Agave ledger directory or rocksdb directory
+        \\  --target <ip:port>    UDP target, usually 127.0.0.1:8002
+        \\
+        \\options:
+        \\  --start-slot <slot>   First slot to stream
+        \\  --end-slot <slot>     Inclusive last slot to stream
+        \\  --rate-hz <float>     Maximum packets per second
+        \\  --dry-run             Read and print stats without sending UDP
+        \\  -h, --help            Print this help
+        \\
+    , .{});
+}
+
+test "parse arguments" {
+    {
+        const result = try parseArgs(&.{ "--ledger", "ledger", "--target", "127.0.0.1:8002" });
+        const config = result.config;
+        try std.testing.expectEqualStrings("ledger", config.ledger);
+        try std.testing.expectEqualStrings("127.0.0.1:8002", config.target);
+        try std.testing.expectEqual(@as(?Slot, null), config.start_slot);
+        try std.testing.expectEqual(@as(?Slot, null), config.end_slot);
+        try std.testing.expectEqual(@as(?f64, null), config.rate_hz);
+        try std.testing.expect(!config.dry_run);
+    }
+
+    {
+        const result = try parseArgs(&.{
+            "--ledger",     "ledger",
+            "--target",     "127.0.0.1:8002",
+            "--start-slot", "10",
+            "--end-slot",   "20",
+            "--rate-hz",    "100.5",
+            "--dry-run",
+        });
+        const config = result.config;
+        try std.testing.expectEqual(@as(?Slot, 10), config.start_slot);
+        try std.testing.expectEqual(@as(?Slot, 20), config.end_slot);
+        try std.testing.expectEqual(@as(?f64, 100.5), config.rate_hz);
+        try std.testing.expect(config.dry_run);
+    }
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",     "ledger",
+        "--target",     "127.0.0.1:8002",
+        "--start-slot", "20",
+        "--end-slot",   "10",
+    }));
+}
+
+test "parse and write slot keys" {
+    const key = [_]u8{ 0, 0, 0, 0, 0, 0, 0x04, 0xd2 };
+    try std.testing.expectEqual(@as(Slot, 1234), try parseSlotKey(&key));
+
+    var written_key: [8]u8 = undefined;
+    writeSlotKey(&written_key, 1234);
+    try std.testing.expectEqualSlices(u8, &key, &written_key);
+
+    try std.testing.expectError(error.InvalidSlotKey, parseSlotKey(&.{ 1, 2, 3 }));
+}
+
+test "parse and write shred keys" {
+    const key = [_]u8{
+        0, 0, 0, 0, 0, 0, 0x04, 0xd2,
+        0, 0, 0, 0, 0, 0, 0x16, 0x2e,
+    };
+
+    const shred_key = try parseShredKey(&key);
+    try std.testing.expectEqual(@as(Slot, 1234), shred_key.slot);
+    try std.testing.expectEqual(@as(u64, 5678), shred_key.index);
+
+    var written_key: [16]u8 = undefined;
+    writeShredKey(&written_key, .{ .slot = 1234, .index = 5678 });
+    try std.testing.expectEqualSlices(u8, &key, &written_key);
+
+    try std.testing.expectError(error.InvalidShredKey, parseShredKey(&.{ 1, 2, 3 }));
+}
+
+test "slot bounds helpers respect optional bounds" {
+    const base: Config = .{ .ledger = "ledger", .target = "127.0.0.1:8002" };
+    try std.testing.expect(base.slotSelected(10));
+    try std.testing.expect(!base.pastEndSlot(100));
+
+    var bounded = base;
+    bounded.start_slot = 10;
+    bounded.end_slot = 20;
+    try std.testing.expect(!bounded.slotSelected(9));
+    try std.testing.expect(bounded.slotSelected(10));
+    try std.testing.expect(bounded.slotSelected(20));
+    try std.testing.expect(!bounded.slotSelected(21));
+    try std.testing.expect(!bounded.pastEndSlot(20));
+    try std.testing.expect(bounded.pastEndSlot(21));
+}
+
+test "resolve rocksdb path" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.makePath("ledger/rocksdb");
+
+    const ledger_path = try tmp.dir.realpathAlloc(std.testing.allocator, "ledger");
+    defer std.testing.allocator.free(ledger_path);
+
+    const rocksdb_path = try resolveRocksDbPath(std.testing.allocator, ledger_path);
+    defer std.testing.allocator.free(rocksdb_path);
+
+    const expected = try tmp.dir.realpathAlloc(std.testing.allocator, "ledger/rocksdb");
+    defer std.testing.allocator.free(expected);
+
+    try std.testing.expectEqualStrings(expected, rocksdb_path);
+
+    const direct_path = try tmp.dir.realpathAlloc(std.testing.allocator, "ledger/rocksdb");
+    defer std.testing.allocator.free(direct_path);
+
+    const direct_rocksdb_path = try resolveRocksDbPath(std.testing.allocator, direct_path);
+    defer std.testing.allocator.free(direct_rocksdb_path);
+
+    try std.testing.expectEqualStrings(direct_path, direct_rocksdb_path);
+}
