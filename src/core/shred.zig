@@ -1,4 +1,4 @@
-const Hash = @import("hash.zig").Hash;
+const Hash = @import("shared").core.Hash;
 const std = @import("std");
 const HardForks = @import("hard_forks.zig").HardForks;
 
