@@ -302,6 +302,7 @@ fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
             producerThreadMain,
             .{
                 &blockstore,
+                allocator,
                 config,
                 &ring,
                 &producer_done,
@@ -681,6 +682,7 @@ fn netThreadMainInner(
 
 fn producerThreadMain(
     blockstore: *const AgaveBlockstore,
+    allocator: Allocator,
     config: Config,
     ring: *StreamPacketRing,
     done: *std.atomic.Value(bool),
@@ -690,7 +692,14 @@ fn producerThreadMain(
     result: *ProducerThreadResult,
 ) !void {
     var writer = ring.get(.writer);
-    result.stats = produceLedgerPackets(blockstore, config, &writer, stop, progress) catch |err| {
+    result.stats = produceLedgerPackets(
+        allocator,
+        blockstore,
+        config,
+        &writer,
+        stop,
+        progress,
+    ) catch |err| {
         failed.store(true, .release);
         stop.store(true, .release);
         done.store(true, .release);
@@ -829,6 +838,7 @@ fn scanLedger(blockstore: *const AgaveBlockstore, config: Config) !LedgerStats {
 }
 
 fn produceLedgerPackets(
+    allocator: Allocator,
     blockstore: *const AgaveBlockstore,
     config: Config,
     writer: *StreamPacketRing.Iterator(.writer),
@@ -853,6 +863,7 @@ fn produceLedgerPackets(
             progress,
         ),
         .shuffle_global => produceGlobalShuffledRefSchedule(
+            allocator,
             blockstore,
             config,
             writer,
@@ -860,6 +871,7 @@ fn produceLedgerPackets(
             progress,
         ),
         .shuffle_slot => produceSlotShuffledPackets(
+            allocator,
             blockstore,
             config,
             writer,
@@ -962,14 +974,15 @@ fn produceOrderedLedgerPackets(
 }
 
 fn produceGlobalShuffledRefSchedule(
+    allocator: Allocator,
     blockstore: *const AgaveBlockstore,
     config: Config,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
 ) !ProducerStats {
-    var schedule = try buildOrderedRefSchedule(blockstore, config, stop);
-    defer schedule.deinit(blockstore.allocator);
+    var schedule = try buildOrderedRefSchedule(allocator, blockstore, config, stop);
+    defer schedule.deinit(allocator);
 
     var prng = std.Random.DefaultPrng.init(config.seed.?);
     prng.random().shuffleWithIndex(ShredRef, schedule.refs.items, u64);
@@ -978,6 +991,7 @@ fn produceGlobalShuffledRefSchedule(
 }
 
 fn produceSlotShuffledPackets(
+    allocator: Allocator,
     blockstore: *const AgaveBlockstore,
     config: Config,
     writer: *StreamPacketRing.Iterator(.writer),
@@ -1005,7 +1019,7 @@ fn produceSlotShuffledPackets(
     defer if (err_data) |err| err.deinit();
 
     var refs: std.ArrayList(ShredRef) = .empty;
-    defer refs.deinit(blockstore.allocator);
+    defer refs.deinit(allocator);
 
     while (try slot_iter.next(&err_data)) |entry| {
         if (stop.load(.acquire)) break;
@@ -1018,9 +1032,9 @@ fn produceSlotShuffledPackets(
         if (!config.slotSelected(slot)) continue;
 
         refs.clearRetainingCapacity();
-        try collectSlotShredRefs(blockstore, slot, .data, &refs, stop);
+        try collectSlotShredRefs(allocator, blockstore, slot, .data, &refs, stop);
         if (blockstore.has_code_shred) {
-            try collectSlotShredRefs(blockstore, slot, .code, &refs, stop);
+            try collectSlotShredRefs(allocator, blockstore, slot, .code, &refs, stop);
         }
 
         prng.random().shuffleWithIndex(ShredRef, refs.items, u64);
@@ -1053,12 +1067,13 @@ fn produceSlotShuffledPackets(
 }
 
 fn buildOrderedRefSchedule(
+    allocator: Allocator,
     blockstore: *const AgaveBlockstore,
     config: Config,
     stop: *std.atomic.Value(bool),
 ) !RefSchedule {
     var schedule: RefSchedule = .{};
-    errdefer schedule.deinit(blockstore.allocator);
+    errdefer schedule.deinit(allocator);
 
     var start_key_buf: [8]u8 = undefined;
     const start_key: ?[]const u8 = if (config.start_slot) |slot| start_key: {
@@ -1087,9 +1102,9 @@ fn buildOrderedRefSchedule(
         if (!config.slotSelected(slot)) continue;
 
         schedule.selected_slots += 1;
-        try collectSlotShredRefs(blockstore, slot, .data, &schedule.refs, stop);
+        try collectSlotShredRefs(allocator, blockstore, slot, .data, &schedule.refs, stop);
         if (blockstore.has_code_shred) {
-            try collectSlotShredRefs(blockstore, slot, .code, &schedule.refs, stop);
+            try collectSlotShredRefs(allocator, blockstore, slot, .code, &schedule.refs, stop);
         }
     }
 
@@ -1097,6 +1112,7 @@ fn buildOrderedRefSchedule(
 }
 
 fn collectSlotShredRefs(
+    allocator: Allocator,
     blockstore: *const AgaveBlockstore,
     slot: Slot,
     kind: ShredKind,
@@ -1128,7 +1144,7 @@ fn collectSlotShredRefs(
         };
         if (key.slot != slot) break;
         try refs.append(
-            blockstore.allocator,
+            allocator,
             .{ .slot = key.slot, .index = key.index, .kind = kind },
         );
     }
