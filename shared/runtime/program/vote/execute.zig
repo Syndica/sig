@@ -2684,7 +2684,12 @@ test "vote_program: update_commission too late allowed with delay feature" {
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{},
+            .feature_set = &.{
+                .{
+                    .feature = .delay_commission_updates,
+                    .slot = 0,
+                },
+            },
         },
         .{
             .accounts = &.{
