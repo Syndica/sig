@@ -1195,7 +1195,7 @@
         .name = "disable_rent_fees_collection",
         .pubkey = "CJzY83ggJHqPGDq8VisV3U91jDJLuEaALZooBrXtnnLU",
         .description = "Disable rent fees collection #33945",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "add_new_reserved_account_keys",
