@@ -304,7 +304,7 @@ pub fn build(b: *Build) !void {
     tracy_mod.sanitize_c = .off; // Workaround UB in Tracy.
 
     const std14_mod = b.createModule(.{
-        .root_source_file = b.path("src/std14.zig"),
+        .root_source_file = b.path("shared/std14.zig"),
         .target = config.target,
         .optimize = config.optimize,
     });
@@ -366,6 +366,21 @@ pub fn build(b: *Build) !void {
     };
     // zig fmt: on
 
+    const shared_mod = b.createModule(.{
+        .root_source_file = b.path("shared/lib.zig"),
+        .target = config.target,
+        .optimize = config.optimize,
+        .imports = imports,
+    });
+    shared_mod.addImport("std14", std14_mod);
+
+    const imports_with_shared = b.allocator.alloc(
+        Build.Module.Import,
+        imports.len + 1,
+    ) catch |err| std.debug.panic("{}", .{err});
+    @memcpy(imports_with_shared[0..imports.len], imports);
+    imports_with_shared[imports.len] = .{ .name = "shared", .module = shared_mod };
+
     const memcpy = b.addObject(.{
         .name = "memcpy",
         .root_module = b.createModule(.{
@@ -381,7 +396,7 @@ pub fn build(b: *Build) !void {
         .root_source_file = b.path("src/sig.zig"),
         .target = config.target,
         .optimize = config.optimize,
-        .imports = imports,
+        .imports = imports_with_shared,
     });
 
     sig_mod.addImport("std14", std14_mod);
@@ -397,7 +412,7 @@ pub fn build(b: *Build) !void {
             .root_source_file = b.path("src/cmd.zig"),
             .target = config.target,
             .optimize = config.optimize,
-            .imports = imports,
+            .imports = imports_with_shared,
             .error_tracing = config.error_tracing,
             .sanitize_thread = config.enable_tsan,
             .link_libc = true,
@@ -422,7 +437,7 @@ pub fn build(b: *Build) !void {
             .root_source_file = b.path("src/tests.zig"),
             .target = config.target,
             .optimize = config.optimize,
-            .imports = imports,
+            .imports = imports_with_shared,
             .error_tracing = config.error_tracing,
             .sanitize_thread = config.enable_tsan,
         }),
@@ -444,7 +459,7 @@ pub fn build(b: *Build) !void {
             .root_source_file = b.path("src/fuzz.zig"),
             .target = config.target,
             .optimize = config.optimize,
-            .imports = imports,
+            .imports = imports_with_shared,
             .error_tracing = config.error_tracing,
             .sanitize_thread = config.enable_tsan,
             .link_libc = true,
@@ -466,7 +481,7 @@ pub fn build(b: *Build) !void {
             .root_source_file = b.path("src/benchmarks.zig"),
             .target = config.target,
             .optimize = config.optimize,
-            .imports = imports,
+            .imports = imports_with_shared,
             .error_tracing = config.error_tracing,
             .sanitize_thread = config.enable_tsan,
             .link_libc = true,
@@ -492,7 +507,7 @@ pub fn build(b: *Build) !void {
             .root_source_file = b.path("src/geyser/main.zig"),
             .target = config.target,
             .optimize = config.optimize,
-            .imports = imports,
+            .imports = imports_with_shared,
             .error_tracing = config.error_tracing,
             .sanitize_thread = config.enable_tsan,
         }),
@@ -510,7 +525,7 @@ pub fn build(b: *Build) !void {
             .root_source_file = b.path("src/vm/main.zig"),
             .target = config.target,
             .optimize = config.optimize,
-            .imports = imports,
+            .imports = imports_with_shared,
             .sanitize_thread = config.enable_tsan,
             .error_tracing = config.error_tracing,
         }),
@@ -528,7 +543,7 @@ pub fn build(b: *Build) !void {
             .root_source_file = b.path("src/transaction_sender/test_send_transactions.zig"),
             .target = config.target,
             .optimize = config.optimize,
-            .imports = imports,
+            .imports = imports_with_shared,
             .sanitize_thread = config.enable_tsan,
             .error_tracing = config.error_tracing,
             .link_libc = true,
@@ -545,7 +560,7 @@ pub fn build(b: *Build) !void {
             .root_source_file = b.path("src/transaction_sender/test_mock_transfers.zig"),
             .target = config.target,
             .optimize = config.optimize,
-            .imports = imports,
+            .imports = imports_with_shared,
             .sanitize_thread = config.enable_tsan,
             .error_tracing = config.error_tracing,
             .link_libc = true,
@@ -650,7 +665,7 @@ fn addFeatureSetIdGenerator(b: *Build, use_llvm: bool) *Build.Step.Compile {
                 .{
                     .name = "features",
                     .module = b.createModule(.{
-                        .root_source_file = b.path("src/core/features.zon"),
+                        .root_source_file = b.path("shared/core/features.zon"),
                     }),
                 },
             },
