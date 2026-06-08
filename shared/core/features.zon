@@ -1762,4 +1762,33 @@
         .description = "SIMD-0232: Custom Commission Collector Account",
         .status = .supported,
     },
+    .{
+        .name = "block_revenue_sharing",
+        .pubkey = "B1ockRevenueSharing111111111111111111111111",
+        .description = "SIMD-0123: Block Revenue Sharing (co-dependency of SIMD-0387)",
+        .status = .unsupported,
+        .note =
+        \\ TODO: Low Priority
+        \\ Not currently scheduled for activation.
+        \\ Listed as a co-dependency of SIMD-0387's
+        \\ `bls_pubkey_management_in_vote_account` `is_init_account_v2_enabled`
+        \\ gate; the InitializeAccountV2 instruction only activates when this
+        \\ feature is also live.
+        ,
+    },
+    .{
+        .name = "vote_account_initialize_v2",
+        .pubkey = "VoteAccount1nitia1izeV211111111111111111111",
+        .description = "SIMD-0387: Vote Account InitializeV2 instruction",
+        .status = .unsupported,
+        .note =
+        \\ TODO: Low Priority
+        \\ Not currently scheduled for activation.
+        \\ Co-dependency of `bls_pubkey_management_in_vote_account`; the
+        \\ InitializeAccountV2 instruction only activates when all of
+        \\ bls_pubkey_management_in_vote_account, commission_rate_in_basis_points,
+        \\ custom_commission_collector, block_revenue_sharing and
+        \\ vote_account_initialize_v2 are active.
+        ,
+    },
 }
