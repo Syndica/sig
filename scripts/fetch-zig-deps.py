@@ -46,11 +46,10 @@ def fetch(zonfile: str | Path, zig_path: str, force: bool) -> None:
             continue
 
         url = dep.get("url")
-        if not url:
-            continue
         expected = dep.get("hash")
+        assert url is not None and expected is not None
 
-        if expected and not force and (CACHE / expected).exists():
+        if not force and (CACHE / expected).exists():
             print(f"Cached:   {url}", flush=True)
             h = expected
         else:
@@ -71,7 +70,7 @@ def parse_zon(zonfile: Path, zig_path: str) -> dict[str, dict[str, str]]:
     return json.loads(out)
 
 
-def cache_dep(url: str, expected: str | None, zig_path: str) -> str:
+def cache_dep(url: str, expected: str, zig_path: str) -> str:
     """Fetch url, verify its hash, and ensure it is in the package cache."""
     with tempfile.TemporaryDirectory() as tmp:
         if url.startswith("git+"):
@@ -85,7 +84,7 @@ def cache_dep(url: str, expected: str | None, zig_path: str) -> str:
         out = subprocess.check_output([zig_path, "fetch", "--debug-hash", str(staged)], text=True)
         actual = [line for line in out.splitlines() if line.strip()][-1]
 
-        if expected and actual != expected:
+        if actual != expected:
             sys.exit(f"Hash mismatch for {url}: got {actual}, expected {expected}")
         # zig fetch --debug-hash caches archives, but not local directories.
         if staged.is_dir():
