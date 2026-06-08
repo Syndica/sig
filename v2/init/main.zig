@@ -227,16 +227,6 @@ pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
         .@"gossip:source_to_snapshot",
         .@"snapshot:source_from_gossip",
     }),
-    .shreds_to_replay = .initMany(&.{
-        .@"shred_receiver:deshredded_out",
-        .@"replay:deshredded_in",
->>>>>>> 6ab3ea44 (integrate with new topology code)
-    }),
-    .net_to_gossip = .initMany(&.{
-        .@"net:to_gossip",
-        .@"gossip:from_net",
-    }),
-
     .gossip_source_to_snapshot = .initMany(&.{
         .@"gossip:source_to_snapshot",
         .@"snapshot:source_from_gossip",
@@ -279,18 +269,6 @@ pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
         .@"replay:block_pool",
         .@"exec:block_pool",
     }),
-    .exec_req_response = .initMany(&.{
-        .@"replay:exec_req_response",
-        .@"exec:exec_req_response",
-    }),
-    .transaction_pool = .initMany(&.{
-        .@"replay:transaction_pool",
-        .@"exec:transaction_pool",
-    }),
-    .block_pool = .initMany(&.{
-        .@"replay:block_pool",
-        .@"exec:block_pool",
-    }),
 }));
 
 pub const Region = union(enum) {
@@ -318,7 +296,6 @@ pub const Region = union(enum) {
     account_pool: struct { memory: usize },
 
     shreds_to_replay,
-    gossip_source_to_snapshot,
 
     exec_req_response,
     transaction_pool,
