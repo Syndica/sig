@@ -98,7 +98,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             const stderr = &stderr_fw.interface;
             defer stderr.flush() catch {};
             for (log_streams) |*log_stream| {
-                try runner.activity.signalIdleAfterNCalls(1000);
+                try runner.activity.signalIdleSpinning();
                 const log_messages_buffer = log_stream.swap_buffer.swap();
                 try api.log.streamLogs(.{
                     .output = stderr,

@@ -114,8 +114,8 @@ fn serviceMain(params: lib.ipc.ResolvedArgs) callconv(.c) void {
 
     root.serviceMain(connection, ro, rw) catch |err| {
         if (err == error.Canceled and
-            activity.signalIdleAfterNCalls(0) == error.Canceled //
-        ) {
+            activity.checkCanceled() == error.Canceled)
+        {
             return;
         }
 

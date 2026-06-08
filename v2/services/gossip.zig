@@ -122,7 +122,12 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         try gossip.poll(.from(logger), now);
 
         const packet = it.next() orelse {
-            try runner.activity.signalIdleAfterNCalls(1_000_000);
+            // TODO(ink): detect whether our output ring buffers (`packet_writer` and co)
+            // are all empty, and only signal idle if they are.
+            // For now this should work fine, but in theory there's a very slim chance
+            // of a race condition (it should be basically impossible to manifest
+            // in the one black-box test that currently exists for this).
+            try runner.activity.signalIdleSpinning();
             continue;
         };
         try runner.activity.signalActive();

@@ -41,16 +41,23 @@ pub const Activity = extern struct {
         /// has signalled idle since signalling activity.
         consecutive_idles: u32 = 0,
 
-        /// Signal idle; the `threshold` parameter will be used so that the actual idle signal
-        /// will only be sent if this function is called that many times consecutively without
-        /// signalling activity.
-        pub fn signalIdleAfterNCalls(self: *ServiceView, threshold: u32) error{Canceled}!void {
+        /// This function may need to be called multiple times consecutively before a signal is actually emitted.
+        /// See the doc comment on `Activity.signalIdle` for further commentary on what it means to be "idle".
+        /// Also calls `std.atomic.spinLoopHint()`.
+        pub fn signalIdleSpinning(self: *ServiceView) error{Canceled}!void {
+            const threshold = 1_000_000;
             if (self.consecutive_idles > threshold) {
-                try Activity.signalIdle(.{
-                    .state = &self.activity.state,
-                });
+                try self.signalIdleImmediate();
             }
             self.consecutive_idles += 1;
+            std.atomic.spinLoopHint();
+        }
+
+        /// Immediately signals idle. Prefer `signalIdleSpinning` if using this in a loop.
+        pub fn signalIdleImmediate(self: *ServiceView) error{Canceled}!void {
+            try Activity.signalIdle(.{
+                .state = &self.activity.state,
+            });
         }
 
         pub fn signalActive(self: *ServiceView) error{Canceled}!void {
@@ -58,6 +65,12 @@ pub const Activity = extern struct {
                 .state = &self.activity.state,
             });
             self.consecutive_idles = 0;
+        }
+
+        pub fn checkCanceled(self: *const ServiceView) error{Canceled}!void {
+            try Activity.checkCanceled(.{
+                .state = &self.activity.state,
+            });
         }
     };
 
@@ -87,7 +100,11 @@ pub const Activity = extern struct {
 
     /// Send signal to the runner that the service is idle.
     /// Also checks if the service runner has sent a cancelation signal.
-    /// Also calls `std.atomic.spinLoopHint()`, unless a cancellation signal is received.
+    ///
+    /// A service is defined as idle when all of the following conditions are met:
+    /// * The service is not currently processing any inputs.
+    /// * The service observes zero incoming inputs to be processed.
+    // TODO: evaluate whether it makes sense to also require "The service has no outgoing values present in its outputs."
     fn signalIdle(params: struct {
         state: *std.atomic.Value(State),
     }) error{Canceled}!void {
@@ -100,7 +117,7 @@ pub const Activity = extern struct {
             .monotonic,
         ) orelse return;
         switch (prev_state) {
-            .active, .idle => std.atomic.spinLoopHint(),
+            .active, .idle => {},
             .canceled => {
                 @branchHint(.cold);
                 return error.Canceled;
@@ -124,6 +141,13 @@ pub const Activity = extern struct {
                 return error.Canceled;
             },
         }
+    }
+
+    /// Check for cancellation without signalling anything.
+    fn checkCanceled(params: struct {
+        state: *const std.atomic.Value(State),
+    }) error{Canceled}!void {
+        if (params.state.load(.monotonic) == .canceled) return error.Canceled;
     }
 
     // -- Service Runner API -- //
