@@ -7,6 +7,8 @@ const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
 const Hash = lib.solana.Hash;
 const IoUring = std.os.linux.IoUring;
+
+const FinalSnapshot = lib.snapshot.ReadySnapshot;
 const SnapshotSourceRing = lib.snapshot.SnapshotSourceRing;
 const KnownValidators = lib.snapshot.SnapshotConfig.KnownValidators;
 
@@ -542,19 +544,6 @@ const RacerResult = enum {
     succeeded,
     failed,
     cancelled,
-};
-
-const FinalSnapshot = struct {
-    slot: Slot,
-    hash: Hash,
-
-    pub fn format(self: FinalSnapshot, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        return writer.print("snapshot-{d}-{f}.tar.zst", .{ self.slot, self.hash });
-    }
-
-    fn name(self: FinalSnapshot, buf: []u8) std.fmt.BufPrintError![]const u8 {
-        return std.fmt.bufPrint(buf, "{f}", .{self});
-    }
 };
 
 const TempSnapshot = struct {

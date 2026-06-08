@@ -8,7 +8,6 @@ export fn entrypoint() u64 {
     asm volatile (""
         :
         : [val] "m" (&VAL_B),
-        : "memory"
-    );
+        : .{ .memory = true });
     return @as(*const volatile u64, &VAL_B).*;
 }

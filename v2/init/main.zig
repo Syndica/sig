@@ -30,13 +30,16 @@ const Config = struct {
     gossip: Gossip,
     shred_network: ShredNetwork,
 
-    snapshot: Snapshot,
     telemetry: Telemetry,
+
+    snapshot: Snapshot,
+    accounts_db: AccountsDb,
 
     const SandboxingMode = enum { sandboxed, threaded };
 
     const Gossip = struct {
         port: u16,
+        advertise_tvu_port: bool,
     };
 
     const ShredNetwork = struct {
@@ -51,6 +54,29 @@ const Config = struct {
     const Snapshot = struct {
         folder: []const u8,
         known_validators: []const []const u8,
+    };
+
+    const AccountsDb = struct {
+        file: []const u8,
+        rooted: MemorySize,
+        unrooted: MemorySize,
+
+        // For nicer initialization of constants (instead of x * 1024 * 1024 * 1024)
+        const MemorySize = union(enum) {
+            bytes: usize,
+            kb: usize,
+            mb: usize,
+            gb: usize,
+
+            fn toBytes(self: MemorySize) usize {
+                return switch (self) {
+                    .bytes => |b| b,
+                    .kb => |b| b * 1024,
+                    .mb => |b| b * 1024 * 1024,
+                    .gb => |b| b * 1024 * 1024 * 1024,
+                };
+            }
+        };
     };
 
     pub fn format(self: Config, writer: *std.Io.Writer) !void {
@@ -107,11 +133,12 @@ pub fn main() !void {
     var reader = schedule_file.reader(&reader_buf);
 
     const service_instances: []const topology.ServiceInstance = &.{
-        .{ .service = .shred_receiver },
         .{ .service = .net },
         .{ .service = .gossip },
-        .{ .service = .replay },
+        .{ .service = .shred_receiver },
         .{ .service = .snapshot },
+        .{ .service = .accounts_db },
+        .{ .service = .replay },
         .{ .service = .telemetry },
     };
 
@@ -122,27 +149,41 @@ pub fn main() !void {
             // TODO: read this from identity file in signer service
             .keypair = .fromKeyPair(.generate()),
             .turbine_recv_port = config.shred_network.recv_port,
+            .advertise_tvu_port = config.gossip.advertise_tvu_port,
         },
         // shred constants
         .shred_recv_config = .{
             .schedule_string = &reader.interface,
             .shred_version = gossip_cluster_info.shred_version,
         },
+        // snapshot constants
         .snapshot_config = .{
             .folder_path = config.snapshot.folder,
             .cluster = config.cluster,
             .known_validators = config.snapshot.known_validators,
         },
+        // accounts_db constants + rooted memory
+        .accounts_db_config = .{
+            .file_path = config.accounts_db.file,
+            .memory = config.accounts_db.rooted.toBytes(),
+        },
+
+        // net -> shred
+        .net_to_shred = .{ .port = config.shred_network.recv_port },
+        // net <-> gossip
+        .net_to_gossip = .{ .port = config.gossip.port },
+
+        // gossip -(source)-> snapshot
+        .gossip_source_to_snapshot = {},
+        // snapshot -> accounts_db
+        .snapshot_ready_to_accounts_db = {},
+        // pool <-> { accounts_db, replay }
+        .account_pool = .{ .memory = config.accounts_db.unrooted.toBytes() },
 
         // shred receiver -> replay
         .shreds_to_replay = {},
-        // gossip -(source)-> snapshot
-        .gossip_source_to_snapshot = {},
-
-        // net -> gossip
-        .net_to_gossip = .{ .port = config.gossip.port },
-        // net -> shred
-        .net_to_shred = .{ .port = config.shred_network.recv_port },
+        // replay <-> accounts_db
+        .replay_account_lookups = {},
 
         .telemetry = .{
             .port = config.telemetry.port,
@@ -179,23 +220,38 @@ const topology_schema: lib.TopologySchema = .{
 pub const topology = topology_schema.Bind(Region, .init(.{
     .gossip_config = .initOne(.@"gossip:config"),
     .shred_recv_config = .initOne(.@"shred_receiver:config"),
+    .accounts_db_config = .initOne(.@"accounts_db:config"),
     .snapshot_config = .initOne(.@"snapshot:config"),
 
-    .gossip_source_to_snapshot = .initMany(&.{
-        .@"gossip:source_to_snapshot",
-        .@"snapshot:source_from_gossip",
-    }),
-    .shreds_to_replay = .initMany(&.{
-        .@"shred_receiver:deshredded_out",
-        .@"replay:deshredded_in",
+    .net_to_shred = .initMany(&.{
+        .@"net:to_shred",
+        .@"shred_receiver:from_net",
     }),
     .net_to_gossip = .initMany(&.{
         .@"net:to_gossip",
         .@"gossip:from_net",
     }),
-    .net_to_shred = .initMany(&.{
-        .@"net:to_shred",
-        .@"shred_receiver:from_net",
+
+    .gossip_source_to_snapshot = .initMany(&.{
+        .@"gossip:source_to_snapshot",
+        .@"snapshot:source_from_gossip",
+    }),
+    .snapshot_ready_to_accounts_db = .initMany(&.{
+        .@"snapshot:ready_snapshot_out",
+        .@"accounts_db:ready_snapshot_in",
+    }),
+    .account_pool = .initMany(&.{
+        .@"accounts_db:account_pool",
+        .@"replay:account_pool",
+    }),
+
+    .shreds_to_replay = .initMany(&.{
+        .@"shred_receiver:deshredded_out",
+        .@"replay:deshredded_in",
+    }),
+    .replay_account_lookups = .initMany(&.{
+        .@"replay:account_lookups",
+        .@"accounts_db:replay_lookups",
     }),
 
     .telemetry = .initMany(&.{
@@ -204,6 +260,8 @@ pub const topology = topology_schema.Bind(Region, .init(.{
         .@"gossip:telemetry",
         .@"shred_receiver:telemetry",
         .@"snapshot:telemetry",
+        .@"accounts_db:telemetry",
+        .@"replay:telemetry",
     }),
 }));
 
@@ -213,6 +271,7 @@ pub const Region = union(enum) {
         // TODO: this should live in signing service
         keypair: lib.gossip.KeyPair,
         turbine_recv_port: u16,
+        advertise_tvu_port: bool,
     },
     shred_recv_config: struct {
         // TODO: this should not exist - remove once we can open snapshots again
@@ -224,12 +283,20 @@ pub const Region = union(enum) {
         cluster: lib.solana.Cluster,
         known_validators: []const []const u8,
     },
+    accounts_db_config: struct {
+        file_path: []const u8,
+        memory: usize,
+    },
+
+    net_to_shred: NetPair,
+    net_to_gossip: NetPair,
+
+    gossip_source_to_snapshot,
+    snapshot_ready_to_accounts_db,
+    account_pool: struct { memory: usize },
 
     shreds_to_replay,
-    gossip_source_to_snapshot,
-
-    net_to_gossip: NetPair,
-    net_to_shred: NetPair,
+    replay_account_lookups,
 
     telemetry: tel.Region.InitParams,
 
@@ -253,13 +320,18 @@ pub const Region = union(enum) {
             .gossip_config => @sizeOf(lib.gossip.Config),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
             .snapshot_config => @sizeOf(lib.snapshot.SnapshotConfig),
+            .accounts_db_config => |params| @sizeOf(lib.accounts_db.RootedConfig) + params.memory,
+
+            .net_to_shred,
+            .net_to_gossip,
+            => @sizeOf(lib.net.Pair),
+
+            .gossip_source_to_snapshot => @sizeOf(lib.snapshot.SnapshotSourceRing),
+            .snapshot_ready_to_accounts_db => @sizeOf(lib.snapshot.SnapshotDataRing),
+            .account_pool => |params| @sizeOf(lib.accounts_db.AccountPool) + params.memory,
 
             .shreds_to_replay => @sizeOf(lib.shred.DeshredRing),
-            .gossip_source_to_snapshot => @sizeOf(lib.snapshot.SnapshotSourceRing),
-
-            .net_to_gossip,
-            .net_to_shred,
-            => @sizeOf(lib.net.Pair),
+            .replay_account_lookups => @sizeOf(lib.accounts_db.AccountLookups),
 
             .telemetry => |params| params.info().regionSize(),
         };
@@ -276,6 +348,7 @@ pub const Region = union(enum) {
                 data.keypair = cfg.keypair;
                 data.cluster_info = cfg.cluster_info;
                 data.turbine_recv_port = cfg.turbine_recv_port;
+                data.advertise_tvu_port = cfg.advertise_tvu_port;
             },
             .shred_recv_config => |cfg| {
                 std.debug.assert(buf.len == @sizeOf(lib.shred.RecvConfig));
@@ -339,21 +412,46 @@ pub const Region = union(enum) {
                     }
                 }
             },
+            .accounts_db_config => |params| {
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.RootedConfig) + params.memory);
+                const data: *lib.accounts_db.RootedConfig = @ptrCast(buf);
+
+                data.file_len = @intCast(params.file_path.len);
+                @memcpy(data.file_path[0..data.file_len], params.file_path);
+
+                data.memory_len = params.memory;
+            },
+
+            .net_to_shred,
+            .net_to_gossip,
+            => |cfg| cfg.init(buf),
+
+            .gossip_source_to_snapshot => {
+                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotSourceRing));
+                const data: *lib.snapshot.SnapshotSourceRing = @ptrCast(buf);
+                data.init();
+            },
+            .snapshot_ready_to_accounts_db => {
+                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotDataRing));
+                const data: *lib.snapshot.SnapshotDataRing = @ptrCast(buf);
+                data.init();
+            },
+            .account_pool => |params| {
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.AccountPool) + params.memory);
+                const data: *lib.accounts_db.AccountPool = @ptrCast(buf);
+                data.init(params.memory);
+            },
 
             .shreds_to_replay => {
                 std.debug.assert(buf.len == @sizeOf(lib.shred.DeshredRing));
                 const data: *lib.shred.DeshredRing = @ptrCast(buf);
                 data.init();
             },
-            .gossip_source_to_snapshot => {
-                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotSourceRing));
-                const data: *lib.snapshot.SnapshotSourceRing = @ptrCast(buf);
+            .replay_account_lookups => {
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.AccountLookups));
+                const data: *lib.accounts_db.AccountLookups = @ptrCast(buf);
                 data.init();
             },
-
-            .net_to_gossip,
-            .net_to_shred,
-            => |cfg| cfg.init(buf),
 
             .telemetry => |params| {
                 std.debug.assert(buf.len == params.info().regionSize());

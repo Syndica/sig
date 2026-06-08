@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
-const Slot = @import("time.zig").Slot;
+const Slot = @import("shared").core.Slot;
 
 /// TODO: It may be more efficient to store hard forks as a hash map, and only sort when required.
 pub const HardForks = struct {
