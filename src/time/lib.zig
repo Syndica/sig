@@ -1,12 +1,13 @@
 const std = @import("std");
+const shared = @import("shared");
 
 pub const estimate = @import("estimate.zig");
 pub const stake_weighted_timestamp = @import("stake_weighted_timestamp.zig");
-pub const time = @import("time.zig");
+pub const time = shared.time.time;
 
-pub const Instant = time.Instant;
-pub const Timer = time.Timer;
-pub const Duration = time.Duration;
+pub const Instant = shared.time.Instant;
+pub const Timer = shared.time.Timer;
+pub const Duration = shared.time.Duration;
 
 /// returns current timestamp in milliseconds
 pub fn getWallclockMs() u64 {
