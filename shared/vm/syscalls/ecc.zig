@@ -636,7 +636,7 @@ pub fn altBn128Compression(
     // must surface as `ReadonlyDataModified` (from the failed write
     // translation), not as a generic `AccessViolation` produced by failing
     // the read translation first.
-    // [agave] https://github.com/anza-xyz/agave/blob/8e81e22a96/syscalls/src/lib.rs#L2514
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1/syscalls/src/lib.rs#L2514
     const call_result = try memory_map.translateSlice(
         u8,
         .mutable,
