@@ -5,6 +5,7 @@
         "build.zig.zon",
         "build.zig",
         "src",
+        "shared",
     },
     .minimum_zig_version = "0.15.2",
     .fingerprint = 0xce1f2b0e2866b810,
