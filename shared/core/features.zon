@@ -1362,7 +1362,7 @@
         .name = "remove_accounts_delta_hash",
         .pubkey = "LTdLt9Ycbyoipz5fLysCi1NnDnASsZfmJLJXts5ZxZz",
         .description = "SIMD-0223: removes accounts delta hash",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "snapshots_lt_hash",
