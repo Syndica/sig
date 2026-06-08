@@ -54,7 +54,7 @@ rm shared/data/test-elfs/*.o
 rm shared/data/test-elfs/*.bc
 
 # SIMD-0189 mandates `e_machine = EM_BPF (0xF7)` in the ELF header for SBPF v3,
-# and the strict parser in src/vm/elf.zig (parseStrict) rejects anything else,
+# and the strict parser in shared/vm/elf.zig (parseStrict) rejects anything else,
 # matching Agave's load_with_strict_parser:
 #   https://github.com/anza-xyz/sbpf/blob/sbpf-v0.14.4-patches/src/elf.rs#L440
 #   https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0189-sbpf-static-syscalls.md

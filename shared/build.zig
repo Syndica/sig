@@ -67,8 +67,9 @@ pub fn build(b: *Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const feature_set_id_gen = b.addRunArtifact(addFeatureSetIdGenerator(b, use_llvm));
     const feature_set_id = b.createModule(.{
-        .root_source_file = b.addRunArtifact(addFeatureSetIdGenerator(b, use_llvm)).addOutputFileArg("feature-set-id.zig"),
+        .root_source_file = feature_set_id_gen.addOutputFileArg("feature-set-id.zig"),
     });
     const gh_table = b.createModule(.{
         .root_source_file = generateTable(b, use_llvm),
