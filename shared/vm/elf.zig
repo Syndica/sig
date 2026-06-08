@@ -285,9 +285,32 @@ fn parseLenient(
     const ro_section = try elf_parsed.parseRoSections(allocator, &config, bytes);
 
     // Extract instructions from the text section.
+    //
+    // When `parseRoSections` returns `Section.owned`, the merged read-only
+    // buffer may overlay other sections on top of `.text` (e.g. a fuzz-crafted
+    // ELF can declare an `SHT_DYNAMIC` section named `.rodata` whose `sh_addr`
+    // lands inside the `.text` range). To stay byte-identical with agave's
+    // `Executable::get_text_bytes`, which always reads the text section from
+    // the owned buffer when sections overlap, we must do the same here.
+    //
+    // [sbpf] https://github.com/anza-xyz/sbpf/blob/v0.20.0/src/elf.rs#L307-L321
     const text_range = Elf64.Range.get(text_shdr);
-    const text_bytes = bytes[text_range.lo..text_range.hi];
-    const instruction_count = (text_range.hi - text_range.lo) / 8;
+    const text_len = text_range.hi - text_range.lo;
+    const text_bytes = switch (ro_section) {
+        .owned => |o| blk: {
+            // `o.offset` is the vaddr where `o.data[0]` is mapped.
+            // `text_section_vaddr` is `text_shdr.sh_addr + REGION_SIZE`.
+            // So the index into `o.data` of the first text byte is
+            // `text_section_vaddr - o.offset` (matches agave).
+            const text_offset_in_owned = text_section_vaddr -| o.offset;
+            if (text_offset_in_owned +| text_len > o.data.len) {
+                return error.OutOfBounds;
+            }
+            break :blk o.data[text_offset_in_owned..][0..text_len];
+        },
+        .borrowed => bytes[text_range.lo..text_range.hi],
+    };
+    const instruction_count = text_len / 8;
     const instructions = std.mem.bytesAsSlice(
         sbpf.Instruction,
         text_bytes[0 .. instruction_count * @sizeOf(sbpf.Instruction)],
