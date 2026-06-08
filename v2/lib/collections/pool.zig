@@ -1,6 +1,7 @@
 const std = @import("std");
 
-/// An atomic shared mem pool of []Item
+/// A mem pool of []Item, intended to be shared across processes.
+/// NOTE: this is not an atomic pool - the same thread is expected create and destroy all nodes.
 pub fn SharedPool(Item: type, cap: usize) type {
     // bits required for the power-of-two integer needed to store capacity+1 items
     const int_bits = @max(
@@ -13,7 +14,7 @@ pub fn SharedPool(Item: type, cap: usize) type {
     const IdInt: type = @Type(.{ .int = .{ .bits = int_bits, .signedness = .unsigned } });
 
     return extern struct {
-        free_list: std.atomic.Value(ItemId),
+        free_list: ItemId,
 
         // This is effectively a [capacity]Node, however Zig doesn't let us make structs over 4GiB,
         // which some pools may be.
@@ -87,25 +88,17 @@ pub fn SharedPool(Item: type, cap: usize) type {
             }
             nodes[nodes.len - 1] = .{ .next_free = .null };
 
-            pool.free_list = .init(@enumFromInt(0));
+            pool.free_list = @enumFromInt(0);
         }
 
         // take head off free_list
         pub fn create(self: *PoolSelf) !*Item {
-            while (true) {
-                const head = self.free_list.load(.acquire);
-                if (head == .null) return error.OutOfSpace;
+            const head = self.free_list;
+            if (head == .null) return error.OutOfSpace;
 
-                const new_node: *Node = &self.buf()[head.index().?];
-                const next = new_node.next_free;
-
-                // these atomics may be wrong, but king will smell this and fix it before it gets
-                // in main
-                if (self.free_list.cmpxchgWeak(head, next, .acq_rel, .acquire) != null)
-                    continue;
-
-                return @ptrCast(new_node);
-            }
+            const new_node: *Node = &self.buf()[head.index().?];
+            self.free_list = new_node.next_free;
+            return @ptrCast(new_node);
         }
 
         pub fn createId(self: *PoolSelf) !ItemId {
@@ -119,15 +112,9 @@ pub fn SharedPool(Item: type, cap: usize) type {
             const node: *Node = @ptrCast(item);
             const id = self.ptrToIndex(item);
 
-            while (true) {
-                const head = self.free_list.load(.acquire);
-                node.* = .{ .next_free = head };
-
-                if (self.free_list.cmpxchgWeak(head, id, .acq_rel, .acquire) != null)
-                    continue;
-
-                return;
-            }
+            const head = self.free_list;
+            node.* = .{ .next_free = head };
+            self.free_list = id;
         }
 
         pub fn destroyId(self: *PoolSelf, item_id: ItemId) void {
