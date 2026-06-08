@@ -48,10 +48,6 @@ pub const GroupOp = enum(u64) {
     }
 };
 
-fn invalidError() !void {
-    return SyscallError.InvalidAttribute;
-}
-
 /// [agave] https://github.com/anza-xyz/agave/blob/a3e2a62a942a497e00e4e091e888a1945dcdad53/syscalls/src/lib.rs#L978-L1111
 pub fn curvePointValidation(
     tc: *TransactionContext,
@@ -59,7 +55,7 @@ pub fn curvePointValidation(
     registers: *RegisterMap,
 ) Error!void {
     const curve_id = CurveId.wrap(registers.get(.r1)) orelse
-        return invalidError();
+        return SyscallError.InvalidAttribute;
     const point_addr = registers.get(.r2);
 
     // Only allow the BLS12-381 syscalls if the feature gate is enabled.
@@ -83,7 +79,7 @@ pub fn curvePointValidation(
         .bls12_381_g2_be,
         .bls12_381_g2_le,
         => tc.compute_budget.bls12_381_g2_validate_cost,
-        else => return invalidError(),
+        else => return SyscallError.InvalidAttribute,
     };
     try tc.consumeCompute(cost);
 
@@ -148,9 +144,9 @@ pub fn curveGroupOp(
     registers: *RegisterMap,
 ) Error!void {
     const curve_id = CurveId.wrap(registers.get(.r1)) orelse
-        return invalidError();
+        return SyscallError.InvalidAttribute;
     const group_op = GroupOp.wrap(registers.get(.r2)) orelse
-        return invalidError();
+        return SyscallError.InvalidAttribute;
 
     // Only allow the BLS12-381 syscalls if the feature gate is enabled.
     // [agave] https://github.com/anza-xyz/agave/blob/734a250745533616bd29e86bd69ac90dbc26f38c/syscalls/src/lib.rs#L1239-L1246
@@ -264,7 +260,7 @@ pub fn curveGroupOp(
                 },
             }
         },
-        else => return invalidError(),
+        else => return SyscallError.InvalidAttribute,
     }
 }
 
@@ -309,12 +305,12 @@ pub fn curveMultiscalarMul(
     if (points_len > 512) return SyscallError.InvalidLength;
 
     const curve_id = CurveId.wrap(attribute_id) orelse
-        return invalidError();
+        return SyscallError.InvalidAttribute;
 
     const cost = switch (curve_id) {
         .edwards => tc.compute_budget.curve25519_edwards_msm_base_cost,
         .ristretto => tc.compute_budget.curve25519_ristretto_msm_base_cost,
-        else => return invalidError(),
+        else => return SyscallError.InvalidAttribute,
     };
     const incremental_cost = switch (curve_id) {
         .edwards => tc.compute_budget.curve25519_edwards_msm_incremental_cost,
