@@ -35,7 +35,6 @@ jobs:
 
       - name: Build
         run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
           ./scripts/fetch-zig-deps.py
           zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Denable-tsan=false -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
 
@@ -98,7 +97,6 @@ jobs:
 
       - name: Build
         run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
           ./scripts/fetch-zig-deps.py
           zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out-release --summary all
 
@@ -133,12 +131,12 @@ jobs:
 
       - name: Build
         run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
           ./scripts/fetch-zig-deps.py
           zig build -Denable-tsan=true -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out --summary all
 
       - name: Build Tests
-        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
+        run:
+          zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
           -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Run Tests
@@ -181,7 +179,6 @@ jobs:
 
       - name: V2 checks
         run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
           ./scripts/fetch-zig-deps.py v2/build.zig.zon
           cd v2/
           zig build ci -Dallow-no-sha -Dallow-no-avx512 --summary all
@@ -211,13 +208,13 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: build_conformance-v1-${{ hashFiles('build.zig', 'build.zig.zon',
+          cache-key:
+            build_conformance-v1-${{ hashFiles('build.zig', 'build.zig.zon',
             'conformance/build.zig', 'conformance/build.zig.zon') }}
 
       - name: Build Conformance
         run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/fetch-zig-deps.py src/rpc/conformance/build.zig.zon
+          ./scripts/fetch-zig-deps.py conformance/build.zig.zon
           cd conformance
           zig build -Dallow-no-sha -Dallow-no-avx512 --summary all
 
@@ -253,7 +250,8 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: feature_compat-v1-${{ hashFiles('build.zig', 'build.zig.zon',
+          cache-key:
+            feature_compat-v1-${{ hashFiles('build.zig', 'build.zig.zon',
             'conformance/build.zig', 'conformance/build.zig.zon') }}
 
       - uses: dtolnay/rust-toolchain@stable
@@ -276,7 +274,6 @@ jobs:
 
       - name: Build Sig target and Agave target
         run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
           ./scripts/fetch-zig-deps.py conformance/build.zig.zon
           cd conformance
           zig build solfuzz_sig -Dallow-no-sha -Dallow-no-avx512 --summary all
