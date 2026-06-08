@@ -1770,4 +1770,45 @@
         .description = "SIMD-0431: Loader V3 minimum extend program size",
         .status = .supported,
     },
+    .{
+        .name = "block_revenue_sharing",
+        .pubkey = "B1ockRevenueSharing111111111111111111111111",
+        .description = "SIMD-0123: Block Revenue Sharing",
+        .status = .unsupported,
+        .note =
+        \\ TODO: Low Priority
+        \\ Not currently scheduled for activation.
+        \\ Listed as a co-dependency of SIMD-0387's
+        \\ `bls_pubkey_management_in_vote_account` `is_init_account_v2_enabled`
+        \\ gate; the InitializeAccountV2 instruction only activates when this
+        \\ feature is also live.
+        ,
+    },
+    .{
+        .name = "vote_account_initialize_v2",
+        .pubkey = "VoteAccount1nitia1izeV211111111111111111111",
+        .description = "SIMD-0464: Vote Account InitializeV2",
+        .status = .unsupported,
+        .note =
+        \\ TODO: Low Priority
+        \\ Not currently scheduled for activation.
+        \\ Co-dependency of `bls_pubkey_management_in_vote_account`; the
+        \\ InitializeAccountV2 instruction only activates when all of
+        \\ bls_pubkey_management_in_vote_account, commission_rate_in_basis_points,
+        \\ custom_commission_collector, block_revenue_sharing and
+        \\ vote_account_initialize_v2 are active.
+        ,
+    },
+    .{
+        .name = "commission_rate_in_basis_points",
+        .pubkey = "Eg7tXEwMZzS98xaZ1YHUbdRHsaYZiCsSaR6sKgxreoaj",
+        .description = "SIMD-0291: Commission Rate in Basis Points",
+        .status = .unsupported,
+        .note =
+        \\ TODO: Placeholder for SIMD-0291; the full implementation lands in
+        \\ a separate PR. Listed here so SIMD-0387's `is_init_account_v2_enabled`
+        \\ predicate can check this gate today, matching agave's
+        \\ five-feature AND.
+        ,
+    },
 }
