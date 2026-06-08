@@ -1299,6 +1299,12 @@
         .status = .supported,
     },
     .{
+        .name = "disable_sbpf_v0_v1_v2_deployment",
+        .pubkey = "B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g",
+        .description = "SIMD-0500: Disable deployment of SBPFv0, SBPFv1 and SBPFv2 programs",
+        .status = .supported,
+    },
+    .{
         .name = "migrate_feature_gate_program_to_core_bpf",
         .pubkey = "4eohviozzEeivk1y9UbrnekbAFMDQyJz5JjA9Y6gyvky",
         .description = "Migrate Feature Gate program to Core BPF (programify) #1003",
