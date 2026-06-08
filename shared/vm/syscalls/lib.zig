@@ -60,6 +60,7 @@ pub const Syscall = enum {
     sol_sha256,
     sol_keccak256,
     sol_blake3,
+    sol_sha512,
     sol_poseidon,
 
     sol_secp256k1_recover,
@@ -154,6 +155,7 @@ pub const Syscall = enum {
         .sol_sha256 = hash.sha256,
         .sol_keccak256 = hash.keccak256,
         .sol_blake3 = hash.blake3,
+        .sol_sha512 = hash.sha512,
         .sol_poseidon = hash.poseidon,
 
         .sol_secp256k1_recover = ecc.secp256k1Recover,
@@ -202,6 +204,7 @@ pub const Syscall = enum {
         .sol_alloc_free_ = .{ .feature = .disable_deploy_of_alloc_free_syscall, .invert = true },
 
         .sol_blake3 = .{ .feature = .blake3_syscall_enabled },
+        .sol_sha512 = .{ .feature = .enable_sha512_syscall },
 
         .sol_curve_decompress = .{ .feature = .enable_bls12_381_syscall },
         .sol_curve_pairing_map = .{ .feature = .enable_bls12_381_syscall },
