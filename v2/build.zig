@@ -9,15 +9,12 @@ pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const use_kcov = b.option(bool, "kcov", "Use kcov to run the tests.") orelse false;
-    const use_llvm: ?bool = llvm: {
-        const option = b.option(
-            bool,
-            "use-llvm",
-            "Force usage of LLVM (currently ignored for some artifacts).",
-        );
-        if (use_kcov and option == false) @panic("cannot use kcov without llvm");
-        break :llvm if (use_kcov) true else option;
-    };
+    const use_llvm = b.option(
+        bool,
+        "use-llvm",
+        "Force usage of LLVM (currently ignored for some artifacts).",
+    ) orelse true;
+    if (use_kcov and !use_llvm) @panic("cannot use kcov without llvm");
     const artifact_opts: ExeOutput.InitOptions = .{
         .no_bin = b.option(
             bool,
