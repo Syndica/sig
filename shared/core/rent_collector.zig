@@ -57,36 +57,6 @@ pub const RentCollector = struct {
         };
     }
 
-    pub fn collectFromExistingAccount(
-        self: RentCollector,
-        address: *const Pubkey,
-        account: *AccountSharedData,
-    ) CollectedInfo {
-        const rent_result = self.calculateRentResult(address, account.*);
-
-        return switch (rent_result) {
-            .Exempt => blk: {
-                account.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
-                break :blk CollectedInfo.NoneCollected;
-            },
-            .NoRentCollectionNow => CollectedInfo.NoneCollected,
-            .CollectRent => |rent| blk: {
-                const lamports_after_rent = account.lamports -| rent.rent_due;
-
-                if (lamports_after_rent == 0) {
-                    break :blk .{
-                        .rent_amount = account.lamports,
-                        .account_data_len_reclaimed = account.data.len,
-                    };
-                } else {
-                    account.lamports = lamports_after_rent;
-                    account.rent_epoch = rent.new_rent_epoch;
-                    break :blk .{ .rent_amount = rent.rent_due, .account_data_len_reclaimed = 0 };
-                }
-            },
-        };
-    }
-
     fn calculateRentResult(
         self: RentCollector,
         address: *const Pubkey,
@@ -218,48 +188,18 @@ test "calculate rent result" {
         .NoRentCollectionNow,
         collector.calculateRentResult(&Pubkey.ZEROES, account),
     );
-    {
-        var account_clone = account;
-        try std.testing.expectEqual(
-            CollectedInfo.NoneCollected,
-            collector.collectFromExistingAccount(&Pubkey.ZEROES, &account_clone),
-        );
-        try std.testing.expectEqualDeep(account, account_clone);
-    }
 
     account.executable = true;
     try std.testing.expectEqual(
         .Exempt,
         collector.calculateRentResult(&Pubkey.ZEROES, account),
     );
-    {
-        var account_clone = account;
-        var account_expected = account;
-        account_expected.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
-
-        try std.testing.expectEqual(
-            CollectedInfo.NoneCollected,
-            collector.collectFromExistingAccount(&Pubkey.ZEROES, &account_clone),
-        );
-        try std.testing.expectEqualDeep(account_expected, account_clone);
-    }
 
     account.executable = false;
     try std.testing.expectEqual(
         .Exempt,
         collector.calculateRentResult(&sig.runtime.ids.INCINERATOR, account),
     );
-    {
-        var account_clone = account;
-        var account_expected = account;
-        account_expected.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
-
-        try std.testing.expectEqual(
-            CollectedInfo.NoneCollected,
-            collector.collectFromExistingAccount(&sig.runtime.ids.INCINERATOR, &account_clone),
-        );
-        try std.testing.expectEqualDeep(account_expected, account_clone);
-    }
 
     // try a few combinations of rent collector rent epoch and collecting rent
     inline for (&.{ .{ 2, 2 }, .{ 3, 5 } }) |rent| {
@@ -280,18 +220,6 @@ test "calculate rent result" {
             },
             collector.calculateRentResult(&Pubkey.ZEROES, account),
         );
-
-        {
-            var account_clone = account;
-            try std.testing.expectEqual(
-                CollectedInfo{ .rent_amount = rent_due_expected, .account_data_len_reclaimed = 0 },
-                collector.collectFromExistingAccount(&Pubkey.ZEROES, &account_clone),
-            );
-            var account_expected = account;
-            account_expected.lamports = account.lamports - rent_due_expected;
-            account_expected.rent_epoch = new_rent_epoch_expected;
-            try std.testing.expectEqual(account_clone, account_expected);
-        }
     }
 
     // enough lamports to make us exempt
@@ -300,16 +228,6 @@ test "calculate rent result" {
         RentResult.Exempt,
         collector.calculateRentResult(&Pubkey.ZEROES, account),
     );
-    {
-        var account_clone = account;
-        var account_expected = account;
-        account_expected.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
-        try std.testing.expectEqual(
-            CollectedInfo.NoneCollected,
-            collector.collectFromExistingAccount(&Pubkey.ZEROES, &account_clone),
-        );
-        try std.testing.expectEqual(account_expected, account_clone);
-    }
 
     // enough lamports to make us exempt
     // but, our rent_epoch is set in the future, so we can't know if we are exempt yet or not.
@@ -319,12 +237,4 @@ test "calculate rent result" {
         RentResult.NoRentCollectionNow,
         collector.calculateRentResult(&Pubkey.ZEROES, account),
     );
-    {
-        var account_clone = account;
-        try std.testing.expectEqual(
-            CollectedInfo.NoneCollected,
-            collector.collectFromExistingAccount(&Pubkey.ZEROES, &account_clone),
-        );
-        try std.testing.expectEqual(account, account_clone);
-    }
 }

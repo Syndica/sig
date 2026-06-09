@@ -113,9 +113,6 @@ pub fn checkFeePayer(
 
     const rent_collected = account_loader.collectRentFromAccount(
         &payer_account,
-        &fee_payer_key,
-        feature_set,
-        slot,
         rent_collector,
     ).rent_amount;
 
