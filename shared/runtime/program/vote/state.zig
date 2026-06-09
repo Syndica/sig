@@ -697,10 +697,17 @@ pub const CircBufV1 = struct {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L20
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v6.0.0/vote-interface/src/state/vote_state_versions.rs#L18
 /// [SIMD-0185] v4 added with discriminant 3.
+///
+/// In `solana-vote-interface` >= 6.0 the variant-0 slot was repurposed from the
+/// legacy `V0_23_5` layout into a zero-sized `Uninitialized` marker. Bincode
+/// auto-derived deserialization therefore succeeds on a leading `u32` tag of
+/// 0 (consuming only those 4 bytes), letting callers such as
+/// `initialize_account` continue into the signer check rather than failing
+/// during deserialization of a stale V0_23_5 body.
 pub const VoteStateVersions = union(enum(u32)) {
-    v0_23_5: VoteState0_23_5,
+    uninitialized: void,
     v1_14_11: VoteState1_14_11,
     v3: VoteStateV3,
     v4: VoteStateV4,
@@ -725,7 +732,7 @@ pub const VoteStateVersions = union(enum(u32)) {
 
     pub fn deinit(self: *const VoteStateVersions, allocator: Allocator) void {
         switch (self.*) {
-            .v0_23_5 => |*vote_state| vote_state.deinit(allocator),
+            .uninitialized => {},
             .v1_14_11 => |*vote_state| vote_state.deinit(allocator),
             .v3 => |*vote_state| vote_state.deinit(allocator),
             .v4 => |*vote_state| vote_state.deinit(allocator),
@@ -752,44 +759,7 @@ pub const VoteStateVersions = union(enum(u32)) {
     ) !VoteStateV4 {
         const default_collector = vote_pubkey orelse Pubkey.ZEROES;
         switch (self) {
-            .v0_23_5 => |state| {
-                defer self.deinit(allocator);
-
-                const authorized_voters: AuthorizedVoters = if (state.voter.isZeroed())
-                    .EMPTY
-                else
-                    try AuthorizedVoters.init(
-                        allocator,
-                        state.voter_epoch,
-                        state.voter,
-                    );
-                errdefer authorized_voters.deinit(allocator);
-
-                const votes = try VoteStateVersions.landedVotesFromLockouts(
-                    allocator,
-                    state.votes.items,
-                );
-                errdefer allocator.free(votes);
-
-                const epoch_credits = try state.epoch_credits.clone(allocator);
-                errdefer epoch_credits.deinit(allocator);
-
-                return .{
-                    .node_pubkey = state.node_pubkey,
-                    .withdrawer = state.withdrawer,
-                    .inflation_rewards_collector = default_collector,
-                    .block_revenue_collector = state.node_pubkey,
-                    .inflation_rewards_commission_bps = @as(u16, state.commission) * 100,
-                    .block_revenue_commission_bps = 10_000,
-                    .pending_delegator_rewards = 0,
-                    .bls_pubkey_compressed = null,
-                    .votes = .fromOwnedSlice(votes),
-                    .root_slot = state.root_slot,
-                    .authorized_voters = authorized_voters,
-                    .epoch_credits = epoch_credits,
-                    .last_timestamp = state.last_timestamp,
-                };
-            },
+            .uninitialized => return InstructionError.UninitializedAccount,
             .v1_14_11 => |state| {
                 defer self.deinit(allocator);
 
@@ -870,40 +840,7 @@ pub const VoteStateVersions = union(enum(u32)) {
         switch (self) {
             .v3 => |state| return .{ .v3 = state },
             .v4 => |state| return .{ .v4 = state },
-            .v0_23_5 => |state| {
-                defer self.deinit(allocator);
-
-                const authorized_voters: AuthorizedVoters = if (state.voter.isZeroed())
-                    .EMPTY
-                else
-                    try AuthorizedVoters.init(
-                        allocator,
-                        state.voter_epoch,
-                        state.voter,
-                    );
-                errdefer authorized_voters.deinit(allocator);
-
-                const votes_slice = try VoteStateVersions.landedVotesFromLockouts(
-                    allocator,
-                    state.votes.items,
-                );
-                errdefer allocator.free(votes_slice);
-
-                const epoch_credits = try state.epoch_credits.clone(allocator);
-                errdefer epoch_credits.deinit(allocator);
-
-                return .{ .v3 = .{
-                    .node_pubkey = state.node_pubkey,
-                    .withdrawer = state.withdrawer,
-                    .commission = state.commission,
-                    .votes = .fromOwnedSlice(votes_slice),
-                    .root_slot = state.root_slot,
-                    .voters = authorized_voters,
-                    .prior_voters = CircBufV1.init(),
-                    .epoch_credits = epoch_credits,
-                    .last_timestamp = state.last_timestamp,
-                } };
-            },
+            .uninitialized => return InstructionError.UninitializedAccount,
             .v1_14_11 => |state| {
                 defer self.deinit(allocator);
 
@@ -934,11 +871,11 @@ pub const VoteStateVersions = union(enum(u32)) {
         }
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v6.0.0/vote-interface/src/state/vote_state_versions.rs#L117
     /// [SIMD-0185] v4 is never uninitialized.
     pub fn isUninitialized(self: VoteStateVersions) bool {
         switch (self) {
-            .v0_23_5 => |state| return state.voter.equals(&Pubkey.ZEROES),
+            .uninitialized => return true,
             .v1_14_11 => |state| return state.voters.count() == 0,
             .v3 => |state| return state.voters.count() == 0,
             .v4 => |_| return false,
@@ -2932,32 +2869,13 @@ test "state.Lockout.isLockedOutAtSlot" {
 test "state.VoteStateV3.convertToV4" {
     const allocator = std.testing.allocator;
     const vote_pubkey = Pubkey.ZEROES;
-    // VoteState0_23_5 -> V4
+    // Uninitialized -> V4 surfaces UninitializedAccount (SIMD-0185).
     {
-        const vote_state_0_23_5: VoteStateVersions = .{ .v0_23_5 = try VoteState0_23_5.init(
-            Pubkey.ZEROES,
-            Pubkey.ZEROES,
-            Pubkey.ZEROES,
-            10,
-            0,
-        ) };
-        const vote_state = try VoteStateVersions.convertToV4(
-            vote_state_0_23_5,
-            allocator,
-            vote_pubkey,
+        const uninitialized_versions: VoteStateVersions = .uninitialized;
+        try std.testing.expectError(
+            InstructionError.UninitializedAccount,
+            VoteStateVersions.convertToV4(uninitialized_versions, allocator, vote_pubkey),
         );
-        defer vote_state.deinit(allocator);
-
-        try std.testing.expectEqual(0, vote_state.authorized_voters.count());
-        try std.testing.expect(vote_state.withdrawer.equals(&Pubkey.ZEROES));
-        try std.testing.expectEqual(10, vote_state.commission());
-        try std.testing.expectEqual(0, vote_state.votes.items.len);
-        try std.testing.expectEqual(null, vote_state.root_slot);
-        try std.testing.expectEqual(1000, vote_state.inflation_rewards_commission_bps);
-        try std.testing.expectEqual(10_000, vote_state.block_revenue_commission_bps);
-        try std.testing.expectEqual(0, vote_state.epoch_credits.items.len);
-        try std.testing.expectEqual(0, vote_state.last_timestamp.slot);
-        try std.testing.expectEqual(0, vote_state.last_timestamp.timestamp);
     }
     // VoteStatev1_14_11 -> V4
     {
@@ -3121,26 +3039,20 @@ test "state.VoteStateV3.setNewAuthorizedVoter: invalid account data" {
     );
 }
 
-test "state.VoteStateV3.isUninitialized: VoteState0_23_5 invalid account data" {
-    // Test attempt to set a voter with an invalid target epoch
+test "state.VoteStateV3.isUninitialized: Uninitialized variant" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const node_publey = Pubkey.initRandom(prng.random());
-    const authorized_voter = Pubkey.initRandom(prng.random());
     const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
-    const epoch = 2; // epoch of current authorized voter
 
-    var vote_state = VoteStateVersions{ .v0_23_5 = try VoteState0_23_5.init(
-        node_publey,
-        authorized_voter,
-        withdrawer,
-        commission,
-        epoch,
-    ) };
+    // In `solana-vote-interface` >= 6.0 the variant-0 slot is the unit
+    // `Uninitialized` marker, which `isUninitialized()` must always report
+    // as uninitialized regardless of any payload (there is none).
+    var vote_state: VoteStateVersions = .uninitialized;
     defer vote_state.deinit(allocator);
 
-    try std.testing.expect(!vote_state.isUninitialized());
+    try std.testing.expect(vote_state.isUninitialized());
 
     const uninitialized_state = VoteStateVersions{
         .v3 = try createTestVoteStateV3(
@@ -6516,32 +6428,19 @@ test "state.VoteState.delegating methods" {
     }
 }
 
-test "state.VoteStateVersions.convertToVoteState: v0_23_5 to v3" {
+test "state.VoteStateVersions.convertToVoteState: uninitialized errors" {
     const allocator = std.testing.allocator;
-    const node_pk = Pubkey.ZEROES;
-    const voter_pk = Pubkey.ZEROES;
-    const withdrawer_pk = Pubkey.ZEROES;
 
-    var versions: VoteStateVersions = .{ .v0_23_5 = try VoteState0_23_5.init(
-        node_pk,
-        voter_pk,
-        withdrawer_pk,
-        10,
-        0,
-    ) };
-    const vs = try versions.convertToVoteState(allocator, null, false);
-    defer vs.deinit(allocator);
-
-    try std.testing.expect(vs == .v3);
-    try std.testing.expect(vs != .v4);
-    try std.testing.expect(vs.nodePubkey().equals(&node_pk));
-    try std.testing.expect(vs.withdrawerKey().equals(&withdrawer_pk));
-    try std.testing.expectEqual(10, vs.commission());
-    try std.testing.expectEqual(null, vs.rootSlot());
-    try std.testing.expectEqual(0, vs.votes().len);
-    try std.testing.expectEqual(0, vs.epochCreditsList().len);
-    // v0_23_5 with ZEROES voter → authorized_voters count is 0
-    try std.testing.expectEqual(0, vs.authorizedVoters().count());
+    // `Uninitialized` cannot be converted to either V3 or V4 — both targets
+    // must surface `UninitializedAccount` (matches agave's
+    // `try_convert_to_v3` / `try_convert_to_v4`).
+    inline for (.{ true, false }) |target_v4| {
+        const versions: VoteStateVersions = .uninitialized;
+        try std.testing.expectError(
+            InstructionError.UninitializedAccount,
+            versions.convertToVoteState(allocator, null, target_v4),
+        );
+    }
 }
 
 test "state.VoteStateVersions.convertToVoteState: v1_14_11 to v3" {
