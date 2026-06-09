@@ -140,7 +140,7 @@ fn applyBuiltinProgramFeatureTransitions(
 
     for (program.precompiles.PRECOMPILES) |precompile| {
         const feature_id = precompile.required_feature orelse continue;
-        if (!feature_set.active(feature_id, 0)) continue;
+        if (!new_feature_activations.active(feature_id, slot)) continue;
 
         const maybe_account = account_store.reader().getLatest(
             allocator,
@@ -149,7 +149,7 @@ fn applyBuiltinProgramFeatureTransitions(
         defer if (maybe_account) |account| account.deinit(allocator);
 
         // If account is present and executable, do nothing. Otherwise burn and purge, then create a new account.
-        if (maybe_account) |account| if (account.executable) return;
+        if (maybe_account) |account| if (account.executable) continue;
 
         // TODO: burn_and_purge_account
 
