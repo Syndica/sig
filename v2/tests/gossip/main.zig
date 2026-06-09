@@ -79,7 +79,7 @@ pub fn main() !void {
     spawned.cancel();
 
     // and then actually wait for the services to exit
-    try spawned.wait(10 * std.time.ns_per_ms);
+    try spawned.wait(2 * std.time.ns_per_s);
 
     var msgs: std.ArrayList(lib.gossip.GossipMessage) = .empty;
     defer msgs.deinit(gpa);
