@@ -391,20 +391,10 @@ pub fn execute(
             return error.InvalidInstructionData;
         },
         .move_stake => |lamports| {
-            if (!ic.tc.feature_set.active(
-                .move_stake_and_move_lamports_ixs,
-                ic.tc.slot,
-            )) return error.InvalidInstructionData;
-
             try ic.ixn_info.checkNumberOfAccounts(3);
             try moveStake(allocator, ic, 0, lamports, 1, 2);
         },
         .move_lamports => |lamports| {
-            if (!ic.tc.feature_set.active(
-                .move_stake_and_move_lamports_ixs,
-                ic.tc.slot,
-            )) return error.InvalidInstructionData;
-
             try ic.ixn_info.checkNumberOfAccounts(3);
             try moveLamports(allocator, ic, 0, lamports, 1, 2);
         },
@@ -3487,9 +3477,7 @@ test "stake.move_stake" {
                 },
                 .compute_meter = 10_000,
                 .sysvar_cache = sysvar_cache,
-                .feature_set = &.{
-                    .{ .feature = .move_stake_and_move_lamports_ixs },
-                },
+                .feature_set = &.{},
             },
             .{
                 .accounts = &.{
@@ -3586,9 +3574,7 @@ test "stake.move_lamports" {
             },
             .compute_meter = 10_000,
             .sysvar_cache = sysvar_cache,
-            .feature_set = &.{
-                .{ .feature = .move_stake_and_move_lamports_ixs },
-            },
+            .feature_set = &.{},
         },
         .{
             .accounts = &.{
