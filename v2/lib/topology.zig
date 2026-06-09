@@ -731,6 +731,21 @@ pub fn Bind(
                 return self.meta_bufs.activity_views[0..self.services_index.len];
             }
 
+            /// Returns true if any services are active.
+            /// Returns false if all services are idle.
+            pub fn isActive(self: *const Children) bool {
+                const activity_views = self.meta_bufs.activity_views[0..self.services_index.len];
+                return for (activity_views) |*view| {
+                    if (view.isActive()) break true;
+                } else false;
+            }
+
+            // Send the cancelation signal to all services.
+            pub fn cancel(self: *Children) void {
+                // go and ask all the services to cancel
+                for (self.activityViews()) |*view| view.cancel();
+            }
+
             pub fn wait(self: *Children, timeout_ns_opt: ?u64) error{Timeout}!void {
                 switch (self.mode_state) {
                     .sandboxed => |*sb| {

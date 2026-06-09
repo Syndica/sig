@@ -72,18 +72,11 @@ pub fn main() !void {
     var spawned: topology.Children = undefined;
     try spawned.spawn(.sandboxed, &service_map);
 
-    const activities = spawned.activityViews();
-
     // wait for gossip and telemetry to go idle
-    blk: while (true) {
-        for (activities) |*view| {
-            if (view.isActive()) continue :blk;
-        }
-        break :blk;
-    }
+    while (spawned.isActive()) : (std.atomic.spinLoopHint()) {}
 
     // go and ask all the services to cancel
-    for (activities) |*view| view.cancel();
+    spawned.cancel();
 
     // and then actually wait for the services to exit
     try spawned.wait(10 * std.time.ns_per_ms);
