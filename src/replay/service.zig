@@ -1400,22 +1400,22 @@ test "getActiveFeatures rejects wrong ownership" {
 
     try accounts.put(
         allocator,
-        sig.core.features.pubkey_map.get(.system_transfer_zero_check),
+        sig.core.features.pubkey_map.get(.blake3_syscall_enabled),
         acct,
     );
 
     const features = try getActiveFeatures(allocator, .{ .account_map = &accounts }, 0);
-    try std.testing.expect(!features.active(.system_transfer_zero_check, 1));
+    try std.testing.expect(!features.active(.blake3_syscall_enabled, 1));
 
     acct.owner = sig.runtime.ids.FEATURE_PROGRAM_ID;
     try accounts.put(
         allocator,
-        sig.core.features.pubkey_map.get(.system_transfer_zero_check),
+        sig.core.features.pubkey_map.get(.blake3_syscall_enabled),
         acct,
     );
 
     const features2 = try getActiveFeatures(allocator, .{ .account_map = &accounts }, 0);
-    try std.testing.expect(features2.active(.system_transfer_zero_check, 1));
+    try std.testing.expect(features2.active(.blake3_syscall_enabled, 1));
 }
 
 test trackNewSlots {
