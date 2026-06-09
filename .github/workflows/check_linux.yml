@@ -31,7 +31,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: kcov-${{ hashFiles('build.zig', 'build.zig.zon', 'v2/build.zig', 'v2/build.zig.zon') }}
+          cache-key: kcov-${{ hashFiles('build.zig', 'build.zig.zon', 'v2/build.zig', 'v2/build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Pre-download zig dependencies
         run: |
@@ -114,7 +114,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: selfhosted-release-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          cache-key: selfhosted-release-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Build
         run: |
@@ -149,7 +149,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Build
         run: |
@@ -179,7 +179,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon', 'v2/build.zig', 'v2/build.zig.zon') }}
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon', 'v2/build.zig', 'v2/build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Install Python PIP
         run: |
@@ -188,17 +188,25 @@ jobs:
 
       - name: Lint (Zig)
         run: |
-          zig fmt --check src/ build.zig
+          zig fmt --check src/ shared/ build.zig
           cd conformance/
           zig fmt --check src/ build.zig
 
       - name: Check style
         run: |
           python3 scripts/style.py --check src
+          python3 scripts/style.py --check shared
           python3 scripts/style.py --check conformance/src
 
       - name: Check docs
         run: python3 docs/check.py ./
+
+      - name: Shared tests
+        run: |
+          sudo apt-get update -y && sudo apt-get install wget -y
+          ./scripts/proxy_workaround.sh zig shared/build.zig.zon
+          cd shared
+          zig build test -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: V2 checks
         run: |

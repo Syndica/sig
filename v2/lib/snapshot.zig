@@ -1,16 +1,15 @@
 const std = @import("std");
 const lib = @import("lib.zig");
 
+const Slot = lib.solana.Slot;
+const Hash = lib.solana.Hash;
+
 pub const download = @import("snapshot/download.zig");
 
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("snapshot/download.zig");
     }
-}
-
-comptime {
-    _ = download;
 }
 
 pub const SnapshotSourceRing = lib.ipc.Ring(256, SnapshotSource);
@@ -51,5 +50,21 @@ pub const SnapshotConfig = extern struct {
     pub fn knownValidators(self: *const SnapshotConfig) KnownValidators {
         if (self.known_validators_allow_all) return .allow_all;
         return .{ .set = self.known_validators_buffer[0..self.known_validators_len] };
+    }
+};
+
+// Holds decompressed snapshot data given to accounts_db service
+pub const SnapshotDataRing = lib.ipc.Ring(16 * 1024 * 1024, u8);
+
+pub const ReadySnapshot = extern struct {
+    slot: Slot,
+    hash: Hash,
+
+    pub fn format(self: *const ReadySnapshot, writer: *std.Io.Writer) !void {
+        return try writer.print("snapshot-{d}-{f}.tar.zst", .{ self.slot, self.hash });
+    }
+
+    pub fn name(self: *const ReadySnapshot, buf: []u8) ![]const u8 {
+        return try std.fmt.bufPrint(buf, "{f}", .{self});
     }
 };

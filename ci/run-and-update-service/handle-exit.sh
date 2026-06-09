@@ -8,7 +8,10 @@ log() { local level=$1; local message=$2;
     echo "time=$timestamp level=$level scope=handle-exit message=\"$message\"" >>"$BASE_DIR/logs/sig.log"
 }
 
-trap 'e=$?; [ $e -ne 0 ] && log error "handle-exit.sh exited with code $e. see sig.service logs"' EXIT
+logExit() {
+    e=$?; [ $e -ne 0 ] && log error "handle-exit.sh exited with code $e. see sig.service logs"
+}
+trap logExit EXIT
 
 if [[ "${SERVICE_RESULT:=unknown} ${EXIT_CODE:=unknown} ${EXIT_STATUS:=unknown}" == "success killed TERM" ]]; then
     # During upgrades, we use `systemctl stop` which signals TERM to the
@@ -25,8 +28,16 @@ if [ -d "$BASE_DIR/validator" ]; then
     # compress validator state to a tarball
     cp "$BASE_DIR/logs/sig.log" "$BASE_DIR/validator/"
     timestamp="$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")"
-    tar --zstd -cf "$BASE_DIR/validator-${timestamp}.tar.zst" -C "$BASE_DIR" validator
+    archive_name="validator-${timestamp}.tar.zst";
+    archive_path="$BASE_DIR/$archive_name"
+    tar --zstd -cf $archive_path -C "$BASE_DIR" validator
     rm -rf "$BASE_DIR/validator"
+
+    logExitAndRm() {
+        rm $archive_path
+        logExit
+    }
+    trap logExitAndRm EXIT
 
     # upload artifact to S3 and clean up local state
     . /etc/sig.conf  # get S3_BUCKET
@@ -34,6 +45,5 @@ if [ -d "$BASE_DIR/validator" ]; then
         log error "S3_BUCKET is not set, cannot upload validator archive"
         exit 1
     fi
-    aws s3 cp "$BASE_DIR/validator-${timestamp}.tar.zst" "s3://$S3_BUCKET/ci-crashes/validator-${timestamp}.tar.zst"
-    rm "$BASE_DIR/validator-${timestamp}.tar.zst"
+    aws s3 cp $archive_path "s3://$S3_BUCKET/ci-crashes/$(basename $archive_path)" || log error "failed to upload validator archive to s3 bucket"
 fi

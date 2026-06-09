@@ -7,6 +7,8 @@ const executor = sig.runtime.executor;
 const serialize = sig.runtime.program.bpf.serialize;
 const syscalls = sig.vm.syscalls;
 const memory = sig.vm.memory;
+const AccessViolationHandlerCtx =
+    sig.runtime.program.bpf_loader.AccessViolationHandlerCtx;
 
 const Vm = sig.vm.Vm;
 const TransactionContext = sig.runtime.transaction_context.TransactionContext;
@@ -190,19 +192,21 @@ fn executeSyscall(
     defer allocator.free(rodata);
     @memcpy(rodata, pb_vm.rodata);
 
+    // Legacy SBPF (v0/v1/v2): rodata lives at MM_BYTECODE_START (SIMD-0189
+    // moves it for v3). The vm_syscalls harness uses v0.
     const executable: sig.vm.Executable = .{
         .instructions = &.{},
         .bytes = rodata,
         .text_section_len = 0,
         .version = .v0,
         .ro_section = .{ .borrowed = .{
-            .offset = memory.RODATA_START,
+            .offset = memory.BYTECODE_START,
             .start = 0,
             .end = rodata.len,
         } },
         .entry_pc = 0,
         .config = config,
-        .text_vaddr = memory.RODATA_START,
+        .text_vaddr = memory.BYTECODE_START,
         .function_registry = .{},
         .from_asm = false,
     };
@@ -241,7 +245,8 @@ fn executeSyscall(
     defer input_memory_regions.deinit(allocator);
 
     try input_memory_regions.appendSlice(allocator, &.{
-        memory.Region.init(.constant, rodata, memory.RODATA_START),
+        // v0 lenient layout: rodata at MM_BYTECODE_START, matching Agave.
+        memory.Region.init(.constant, rodata, memory.BYTECODE_START),
         memory.Region.initGapped(
             .mutable,
             stack,
@@ -295,6 +300,24 @@ fn executeSyscall(
         return error.SyscallNotFound;
     };
     const syscall_fn = syscalls.Syscall.map.get(syscall_tag);
+
+    // SIMD-0460: install the access-violation handler so the syscall sees
+    // writable+owned account regions auto-grown on write, matching the
+    // `MemoryMapping::new_with_access_violation_handler` setup in solfuzz-agave's
+    // fuzz_syscall harness.
+    // [solfuzz-agave] https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.1.0-beta.1/src/vm_syscalls.rs#L289-L297
+    var avh_ctx: AccessViolationHandlerCtx = .{
+        .tc = &tc,
+        .allocator = allocator,
+        .direct_mapping = direct_mapping,
+    };
+    if (virtual_address_space_adjustments) {
+        tc.last_access_violation = null;
+        vm.memory_map.setAccessViolationHandler(.{
+            .ctx = @ptrCast(&avh_ctx),
+            .call = AccessViolationHandlerCtx.handle,
+        });
+    }
 
     var execution_error: ?sig.vm.ExecutionError = null;
     syscall_fn(&tc, &vm.memory_map, &vm.registers) catch |err| {

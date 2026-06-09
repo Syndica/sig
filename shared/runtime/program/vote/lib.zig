@@ -1,0 +1,25 @@
+const sig = @import("../../../lib.zig");
+
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("error.zig");
+        _ = @import("execute.zig");
+        _ = @import("instruction.zig");
+        _ = @import("state.zig");
+        _ = @import("state_v4.zig");
+    }
+}
+
+pub const Instruction = @import("instruction.zig").Instruction;
+pub const state = @import("state.zig");
+
+/// [agave] https://github.com/solana-program/vote/blob/f6e499f2a29d890896af4f063d8eea762d4d43b7/program/src/lib.rs#L7C30-L7C73
+pub const ID: sig.core.Pubkey = .parse("Vote111111111111111111111111111111111111111");
+
+pub const COMPUTE_UNITS = 2_100;
+
+pub const vote_instruction = @import("instruction.zig");
+
+pub const VoteError = @import("error.zig").VoteError;
+pub const VoteAuthorize = state.VoteAuthorize;
+pub const execute = @import("execute.zig").execute;

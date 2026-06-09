@@ -17,6 +17,7 @@ pub fn Ring(N: comptime_int, T: type) type {
         const Pos = extern struct {
             value: Atomic(u32) = .init(0),
             cached_other: u32 = 0,
+            closed: Atomic(bool) = .init(false),
         };
 
         pub fn init(self: *RingSelf) void {
@@ -26,49 +27,116 @@ pub fn Ring(N: comptime_int, T: type) type {
 
         pub const Side = enum { reader, writer };
 
-        /// Get a reference to one side of the Ring buffer to start using items.
-        pub fn get(self: *RingSelf, comptime side: Side) Iterator(side) {
+        pub fn getView(self: *RingSelf, comptime side: Side) View(side) {
             const pos = if (side == .reader) &self.head else &self.tail;
-            return .{ .ring = self, .pos = pos.value.raw, .other = pos.cached_other };
+            return .{
+                .ring = self,
+                .pos = pos.value.raw,
+                .other = pos.cached_other,
+                .closed = pos.closed.raw,
+            };
         }
 
-        pub fn Iterator(comptime side: Side) type {
+        pub fn View(comptime side: Side) type {
             return struct {
                 ring: *RingSelf,
                 pos: u32,
                 other: u32,
+                closed: bool,
+
+                const Self = @This();
+                const Slice = if (side == .reader) []const T else []T;
+
+                pub fn getBuffer(self: *Self) ?Slice {
+                    std.debug.assert(!self.closed);
+                    switch (side) {
+                        .reader => {
+                            // head == cached_tail (empty)
+                            if (self.pos == self.other) {
+                                // cached_tail = load(tail)
+                                self.other = self.ring.tail.value.load(.acquire);
+                                if (self.pos == self.other) {
+                                    if (self.ring.tail.closed.load(.acquire)) return &.{};
+                                    return null;
+                                }
+                                self.ring.head.cached_other = self.other;
+                            }
+                            const size = self.other -% self.pos; // tail -% head
+                            std.debug.assert(size <= N);
+                            const idx = self.pos % N;
+                            return self.ring.array[idx..@min(idx + size, N)];
+                        },
+                        .writer => {
+                            var size = self.pos -% self.other; // tail -% cached_head (occupied)
+                            if (size == N) {
+                                if (self.ring.head.closed.load(.acquire)) return &.{};
+                                // cached_head = load(head)
+                                self.other = self.ring.head.value.load(.acquire);
+                                size = self.pos -% self.other;
+                                if (size == N) return null;
+                                self.ring.tail.cached_other = self.other;
+                            }
+                            std.debug.assert(size < N);
+                            const idx = self.pos % N;
+                            return self.ring.array[idx..@min(idx + (N - size), N)];
+                        },
+                    }
+                }
+
+                pub fn close(self: *Self) void {
+                    std.debug.assert(!self.closed);
+                    self.closed = true;
+                    const pos = if (side == .reader) &self.ring.head else &self.ring.tail;
+                    pos.closed.store(true, .release);
+                }
+
+                pub fn advance(self: *Self, n: usize) void {
+                    self.bump(n);
+                    self.commit();
+                }
+
+                fn bump(self: *Self, n: usize) void {
+                    std.debug.assert(!self.closed);
+                    const available = switch (side) {
+                        .reader => self.other -% self.pos,
+                        .writer => N - (self.pos -% self.other),
+                    };
+                    std.debug.assert(n <= available);
+                    self.pos +%= @intCast(n);
+                }
+
+                fn commit(self: *const Self) void {
+                    std.debug.assert(!self.closed);
+                    const pos = if (side == .reader) &self.ring.head else &self.ring.tail;
+                    pos.value.store(self.pos, .release);
+                }
+            };
+        }
+
+        /// Get a reference to one side of the Ring buffer to start using items.
+        pub fn get(self: *RingSelf, comptime side: Side) Iterator(side) {
+            return .{ .view = self.getView(side) };
+        }
+
+        pub fn Iterator(comptime side: Side) type {
+            return struct {
+                view: View(side),
 
                 const Self = @This();
                 const Ptr = if (side == .reader) *const T else *T;
 
                 /// Returns a pointer to the next item to consume on this side of the ring buffer.
                 pub fn peek(self: *Self) ?Ptr {
-                    return switch (side) {
-                        .reader => {
-                            if (self.pos == self.other) { // head == cached_tail
-                                self.other = self.ring.tail.value.load(.acquire); // cached_tail = load(tail)
-                                if (self.pos == self.other) return null;
-                                self.ring.head.cached_other = self.other;
-                            }
-                            return &self.ring.array[self.pos % N];
-                        },
-                        .writer => {
-                            if (self.pos -% self.other == N) { // tail -% cached_head == N
-                                self.other = self.ring.head.value.load(.acquire); // cached_head = load(head)
-                                if (self.pos -% self.other == N) return null;
-                                self.ring.tail.cached_other = self.other;
-                            }
-                            std.debug.assert((self.pos -% self.other) < N);
-                            return &self.ring.array[self.pos % N];
-                        },
-                    };
+                    const buf = self.view.getBuffer() orelse return null;
+                    if (buf.len == 0) return null; // closed == empty in this api
+                    return &buf[0];
                 }
 
                 /// If theres an element to use, returns the element and advance's this view of the
                 /// ring buffer. NOTE: Does NOT update the ring buffer for the other side.
                 pub fn next(self: *Self) ?Ptr {
                     const ptr = self.peek() orelse return null;
-                    self.pos +%= 1;
+                    self.view.bump(1);
                     return ptr;
                 }
 
@@ -76,8 +144,7 @@ pub fn Ring(N: comptime_int, T: type) type {
                 // 2) the last markUsed() call, update the position of this side on the ring buffer, making any
                 // changes to the memory visible to the other side.
                 pub fn markUsed(self: *const Self) void {
-                    const pos = if (side == .reader) &self.ring.head else &self.ring.tail;
-                    pos.value.store(self.pos, .release);
+                    self.view.commit();
                 }
             };
         }

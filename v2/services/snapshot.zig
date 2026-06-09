@@ -5,7 +5,10 @@ const tel = lib.telemetry;
 
 const download = lib.snapshot.download;
 
+const SnapshotConfig = lib.snapshot.SnapshotConfig;
 const SnapshotSourceRing = lib.snapshot.SnapshotSourceRing;
+const SnapshotDataRing = lib.snapshot.SnapshotDataRing;
+
 const Metrics = download.Metrics;
 const DownloadResult = download.DownloadResult;
 const Downloader = download.Downloader;
@@ -20,66 +23,99 @@ pub const panic = start.panic;
 pub const std_options = start.options;
 
 pub const ReadOnly = struct {
-    config: *const lib.snapshot.SnapshotConfig,
+    config: *const SnapshotConfig,
 };
 
 pub const ReadWrite = struct {
-    gossip_to_snapshot: *SnapshotSourceRing,
+    source_from_gossip: *SnapshotSourceRing,
+    ready_snapshot_out: *SnapshotDataRing,
     tel: *tel.Region,
 };
 
-pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
-    const logger = rw.tel.acquireLogger(@tagName(name), "snapshot");
+pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
+    _ = runner;
+    const logger = rw.tel.acquireLogger(@tagName(name), "main");
     const metrics = rw.tel.metricAppender().appendFields(Metrics, Metrics.fields_config);
-
     rw.tel.signalReady();
 
-    const snapshot_dir = ro.config.folder_buffer[0..ro.config.folder_len];
+    const snapshot_dir_path = ro.config.folder_buffer[0..ro.config.folder_len];
     const known_validators = ro.config.knownValidators();
 
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_path, .{ .iterate = true });
+    defer snapshot_dir.close();
+
     const result: DownloadResult = result: {
-        var snapshot_dir_handle = try std.fs.cwd().makeOpenPath(snapshot_dir, .{ .iterate = true });
-        defer snapshot_dir_handle.close();
+        logger.info().logf("snapshot path {s}", .{snapshot_dir_path});
 
-        logger.info().logf("snapshot path {s}", .{snapshot_dir});
-
-        if (try download.findExistingSnapshot(snapshot_dir_handle)) |existing| {
+        if (try download.findExistingSnapshot(snapshot_dir)) |existing| {
             break :result .{ .already_exists = existing };
         }
 
         var downloader = try Downloader.init(
-            rw.gossip_to_snapshot,
+            rw.source_from_gossip,
             known_validators,
-            snapshot_dir_handle,
+            snapshot_dir,
             metrics,
-            logger,
+            .from(logger),
         );
         defer downloader.deinit();
 
         break :result try downloader.run();
     };
 
-    switch (result) {
-        .already_exists => |existing| {
+    const ready_snapshot = switch (result) {
+        .already_exists => |existing| blk: {
             logger.info().logf("snapshot already exists, skipping download name={f}", .{
                 existing,
             });
+            break :blk existing;
         },
-        .downloaded => |snapshot| {
+        .downloaded => |snapshot| blk: {
             logger.info().logf("snapshot download completed slot={d} hash={f} path={s}/{f}", .{
                 snapshot.slot,
                 snapshot.hash,
-                snapshot_dir,
+                snapshot_dir_path,
                 snapshot,
             });
+            break :blk snapshot;
         },
         .failed => |reason| {
             logger.err().logf("snapshot download failed reason={s}", .{
                 @tagName(reason),
             });
+            return error.SnapshotDownloadFailed;
         },
+    };
+
+    { // Send the decompressed snapshot data to accounts_db service
+        const Global = struct {
+            var zst_reader: lib.solana.snapshot.ZstReader = undefined;
+        };
+
+        var snapshot_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const snapshot_path = try ready_snapshot.name(&snapshot_path_buf);
+
+        const zst_reader = &Global.zst_reader;
+        try zst_reader.init(snapshot_dir, snapshot_path);
+        defer zst_reader.deinit();
+
+        var out = rw.ready_snapshot_out.getView(.writer);
+        defer out.close();
+
+        while (true) {
+            const buf: []u8 = while (true) : (std.atomic.spinLoopHint())
+                break out.getBuffer() orelse continue;
+            if (buf.len == 0) break; // reader closed their side
+
+            // cap decompress size to ensure advance() is called frequently enough to unblock rooted
+            const decompressed = buf[0..@min(buf.len, 128 * 1024)];
+
+            const n = try zst_reader.read(.from(logger), decompressed);
+            if (n == 0) break;
+            out.advance(n);
+        }
     }
 
-    // TODO: load snapshot and stream to accountsdb service.
+    logger.info().logf("snapshot service finished", .{});
     while (true) std.atomic.spinLoopHint();
 }

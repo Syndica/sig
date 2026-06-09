@@ -3,6 +3,11 @@ const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
 
+const tel = lib.telemetry;
+
+const AccountPool = lib.accounts_db.AccountPool;
+const AccountLookups = lib.accounts_db.AccountLookups;
+
 const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;
 
@@ -23,13 +28,20 @@ pub const std_options = start.options;
 pub const ReadOnly = struct {};
 pub const ReadWrite = struct {
     deshredded_in: *lib.shred.DeshredRing,
+    account_pool: *AccountPool,
+    account_lookups: *AccountLookups,
+    tel: *tel.Region,
 };
 
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
-pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
+    _ = runner;
     const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
     defer zone.deinit();
+
+    const logger = rw.tel.acquireLogger(@tagName(name), "main");
+    rw.tel.signalReady();
 
     var fba = std.heap.FixedBufferAllocator.init(&scratch_memory);
     const allocator = fba.allocator();
@@ -47,7 +59,7 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
         defer received_zone.deinit();
 
         const result = try map_tree.put(deshredded_fec_set);
-        std.log.info(
+        logger.info().logf(
             "{}: {f}, last? {}",
             .{ deshredded_fec_set.id, result, deshredded_fec_set.slot_complete },
         );

@@ -173,6 +173,7 @@ pub const memfd = struct {
         }
 
         pub const mmap = mmapInner;
+        pub const mmapStaticSize = mmapStaticSizeInner;
     };
 
     pub const RO = extern struct {
@@ -193,23 +194,93 @@ pub const memfd = struct {
         }
 
         pub const mmap = mmapInner;
+        pub const mmapStaticSize = mmapStaticSizeInner;
     };
 
-    fn mmapInner(self: anytype, ptr: ?[*]align(page_size_min) u8) ![]align(page_size_min) u8 {
+    pub const MapArgs = struct {
+        at_ptr: ?[*]align(page_size_min) u8 = null,
+        populate: bool = false,
+    };
+
+    fn mmapInner(self: anytype, args: MapArgs) ![]align(page_size_min) u8 {
         const access = switch (@TypeOf(self)) {
             *const RW, *RW, RW => linux.PROT.READ | linux.PROT.WRITE,
             *const RO, *RO, RO => linux.PROT.READ,
             else => @compileError("unsupported type"),
         };
 
+        // TODO: HUGEPAGE support
         return try std.posix.mmap(
-            ptr,
+            args.at_ptr,
             self.size,
             access,
-            .{ .TYPE = .SHARED },
+            .{ .TYPE = .SHARED, .POPULATE = args.populate },
             self.fd,
             0,
         );
+    }
+
+    pub fn MapTypedArgs(comptime T: type) type {
+        return struct {
+            at_ptr: ?*align(page_size_min) T = null,
+            populate: bool = false,
+            const MapTypedArgsSelf = @This();
+
+            fn toAny(self: MapTypedArgsSelf) MapArgs {
+                return .{
+                    .at_ptr = @ptrCast(self.at_ptr),
+                    .populate = self.populate,
+                };
+            }
+        };
+    }
+
+    /// Helper equivalent to `mmap`, but casts to defined-layout `T`, asserting the runtime size matches.
+    fn mmapStaticSizeInner(
+        self: anytype,
+        comptime T: type,
+        args: MapTypedArgs(T),
+    ) !*align(page_size_min) T {
+        if (verifyIpcMmapType(T)) |err_msg| {
+            @compileError(err_msg ++ " are not supported: " ++ @typeName(T));
+        }
+        const expected_size = @sizeOf(T);
+        std.debug.assert(expected_size == self.size); // memfd size does not match mmap type
+        return @ptrCast(try mmapInner(self, args.toAny()));
+    }
+
+    /// Returns `null` if `T` is a supported, mmapable, fixed-size type.
+    /// Otherwise returns a general description of the type which can be used
+    /// like `desc ++ " are not supported"`
+    inline fn verifyIpcMmapType(comptime T: type) ?[]const u8 {
+        comptime {
+            switch (@typeInfo(T)) {
+                .int => |info| if (@popCount(info.bits) != 1) {
+                    return "integers with non-power of two bit sizes";
+                },
+                .float => |info| if (@popCount(info.bits) != 1) {
+                    return "floats with non-power of two bit sizes";
+                },
+                .@"enum" => |info| if (@popCount(@bitSizeOf(info.tag_type)) != 1) {
+                    return "enums with non-power of two bit sizes";
+                },
+                inline //
+                .@"struct",
+                .@"union",
+                => |info, tag| switch (info.layout) {
+                    .auto => return "auto layout " ++ @tagName(tag) ++ "s",
+                    .@"packed" => if (@popCount(@bitSizeOf(info.tag_type)) != 1) {
+                        return "packed structs with non-power of two bit sizes";
+                    },
+                    .@"extern" => {},
+                },
+                .array => |info| if (verifyIpcMmapType(info.child)) |child_desc| {
+                    return "arrays of " ++ child_desc;
+                },
+                inline else => |_, tag| return @tagName(tag) ++ "s",
+            }
+            return null;
+        }
     }
 };
 
@@ -257,7 +328,7 @@ pub const bpf = struct {
     }
 
     /// Only allows writing to stderr, sleeping, and exiting.
-    pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [64]sock_filter {
+    pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [66]sock_filter {
         // load syscall number
         const preamble = .{stmt(LD + W + ABS, @offsetOf(SECCOMP.data, "nr"))};
 
@@ -294,8 +365,8 @@ pub const bpf = struct {
             // snapshot
             allowSyscall(@intFromEnum(syscalls.io_uring_setup)) ++
             allowSyscall(@intFromEnum(syscalls.io_uring_enter)) ++
-            allowSyscall(@intFromEnum(syscalls.mmap)) ++
-            allowSyscall(@intFromEnum(syscalls.munmap)) ++
+            allowSyscall(@intFromEnum(syscalls.mmap)) ++ // used by io_uring init
+            allowSyscall(@intFromEnum(syscalls.munmap)) ++ // used by io_uring init
             allowSyscall(@intFromEnum(syscalls.openat)) ++
             allowSyscall(@intFromEnum(syscalls.getdents64)) ++
             allowSyscall(@intFromEnum(syscalls.mkdirat)) ++
@@ -303,6 +374,8 @@ pub const bpf = struct {
             allowSyscall(@intFromEnum(syscalls.pipe2)) ++
             allowSyscall(@intFromEnum(syscalls.renameat)) ++
             allowSyscall(@intFromEnum(syscalls.unlinkat)) ++
+            // accounts_db
+            allowSyscall(@intFromEnum(syscalls.fsync)) ++
             //
             syscall_fd_filters ++
             fall_through;

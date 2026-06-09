@@ -1,0 +1,240 @@
+const sig = @import("../lib.zig");
+const std = @import("std");
+
+const Pubkey = sig.core.Pubkey;
+const Epoch = sig.core.Epoch;
+const Rent = sig.runtime.sysvar.Rent;
+const AccountSharedData = sig.runtime.AccountSharedData;
+const EpochSchedule = sig.core.EpochSchedule;
+const TransactionError = sig.core.transaction_error.TransactionError;
+
+pub const RENT_EXEMPT_RENT_EPOCH: Epoch = std.math.maxInt(Epoch);
+/// Derived from `src/core/genesis_config.zig` as `GenesisConfig.default().slotsPerYear()`.
+/// The default genesis config uses `DEFAULT_TICKS_PER_SECOND` of 160 and
+/// `DEFAULT_TICKS_PER_SLOT` of 64. Note this is enough decimal digits to saturate what the f64 can
+/// represent (this must match for conformance).
+pub const DEFAULT_SLOTS_PER_YEAR: f64 = 78892314.983999997;
+
+pub const RentResult = union(enum) {
+    NoRentCollectionNow,
+    Exempt,
+    CollectRent: struct {
+        new_rent_epoch: Epoch,
+        rent_due: u64, // thought: should we have a Lamports = u64 type alias?
+    },
+};
+
+pub const RentDue = union(enum) {
+    Exempt,
+    Paying: u64,
+};
+
+pub const CollectedInfo = struct {
+    rent_amount: u64,
+    account_data_len_reclaimed: u64,
+    pub const NoneCollected: CollectedInfo = .{ .rent_amount = 0, .account_data_len_reclaimed = 0 };
+};
+
+// [agave] https://github.com/anza-xyz/solana-sdk/blob/801ac25f6d35d94736ed576425e44f9ec63de809/rent-collector/src/lib.rs#L21
+pub const RentCollector = struct {
+    epoch: Epoch,
+    epoch_schedule: EpochSchedule,
+    slots_per_year: f64,
+    rent: Rent,
+
+    pub const DEFAULT: RentCollector = .{
+        .epoch = 0,
+        .epoch_schedule = .INIT,
+        .slots_per_year = DEFAULT_SLOTS_PER_YEAR,
+        .rent = .INIT,
+    };
+    pub fn initRandom(random: std.Random) RentCollector {
+        return .{
+            .epoch = random.int(Epoch),
+            .epoch_schedule = .initRandom(random),
+            .slots_per_year = random.float(f64),
+            .rent = .initRandom(random),
+        };
+    }
+
+    fn calculateRentResult(
+        self: RentCollector,
+        address: *const Pubkey,
+        account: AccountSharedData,
+    ) RentResult {
+        if (account.rent_epoch == RENT_EXEMPT_RENT_EPOCH or account.rent_epoch > self.epoch)
+            // potentially rent paying account (or known and already marked exempt)
+            // Maybe collect rent later, leave account alone for now.
+            return .NoRentCollectionNow;
+        if (!shouldCollectRent(address, account.executable))
+            // easy to determine this account should not consider having rent collected from it
+            return .Exempt;
+
+        return switch (self.getRentDue(
+            account.lamports,
+            account.data.len,
+            account.rent_epoch,
+        )) {
+            // account will not have rent collected ever
+            .Exempt => .Exempt,
+            .Paying => |rent_due| blk: {
+                break :blk if (rent_due == 0)
+                    .NoRentCollectionNow
+                else
+                    .{ .CollectRent = .{
+                        .new_rent_epoch = self.epoch +| 1,
+                        .rent_due = rent_due,
+                    } };
+            },
+        };
+    }
+
+    pub fn shouldCollectRent(address: *const Pubkey, executable: bool) bool {
+        return !(executable or address.equals(&sig.runtime.ids.INCINERATOR));
+    }
+
+    pub fn getRentDue(
+        self: RentCollector,
+        lamports: u64,
+        data_len: usize,
+        account_rent_epoch: Epoch,
+    ) RentDue {
+        if (self.rent.isExempt(lamports, data_len)) return .Exempt;
+
+        if (account_rent_epoch > self.epoch) return .{ .Paying = 0 };
+
+        var slots_elapsed: u64 = 0;
+        for (account_rent_epoch..self.epoch + 1) |epoch| {
+            slots_elapsed +|= self.epoch_schedule.getSlotsInEpoch(epoch +| 1);
+        }
+
+        // as firedancer says: "Consensus-critical use of doubles :("
+        const years_elapsed: f64 = if (self.slots_per_year != 0.0)
+            @as(f64, @floatFromInt(slots_elapsed)) / self.slots_per_year
+        else
+            0;
+
+        const due = self.rent.dueAmount(data_len, years_elapsed);
+
+        return .{ .Paying = due };
+    }
+
+    pub const RentPaying = struct { lamports: u64, data_len: u64 };
+
+    pub const RentState = union(enum) {
+        /// account.lamports == 0
+        uninitialized,
+        /// 0 < account.lamports < rent-exempt-minimum
+        rent_paying: RentPaying,
+        /// account.lamports >= rent-exempt-minimum
+        rent_exempt,
+    };
+
+    pub fn getAccountRentState(self: RentCollector, lamports: u64, data_len: usize) RentState {
+        if (lamports == 0) return .uninitialized;
+        if (self.rent.isExempt(lamports, data_len)) return .rent_exempt;
+        return .{
+            .rent_paying = .{
+                .data_len = data_len,
+                .lamports = lamports,
+            },
+        };
+    }
+
+    pub fn transitionAllowed(pre: RentState, post: RentState) bool {
+        // can always transition away from RentPaying
+        if (post != .rent_paying) return true;
+        // can't transition an account into RentPaying
+        if (pre != .rent_paying) return false;
+
+        // can't remain RentPaying if resized or credited.
+        if (post.rent_paying.lamports > pre.rent_paying.lamports) return false;
+        if (post.rent_paying.data_len != pre.rent_paying.data_len) return false;
+
+        return true;
+    }
+
+    pub fn checkRentStateWithAccount(
+        pre: RentState,
+        post: RentState,
+        address: *const Pubkey,
+        index: u8,
+    ) ?TransactionError {
+        if (sig.runtime.ids.INCINERATOR.equals(address)) return null;
+        if (transitionAllowed(pre, post)) return null;
+        return .{ .InsufficientFundsForRent = .{ .account_index = index } };
+    }
+
+    pub fn testDefault(epoch: Epoch) RentCollector {
+        if (!@import("builtin").is_test) @compileError("default for test usage only");
+        return .{
+            .epoch = epoch,
+            .epoch_schedule = .INIT,
+            .slots_per_year = DEFAULT_SLOTS_PER_YEAR,
+            .rent = .INIT,
+        };
+    }
+};
+
+pub fn defaultCollector(epoch: Epoch) RentCollector {
+    return .testDefault(epoch);
+}
+
+test "calculate rent result" {
+    var collector = defaultCollector(0);
+    var account = AccountSharedData.EMPTY;
+
+    try std.testing.expectEqual(
+        .NoRentCollectionNow,
+        collector.calculateRentResult(&Pubkey.ZEROES, account),
+    );
+
+    account.executable = true;
+    try std.testing.expectEqual(
+        .Exempt,
+        collector.calculateRentResult(&Pubkey.ZEROES, account),
+    );
+
+    account.executable = false;
+    try std.testing.expectEqual(
+        .Exempt,
+        collector.calculateRentResult(&sig.runtime.ids.INCINERATOR, account),
+    );
+
+    // try a few combinations of rent collector rent epoch and collecting rent
+    inline for (&.{ .{ 2, 2 }, .{ 3, 5 } }) |rent| {
+        const rent_epoch = rent[0];
+        const rent_due_expected = rent[1];
+        collector.epoch = rent_epoch;
+
+        account.lamports = 10;
+        account.rent_epoch = 1;
+        const new_rent_epoch_expected = collector.epoch + 1;
+
+        try std.testing.expectEqual(
+            RentResult{
+                .CollectRent = .{
+                    .rent_due = rent_due_expected,
+                    .new_rent_epoch = new_rent_epoch_expected,
+                },
+            },
+            collector.calculateRentResult(&Pubkey.ZEROES, account),
+        );
+    }
+
+    // enough lamports to make us exempt
+    account.lamports = 1_000_000;
+    try std.testing.expectEqual(
+        RentResult.Exempt,
+        collector.calculateRentResult(&Pubkey.ZEROES, account),
+    );
+
+    // enough lamports to make us exempt
+    // but, our rent_epoch is set in the future, so we can't know if we are exempt yet or not.
+    // We don't calculate rent amount vs data if the rent_epoch is already in the future.
+    account.rent_epoch = 1_000_000;
+    try std.testing.expectEqual(
+        RentResult.NoRentCollectionNow,
+        collector.calculateRentResult(&Pubkey.ZEROES, account),
+    );
+}

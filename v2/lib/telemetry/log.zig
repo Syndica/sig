@@ -428,6 +428,44 @@ pub const Filter = struct {
         }
     }
 
+    /// Returns the length that would be written by `parseListAndWriteBinary`.
+    pub fn calcParseListAndWriteBinaryLength(
+        default_log_level: Level,
+        str: []const u8,
+    ) ParseError!u64 {
+        const buffer_len = if (@inComptime()) str.len else 4096;
+        var buffer: [buffer_len]u8 = undefined;
+        var discarding: std.Io.Writer.Discarding = .init(&buffer);
+        parseListAndWriteBinary(
+            &discarding.writer,
+            default_log_level,
+            str,
+        ) catch |err| switch (err) {
+            error.WriteFailed => unreachable,
+            error.InvalidLogLevel => |e| return e,
+        };
+        return discarding.count;
+    }
+
+    /// Like `parseListAndWriteBinary`, but runs at comptime and directly returns the encoded bytes.
+    /// Returns null instead of an error.
+    pub inline fn parseListStrLitIntoBinary(
+        comptime default_log_level: Level,
+        comptime str: []const u8,
+    ) ?[]const u8 {
+        comptime {
+            const len = calcParseListAndWriteBinaryLength(default_log_level, str) catch return null;
+            var result: [len]u8 = @splat(255);
+            var fbw: std.Io.Writer = .fixed(&result);
+            parseListAndWriteBinary(&fbw, default_log_level, str) catch |err| switch (err) {
+                error.WriteFailed => unreachable,
+                error.InvalidLogLevel => return null,
+            };
+            const copy = fbw.buffered()[0..].*;
+            return &copy;
+        }
+    }
+
     pub fn writeBinary(
         self: Filter,
         w: *std.Io.Writer,
@@ -447,9 +485,9 @@ pub const Filter = struct {
 
     pub const Header = extern struct {
         /// Length of zero represents `null`.
-        service_len: u32,
+        service_len: u32 align(1),
         /// Length of zero represents `null`.
-        scope_len: u32,
+        scope_len: u32 align(1),
         level: Level,
 
         pub fn encodedLength(self: Header) u32 {

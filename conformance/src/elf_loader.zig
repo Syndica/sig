@@ -117,7 +117,11 @@ fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEff
         .err_code = 0,
         .rodata_hash = xxhash(0, ro_data),
         .text_cnt = executable.instructions.len,
-        .text_off = executable.text_vaddr -| svm.memory.RODATA_START,
+        // Matches Agave's solfuzz harness: `text_vaddr.saturating_sub(MM_BYTECODE_START)`.
+        // For legacy ELFs (v<3) text lives inside the rodata region at vaddr
+        // `MM_BYTECODE_START + file_offset`, so this yields the file offset.
+        // For SIMD-0189 ELFs text starts exactly at `MM_BYTECODE_START`, so this is 0.
+        .text_off = executable.text_vaddr -| svm.memory.BYTECODE_START,
         .entry_pc = executable.entry_pc,
         .calldests_hash = calldests_hash,
     };
@@ -133,6 +137,11 @@ fn ebpfErrToCode(err: elf.LoadError) u32 {
         error.InvalidAlignment,
         error.StringTooLong,
         error.InvalidDynamicSectionTable,
+        error.NoSectionNameStringTable,
+        error.InvalidString,
+        error.InvalidRelocationTable,
+        error.NoStringTable,
+        error.NoDynamicStringTable,
         => 1,
         error.EntrypointOutOfBounds => 2,
         error.InvalidEntrypoint => 3,

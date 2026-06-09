@@ -1,6 +1,11 @@
 const std = @import("std");
 const Build = std.Build;
 
+const lib = @import("lib/lib.zig");
+/// The schema for services used in release.
+const topo_schema: lib.topology.Schema = .{ .services = @import("init/services.zon") };
+const topo_types = lib.topology.Unbound(topo_schema);
+
 const test_install_dir: Build.Step.InstallArtifact.Options.Dir = .{
     .override = .{ .custom = "bin/tests" },
 };
@@ -70,13 +75,19 @@ pub fn build(b: *Build) !void {
 
     const install_step = b.getInstallStep();
     const run_step = b.step("run", "Run supervisor");
-    const test_step = b.step("test", "Run unit tests");
+    const test_step = b.step("test", "Run all tests.");
+    const unit_test_step = b.step("unit-test", "Run unit tests.");
+    const bb_test_step = b.step("bb-test", "Run black box tests.");
     const check_step = b.step("check", "Check step.");
     const lint_step = b.step("lint", "Run lint checks");
     const lint_test_step = b.step("lint-test", "Run lint unit tests");
     const ci_step = b.step("ci", "Run all checks used for CI");
     const sig_step = b.step("sig", "Build only the sig binary");
     const docs_step = b.step("docs", "Emit docs");
+    const shred_stream_step = b.step("shred-stream", "Stream shreds from an Agave ledger");
+
+    test_step.dependOn(unit_test_step);
+    test_step.dependOn(bb_test_step);
 
     ci_step.dependOn(test_step);
     ci_step.dependOn(install_step);
@@ -107,11 +118,31 @@ pub fn build(b: *Build) !void {
         .tracy_callstack = 6,
     }).module("tracy");
     const binkode_mod = b.dependency("binkode", .{}).module("binkode");
-    const base58_mod = b.dependency("base58", .{}).module("base58");
+    const base58_mod = b.dependency("base58", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("base58");
+    const zstd_mod = b.dependency("zstd", .{
+        .target = target,
+        .optimize = .ReleaseFast, // fast to compile once, no need to recompile when changing modes,
+    }).module("zstd");
+    const ipc_ring_mod = b.createModule(.{
+        .root_source_file = b.path("lib/ipc/ring.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const rocksdb_dep = b.dependency("rocksdb", .{
+        .target = target,
+        .optimize = optimize,
+        .enable_snappy = true,
+    });
+    const rocksdb_mod = rocksdb_dep.module("bindings");
+    const rocksdb_c_mod = rocksdb_dep.module("rocksdb");
+    rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = .off;
 
     const fmt_check_step = b.addFmt(.{
         .check = true,
-        .paths = &.{ "init/", "lib/", "services/", "build.zig", "lint/" },
+        .paths = &.{ "init/", "lib/", "services/", "scripts/", "build.zig", "lint/" },
     });
     ci_step.dependOn(&fmt_check_step.step);
 
@@ -137,6 +168,15 @@ pub fn build(b: *Build) !void {
     const run_lint_tests = b.addRunArtifact(lint_tests);
     lint_test_step.dependOn(&run_lint_tests.step);
 
+    const features = b.createModule(.{
+        .root_source_file = b.path("../shared/core/features.zon"),
+    });
+    const feature_set_id = b.createModule(.{
+        .root_source_file = b
+            .addRunArtifact(addFeatureSetIdGenerator(b, features, use_llvm))
+            .addOutputFileArg("feature-set-id.zig"),
+    });
+
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("lib/lib.zig"),
         .target = target,
@@ -146,6 +186,9 @@ pub fn build(b: *Build) !void {
             .{ .name = "binkode", .module = binkode_mod },
             .{ .name = "tracy", .module = tracy_mod },
             .{ .name = "build-options", .module = build_options_mod },
+            .{ .name = "zstd", .module = zstd_mod },
+            .{ .name = "features-zon", .module = features },
+            .{ .name = "feature-set-id", .module = feature_set_id },
         },
     });
     _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
@@ -155,14 +198,16 @@ pub fn build(b: *Build) !void {
         .use_llvm = use_llvm,
     });
 
-    const sig_init_mod = b.createModule(.{
+    const runner_imports: RunnerModuleOptions.Imports = .{
+        .sig_lib = lib_mod,
+        .tracy = tracy_mod,
+    };
+
+    const sig_init_mod = createRunnerModule(b, .{
         .root_source_file = b.path("init/main.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
-            .{ .name = "lib", .module = lib_mod },
-            .{ .name = "tracy", .module = tracy_mod },
-        },
+        .imports = runner_imports,
     });
     _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "sig-init",
@@ -187,6 +232,40 @@ pub fn build(b: *Build) !void {
         }
     }
 
+    {
+        const module = b.createModule(.{
+            .root_source_file = b.path("scripts/shred_stream.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ipc-ring", .module = ipc_ring_mod },
+                .{ .name = "rocksdb", .module = rocksdb_mod },
+                .{ .name = "rocksdb-c", .module = rocksdb_c_mod },
+            },
+        });
+        const shred_stream_exe = b.addExecutable(.{
+            .name = "shred-stream",
+            .root_module = module,
+            .use_llvm = true,
+        });
+        _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
+            .name = "shred-stream",
+            .root_module = module,
+            .filters = filters,
+            .use_llvm = true,
+        });
+        const shred_stream_out = addExeOutputs(
+            b,
+            shred_stream_exe,
+            shred_stream_step,
+            artifact_opts,
+            .{},
+        );
+        if (shred_stream_out.run) |shred_stream_run| {
+            shred_stream_run.addArgs(b.args orelse &.{});
+        }
+    }
+
     const start_service_mod = b.createModule(.{
         .root_source_file = b.path("init/start_service.zig"),
         .target = target,
@@ -206,8 +285,10 @@ pub fn build(b: *Build) !void {
     var doc_service_modules: std.ArrayListUnmanaged(DocGenModule) = .empty;
     defer doc_service_modules.deinit(b.allocator);
 
+    var service_libs: std.EnumArray(topo_types.ServiceId, *Build.Step.Compile) = .initUndefined();
+
     // build + link services
-    inline for (@import("init/services.zon")) |s| {
+    inline for (topo_schema.services) |s| {
         const service_name = @tagName(s.name);
         const service_mod = b.createModule(.{
             .root_source_file = b.path("services").path(b, service_name ++ ".zig"),
@@ -229,6 +310,7 @@ pub fn build(b: *Build) !void {
             .use_llvm = true,
         });
         sig_init_mod.linkLibrary(service_lib);
+        service_libs.set(s.name, service_lib);
 
         _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
             .root_module = service_mod,
@@ -242,6 +324,30 @@ pub fn build(b: *Build) !void {
             .{ .name = service_name, .module = service_mod },
         );
     }
+
+    const gossip_bbt_exe = b.addExecutable(.{
+        .name = "bbt-" ++ "gossip",
+        .root_module = createRunnerModule(b, .{
+            .root_source_file = b.path("tests/gossip/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = runner_imports,
+        }),
+        .use_llvm = true,
+    });
+    gossip_bbt_exe.linkLibrary(service_libs.get(.gossip));
+    gossip_bbt_exe.linkLibrary(service_libs.get(.telemetry));
+    gossip_bbt_exe.root_module.addAnonymousImport("schema", .{
+        .root_source_file = topoSchemaSubsetFile(
+            b,
+            "schema.zon",
+            .initMany(&.{ .gossip, .telemetry }),
+        ),
+    });
+
+    _ = addExeOutputs(b, gossip_bbt_exe, bb_test_step, artifact_opts, .{
+        .dest_dir = test_install_dir,
+    });
 
     // generates unified docs for all modules
     // NOTE: have to specify `-Dno-bin` & `-Dno-run` in order to
@@ -293,6 +399,48 @@ pub fn build(b: *Build) !void {
         });
         docs_step.dependOn(&install_docs.step);
     }
+}
+
+const RunnerModuleOptions = struct {
+    root_source_file: Build.LazyPath,
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    imports: Imports,
+
+    const Imports = struct {
+        sig_lib: *Build.Module,
+        tracy: *Build.Module,
+    };
+};
+
+fn createRunnerModule(
+    b: *Build,
+    options: RunnerModuleOptions,
+) *Build.Module {
+    return b.createModule(.{
+        .root_source_file = options.root_source_file,
+        .target = options.target,
+        .optimize = options.optimize,
+        .imports = &.{
+            .{ .name = "lib", .module = options.imports.sig_lib },
+            .{ .name = "tracy", .module = options.imports.tracy },
+        },
+    });
+}
+
+fn topoSchemaSubsetFile(
+    b: *Build,
+    name: []const u8,
+    service_ids: std.EnumSet(topo_types.ServiceId),
+) Build.LazyPath {
+    var rendered: std.Io.Writer.Allocating = .init(b.allocator);
+    var sz: std.zon.Serializer = .{
+        .options = .{ .whitespace = true },
+        .indent_level = 0,
+        .writer = &rendered.writer,
+    };
+    topo_schema.renderPrettyZonSubset(&sz, .{}, service_ids) catch std.debug.panic("OOM", .{});
+    return b.addWriteFiles().add(name, rendered.written());
 }
 
 const ExeOutput = struct {
@@ -373,4 +521,34 @@ fn addExeOutputs(
         .install = install_opt,
         .run = run_opt,
     };
+}
+
+fn addFeatureSetIdGenerator(
+    b: *Build,
+    features: *Build.Module,
+    use_llvm: ?bool,
+) *Build.Step.Compile {
+    // This generator runs on the host at build time, so its dependencies must
+    // be fetched with default (host) target options — not the cross-compilation
+    // target used for the main build. This should be repeated for other scripts if they
+    // import a library in the future.
+    return b.addExecutable(.{
+        .name = "gen_feature_set_id",
+        .root_module = b.createModule(.{
+            .target = b.graph.host,
+            .optimize = .Debug,
+            .root_source_file = b.path("../shared/scripts/gen_feature_set_id.zig"),
+            .imports = &.{
+                .{
+                    .name = "base58",
+                    .module = b.dependency("base58", .{}).module("base58"),
+                },
+                .{
+                    .name = "features",
+                    .module = features,
+                },
+            },
+        }),
+        .use_llvm = use_llvm,
+    });
 }
