@@ -31,7 +31,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Build Check
         run: |
@@ -51,7 +51,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Build Tests
         run: |
@@ -63,6 +63,12 @@ jobs:
         run: |
           set -eo pipefail
           zig-out/bin/test 2>&1 | cat
+
+      - name: Shared Tests
+        run: |
+          ./scripts/proxy_workaround.sh zig shared/build.zig.zon
+          cd shared
+          zig build test -Dallow-no-sha -Dallow-no-avx512 --summary all
 
   test_macos_hashmap_ledger:
     runs-on: macos-15
@@ -76,7 +82,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Build Tests
         run: |

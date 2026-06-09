@@ -132,17 +132,7 @@ pub fn main() !void {
     var reader_buf: [4096]u8 = undefined;
     var reader = schedule_file.reader(&reader_buf);
 
-    const service_instances: []const topology.ServiceInstance = &.{
-        .{ .service = .net },
-        .{ .service = .gossip },
-        .{ .service = .shred_receiver },
-        .{ .service = .snapshot },
-        .{ .service = .accounts_db },
-        .{ .service = .replay },
-        .{ .service = .telemetry },
-    };
-
-    const shared_regions = topology.toSharedRegions(.{
+    const service_map = try topology.serviceMap(.{
         // gossip constants
         .gossip_config = .{
             .cluster_info = gossip_cluster_info,
@@ -189,7 +179,7 @@ pub fn main() !void {
             .port = config.telemetry.port,
             .log_filters_encoded = log_filters.written(),
             .service_count = @intCast(
-                topology.countRegionShares(.telemetry, service_instances) - 1,
+                topology.countTotalBindingShares(.telemetry) - 1,
             ),
 
             .id_mem_len = 4096 * 16,
@@ -200,24 +190,16 @@ pub fn main() !void {
     });
 
     switch (config.sandboxing_mode) {
-        .sandboxed => try topology.spawnAndWait(
-            allocator,
-            service_instances,
-            &shared_regions,
-        ),
-        .threaded => try topology.spawnAndWaitNoSandbox(
-            allocator,
-            service_instances,
-            &shared_regions,
-        ),
+        .sandboxed => try topology.spawnAndWait(&service_map),
+        .threaded => try topology.spawnAndWaitNoSandbox(&service_map),
     }
 }
 
-const topology_schema: lib.TopologySchema = .{
+const topology_schema: lib.topology.Schema = .{
     .services = @import("./services.zon"),
 };
 
-pub const topology = topology_schema.Bind(Region, .init(.{
+pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
     .gossip_config = .initOne(.@"gossip:config"),
     .shred_recv_config = .initOne(.@"shred_receiver:config"),
     .accounts_db_config = .initOne(.@"accounts_db:config"),
@@ -266,13 +248,7 @@ pub const topology = topology_schema.Bind(Region, .init(.{
 }));
 
 pub const Region = union(enum) {
-    gossip_config: struct {
-        cluster_info: lib.gossip.ClusterInfo,
-        // TODO: this should live in signing service
-        keypair: lib.gossip.KeyPair,
-        turbine_recv_port: u16,
-        advertise_tvu_port: bool,
-    },
+    gossip_config: lib.gossip.Config.InitParams,
     shred_recv_config: struct {
         // TODO: this should not exist - remove once we can open snapshots again
         schedule_string: *std.Io.Reader,
@@ -288,8 +264,8 @@ pub const Region = union(enum) {
         memory: usize,
     },
 
-    net_to_shred: NetPair,
-    net_to_gossip: NetPair,
+    net_to_shred: lib.net.Pair.InitParams,
+    net_to_gossip: lib.net.Pair.InitParams,
 
     gossip_source_to_snapshot,
     snapshot_ready_to_accounts_db,
@@ -302,29 +278,16 @@ pub const Region = union(enum) {
 
     pub const Tag = @typeInfo(Region).@"union".tag_type.?;
 
-    pub const NetPair = struct {
-        port: u16,
-
-        pub fn init(cfg: NetPair, buf: []align(std.heap.page_size_min) u8) !void {
-            std.debug.assert(buf.len == @sizeOf(lib.net.Pair));
-            const data: *lib.net.Pair = @ptrCast(buf);
-
-            data.recv.init();
-            data.send.init();
-            data.port = cfg.port;
-        }
-    };
-
     pub fn size(self: Region) usize {
         return switch (self) {
-            .gossip_config => @sizeOf(lib.gossip.Config),
+            .gossip_config => |cfg| cfg.size(),
             .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
             .snapshot_config => @sizeOf(lib.snapshot.SnapshotConfig),
             .accounts_db_config => |params| @sizeOf(lib.accounts_db.RootedConfig) + params.memory,
 
-            .net_to_shred,
             .net_to_gossip,
-            => @sizeOf(lib.net.Pair),
+            .net_to_shred,
+            => |cfg| cfg.size(),
 
             .gossip_source_to_snapshot => @sizeOf(lib.snapshot.SnapshotSourceRing),
             .snapshot_ready_to_accounts_db => @sizeOf(lib.snapshot.SnapshotDataRing),
@@ -341,15 +304,7 @@ pub const Region = union(enum) {
         std.log.info("Initialising: {}", .{std.meta.activeTag(self)});
 
         return switch (self) {
-            .gossip_config => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(lib.gossip.Config));
-                const data: *lib.gossip.Config = @ptrCast(buf);
-
-                data.keypair = cfg.keypair;
-                data.cluster_info = cfg.cluster_info;
-                data.turbine_recv_port = cfg.turbine_recv_port;
-                data.advertise_tvu_port = cfg.advertise_tvu_port;
-            },
+            .gossip_config => |cfg| cfg.init(buf),
             .shred_recv_config => |cfg| {
                 std.debug.assert(buf.len == @sizeOf(lib.shred.RecvConfig));
                 const data: *lib.shred.RecvConfig = @ptrCast(buf);

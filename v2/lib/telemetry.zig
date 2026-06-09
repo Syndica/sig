@@ -13,12 +13,6 @@ comptime {
     }
 }
 
-comptime {
-    _ = metric;
-    _ = log;
-    _ = prometheus;
-}
-
 /// The native endian, which is what is used by telemetry for `std.Io.Writer` and `std.Io.Reader` IPC data.
 pub const endian = builtin.target.cpu.arch.endian();
 

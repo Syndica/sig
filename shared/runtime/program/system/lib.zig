@@ -1,6 +1,14 @@
 const std = @import("std");
 const sig = @import("../../../lib.zig");
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("error.zig");
+        _ = @import("execute.zig");
+        _ = @import("instruction.zig");
+    }
+}
+
 const Pubkey = sig.core.Pubkey;
 
 /// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs#L64
