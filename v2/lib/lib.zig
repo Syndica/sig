@@ -1,12 +1,11 @@
 comptime {
     if (@import("builtin").is_test) {
-        _ = @import("TopologySchema.zig");
         _ = @import("accounts_db.zig");
         _ = @import("clock.zig");
         _ = @import("collections.zig");
         _ = @import("crypto.zig");
-        _ = @import("fio.zig");
         _ = @import("exec.zig");
+        _ = @import("fio.zig");
         _ = @import("gossip.zig");
         _ = @import("ipc.zig");
         _ = @import("linux.zig");
@@ -16,6 +15,7 @@ comptime {
         _ = @import("snapshot.zig");
         _ = @import("solana.zig");
         _ = @import("telemetry.zig");
+        _ = @import("TopologySchema.zig");
         _ = @import("util.zig");
     }
 }
