@@ -87,7 +87,7 @@
         .name = "system_transfer_zero_check",
         .pubkey = "BrTR9hzw4WBGFP65AJMbpAo64DcA3U6jdPSga9fMV5cS",
         .description = "perform all checks for transfers of 0 lamports",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "blake3_syscall_enabled",
@@ -729,7 +729,7 @@
         .name = "relax_authority_signer_check_for_lookup_table_creation",
         .pubkey = "FKAcEvNgSY79RpqsPNUV5gDyumopH4cEHqUxyfm8b8Ap",
         .description = "relax authority signer check for lookup table creation #27205",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "stop_sibling_instruction_search_at_parent",
@@ -1195,7 +1195,7 @@
         .name = "disable_rent_fees_collection",
         .pubkey = "CJzY83ggJHqPGDq8VisV3U91jDJLuEaALZooBrXtnnLU",
         .description = "Disable rent fees collection #33945",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "add_new_reserved_account_keys",
@@ -1237,7 +1237,7 @@
         .name = "move_stake_and_move_lamports_ixs",
         .pubkey = "7bTK6Jis8Xpfrs8ZoUfiMDPazTcdPcTWheZFJTA5Z6X4",
         .description = "Enable MoveStake and MoveLamports stake program instructions #1610",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "deprecate_legacy_vote_ixs",
@@ -1362,7 +1362,7 @@
         .name = "remove_accounts_delta_hash",
         .pubkey = "LTdLt9Ycbyoipz5fLysCi1NnDnASsZfmJLJXts5ZxZz",
         .description = "SIMD-0223: removes accounts delta hash",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "snapshots_lt_hash",
@@ -1374,7 +1374,7 @@
         .name = "reserve_minimal_cus_for_builtin_instructions",
         .pubkey = "C9oAhLxDBm3ssWtJx1yBGzPY55r2rArHmN1pbQn6HogH",
         .description = "SIMD-0170: Reserve minimal CUs for builtin instructions #2562",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "raise_block_limits_to_50m",
@@ -1403,7 +1403,7 @@
         .name = "move_precompile_verification_to_svm",
         .pubkey = "9ypxGLzkMxi89eDerRKXWDXe44UY2z4hBig4mDhNq5Dp",
         .description = "SIMD-0159: Move precompile verification into SVM",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_transaction_loading_failure_fees",
