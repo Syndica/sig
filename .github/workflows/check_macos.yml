@@ -35,7 +35,6 @@ jobs:
 
       - name: Build Check
         run: |
-          brew install wget
           ./scripts/fetch-zig-deps.py
           zig build -Denable-tsan=false --summary all -Dno-run -Dno-bin
 
@@ -55,7 +54,6 @@ jobs:
 
       - name: Build Tests
         run: |
-          brew install wget
           ./scripts/fetch-zig-deps.py
           zig build test -Dno-run -Denable-tsan=false --summary all
 
@@ -86,7 +84,6 @@ jobs:
 
       - name: Build Tests
         run: |
-          brew install wget
           ./scripts/fetch-zig-deps.py
           zig build test -Dno-run -Denable-tsan=false --summary all -Dlong-tests -Dledger=hashmap -Dfilter="ledger"
 
@@ -113,7 +110,6 @@ jobs:
 
       - name: Build and Run Webzockets Tests
         run: |
-          brew install wget
           ./scripts/fetch-zig-deps.py src/rpc/webzockets/build.zig.zon
           cd src/rpc/webzockets
           zig build test --summary all
