@@ -115,13 +115,19 @@ pub const Environment = struct {
         var iter = gates.iterator();
         while (iter.next()) |entry| {
             const gate = entry.value.* orelse continue; // always enabled syscall
-            const guard = switch (entry.key) {
-                .sol_alloc_free_ => reject_deployment_of_broken_elfs,
-                else => true,
-            };
-            const should = guard and feature_set.active(gate.feature, slot);
+            const should = feature_set.active(gate.feature, slot);
             if (gate.invert == should) loader.map.set(entry.key, null);
         }
+
+        // disable_deploy_of_alloc_free_syscall is hardcoded (always active), so
+        // sol_alloc_free_ is always disabled when reject_deployment_of_broken_elfs is set.
+        if (reject_deployment_of_broken_elfs) {
+            loader.map.set(.sol_alloc_free_, null);
+        }
+
+        // disable_fees_sysvar is hardcoded (always active), so
+        // sol_get_fees_sysvar is always disabled.
+        loader.map.set(.sol_get_fees_sysvar, null);
 
         return loader;
     }

@@ -188,9 +188,6 @@ pub const Syscall = enum {
 
     /// Describes syscalls whos activation is locked behind a feature gate.
     pub const gates = std.EnumArray(Syscall, ?Gate).initDefault(@as(?Gate, null), .{
-        // NOTE: also needs to check for `reject_deployment_of_broken_elfs`.
-        .sol_alloc_free_ = .{ .feature = .disable_deploy_of_alloc_free_syscall, .invert = true },
-
         .sol_blake3 = .{ .feature = .blake3_syscall_enabled },
         .sol_poseidon = .{ .feature = .enable_poseidon_syscall },
 
@@ -203,7 +200,6 @@ pub const Syscall = enum {
         .sol_curve_decompress = .{ .feature = .enable_bls12_381_syscall },
         .sol_curve_pairing_map = .{ .feature = .enable_bls12_381_syscall },
 
-        .sol_get_fees_sysvar = .{ .feature = .disable_fees_sysvar, .invert = true },
         .sol_get_last_restart_slot = .{ .feature = .last_restart_slot_sysvar },
         .sol_remaining_compute_units = .{ .feature = .remaining_compute_units_syscall_enabled },
         .sol_get_sysvar = .{ .feature = .get_sysvar_syscall_enabled },
