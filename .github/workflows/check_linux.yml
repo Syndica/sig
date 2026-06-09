@@ -180,8 +180,7 @@ jobs:
 
       - name: Shared tests
         run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh zig shared/build.zig.zon
+          ./scripts/fetch-zig-deps.py shared/build.zig.zon
           cd shared
           zig build test -Dallow-no-sha -Dallow-no-avx512 --summary all
 
