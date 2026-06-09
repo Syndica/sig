@@ -198,7 +198,6 @@ pub fn build(b: *Build) !void {
         .root_source_file = b.path("init/main.zig"),
         .target = target,
         .optimize = optimize,
-        .error_tracing = true,
         .imports = runner_imports,
     });
     _ = addTestOutputs(b, unit_test_step, null, artifact_opts, .{

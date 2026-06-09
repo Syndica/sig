@@ -26,7 +26,8 @@ pub const ReadWrite = struct {
     exec_req_response: *lib.replay.ExecReqResponse,
 };
 
-pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
+    _ = runner;
     var request_reader = rw.exec_req_response.request_ring.get(.reader);
     var response_writer = rw.exec_req_response.response_ring.get(.writer);
 

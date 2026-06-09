@@ -114,7 +114,8 @@ var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 const DeserialStates = [lib.replay.BlockPool.capacity]?BlockDeserialState;
 const BlockExecStates = [lib.replay.BlockPool.capacity]?BlockExecState;
 
-pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
+    _ = runner;
     var fba: std.heap.FixedBufferAllocator = .init(&scratch_memory);
     const allocator = fba.allocator();
 
