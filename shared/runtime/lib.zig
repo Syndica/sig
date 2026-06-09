@@ -1,3 +1,31 @@
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("AccountSharedData.zig");
+        _ = @import("ComputeBudget.zig");
+        _ = @import("account_loader.zig");
+        _ = @import("borrowed_account.zig");
+        _ = @import("check_transactions.zig");
+        _ = @import("cost_model.zig");
+        _ = @import("execution_interfaces.zig");
+        _ = @import("executor.zig");
+        _ = @import("ids.zig");
+        _ = @import("instruction_context.zig");
+        _ = @import("instruction_info.zig");
+        _ = @import("log_collector.zig");
+        _ = @import("nonce.zig");
+        _ = @import("program/lib.zig");
+        _ = @import("program_loader.zig");
+        _ = @import("pubkey_utils.zig");
+        _ = @import("spl_token.zig");
+        _ = @import("stable_log.zig");
+        _ = @import("sysvar/lib.zig");
+        _ = @import("sysvar_cache.zig");
+        _ = @import("testing.zig");
+        _ = @import("transaction_context.zig");
+        _ = @import("transaction_execution.zig");
+    }
+}
+
 pub const account_loader = @import("account_loader.zig");
 pub const borrowed_account = @import("borrowed_account.zig");
 pub const check_transactions = @import("check_transactions.zig");

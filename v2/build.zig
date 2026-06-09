@@ -499,7 +499,7 @@ fn addFeatureSetIdGenerator(
         .root_module = b.createModule(.{
             .target = b.graph.host,
             .optimize = .Debug,
-            .root_source_file = b.path("../scripts/gen_feature_set_id.zig"),
+            .root_source_file = b.path("../shared/scripts/gen_feature_set_id.zig"),
             .imports = &.{
                 .{
                     .name = "base58",

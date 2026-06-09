@@ -4,6 +4,15 @@ const std14 = @import("std14");
 const builtin = @import("builtin");
 const build_options = @import("build-options");
 
+comptime {
+    if (builtin.is_test) {
+        _ = @import("generic.zig");
+        _ = @import("pippenger.zig");
+        _ = @import("straus.zig");
+        _ = @import("wycheproof.zig");
+    }
+}
+
 pub const pippenger = @import("pippenger.zig");
 pub const straus = @import("straus.zig");
 
@@ -29,6 +38,12 @@ comptime {
         );
 }
 pub const use_avx125 = has_avx512 and builtin.zig_backend == .stage2_llvm;
+
+comptime {
+    if (builtin.is_test and use_avx125) {
+        _ = @import("avx512.zig");
+    }
+}
 
 // avx512 implementation relies on llvm specific tricks
 const namespace = if (use_avx125) avx512 else generic;

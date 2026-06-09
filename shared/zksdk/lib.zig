@@ -1,3 +1,21 @@
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("benchmarks.zig");
+        _ = @import("elgamal.zig");
+        _ = @import("merlin.zig");
+        _ = @import("pedersen.zig");
+        _ = @import("range_proof/bulletproofs.zig");
+        _ = @import("range_proof/ipp.zig");
+        _ = @import("sigma_proofs/ciphertext_ciphertext.zig");
+        _ = @import("sigma_proofs/ciphertext_commitment.zig");
+        _ = @import("sigma_proofs/grouped_ciphertext/2_handles.zig");
+        _ = @import("sigma_proofs/grouped_ciphertext/3_handles.zig");
+        _ = @import("sigma_proofs/percentage_with_cap.zig");
+        _ = @import("sigma_proofs/pubkey_validity.zig");
+        _ = @import("sigma_proofs/zero_ciphertext.zig");
+    }
+}
+
 pub const benchmarks = @import("benchmarks.zig");
 pub const elgamal = @import("elgamal.zig");
 pub const pedersen = @import("pedersen.zig");

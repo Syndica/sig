@@ -246,7 +246,6 @@ pub fn build(b: *Build) !void {
     const test_send_transactions_step = b.step("test_send_transactions", "Attempt to land transactions on testnet using QUIC client");
     const test_mock_transfers_step = b.step("test_mock_transfers", "Test MockTransferService in RPC submission mode");
     const docs_step = b.step("docs", "Generate and install documentation for the Sig Library");
-    const feature_set_id_step = b.step("feature_set_id", "Print the generated feature set ID");
 
     // Dependencies
     const dep_opts = .{
@@ -256,7 +255,6 @@ pub fn build(b: *Build) !void {
 
     const base58_mod = b.dependency("base58", dep_opts).module("base58");
     const httpz_mod = b.dependency("httpz", dep_opts).module("httpz");
-    const poseidon_mod = b.dependency("poseidon", dep_opts).module("poseidon");
     const xev_mod = b.dependency("xev", dep_opts).module("xev");
     const pretty_table_mod = b.dependency("prettytable", dep_opts).module("prettytable");
     const webzockets_mod = b.dependency("webzockets", dep_opts).module("webzockets");
@@ -288,11 +286,6 @@ pub fn build(b: *Build) !void {
     // reproducable via: zig build test -Dfilter="ledger"
     rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = .off;
 
-    const secp256k1_mod = b.dependency("secp256k1", .{
-        .target = config.target,
-        .optimize = config.optimize,
-    }).module("secp256k1");
-
     const tracy_mod = b.dependency("tracy", .{
         .target = config.target,
         .optimize = config.optimize,
@@ -303,11 +296,17 @@ pub fn build(b: *Build) !void {
     }).module("tracy");
     tracy_mod.sanitize_c = .off; // Workaround UB in Tracy.
 
-    const std14_mod = b.createModule(.{
-        .root_source_file = b.path("shared/std14.zig"),
+    const shared_dep = b.dependency("shared", .{
         .target = config.target,
         .optimize = config.optimize,
+        .@"long-tests" = config.long_tests,
+        .@"allow-no-sha" = config.allow_no_sha,
+        .@"allow-no-avx512" = config.allow_no_avx512,
+        .@"use-llvm" = config.use_llvm,
+        .@"enable-tracy" = config.enable_tracy,
+        .@"tracy-on-demand" = config.tracy_on_demand,
     });
+    const std14_mod = shared_dep.module("std14");
 
     const cli_mod = b.createModule(.{
         .root_source_file = b.path("src/cli.zig"),
@@ -316,63 +315,33 @@ pub fn build(b: *Build) !void {
     });
     cli_mod.addImport("std14", std14_mod);
 
-    // G/H table for Bulletproofs
-    const gh_table = b.createModule(.{
-        .root_source_file = generateTable(b, config.use_llvm),
-        .target = config.target,
-        .optimize = config.optimize,
-    });
-
-    // Feature set ID for version compatibility
-    const feature_set_id_gen = addFeatureSetIdGenerator(b, config.use_llvm);
-    const feature_set_id = b.createModule(.{
-        .root_source_file = b.addRunArtifact(feature_set_id_gen).addOutputFileArg("feature-set-id.zig"),
-    });
-    const print_feature_set_id = b.addRunArtifact(feature_set_id_gen);
-    feature_set_id_step.dependOn(&print_feature_set_id.step);
-
     // Non-circulating supply pubkeys (pre-decoded at build time)
     const non_circulating_supply = b.createModule(.{
         .root_source_file = generateNonCirculatingSupply(b, config.use_llvm),
     });
 
     const sqlite_mod = genSqlite(b, config.target, config.optimize, config.use_llvm);
-    const blst_mod = b.dependency("blst", .{
-        .target = config.target,
-        .optimize = config.optimize,
-    }).module("blst");
     const bzip2_mod = genBzip2(b, config.target, config.optimize, config.use_llvm);
 
     // zig fmt: off
     const imports: []const Build.Module.Import = &.{
-        .{ .name = "base58",        .module = base58_mod },
-        .{ .name = "blst",          .module = blst_mod },
-        .{ .name = "build-options", .module = build_options.createModule() },
-        .{ .name = "feature-set-id", .module = feature_set_id },
+        .{ .name = "base58",                 .module = base58_mod },
+        .{ .name = "build-options",          .module = build_options.createModule() },
         .{ .name = "non-circulating-supply", .module = non_circulating_supply },
-        .{ .name = "bzip2",         .module = bzip2_mod },
-        .{ .name = "httpz",         .module = httpz_mod },
-        .{ .name = "lsquic",        .module = lsquic_mod },
-        .{ .name = "poseidon",      .module = poseidon_mod },
-        .{ .name = "prettytable",   .module = pretty_table_mod },
-        .{ .name = "secp256k1",     .module = secp256k1_mod },
-        .{ .name = "sqlite",        .module = sqlite_mod },
-        .{ .name = "ssl",           .module = ssl_mod },
-        .{ .name = "table",         .module = gh_table },
-        .{ .name = "tracy",         .module = tracy_mod },
-        .{ .name = "webzockets",    .module = webzockets_mod },
-        .{ .name = "xev",           .module = xev_mod },
-        .{ .name = "zstd",          .module = zstd_mod },
+        .{ .name = "bzip2",                  .module = bzip2_mod },
+        .{ .name = "httpz",                  .module = httpz_mod },
+        .{ .name = "lsquic",                 .module = lsquic_mod },
+        .{ .name = "prettytable",            .module = pretty_table_mod },
+        .{ .name = "sqlite",                 .module = sqlite_mod },
+        .{ .name = "ssl",                    .module = ssl_mod },
+        .{ .name = "tracy",                  .module = tracy_mod },
+        .{ .name = "webzockets",             .module = webzockets_mod },
+        .{ .name = "xev",                    .module = xev_mod },
+        .{ .name = "zstd",                   .module = zstd_mod },
     };
     // zig fmt: on
 
-    const shared_mod = b.createModule(.{
-        .root_source_file = b.path("shared/lib.zig"),
-        .target = config.target,
-        .optimize = config.optimize,
-        .imports = imports,
-    });
-    shared_mod.addImport("std14", std14_mod);
+    const shared_mod = shared_dep.module("shared");
 
     const imports_with_shared = b.allocator.alloc(
         Build.Module.Import,
@@ -624,54 +593,6 @@ fn addInstallAndRun(
             step.dependOn(&run.step);
         }
     }
-}
-
-fn generateTable(b: *Build, use_llvm: bool) Build.LazyPath {
-    const gen = b.addExecutable(.{
-        .name = "generator_chain",
-        .root_module = b.createModule(.{
-            .target = b.graph.host,
-            // Overall it takes less time to compile in debug mode than the perf gain from a release mode at runtime
-            .optimize = .Debug,
-            .root_source_file = b.path("scripts/generator_chain.zig"),
-        }),
-        .use_llvm = use_llvm,
-    });
-    const run = b.addRunArtifact(gen);
-    const generated = run.captureStdOut();
-    // Write the generated table to a file so it can be file-path imported
-    const wf = b.addWriteFiles();
-    const table_file = wf.addCopyFile(generated, "table.zig");
-    wf.step.dependOn(&run.step);
-    return table_file;
-}
-
-fn addFeatureSetIdGenerator(b: *Build, use_llvm: bool) *Build.Step.Compile {
-    // This generator runs on the host at build time, so its dependencies must
-    // be fetched with default (host) target options — not the cross-compilation
-    // target used for the main build. This should be repeated for other scripts if they
-    // import a library in the future.
-    return b.addExecutable(.{
-        .name = "gen_feature_set_id",
-        .root_module = b.createModule(.{
-            .target = b.graph.host,
-            .optimize = .Debug,
-            .root_source_file = b.path("scripts/gen_feature_set_id.zig"),
-            .imports = &.{
-                .{
-                    .name = "base58",
-                    .module = b.dependency("base58", .{}).module("base58"),
-                },
-                .{
-                    .name = "features",
-                    .module = b.createModule(.{
-                        .root_source_file = b.path("shared/core/features.zon"),
-                    }),
-                },
-            },
-        }),
-        .use_llvm = use_llvm,
-    });
 }
 
 fn generateNonCirculatingSupply(b: *Build, use_llvm: bool) Build.LazyPath {

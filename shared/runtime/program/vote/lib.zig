@@ -1,4 +1,15 @@
 const sig = @import("../../../lib.zig");
+
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("error.zig");
+        _ = @import("execute.zig");
+        _ = @import("instruction.zig");
+        _ = @import("state.zig");
+        _ = @import("state_v4.zig");
+    }
+}
+
 pub const Instruction = @import("instruction.zig").Instruction;
 pub const state = @import("state.zig");
 

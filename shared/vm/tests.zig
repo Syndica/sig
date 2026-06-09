@@ -1848,7 +1848,7 @@ test "jslt reg" {
 // 32 bits of dst/src/imm; sixteen of the 22 opcode bytes overlap with deprecated
 // pqr instructions and are reached via aliases on `OpCode`. These tests mirror
 // the corresponding JMP64 tests above and exercise every branch of the v3
-// `branch32` dispatcher in `src/vm/interpreter.zig`.
+// `branch32` dispatcher in `shared/vm/interpreter.zig`.
 
 test "v3 jeq32 imm" {
     try testAsm(.{},
