@@ -57,17 +57,6 @@ pub const Account = struct {
         };
     }
 
-    // creates a cheap borrow of an already-cached account
-    pub fn cloneCached(self: *const Account, allocator: std.mem.Allocator) !Account {
-        return .{
-            .lamports = self.lamports,
-            .data = try self.data.duplicateBufferPoolRead(allocator),
-            .owner = self.owner,
-            .executable = self.executable,
-            .rent_epoch = self.rent_epoch,
-        };
-    }
-
     pub fn equals(self: *const Account, other: *const Account) bool {
         return self.data.eql(other.data) and
             self.lamports == other.lamports and
