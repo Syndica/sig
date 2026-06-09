@@ -2121,12 +2121,13 @@ test "stakes activate epoch" {
 /// Build a v4 VoteAccount with the given delegated stake, lamports, and
 /// optional BLS pubkey for the SIMD-0357 filter tests. Mirrors agave's
 /// `new_rand_vote_account` / `new_staked_vote_accounts` (runtime/src/test_utils.rs).
-fn createTestVatVoteAccount(
+pub fn createTestVatVoteAccount(
     allocator: Allocator,
     random: std.Random,
     lamports: u64,
     set_bls_pubkey: bool,
 ) Allocator.Error!VoteAccount {
+    if (!builtin.is_test) @compileError("only for tests");
     var v4 = VoteStateV4.DEFAULT;
     v4.node_pubkey = .initRandom(random);
     v4.withdrawer = .initRandom(random);
@@ -2149,7 +2150,7 @@ fn createTestVatVoteAccount(
 
 /// Insert a fresh v4 vote account with the given stake/lamports/bls into
 /// `vote_accounts`. Takes ownership; freed via the standard deinit path.
-fn insertTestVatVoteAccount(
+pub fn insertTestVatVoteAccount(
     allocator: Allocator,
     random: std.Random,
     vote_accounts: *VoteAccounts,
@@ -2157,6 +2158,7 @@ fn insertTestVatVoteAccount(
     lamports: u64,
     set_bls_pubkey: bool,
 ) !void {
+    if (!builtin.is_test) @compileError("only for tests");
     var account = try createTestVatVoteAccount(allocator, random, lamports, set_bls_pubkey);
     errdefer account.deinit(allocator);
     try vote_accounts.vote_accounts.put(

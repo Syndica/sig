@@ -24,6 +24,7 @@ const SlotConstants = sig.core.SlotConstants;
 const StakesCache = sig.core.StakesCache;
 const FeatureSet = sig.core.FeatureSet;
 const Rent = sig.runtime.sysvar.Rent;
+const VoteStateV4 = sig.runtime.program.vote.state.VoteStateV4;
 
 const beginPartitionedRewards = sig.replay.rewards.calculation.beginPartitionedRewards;
 const updateRent = sig.replay.update_sysvar.updateRent;
@@ -121,9 +122,12 @@ pub fn updateEpochStakes(
 ///  - mapping of vote accounts to their authorized voters.
 /// The authorized voters are determined based on the vote state and leader schedule epoch.
 ///
-/// `slot`, `rent`, and `feature_set` are threaded through so that the SIMD-0357
-/// Validator Admission Ticket filter can be applied here once the
-/// `validator_admission_ticket` feature is wired up (next commit).
+/// When the SIMD-0357 `validator_admission_ticket` feature is active at `slot`,
+/// the snapshot is first reduced via `Stakes.cloneAndFilterForVat` to the top
+/// `MAX_ALPENGLOW_VOTE_ACCOUNTS` vote accounts that have a BLS pubkey, non-zero
+/// stake, and at least `minimum_vote_account_balance_for_vat` lamports (see
+/// agave bank.rs minimum_vote_account_balance_for_vat /
+/// get_top_epoch_stakes).
 pub fn getEpochStakes(
     allocator: Allocator,
     slot: Slot,
@@ -132,12 +136,29 @@ pub fn getEpochStakes(
     rent: *const Rent,
     feature_set: *const FeatureSet,
 ) !EpochStakes {
-    _ = slot;
-    _ = rent;
-    _ = feature_set;
     const new_stakes = blk: {
         const stakes, var stakes_lg = stakes_cache.stakes.readWithLock();
         defer stakes_lg.unlock();
+        if (feature_set.active(.validator_admission_ticket, slot)) {
+            // SIMD-0357: only keep the top MAX_ALPENGLOW_VOTE_ACCOUNTS vote
+            // accounts that have a BLS pubkey, non-zero stake, and at least
+            // `min_balance` lamports. Mirrors agave's
+            // Bank::get_top_epoch_stakes / minimum_vote_account_balance_for_vat.
+            //
+            // When `alpenglow` is also active, the minimum required balance
+            // additionally includes `VAT_TO_BURN_PER_EPOCH` so that every
+            // admitted vote account can survive `burnVat` later this epoch.
+            const rent_exempt_min = rent.minimumBalance(VoteStateV4.MAX_VOTE_STATE_SIZE);
+            const min_balance = if (feature_set.active(.alpenglow, slot))
+                rent_exempt_min + sig.core.stakes.VAT_TO_BURN_PER_EPOCH
+            else
+                rent_exempt_min;
+            break :blk try stakes.cloneAndFilterForVat(
+                allocator,
+                sig.core.stakes.MAX_ALPENGLOW_VOTE_ACCOUNTS,
+                min_balance,
+            );
+        }
         break :blk try stakes.convert(allocator, .delegation);
     };
     errdefer new_stakes.deinit(allocator);
@@ -1000,6 +1021,111 @@ test getEpochStakes {
         defer epoch_stakes.deinit(allocator);
 
         try std.testing.expectEqual(expected_total_stake, epoch_stakes.total_stake);
+    }
+}
+
+test "getEpochStakes: SIMD-0357 VAT filter gates on validator_admission_ticket" {
+    // With the feature inactive, ineligible vote accounts (no BLS pubkey, or
+    // lamports below `Rent.minimumBalance(MAX_VOTE_STATE_SIZE)`) still
+    // contribute to total_stake. With the feature active at `slot`, only
+    // eligible accounts survive `Stakes.cloneAndFilterForVat`.
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const leader_schedule_epoch: Epoch = 1;
+    const slot: Slot = 100;
+    const rent: Rent = .INIT;
+    const min_balance = rent.minimumBalance(VoteStateV4.MAX_VOTE_STATE_SIZE);
+
+    var stakes_cache = StakesCache.EMPTY;
+    defer stakes_cache.deinit(allocator);
+
+    // Seed three vote accounts:
+    //   eligible_a: v4 + bls, lamports >= min_balance, stake = 1000
+    //   eligible_b: v4 + bls, lamports == min_balance,  stake = 2000
+    //   ineligible_no_bls: v4 without bls, lamports >= min_balance, stake = 9999
+    //   ineligible_low_lamports: v4 + bls, lamports = min_balance - 1, stake = 8888
+    {
+        const stakes, var stakes_lg = stakes_cache.stakes.writeWithLock();
+        defer stakes_lg.unlock();
+
+        try sig.core.stakes.insertTestVatVoteAccount(
+            allocator,
+            random,
+            &stakes.vote_accounts,
+            1000,
+            min_balance + 42,
+            true,
+        );
+        try sig.core.stakes.insertTestVatVoteAccount(
+            allocator,
+            random,
+            &stakes.vote_accounts,
+            2000,
+            min_balance,
+            true,
+        );
+        try sig.core.stakes.insertTestVatVoteAccount(
+            allocator,
+            random,
+            &stakes.vote_accounts,
+            9999,
+            min_balance + 1,
+            false,
+        );
+        try sig.core.stakes.insertTestVatVoteAccount(
+            allocator,
+            random,
+            &stakes.vote_accounts,
+            8888,
+            min_balance - 1,
+            true,
+        );
+    }
+
+    { // Feature inactive: all four are kept.
+        const epoch_stakes = try getEpochStakes(
+            allocator,
+            slot,
+            leader_schedule_epoch,
+            &stakes_cache,
+            &rent,
+            &.ALL_DISABLED,
+        );
+        defer epoch_stakes.deinit(allocator);
+        try std.testing.expectEqual(
+            @as(u64, 1000 + 2000 + 9999 + 8888),
+            epoch_stakes.total_stake,
+        );
+        try std.testing.expectEqual(
+            @as(usize, 4),
+            epoch_stakes.stakes.vote_accounts.vote_accounts.count(),
+        );
+    }
+
+    { // Feature active: only the two eligible accounts survive.
+        var feature_set: sig.core.FeatureSet = .ALL_DISABLED;
+        feature_set.setSlot(.validator_admission_ticket, slot);
+
+        const epoch_stakes = try getEpochStakes(
+            allocator,
+            slot,
+            leader_schedule_epoch,
+            &stakes_cache,
+            &rent,
+            &feature_set,
+        );
+        defer epoch_stakes.deinit(allocator);
+        try std.testing.expectEqual(
+            @as(u64, 1000 + 2000),
+            epoch_stakes.total_stake,
+        );
+        try std.testing.expectEqual(
+            @as(usize, 2),
+            epoch_stakes.stakes.vote_accounts.vote_accounts.count(),
+        );
     }
 }
 
