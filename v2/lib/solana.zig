@@ -9,8 +9,8 @@ comptime {
         _ = @import("solana/leader_schedule.zig");
         _ = @import("solana/pubkey.zig");
         _ = @import("solana/signature.zig");
-        _ = @import("solana/transaction.zig");
         _ = @import("solana/snapshot.zig");
+        _ = @import("solana/transaction.zig");
     }
 }
 
