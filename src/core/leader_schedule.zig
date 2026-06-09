@@ -86,6 +86,9 @@ pub const LeaderSchedule = struct {
         allocator.free(self.leaders);
     }
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/leader_schedule_utils.rs#L10-L18
+    /// `enable_vote_address_leader_schedule` is always active — vote-keyed leader schedule
+    /// is unconditionally used. Feature cleanup: https://github.com/anza-xyz/agave/commit/9056c982f7
     pub fn init(
         allocator: Allocator,
         leader_schedule_epoch: Epoch,
@@ -196,7 +199,7 @@ pub const LeaderSchedule = struct {
     }
 };
 
-pub fn computeFromVoteAccounts(
+fn computeFromVoteAccounts(
     allocator: std.mem.Allocator,
     leader_schedule_epoch: Epoch,
     slots_in_epoch: Slot,
@@ -227,7 +230,7 @@ pub fn computeFromVoteAccounts(
     return vote_keyed;
 }
 
-pub fn computeFromStakedNodes(
+fn computeFromStakedNodes(
     allocator: std.mem.Allocator,
     leader_schedule_epoch: Epoch,
     slots_in_epoch: Slot,
