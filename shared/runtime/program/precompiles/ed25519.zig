@@ -201,9 +201,7 @@ test "execute" {
                     .executable = true,
                 },
             },
-            .feature_set = &.{
-                .{ .feature = .move_precompile_verification_to_svm, .slot = 0 },
-            },
+            .feature_set = &.{},
             .instruction_datas = &.{},
         },
         .{},
