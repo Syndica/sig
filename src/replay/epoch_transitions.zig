@@ -69,6 +69,8 @@ pub fn processNewEpoch(
         &slot_constants.rent_collector.rent,
         &slot_state.stakes_cache,
         epoch_tracker,
+        slot_store,
+        logger,
     );
 
     try beginPartitionedRewards(
@@ -81,6 +83,7 @@ pub fn processNewEpoch(
     );
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/runtime/src/bank.rs#L2392
 pub fn updateEpochStakes(
     allocator: Allocator,
     slot: Slot,
@@ -89,6 +92,8 @@ pub fn updateEpochStakes(
     rent: *const Rent,
     stakes_cache: *StakesCache,
     epoch_tracker: *sig.core.EpochTracker,
+    slot_store: SlotAccountStore,
+    logger: Logger,
 ) !void {
     const epoch_info = epoch_tracker.getEpochInfoNoOffset(slot, ancestors) catch null;
     if (epoch_info) |info| {
@@ -104,6 +109,8 @@ pub fn updateEpochStakes(
         );
         errdefer epoch_stakes.deinit(allocator);
 
+        try burnVat(allocator, slot_store, &epoch_stakes, feature_set, slot, logger);
+
         _ = try epoch_tracker.insertUnrootedEpochInfo(
             allocator,
             slot,
@@ -112,6 +119,79 @@ pub fn updateEpochStakes(
             feature_set,
         );
     }
+}
+
+/// Burn the Validator Admission ticket from each vote account if both the VAT and Alpenglow feature flags
+/// are enabled
+///
+/// Note: This must ONLY be called after the vote accounts have been filtered (`clone_and_filter_for_vat`)
+/// to the top `MAX_ALPENGLOW_VOTE_ACCOUNTS` that contain enough balance for admission.
+///
+// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/runtime/src/bank.rs#L2435
+fn burnVat(
+    allocator: Allocator,
+    slot_store: SlotAccountStore,
+    epoch_stakes: *const EpochStakes,
+    feature_set: *const FeatureSet,
+    slot: Slot,
+    logger: Logger,
+) !void {
+    if (!feature_set.active(.alpenglow, slot)) return;
+    if (!feature_set.active(.validator_admission_ticket, slot)) return;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    const vote_accounts = epoch_stakes.stakes.vote_accounts.vote_accounts;
+    std.debug.assert(
+        vote_accounts.count() <= sig.core.stakes.MAX_ALPENGLOW_VOTE_ACCOUNTS,
+    );
+
+    var total_vat: u64 = 0;
+    for (vote_accounts.keys()) |vote_pubkey| {
+        const account = (try slot_store.reader().get(arena_alloc, vote_pubkey)) orelse {
+            logger.err().logf(
+                "burnVat: filtered vote account {f} missing from accounts store",
+                .{vote_pubkey},
+            );
+            return error.MissingFilteredVoteAccount;
+        };
+
+        const new_lamports = std.math.sub(
+            u64,
+            account.lamports,
+            sig.core.stakes.VAT_TO_BURN_PER_EPOCH,
+        ) catch {
+            logger.err().logf(
+                "burnVat: vote account {f} has {} lamports, below VAT minimum",
+                .{ vote_pubkey, account.lamports },
+            );
+            return error.InsufficientLamportsForVat;
+        };
+        total_vat += sig.core.stakes.VAT_TO_BURN_PER_EPOCH;
+
+        var asd = try sig.runtime.account_conversions.fromAccount(arena_alloc, &account);
+        asd.lamports = new_lamports;
+        try slot_store.put(vote_pubkey, asd);
+    }
+
+    var incinerator_asd: AccountSharedData =
+        if (try slot_store.reader().get(arena_alloc, sig.runtime.ids.INCINERATOR)) |a|
+            try sig.runtime.account_conversions.fromAccount(arena_alloc, &a)
+        else
+            .EMPTY;
+    incinerator_asd.lamports = std.math.add(
+        u64,
+        incinerator_asd.lamports,
+        total_vat,
+    ) catch return error.IncineratorLamportsOverflow;
+    try slot_store.put(sig.runtime.ids.INCINERATOR, incinerator_asd);
+
+    logger.info().logf(
+        "Transferred {} lamports VAT to incinerator from {} vote accounts",
+        .{ total_vat, vote_accounts.count() },
+    );
 }
 
 /// Compute the epoch stakes for the given leader schedule epoch.
@@ -937,6 +1017,8 @@ test updateEpochStakes {
             &Rent.INIT,
             &stakes_cache,
             &epoch_tracker,
+            .noop,
+            .FOR_TESTS,
         );
         const epoch_info = try epoch_tracker.unrooted_epochs.getEpochInfoRef(&ancestors);
         defer epoch_info.release();
@@ -1125,6 +1207,222 @@ test "getEpochStakes: SIMD-0357 VAT filter gates on validator_admission_ticket" 
         try std.testing.expectEqual(
             @as(usize, 2),
             epoch_stakes.stakes.vote_accounts.vote_accounts.count(),
+        );
+    }
+}
+
+test "burnVat: debits each vote account and credits the incinerator" {
+    // Build a SlotAccountStore.account_shared_data_map seeded with three
+    // (already filtered) vote accounts plus a pre-existing incinerator entry,
+    // run burnVat with both the validator_admission_ticket and alpenglow
+    // features active, and verify each vote account was debited
+    // VAT_TO_BURN_PER_EPOCH while the incinerator absorbed the total. Uses an
+    // arena so replaced AccountSharedData entries stay valid until teardown.
+    const VAT_TO_BURN = sig.core.stakes.VAT_TO_BURN_PER_EPOCH;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const slot: Slot = 100;
+    const initial_vote_lamports: u64 = VAT_TO_BURN * 5;
+    const initial_incinerator_lamports: u64 = 7;
+
+    var account_map = sig.utils.collections.PubkeyMap(AccountSharedData){};
+
+    // Seed three filtered vote accounts (key = vote-account pubkey, owner is
+    // arbitrary; burnVat does not validate either).
+    var vote_keys: [3]Pubkey = undefined;
+    for (&vote_keys) |*k| {
+        k.* = .initRandom(random);
+        try account_map.put(arena_alloc, k.*, .{
+            .lamports = initial_vote_lamports,
+            .data = &.{},
+            .owner = sig.runtime.program.vote.ID,
+            .executable = false,
+            .rent_epoch = 0,
+        });
+    }
+
+    try account_map.put(arena_alloc, sig.runtime.ids.INCINERATOR, .{
+        .lamports = initial_incinerator_lamports,
+        .data = &.{},
+        .owner = Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    const slot_store: SlotAccountStore = .{
+        .account_shared_data_map = .{ arena_alloc, &account_map },
+    };
+
+    // Build a minimal EpochStakes whose vote_accounts.vote_accounts contains
+    // entries for our three keys. The accounts there are unused by burnVat
+    // (it re-reads from the store), so we wire dummy stakes only.
+    var epoch_stakes: EpochStakes = .EMPTY;
+    defer epoch_stakes.deinit(arena_alloc);
+
+    for (vote_keys, 0..) |k, i| {
+        try sig.core.stakes.insertTestVatVoteAccount(
+            arena_alloc,
+            random,
+            &epoch_stakes.stakes.vote_accounts,
+            @as(u64, @intCast(i + 1)) * 1000,
+            initial_vote_lamports,
+            true,
+        );
+        // Replace the random key inserted by the helper with our store key so
+        // burnVat looks the account up in the map.
+        const pop = epoch_stakes.stakes.vote_accounts.vote_accounts.pop().?;
+        try epoch_stakes.stakes.vote_accounts.vote_accounts.put(
+            arena_alloc,
+            k,
+            pop.value,
+        );
+    }
+
+    var feature_set: sig.core.FeatureSet = .ALL_DISABLED;
+    feature_set.setSlot(.validator_admission_ticket, slot);
+    feature_set.setSlot(.alpenglow, slot);
+
+    try burnVat(arena_alloc, slot_store, &epoch_stakes, &feature_set, slot, .FOR_TESTS);
+
+    for (vote_keys) |k| {
+        const stored = account_map.get(k).?;
+        try std.testing.expectEqual(initial_vote_lamports - VAT_TO_BURN, stored.lamports);
+    }
+    const inc = account_map.get(sig.runtime.ids.INCINERATOR).?;
+    try std.testing.expectEqual(
+        initial_incinerator_lamports + VAT_TO_BURN * vote_keys.len,
+        inc.lamports,
+    );
+}
+
+test "burnVat: empty vote accounts still materializes incinerator" {
+    // Mirrors agave's `Bank::maybe_burn_vat_from_staked_accounts`: even when
+    // the filter produces an empty surviving set, the incinerator is fetched
+    // (or defaulted) and written back at the current slot. Skipping that
+    // write would diverge on lt-hash / write-version side effects.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    const slot: Slot = 100;
+
+    var feature_set: sig.core.FeatureSet = .ALL_DISABLED;
+    feature_set.setSlot(.validator_admission_ticket, slot);
+    feature_set.setSlot(.alpenglow, slot);
+
+    var epoch_stakes: EpochStakes = .EMPTY;
+    defer epoch_stakes.deinit(arena_alloc);
+
+    { // Incinerator absent before the call: must exist with 0 lamports after.
+        var account_map = sig.utils.collections.PubkeyMap(AccountSharedData){};
+        const slot_store: SlotAccountStore = .{
+            .account_shared_data_map = .{ arena_alloc, &account_map },
+        };
+
+        try burnVat(arena_alloc, slot_store, &epoch_stakes, &feature_set, slot, .FOR_TESTS);
+
+        const inc = account_map.get(sig.runtime.ids.INCINERATOR);
+        try std.testing.expect(inc != null);
+        try std.testing.expectEqual(@as(u64, 0), inc.?.lamports);
+    }
+
+    { // Incinerator present before the call: lamports preserved, entry rewritten.
+        var account_map = sig.utils.collections.PubkeyMap(AccountSharedData){};
+        const slot_store: SlotAccountStore = .{
+            .account_shared_data_map = .{ arena_alloc, &account_map },
+        };
+        const initial_incinerator_lamports: u64 = 42;
+        try account_map.put(arena_alloc, sig.runtime.ids.INCINERATOR, .{
+            .lamports = initial_incinerator_lamports,
+            .data = &.{},
+            .owner = Pubkey.ZEROES,
+            .executable = false,
+            .rent_epoch = 0,
+        });
+
+        try burnVat(arena_alloc, slot_store, &epoch_stakes, &feature_set, slot, .FOR_TESTS);
+
+        const inc = account_map.get(sig.runtime.ids.INCINERATOR).?;
+        try std.testing.expectEqual(initial_incinerator_lamports, inc.lamports);
+    }
+}
+
+test "burnVat: no-op when validator_admission_ticket or alpenglow inactive" {
+    const VAT_TO_BURN = sig.core.stakes.VAT_TO_BURN_PER_EPOCH;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var account_map = sig.utils.collections.PubkeyMap(AccountSharedData){};
+    const slot_store: SlotAccountStore = .{
+        .account_shared_data_map = .{ arena_alloc, &account_map },
+    };
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    var epoch_stakes: EpochStakes = .EMPTY;
+    defer epoch_stakes.deinit(arena_alloc);
+
+    // Insert a vote account whose stored lamports are below VAT_TO_BURN. With
+    // either gating feature inactive, burnVat must NOT touch it (and must not
+    // return InsufficientLamportsForVat).
+    const vote_key = Pubkey.initRandom(random);
+    try account_map.put(arena_alloc, vote_key, .{
+        .lamports = VAT_TO_BURN / 2,
+        .data = &.{},
+        .owner = sig.runtime.program.vote.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+    try sig.core.stakes.insertTestVatVoteAccount(
+        arena_alloc,
+        random,
+        &epoch_stakes.stakes.vote_accounts,
+        1,
+        VAT_TO_BURN / 2,
+        true,
+    );
+    const pop = epoch_stakes.stakes.vote_accounts.vote_accounts.pop().?;
+    try epoch_stakes.stakes.vote_accounts.vote_accounts.put(arena_alloc, vote_key, pop.value);
+
+    const slot: Slot = 0;
+
+    // Both inactive.
+    try burnVat(arena_alloc, slot_store, &epoch_stakes, &.ALL_DISABLED, slot, .FOR_TESTS);
+    try std.testing.expectEqual(VAT_TO_BURN / 2, account_map.get(vote_key).?.lamports);
+    try std.testing.expectEqual(
+        @as(?AccountSharedData, null),
+        account_map.get(sig.runtime.ids.INCINERATOR),
+    );
+
+    // Only validator_admission_ticket active.
+    {
+        var fs: sig.core.FeatureSet = .ALL_DISABLED;
+        fs.setSlot(.validator_admission_ticket, slot);
+        try burnVat(arena_alloc, slot_store, &epoch_stakes, &fs, slot, .FOR_TESTS);
+        try std.testing.expectEqual(VAT_TO_BURN / 2, account_map.get(vote_key).?.lamports);
+        try std.testing.expectEqual(
+            @as(?AccountSharedData, null),
+            account_map.get(sig.runtime.ids.INCINERATOR),
+        );
+    }
+
+    // Only alpenglow active.
+    {
+        var fs: sig.core.FeatureSet = .ALL_DISABLED;
+        fs.setSlot(.alpenglow, slot);
+        try burnVat(arena_alloc, slot_store, &epoch_stakes, &fs, slot, .FOR_TESTS);
+        try std.testing.expectEqual(VAT_TO_BURN / 2, account_map.get(vote_key).?.lamports);
+        try std.testing.expectEqual(
+            @as(?AccountSharedData, null),
+            account_map.get(sig.runtime.ids.INCINERATOR),
         );
     }
 }

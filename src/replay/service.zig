@@ -608,6 +608,8 @@ pub fn trackNewSlots(
                     &constants.rent_collector.rent,
                     &state.stakes_cache,
                     epoch_tracker,
+                    store,
+                    .from(logger),
                 );
             }
 
