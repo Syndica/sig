@@ -1,6 +1,19 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("elf.zig");
+        _ = @import("environment.zig");
+        _ = @import("executable.zig");
+        _ = @import("interpreter.zig");
+        _ = @import("memory.zig");
+        _ = @import("sbpf.zig");
+        _ = @import("syscalls/lib.zig");
+        _ = @import("tests.zig");
+    }
+}
+
 const executable = @import("executable.zig");
 pub const sbpf = @import("sbpf.zig");
 pub const elf = @import("elf.zig");

@@ -2,6 +2,16 @@ const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../../lib.zig");
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("cpi.zig");
+        _ = @import("ecc.zig");
+        _ = @import("hash.zig");
+        _ = @import("memops.zig");
+        _ = @import("sysvar.zig");
+    }
+}
+
 pub const cpi = @import("cpi.zig");
 pub const memops = @import("memops.zig");
 pub const hash = @import("hash.zig");
@@ -189,13 +199,6 @@ pub const Syscall = enum {
     /// Describes syscalls whos activation is locked behind a feature gate.
     pub const gates = std.EnumArray(Syscall, ?Gate).initDefault(@as(?Gate, null), .{
         .sol_blake3 = .{ .feature = .blake3_syscall_enabled },
-        .sol_poseidon = .{ .feature = .enable_poseidon_syscall },
-
-        .sol_curve_validate_point = .{ .feature = .curve25519_syscall_enabled },
-        .sol_curve_group_op = .{ .feature = .curve25519_syscall_enabled },
-        .sol_curve_multiscalar_mul = .{ .feature = .curve25519_syscall_enabled },
-        .sol_alt_bn128_group_op = .{ .feature = .enable_alt_bn128_syscall },
-        .sol_alt_bn128_compression = .{ .feature = .enable_alt_bn128_compression_syscall },
 
         .sol_curve_decompress = .{ .feature = .enable_bls12_381_syscall },
         .sol_curve_pairing_map = .{ .feature = .enable_bls12_381_syscall },

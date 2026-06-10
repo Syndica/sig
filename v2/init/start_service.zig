@@ -53,8 +53,8 @@ pub const options: std.Options = .{
 
 pub const panic_state = struct {
     pub var stderr: std.os.linux.fd_t = undefined;
-    pub var exit: *lib.ipc.Exit = undefined;
-    pub var thread_crash_ctx: ?*const anyopaque = null;
+    pub var exit: *lib.runner.Exit = undefined;
+    pub var thread_crash_ctx: ?*anyopaque = null;
     pub var thread_crash_fn: ?lib.ipc.ResolvedArgs.ThreadCrashFn = null;
     pub var service_idx: u16 = std.math.maxInt(u16);
     var faulted: bool = false;
@@ -84,7 +84,7 @@ fn serviceLog(
 }
 
 fn serviceMain(params: lib.ipc.ResolvedArgs) callconv(.c) void {
-    const exit: *lib.ipc.Exit = @ptrCast(params.exit);
+    const exit: *lib.runner.Exit = &params.runner.exit;
     exit.* = .{};
 
     lib.clock.warmup();
@@ -107,7 +107,18 @@ fn serviceMain(params: lib.ipc.ResolvedArgs) callconv(.c) void {
     comptime var rw_index: usize = 0;
     populateFields(&rw, &rw_index, .rw, max_regions, &params.rw, &params.rw_len);
 
-    root.serviceMain(ro, rw) catch |err| {
+    var activity = params.runner.activity.serviceView();
+    const connection: lib.runner.Connection = .{
+        .activity = &activity,
+    };
+
+    root.serviceMain(connection, ro, rw) catch |err| {
+        if (err == error.Canceled and
+            activity.checkCanceled() == error.Canceled)
+        {
+            return;
+        }
+
         // write back error name
         const err_len = @min(@errorName(err).len, exit.error_name.len);
         @memcpy(exit.error_name[0..err_len], @errorName(err)[0..err_len]);

@@ -1,5 +1,10 @@
 const std = @import("std");
 
+const linux = std.os.linux;
+const E = linux.E;
+const e = E.init;
+const page_size_min = std.heap.page_size_min;
+
 pub const clone3 = struct {
     // zig fmt: off
     pub const Flags = packed struct(u64) {
@@ -119,103 +124,182 @@ pub const clone3 = struct {
     }
 };
 
-pub const memfd = struct {
-    const linux = std.os.linux;
-    const E = linux.E;
-    const e = E.init;
-    const page_size_min = std.heap.page_size_min;
+pub const Memfd = extern struct {
+    fd: linux.fd_t,
+    size: usize,
 
-    pub const RW = extern struct {
-        fd: linux.fd_t,
+    pub const empty: Memfd = .{ .fd = -1, .size = 0 };
+
+    pub const Args = struct {
+        name: [:0]const u8,
         size: usize,
+    };
 
-        pub const empty: RW = .{ .fd = -1, .size = 0 };
+    pub fn init(args: Args) !Memfd {
+        // Create a new memfd
+        const fd_rw: linux.fd_t = blk: {
+            // include/uapi/linux/memfd.h
+            const CLOEXEC = linux.MFD.CLOEXEC; // this fd will be closed if we ever exec
+            const ALLOW_SEALING = linux.MFD.ALLOW_SEALING; // allow sealing (needed below)
+            const NOEXEC_SEAL = 0x8; // create it with exec disabled *permanently*
 
-        pub const Args = struct {
-            name: [:0]const u8,
-            size: usize,
+            const fd = linux.memfd_create(args.name, CLOEXEC | ALLOW_SEALING | NOEXEC_SEAL);
+            switch (e(fd)) {
+                .SUCCESS => {},
+                else => |err| std.debug.panic("memfd_create failed with: {t}\n", .{err}),
+            }
+            break :blk @intCast(fd);
         };
 
-        pub fn init(args: Args) !RW {
-            // Create a new memfd
-            const fd_rw: linux.fd_t = blk: {
-                // include/uapi/linux/memfd.h
-                const CLOEXEC = linux.MFD.CLOEXEC; // this fd will be closed if we ever exec
-                const ALLOW_SEALING = linux.MFD.ALLOW_SEALING; // allow sealing (needed below)
-                const NOEXEC_SEAL = 0x8; // create it with exec disabled *permanently*
+        // Set file to correct size
+        try std.posix.ftruncate(fd_rw, args.size);
 
-                const fd = linux.memfd_create(args.name, CLOEXEC | ALLOW_SEALING | NOEXEC_SEAL);
-                switch (e(fd)) {
-                    .SUCCESS => {},
-                    else => |err| std.debug.panic("memfd_create failed with: {t}\n", .{err}),
-                }
-                break :blk @intCast(fd);
-            };
+        // Make sure the file cannot be later resized.
+        {
+            // include/uapi/linux/fcntl.h
+            const F_LINUX_SPECIFIC_BASE = 1024;
+            const F_ADD_SEALS = F_LINUX_SPECIFIC_BASE + 9;
+            const F_SEAL_SHRINK = 0x0002; // prevent file shrink
+            const F_SEAL_GROW = 0x0004; // prevent file grow
 
-            // Set file to correct size
-            try std.posix.ftruncate(fd_rw, args.size);
-
-            // Make sure the file cannot be later resized.
-            {
-                // include/uapi/linux/fcntl.h
-                const F_LINUX_SPECIFIC_BASE = 1024;
-                const F_ADD_SEALS = F_LINUX_SPECIFIC_BASE + 9;
-                const F_SEAL_SHRINK = 0x0002; // prevent file shrink
-                const F_SEAL_GROW = 0x0004; // prevent file grow
-
-                _ = try std.posix.fcntl(fd_rw, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW);
-            }
-
-            return .{
-                .fd = fd_rw,
-                .size = args.size,
-            };
+            _ = try std.posix.fcntl(fd_rw, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW);
         }
 
-        pub const mmap = mmapInner;
-    };
+        return .{
+            .fd = fd_rw,
+            .size = args.size,
+        };
+    }
 
-    pub const RO = extern struct {
-        fd: linux.fd_t,
-        size: usize,
-
-        pub const empty: RO = .{ .fd = -1, .size = 0 };
-
-        pub fn fromRW(rw: RW) !RO {
-            var buf: [100]u8 = undefined;
-            const path = try std.fmt.bufPrint(&buf, "/proc/self/fd/{}", .{rw.fd});
-            const file = try std.fs.openFileAbsolute(path, .{ .mode = .read_only });
-
-            return .{
-                .fd = file.handle,
-                .size = rw.size,
-            };
-        }
-
-        pub const mmap = mmapInner;
-    };
+    pub const Access = enum { rw, ro };
 
     pub const MapArgs = struct {
         at_ptr: ?[*]align(page_size_min) u8 = null,
         populate: bool = false,
     };
 
-    fn mmapInner(self: anytype, args: MapArgs) ![]align(page_size_min) u8 {
-        const access = switch (@TypeOf(self)) {
-            *const RW, *RW, RW => linux.PROT.READ | linux.PROT.WRITE,
-            *const RO, *RO, RO => linux.PROT.READ,
-            else => @compileError("unsupported type"),
+    /// If `access == .ro`, this will also create a temporary read-only file handle to the same
+    /// underlying memfd, and use it to create the memory mapping. This ensures it cannot be
+    /// upgraded to a read-write mapping with `mprotect`. The read-only handle is closed before
+    /// returning.
+    pub fn mmapRaw(
+        self: Memfd,
+        access: Access,
+        args: MapArgs,
+    ) ![]align(page_size_min) u8 {
+        const prot: u32 = switch (access) {
+            .rw => linux.PROT.READ | linux.PROT.WRITE,
+            .ro => linux.PROT.READ,
         };
+
+        const fd: linux.fd_t, //
+        const close_fd: bool //
+        = switch (access) {
+            .rw => .{ self.fd, false },
+            .ro => ro: {
+                const path_fmt_str = "/proc/self/fd/{d}";
+                const path_max_len = comptime @max(
+                    std.fmt.count(path_fmt_str, .{std.math.minInt(linux.fd_t)}),
+                    std.fmt.count(path_fmt_str, .{std.math.maxInt(linux.fd_t)}),
+                );
+                var buf: [path_max_len]u8 = undefined;
+                const path = std.fmt.bufPrint(&buf, path_fmt_str, .{self.fd}) catch unreachable;
+                const file = try std.fs.openFileAbsolute(path, .{ .mode = .read_only });
+                break :ro .{ file.handle, true };
+            },
+        };
+        defer if (close_fd) std.posix.close(fd);
 
         // TODO: HUGEPAGE support
         return try std.posix.mmap(
             args.at_ptr,
             self.size,
-            access,
+            prot,
             .{ .TYPE = .SHARED, .POPULATE = args.populate },
-            self.fd,
+            fd,
             0,
         );
+    }
+
+    pub fn MapTypedArgs(comptime T: type) type {
+        return struct {
+            at_ptr: ?*align(page_size_min) T = null,
+            populate: bool = false,
+            const MapTypedArgsSelf = @This();
+
+            fn toAny(self: MapTypedArgsSelf) MapArgs {
+                return .{
+                    .at_ptr = @ptrCast(self.at_ptr),
+                    .populate = self.populate,
+                };
+            }
+        };
+    }
+
+    /// Helper equivalent to `mmap`, but casts to defined-layout `T`, asserting the runtime size matches.
+    /// This is to be used for mapping a structure whose entire layout is statically-known.
+    pub fn mmapStaticSize(
+        self: Memfd,
+        access: Access,
+        comptime T: type,
+        args: MapTypedArgs(T),
+    ) !*align(page_size_min) T {
+        if (verifyIpcMmapType(T)) |err_msg| {
+            @compileError(err_msg ++ " are not supported: " ++ @typeName(T));
+        }
+        const expected_size = @sizeOf(T);
+        std.debug.assert(self.size == expected_size); // memfd size does not match mmap type
+        return @ptrCast(try self.mmapRaw(access, args.toAny()));
+    }
+
+    /// Helper equivalent to `mmap`, but casts to defined-layout `T`, asserting the runtime size suffices.
+    /// This is to be used for mapping a structure with a statically-sized "header" followed by runtime-sized data.
+    pub fn mmapDynamicSize(
+        self: Memfd,
+        access: Access,
+        comptime T: type,
+        args: MapTypedArgs(T),
+    ) !*align(page_size_min) T {
+        if (verifyIpcMmapType(T)) |err_msg| {
+            @compileError(err_msg ++ " are not supported: " ++ @typeName(T));
+        }
+        const minimum_size = @sizeOf(T);
+        std.debug.assert(self.size >= minimum_size); // memfd size does not fit mmap type
+        return @ptrCast(try self.mmapRaw(access, args.toAny()));
+    }
+
+    /// Returns `null` if `T` is a supported, mmapable, fixed-size type.
+    /// Otherwise returns a general description of the type which can be used
+    /// like `desc ++ " are not supported"`
+    inline fn verifyIpcMmapType(comptime T: type) ?[]const u8 {
+        comptime {
+            switch (@typeInfo(T)) {
+                .int => |info| if (@popCount(info.bits) != 1) {
+                    return "integers with non-power of two bit sizes";
+                },
+                .float => |info| if (@popCount(info.bits) != 1) {
+                    return "floats with non-power of two bit sizes";
+                },
+                .@"enum" => |info| if (@popCount(@bitSizeOf(info.tag_type)) != 1) {
+                    return "enums with non-power of two bit sizes";
+                },
+                inline //
+                .@"struct",
+                .@"union",
+                => |info, tag| switch (info.layout) {
+                    .auto => return "auto layout " ++ @tagName(tag) ++ "s",
+                    .@"packed" => if (@popCount(@bitSizeOf(info.tag_type)) != 1) {
+                        return "packed structs with non-power of two bit sizes";
+                    },
+                    .@"extern" => {},
+                },
+                .array => |info| if (verifyIpcMmapType(info.child)) |child_desc| {
+                    return "arrays of " ++ child_desc;
+                },
+                inline else => |_, tag| return @tagName(tag) ++ "s",
+            }
+            return null;
+        }
     }
 };
 

@@ -3,6 +3,13 @@ const tracy = @import("tracy");
 const std14 = @import("std14");
 const sig = @import("../../../lib.zig");
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("instruction.zig");
+        _ = @import("state.zig");
+    }
+}
+
 pub const state = @import("state.zig");
 const instruction = @import("instruction.zig");
 const program = @import("lib.zig");
