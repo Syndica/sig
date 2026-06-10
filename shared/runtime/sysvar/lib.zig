@@ -1,6 +1,21 @@
 const std = @import("std");
 const sig = @import("../../lib.zig");
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("clock.zig");
+        _ = @import("epoch_rewards.zig");
+        _ = @import("fees.zig");
+        _ = @import("instruction.zig");
+        _ = @import("last_restart_slot.zig");
+        _ = @import("recent_blockhashes.zig");
+        _ = @import("rent.zig");
+        _ = @import("slot_hashes.zig");
+        _ = @import("slot_history.zig");
+        _ = @import("stake_history.zig");
+    }
+}
+
 const bincode = sig.bincode;
 const Pubkey = sig.core.Pubkey;
 

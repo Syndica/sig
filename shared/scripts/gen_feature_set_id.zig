@@ -3,7 +3,7 @@
 const std = @import("std");
 const base58 = @import("base58");
 
-/// Keep in sync with definition in `src/features.zig`
+/// Keep in sync with definition in `shared/core/features.zig`
 const ZonInfo = struct {
     name: [:0]const u8,
     pubkey: [:0]const u8,

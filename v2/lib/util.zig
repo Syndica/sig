@@ -165,3 +165,152 @@ test "FastDiv divide by 2" {
     try std.testing.expectEqual(@as(u64, 1), d.div(3));
     try std.testing.expectEqual(@as(u64, 500), d.div(1000));
 }
+
+/// A statically-sized enum-keyed map, with preserved insertion order.
+/// Lookup and insertion are `O(n)`.
+pub fn ArrayEnumMap(comptime E: type, comptime V: type) type {
+    const enum_info = @typeInfo(E).@"enum";
+    return struct {
+        keys_buf: [enum_info.fields.len]E,
+        values_buf: [enum_info.fields.len]V,
+        len: Count,
+
+        const ArrayEnumMapSelf = @This();
+
+        pub const empty: ArrayEnumMapSelf = .{
+            .keys_buf = undefined,
+            .values_buf = undefined,
+            .len = 0,
+        };
+
+        pub const Count = std.math.IntFittingRange(0, enum_info.fields.len);
+
+        pub const Index = std.math.IntFittingRange(0, enum_info.fields.len -| 1);
+
+        fn getIndex(self: *const ArrayEnumMapSelf, key: E) ?Index {
+            const index = std.mem.indexOfScalar(E, self.keys_buf[0..self.len], key) orelse
+                return null;
+            switch (@import("builtin").mode) {
+                .Debug, .ReleaseSafe => if (std.mem.indexOfScalarPos(
+                    E,
+                    self.keys_buf[0..self.len],
+                    index + 1,
+                    key,
+                )) |duplicate| {
+                    std.debug.panic(
+                        "Multiple instances of `{t}` in map, at indices {} and {}.",
+                        .{ key, index, duplicate },
+                    );
+                },
+                .ReleaseFast, .ReleaseSmall => {},
+            }
+            return @intCast(index);
+        }
+
+        pub fn keys(self: *const ArrayEnumMapSelf) []const E {
+            return self.keys_buf[0..self.len];
+        }
+
+        pub fn values(self: *const ArrayEnumMapSelf) []const V {
+            return self.values_buf[0..self.len];
+        }
+
+        pub fn contains(self: *const ArrayEnumMapSelf, key: E) bool {
+            return self.getIndex(key) != null;
+        }
+
+        pub fn get(self: *const ArrayEnumMapSelf, key: E) ?*const V {
+            return &self.values_buf[self.getIndex(key) orelse return null];
+        }
+
+        pub fn getMut(self: *ArrayEnumMapSelf, key: E) ?*V {
+            return &self.values_buf[self.getIndex(key) orelse return null];
+        }
+
+        pub fn putNoClobber(self: *ArrayEnumMapSelf, key: E, value: V) void {
+            const gop = self.getOrPut(key);
+            std.debug.assert(!gop.found_existing);
+            gop.value_ptr.* = value;
+        }
+
+        pub const GetOrPutResult = struct {
+            found_existing: bool,
+            value_ptr: *V,
+        };
+
+        pub fn getOrPut(self: *ArrayEnumMapSelf, key: E) GetOrPutResult {
+            if (self.getIndex(key)) |existing| return .{
+                .found_existing = true,
+                .value_ptr = &self.values_buf[existing],
+            };
+
+            const index: Index = @intCast(self.len);
+            self.len += 1;
+            std.debug.assert(index < enum_info.fields.len);
+            self.keys_buf[index] = key;
+            self.values_buf[index] = undefined;
+
+            return .{
+                .found_existing = false,
+                .value_ptr = &self.values_buf[index],
+            };
+        }
+
+        pub const IteratorMut = Iterator(.mut);
+
+        pub fn iteratorMut(self: *ArrayEnumMapSelf) IteratorMut {
+            return .{ .map = self, .index = 0 };
+        }
+
+        pub const IteratorImmut = Iterator(.immut);
+
+        pub fn iteratorImmut(self: *const ArrayEnumMapSelf) IteratorImmut {
+            return .{ .map = self, .index = 0 };
+        }
+
+        fn Iterator(comptime mutability: enum { mut, immut }) type {
+            return struct {
+                map: switch (mutability) {
+                    .mut => *ArrayEnumMapSelf,
+                    .immut => *const ArrayEnumMapSelf,
+                },
+                index: Count,
+
+                const IteratorSelf = @This();
+
+                const ValuePtr = switch (mutability) {
+                    .mut => *V,
+                    .immut => *const V,
+                };
+
+                pub const Entry = struct {
+                    key: E,
+                    value: ValuePtr,
+
+                    pub fn destructure(entry: Entry) struct { E, ValuePtr } {
+                        return .{ entry.key, entry.value };
+                    }
+                };
+
+                pub fn next(self: *IteratorSelf) ?Entry {
+                    if (self.index == self.map.len) return null;
+                    defer self.index += 1;
+                    return .{
+                        .key = self.map.keys_buf[self.index],
+                        .value = &self.map.values_buf[self.index],
+                    };
+                }
+
+                pub fn nextKey(self: *IteratorSelf) ?E {
+                    const entry = self.next() orelse return null;
+                    return entry.key;
+                }
+
+                pub fn nextValue(self: *IteratorSelf) ?ValuePtr {
+                    const entry = self.next() orelse return null;
+                    return entry.value;
+                }
+            };
+        }
+    };
+}

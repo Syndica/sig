@@ -32,7 +32,8 @@ pub const ReadWrite = struct {
     tel: *tel.Region,
 };
 
-pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
+    _ = runner;
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     const metrics = rw.tel.metricAppender().appendFields(Metrics, Metrics.fields_config);
     rw.tel.signalReady();

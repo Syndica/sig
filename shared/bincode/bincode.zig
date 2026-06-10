@@ -1,3 +1,15 @@
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("arraylist.zig");
+        _ = @import("bounded_array.zig");
+        _ = @import("hashmap.zig");
+        _ = @import("int.zig");
+        _ = @import("list.zig");
+        _ = @import("optional.zig");
+        _ = @import("shortvec.zig");
+    }
+}
+
 pub const arraylist = @import("arraylist.zig");
 pub const hashmap = @import("hashmap.zig");
 pub const bounded_array = @import("bounded_array.zig");

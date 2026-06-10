@@ -1,6 +1,14 @@
 const std = @import("std");
 const sig = @import("../../../lib.zig");
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("ed25519.zig");
+        _ = @import("secp256k1.zig");
+        _ = @import("secp256r1.zig");
+    }
+}
+
 pub const ed25519 = @import("ed25519.zig");
 pub const secp256k1 = @import("secp256k1.zig");
 pub const secp256r1 = @import("secp256r1.zig");
