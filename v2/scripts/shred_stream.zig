@@ -24,6 +24,7 @@ const TestMode = enum {
     shuffle_slot,
     drop,
     late,
+    duplicate,
 
     fn parse(raw: []const u8) ?TestMode {
         if (std.mem.eql(u8, raw, "linear")) return .linear;
@@ -32,6 +33,7 @@ const TestMode = enum {
         if (std.mem.eql(u8, raw, "shuffle-slot")) return .shuffle_slot;
         if (std.mem.eql(u8, raw, "drop")) return .drop;
         if (std.mem.eql(u8, raw, "late")) return .late;
+        if (std.mem.eql(u8, raw, "duplicate")) return .duplicate;
         return null;
     }
 
@@ -43,12 +45,13 @@ const TestMode = enum {
             .shuffle_slot => "shuffle-slot",
             .drop => "drop",
             .late => "late",
+            .duplicate => "duplicate",
         };
     }
 
     fn usesSelectedShreds(self: TestMode) bool {
         return switch (self) {
-            .drop, .late => true,
+            .drop, .late, .duplicate => true,
             .linear, .reverse, .shuffle_global, .shuffle_slot => false,
         };
     }
@@ -91,7 +94,7 @@ const Config = struct {
     rate_hz: ?f64 = null,
     test_mode: TestMode = .linear,
     seed: ?u64 = null,
-    count: usize = 1,
+    selected_count: usize = 1,
     shred_kind: ShredKindFilter = .any,
     plan_limit: usize = 20,
     dry_run: bool = false,
@@ -127,7 +130,7 @@ const PartialConfig = struct {
     rate_hz: ?f64 = null,
     test_mode: TestMode = .linear,
     seed: ?u64 = null,
-    count: ?usize = null,
+    selected_count: ?usize = null,
     shred_kind: ?ShredKindFilter = null,
     plan_limit: ?usize = null,
     dry_run: bool = false,
@@ -155,13 +158,13 @@ const PartialConfig = struct {
                 if (self.seed != null) {
                     std.debug.print(
                         "--seed is only valid with --test-mode shuffle-global, " ++
-                            "shuffle-slot, drop, or late\n",
+                            "shuffle-slot, drop, late, or duplicate\n",
                         .{},
                     );
                     return error.InvalidArguments;
                 }
             },
-            .shuffle_global, .shuffle_slot, .drop, .late => {
+            .shuffle_global, .shuffle_slot, .drop, .late, .duplicate => {
                 if (self.seed == null) {
                     std.debug.print("--test-mode {s} requires --seed\n", .{self.test_mode.name()});
                     return error.InvalidArguments;
@@ -177,16 +180,25 @@ const PartialConfig = struct {
         }
 
         if (!self.test_mode.usesSelectedShreds()) {
-            if (self.count != null) {
-                std.debug.print("--count is only valid with --test-mode drop or late\n", .{});
+            if (self.selected_count != null) {
+                std.debug.print(
+                    "--count is only valid with --test-mode drop, late, or duplicate\n",
+                    .{},
+                );
                 return error.InvalidArguments;
             }
             if (self.shred_kind != null) {
-                std.debug.print("--shred-kind is only valid with --test-mode drop or late\n", .{});
+                std.debug.print(
+                    "--shred-kind is only valid with --test-mode drop, late, or duplicate\n",
+                    .{},
+                );
                 return error.InvalidArguments;
             }
             if (self.plan_limit != null) {
-                std.debug.print("--plan-limit is only valid with --test-mode drop or late\n", .{});
+                std.debug.print(
+                    "--plan-limit is only valid with --test-mode drop, late, or duplicate\n",
+                    .{},
+                );
                 return error.InvalidArguments;
             }
         }
@@ -199,7 +211,7 @@ const PartialConfig = struct {
             .rate_hz = self.rate_hz,
             .test_mode = self.test_mode,
             .seed = self.seed,
-            .count = self.count orelse 1,
+            .selected_count = self.selected_count orelse 1,
             .shred_kind = self.shred_kind orelse .any,
             .plan_limit = self.plan_limit orelse 20,
             .dry_run = self.dry_run,
@@ -308,7 +320,7 @@ fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
     try stdout.print("  test_mode: {s}\n", .{config.test_mode.name()});
     try stdout.print("  seed: {?}\n", .{config.seed});
     if (config.test_mode.usesSelectedShreds()) {
-        try stdout.print("  count: {d}\n", .{config.count});
+        try stdout.print("  selected_count: {d}\n", .{config.selected_count});
         try stdout.print("  shred_kind: {s}\n", .{config.shred_kind.name()});
         try stdout.print("  plan_limit: {d}\n", .{config.plan_limit});
     }
@@ -987,7 +999,7 @@ fn produceLedgerPackets(
             stop,
             progress,
         ),
-        .drop, .late => produceSelectedShredSchedule(
+        .drop, .late, .duplicate => produceSelectedShredSchedule(
             blockstore,
             selected_shreds.?,
             config.test_mode,
@@ -1283,7 +1295,7 @@ fn buildSelectedShredPlan(
         allocator,
         plan.schedule.refs.items,
         config.shred_kind,
-        config.count,
+        config.selected_count,
         config.seed.?,
     );
     return plan;
@@ -1300,16 +1312,51 @@ fn produceSelectedShredSchedule(
     const refs = selected_shreds.schedule.refs.items;
     const selected_ref_indices = selected_shreds.selected_ref_indices.items;
 
-    var stats = try produceRefSchedule(
-        blockstore,
-        &selected_shreds.schedule,
-        selected_ref_indices,
-        writer,
-        stop,
-        progress,
-    );
+    var stats: ProducerStats = .{ .slots = selected_shreds.schedule.selected_slots };
+    var unpublished_packets: usize = 0;
+    var selected_cursor: usize = 0;
+
+    for (refs, 0..) |shred_ref, ref_index| {
+        if (stop.load(.acquire)) break;
+
+        const is_selected = selected_cursor < selected_ref_indices.len and
+            selected_ref_indices[selected_cursor] == ref_index;
+        if (is_selected) selected_cursor += 1;
+
+        if (is_selected and test_mode != .duplicate) continue;
+
+        progress.current_slot.store(shred_ref.slot, .release);
+        progress.store(stats);
+        try produceShredByRef(
+            blockstore,
+            shred_ref,
+            writer,
+            stop,
+            progress,
+            &unpublished_packets,
+            &stats,
+        );
+
+        if (is_selected and test_mode == .duplicate) {
+            try produceShredByRef(
+                blockstore,
+                shred_ref,
+                writer,
+                stop,
+                progress,
+                &unpublished_packets,
+                &stats,
+            );
+        }
+    }
+
+    if (unpublished_packets != 0 and !stop.load(.acquire)) {
+        progress.store(stats);
+        writer.markUsed();
+        unpublished_packets = 0;
+    }
+
     if (test_mode == .late) {
-        var unpublished_packets: usize = 0;
         for (selected_ref_indices) |index| {
             if (stop.load(.acquire)) break;
             const shred_ref = refs[index];
@@ -1354,9 +1401,9 @@ fn chooseSelectedRefIndices(
     var candidates: std.ArrayList(usize) = .empty;
     errdefer candidates.deinit(allocator);
 
-    for (refs, 0..) |shred_ref, index| {
+    for (refs, 0..) |shred_ref, ref_index| {
         if (shred_kind.matches(shred_ref.kind)) {
-            try candidates.append(allocator, index);
+            try candidates.append(allocator, ref_index);
         }
     }
 
@@ -1365,7 +1412,7 @@ fn chooseSelectedRefIndices(
             "--count {d} exceeds {d} eligible {s} shreds\n",
             .{ count, candidates.items.len, shred_kind.name() },
         );
-        return error.InvalidDropCount;
+        return error.InvalidSelectedShredCount;
     }
 
     var prng = std.Random.DefaultPrng.init(seed);
@@ -1649,6 +1696,7 @@ fn printSelectedShredPlan(
     const action = switch (test_mode) {
         .drop => "dropped",
         .late => "delayed",
+        .duplicate => "duplicated",
         .linear, .reverse, .shuffle_global, .shuffle_slot => unreachable,
     };
 
@@ -1917,7 +1965,9 @@ fn parseArgs(args: []const []const u8) ParseArgsError!ParseResult {
                 try nextValue(args, &i, parsed_arg.name()),
             ),
             .seed => config.seed = try parseSeed(try nextValue(args, &i, parsed_arg.name())),
-            .count => config.count = try parseCount(try nextValue(args, &i, parsed_arg.name())),
+            .count => config.selected_count = try parseSelectedCount(
+                try nextValue(args, &i, parsed_arg.name()),
+            ),
             .shred_kind => config.shred_kind = try parseShredKind(
                 try nextValue(args, &i, parsed_arg.name()),
             ),
@@ -1966,7 +2016,8 @@ fn parseTestMode(value: []const u8) ParseArgsError!TestMode {
     return TestMode.parse(value) orelse {
         std.debug.print("invalid test mode for --test-mode: {s}\n", .{value});
         std.debug.print(
-            "valid test modes: linear, reverse, shuffle-global, shuffle-slot, drop, late\n",
+            "valid test modes: linear, reverse, shuffle-global, shuffle-slot, drop, late, " ++
+                "duplicate\n",
             .{},
         );
         return error.InvalidArguments;
@@ -1987,16 +2038,16 @@ fn parseSeed(value: []const u8) ParseArgsError!u64 {
     };
 }
 
-fn parseCount(value: []const u8) ParseArgsError!usize {
-    const count = std.fmt.parseUnsigned(usize, value, 10) catch {
+fn parseSelectedCount(value: []const u8) ParseArgsError!usize {
+    const selected_count = std.fmt.parseUnsigned(usize, value, 10) catch {
         std.debug.print("invalid count for --count: {s}\n", .{value});
         return error.InvalidArguments;
     };
-    if (count == 0) {
+    if (selected_count == 0) {
         std.debug.print("--count must be greater than zero\n", .{});
         return error.InvalidArguments;
     }
-    return count;
+    return selected_count;
 }
 
 fn parseShredKind(value: []const u8) ParseArgsError!ShredKindFilter {
@@ -2026,11 +2077,11 @@ fn printHelp() void {
         \\  --start-slot <slot>   First slot to stream
         \\  --end-slot <slot>     Inclusive last slot to stream
         \\  --rate-hz <float>     Maximum packets per second
-        \\  --test-mode <mode>    linear, reverse, shuffle-global, shuffle-slot, drop, or late
+        \\  --test-mode <mode>    linear, reverse, shuffle-global, shuffle-slot, drop, late, or duplicate
         \\  --seed <seed>         Decimal or 0x-prefixed seed for randomized test modes
-        \\  --count <n>           Number of selected shreds for drop/late modes (default: 1)
-        \\  --shred-kind <kind>   any, data, or code shreds for drop/late modes (default: any)
-        \\  --plan-limit <n>      Maximum affected slots to preview for drop/late modes (default: 20)
+        \\  --count <n>           Number of selected shreds for drop/late/duplicate modes (default: 1)
+        \\  --shred-kind <kind>   any, data, or code shreds for drop/late/duplicate modes (default: any)
+        \\  --plan-limit <n>      Maximum affected slots to preview for drop/late/duplicate modes (default: 20)
         \\  --dry-run             Read and print stats without sending UDP
         \\  -h, --help            Print this help
         \\
@@ -2048,7 +2099,7 @@ test "parse arguments" {
         try std.testing.expectEqual(@as(?f64, null), config.rate_hz);
         try std.testing.expectEqual(.linear, config.test_mode);
         try std.testing.expectEqual(@as(?u64, null), config.seed);
-        try std.testing.expectEqual(@as(usize, 1), config.count);
+        try std.testing.expectEqual(@as(usize, 1), config.selected_count);
         try std.testing.expectEqual(.any, config.shred_kind);
         try std.testing.expectEqual(@as(usize, 20), config.plan_limit);
         try std.testing.expect(!config.dry_run);
@@ -2131,7 +2182,7 @@ test "parse arguments" {
         });
         try std.testing.expectEqual(.drop, result.config.test_mode);
         try std.testing.expectEqual(@as(?u64, 12345), result.config.seed);
-        try std.testing.expectEqual(@as(usize, 1), result.config.count);
+        try std.testing.expectEqual(@as(usize, 1), result.config.selected_count);
         try std.testing.expectEqual(.any, result.config.shred_kind);
         try std.testing.expectEqual(@as(usize, 20), result.config.plan_limit);
     }
@@ -2149,7 +2200,7 @@ test "parse arguments" {
             "--plan-limit", "5",
         });
         try std.testing.expectEqual(.drop, result.config.test_mode);
-        try std.testing.expectEqual(@as(usize, 2), result.config.count);
+        try std.testing.expectEqual(@as(usize, 2), result.config.selected_count);
         try std.testing.expectEqual(.code, result.config.shred_kind);
         try std.testing.expectEqual(@as(usize, 5), result.config.plan_limit);
     }
@@ -2168,9 +2219,28 @@ test "parse arguments" {
         });
         try std.testing.expectEqual(.late, result.config.test_mode);
         try std.testing.expectEqual(@as(?u64, 12345), result.config.seed);
-        try std.testing.expectEqual(@as(usize, 3), result.config.count);
+        try std.testing.expectEqual(@as(usize, 3), result.config.selected_count);
         try std.testing.expectEqual(.data, result.config.shred_kind);
         try std.testing.expectEqual(@as(usize, 0), result.config.plan_limit);
+    }
+
+    {
+        const result = try parseArgs(&.{
+            "--ledger",     "ledger",
+            "--target",     "127.0.0.1:8002",
+            "--start-slot", "10",
+            "--end-slot",   "20",
+            "--test-mode",  "duplicate",
+            "--seed",       "12345",
+            "--count",      "4",
+            "--shred-kind", "any",
+            "--plan-limit", "7",
+        });
+        try std.testing.expectEqual(.duplicate, result.config.test_mode);
+        try std.testing.expectEqual(@as(?u64, 12345), result.config.seed);
+        try std.testing.expectEqual(@as(usize, 4), result.config.selected_count);
+        try std.testing.expectEqual(.any, result.config.shred_kind);
+        try std.testing.expectEqual(@as(usize, 7), result.config.plan_limit);
     }
 
     try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
@@ -2214,6 +2284,12 @@ test "parse arguments" {
     try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
+        "--test-mode", "duplicate",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",    "ledger",
+        "--target",    "127.0.0.1:8002",
         "--test-mode", "drop",
         "--seed",      "1",
     }));
@@ -2222,6 +2298,13 @@ test "parse arguments" {
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "late",
+        "--seed",      "1",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",    "ledger",
+        "--target",    "127.0.0.1:8002",
+        "--test-mode", "duplicate",
         "--seed",      "1",
     }));
 
@@ -2339,7 +2422,7 @@ test "choose shred target indices" {
     }
 
     try std.testing.expectError(
-        error.InvalidDropCount,
+        error.InvalidSelectedShredCount,
         chooseSelectedRefIndices(std.testing.allocator, &refs, .code, 3, 12345),
     );
 }
