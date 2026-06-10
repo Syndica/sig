@@ -47,7 +47,7 @@ pub fn main() !void {
     });
 
     const net_to_gossip_memfd = service_map.entries.get(.gossip).?.bindings.get(.net_to_gossip).?;
-    const net_pair = try net_to_gossip_memfd.memfd.mmapStaticSize(lib.net.Pair, .{});
+    const net_pair = try net_to_gossip_memfd.memfd.mmapStaticSize(.rw, lib.net.Pair, .{});
     defer std.posix.munmap(@ptrCast(net_pair));
 
     const ping_token: [32]u8 = @splat(12);
@@ -69,26 +69,17 @@ pub fn main() !void {
         packet.len = @intCast(fbw.end);
     }
 
-    var spawned = try topology.spawnSandboxed(&service_map);
-
-    // var spawned: topology.NoSandbox = undefined;
-    // try topology.spawnNoSandbox(&spawned, &service_map);
-
-    const activities = spawned.activityViews();
+    var spawned: topology.Children = undefined;
+    try spawned.spawn(.sandboxed, &service_map);
 
     // wait for gossip and telemetry to go idle
-    blk: while (true) {
-        for (activities) |*view| {
-            if (view.isActive()) continue :blk;
-        }
-        break :blk;
-    }
+    while (spawned.isActive()) : (std.atomic.spinLoopHint()) {}
 
     // go and ask all the services to cancel
-    for (activities) |*view| view.cancel();
+    spawned.cancel();
 
     // and then actually wait for the services to exit
-    try spawned.wait(10 * std.time.ns_per_ms);
+    try spawned.wait(2 * std.time.ns_per_s);
 
     var msgs: std.ArrayList(lib.gossip.GossipMessage) = .empty;
     defer msgs.deinit(gpa);
