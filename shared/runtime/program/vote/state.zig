@@ -1286,69 +1286,6 @@ pub const VoteState = union(enum(u32)) {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_0_23_5.rs#L11
-pub const VoteState0_23_5 = struct {
-    /// the node that votes in this account
-    node_pubkey: Pubkey,
-
-    /// the signer for vote transactions
-    voter: Pubkey,
-
-    /// when the authorized voter was set/initialized
-    voter_epoch: Epoch,
-
-    /// history of prior authorized voters and the epoch ranges for which
-    ///  they were set
-    prior_voters: CircBufV0,
-
-    /// the signer for withdrawals
-    withdrawer: Pubkey,
-
-    /// percentage (0-100) that represents what part of a rewards
-    ///  payout should be given to this VoteAccount
-    commission: u8,
-
-    // TODO this should be a double ended queue.
-    votes: std.ArrayListUnmanaged(Lockout),
-
-    root_slot: ?Slot,
-
-    /// history of how many credits earned by the end of each epoch
-    ///  each tuple is (Epoch, credits, prev_credits)
-    epoch_credits: std.ArrayListUnmanaged(EpochCredit),
-
-    /// most recent timestamp submitted with a vote
-    last_timestamp: BlockTimestamp,
-
-    pub fn init(
-        node_pubkey: Pubkey,
-        authorized_voter: Pubkey,
-        withdrawer: Pubkey,
-        commission: u8,
-        voter_epoch: Epoch,
-    ) !VoteState0_23_5 {
-        return .{
-            .node_pubkey = node_pubkey,
-            .voter = authorized_voter,
-            .voter_epoch = voter_epoch,
-            .prior_voters = CircBufV0.init(),
-            .withdrawer = withdrawer,
-            .commission = commission,
-            .votes = .empty,
-            .root_slot = null,
-            .epoch_credits = .empty,
-            .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
-        };
-    }
-
-    pub fn deinit(self: *const VoteState0_23_5, allocator: Allocator) void {
-        var votes = self.votes;
-        votes.deinit(allocator);
-        var epoch_credits = self.epoch_credits;
-        epoch_credits.deinit(allocator);
-    }
-};
-
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_1_14_11.rs#L16
 pub const VoteState1_14_11 = struct {
     /// the node that votes in this account
