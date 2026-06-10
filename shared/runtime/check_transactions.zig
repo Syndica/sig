@@ -86,14 +86,11 @@ pub fn checkFeePayer(
     rent_collector: *const RentCollector,
     feature_set: *const FeatureSet,
     slot: sig.core.Slot,
-    lamports_per_signature: u64,
 ) AccountLoadError!TransactionResult(struct {
     FeeDetails,
     std14.BoundedArray(LoadedAccount, 2),
     PreparedAccount,
 }) {
-    _ = lamports_per_signature; // ignored here - see comment below
-
     var zone = tracy.Zone.init(@src(), .{ .name = "checkFeePayer" });
     defer zone.deinit();
 
@@ -125,19 +122,11 @@ pub fn checkFeePayer(
     // This means that lamports_per_signature is in effect *always* 5000, even
     // when the fee rate governor disagrees.
     //
-    // The other fields of FeeStructure, lamports_per_write_lock and
-    // compute_fee_bins, are also effectively unused.
-    //
-    // TODO: Stop hardcoding this value.
-    // This will probably be fixed in Agave at some point, we should fix this
-    // when they do.
-    //
     // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank/check_transactions.rs#L106-L112
 
     const fee_budget_limits = FeeBudgetLimits.fromComputeBudgetLimits(compute_budget_limits.*);
     const fee_details = FeeDetails.init(
         SignatureCounts.fromTransaction(transaction),
-        5_000,
         enable_secp256r1,
         fee_budget_limits.prioritization_fee,
         compute_budget_limits.compute_unit_price,
@@ -222,6 +211,8 @@ pub const SignatureCounts = struct {
     }
 };
 
+pub const LAMPORTS_PER_SIGNATURE: u64 = 5_000;
+
 pub const FeeDetails = struct {
     transaction_fee: u64,
     prioritization_fee: u64,
@@ -237,7 +228,6 @@ pub const FeeDetails = struct {
 
     pub fn init(
         sig_counts: SignatureCounts,
-        lamports_per_signature: u64,
         enable_secp256r1: bool,
         prioritization_fee: u64,
         compute_unit_price: u64,
@@ -245,7 +235,6 @@ pub const FeeDetails = struct {
         return .{
             .transaction_fee = calculateSignatureFee(
                 sig_counts,
-                lamports_per_signature,
                 enable_secp256r1,
             ),
             .prioritization_fee = prioritization_fee,
@@ -256,7 +245,6 @@ pub const FeeDetails = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/dad81b9b2ecf81ceb518dd9f7cc91e83ba33bda8/fee/src/lib.rs#L66
     fn calculateSignatureFee(
         sig_counts: SignatureCounts,
-        lamports_per_signature: u64,
         enable_secp256r1: bool,
     ) u64 {
         const sig_count = sig_counts.num_transaction_signatures +|
@@ -264,7 +252,7 @@ pub const FeeDetails = struct {
             sig_counts.num_secp256k1_signatures +|
             if (enable_secp256r1) sig_counts.num_secp256r1_signatures else 0;
 
-        return sig_count *| lamports_per_signature;
+        return sig_count *| LAMPORTS_PER_SIGNATURE;
     }
 
     pub fn total(self: FeeDetails) u64 {
@@ -918,18 +906,17 @@ test "checkFeePayer: happy path fee payer only" {
         &sig.core.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,
         0,
-        5000,
     );
 
     const fee_details, const rollbacks, const prepared_fee_payer = result.ok;
     defer prepared_fee_payer.account.deinit(allocator);
 
-    try std.testing.expectEqual(5000, fee_details.transaction_fee);
+    try std.testing.expectEqual(LAMPORTS_PER_SIGNATURE, fee_details.transaction_fee);
     try std.testing.expectEqual(0, fee_details.prioritization_fee);
 
     try std.testing.expectEqual(1, rollbacks.slice().len);
     const payer = rollbacks.slice()[0];
-    try std.testing.expectEqual(995_000, payer.account.lamports);
+    try std.testing.expectEqual(1_000_000 - LAMPORTS_PER_SIGNATURE, payer.account.lamports);
     try std.testing.expectEqual(0, payer.account.rent_epoch);
 }
 
@@ -988,7 +975,6 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
         &sig.core.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,
         0,
-        5000,
     );
 
     const fee_details, const rollbacks, const prepared_fee_payer = result.ok;
@@ -998,9 +984,9 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
     try std.testing.expectEqual(1, rollbacks.len);
     const rollback_account = rollbacks.get(0).account;
 
-    try std.testing.expectEqual(5000, fee_details.transaction_fee);
+    try std.testing.expectEqual(LAMPORTS_PER_SIGNATURE, fee_details.transaction_fee);
     try std.testing.expectEqual(0, fee_details.prioritization_fee);
-    try std.testing.expectEqual(995_000, rollback_account.lamports);
+    try std.testing.expectEqual(1_000_000 - LAMPORTS_PER_SIGNATURE, rollback_account.lamports);
     try std.testing.expectEqual(std.math.maxInt(u64), rollback_account.rent_epoch);
 }
 
@@ -1059,7 +1045,6 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
         &sig.core.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,
         0,
-        5000,
     );
 
     const fee_details, const rollbacks, const prepared_fee_payer = result.ok;
@@ -1069,10 +1054,10 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
     const rollback_nonce_account = rollbacks.get(0).account;
     const rollback_fee_payer_account = rollbacks.get(1).account;
 
-    try std.testing.expectEqual(5000, fee_details.transaction_fee);
+    try std.testing.expectEqual(LAMPORTS_PER_SIGNATURE, fee_details.transaction_fee);
     try std.testing.expectEqual(0, fee_details.prioritization_fee);
     try std.testing.expectEqual(1_000, rollback_nonce_account.lamports);
     try std.testing.expectEqual(0, rollback_nonce_account.rent_epoch);
-    try std.testing.expectEqual(995_000, rollback_fee_payer_account.lamports);
+    try std.testing.expectEqual(1_000_000 - LAMPORTS_PER_SIGNATURE, rollback_fee_payer_account.lamports);
     try std.testing.expectEqual(std.math.maxInt(u64), rollback_fee_payer_account.rent_epoch);
 }

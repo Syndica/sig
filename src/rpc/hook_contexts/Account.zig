@@ -429,7 +429,6 @@ pub fn getFeeForMessage(
         const fee_budget_limits = FeeBudgetLimits.fromComputeBudgetLimits(budget_limits);
         fee_details = FeeDetails.init(
             SignatureCounts.fromTransaction(&runtime_txn),
-            5_000,
             enable_secp256r1,
             fee_budget_limits.prioritization_fee,
             budget_limits.compute_unit_price,
