@@ -283,17 +283,24 @@ fn parseLenient(
 
     // [sbpf] https://github.com/anza-xyz/sbpf/blob/v0.20.0/src/elf.rs#L710-730
     const ro_section = try elf_parsed.parseRoSections(allocator, &config, bytes);
+    errdefer ro_section.deinit(allocator);
 
     // Extract instructions from the text section.
     //
     // When `parseRoSections` returns `Section.owned`, the merged read-only
     // buffer may overlay other sections on top of `.text` (e.g. a fuzz-crafted
     // ELF can declare an `SHT_DYNAMIC` section named `.rodata` whose `sh_addr`
-    // lands inside the `.text` range). To stay byte-identical with agave's
-    // `Executable::get_text_bytes`, which always reads the text section from
-    // the owned buffer when sections overlap, we must do the same here.
+    // lands inside the `.text` range). To stay byte-identical with sbpf's
+    // `Executable::get_text_bytes`, which reads the text section from the
+    // owned buffer (not `elf_bytes`) so it stays consistent with the
+    // ro_section when sections overlap, we must do the same here.
     //
-    // [sbpf] https://github.com/anza-xyz/sbpf/blob/v0.20.0/src/elf.rs#L307-L321
+    // The patched `get_text_bytes` lives on firedancer-io's
+    // `sbpf-v0.20.0-patches` branch (used by the conformance harness via
+    // solfuzz-agave's Cargo.lock) and has since been upstreamed to
+    // anza-xyz/sbpf `main` (post v0.20.0).
+    //
+    // [sbpf] https://github.com/firedancer-io/sbpf/blob/6cd6372eb4ee631f792642f97fe825bc269aaf58/src/elf.rs#L307-L321
     const text_range = Elf64.Range.get(text_shdr);
     const text_len = text_range.hi - text_range.lo;
     const text_bytes = switch (ro_section) {
@@ -301,7 +308,7 @@ fn parseLenient(
             // `o.offset` is the vaddr where `o.data[0]` is mapped.
             // `text_section_vaddr` is `text_shdr.sh_addr + REGION_SIZE`.
             // So the index into `o.data` of the first text byte is
-            // `text_section_vaddr - o.offset` (matches agave).
+            // `text_section_vaddr - o.offset` (matches sbpf).
             const text_offset_in_owned = text_section_vaddr -| o.offset;
             if (text_offset_in_owned +| text_len > o.data.len) {
                 return error.OutOfBounds;
