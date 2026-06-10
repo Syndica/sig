@@ -46,7 +46,7 @@ const TestMode = enum {
         };
     }
 
-    fn isMutation(self: TestMode) bool {
+    fn usesSelectedShreds(self: TestMode) bool {
         return switch (self) {
             .drop, .late => true,
             .linear, .reverse, .shuffle_global, .shuffle_slot => false,
@@ -176,7 +176,7 @@ const PartialConfig = struct {
             },
         }
 
-        if (!self.test_mode.isMutation()) {
+        if (!self.test_mode.usesSelectedShreds()) {
             if (self.count != null) {
                 std.debug.print("--count is only valid with --test-mode drop or late\n", .{});
                 return error.InvalidArguments;
@@ -307,7 +307,7 @@ fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
     try stdout.print("  rate_hz: {?}\n", .{config.rate_hz});
     try stdout.print("  test_mode: {s}\n", .{config.test_mode.name()});
     try stdout.print("  seed: {?}\n", .{config.seed});
-    if (config.test_mode.isMutation()) {
+    if (config.test_mode.usesSelectedShreds()) {
         try stdout.print("  count: {d}\n", .{config.count});
         try stdout.print("  shred_kind: {s}\n", .{config.shred_kind.name()});
         try stdout.print("  plan_limit: {d}\n", .{config.plan_limit});
@@ -328,12 +328,17 @@ fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
         );
     }
 
-    var target_plan: ?ShredTargetPlan = null;
-    defer if (target_plan) |*plan| plan.deinit(allocator);
-    if (config.test_mode.isMutation()) {
+    var selected_shreds: ?SelectedShredPlan = null;
+    defer if (selected_shreds) |*plan| plan.deinit(allocator);
+    if (config.test_mode.usesSelectedShreds()) {
         var preflight_stop: std.atomic.Value(bool) = .init(false);
-        target_plan = try buildShredTargetPlan(allocator, &blockstore, config, &preflight_stop);
-        try printShredTargetPlan(stdout, &target_plan.?, config.test_mode, config.plan_limit);
+        selected_shreds = try buildSelectedShredPlan(
+            allocator,
+            &blockstore,
+            config,
+            &preflight_stop,
+        );
+        try printSelectedShredPlan(stdout, &selected_shreds.?, config.test_mode, config.plan_limit);
     }
 
     if (config.dry_run) {
@@ -393,7 +398,7 @@ fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
                 &blockstore,
                 allocator,
                 config,
-                if (target_plan) |*plan| plan else null,
+                if (selected_shreds) |*plan| plan else null,
                 &ring,
                 &producer_done,
                 &stop,
@@ -556,13 +561,13 @@ const RefSchedule = struct {
     }
 };
 
-const ShredTargetPlan = struct {
+const SelectedShredPlan = struct {
     schedule: RefSchedule = .{},
-    target_indices: std.ArrayList(usize) = .empty,
+    selected_ref_indices: std.ArrayList(usize) = .empty,
     eligible_shreds: usize = 0,
 
-    fn deinit(self: *ShredTargetPlan, allocator: Allocator) void {
-        self.target_indices.deinit(allocator);
+    fn deinit(self: *SelectedShredPlan, allocator: Allocator) void {
+        self.selected_ref_indices.deinit(allocator);
         self.schedule.deinit(allocator);
     }
 };
@@ -785,7 +790,7 @@ fn producerThreadMain(
     blockstore: *const AgaveBlockstore,
     allocator: Allocator,
     config: Config,
-    target_plan: ?*const ShredTargetPlan,
+    selected_shreds: ?*const SelectedShredPlan,
     ring: *StreamPacketRing,
     done: *std.atomic.Value(bool),
     stop: *std.atomic.Value(bool),
@@ -798,7 +803,7 @@ fn producerThreadMain(
         allocator,
         blockstore,
         config,
-        target_plan,
+        selected_shreds,
         &writer,
         stop,
         progress,
@@ -944,7 +949,7 @@ fn produceLedgerPackets(
     allocator: Allocator,
     blockstore: *const AgaveBlockstore,
     config: Config,
-    target_plan: ?*const ShredTargetPlan,
+    selected_shreds: ?*const SelectedShredPlan,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
@@ -982,16 +987,10 @@ fn produceLedgerPackets(
             stop,
             progress,
         ),
-        .drop => produceDroppedRefSchedule(
+        .drop, .late => produceSelectedShredSchedule(
             blockstore,
-            target_plan.?,
-            writer,
-            stop,
-            progress,
-        ),
-        .late => produceLateRefSchedule(
-            blockstore,
-            target_plan.?,
+            selected_shreds.?,
+            config.test_mode,
             writer,
             stop,
             progress,
@@ -1268,19 +1267,19 @@ fn collectSlotShredRefs(
     }
 }
 
-fn buildShredTargetPlan(
+fn buildSelectedShredPlan(
     allocator: Allocator,
     blockstore: *const AgaveBlockstore,
     config: Config,
     stop: *std.atomic.Value(bool),
-) !ShredTargetPlan {
-    var plan: ShredTargetPlan = .{
+) !SelectedShredPlan {
+    var plan: SelectedShredPlan = .{
         .schedule = try buildOrderedRefSchedule(allocator, blockstore, config, stop),
     };
     errdefer plan.deinit(allocator);
 
     plan.eligible_shreds = countEligibleShreds(plan.schedule.refs.items, config.shred_kind);
-    plan.target_indices = try chooseShredTargetIndices(
+    plan.selected_ref_indices = try chooseSelectedRefIndices(
         allocator,
         plan.schedule.refs.items,
         config.shred_kind,
@@ -1290,47 +1289,50 @@ fn buildShredTargetPlan(
     return plan;
 }
 
-fn produceDroppedRefSchedule(
+fn produceSelectedShredSchedule(
     blockstore: *const AgaveBlockstore,
-    target_plan: *const ShredTargetPlan,
+    selected_shreds: *const SelectedShredPlan,
+    test_mode: TestMode,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
 ) !ProducerStats {
-    return produceRefSchedule(
-        blockstore,
-        &target_plan.schedule,
-        target_plan.target_indices.items,
-        writer,
-        stop,
-        progress,
-    );
-}
+    const refs = selected_shreds.schedule.refs.items;
+    const selected_ref_indices = selected_shreds.selected_ref_indices.items;
 
-fn produceLateRefSchedule(
-    blockstore: *const AgaveBlockstore,
-    target_plan: *const ShredTargetPlan,
-    writer: *StreamPacketRing.Iterator(.writer),
-    stop: *std.atomic.Value(bool),
-    progress: *ProducerProgress,
-) !ProducerStats {
     var stats = try produceRefSchedule(
         blockstore,
-        &target_plan.schedule,
-        target_plan.target_indices.items,
+        &selected_shreds.schedule,
+        selected_ref_indices,
         writer,
         stop,
         progress,
     );
-    try produceRefTargets(
-        blockstore,
-        &target_plan.schedule,
-        target_plan.target_indices.items,
-        writer,
-        stop,
-        progress,
-        &stats,
-    );
+    if (test_mode == .late) {
+        var unpublished_packets: usize = 0;
+        for (selected_ref_indices) |index| {
+            if (stop.load(.acquire)) break;
+            const shred_ref = refs[index];
+            progress.current_slot.store(shred_ref.slot, .release);
+            progress.store(stats);
+            try produceShredByRef(
+                blockstore,
+                shred_ref,
+                writer,
+                stop,
+                progress,
+                &unpublished_packets,
+                &stats,
+            );
+        }
+
+        if (unpublished_packets != 0 and !stop.load(.acquire)) {
+            progress.store(stats);
+            writer.markUsed();
+        }
+    }
+
+    progress.store(stats);
     return stats;
 }
 
@@ -1342,7 +1344,7 @@ fn countEligibleShreds(refs: []const ShredRef, shred_kind: ShredKindFilter) usiz
     return count;
 }
 
-fn chooseShredTargetIndices(
+fn chooseSelectedRefIndices(
     allocator: Allocator,
     refs: []const ShredRef,
     shred_kind: ShredKindFilter,
@@ -1412,41 +1414,6 @@ fn produceRefSchedule(
 
     progress.store(stats);
     return stats;
-}
-
-fn produceRefTargets(
-    blockstore: *const AgaveBlockstore,
-    schedule: *const RefSchedule,
-    target_indices: []const usize,
-    writer: *StreamPacketRing.Iterator(.writer),
-    stop: *std.atomic.Value(bool),
-    progress: *ProducerProgress,
-    stats: *ProducerStats,
-) !void {
-    var unpublished_packets: usize = 0;
-
-    for (target_indices) |index| {
-        if (stop.load(.acquire)) break;
-        const shred_ref = schedule.refs.items[index];
-        progress.current_slot.store(shred_ref.slot, .release);
-        progress.store(stats.*);
-        try produceShredByRef(
-            blockstore,
-            shred_ref,
-            writer,
-            stop,
-            progress,
-            &unpublished_packets,
-            stats,
-        );
-    }
-
-    if (unpublished_packets != 0 and !stop.load(.acquire)) {
-        progress.store(stats.*);
-        writer.markUsed();
-    }
-
-    progress.store(stats.*);
 }
 
 fn produceShredByRef(
@@ -1670,13 +1637,15 @@ fn printLedgerStats(stdout: *std.Io.Writer, stats: LedgerStats) !void {
     }
 }
 
-fn printShredTargetPlan(
+fn printSelectedShredPlan(
     stdout: *std.Io.Writer,
-    target_plan: *const ShredTargetPlan,
+    selected_shreds: *const SelectedShredPlan,
     test_mode: TestMode,
     preview_limit: usize,
 ) !void {
-    const affected_slots = countAffectedShredTargetSlots(target_plan);
+    const refs = selected_shreds.schedule.refs.items;
+    const selected_ref_indices = selected_shreds.selected_ref_indices.items;
+    const affected_slots = countSelectedShredSlots(selected_shreds);
     const action = switch (test_mode) {
         .drop => "dropped",
         .late => "delayed",
@@ -1684,8 +1653,11 @@ fn printShredTargetPlan(
     };
 
     try stdout.print("{s}_plan:\n", .{test_mode.name()});
-    try stdout.print("  eligible_shreds: {d}\n", .{target_plan.eligible_shreds});
-    try stdout.print("  {s}_shreds: {d}\n", .{ action, target_plan.target_indices.items.len });
+    try stdout.print("  eligible_shreds: {d}\n", .{selected_shreds.eligible_shreds});
+    try stdout.print(
+        "  {s}_shreds: {d}\n",
+        .{ action, selected_ref_indices.len },
+    );
     try stdout.print("  affected_slots: {d}\n", .{affected_slots});
     try stdout.print("  preview_slots: {d}\n", .{@min(preview_limit, affected_slots)});
 
@@ -1695,21 +1667,21 @@ fn printShredTargetPlan(
 
     var skip_index: usize = 0;
     var printed_slots: usize = 0;
-    while (skip_index < target_plan.target_indices.items.len) {
-        const slot = target_plan.schedule.refs.items[target_plan.target_indices.items[skip_index]].slot;
+    while (skip_index < selected_ref_indices.len) {
+        const slot = refs[selected_ref_indices[skip_index]].slot;
         const slot_start = skip_index;
-        while (skip_index < target_plan.target_indices.items.len and
-            target_plan.schedule.refs.items[target_plan.target_indices.items[skip_index]].slot == slot)
+        while (skip_index < selected_ref_indices.len and
+            refs[selected_ref_indices[skip_index]].slot == slot)
         {
             skip_index += 1;
         }
-        const slot_target_indices = target_plan.target_indices.items[slot_start..skip_index];
+        const slot_selected_ref_indices = selected_ref_indices[slot_start..skip_index];
 
         if (printed_slots == preview_limit) break;
         try stdout.print("    {d}: data=[", .{slot});
-        try printTargetShredIndexes(stdout, target_plan, slot_target_indices, .data);
+        try printSelectedShredIndexList(stdout, selected_shreds, slot_selected_ref_indices, .data);
         try stdout.print("] code=[", .{});
-        try printTargetShredIndexes(stdout, target_plan, slot_target_indices, .code);
+        try printSelectedShredIndexList(stdout, selected_shreds, slot_selected_ref_indices, .code);
         try stdout.print("]\n", .{});
         printed_slots += 1;
     }
@@ -1719,11 +1691,14 @@ fn printShredTargetPlan(
     }
 }
 
-fn countAffectedShredTargetSlots(target_plan: *const ShredTargetPlan) usize {
+fn countSelectedShredSlots(selected_shreds: *const SelectedShredPlan) usize {
+    const refs = selected_shreds.schedule.refs.items;
+    const selected_ref_indices = selected_shreds.selected_ref_indices.items;
+
     var count: usize = 0;
     var previous_slot: ?Slot = null;
-    for (target_plan.target_indices.items) |target_index| {
-        const slot = target_plan.schedule.refs.items[target_index].slot;
+    for (selected_ref_indices) |selected_ref_index| {
+        const slot = refs[selected_ref_index].slot;
         if (previous_slot == null or previous_slot.? != slot) {
             count += 1;
             previous_slot = slot;
@@ -1732,15 +1707,17 @@ fn countAffectedShredTargetSlots(target_plan: *const ShredTargetPlan) usize {
     return count;
 }
 
-fn printTargetShredIndexes(
+fn printSelectedShredIndexList(
     stdout: *std.Io.Writer,
-    target_plan: *const ShredTargetPlan,
-    target_indices: []const usize,
+    selected_shreds: *const SelectedShredPlan,
+    selected_ref_indices: []const usize,
     kind: ShredKind,
 ) !void {
+    const refs = selected_shreds.schedule.refs.items;
+
     var first = true;
-    for (target_indices) |target_index| {
-        const shred_ref = target_plan.schedule.refs.items[target_index];
+    for (selected_ref_indices) |selected_ref_index| {
+        const shred_ref = refs[selected_ref_index];
         if (shred_ref.kind != kind) continue;
         if (!first) try stdout.print(", ", .{});
         try stdout.print("{d}", .{shred_ref.index});
@@ -2051,9 +2028,9 @@ fn printHelp() void {
         \\  --rate-hz <float>     Maximum packets per second
         \\  --test-mode <mode>    linear, reverse, shuffle-global, shuffle-slot, drop, or late
         \\  --seed <seed>         Decimal or 0x-prefixed seed for randomized test modes
-        \\  --count <n>           Number of shreds affected by mutation modes (default: 1)
-        \\  --shred-kind <kind>   any, data, or code shreds for mutation modes (default: any)
-        \\  --plan-limit <n>      Maximum affected slots to preview for mutation modes (default: 20)
+        \\  --count <n>           Number of selected shreds for drop/late modes (default: 1)
+        \\  --shred-kind <kind>   any, data, or code shreds for drop/late modes (default: any)
+        \\  --plan-limit <n>      Maximum affected slots to preview for drop/late modes (default: 20)
         \\  --dry-run             Read and print stats without sending UDP
         \\  -h, --help            Print this help
         \\
@@ -2343,9 +2320,9 @@ test "choose shred target indices" {
         .{ .slot = 1, .index = 4, .kind = .data },
     };
 
-    var first = try chooseShredTargetIndices(std.testing.allocator, &refs, .data, 2, 12345);
+    var first = try chooseSelectedRefIndices(std.testing.allocator, &refs, .data, 2, 12345);
     defer first.deinit(std.testing.allocator);
-    var second = try chooseShredTargetIndices(std.testing.allocator, &refs, .data, 2, 12345);
+    var second = try chooseSelectedRefIndices(std.testing.allocator, &refs, .data, 2, 12345);
     defer second.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 2), first.items.len);
@@ -2354,7 +2331,7 @@ test "choose shred target indices" {
         try std.testing.expect(refs[index].kind == .data);
     }
 
-    var code = try chooseShredTargetIndices(std.testing.allocator, &refs, .code, 2, 12345);
+    var code = try chooseSelectedRefIndices(std.testing.allocator, &refs, .code, 2, 12345);
     defer code.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 2), code.items.len);
     for (code.items) |index| {
@@ -2363,7 +2340,7 @@ test "choose shred target indices" {
 
     try std.testing.expectError(
         error.InvalidDropCount,
-        chooseShredTargetIndices(std.testing.allocator, &refs, .code, 3, 12345),
+        chooseSelectedRefIndices(std.testing.allocator, &refs, .code, 3, 12345),
     );
 }
 
