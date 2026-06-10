@@ -141,15 +141,15 @@ def unused_imports(args, files_to_check):
 
 files_excluded_from_line_length_check = [
     # src
-    "src/bincode/arraylist.zig",
-    "src/bincode/bincode.zig",
-    "src/bincode/int.zig",
-    "src/bincode/shortvec.zig",
-    "src/bloom/bit_set.zig",
-    "src/bloom/bit_vec.zig",
+    "shared/bincode/arraylist.zig",
+    "shared/bincode/bincode.zig",
+    "shared/bincode/int.zig",
+    "shared/bincode/shortvec.zig",
     "src/bloom/bitvec.zig",
+    "shared/bloom/bit_set.zig",
+    "shared/bloom/bit_vec.zig",
     "src/core/leader_schedule.zig",
-    "src/core/transaction.zig",
+    "shared/core/transaction.zig",
     "src/gossip/data.zig",
     "src/gossip/fuzz_service.zig",
     "src/gossip/fuzz_table.zig",
@@ -172,16 +172,13 @@ files_excluded_from_line_length_check = [
     "src/shred_network/collector/repair_message.zig",
     "src/shred_network/collector/repair_service.zig",
     "src/sync/thread_pool.zig",
-    "src/transaction_sender/mock_transfer_generator.zig",
     "src/transaction_sender/service.zig",
-    "src/transaction_sender/transaction_pool.zig",
-    "v2/lib/shred/test_shreds.zig",
     "v2/lib/shred.zig",
     "v2/lib/shred/reed_solomon_table.zig",
 
     # Generated files, will not conform to style guide.
-    "src/crypto/bn254/bn254_64.zig",
-    "src/crypto/ed25519/wycheproof.zig",
+    "shared/crypto/bn254/bn254_64.zig",
+    "shared/crypto/ed25519/wycheproof.zig",
     "v2/lib/crypto/ed25519/wycheproof.zig",
 ]
 

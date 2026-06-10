@@ -1,4 +1,4 @@
-//! Generates the `src/zksdk/range_proof/table.zig` with precomputed G and H generator points.
+//! Generates the `table` module with precomputed G and H generator points.
 const std = @import("std");
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Shake256 = std.crypto.hash.sha3.Shake256;

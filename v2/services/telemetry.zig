@@ -20,7 +20,7 @@ pub const ReadWrite = struct {
     region: *api.Region,
 };
 
-pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
     _ = ro;
 
     const region = rw.region;
@@ -88,7 +88,13 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     try setRecvTimeOut(server.stream.handle, .{ .sec = 1, .usec = 0 });
     try setSendTimeOut(server.stream.handle, .{ .sec = 1, .usec = 0 });
 
-    while (true) {
+    // telemetry will always signal as idle, so that it will never cause other tests to block.
+    // this is necessary because so long as other tests are running, even if they are idle,
+    // they may continue to log messages, causing telemetry to appear active, even if it
+    // should soon be shut down along with all the other services.
+    try runner.activity.signalIdleImmediate();
+
+    while (true) : (try runner.activity.checkCanceled()) {
         {
             var stderr_buf: [4096]u8 = undefined;
             var stderr_fw: std.fs.File.Writer = .init(
@@ -98,10 +104,11 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
             const stderr = &stderr_fw.interface;
             defer stderr.flush() catch {};
             for (log_streams) |*log_stream| {
+                const log_messages_buffer = log_stream.swap_buffer.swap();
                 try api.log.streamLogs(.{
                     .output = stderr,
                     .service_name = log_stream.name.slice(),
-                    .log_messages_buffer = log_stream.swap_buffer.swap(),
+                    .log_messages_buffer = log_messages_buffer,
                     .filters = filters,
                 });
             }

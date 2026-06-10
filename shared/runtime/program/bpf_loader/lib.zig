@@ -1,5 +1,15 @@
 const sig = @import("../../../lib.zig");
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("execute.zig");
+        _ = @import("v3_instruction.zig");
+        _ = @import("v3_state.zig");
+        _ = @import("v4_instruction.zig");
+        _ = @import("v4_state.zig");
+    }
+}
+
 const Pubkey = sig.core.Pubkey;
 
 pub const v1 = struct {

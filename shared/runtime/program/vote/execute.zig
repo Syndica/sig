@@ -2402,16 +2402,7 @@ test "vote_program: update_commission increasing commission" {
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{
-                .{
-                    .feature = .allow_commission_decrease_at_any_time,
-                    .slot = 0,
-                },
-                .{
-                    .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
-                    .slot = 0,
-                },
-            },
+            .feature_set = &.{},
         },
         .{
             .accounts = &.{
@@ -2513,16 +2504,7 @@ test "vote_program: update_commission decreasing commission" {
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{
-                .{
-                    .feature = .allow_commission_decrease_at_any_time,
-                    .slot = 0,
-                },
-                .{
-                    .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
-                    .slot = 0,
-                },
-            },
+            .feature_set = &.{},
         },
         .{
             .accounts = &.{
@@ -2809,16 +2791,7 @@ test "vote_program: update_commission error commission update too late failure" 
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{
-                .{
-                    .feature = .allow_commission_decrease_at_any_time,
-                    .slot = 0,
-                },
-                .{
-                    .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
-                    .slot = 0,
-                },
-            },
+            .feature_set = &.{},
         },
         .{
             .accounts = &.{
@@ -2925,16 +2898,7 @@ test "vote_program: update_commission missing signature" {
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{
-                .{
-                    .feature = .allow_commission_decrease_at_any_time,
-                    .slot = 0,
-                },
-                .{
-                    .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
-                    .slot = 0,
-                },
-            },
+            .feature_set = &.{},
         },
         .{
             .accounts = &.{
@@ -5756,14 +5720,6 @@ test "vote_program: update_commission with v4 feature" {
             .feature_set = &.{
                 .{
                     .feature = .vote_state_v4,
-                    .slot = 0,
-                },
-                .{
-                    .feature = .allow_commission_decrease_at_any_time,
-                    .slot = 0,
-                },
-                .{
-                    .feature = .commission_updates_only_allowed_in_first_half_of_epoch,
                     .slot = 0,
                 },
             },
