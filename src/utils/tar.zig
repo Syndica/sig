@@ -406,13 +406,18 @@ pub const TarHeaderMinimal = struct {
         const raw = header.bytes[start..][0..len];
         //  If the leading byte is 0xff (255), all the bytes of the field
         //  (including the leading byte) are concatenated in big-endian order,
-        //  with the result being a negative number expressed in two’s
+        //  with the result being a negative number expressed in two's
         //  complement form.
         if (raw[0] == 0xff) return error.TarNumericValueNegative;
-        // If the leading byte is 0x80 (128), the non-leading bytes of the
-        // field are concatenated in big-endian order.
-        if (raw[0] == 0x80) {
-            if (raw[1] != 0 or raw[2] != 0 or raw[3] != 0) return error.TarNumericValueTooBig;
+        // If the leading byte has the high bit set, the field uses base-256
+        // (binary) encoding. The high bit is the format indicator; the
+        // remaining bits of the first byte plus all subsequent bytes form
+        // a big-endian unsigned integer.
+        if (raw[0] & 0x80 != 0) {
+            // For the value to fit in u64, the upper 31 bits must be zero:
+            // 7 bits from byte[0] + 8 bits each from bytes[1..3] = 31 bits.
+            if (raw[0] & 0x7f != 0 or raw[1] != 0 or raw[2] != 0 or raw[3] != 0)
+                return error.TarNumericValueTooBig;
             return std.mem.readInt(u64, raw[4..12], .big);
         }
         return try header.octal(start, len);

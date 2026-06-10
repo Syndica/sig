@@ -400,11 +400,18 @@ fn insertFromSnapshotArchive(
             defer inner_zone.deinit();
 
             if (maybe_status_cache) |_| return error.DuplicateStatusCache;
-            // Read file content into memory for bincode deserialization
-            maybe_status_cache = try StatusCache.decodeFromBincode(allocator, reader, .{
-                .allocation_limit = snapshot.data.bincodeAllocationLimit(tar_hdr.file_size),
-            });
-            try reader.skipBytes(tar_hdr.pad_len, .{});
+            // Read file content into memory for bincode deserialization.
+            // Use a limited reader to track how many bytes bincode actually
+            // consumes, then skip any remaining content + block padding.
+            // This prevents stream misalignment if the serialized format
+            // contains trailing data our decoder doesn't read.
+            var content_reader = std14.limitedReader(reader, tar_hdr.file_size);
+            maybe_status_cache = try StatusCache.decodeFromBincode(
+                allocator,
+                content_reader.reader(),
+                .{ .allocation_limit = snapshot.data.bincodeAllocationLimit(tar_hdr.file_size) },
+            );
+            try reader.skipBytes(content_reader.bytes_left + tar_hdr.pad_len, .{});
 
             // Read /snapshot/{slot}/{slot}
         } else if (std.mem.eql(u8, tar_hdr.file_name, manifest_path.constSlice())) {
@@ -412,11 +419,18 @@ fn insertFromSnapshotArchive(
             defer inner_zone.deinit();
 
             if (maybe_manifest) |_| return error.DuplicateManifest;
-            // Read file content into memory for bincode deserialization
-            maybe_manifest = try Manifest.decodeFromBincode(allocator, reader, .{
-                .allocation_limit = snapshot.data.bincodeAllocationLimit(tar_hdr.file_size),
-            });
-            try reader.skipBytes(tar_hdr.pad_len, .{});
+            // Read file content into memory for bincode deserialization.
+            // Use a limited reader to track how many bytes bincode actually
+            // consumes, then skip any remaining content + block padding.
+            // This prevents stream misalignment if the serialized format
+            // contains trailing data our decoder doesn't read.
+            var content_reader = std14.limitedReader(reader, tar_hdr.file_size);
+            maybe_manifest = try Manifest.decodeFromBincode(
+                allocator,
+                content_reader.reader(),
+                .{ .allocation_limit = snapshot.data.bincodeAllocationLimit(tar_hdr.file_size) },
+            );
+            try reader.skipBytes(content_reader.bytes_left + tar_hdr.pad_len, .{});
 
             if (maybe_manifest.?.accounts_db_fields.slot != slot_and_hash.slot)
                 return error.MismatchingManifestSlot;
