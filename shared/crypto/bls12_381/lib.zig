@@ -1,5 +1,12 @@
 const std = @import("std");
 const c = @import("blst").c;
+
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("tests.zig");
+    }
+}
+
 pub const tests = @import("tests.zig");
 
 /// We do not need to provide any more granular errors than a simple pass/fail.

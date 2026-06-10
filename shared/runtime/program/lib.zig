@@ -1,6 +1,24 @@
 const std = @import("std");
 const sig = @import("../../lib.zig");
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("address_lookup_table/lib.zig");
+        _ = @import("bpf/lib.zig");
+        _ = @import("bpf_loader/lib.zig");
+        _ = @import("builtin_program_costs.zig");
+        _ = @import("builtin_programs.zig");
+        _ = @import("compute_budget/lib.zig");
+        _ = @import("config/lib.zig");
+        _ = @import("precompiles/lib.zig");
+        _ = @import("stake/lib.zig");
+        _ = @import("system/lib.zig");
+        _ = @import("testing.zig");
+        _ = @import("vote/lib.zig");
+        _ = @import("zk_elgamal/lib.zig");
+    }
+}
+
 pub const address_lookup_table = @import("address_lookup_table/lib.zig");
 pub const bpf = @import("bpf/lib.zig");
 pub const bpf_loader = @import("bpf_loader/lib.zig");

@@ -29,7 +29,8 @@ pub const ReadWrite = struct {
     tel: *tel.Region,
 };
 
-pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
+    _ = runner;
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
 
