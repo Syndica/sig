@@ -165,7 +165,7 @@
         .name = "curve25519_syscall_enabled",
         .pubkey = "7rcw5UtqgDTBBv2EcynNfYckgdAaH1MAsCjKgXMkN7Ri",
         .description = "enable curve25519 syscalls",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "versioned_tx_message_enabled",
@@ -795,7 +795,7 @@
         .name = "enable_alt_bn128_syscall",
         .pubkey = "A16q37opZdQMCbe5qJ6xpBB9usykfv8jZaMkxvZQi4GJ",
         .description = "add alt_bn128 syscalls #27961",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_program_redeployment_cooldown",
@@ -997,7 +997,7 @@
         .name = "enable_poseidon_syscall",
         .pubkey = "FL9RsQA6TVUoh5xJQ9d936RHSebA1NLQqe3Zv9sXZRpr",
         .description = "Enable Poseidon syscall",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "timely_vote_credits",
@@ -1037,7 +1037,7 @@
         .name = "enable_alt_bn128_compression_syscall",
         .pubkey = "EJJewYSddEEtSZHiqugnvhQHiWyZKjkFDQASd7oKSagn",
         .description = "add alt_bn128 compression syscalls",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "programify_feature_gate_program",
