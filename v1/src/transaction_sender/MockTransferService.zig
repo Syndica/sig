@@ -21,6 +21,8 @@ const TransactionInfo = sig.TransactionSenderService.TransactionInfo;
 
 const Commitment = sig.rpc.methods.common.Commitment;
 
+const LAMPORTS_PER_SIGNATURE = sig.runtime.check_transactions.LAMPORTS_PER_SIGNATURE;
+
 const Logger = sig.trace.Logger("MockTransferService");
 
 pub const Service = @This();
@@ -40,8 +42,7 @@ successful: u64 = 0,
 
 const TRANSFERS: u64 = 10;
 const TRANSFER_AMOUNT: u64 = 1e6;
-const TRANSFER_FEE: u64 = 5000;
-const TRANSFER_COST: u64 = TRANSFER_AMOUNT + TRANSFER_FEE;
+const TRANSFER_COST: u64 = TRANSFER_AMOUNT + LAMPORTS_PER_SIGNATURE;
 
 pub const ACCOUNT_0: Account = .init("account_0", .{ // Pubkey: H67JSziFxAZR1KSQshWfa8Rdpr7LSv1VkT2cFQHL79rd
     .public_key = .{ .bytes = .{
