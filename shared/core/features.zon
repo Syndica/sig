@@ -807,7 +807,7 @@
         .name = "commission_updates_only_allowed_in_first_half_of_epoch",
         .pubkey = "noRuG2kzACwgaY7TVmLRnUNPLKNVQE1fb7X55YWBehp",
         .description = "validator commission updates are only allowed in the first half of an epoch #29362",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_turbine_fanout_experiments",
@@ -1119,7 +1119,7 @@
         .name = "allow_commission_decrease_at_any_time",
         .pubkey = "decoMktMcnmiq6t3u7g5BfgcQu91nKZr6RvMYf9z1Jb",
         .description = "Allow commission decrease at any time in epoch #33843",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "merkle_conflict_duplicate_proofs",
