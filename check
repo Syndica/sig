@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+
+trap 'trap - INT TERM; kill 0; wait; exit 130' INT TERM
+
+mkdir -p logs
+
+echo running checks in parallel, see their respective log files:
+
+(
+    set -euxo pipefail
+    cd v1
+    zig build -Duse-llvm 2>&1 | cat
+    ./zig-out/bin/test 2>&1 | cat
+) &> logs/check-v1.log &
+echo '    logs/check-v1.log'
+
+(
+    set -euxo pipefail
+    cd v2
+    zig build -Duse-llvm 2>&1 | cat
+    ./zig-out/bin/test 2>&1 | cat
+) &> logs/check-v2.log &
+echo '    logs/check-v2.log'
+
+(
+    set -euxo pipefail
+    cd shared
+    zig build 2>&1 | cat
+    ./zig-out/bin/test 2>&1 | cat
+) &> logs/check-shared.log &
+echo '    logs/check-shared.log'
+
+(
+    set -euxo pipefail
+    cd conformance
+    zig build 2>&1 | cat
+    ./zig-out/bin/run
+) &> logs/check-conformance.log &
+echo '    logs/check-conformance.log'
+
+wait

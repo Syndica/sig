@@ -5,7 +5,7 @@
     .fingerprint = 0xdf162ceee1635531,
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
-        .sig = .{ .path = "../" },
+        .sig = .{ .path = "../v1" },
         .pb = .{
             .url = "git+https://github.com/yewman/zig-protobuf#1da1301ca9a00d2bc6ee1e8988ded9a93b80a7b8",
             .hash = "protobuf-3.0.0-0e82au3YKAAhdxzX7URyHNW4cjLtUovf4vfCOM8ZI4gx",

@@ -1,0 +1,1058 @@
+const std = @import("std");
+const builtin = @import("builtin");
+
+const posix = std.posix;
+
+pub const AddressFamily = enum(u32) {
+    ipv4 = posix.AF.INET,
+    ipv6 = posix.AF.INET6,
+
+    pub fn fromAddress(addr: std.net.Address) !AddressFamily {
+        return switch (addr.any.family) {
+            posix.AF.INET => .ipv4,
+            posix.AF.INET6 => .ipv6,
+            else => error.UnsupportedAddressFamily,
+        };
+    }
+
+    fn fromNativeAddressFamily(domain: u32) ?AddressFamily {
+        return std.meta.intToEnum(AddressFamily, domain) catch null;
+    }
+
+    fn toNativeAddressFamily(family: AddressFamily) u32 {
+        return @intFromEnum(family);
+    }
+};
+
+pub const UdpSocket = struct {
+    family: AddressFamily,
+    handle: posix.socket_t,
+
+    pub fn create(family: AddressFamily) !UdpSocket {
+        const socket_type = posix.SOCK.DGRAM | posix.SOCK.CLOEXEC;
+        return .{
+            .family = family,
+            .handle = try posix.socket(family.toNativeAddressFamily(), socket_type, 0),
+        };
+    }
+
+    pub fn close(self: *const UdpSocket) void {
+        posix.close(self.handle);
+    }
+
+    pub fn bind(self: *const UdpSocket, endpoint: std.net.Address) posix.BindError!void {
+        try posix.bind(
+            self.handle,
+            &endpoint.any,
+            endpoint.getOsSockLen(),
+        );
+    }
+
+    pub fn bindToPort(self: *const UdpSocket, port: u16) posix.BindError!void {
+        return switch (self.family) {
+            .ipv4 => try self.bind(.initIp4(@splat(0), port)),
+            .ipv6 => try self.bind(.initIp6(@splat(0), port, 0, 0)),
+        };
+    }
+
+    pub fn setReadTimeout(self: *const UdpSocket, read: ?u32) posix.SetSockOptError!void {
+        std.debug.assert(read == null or read.? != 0);
+        const micros = read orelse 0;
+        const opt: posix.timeval = .{
+            .sec = @intCast(@divTrunc(micros, std.time.us_per_s)),
+            .usec = @intCast(@mod(micros, std.time.us_per_s)),
+        };
+        try posix.setsockopt(
+            self.handle,
+            posix.SOL.SOCKET,
+            posix.SO.RCVTIMEO,
+            std.mem.asBytes(&opt),
+        );
+    }
+
+    pub fn receive(self: *const UdpSocket, data: []u8) posix.RecvFromError!usize {
+        return try posix.recvfrom(self.handle, data, 0, null, null);
+    }
+
+    pub fn receiveFrom(
+        self: *const UdpSocket,
+        data: []u8,
+    ) posix.RecvFromError!struct { usize, std.net.Address } {
+        // Use the ipv6 sockaddr to guarantee data will fit.
+        var addr: posix.sockaddr.in6 = undefined;
+        var size: posix.socklen_t = @sizeOf(posix.sockaddr.in6);
+        const addr_ptr: *posix.sockaddr = @ptrCast(&addr);
+        const len = try posix.recvfrom(self.handle, data, 0, addr_ptr, &size);
+        return .{ len, .{ .in6 = .{ .sa = addr } } };
+    }
+
+    pub fn sendTo(
+        self: *const UdpSocket,
+        receiver: std.net.Address,
+        data: []const u8,
+    ) posix.SendToError!usize {
+        const flags = switch (builtin.target.os.tag) {
+            .linux => posix.MSG.NOSIGNAL,
+            else => 0,
+        };
+        return try posix.sendto(
+            self.handle,
+            data,
+            flags,
+            &receiver.any,
+            receiver.getOsSockLen(),
+        );
+    }
+
+    pub fn enablePortReuse(sock: *const UdpSocket, enabled: bool) !void {
+        const opt: c_int = if (enabled) 1 else 0;
+        try posix.setsockopt(
+            sock.handle,
+            posix.SOL.SOCKET,
+            posix.SO.REUSEPORT,
+            std.mem.asBytes(&opt),
+        );
+    }
+
+    /// Retrieves the end point to which the socket is bound.
+    pub fn getLocalEndPoint(self: *const UdpSocket) !std.net.Address {
+        var addr: posix.sockaddr.in6 align(4) = undefined;
+        var size: posix.socklen_t = @sizeOf(posix.sockaddr.in6);
+
+        const src: *posix.sockaddr = @ptrCast(&addr);
+        try posix.getsockname(self.handle, src, &size);
+
+        const family = AddressFamily.fromNativeAddressFamily(src.family) orelse
+            return error.UnsupportedAddressFamily;
+        switch (family) {
+            .ipv4 => {
+                const value: *align(4) const posix.sockaddr.in = @ptrCast(@alignCast(src));
+                return .initIp4(
+                    @bitCast(value.addr),
+                    std.mem.bigToNative(u16, value.port),
+                );
+            },
+            .ipv6 => {
+                const value: *align(4) const posix.sockaddr.in6 = @ptrCast(@alignCast(src));
+                return .initIp6(
+                    value.addr,
+                    std.mem.bigToNative(u16, value.port),
+                    value.flowinfo,
+                    value.scope_id,
+                );
+            },
+        }
+    }
+};
+
+pub const SocketAddr = union(enum(u8)) {
+    V4: SocketAddrV4,
+    V6: SocketAddrV6,
+
+    pub const UNSPECIFIED: SocketAddr = .{ .V4 = .{
+        .ip = .{ .octets = .{ 0, 0, 0, 0 } },
+        .port = 0,
+    } };
+
+    pub fn init(addr: IpAddr, portt: u16) SocketAddr {
+        return switch (addr) {
+            .ipv4 => |ipv4| .{ .V4 = .{ .ip = ipv4, .port = portt } },
+            .ipv6 => |ipv6| .{ .V6 = .{
+                .ip = ipv6,
+                .port = portt,
+                .flowinfo = 0,
+                .scope_id = 0,
+            } },
+        };
+    }
+
+    pub fn initAddress(ip_addr: std.net.Address) SocketAddr {
+        return switch (ip_addr.any.family) {
+            posix.AF.INET => .{ .V4 = .{
+                .ip = .init(@bitCast(ip_addr.in.sa.addr)),
+                .port = ip_addr.getPort(),
+            } },
+            posix.AF.INET6 => .{ .V6 = .{
+                .ip = .init(ip_addr.in6.sa.addr),
+                .port = ip_addr.getPort(),
+                .flowinfo = ip_addr.in6.sa.flowinfo,
+                .scope_id = ip_addr.in6.sa.scope_id,
+            } },
+            else => unreachable,
+        };
+    }
+
+    pub fn toAddress(self: SocketAddr) std.net.Address {
+        return switch (self) {
+            .V4 => |a| .initIp4(a.ip.octets, a.port),
+            .V6 => |a| .initIp6(a.ip.octets, a.port, a.flowinfo, a.scope_id),
+        };
+    }
+
+    pub fn initIpv4(octets: [4]u8, portt: u16) SocketAddr {
+        return .{ .V4 = .{
+            .ip = .init(octets),
+            .port = portt,
+        } };
+    }
+
+    pub fn initIpv6(octets: [16]u8, portt: u16) SocketAddr {
+        return .{ .V6 = .{
+            .ip = .init(octets),
+            .port = portt,
+            .flowinfo = 0,
+            .scope_id = 0,
+        } };
+    }
+
+    pub fn getFamily(self: SocketAddr) AddressFamily {
+        return switch (self) {
+            .V4 => .ipv4,
+            .V6 => .ipv6,
+        };
+    }
+
+    pub fn getPort(self: *const SocketAddr) u16 {
+        return switch (self.*) {
+            .V4 => |v4| v4.port,
+            .V6 => |v6| v6.port,
+        };
+    }
+
+    pub fn ip(self: *const SocketAddr) IpAddr {
+        return switch (self.*) {
+            .V4 => |a| .initIpv4(a.ip.octets),
+            .V6 => |a| .initIpv6(a.ip.octets),
+        };
+    }
+
+    pub fn eql(self: *const SocketAddr, other: *const SocketAddr) bool {
+        if (self.* != std.meta.activeTag(other.*)) return false;
+        return switch (self.*) {
+            .V4 => |self_v4| self_v4.port == other.V4.port and self_v4.ip.eql(&other.V4.ip),
+            .V6 => |self_v6| self_v6.port == other.V6.port and self_v6.ip.eql(&other.V6.ip),
+        };
+    }
+
+    pub fn setPort(self: *SocketAddr, portt: u16) void {
+        switch (self.*) {
+            .V4 => |*v4| v4.port = portt,
+            .V6 => |*v6| v6.port = portt,
+        }
+    }
+
+    pub fn isUnspecified(self: *const SocketAddr) bool {
+        return switch (self.*) {
+            .V4 => |addr| std.mem.readInt(u32, &addr.ip.octets, .big) == 0,
+            .V6 => |addr| std.mem.readInt(u128, &addr.ip.octets, .big) == 0,
+        };
+    }
+
+    /// Returns true if the IP address is globally routable (not loopback,
+    /// private, link-local, unspecified, or broadcast). Equivalent to Rust's
+    /// `IpAddr::is_global()`, used by Agave's `SocketAddrSpace::Global` filter.
+    pub fn isGloballyRoutable(self: *const SocketAddr) bool {
+        return switch (self.*) {
+            .V4 => |addr| blk: {
+                const o = addr.ip.octets;
+                // unspecified: 0.0.0.0
+                if (o[0] == 0) break :blk false;
+                // loopback: 127.0.0.0/8
+                if (o[0] == 127) break :blk false;
+                // private: 10.0.0.0/8
+                if (o[0] == 10) break :blk false;
+                // private: 172.16.0.0/12
+                if (o[0] == 172 and o[1] >= 16 and o[1] <= 31) break :blk false;
+                // private: 192.168.0.0/16
+                if (o[0] == 192 and o[1] == 168) break :blk false;
+                // link-local: 169.254.0.0/16
+                if (o[0] == 169 and o[1] == 254) break :blk false;
+                // broadcast: 255.255.255.255
+                if (o[0] == 255 and o[1] == 255 and o[2] == 255 and o[3] == 255) break :blk false;
+                break :blk true;
+            },
+            .V6 => |addr| blk: {
+                const v = std.mem.readInt(u128, &addr.ip.octets, .big);
+                // unspecified: ::
+                if (v == 0) break :blk false;
+                // loopback: ::1
+                if (v == 1) break :blk false;
+                // link-local: fe80::/10
+                if (v >> 118 == 0b1111111010) break :blk false;
+                break :blk true;
+            },
+        };
+    }
+
+    pub fn isMulticast(self: *const SocketAddr) bool {
+        return switch (self.*) {
+            .V4 => |addr| addr.ip.octets[0] >= 224 and addr.ip.octets[0] <= 239,
+            .V6 => |addr| addr.ip.isMulticast(),
+        };
+    }
+
+    pub fn sanitize(socket: *const SocketAddr) !void {
+        if (socket.getPort() == 0) {
+            return error.InvalidPort;
+        }
+        if (socket.isUnspecified()) {
+            return error.UnspecifiedAddress;
+        }
+        if (socket.isMulticast()) {
+            return error.MulticastAddress;
+        }
+    }
+
+    pub const ParseIpError = error{InvalidIp};
+    pub fn parse(bytes: []const u8) ParseIpError!SocketAddr {
+        return parseIpv4(bytes) catch parseIpv6(bytes) catch error.InvalidIp;
+    }
+
+    pub const ParseIpv6Error = error{InvalidIpv6};
+    pub fn parseIpv6(bytes: []const u8) ParseIpv6Error!SocketAddr {
+        // https://ratfactor.com/zig/stdlib-browseable2/net.zig.html
+        // ports with IPv6 are after square brackets, but stdlib has IPv6 parsing on only the address
+        // so exploit stdlib for that portion, and parse the port afterwards.
+
+        var maybe_address: ?std.net.Ip6Address = null;
+        var portt: u16 = 0;
+        const maybe_right_bracket_index = std.mem.indexOf(u8, bytes, &[_]u8{']'});
+        const maybe_left_bracket_index = std.mem.indexOf(u8, bytes, &[_]u8{'['});
+        // right_bracket_index + 2 should be less than the total length of bytes in order to proceed. Why?
+        // Because if the string is [2001::1]:8000, then right_bracket_index would be 8, and 10 would be the start of the port
+        //                          ~~~~~~~^++ <-- this is index + 2
+        if (maybe_right_bracket_index) |right_bracket_index| {
+            if (maybe_left_bracket_index) |left_bracket_index| {
+                const addr_str = bytes[left_bracket_index + 1 .. right_bracket_index];
+                var addr = std.net.Ip6Address.parse(addr_str, 0) catch
+                    return error.InvalidIpv6;
+                portt = std.fmt.parseUnsigned(u16, bytes[right_bracket_index + 2 ..], 10) catch
+                    return error.InvalidIpv6;
+                addr.setPort(portt);
+                maybe_address = addr;
+            }
+        } else {
+            maybe_address = std.net.Ip6Address.parse(bytes, 0) catch return error.InvalidIpv6;
+        }
+
+        if (maybe_address) |address| {
+            return .{ .V6 = .{
+                .ip = Ipv6Addr.init(address.sa.addr),
+                .port = address.getPort(),
+                .scope_id = address.sa.scope_id,
+                .flowinfo = address.sa.flowinfo,
+            } };
+        } else {
+            return error.InvalidIpv6;
+        }
+    }
+
+    pub const ParseIpv4Error = error{InvalidIpv4};
+    pub fn parseIpv4(bytes: []const u8) ParseIpv4Error!SocketAddr {
+        // parse v4
+        var octs: [4]u8 = [_]u8{0} ** 4;
+        var addr_port: u16 = 0;
+        var octets_index: usize = 0;
+        var parsed_digit: bool = false;
+        var parsed_ip = false;
+
+        for (bytes) |byte| {
+            switch (byte) {
+                '.' => {
+                    if (!parsed_digit) return error.InvalidIpv4;
+                    if (octets_index == 4) return error.InvalidIpv4;
+                    octets_index += 1;
+                    parsed_digit = false;
+                },
+                '0'...'9' => {
+                    const value = byte - '0';
+
+                    if (!parsed_ip) {
+                        // octs[octets_index] = octs[octets_index] * 10 + value
+                        const mul_result = @mulWithOverflow(octs[octets_index], 10);
+                        if (mul_result[1] == 1) return error.InvalidIpv4;
+                        const add_result = @addWithOverflow(mul_result[0], value);
+                        if (add_result[1] == 1) return error.InvalidIpv4;
+                        octs[octets_index] = add_result[0];
+                    } else {
+                        // addr_port = addr_port * 10 + value
+                        const mul_result = @mulWithOverflow(addr_port, 10);
+                        if (mul_result[1] == 1) return error.InvalidIpv4;
+                        const add_result = @addWithOverflow(mul_result[0], value);
+                        if (add_result[1] == 1) return error.InvalidIpv4;
+                        addr_port = add_result[0];
+                    }
+                    parsed_digit = true;
+                },
+                ':' => {
+                    if (octets_index != 3) return error.InvalidIpv4;
+                    parsed_ip = true;
+                },
+                else => {
+                    return error.InvalidIpv4;
+                },
+            }
+        }
+        if (!parsed_ip) return error.InvalidIpv4;
+
+        return .{ .V4 = .{
+            .ip = Ipv4Addr.init(octs),
+            .port = addr_port,
+        } };
+    }
+
+    pub fn toStringBuf(self: SocketAddr, buf: *[53]u8) std.math.IntFittingRange(0, 53) {
+        var stream = std.io.fixedBufferStream(buf);
+        const writer = stream.writer();
+        self.toAddress().format(&writer.interface) catch unreachable;
+        return @intCast(stream.pos);
+    }
+
+    pub fn format(self: SocketAddr, writer: *std.io.Writer) std.io.Writer.Error!void {
+        switch (self) {
+            .V4 => |sav4| try sav4.format(writer),
+            .V6 => |sav6| try sav6.format(writer),
+        }
+    }
+
+    pub fn initRandom(random: std.Random) SocketAddr {
+        const pport = random.int(u16);
+
+        const version = random.int(u8);
+        if (version % 2 == 0) {
+            var octets: [4]u8 = undefined;
+            random.bytes(&octets);
+            return .{ .V4 = .{
+                .ip = Ipv4Addr.init(octets),
+                .port = pport,
+            } };
+        } else {
+            var octets: [16]u8 = undefined;
+            random.bytes(&octets);
+            return .{ .V6 = .{
+                .ip = Ipv6Addr.init(octets),
+                .port = pport,
+                .flowinfo = 0,
+                .scope_id = 0,
+            } };
+        }
+    }
+};
+
+pub const SocketAddrV4 = struct {
+    ip: Ipv4Addr,
+    port: u16,
+
+    pub fn format(self: SocketAddrV4, writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print("{f}:{d}", .{
+            self.ip,
+            self.port,
+        });
+    }
+};
+
+pub const SocketAddrV6 = struct {
+    ip: Ipv6Addr,
+    port: u16,
+    flowinfo: u32,
+    scope_id: u32,
+
+    pub fn format(self: SocketAddrV6, writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print("{f}:{d}", .{
+            self.ip,
+            self.port,
+        });
+    }
+};
+
+pub const Ipv4Addr = struct {
+    octets: [4]u8,
+
+    pub fn init(octets: [4]u8) Ipv4Addr {
+        return .{ .octets = octets };
+    }
+
+    pub fn eql(self: *const Ipv4Addr, other: *const Ipv4Addr) bool {
+        return std.mem.eql(u8, self.octets[0..], other.octets[0..]);
+    }
+
+    pub fn format(self: Ipv4Addr, writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print("{}.{}.{}.{}", .{
+            self.octets[0],
+            self.octets[1],
+            self.octets[2],
+            self.octets[3],
+        });
+    }
+};
+
+pub const Ipv6Addr = struct {
+    octets: [16]u8,
+
+    pub fn init(octets: [16]u8) Ipv6Addr {
+        return .{
+            .octets = octets,
+        };
+    }
+
+    pub fn eql(self: *const Ipv6Addr, other: *const Ipv6Addr) bool {
+        return std.mem.eql(u8, &self.octets, &other.octets);
+    }
+
+    /// defined in https://tools.ietf.org/html/rfc4291
+    pub fn isMulticast(self: *const Ipv6Addr) bool {
+        return self.octets[0] == 255;
+    }
+
+    pub fn format(self: Ipv6Addr, writer: *std.io.Writer) std.io.Writer.Error!void {
+        if (std.mem.eql(
+            u8,
+            self.octets[0..12],
+            &[12]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff },
+        )) {
+            try writer.print("[::ffff:{}.{}.{}.{}]", .{
+                self.octets[12],
+                self.octets[13],
+                self.octets[14],
+                self.octets[15],
+            });
+            return;
+        }
+        const big_endian_parts: *align(1) const [8]u16 = @ptrCast(&self.octets);
+        const native_endian_parts = switch (builtin.target.cpu.arch.endian()) {
+            .big => big_endian_parts.*,
+            .little => blk: {
+                var buf: [8]u16 = undefined;
+                for (big_endian_parts, 0..) |part, i| {
+                    buf[i] = std.mem.bigToNative(u16, part);
+                }
+                break :blk buf;
+            },
+        };
+        try writer.writeAll("[");
+        var i: usize = 0;
+        var abbrv = false;
+        while (i < native_endian_parts.len) : (i += 1) {
+            if (native_endian_parts[i] == 0) {
+                if (!abbrv) {
+                    try writer.writeAll(if (i == 0) "::" else ":");
+                    abbrv = true;
+                }
+                continue;
+            }
+            try writer.print("{x}", .{native_endian_parts[i]});
+            if (i != native_endian_parts.len - 1) {
+                try writer.writeAll(":");
+            }
+        }
+        try writer.writeAll("]");
+    }
+};
+
+pub const IpAddr = union(enum(u32)) {
+    ipv4: Ipv4Addr,
+    ipv6: Ipv6Addr,
+
+    pub fn initIpv4(octets: [4]u8) IpAddr {
+        return .{ .ipv4 = .init(octets) };
+    }
+
+    pub fn initIpv6(octets: [16]u8) IpAddr {
+        return .{ .ipv6 = .init(octets) };
+    }
+
+    pub const ParseIpError = ParseIpv4Error || ParseIpv6Error;
+
+    pub fn parse(bytes: []const u8) ParseIpError!IpAddr {
+        if (std.mem.indexOfScalar(u8, bytes, '.')) |_| {
+            // Probably IPv4.
+            return parseIpv4(bytes);
+        } else {
+            // Probably IPv6.
+            return parseIpv6(bytes);
+        }
+    }
+
+    pub const ParseIpv4Error = std.net.IPv4ParseError || error{UnexpectedPort};
+
+    pub fn parseIpv4(bytes: []const u8) ParseIpv4Error!IpAddr {
+        if (std.mem.indexOfScalar(u8, bytes, ':')) |_| {
+            return error.UnexpectedPort;
+        }
+        const address = try std.net.Ip4Address.parse(bytes, 0);
+        return IpAddr{ .ipv4 = Ipv4Addr.init(@bitCast(address.sa.addr)) };
+    }
+
+    pub const ParseIpv6Error = std.net.IPv6ParseError || error{UnexpectedPort};
+
+    pub fn parseIpv6(bytes: []const u8) ParseIpv6Error!IpAddr {
+        if (std.mem.indexOfScalar(u8, bytes, ']')) |_| {
+            return error.UnexpectedPort;
+        }
+        const address = try std.net.Ip6Address.parse(bytes, 0);
+        return IpAddr{ .ipv6 = Ipv6Addr.init(address.sa.addr) };
+    }
+
+    pub fn eql(self: *const IpAddr, other: *const IpAddr) bool {
+        return switch (self.*) {
+            .ipv4 => |ip| switch (other.*) {
+                .ipv4 => |other_ip| std.mem.eql(u8, ip.octets[0..], other_ip.octets[0..]),
+                else => false,
+            },
+            .ipv6 => |ip| switch (other.*) {
+                .ipv6 => |other_ip| std.mem.eql(u8, ip.octets[0..], other_ip.octets[0..]),
+                else => false,
+            },
+        };
+    }
+
+    pub fn format(self: IpAddr, writer: *std.io.Writer) std.io.Writer.Error!void {
+        switch (self) {
+            .ipv4 => |ipv4| try ipv4.format(writer),
+            .ipv6 => |ipv6| try ipv6.format(writer),
+        }
+    }
+};
+
+pub fn resolveSocketAddr(allocator: std.mem.Allocator, host_and_port: []const u8) !SocketAddr {
+    const domain_port_sep = std.mem.indexOfScalar(u8, host_and_port, ':') orelse {
+        return error.PortMissing;
+    };
+    const domain_str = host_and_port[0..domain_port_sep];
+    if (domain_str.len == 0) {
+        return error.DomainNotValid;
+    }
+    // parse port from string
+    const port = std.fmt.parseInt(u16, host_and_port[domain_port_sep + 1 ..], 10) catch {
+        return error.PortNotValid;
+    };
+
+    // get dns address lists
+    const addr_list = try std.net.getAddressList(allocator, domain_str, port);
+    defer addr_list.deinit();
+
+    if (addr_list.addrs.len == 0) {
+        return error.DnsResolutionFailure;
+    }
+
+    // use first A record address
+    const ipv4_addr = addr_list.addrs[0];
+
+    const socket_addr: SocketAddr = .initAddress(ipv4_addr);
+    std.debug.assert(socket_addr.getPort() == port);
+    return socket_addr;
+}
+
+test "invalid ipv4 socket parsing" {
+    {
+        const addr = "127.0.0.11234";
+        const result = SocketAddr.parseIpv4(addr);
+        try std.testing.expectError(error.InvalidIpv4, result);
+    }
+    {
+        const addr = "127.0.0:1123";
+        const result = SocketAddr.parseIpv4(addr);
+        try std.testing.expectError(error.InvalidIpv4, result);
+    }
+}
+
+test "valid ipv4 socket parsing" {
+    const addr = "127.0.0.1:1234";
+    const expected_addr = SocketAddr{ .V4 = SocketAddrV4{
+        .ip = Ipv4Addr.init(.{ 127, 0, 0, 1 }),
+        .port = 1234,
+    } };
+    const actual_addr = try SocketAddr.parseIpv4(addr);
+    try std.testing.expectEqual(expected_addr, actual_addr);
+}
+
+test "SocketAddr.initRandom" {
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const addr = SocketAddr.initRandom(prng.random());
+    _ = addr;
+}
+
+test "set port works" {
+    var sa1 = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1000);
+    sa1.setPort(1001);
+    try std.testing.expectEqual(@as(u16, 1001), sa1.getPort());
+}
+
+test "SocketAddr.isGloballyRoutable filters non-global IPv4 ranges" {
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 0, 0, 0, 0 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 10, 1, 2, 3 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 172, 16, 0, 1 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 172, 31, 255, 255 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 192, 168, 1, 10 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 169, 254, 10, 20 }, 8000).isGloballyRoutable());
+    try std.testing.expect(!SocketAddr.initIpv4(.{ 255, 255, 255, 255 }, 8000).isGloballyRoutable());
+    try std.testing.expect(SocketAddr.initIpv4(.{ 8, 8, 8, 8 }, 8000).isGloballyRoutable());
+}
+
+test "SocketAddr.isGloballyRoutable filters non-global IPv6 ranges" {
+    try std.testing.expect(!SocketAddr.initIpv6(.{
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+    }, 8000).isGloballyRoutable());
+
+    try std.testing.expect(!SocketAddr.initIpv6(.{
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0, 1,
+    }, 8000).isGloballyRoutable());
+
+    try std.testing.expect(!SocketAddr.initIpv6(.{
+        0xFE, 0x80, 0, 0,
+        0,    0,    0, 0,
+        0,    0,    0, 0,
+        0,    0,    0, 1,
+    }, 8000).isGloballyRoutable());
+
+    try std.testing.expect(SocketAddr.initIpv6(.{
+        0x20, 0x01, 0x0D, 0xB8,
+        0,    0,    0,    0,
+        0,    0,    0,    0,
+        0,    0,    0,    1,
+    }, 8000).isGloballyRoutable());
+}
+
+test "parse IPv6 if IPv4 fails" {
+    try std.testing.expectError(
+        error.InvalidIp,
+        SocketAddr.parse("[FE38:DCEq:124C:C1A2:BA03:6745:EF1C:683D]:8000"),
+    );
+
+    try std.testing.expectError(
+        error.InvalidIp,
+        SocketAddr.parse("[FE38:DCEE:124C:C1A2:BA03:6745:EF1C:683D]:"),
+    );
+
+    {
+        const sa = try SocketAddr.parse("[FE38:DCE3:124C:C1A2:BA03:6745:EF1C:683D]:8000");
+        const expected = SocketAddr.initIpv6(
+            .{
+                '\xFE', '\x38', '\xDC', '\xE3',
+                '\x12', '\x4C', '\xC1', '\xA2',
+                '\xBA', '\x03', '\x67', '\x45',
+                '\xEF', '\x1C', '\x68', '\x3D',
+            },
+            @as(u16, 8000),
+        );
+
+        try std.testing.expectEqual(sa.V6, expected.V6);
+    }
+
+    {
+        const sa = try SocketAddr.parse("[::1]:1234");
+        const expected = SocketAddr.initIpv6(.{
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+            0, 0, 0, '\x01',
+        }, @as(u16, 1234));
+        try std.testing.expectEqual(sa.V6, expected.V6);
+    }
+
+    {
+        const sa = try SocketAddr.parse("[2001:0df8:00f2::06ee:0:0f11]:6500");
+        const expected = SocketAddr.initIpv6(.{
+            '\x20', '\x01', '\x0D', '\xF8',
+            0,      '\xF2', 0,      0,
+            0,      0,      '\x06', '\xEE',
+            0,      0,      '\x0F', '\x11',
+        }, @as(u16, 6500));
+        try std.testing.expectEqual(sa.V6, expected.V6);
+    }
+
+    {
+        const sa = try SocketAddr.parse("2001:0df8:00f2::06ee:0:0f11");
+        const expected = SocketAddr.initIpv6(.{
+            '\x20', '\x01', '\x0D', '\xF8',
+            0,      '\xF2', 0,      0,
+            0,      0,      '\x06', '\xEE',
+            0,      0,      '\x0F', '\x11',
+        }, @as(u16, 0));
+        try std.testing.expectEqual(sa.V6, expected.V6);
+    }
+}
+
+test "valid ipv4 address without port parsing" {
+    const addr = "127.0.0.1";
+    const expected_addr = IpAddr{ .ipv4 = Ipv4Addr.init(.{ 127, 0, 0, 1 }) };
+    const actual_addr = try IpAddr.parseIpv4(addr);
+    try std.testing.expectEqual(expected_addr, actual_addr);
+}
+
+test "valid ipv4 address with port inclusion parsing" {
+    const addr = "127.0.0.1:1234";
+    const result = IpAddr.parseIpv4(addr);
+    try std.testing.expectError(error.UnexpectedPort, result);
+}
+
+test "invalid ipv4 address without port parsing" {
+    const addr = "127.0.01";
+    const result = IpAddr.parseIpv4(addr);
+    try std.testing.expectError(error.NonCanonical, result);
+}
+
+test "valid ipv6 address without port parsing" {
+    const addr = try IpAddr.parseIpv6("FE38:DCE3:124C:C1A2:BA03:6745:EF1C:683D");
+    const expected = IpAddr{ .ipv6 = Ipv6Addr.init(.{
+        '\xFE', '\x38', '\xDC', '\xE3',
+        '\x12', '\x4C', '\xC1', '\xA2',
+        '\xBA', '\x03', '\x67', '\x45',
+        '\xEF', '\x1C', '\x68', '\x3D',
+    }) };
+
+    try std.testing.expectEqual(addr, expected);
+}
+
+test "invalid ipv6 address with port inclusion parsing" {
+    const addr = "[FE38:DCE3:124C:C1A2:BA03:6745:EF1C:683D]:8000";
+    const result = IpAddr.parseIpv6(addr);
+    try std.testing.expectError(error.UnexpectedPort, result);
+}
+
+test "invalid ipv6 address without port parsing" {
+    try std.testing.expectError(
+        error.InvalidCharacter,
+        IpAddr.parseIpv6("FE38:DCEq:124C:C1A2:BA03:6745:EF1C683D"),
+    );
+}
+
+test "parse IPv6 addreess if IPv4 address fails" {
+    {
+        const addr = try IpAddr.parse("127.0.0.1");
+        const expected: IpAddr = .{ .ipv4 = Ipv4Addr.init(.{ 127, 0, 0, 1 }) };
+        try std.testing.expectEqual(addr.ipv4, expected.ipv4);
+    }
+
+    {
+        const addr = try IpAddr.parse("FE38:DCE3:124C:C1A2:BA03:6745:EF1C:683D");
+        const expected: IpAddr = .{ .ipv6 = Ipv6Addr.init(.{
+            '\xFE', '\x38', '\xDC', '\xE3',
+            '\x12', '\x4C', '\xC1', '\xA2',
+            '\xBA', '\x03', '\x67', '\x45',
+            '\xEF', '\x1C', '\x68', '\x3D',
+        }) };
+
+        try std.testing.expectEqual(addr.ipv6, expected.ipv6);
+    }
+
+    {
+        const addr = try IpAddr.parse("::1");
+        const expected: IpAddr = .{ .ipv6 = Ipv6Addr.init(.{
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+            0, 0, 0, '\x01',
+        }) };
+
+        try std.testing.expectEqual(addr.ipv6, expected.ipv6);
+    }
+
+    {
+        const addr = try IpAddr.parse("2001:0df8:00f2::06ee:0:0f11");
+        const expected: IpAddr = .{ .ipv6 = Ipv6Addr.init(.{
+            '\x20', '\x01', '\x0D', '\xF8',
+            0,      '\xF2', 0,      0,
+            0,      0,      '\x06', '\xEE',
+            0,      0,      '\x0F', '\x11',
+        }) };
+        try std.testing.expectEqual(addr.ipv6, expected.ipv6);
+    }
+
+    {
+        try std.testing.expectEqual(
+            IpAddr.initIpv6(.{
+                '\x20', '\x01', '\x0D', '\xF8',
+                0,      '\xF2', 0,      0,
+                0,      0,      '\x06', '\xEE',
+                0,      0,      '\x0F', '\x11',
+            }),
+            IpAddr.parse("2001:0df8:00f2::06ee:0:0f11"),
+        );
+    }
+}
+
+test "Ipv6Addr.format - IPv4-mapped address" {
+    try testIpv6Format(
+        "[::ffff:192.168.1.1]",
+        .init(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 1, 1 }),
+    );
+    try testIpv6Format(
+        "[::ffff:127.0.0.1]",
+        .init(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 127, 0, 0, 1 }),
+    );
+    try testIpv6Format(
+        "[::ffff:0.0.0.0]",
+        .init(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0 }),
+    );
+    try testIpv6Format(
+        "[::ffff:255.255.255.255]",
+        .init(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 255, 255, 255, 255 }),
+    );
+}
+
+test "Ipv6Addr.format - all zeros (unspecified)" {
+    const addr = Ipv6Addr.init(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+    var buf: [45]u8 = undefined;
+    var w: std.io.Writer = .fixed(&buf);
+    try addr.format(&w);
+    try std.testing.expectEqualStrings("[::]", buf[0..w.end]);
+}
+
+test "Ipv6Addr.format - loopback (::1)" {
+    const addr = Ipv6Addr.init(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 });
+    var buf: [45]u8 = undefined;
+    var w: std.io.Writer = .fixed(&buf);
+    try addr.format(&w);
+    try std.testing.expectEqualStrings("[::1]", buf[0..w.end]);
+}
+
+test "Ipv6Addr.format - leading non-zero then zeros" {
+    try testIpv6Format(
+        "[1::]",
+        .init(.{ 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
+    );
+    try testIpv6Format(
+        "[ff00::]",
+        .init(.{ 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
+    );
+}
+
+test "Ipv6Addr.format - full address with no zeros" {
+    try testIpv6Format("[fe38:dce3:124c:c1a2:ba03:6745:ef1c:683d]", .init(.{
+        0xFE, 0x38, 0xDC, 0xE3, 0x12, 0x4C, 0xC1, 0xA2,
+        0xBA, 0x03, 0x67, 0x45, 0xEF, 0x1C, 0x68, 0x3D,
+    }));
+    try testIpv6Format(
+        "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]",
+        .init(.{
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        }),
+    );
+    try testIpv6Format(
+        "[1:2:3:4:5:6:7:8]",
+        .init(.{ 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8 }),
+    );
+}
+
+test "Ipv6Addr.format - zeros in middle" {
+    try testIpv6Format(
+        "[2001:db8::1]",
+        .init(.{ 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }),
+    );
+    try testIpv6Format(
+        "[1::1]",
+        .init(.{ 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }),
+    );
+    try testIpv6Format(
+        "[fe80::1]",
+        .init(.{ 0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }),
+    );
+}
+
+test "Ipv6Addr.format - single zero group" {
+    try testIpv6Format(
+        "[1::2:3:4:5:6:7]",
+        .init(.{ 0, 1, 0, 0, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7 }),
+    );
+    try testIpv6Format(
+        "[1:2:3:4:5:6::8]",
+        .init(.{ 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 0, 0, 8 }),
+    );
+}
+
+test "Ipv6Addr.format - multicast addresses" {
+    try testIpv6Format(
+        "[ff02::1]",
+        .init(.{ 0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }),
+    );
+    try testIpv6Format(
+        "[ff02::2]",
+        .init(.{ 0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2 }),
+    );
+}
+
+test "Ipv6Addr.format - various real-world addresses" {
+    try testIpv6Format(
+        "[2001:4860:4860::8888]",
+        .init(.{ 0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0x88, 0x88 }),
+    );
+    try testIpv6Format(
+        "[2606:4700:4700::1111]",
+        .init(.{ 0x26, 0x06, 0x47, 0x00, 0x47, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x11, 0x11 }),
+    );
+}
+
+test "Ipv6Addr.format - edge cases with byte boundaries" {
+    try testIpv6Format(
+        "[100::1]",
+        .init(.{ 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }),
+    );
+    try testIpv6Format(
+        "[1:1:1:1:1:1:1:1]",
+        .init(.{ 0, 0x01, 0, 0x01, 0, 0x01, 0, 0x01, 0, 0x01, 0, 0x01, 0, 0x01, 0, 0x01 }),
+    );
+    try testIpv6Format(
+        "[abcd:1::1234:5678]",
+        .init(.{
+            0xab, 0xcd, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x12, 0x34, 0x56, 0x78,
+        }),
+    );
+}
+
+test "Ipv6Addr.format - trailing zeros" {
+    try testIpv6Format(
+        "[1:2:3:4:5:6:7::]",
+        .init(.{ 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 0 }),
+    );
+    try testIpv6Format(
+        "[1:2::]",
+        .init(.{ 0, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
+    );
+}
+
+fn testIpv6Format(expected: []const u8, addr: Ipv6Addr) !void {
+    var buf: [45]u8 = undefined;
+    var w: std.io.Writer = .fixed(&buf);
+    try addr.format(&w);
+    try std.testing.expectEqualStrings(expected, buf[0..w.end]);
+}
+
+test "AddressFamily.fromAddress - ipv4" {
+    try std.testing.expectEqual(
+        AddressFamily.ipv4,
+        try AddressFamily.fromAddress(std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 1234)),
+    );
+}
+
+test "AddressFamily.fromAddress - ipv6" {
+    try std.testing.expectEqual(
+        AddressFamily.ipv6,
+        try AddressFamily.fromAddress(std.net.Address.initIp6(.{0} ** 16, 1234, 0, 0)),
+    );
+}
+
+test "AddressFamily.fromAddress - unsupported family" {
+    const unsupported = try std.net.Address.initUnix("/tmp/sig-fromAddress.sock");
+    try std.testing.expectError(
+        error.UnsupportedAddressFamily,
+        AddressFamily.fromAddress(unsupported),
+    );
+}
+
+test "SocketAddr.getFamily" {
+    const v4 = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    try std.testing.expectEqual(AddressFamily.ipv4, v4.getFamily());
+
+    const v6 = SocketAddr.initIpv6(.{0} ** 16, 0);
+    try std.testing.expectEqual(AddressFamily.ipv6, v6.getFamily());
+}
