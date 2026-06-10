@@ -325,15 +325,15 @@ pub fn build(b: *Build) !void {
         );
     }
 
-    const black_box_tests = &.{
-        BlackBoxTest{
+    const black_box_tests: []const BlackBoxTest = &.{
+        .{
             .name = "gossip",
             .root_source_file = b.path("tests/gossip/main.zig"),
             .services = .initMany(&.{ .gossip, .telemetry }),
         },
     };
 
-    inline for (black_box_tests) |black_box_test| {
+    for (black_box_tests) |black_box_test| {
         addBlackBoxTest(b, bb_test_step, artifact_opts, .{
             .test_config = black_box_test,
             .target = target,
