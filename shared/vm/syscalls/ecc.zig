@@ -868,7 +868,7 @@ test "edwards curve point validation" {
         &.{
             .{ .{ 0, valid_bytes_addr,   0, 0, 0 }, 0 }, // success
             .{ .{ 0, invalid_bytes_addr, 0, 0, 0 }, 1 }, // failed
-            .{ .{ 8, valid_bytes_addr,   0, 0, 0 }, 1 }, // invalid curve ID
+            .{ .{ 8, valid_bytes_addr,   0, 0, 0 }, error.InvalidAttribute }, // invalid curve ID
             .{ .{ 0, valid_bytes_addr,   0, 0, 0 }, error.ComputationalBudgetExceeded },
         },
         // zig fmt: on
@@ -905,7 +905,7 @@ test "ristretto curve point validation" {
         &.{
             .{ .{ 1, valid_bytes_addr,   0, 0, 0 }, 0 }, // success
             .{ .{ 1, invalid_bytes_addr, 0, 0, 0 }, 1 }, // failed
-            .{ .{ 8, valid_bytes_addr,   0, 0, 0 }, 1 }, // invalid curve ID
+            .{ .{ 8, valid_bytes_addr,   0, 0, 0 }, error.InvalidAttribute }, // invalid curve ID
             .{ .{ 1, valid_bytes_addr,   0, 0, 0 }, error.ComputationalBudgetExceeded },
         },
         // zig fmt: on
