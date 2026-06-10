@@ -87,7 +87,6 @@ pub const SvmGateway = struct {
         // Simple inputs to copy into the svm
         slot: u64,
         max_age: u64,
-        lamports_per_signature: u64,
 
         // Borrowed values to pass by reference into the SVM.
         account_store: SlotAccountStore,
@@ -190,7 +189,7 @@ pub const SvmGateway = struct {
             // https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank.rs#L2893-L2896
             .last_lamports_per_signature = last_lamports_per_signature,
 
-            .lamports_per_signature = self.params.lamports_per_signature,
+            .lamports_per_signature = sig.runtime.check_transactions.LAMPORTS_PER_SIGNATURE,
         };
     }
 };
