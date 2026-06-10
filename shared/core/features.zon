@@ -165,7 +165,7 @@
         .name = "curve25519_syscall_enabled",
         .pubkey = "7rcw5UtqgDTBBv2EcynNfYckgdAaH1MAsCjKgXMkN7Ri",
         .description = "enable curve25519 syscalls",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "versioned_tx_message_enabled",
@@ -795,7 +795,7 @@
         .name = "enable_alt_bn128_syscall",
         .pubkey = "A16q37opZdQMCbe5qJ6xpBB9usykfv8jZaMkxvZQi4GJ",
         .description = "add alt_bn128 syscalls #27961",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_program_redeployment_cooldown",
@@ -807,7 +807,7 @@
         .name = "commission_updates_only_allowed_in_first_half_of_epoch",
         .pubkey = "noRuG2kzACwgaY7TVmLRnUNPLKNVQE1fb7X55YWBehp",
         .description = "validator commission updates are only allowed in the first half of an epoch #29362",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_turbine_fanout_experiments",
@@ -997,7 +997,7 @@
         .name = "enable_poseidon_syscall",
         .pubkey = "FL9RsQA6TVUoh5xJQ9d936RHSebA1NLQqe3Zv9sXZRpr",
         .description = "Enable Poseidon syscall",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "timely_vote_credits",
@@ -1037,7 +1037,7 @@
         .name = "enable_alt_bn128_compression_syscall",
         .pubkey = "EJJewYSddEEtSZHiqugnvhQHiWyZKjkFDQASd7oKSagn",
         .description = "add alt_bn128 compression syscalls",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "programify_feature_gate_program",
@@ -1119,7 +1119,7 @@
         .name = "allow_commission_decrease_at_any_time",
         .pubkey = "decoMktMcnmiq6t3u7g5BfgcQu91nKZr6RvMYf9z1Jb",
         .description = "Allow commission decrease at any time in epoch #33843",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "merkle_conflict_duplicate_proofs",
@@ -1201,7 +1201,7 @@
         .name = "add_new_reserved_account_keys",
         .pubkey = "8U4skmMVnF6k2kMvrWbQuRUT3qQSiTYpSjqmhmgfthZu",
         .description = "add new unwritable reserved accounts #34899",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "chained_merkle_conflict_duplicate_proofs",

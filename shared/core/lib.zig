@@ -1,3 +1,19 @@
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("blockhash_queue.zig");
+        _ = @import("epoch_schedule.zig");
+        _ = @import("features.zig");
+        _ = @import("hash.zig");
+        _ = @import("instruction.zig");
+        _ = @import("pubkey.zig");
+        _ = @import("rent_collector.zig");
+        _ = @import("signature.zig");
+        _ = @import("time.zig");
+        _ = @import("transaction.zig");
+        _ = @import("transaction_error.zig");
+    }
+}
+
 pub const blockhash_queue = @import("blockhash_queue.zig");
 pub const epoch_schedule = @import("epoch_schedule.zig");
 pub const features = @import("features.zig");
