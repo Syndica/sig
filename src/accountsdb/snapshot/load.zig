@@ -412,11 +412,20 @@ fn insertFromSnapshotArchive(
             defer inner_zone.deinit();
 
             if (maybe_manifest) |_| return error.DuplicateManifest;
-            // Read file content into memory for bincode deserialization
-            maybe_manifest = try Manifest.decodeFromBincode(allocator, reader, .{
+            // Read the entire manifest file into memory, then parse from the buffer.
+            // This ensures we advance the tar reader past all file bytes even if
+            // our bincode parser doesn't consume trailing fields added by newer Agave.
+            const manifest_buf = try allocator.alloc(u8, tar_hdr.file_size);
+            defer allocator.free(manifest_buf);
+            const manifest_bytes_read = try reader.readAll(manifest_buf);
+            if (manifest_bytes_read < tar_hdr.file_size)
+                return error.UnexpectedEndOfStream;
+            try reader.skipBytes(tar_hdr.pad_len, .{});
+
+            var fbs = std.io.fixedBufferStream(manifest_buf);
+            maybe_manifest = try Manifest.decodeFromBincode(allocator, fbs.reader(), .{
                 .allocation_limit = snapshot.data.bincodeAllocationLimit(tar_hdr.file_size),
             });
-            try reader.skipBytes(tar_hdr.pad_len, .{});
 
             if (maybe_manifest.?.accounts_db_fields.slot != slot_and_hash.slot)
                 return error.MismatchingManifestSlot;
