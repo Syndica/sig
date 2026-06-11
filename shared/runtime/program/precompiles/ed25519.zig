@@ -3,12 +3,9 @@ const builtin = @import("builtin");
 const sig = @import("../../../lib.zig");
 
 const Pubkey = sig.core.Pubkey;
-const FeatureSet = sig.core.FeatureSet;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const PrecompileProgramError = sig.runtime.program.precompiles.PrecompileProgramError;
-const verifyPrecompiles = sig.runtime.program.precompiles.verifyPrecompiles;
-const TransactionError = sig.core.transaction_error.TransactionError;
 const getInstructionData = sig.runtime.program.precompiles.getInstructionData;
 
 const Ed25519 = std.crypto.sign.Ed25519;
@@ -175,7 +172,6 @@ fn testCase(
     @memcpy(instruction_data[0..2], std.mem.asBytes(&num_signatures));
     @memcpy(instruction_data[2..], std.mem.asBytes(&offsets));
 
-    try verify(&instruction_data, &.{&(.{0} ** 100)});
     try verify(&instruction_data, &.{&(.{0} ** 100)});
 }
 
@@ -361,23 +357,9 @@ test "ed25519_malleability" {
             message,
         );
         defer allocator.free(instruction.data);
-        const tx: sig.core.Transaction = .{
-            .msg = .{
-                .account_keys = &.{ID},
-                .instructions = &.{
-                    .{ .program_index = 0, .account_indexes = &.{0}, .data = instruction.data },
-                },
-                .signature_count = 1,
-                .readonly_signed_count = 1,
-                .readonly_unsigned_count = 0,
-                .recent_blockhash = sig.core.Hash.ZEROES,
-            },
-            .version = .legacy,
-            .signatures = &.{},
-        };
 
-        _ = try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_DISABLED, 0);
-        _ = try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0);
+        // Valid signature should always pass with strict verification
+        try verify(instruction.data, &.{instruction.data});
     }
 
     {
@@ -404,25 +386,11 @@ test "ed25519_malleability" {
         );
         const instruction = try newInstruction(allocator, &signature, &pubkey, message);
         defer allocator.free(instruction.data);
-        const tx: sig.core.Transaction = .{
-            .msg = .{
-                .account_keys = &.{ID},
-                .instructions = &.{
-                    .{ .program_index = 0, .account_indexes = &.{0}, .data = instruction.data },
-                },
-                .signature_count = 1,
-                .readonly_signed_count = 1,
-                .readonly_unsigned_count = 0,
-                .recent_blockhash = sig.core.Hash.ZEROES,
-            },
-            .version = .legacy,
-            .signatures = &.{},
-        };
 
-        _ = try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_DISABLED, 0);
+        // Malleable signature should always fail with strict verification
         try std.testing.expectEqual(
-            TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
-            try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0),
+            error.InvalidSignature,
+            verify(instruction.data, &.{instruction.data}),
         );
     }
 }

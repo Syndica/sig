@@ -5,12 +5,9 @@ const sig = @import("../../../lib.zig");
 const precompile_programs = sig.runtime.program.precompiles;
 
 const Pubkey = sig.core.Pubkey;
-const FeatureSet = sig.core.FeatureSet;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const PrecompileProgramError = precompile_programs.PrecompileProgramError;
-const TransactionError = sig.core.transaction_error.TransactionError;
-const verifyPrecompiles = precompile_programs.verifyPrecompiles;
 const getInstructionData = precompile_programs.getInstructionData;
 
 const P256 = std.crypto.ecc.P256;
@@ -353,22 +350,9 @@ test "sanity check" {
         message,
     );
     defer std.testing.allocator.free(instruction.data);
-    const tx: sig.core.Transaction = .{
-        .msg = .{
-            .account_keys = &.{ID},
-            .instructions = &.{
-                .{ .program_index = 0, .account_indexes = &.{0}, .data = instruction.data },
-            },
-            .signature_count = 1,
-            .readonly_signed_count = 1,
-            .readonly_unsigned_count = 0,
-            .recent_blockhash = sig.core.Hash.ZEROES,
-        },
-        .version = .legacy,
-        .signatures = &.{},
-    };
 
-    _ = try verifyPrecompiles(std.testing.allocator, &tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0);
+    // Valid signature should pass with strict verification
+    try verify(instruction.data, &.{instruction.data});
 }
 
 test "high s" {
@@ -399,25 +383,10 @@ test "high s" {
     s = s.neg();
     @memcpy(data[s_offset..][0..32], &s.toBytes(.big));
 
-    const bad_tx: sig.core.Transaction = .{
-        .msg = .{
-            .account_keys = &.{ID},
-            .instructions = &.{
-                .{ .program_index = 0, .account_indexes = &.{0}, .data = instruction.data },
-            },
-            .signature_count = 1,
-            .readonly_signed_count = 1,
-            .readonly_unsigned_count = 0,
-            .recent_blockhash = sig.core.Hash.ZEROES,
-        },
-        .version = .legacy,
-        .signatures = &.{},
-    };
-
-    const actual = try verifyPrecompiles(allocator, &bad_tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0);
+    // Malleable signature should fail with strict verification
     try std.testing.expectEqual(
-        TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
-        actual,
+        error.InvalidSignature,
+        verify(instruction.data, &.{instruction.data}),
     );
 }
 

@@ -308,7 +308,6 @@ fn testCase(
     @memcpy(instruction_data[1..], offsets.asBytes());
 
     try verify(&instruction_data, &.{&(.{0} ** 100)});
-    try verify(&instruction_data, &.{&(.{0} ** 100)});
 }
 
 test "execute" {
@@ -683,6 +682,5 @@ test "secp256 malleability" {
 
     try instruction_data.appendSlice(data.items);
 
-    try verify(instruction_data.items, &.{instruction_data.items});
     try verify(instruction_data.items, &.{instruction_data.items});
 }
