@@ -1663,7 +1663,7 @@
     },
     .{
         .name = "discard_unexpected_data_complete_shreds",
-        .pubkey = "dcomRRWHXP1FVWPqi9Mm4oxJhF4ehC795SvAtUdA9os",
+        .pubkey = "disCA4efguFL6Wqa4pGdG7jpjC7C5uiKzKnhEBqchBe",
         .description = "SIMD-0337: Markers for Alpenglow Fast Leader Handover, DATA_COMPLETE_SHRED placement rules",
         .status = .unsupported,
         .note =
