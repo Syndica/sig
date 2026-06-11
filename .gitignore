@@ -1,6 +1,7 @@
 # build outputs
 .zig-cache/
 zig-out/
+*.pyc
 
 # sig outputs
 /data/test-state

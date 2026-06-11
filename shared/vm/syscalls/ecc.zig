@@ -48,15 +48,6 @@ pub const GroupOp = enum(u64) {
     }
 };
 
-fn invalidError(tc: *const TransactionContext, registers: *RegisterMap) !void {
-    if (tc.feature_set.active(.abort_on_invalid_curve, tc.slot)) {
-        return SyscallError.InvalidAttribute;
-    } else {
-        registers.set(.r0, 1);
-        return;
-    }
-}
-
 /// [agave] https://github.com/anza-xyz/agave/blob/a3e2a62a942a497e00e4e091e888a1945dcdad53/syscalls/src/lib.rs#L978-L1111
 pub fn curvePointValidation(
     tc: *TransactionContext,
@@ -64,7 +55,7 @@ pub fn curvePointValidation(
     registers: *RegisterMap,
 ) Error!void {
     const curve_id = CurveId.wrap(registers.get(.r1)) orelse
-        return invalidError(tc, registers);
+        return SyscallError.InvalidAttribute;
     const point_addr = registers.get(.r2);
 
     // Only allow the BLS12-381 syscalls if the feature gate is enabled.
@@ -88,7 +79,7 @@ pub fn curvePointValidation(
         .bls12_381_g2_be,
         .bls12_381_g2_le,
         => tc.compute_budget.bls12_381_g2_validate_cost,
-        else => return invalidError(tc, registers),
+        else => return SyscallError.InvalidAttribute,
     };
     try tc.consumeCompute(cost);
 
@@ -153,9 +144,9 @@ pub fn curveGroupOp(
     registers: *RegisterMap,
 ) Error!void {
     const curve_id = CurveId.wrap(registers.get(.r1)) orelse
-        return invalidError(tc, registers);
+        return SyscallError.InvalidAttribute;
     const group_op = GroupOp.wrap(registers.get(.r2)) orelse
-        return invalidError(tc, registers);
+        return SyscallError.InvalidAttribute;
 
     // Only allow the BLS12-381 syscalls if the feature gate is enabled.
     // [agave] https://github.com/anza-xyz/agave/blob/734a250745533616bd29e86bd69ac90dbc26f38c/syscalls/src/lib.rs#L1239-L1246
@@ -269,7 +260,7 @@ pub fn curveGroupOp(
                 },
             }
         },
-        else => return invalidError(tc, registers),
+        else => return SyscallError.InvalidAttribute,
     }
 }
 
@@ -314,12 +305,12 @@ pub fn curveMultiscalarMul(
     if (points_len > 512) return SyscallError.InvalidLength;
 
     const curve_id = CurveId.wrap(attribute_id) orelse
-        return invalidError(tc, registers);
+        return SyscallError.InvalidAttribute;
 
     const cost = switch (curve_id) {
         .edwards => tc.compute_budget.curve25519_edwards_msm_base_cost,
         .ristretto => tc.compute_budget.curve25519_ristretto_msm_base_cost,
-        else => return invalidError(tc, registers),
+        else => return SyscallError.InvalidAttribute,
     };
     const incremental_cost = switch (curve_id) {
         .edwards => tc.compute_budget.curve25519_edwards_msm_incremental_cost,
@@ -630,18 +621,25 @@ pub fn altBn128Compression(
 
     try tc.consumeCompute(cost);
 
-    const input = try memory_map.translateSlice(
-        u8,
-        .constant,
-        input_addr,
-        input_size,
-        tc.getCheckAligned(),
-    );
+    // Agave translates the OUTPUT buffer (`call_result`) before the INPUT
+    // slice. The order matters: under SIMD-0460 a program that passes a
+    // readonly account pointer as the output and a bogus pointer as the input
+    // must surface as `ReadonlyDataModified` (from the failed write
+    // translation), not as a generic `AccessViolation` produced by failing
+    // the read translation first.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1/syscalls/src/lib.rs#L2514
     const call_result = try memory_map.translateSlice(
         u8,
         .mutable,
         result_addr,
         output_length,
+        tc.getCheckAligned(),
+    );
+    const input = try memory_map.translateSlice(
+        u8,
+        .constant,
+        input_addr,
+        input_size,
         tc.getCheckAligned(),
     );
 
@@ -877,7 +875,7 @@ test "edwards curve point validation" {
         &.{
             .{ .{ 0, valid_bytes_addr,   0, 0, 0 }, 0 }, // success
             .{ .{ 0, invalid_bytes_addr, 0, 0, 0 }, 1 }, // failed
-            .{ .{ 8, valid_bytes_addr,   0, 0, 0 }, 1 }, // invalid curve ID
+            .{ .{ 8, valid_bytes_addr,   0, 0, 0 }, error.InvalidAttribute }, // invalid curve ID
             .{ .{ 0, valid_bytes_addr,   0, 0, 0 }, error.ComputationalBudgetExceeded },
         },
         // zig fmt: on
@@ -914,7 +912,7 @@ test "ristretto curve point validation" {
         &.{
             .{ .{ 1, valid_bytes_addr,   0, 0, 0 }, 0 }, // success
             .{ .{ 1, invalid_bytes_addr, 0, 0, 0 }, 1 }, // failed
-            .{ .{ 8, valid_bytes_addr,   0, 0, 0 }, 1 }, // invalid curve ID
+            .{ .{ 8, valid_bytes_addr,   0, 0, 0 }, error.InvalidAttribute }, // invalid curve ID
             .{ .{ 1, valid_bytes_addr,   0, 0, 0 }, error.ComputationalBudgetExceeded },
         },
         // zig fmt: on

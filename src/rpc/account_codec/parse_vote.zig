@@ -30,8 +30,10 @@ pub fn parseVote(
     ) catch return ParseError.InvalidAccountData;
     defer vote_state_versions.deinit(arena);
 
-    var vote_state = vote_state_versions.convertToV4(arena, vote_pubkey) catch
-        return ParseError.OutOfMemory;
+    var vote_state = vote_state_versions.convertToV4(arena, vote_pubkey) catch |err| switch (err) {
+        error.OutOfMemory => return ParseError.OutOfMemory,
+        else => return ParseError.InvalidAccountData,
+    };
     defer vote_state.deinit(arena);
 
     const votes = try arena.alloc(
