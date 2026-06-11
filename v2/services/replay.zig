@@ -384,8 +384,7 @@ fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
         var maybe_child_node: ?*MerkleNode = children_head;
         while (maybe_child_node) |child_node| {
             std.debug.assert(child_node.parent == .null);
-
-            defer maybe_child_node = child_node.sibling.ptr(&forest.pool);
+            maybe_child_node = child_node.sibling.ptr(&forest.pool);
 
             if (node.id.mayFollowWith(&child_node.id)) {
                 @branchHint(.likely);
@@ -927,7 +926,6 @@ const BlockDeserialState = struct {
         return before_bytes_read + after_bytes_read;
     }
 
-    // TODO: this is *incredibly* slow
     fn nextTransaction(
         self: *BlockDeserialState,
         merkle_pool: *const MerkleForest.NodePool,
@@ -1022,6 +1020,9 @@ const BlockDeserialState = struct {
                 const post_state = self.*;
 
                 const tx_bytes_read = diff(pre_state, post_state, merkle_pool);
+
+                // TODO: handle removing invalid blocks
+                if (tx_bytes_read > tx_buf.len) return error.TransactionTooLarge;
 
                 var tx_reader = pre_state.getReader(merkle_pool);
                 try tx_reader.advanceBytes(.copy, tx_buf[0..tx_bytes_read], {});
