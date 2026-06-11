@@ -1219,7 +1219,7 @@
         .name = "abort_on_invalid_curve",
         .pubkey = "FuS3FPfJDKSNot99ECLXtp3rueq36hMNStJkPJwWodLh",
         .description = "SIMD-0137: Abort when elliptic curve syscalls invoked on invalid curve id",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "ed25519_precompile_verify_strict",
