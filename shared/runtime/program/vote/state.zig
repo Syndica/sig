@@ -1001,6 +1001,13 @@ pub const VoteState = union(enum(u32)) {
         }
     }
 
+    pub fn commissionBps(self: *const VoteState, use_bps: bool) u16 {
+        if (use_bps) {
+            if (self.inflationRewardsCommissionBps()) |bps| return bps;
+        }
+        return @as(u16, self.commission()) * 100;
+    }
+
     pub fn blockRevenueCommissionBps(self: *const VoteState) ?u16 {
         return switch (self.*) {
             .v3 => null,
