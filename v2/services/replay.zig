@@ -784,12 +784,15 @@ const BlockDeserialState = struct {
             var offset: usize = 0;
 
             while (offset < n_bytes) {
+                const chunk_len = @min(next_copy.len, n_bytes - offset);
                 if (mode == .copy) {
-                    @memcpy(out[offset..next_copy.len], next_copy);
+                    @memcpy(out[offset..][0..chunk_len], next_copy[0..chunk_len]);
                 }
-                self.deserial_state.pos_offset += next_copy.len;
 
-                offset += next_copy.len;
+                self.deserial_state.pos_offset += chunk_len;
+                offset += chunk_len;
+
+                if (offset == n_bytes) break;
                 try self.nextNode();
                 next_copy = self.currentReadableSlice();
             }
@@ -823,7 +826,7 @@ const BlockDeserialState = struct {
 
         fn skipTransaction(self: *Reader) !void {
             const n_signatures = try self.readShortu16();
-            try self.skipBytes(32 * n_signatures);
+            try self.skipBytes(64 * n_signatures);
 
             const is_legacy: bool = blk: {
                 const first_byte = try self.copyValue(u8);
