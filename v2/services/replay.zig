@@ -1,7 +1,7 @@
-//! Completed FEC (Forward Error Corerectrion) sets flow into this service from the shred receiver.
+//! Completed FEC (Forward Error Correction) sets flow into this service from the shred receiver.
 //!
 //! Each FEC set contains its own Merkle Root, and its Chained Merkle Root, with the Chained Merkle
-//! Root refering to the FEC set of its parent, i.e. the previous FEC set.
+//! Root referring to the FEC set of its parent, i.e. the previous FEC set.
 //!
 //! These FEC sets are linked together to form a Merkle Forest (a tree of merkle trees), from the
 //! chained roots forming parental relationships.
@@ -308,7 +308,7 @@ fn attachParent(
         if (orphan_map_result.found_existing) {
             @branchHint(.unlikely);
             // this could happen under equivocation or forking, should be unlikely to hit this.
-            // i.e. there's multple fec sets currently missing the same parent
+            // i.e. there's multiple fec sets currently missing the same parent
 
             // NOTE: the code that finds this orphan entry later *must* attach all of the orphan's
             // siblings
@@ -616,7 +616,7 @@ fn maybeContinueBlockExec(
                     root,
                     // Importantly using the block_ref of the inserted node, not the block_ref of
                     // the idx=0 ancestor.
-                    // They may be different if equivocation has occured within the slot
+                    // They may be different if equivocation has occurred within the slot
                     block_ref,
                     forest_pool,
                     block_pool,
@@ -867,8 +867,8 @@ const BlockDeserialState = struct {
                     try self.skipBytes(32); // table pubkey
                     const n_writable_indexes = try self.readShortu16();
                     try self.skipBytes(n_writable_indexes);
-                    const n_readonly_indeces = try self.readShortu16();
-                    try self.skipBytes(n_readonly_indeces);
+                    const n_readonly_indices = try self.readShortu16();
+                    try self.skipBytes(n_readonly_indices);
                 }
             }
         }
