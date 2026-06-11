@@ -1668,7 +1668,7 @@
         .status = .unsupported,
         .note =
         \\ TODO: Low Priority.
-        \\ Not scheduled for activation.
+        \\ Scheduled for activation in agave v4.1 release cycle.
         \\ Implement as part of alpenglow in v2.
         ,
     },
