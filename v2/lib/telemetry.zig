@@ -312,7 +312,11 @@ pub fn Logger(comptime scope_str: []const u8) type {
                     comptime fmt_str: []const u8,
                     args: anytype,
                 ) void {
-                    tracy.print("{s}: " ++ fmt_str, .{@tagName(self.level)} ++ args);
+                    switch (self.level) {
+                        inline else => |ilevel| {
+                            tracy.print(@tagName(ilevel) ++ ": " ++ fmt_str, args);
+                        },
+                    }
 
                     const message: log.Message = .{
                         .epoch_millis = clock.wallclock(.ms),
