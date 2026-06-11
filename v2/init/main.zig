@@ -17,6 +17,7 @@ comptime {
 }
 
 const lib = @import("lib");
+const tracy = @import("tracy");
 const tel = lib.telemetry;
 
 const Config = struct {
@@ -85,6 +86,9 @@ const Config = struct {
 };
 
 pub fn main() !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "main" });
+    defer zone.deinit();
+
     var dba_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = dba_state.deinit();
     const allocator = dba_state.allocator();
@@ -187,12 +191,18 @@ pub fn main() !void {
 
             .histogram_data_len = 4096 * 3,
         },
+
+        .transaction_pool = {},
+        .block_pool = {},
+        .exec_req_response = {},
     });
 
     switch (config.sandboxing_mode) {
         .sandboxed => try topology.spawnAndWait(&service_map),
         .threaded => try topology.spawnAndWaitNoSandbox(&service_map),
     }
+
+    tracy.message("exiting");
 }
 
 const topology_schema: lib.topology.Schema = .{
@@ -213,7 +223,6 @@ pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
         .@"net:to_gossip",
         .@"gossip:from_net",
     }),
-
     .gossip_source_to_snapshot = .initMany(&.{
         .@"gossip:source_to_snapshot",
         .@"snapshot:source_from_gossip",
@@ -235,7 +244,6 @@ pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
         .@"replay:account_lookups",
         .@"accounts_db:replay_lookups",
     }),
-
     .telemetry = .initMany(&.{
         .@"telemetry:main",
         .@"net:telemetry",
@@ -244,6 +252,18 @@ pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
         .@"snapshot:telemetry",
         .@"accounts_db:telemetry",
         .@"replay:telemetry",
+    }),
+    .exec_req_response = .initMany(&.{
+        .@"replay:exec_req_response",
+        .@"exec:exec_req_response",
+    }),
+    .transaction_pool = .initMany(&.{
+        .@"replay:transaction_pool",
+        .@"exec:transaction_pool",
+    }),
+    .block_pool = .initMany(&.{
+        .@"replay:block_pool",
+        .@"exec:block_pool",
     }),
 }));
 
@@ -272,6 +292,11 @@ pub const Region = union(enum) {
     account_pool: struct { memory: usize },
 
     shreds_to_replay,
+
+    exec_req_response,
+    transaction_pool,
+    block_pool,
+
     replay_account_lookups,
 
     telemetry: tel.Region.InitParams,
@@ -297,6 +322,10 @@ pub const Region = union(enum) {
             .replay_account_lookups => @sizeOf(lib.accounts_db.AccountLookups),
 
             .telemetry => |params| params.info().regionSize(),
+
+            .exec_req_response => @sizeOf(lib.replay.ExecReqResponse),
+            .transaction_pool => lib.replay.TransactionPool.size(),
+            .block_pool => lib.replay.BlockPool.size(),
         };
     }
 
@@ -413,6 +442,27 @@ pub const Region = union(enum) {
                 const data: *tel.Region = @ptrCast(buf);
 
                 data.init(params);
+            },
+
+            .block_pool => {
+                std.debug.assert(buf.len == lib.replay.BlockPool.size());
+                const data: *lib.replay.BlockPool = @ptrCast(buf);
+
+                data.init();
+            },
+
+            .transaction_pool => {
+                std.debug.assert(buf.len == lib.replay.TransactionPool.size());
+                const data: *lib.replay.TransactionPool = @ptrCast(buf);
+
+                data.init();
+            },
+
+            .exec_req_response => {
+                std.debug.assert(buf.len == @sizeOf(lib.replay.ExecReqResponse));
+                const data: *lib.replay.ExecReqResponse = @ptrCast(buf);
+
+                data.init();
             },
         };
     }

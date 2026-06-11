@@ -4,11 +4,13 @@ comptime {
         _ = @import("clock.zig");
         _ = @import("collections.zig");
         _ = @import("crypto.zig");
+        _ = @import("exec.zig");
         _ = @import("fio.zig");
         _ = @import("gossip.zig");
         _ = @import("ipc.zig");
         _ = @import("linux.zig");
         _ = @import("net.zig");
+        _ = @import("replay.zig");
         _ = @import("runner.zig");
         _ = @import("shred.zig");
         _ = @import("snapshot.zig");
@@ -33,6 +35,7 @@ pub const collections = @import("collections.zig");
 pub const snapshot = @import("snapshot.zig");
 pub const runner = @import("runner.zig");
 pub const telemetry = @import("telemetry.zig");
+pub const replay = @import("replay.zig");
 pub const accounts_db = @import("accounts_db.zig");
 pub const fio = @import("fio.zig");
 
