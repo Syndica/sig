@@ -3,6 +3,16 @@
 
 const std = @import("std");
 const std14 = @import("std14");
+
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("bn254_64.zig");
+        _ = @import("fields.zig");
+        _ = @import("pairing.zig");
+        _ = @import("tests.zig");
+    }
+}
+
 pub const fields = @import("fields.zig");
 pub const pairing = @import("pairing.zig");
 pub const tests = @import("tests.zig");
