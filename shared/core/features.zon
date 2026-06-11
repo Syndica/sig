@@ -147,7 +147,7 @@
         .name = "disable_fees_sysvar",
         .pubkey = "JAN1trEUEtZjgXYzNBYHU9DYd7GnThhXfFP7SzPXkPsG",
         .description = "disable fees sysvar",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "stake_merge_with_unmatched_credits_observed",
@@ -573,7 +573,7 @@
         .name = "disable_deploy_of_alloc_free_syscall",
         .pubkey = "79HWsX9rpnnJBPcdNURVqygpMAfxdrAirzAGAVmf92im",
         .description = "disable new deployments of deprecated sol_alloc_free_ syscall",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "include_account_index_in_rent_error",
