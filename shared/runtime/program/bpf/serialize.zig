@@ -957,7 +957,7 @@ test serializeParameters {
                 });
             }
 
-            var serialized = serializeParameters(allocator, ic, false, false, false);
+            var serialized = serializeParameters(allocator, ic, false, false);
             defer if (serialized) |*ret| ret.deinit(allocator) else |_| {};
             try std.testing.expect(serialized == error.MaxAccountsExceeded);
         }
@@ -995,7 +995,6 @@ test serializeParameters {
             ic,
             false, // account_data_direct_mapping,
             virtual_address_space_adjustments,
-            false,
         );
         defer serialized.deinit(allocator);
         try std.testing.expect(HOST_ALIGN.check(@intFromPtr(serialized.memory.items.ptr)));
@@ -1259,7 +1258,6 @@ test "writeAccount does not tag regions when virtual_address_space_adjustments i
         ic,
         false, // direct_mapping
         false, // virtual_address_space_adjustments = OFF
-        false,
     );
     defer serialized.deinit(allocator);
 
