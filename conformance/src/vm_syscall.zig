@@ -215,16 +215,11 @@ fn executeSyscall(
         .virtual_address_space_adjustments,
         tc.slot,
     );
-    const mask_out_rent_epoch_in_vm_serialization = tc.feature_set.active(
-        .mask_out_rent_epoch_in_vm_serialization,
-        tc.slot,
-    );
     var serialized = try serialize.serializeParameters(
         allocator,
         ic,
         direct_mapping,
         virtual_address_space_adjustments,
-        mask_out_rent_epoch_in_vm_serialization,
     );
     defer serialized.deinit(allocator);
     tc.serialized_accounts = serialized.account_metas;

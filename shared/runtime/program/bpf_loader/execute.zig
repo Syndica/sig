@@ -124,10 +124,6 @@ fn executeBpfProgram(
         .virtual_address_space_adjustments,
         ic.tc.slot,
     );
-    const mask_out_rent_epoch_in_vm_serialization = ic.tc.feature_set.active(
-        .mask_out_rent_epoch_in_vm_serialization,
-        ic.tc.slot,
-    );
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
     var serialized = try bpf_serialize.serializeParameters(
@@ -135,7 +131,6 @@ fn executeBpfProgram(
         ic,
         account_data_direct_mapping,
         virtual_address_space_adjustments,
-        mask_out_rent_epoch_in_vm_serialization,
     );
     defer serialized.deinit(allocator);
 

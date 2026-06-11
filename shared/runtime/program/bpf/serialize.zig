@@ -247,7 +247,6 @@ pub fn serializeParameters(
     ic: *InstructionContext,
     direct_mapping: bool,
     virtual_address_space_adjustments: bool,
-    mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
     if (ic.ixn_info.account_metas.items.len > InstructionInfo.MAX_ACCOUNT_METAS - 1) {
         return error.MaxAccountsExceeded;
@@ -293,7 +292,6 @@ pub fn serializeParameters(
             ic.ixn_info.program_meta.pubkey,
             direct_mapping,
             virtual_address_space_adjustments,
-            mask_out_rent_epoch_in_vm_serialization,
         )
     else
         serializeParametersAligned(
@@ -303,7 +301,6 @@ pub fn serializeParameters(
             ic.ixn_info.program_meta.pubkey,
             direct_mapping,
             virtual_address_space_adjustments,
-            mask_out_rent_epoch_in_vm_serialization,
         );
 }
 
@@ -315,7 +312,6 @@ fn serializeParametersUnaligned(
     program_id: Pubkey,
     account_data_direct_mapping: bool,
     virtual_address_space_adjustments: bool,
-    mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
     var size: usize = @sizeOf(u64);
     for (accounts) |account| {
@@ -385,13 +381,9 @@ fn serializeParametersUnaligned(
 
                 _ = serializer.write(u8, @intFromBool(borrowed_account.account.executable));
 
-                const rent_epoch: u64 = if (mask_out_rent_epoch_in_vm_serialization)
-                    std.math.maxInt(u64)
-                else
-                    borrowed_account.account.rent_epoch;
                 _ = serializer.write(
                     u64,
-                    std.mem.nativeToLittle(u64, rent_epoch),
+                    std.mem.nativeToLittle(u64, std.math.maxInt(u64)),
                 );
 
                 account_metas.appendAssumeCapacity(.{
@@ -434,7 +426,6 @@ fn serializeParametersAligned(
     program_id: Pubkey,
     account_data_direct_mapping: bool,
     virtual_address_space_adjustments: bool,
-    mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
     var size: u64 = @sizeOf(u64);
     for (accounts) |account| {
@@ -515,13 +506,10 @@ fn serializeParametersAligned(
                     index_in_transaction,
                 );
 
-                const rent_epoch: u64 = if (mask_out_rent_epoch_in_vm_serialization)
-                    std.math.maxInt(u64)
-                else
-                    borrowed_account.account.rent_epoch;
+                // [agave] https://github.com/anza-xyz/agave/blob/cfcee8181f/program-runtime/src/serialization.rs#L484
                 _ = serializer.write(
                     u64,
-                    std.mem.nativeToLittle(u64, rent_epoch),
+                    std.mem.nativeToLittle(u64, std.math.maxInt(u64)),
                 );
 
                 account_metas.appendAssumeCapacity(.{
@@ -1177,7 +1165,6 @@ test "writeAccount tags account-data regions with index_in_transaction" {
             ic,
             direct_mapping,
             true, // virtual_address_space_adjustments
-            false, // mask_out_rent_epoch_in_vm_serialization
         );
         defer serialized.deinit(allocator);
 
