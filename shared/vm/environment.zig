@@ -121,9 +121,7 @@ pub const Environment = struct {
 
         // disable_deploy_of_alloc_free_syscall is hardcoded (always active), so
         // sol_alloc_free_ is always disabled when reject_deployment_of_broken_elfs is set.
-        if (reject_deployment_of_broken_elfs) {
-            loader.map.set(.sol_alloc_free_, null);
-        }
+        if (reject_deployment_of_broken_elfs) loader.map.set(.sol_alloc_free_, null);
 
         // disable_fees_sysvar is hardcoded (always active), so
         // sol_get_fees_sysvar is always disabled.
