@@ -1163,7 +1163,6 @@ test "randomEpochStakes produces valid leader schedule" {
         epoch_stakes.stakes.epoch,
         epoch_stakes.stakes.vote_accounts,
         &.INIT,
-        &.ALL_DISABLED,
     );
     defer leaders.deinit(allocator);
 }
