@@ -3,21 +3,38 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const pshufb_intrinsic: enum { avx512f, avx2 } = intrin: {
+const pshufb_intrinsic: enum { avx512f, avx2, ssse3, fallback } = intrin: {
     if (builtin.cpu.has(.x86, .avx512f)) break :intrin .avx512f;
     if (builtin.cpu.has(.x86, .avx2)) break :intrin .avx2;
-    @compileError("pshufb (avx512f & avx2) unavailable");
+    if (builtin.cpu.has(.x86, .ssse3)) break :intrin .ssse3;
+    break :intrin .fallback;
 };
+
 const L = switch (pshufb_intrinsic) {
     .avx512f => 64,
     .avx2 => 32,
+    .ssse3 => 16,
+    .fallback => 16,
 };
+
 const V = @Vector(L, u8);
 
-const pshufb = @extern(*const fn (V, V) callconv(.c) V, .{ .name = switch (pshufb_intrinsic) {
-    .avx512f => "llvm.x86.avx512.pshuf.b.512",
-    .avx2 => "llvm.x86.avx2.pshuf.b",
-} }).*;
+const BinOp = fn (V, V) callconv(.c) V;
+
+const pshufb: BinOp = switch (pshufb_intrinsic) {
+    .avx512f => @extern(*const BinOp, .{ .name = "llvm.x86.avx512.pshuf.b.512" }).*,
+    .avx2 => @extern(*const BinOp, .{ .name = "llvm.x86.avx2.pshuf.b" }).*,
+    .ssse3 => @extern(*const BinOp, .{ .name = "llvm.x86.ssse3.pshuf.b.128" }).*,
+    .fallback => pshufbFallback,
+};
+
+fn pshufbFallback(a: @Vector(16, u8), mask: @Vector(16, u8)) callconv(.c) @Vector(16, u8) {
+    var out: @Vector(16, u8) = undefined;
+    inline for (0..16) |i| {
+        out[i] = if (mask[i] & 0x80 != 0) 0 else a[mask[i] & 0x0f];
+    }
+    return out;
+}
 
 /// The number of points we'll use for the interpolation.
 const N = 64;
@@ -611,4 +628,25 @@ inline fn ifft(v: *[N]V, a: comptime_int, b: comptime_int, c: comptime_int) void
 inline fn fft(v: *[N]V, a: comptime_int, b: comptime_int, c: comptime_int) void {
     if (c != 0) v[a] = v[a] ^ GF.mul(v[b], c);
     v[b] ^= v[a];
+}
+
+test pshufbFallback {
+    const a: @Vector(16, u8) = .{ 17, 201, 3, 99, 44, 8, 250, 61, 12, 7, 111, 92, 5, 180, 33, 14 };
+    const mask: @Vector(16, u8) = .{
+        0x00, 0x03, 0x8f, 0x11, 0x7e, 0x05, 0x80, 0x0a,
+        0x02, 0x4c, 0x09, 0x8d, 0x0f, 0x06, 0x1a, 0x0b,
+    };
+    const expected: @Vector(16, u8) = .{
+        17, 99, 0, 201, 33, 8, 0, 111, 3, 5, 7, 0, 14, 250, 111, 92,
+    };
+
+    const actual = pshufbFallback(a, mask);
+    if (builtin.cpu.has(.x86, .ssse3)) {
+        const calculated = @extern(
+            *const fn (@Vector(16, u8), @Vector(16, u8)) callconv(.c) @Vector(16, u8),
+            .{ .name = "llvm.x86.ssse3.pshuf.b.128" },
+        ).*(a, mask);
+        try std.testing.expectEqual(calculated, actual);
+    }
+    try std.testing.expectEqual(expected, actual);
 }
