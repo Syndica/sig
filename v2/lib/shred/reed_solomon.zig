@@ -28,12 +28,18 @@ const pshufb: BinOp = switch (pshufb_intrinsic) {
     .fallback => pshufbFallback,
 };
 
-fn pshufbFallback(a: @Vector(16, u8), mask: @Vector(16, u8)) callconv(.c) @Vector(16, u8) {
-    var out: @Vector(16, u8) = undefined;
-    inline for (0..16) |i| {
-        out[i] = if (mask[i] & 0x80 != 0) 0 else a[mask[i] & 0x0f];
-    }
-    return out;
+fn pshufbFallback(a_vec: @Vector(16, u8), mask: @Vector(16, u8)) callconv(.c) @Vector(16, u8) {
+    const Vec = @Vector(16, u8);
+    const a: [16]u8 = a_vec;
+    const indices: [16]u8 = mask & @as(Vec, @splat(0x0f));
+
+    var shuffled: [16]u8 = undefined;
+    inline for (0..16) |i| shuffled[i] = a[indices[i]];
+
+    const zero: Vec = @splat(0);
+    const should_zero = mask & @as(Vec, @splat(0x80)) != zero;
+
+    return @select(u8, should_zero, zero, shuffled);
 }
 
 /// The number of points we'll use for the interpolation.
