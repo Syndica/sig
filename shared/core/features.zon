@@ -1762,4 +1762,10 @@
         .description = "SIMD-0232: Custom Commission Collector Account",
         .status = .supported,
     },
+    .{
+        .name = "loader_v3_minimum_extend_program_size",
+        .pubkey = "YbbRLkvenrocjGPGyoQE4wjnvYzTgfsk38NFmcYK7a5",
+        .description = "SIMD-0431: Loader V3 minimum extend program size",
+        .status = .supported,
+    },
 }
