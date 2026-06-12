@@ -2,13 +2,21 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const L = if (builtin.cpu.has(.x86, .avx512f)) 64 else 32;
+
+const pshufb_intrinsic: enum { avx512f, avx2 } = intrin: {
+    if (builtin.cpu.has(.x86, .avx512f)) break :intrin .avx512f;
+    if (builtin.cpu.has(.x86, .avx2)) break :intrin .avx2;
+    @compileError("pshufb (avx512f & avx2) unavailable");
+};
+const L = switch (pshufb_intrinsic) {
+    .avx512f => 64,
+    .avx2 => 32,
+};
 const V = @Vector(L, u8);
 
-const pshufb = @extern(*const fn (V, V) callconv(.c) V, .{ .name = switch (L) {
-    64 => "llvm.x86.avx512.pshuf.b.512",
-    32 => "llvm.x86.avx2.pshuf.b",
-    else => unreachable,
+const pshufb = @extern(*const fn (V, V) callconv(.c) V, .{ .name = switch (pshufb_intrinsic) {
+    .avx512f => "llvm.x86.avx512.pshuf.b.512",
+    .avx2 => "llvm.x86.avx2.pshuf.b",
 } }).*;
 
 /// The number of points we'll use for the interpolation.
