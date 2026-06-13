@@ -233,7 +233,6 @@ pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
     }),
     .account_pool = .initMany(&.{
         .@"accounts_db:account_pool",
-        .@"replay:account_pool",
     }),
 
     .shreds_to_replay = .initMany(&.{
@@ -241,7 +240,6 @@ pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
         .@"replay:deshredded_in",
     }),
     .replay_account_lookups = .initMany(&.{
-        .@"replay:account_lookups",
         .@"accounts_db:replay_lookups",
     }),
     .telemetry = .initMany(&.{
