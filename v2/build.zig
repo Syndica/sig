@@ -338,6 +338,11 @@ pub fn build(b: *Build) !void {
             .root_source_file = b.path("tests/gossip/main.zig"),
             .services = .initMany(&.{ .gossip, .telemetry }),
         },
+        .{
+            .name = "replay",
+            .root_source_file = b.path("tests/replay/main.zig"),
+            .services = .initMany(&.{ .shred_receiver, .replay, .telemetry, .exec }),
+        },
     };
 
     for (black_box_tests) |black_box_test| {
