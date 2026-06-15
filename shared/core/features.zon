@@ -147,7 +147,7 @@
         .name = "disable_fees_sysvar",
         .pubkey = "JAN1trEUEtZjgXYzNBYHU9DYd7GnThhXfFP7SzPXkPsG",
         .description = "disable fees sysvar",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "stake_merge_with_unmatched_credits_observed",
@@ -573,7 +573,7 @@
         .name = "disable_deploy_of_alloc_free_syscall",
         .pubkey = "79HWsX9rpnnJBPcdNURVqygpMAfxdrAirzAGAVmf92im",
         .description = "disable new deployments of deprecated sol_alloc_free_ syscall",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "include_account_index_in_rent_error",
@@ -1225,7 +1225,7 @@
         .name = "ed25519_precompile_verify_strict",
         .pubkey = "ed9tNscbWLYBooxWA7FE2B5KHWs8A6sxfY8EzezEcoo",
         .description = "SIMD-0152: Use strict verification in ed25519 precompile",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "zk_elgamal_proof_program_enabled",
@@ -1502,7 +1502,7 @@
         .name = "enable_vote_address_leader_schedule",
         .pubkey = "5JsG4NWH8Jbrqdd8uL6BNwnyZK3dQSoieRXG5vmofj9y",
         .description = "SIMD-0180: Enable vote address leader schedule #4573",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enshrine_slashing_program",
@@ -1760,6 +1760,12 @@
         .name = "custom_commission_collector",
         .pubkey = "CustomCommissionCo11ector111111111111111111",
         .description = "SIMD-0232: Custom Commission Collector Account",
+        .status = .supported,
+    },
+    .{
+        .name = "loader_v3_minimum_extend_program_size",
+        .pubkey = "YbbRLkvenrocjGPGyoQE4wjnvYzTgfsk38NFmcYK7a5",
+        .description = "SIMD-0431: Loader V3 minimum extend program size",
         .status = .supported,
     },
 }

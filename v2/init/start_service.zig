@@ -84,6 +84,9 @@ fn serviceLog(
 }
 
 fn serviceMain(params: lib.ipc.ResolvedArgs) callconv(.c) void {
+    const zone = tracy.Zone.init(@src(), .{ .name = @tagName(root.name) });
+    defer zone.deinit();
+
     const exit: *lib.runner.Exit = &params.runner.exit;
     exit.* = .{};
 
@@ -122,6 +125,8 @@ fn serviceMain(params: lib.ipc.ResolvedArgs) callconv(.c) void {
         // write back error name
         const err_len = @min(@errorName(err).len, exit.error_name.len);
         @memcpy(exit.error_name[0..err_len], @errorName(err)[0..err_len]);
+
+        tracy.print("error: {s}", .{exit.error_name[0..err_len]});
 
         if (@errorReturnTrace()) |trace| {
             // write back error return trace
@@ -347,12 +352,14 @@ const SimpleStackIterator = struct {
     }
 };
 
-pub fn servicePanic(
+pub noinline fn servicePanic(
     msg: []const u8,
     first_trace_addr: ?usize,
 ) noreturn {
     // avoids case of recursive panic
     @setRuntimeSafety(false);
+
+    tracy.print("servicePanic: {s}", .{msg});
 
     const exit = panic_state.exit;
 

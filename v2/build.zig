@@ -68,9 +68,17 @@ pub fn build(b: *Build) !void {
             "not silently accepted.",
     ) orelse (optimize == .Debug);
 
+    const debug_skip_shred_checks = b.option(
+        bool,
+        "debug-skip-shred-checks",
+        "Debug purposes only. Skips sig verify and ignores shred version mismatches.",
+    ) orelse false;
+
     const build_options = b.addOptions();
     build_options.addOption(bool, "allow_no_sha", allow_no_sha);
     build_options.addOption(bool, "allow_no_avx512", allow_no_avx512);
+    build_options.addOption(bool, "debug_skip_shred_checks", debug_skip_shred_checks);
+
     const build_options_mod = build_options.createModule();
 
     const install_step = b.getInstallStep();
@@ -117,7 +125,6 @@ pub fn build(b: *Build) !void {
         .tracy_on_demand = tracy_on_demand,
         .tracy_callstack = 6,
     }).module("tracy");
-    const binkode_mod = b.dependency("binkode", .{}).module("binkode");
     const base58_mod = b.dependency("base58", .{
         .target = target,
         .optimize = optimize,
@@ -183,7 +190,6 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "base58", .module = base58_mod },
-            .{ .name = "binkode", .module = binkode_mod },
             .{ .name = "tracy", .module = tracy_mod },
             .{ .name = "build-options", .module = build_options_mod },
             .{ .name = "zstd", .module = zstd_mod },
@@ -270,6 +276,7 @@ pub fn build(b: *Build) !void {
         .root_source_file = b.path("init/start_service.zig"),
         .target = target,
         .optimize = optimize,
+        .error_tracing = true,
         .imports = &.{
             .{ .name = "lib", .module = lib_mod },
             .{ .name = "tracy", .module = tracy_mod },
@@ -296,11 +303,11 @@ pub fn build(b: *Build) !void {
             .optimize = optimize,
             .single_threaded = true,
             .omit_frame_pointer = false,
+            .error_tracing = true,
             .imports = &.{
                 .{ .name = "lib", .module = lib_mod },
                 .{ .name = "start_service", .module = start_service_mod },
                 .{ .name = "tracy", .module = tracy_mod },
-                .{ .name = "binkode", .module = binkode_mod },
             },
         });
 

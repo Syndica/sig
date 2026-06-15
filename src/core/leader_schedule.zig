@@ -12,7 +12,6 @@ const Pubkey = core.pubkey.Pubkey;
 const Epoch = core.time.Epoch;
 const Slot = core.time.Slot;
 
-const FeatureSet = sig.core.features.Set;
 const VoteAccounts = sig.core.stakes.VoteAccounts;
 
 const ChaChaRng = sig.rand.ChaChaRng;
@@ -87,32 +86,23 @@ pub const LeaderSchedule = struct {
         allocator.free(self.leaders);
     }
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0/runtime/src/leader_schedule_utils.rs#L10-L18
+    /// `enable_vote_address_leader_schedule` is always active — vote-keyed leader schedule
+    /// is unconditionally used. Feature cleanup: https://github.com/anza-xyz/agave/commit/9056c982f7
     pub fn init(
         allocator: Allocator,
         leader_schedule_epoch: Epoch,
         vote_accounts: VoteAccounts,
         epoch_schedule: *const EpochSchedule,
-        feature_set: *const FeatureSet,
     ) !LeaderSchedule {
         const slots_in_epoch = epoch_schedule.getSlotsInEpoch(leader_schedule_epoch);
-        const slot_leaders = if (useVoteKeyedLeaderSchedule(
+        const slot_leaders = try computeFromVoteAccounts(
+            allocator,
             leader_schedule_epoch,
-            epoch_schedule,
-            feature_set,
-        ))
-            try computeFromVoteAccounts(
-                allocator,
-                leader_schedule_epoch,
-                slots_in_epoch,
-                &vote_accounts.vote_accounts,
-            )
-        else
-            try computeFromStakedNodes(
-                allocator,
-                leader_schedule_epoch,
-                slots_in_epoch,
-                &vote_accounts.staked_nodes,
-            );
+            slots_in_epoch,
+            &vote_accounts.vote_accounts,
+        );
+
         return .{
             .leaders = slot_leaders,
             .start = epoch_schedule.getFirstSlotInEpoch(leader_schedule_epoch),
@@ -209,28 +199,7 @@ pub const LeaderSchedule = struct {
     }
 };
 
-pub fn useVoteKeyedLeaderSchedule(
-    epoch: Epoch,
-    epoch_schedule: *const EpochSchedule,
-    feature_set: *const FeatureSet,
-) bool {
-    const maybe_activation_slot = feature_set.get(.enable_vote_address_leader_schedule);
-    if (maybe_activation_slot) |activated_slot| {
-        if (activated_slot == 0) {
-            // If the feature is activated at slot 0, always use the new leader schedule
-            return true;
-        } else {
-            // Always use the new leader schedule for epochs after the activated epoch
-            const activated_epoch = epoch_schedule.getEpoch(activated_slot);
-            return epoch >= activated_epoch;
-        }
-    } else {
-        // TODO: do we need to return null here
-        return false;
-    }
-}
-
-pub fn computeFromVoteAccounts(
+fn computeFromVoteAccounts(
     allocator: std.mem.Allocator,
     leader_schedule_epoch: Epoch,
     slots_in_epoch: Slot,
@@ -261,7 +230,7 @@ pub fn computeFromVoteAccounts(
     return vote_keyed;
 }
 
-pub fn computeFromStakedNodes(
+fn computeFromStakedNodes(
     allocator: std.mem.Allocator,
     leader_schedule_epoch: Epoch,
     slots_in_epoch: Slot,
