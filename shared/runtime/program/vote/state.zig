@@ -242,11 +242,11 @@ pub fn deserializeCompactVoteStateUpdate(
     root = if (root == std.math.maxInt(Slot)) null else root;
 
     var slot = root orelse 0;
-    const lockouts_len = try readStrictCompactVarInt(u16, reader);
+    const lockouts_len = try sig.bincode.shortvec.readShortU16(reader);
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
     for (lockouts) |*lockout| {
-        const offset = try readStrictCompactVarInt(u64, reader);
+        const offset = try sig.bincode.shortvec.readVarInt(u64, reader);
         const confirmation_count = try reader.readInt(u8, .little);
         slot = try std.math.add(Slot, slot, offset);
         lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
@@ -353,11 +353,11 @@ pub fn deserializeTowerSync(
     root = if (root == std.math.maxInt(Slot)) null else root;
 
     var slot = root orelse 0;
-    const lockouts_len = try readStrictCompactVarInt(u16, reader);
+    const lockouts_len = try sig.bincode.shortvec.readShortU16(reader);
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
     for (lockouts) |*lockout| {
-        const offset = try readStrictCompactVarInt(u64, reader);
+        const offset = try sig.bincode.shortvec.readVarInt(u64, reader);
         const confirmation_count = try reader.readInt(u8, .little);
         slot = try std.math.add(Slot, slot, offset);
         lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
@@ -382,42 +382,6 @@ pub fn deserializeTowerSync(
         .timestamp = timestamp,
         .block_id = block_id,
     };
-}
-
-/// Read a strict canonical variable-length integer that mirrors agave's
-/// `solana_serde_varint::VarInt` (used by `LockoutOffset.offset`) and
-/// `solana_short_vec::ShortU16` (used by the compact lockout length).
-/// Rejects:
-///   - terminator bytes of `0x00` past the first byte ("Invalid Trailing
-///     Zeros" / "Alias"), and
-///   - terminator bytes whose 7 value bits do not fit in `T` once shifted
-///     to their final position ("Last Byte Truncated" / "Overflow").
-/// Returning `error.NonCanonicalVarInt` here causes the surrounding
-/// `limited_deserialize`-equivalent pipeline to surface
-/// `InstructionError.InvalidInstructionData`, matching agave's behaviour.
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/serde-varint@v3.0.1/serde-varint/src/lib.rs#L70-L94
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/short-vec@v3.2.1/short-vec/src/lib.rs#L98-L128
-fn readStrictCompactVarInt(comptime T: type, reader: anytype) !T {
-    const info = @typeInfo(T).int;
-    comptime std.debug.assert(info.signedness == .unsigned);
-    const max_bytes = (info.bits + 6) / 7;
-    var value: T = 0;
-    var nth_byte: u32 = 0;
-    while (nth_byte < max_bytes) : (nth_byte += 1) {
-        const byte = try reader.readByte();
-        const shift_amt: std.math.Log2Int(T) = @intCast(nth_byte * 7);
-        const low7: T = byte & 0x7f;
-        const shifted = std.math.shlExact(T, low7, shift_amt) catch
-            return error.NonCanonicalVarInt;
-        value |= shifted;
-        if (byte & 0x80 == 0) {
-            if (byte == 0 and (nth_byte != 0 or value != 0)) {
-                return error.NonCanonicalVarInt;
-            }
-            return value;
-        }
-    }
-    return error.NonCanonicalVarInt;
 }
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/authorized_voters.rs#L11
