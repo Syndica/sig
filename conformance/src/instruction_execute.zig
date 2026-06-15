@@ -109,6 +109,7 @@ fn executeInstruction(
         &tc.compute_budget,
         tc.slot,
         false,
+        false,
     );
 
     // Load programs into the program map
