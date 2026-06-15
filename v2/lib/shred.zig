@@ -8,11 +8,9 @@ comptime {
     if (@import("builtin").is_test) {
         _ = @import("shred/receiver.zig");
         _ = @import("shred/reed_solomon.zig");
-        _ = @import("shred/reed_solomon_table.zig");
     }
 }
 
-pub const reed_solomon_table = @import("shred/reed_solomon_table.zig");
 pub const Receiver = @import("shred/receiver.zig").Receiver;
 
 const Hash = solana.Hash;
@@ -29,8 +27,10 @@ pub const RecvConfig = extern struct {
     shred_version: u16,
 };
 
-pub const DeshredRing = Ring(256, DeshreddedFecSet);
+pub const DeshredRing = Ring(1024, DeshreddedFecSet);
 
+/// NOTE: these are not necessarily unique IDs - under equivocation there may be multiple FEC sets
+///       of the same FecSetId.
 pub const FecSetId = extern struct {
     slot: Slot,
     fec_set_idx: u32,
@@ -48,8 +48,44 @@ pub const FecSetId = extern struct {
         std.debug.assert(a.fec_set_idx == b.fec_set_idx);
         return .eq;
     }
+
+    // Some basic sanity checks to ensure that the child fec set may actually follow the parent
+    // fec set. This should only be used to throw out relations, not to create them.
+    pub fn mayFollowWith(parent: *const FecSetId, child: *const FecSetId) bool {
+        const zone = tracy.Zone.init(@src(), .{ .name = "mayFollowWith" });
+        defer zone.deinit();
+
+        if (parent.slot > child.slot) {
+            zone.text("parent.slot > child.slot");
+            return false;
+        }
+        const slot_diff = child.slot - parent.slot;
+
+        zone.value(slot_diff);
+
+        switch (slot_diff) {
+            0 => {
+                if (child.fec_set_idx < parent.fec_set_idx) {
+                    zone.text("child.fec_set_idx < parent.fec_set_idx");
+                    return false;
+                }
+                const idx_diff = child.fec_set_idx - parent.fec_set_idx;
+                return idx_diff == 32;
+            },
+            // typically this will be 1, but may be more under forking / skipped slots
+            else => {
+                return child.fec_set_idx == 0;
+            },
+        }
+    }
 };
 
+/// Represents a reconstructed fec set, with its recovered payload.
+///
+/// NOTE: while we have `data_complete`, which indicates we've reached the end of the data, there is
+/// no data *start* bool. This means that we can only start deserialising when
+/// a) id.fec_set_idx == 0 - i.e. it's the first in the slot.
+/// b) the previous fec set is marked as `data_complete.`
 // TODO: this should be sent as a notification/header, with the payload sent separately.
 // Currently this copies a lot.
 pub const DeshreddedFecSet = extern struct {
@@ -275,10 +311,22 @@ pub const Shred = extern struct {
         return @ptrCast(buffer);
     }
 
+    pub fn fromBufferUncheckedMut(buffer: *Packet.Buffer) *Shred {
+        return @ptrCast(buffer);
+    }
+
     // This is combined with fragments from other shreds in the erasure set to
     // reconstruct a collection of entries.
-    pub fn erasureFragment(shred: *const Shred) ?[]const u8 {
-        const buffer: *const Packet.Buffer = @ptrCast(shred);
+    pub fn erasureFragment(shred: anytype) if (@TypeOf(shred) == *const Shred)
+        ?[]const u8
+    else
+        ?[]u8 {
+        const Ptr_Buffer = if (@TypeOf(shred) == *const Shred)
+            *const Packet.Buffer
+        else
+            *Packet.Buffer;
+
+        const buffer: Ptr_Buffer = @ptrCast(shred);
         const header_size = shred.variant.headerSize();
         if (header_size == 0) unreachable; // we should have gotten rid of this shred earlier?
 
@@ -328,7 +376,8 @@ pub const Shred = extern struct {
         std.debug.assert(shred.variant.isData());
         const buffer: *const Packet.Buffer = @ptrCast(shred);
 
-        return buffer[@offsetOf(Shred, "code_or_data") + @sizeOf(DataHeader) .. shred.code_or_data.data.size];
+        return buffer[@offsetOf(Shred, "code_or_data") +
+            @sizeOf(DataHeader) .. shred.code_or_data.data.size];
     }
 
     pub fn chainedMerkleRoot(shred: *const Shred) *const Hash {
@@ -349,7 +398,8 @@ pub const Shred = extern struct {
     // does not include: retransmit signature + proof nodes
     // [firedancer] https://github.com/firedancer-io/firedancer/blob/9f7770af997a1443e7903113fc03ca1ce3b0ad73/src/ballet/shred/fd_shred.c#L109
     fn merkleProtected(shred: *const Shred) []const u8 {
-        const erasure_protected_size = 1115 + @offsetOf(Shred, "code_or_data") + @sizeOf(DataHeader) -
+        const erasure_protected_size = 1115 + @offsetOf(Shred, "code_or_data") +
+            @sizeOf(DataHeader) -
             Signature.SIZE -
             shred.variant.merkleSize() -
             @as(usize, merkle_root_size) -
@@ -367,7 +417,10 @@ pub const Shred = extern struct {
         else
             code_merkle_protected_size;
 
-        return @as(*const Packet.Buffer, @ptrCast(shred))[Signature.SIZE..][0..merkle_protected_size];
+        return @as(
+            *const Packet.Buffer,
+            @ptrCast(shred),
+        )[Signature.SIZE..][0..merkle_protected_size];
     }
 
     // Added by the node who retransmitted the shred to us over Turbine.

@@ -1972,6 +1972,21 @@ fn commonExtendProgram(
         return InstructionError.InvalidRealloc;
     }
 
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/programs/bpf_loader/src/lib.rs#L861-L883
+    if (ic.tc.feature_set.active(.loader_v3_minimum_extend_program_size, ic.tc.slot)) {
+        const old_len = programdata.constAccountData().len;
+        const headroom = system_program.MAX_PERMITTED_DATA_LENGTH -| old_len;
+        const min_bytes = bpf_loader_program.v3.instruction.MINIMUM_EXTEND_PROGRAM_BYTES;
+        if (additional_bytes < min_bytes and additional_bytes != headroom) {
+            try ic.tc.log(
+                "ExtendProgram requires a minimum of {} additional bytes " ++
+                    "or to extend to maximum size, but only {} were requested",
+                .{ min_bytes, additional_bytes },
+            );
+            return InstructionError.InvalidArgument;
+        }
+    }
+
     const clock_slot = (try ic.tc.sysvar_cache.get(sysvar.Clock)).slot;
 
     const upgrade_authority_address = switch (try programdata.deserializeFromAccountData(
@@ -3823,6 +3838,123 @@ test executeV3ExtendProgram {
         );
         try std.testing.expectEqual(tc.compute_meter, 0);
     }
+}
+
+// SIMD-0431: extending by fewer than 10240 bytes (and not the headroom amount) must be
+// rejected with `InvalidArgument` when `loader_v3_minimum_extend_program_size` is active.
+test "executeV3ExtendProgram SIMD-0431 minimum_extend_program_size" {
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const payer_account_key = Pubkey.initRandom(prng.random());
+    const upgrade_authority_key = Pubkey.initRandom(prng.random());
+
+    const program_account_key = Pubkey.initRandom(prng.random());
+    const program_data_account_key, _ = pubkey_utils.findProgramAddress(
+        &.{&program_account_key.data},
+        bpf_loader_program.v3.ID,
+    ) orelse @panic("findProgramAddress failed");
+
+    var clock = sysvar.Clock.INIT;
+    clock.slot += 1337;
+
+    const initial_program_data = try createValidProgramData(
+        allocator,
+        V3State{
+            .program_data = .{
+                .slot = clock.slot - 1,
+                .upgrade_authority_address = upgrade_authority_key,
+            },
+        },
+        V3State.PROGRAM_DATA_METADATA_SIZE,
+        0,
+    );
+    defer allocator.free(initial_program_data);
+
+    const program_account_buffer = try allocator.alloc(u8, @sizeOf(V3State));
+    defer allocator.free(program_account_buffer);
+    const program_account = try bincode.writeToSlice(
+        program_account_buffer,
+        V3State{
+            .program = .{ .programdata_address = program_data_account_key },
+        },
+        .{},
+    );
+
+    const additional_bytes: u32 = 1;
+    const program_data_lamports =
+        sysvar.Rent.INIT.minimumBalance(initial_program_data.len + additional_bytes);
+    const payer_balance = prng.random().uintAtMost(u32, 1024);
+
+    const accounts = [_]sig.runtime.testing.ExecuteContextsParams.AccountParams{
+        .{
+            .pubkey = program_data_account_key,
+            .data = initial_program_data,
+            .owner = bpf_loader_program.v3.ID,
+            .lamports = program_data_lamports,
+        },
+        .{
+            .pubkey = program_account_key,
+            .data = program_account,
+            .owner = bpf_loader_program.v3.ID,
+        },
+        .{
+            .pubkey = upgrade_authority_key,
+            .owner = system_program.ID,
+        },
+        .{
+            .pubkey = system_program.ID,
+            .owner = ids.NATIVE_LOADER_ID,
+            .executable = true,
+        },
+        .{
+            .pubkey = payer_account_key,
+            .lamports = payer_balance,
+            .owner = system_program.ID,
+        },
+        .{
+            .pubkey = bpf_loader_program.v3.ID,
+            .owner = ids.NATIVE_LOADER_ID,
+        },
+    };
+
+    const instruction_accounts = [_]testing.InstructionContextAccountMetaParams{
+        // program_data
+        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+        // program
+        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+        // system_program
+        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
+        // payer
+        .{ .is_signer = true, .is_writable = true, .index_in_transaction = 4 },
+        // bpf program_id (for instruction)
+        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 5 },
+    };
+
+    // (a) feature ACTIVE + additional_bytes < MINIMUM_EXTEND_PROGRAM_BYTES → InvalidArgument
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidArgument,
+        allocator,
+        bpf_loader_program.v3.ID,
+        bpf_loader_program.v3.Instruction{
+            .extend_program = .{ .additional_bytes = additional_bytes },
+        },
+        &instruction_accounts,
+        .{
+            .accounts = &accounts,
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = sysvar.Rent.INIT,
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{ .feature = .loader_v3_minimum_extend_program_size, .slot = 0 },
+            },
+        },
+        .{},
+    );
 }
 
 test executeV3Migrate {

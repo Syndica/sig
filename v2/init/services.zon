@@ -26,6 +26,16 @@
         },
     },
     .{
+        .name = .replay,
+        .regions = .{
+            .{ .name = .deshredded_in, .access = .rw },
+            .{ .name = .transaction_pool, .access = .rw },
+            .{ .name = .block_pool, .access = .rw },
+            .{ .name = .exec_req_response, .access = .rw },
+            .{ .name = .telemetry, .access = .rw },
+        },
+    },
+    .{
         .name = .snapshot,
         .regions = .{
             .{ .name = .config, .access = .readonly },
@@ -45,18 +55,17 @@
         },
     },
     .{
-        .name = .replay,
-        .regions = .{
-            .{ .name = .deshredded_in, .access = .rw },
-            .{ .name = .account_pool, .access = .rw },
-            .{ .name = .account_lookups, .access = .rw },
-            .{ .name = .telemetry, .access = .rw },
-        },
-    },
-    .{
         .name = .telemetry,
         .regions = .{
             .{ .name = .main, .access = .rw },
+        },
+    },
+    .{
+        .name = .exec,
+        .regions = .{
+            .{ .name = .exec_req_response, .access = .rw },
+            .{ .name = .transaction_pool, .access = .readonly },
+            .{ .name = .block_pool, .access = .readonly },
         },
     },
 }
