@@ -1725,12 +1725,8 @@
     .{
         .name = "enable_sha512_syscall",
         .pubkey = "s512oDwgx8hjMnaQjXfqqrZroVj4HvC6TkN3iSSWXCh",
-        .description = "TODO: Add description",
-        .status = .unsupported,
-        .note =
-        \\ TODO: Low Priority.
-        \\ Not scheduled for activation.
-        ,
+        .description = "SIMD-0512: SHA512 Syscall",
+        .status = .supported,
     },
     .{
         .name = "set_lamports_per_byte_to_6333",

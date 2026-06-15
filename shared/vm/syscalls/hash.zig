@@ -135,7 +135,7 @@ fn hashSyscall(comptime H: type) Syscall {
             try tc.consumeCompute(tc.compute_budget.sha256_base_cost);
 
             const hash_result = try memory_map.translateType(
-                [32]u8,
+                [H.Hasher.digest_length]u8,
                 .mutable,
                 result_addr,
                 tc.getCheckAligned(),
@@ -185,6 +185,10 @@ pub const blake3 = hashSyscall(struct {
 pub const keccak256 = hashSyscall(struct {
     const Hasher = std.crypto.hash.sha3.Keccak256;
     const name = "Keccak256";
+});
+pub const sha512 = hashSyscall(struct {
+    const Hasher = std.crypto.hash.sha2.Sha512;
+    const name = "Sha512";
 });
 
 test poseidon {
@@ -321,6 +325,71 @@ test sha256 {
                 hasher.update(bytes2);
 
                 var hash_local: [32]u8 = undefined;
+                hasher.final(&hash_local);
+
+                try std.testing.expectEqualSlices(u8, &hash_local, result_slice);
+            }
+        }.verify,
+        .{ .compute_meter = total_compute },
+    );
+}
+
+test sha512 {
+    const bytes1: []const u8 = "Gaggablaghblagh!";
+    const bytes2: []const u8 = "flurbos";
+
+    const mock_slice1: memory.VmSlice = .{
+        .ptr = memory.HEAP_START,
+        .len = bytes1.len,
+    };
+    const mock_slice2: memory.VmSlice = .{
+        .ptr = memory.INPUT_START,
+        .len = bytes2.len,
+    };
+
+    const bytes_to_hash: [2]memory.VmSlice = .{ mock_slice1, mock_slice2 };
+    var hash_result: [64]u8 = .{0} ** 64;
+
+    const compute_budget = sig.runtime.ComputeBudget.DEFAULT;
+    const total_compute = (compute_budget.sha256_base_cost + @max(
+        compute_budget.mem_op_base_cost,
+        compute_budget.sha256_byte_cost * (bytes1.len + bytes2.len) / 2,
+    )) * 4;
+
+    try sig.vm.tests.testSyscall(
+        sha512,
+        // zig fmt: off
+        &.{
+            memory.Region.init(.constant, std.mem.sliceAsBytes(&bytes_to_hash), memory.BYTECODE_START),
+            memory.Region.init(.mutable,  &hash_result,                         memory.STACK_START),
+            memory.Region.init(.constant, bytes1,                               bytes_to_hash[0].ptr),
+            memory.Region.init(.constant, bytes2,                               bytes_to_hash[1].ptr),
+        },
+        &.{
+            .{ .{ memory.BYTECODE_START,     2, memory.STACK_START,     0, 0 }, 0 },
+            .{ .{ memory.BYTECODE_START - 1, 2, memory.STACK_START,     0, 0 }, error.AccessViolation },
+            .{ .{ memory.BYTECODE_START,     3, memory.STACK_START,     0, 0 }, error.AccessViolation },
+            .{ .{ memory.BYTECODE_START,     2, memory.STACK_START - 1, 0, 0 }, error.StackAccessViolation },
+            .{ .{ memory.BYTECODE_START,     2, memory.STACK_START,     0, 0 }, error.ComputationalBudgetExceeded },
+        },
+        // zig fmt: on
+        struct {
+            fn verify(tc: *TransactionContext, memory_map: *MemoryMap, args: anytype) !void {
+                _, _, const result_addr, _, _ = args;
+
+                const result_slice = try memory_map.translateSlice(
+                    u8,
+                    .constant,
+                    result_addr,
+                    64,
+                    tc.getCheckAligned(),
+                );
+
+                var hasher = std.crypto.hash.sha2.Sha512.init(.{});
+                hasher.update(bytes1);
+                hasher.update(bytes2);
+
+                var hash_local: [64]u8 = undefined;
                 hasher.final(&hash_local);
 
                 try std.testing.expectEqualSlices(u8, &hash_local, result_slice);
