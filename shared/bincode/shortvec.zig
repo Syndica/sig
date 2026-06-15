@@ -84,7 +84,7 @@ pub fn sliceConfig(comptime Slice: type) bincode.FieldConfig(Slice) {
         }
 
         pub fn deserialize(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !Slice {
-            const len = try std.leb.readUleb128(u16, reader);
+            const len = try readShortU16(reader);
 
             const allocator = limit_allocator.allocator();
             const elems = try allocator.alloc(Child, len);
@@ -148,4 +148,126 @@ pub fn arrayListConfig(comptime Child: type) bincode.FieldConfig(std.array_list.
         .deserializer = S.deserialize,
         .free = S.free,
     };
+}
+
+// Tests mirrored from upstream agave:
+//   * `solana_short_vec::tests::test_deserialize`
+//     https://github.com/anza-xyz/solana-sdk/blob/short-vec@v3.2.2/short-vec/src/lib.rs
+//   * `solana_serde_varint::tests::*`
+//     https://github.com/anza-xyz/solana-sdk/blob/serde-varint@v3.0.1/serde-varint/src/lib.rs
+
+test "readShortU16 accepts canonical encodings" {
+    const Case = struct { value: u16, bytes: []const u8 };
+    const cases = [_]Case{
+        .{ .value = 0x0000, .bytes = &.{0x00} },
+        .{ .value = 0x007f, .bytes = &.{0x7f} },
+        .{ .value = 0x0080, .bytes = &.{ 0x80, 0x01 } },
+        .{ .value = 0x00ff, .bytes = &.{ 0xff, 0x01 } },
+        .{ .value = 0x0100, .bytes = &.{ 0x80, 0x02 } },
+        .{ .value = 0x07ff, .bytes = &.{ 0xff, 0x0f } },
+        .{ .value = 0x3fff, .bytes = &.{ 0xff, 0x7f } },
+        .{ .value = 0x4000, .bytes = &.{ 0x80, 0x80, 0x01 } },
+        .{ .value = 0xffff, .bytes = &.{ 0xff, 0xff, 0x03 } },
+    };
+    for (cases) |case| {
+        var stream = std.io.fixedBufferStream(case.bytes);
+        try std.testing.expectEqual(case.value, try readShortU16(stream.reader()));
+    }
+}
+
+test "readShortU16 rejects alias encodings" {
+    const bad: []const []const u8 = &.{
+        // aliases of 0x0000
+        &.{ 0x80, 0x00 },
+        &.{ 0x80, 0x80, 0x00 },
+        // aliases of 0x007f
+        &.{ 0xff, 0x00 },
+        &.{ 0xff, 0x80, 0x00 },
+        // alias of 0x0080
+        &.{ 0x80, 0x81, 0x00 },
+        // alias of 0x00ff
+        &.{ 0xff, 0x81, 0x00 },
+        // alias of 0x0100
+        &.{ 0x80, 0x82, 0x00 },
+        // alias of 0x07ff
+        &.{ 0xff, 0x8f, 0x00 },
+        // alias of 0x3fff
+        &.{ 0xff, 0xff, 0x00 },
+    };
+    for (bad) |bytes| {
+        var stream = std.io.fixedBufferStream(bytes);
+        try std.testing.expectError(error.ShortU16Alias, readShortU16(stream.reader()));
+    }
+}
+
+test "readShortU16 rejects values that overflow u16" {
+    var s1 = std.io.fixedBufferStream(&[_]u8{ 0x80, 0x80, 0x04 });
+    try std.testing.expectError(error.ShortU16Overflow, readShortU16(s1.reader()));
+    var s2 = std.io.fixedBufferStream(&[_]u8{ 0x80, 0x80, 0x06 });
+    try std.testing.expectError(error.ShortU16Overflow, readShortU16(s2.reader()));
+}
+
+test "readShortU16 rejects continuation bit on third byte" {
+    var stream = std.io.fixedBufferStream(&[_]u8{ 0x80, 0x80, 0x80 });
+    try std.testing.expectError(error.ShortU16ByteThreeContinues, readShortU16(stream.reader()));
+}
+
+test "readShortU16 rejects truncated buffer" {
+    var s1 = std.io.fixedBufferStream(&[_]u8{});
+    try std.testing.expectError(error.EndOfStream, readShortU16(s1.reader()));
+    var s2 = std.io.fixedBufferStream(&[_]u8{0x80});
+    try std.testing.expectError(error.EndOfStream, readShortU16(s2.reader()));
+}
+
+test "readVarInt accepts canonical encodings (u64)" {
+    const Case = struct { value: u64, bytes: []const u8 };
+    const cases = [_]Case{
+        .{ .value = 0, .bytes = &.{0x00} },
+        .{ .value = 0x7f, .bytes = &.{0x7f} },
+        .{ .value = 0x80, .bytes = &.{ 0x80, 0x01 } },
+        .{ .value = 0x3fff, .bytes = &.{ 0xff, 0x7f } },
+        .{ .value = 0x4000, .bytes = &.{ 0x80, 0x80, 0x01 } },
+        // u64::MAX (10-byte varint: nine 0xff continuation bytes then 0x01)
+        .{
+            .value = std.math.maxInt(u64),
+            .bytes = &.{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01 },
+        },
+    };
+    for (cases) |case| {
+        var stream = std.io.fixedBufferStream(case.bytes);
+        try std.testing.expectEqual(case.value, try readVarInt(u64, stream.reader()));
+    }
+}
+
+test "readVarInt rejects invalid trailing zero (multi-byte zero)" {
+    // `[0x80, 0x00]` decodes to 0 under permissive LEB128 but is a non-canonical
+    // alias of the single-byte `[0x00]`. agave's serde_varint rejects this as
+    // "Invalid Trailing Zeros".
+    var stream = std.io.fixedBufferStream(&[_]u8{ 0x80, 0x00 });
+    try std.testing.expectError(error.VarIntInvalidTrailingZeros, readVarInt(u64, stream.reader()));
+}
+
+test "readVarInt rejects trailing zero on terminal byte (u32)" {
+    // Five-byte u32 varint with terminal zero byte: agave test_serde_varint_trailing_zeros.
+    var stream = std.io.fixedBufferStream(&[_]u8{ 0x93, 0xc2, 0xa9, 0x8d, 0x00 });
+    try std.testing.expectError(error.VarIntInvalidTrailingZeros, readVarInt(u32, stream.reader()));
+}
+
+test "readVarInt rejects last-byte truncation (u32)" {
+    // agave test_serde_varint_last_byte_truncated: terminal byte's high bits do
+    // not fit in u32 after shifting by 28.
+    var stream = std.io.fixedBufferStream(&[_]u8{ 0xe4, 0xd7, 0x88, 0xf6, 0x6f });
+    try std.testing.expectError(error.VarIntLastByteTruncated, readVarInt(u32, stream.reader()));
+}
+
+test "readVarInt rejects left-shift overflow (u32)" {
+    // agave test_serde_varint_shift_overflow: five continuation bytes for a u32
+    // would require a 6th byte; we exit the loop with an overflow error.
+    var stream = std.io.fixedBufferStream(&[_]u8{ 0x84, 0xdf, 0x96, 0xfa, 0xef });
+    try std.testing.expectError(error.VarIntLeftShiftOverflows, readVarInt(u32, stream.reader()));
+}
+
+test "readVarInt rejects truncated buffer" {
+    var stream = std.io.fixedBufferStream(&[_]u8{ 0x84, 0xdf, 0x96, 0xfa });
+    try std.testing.expectError(error.EndOfStream, readVarInt(u32, stream.reader()));
 }

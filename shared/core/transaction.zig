@@ -13,6 +13,7 @@ const Signature = sig.core.Signature;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const shortVecConfig = sig.bincode.shortvec.sliceConfig;
+const readShortU16 = sig.bincode.shortvec.readShortU16;
 
 pub const Transaction = struct {
     signatures: []const Signature,
@@ -174,7 +175,7 @@ pub const Transaction = struct {
 
     pub fn deserialize(limit_allocator: *sig.bincode.LimitAllocator, reader: anytype, _: sig.bincode.Params) !Transaction {
         const allocator = limit_allocator.allocator();
-        const signatures = try allocator.alloc(Signature, try leb.readUleb128(u16, reader));
+        const signatures = try allocator.alloc(Signature, try readShortU16(reader));
         errdefer allocator.free(signatures);
 
         for (signatures) |*sgn| sgn.* = .fromBytes(try reader.readBytesNoEof(Signature.SIZE));
@@ -481,7 +482,7 @@ pub const Message = struct {
         const readonly_signed_count = try reader.readByte();
         const readonly_unsigned_count = try reader.readByte();
 
-        const account_keys = try allocator.alloc(Pubkey, try leb.readUleb128(u16, reader));
+        const account_keys = try allocator.alloc(Pubkey, try readShortU16(reader));
         errdefer allocator.free(account_keys);
 
         for (account_keys) |*id| {
@@ -490,7 +491,7 @@ pub const Message = struct {
 
         const recent_blockhash: Hash = .{ .data = try reader.readBytesNoEof(Hash.SIZE) };
 
-        const instructions = try allocator.alloc(Instruction, try leb.readUleb128(u16, reader));
+        const instructions = try allocator.alloc(Instruction, try readShortU16(reader));
         errdefer allocator.free(instructions);
 
         for (instructions, 0..) |*instr, i| {
@@ -499,7 +500,7 @@ pub const Message = struct {
         }
         errdefer for (instructions) |instr| instr.deinit(allocator);
 
-        const address_lookups_len = if (version == .legacy) 0 else try leb.readUleb128(u16, reader);
+        const address_lookups_len = if (version == .legacy) 0 else try readShortU16(reader);
         const address_lookups = try allocator.alloc(AddressLookup, address_lookups_len);
         errdefer allocator.free(address_lookups);
 

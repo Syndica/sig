@@ -58,7 +58,7 @@ pub const ClientVersion = struct {
             reader: anytype,
             _: sig.bincode.Params,
         ) !ClientId {
-            return @enumFromInt(try std.leb.readUleb128(u16, reader));
+            return @enumFromInt(try sig.bincode.shortvec.readVarInt(u16, reader));
         }
     };
 
@@ -188,9 +188,9 @@ pub const ClientVersion = struct {
         reader: anytype,
         params: sig.bincode.Params,
     ) !ClientVersion {
-        const major = try std.leb.readUleb128(u16, reader);
-        const packed_minor = try std.leb.readUleb128(u16, reader);
-        const packed_patch = try std.leb.readUleb128(u16, reader);
+        const major = try sig.bincode.shortvec.readVarInt(u16, reader);
+        const packed_minor = try sig.bincode.shortvec.readVarInt(u16, reader);
+        const packed_patch = try sig.bincode.shortvec.readVarInt(u16, reader);
         const commit = try sig.bincode.readWithLimit(limit_allocator, u32, reader, params);
         const feature_set_value = try sig.bincode.readWithLimit(
             limit_allocator,
