@@ -1362,7 +1362,7 @@
         .name = "accounts_lt_hash",
         .pubkey = "LTHasHQX6661DaDD4S6A2TFi6QBuiwXKv66fB1obfHq",
         .description = "SIMD-0215: enables lattice-based accounts hash",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "remove_accounts_delta_hash",
