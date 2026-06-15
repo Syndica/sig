@@ -313,50 +313,85 @@ fn isInitAccountV2Enabled(ic: *InstructionContext) bool {
         fs.active(.vote_account_initialize_v2, slot);
 }
 
-/// SIMD-0232 / SIMD-0464 collector-account validation. Returns the resolved
-/// collector pubkey, which is either the vote account's own pubkey (escape
-/// hatch) or a system-owned, rent-exempt, writable account.
+/// SIMD-0232 / SIMD-0464 commission-collector argument: either the
+/// vote account itself (escape-hatch) or a separately borrowed
+/// instruction account pending validation via `validateAndResolveKey`.
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L876-L905
-/// [agave] read_new_collector_account: https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_processor.rs#L83-L97
-fn resolveAndValidateNewCollector(
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L876-L912
+const NewCommissionCollector = union(enum) {
+    vote_account,
+    new_account: BorrowedAccount,
+
+    /// Release the borrowed write-lock on `.new_account`. No-op for
+    /// `.vote_account` (the vote account is held by the dispatcher).
+    pub fn release(self: *const NewCommissionCollector) void {
+        switch (self.*) {
+            .vote_account => {},
+            .new_account => |account| account.release(),
+        }
+    }
+
+    /// Validates the collector per SIMD-0232 and returns its pubkey.
+    ///
+    /// The collector must either equal the vote account's address, or
+    /// be a writable, system-program-owned, rent-exempt account.
+    ///
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L883-L912
+    pub fn validateAndResolveKey(
+        self: *const NewCommissionCollector,
+        rent: *const Rent,
+        vote_account: *const BorrowedAccount,
+    ) InstructionError!Pubkey {
+        switch (self.*) {
+            .vote_account => return vote_account.pubkey,
+            .new_account => |collector_account| {
+                // 1. Must be a system program owned account.
+                const system_program = sig.runtime.program.system;
+                if (!collector_account.account.owner.equals(&system_program.ID)) {
+                    return InstructionError.InvalidAccountOwner;
+                }
+
+                // 2. Must be rent-exempt.
+                if (!rent.isExempt(
+                    collector_account.account.lamports,
+                    collector_account.constAccountData().len,
+                )) {
+                    return InstructionError.InsufficientFunds;
+                }
+
+                // 3. Must not be a reserved account (checked via writable flag).
+                if (!collector_account.context.is_writable) {
+                    return InstructionError.InvalidArgument;
+                }
+
+                return collector_account.pubkey;
+            },
+        }
+    }
+};
+
+/// Returns `.vote_account` if the collector meta aliases the vote account,
+/// otherwise borrows the collector account.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_processor.rs#L83-L97
+fn readNewCollectorAccount(
     ic: *InstructionContext,
     vote_account: *const BorrowedAccount,
     collector_index_in_instruction: u16,
-) InstructionError!Pubkey {
+) InstructionError!NewCommissionCollector {
     const collector_meta = ic.ixn_info.getAccountMetaAtIndex(
         collector_index_in_instruction,
     ) orelse return InstructionError.MissingAccount;
 
     if (collector_meta.pubkey.equals(&vote_account.pubkey)) {
-        return vote_account.pubkey;
+        return .vote_account;
     }
 
-    var collector_account = try ic.borrowInstructionAccount(
-        collector_index_in_instruction,
-    );
-    defer collector_account.release();
-
-    // 1. Must be a system program owned account.
-    const system_program = sig.runtime.program.system;
-    if (!collector_account.account.owner.equals(&system_program.ID)) {
-        return InstructionError.InvalidAccountOwner;
-    }
-
-    // 2. Must be rent-exempt.
-    if (!ic.tc.rent.isExempt(
-        collector_account.account.lamports,
-        collector_account.constAccountData().len,
-    )) {
-        return InstructionError.InsufficientFunds;
-    }
-
-    // 3. Must not be a reserved account (checked via writable flag).
-    if (!collector_account.context.is_writable) {
-        return InstructionError.InvalidArgument;
-    }
-
-    return collector_account.pubkey;
+    return .{
+        .new_account = try ic.borrowInstructionAccount(
+            collector_index_in_instruction,
+        ),
+    };
 }
 
 /// SIMD-0387: `InitializeAccountV2`.
@@ -383,18 +418,22 @@ fn executeIntializeAccountV2(
         return InstructionError.MissingAccount;
     }
 
-    const inflation_rewards_collector_key = try resolveAndValidateNewCollector(
+    const inflation_rewards_collector = try readNewCollectorAccount(
         ic,
         vote_account,
         @intFromEnum(vote_instruction.VoteInitV2.AccountIndex.inflation_rewards_collector),
     );
-    const block_revenue_collector_key = try resolveAndValidateNewCollector(
+    defer inflation_rewards_collector.release();
+
+    const block_revenue_collector = try readNewCollectorAccount(
         ic,
         vote_account,
         @intFromEnum(vote_instruction.VoteInitV2.AccountIndex.block_revenue_collector),
     );
+    defer block_revenue_collector.release();
 
     const clock = try ic.tc.sysvar_cache.get(Clock);
+    const rent = try ic.tc.sysvar_cache.get(Rent);
 
     // check_vote_account_length: V4 only.
     if (vote_account.constAccountData().len != VoteStateV4.MAX_VOTE_STATE_SIZE) {
@@ -419,6 +458,12 @@ fn executeIntializeAccountV2(
         );
         return InstructionError.MissingRequiredSignature;
     }
+
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L1014-L1043
+    const inflation_rewards_collector_key = try inflation_rewards_collector
+        .validateAndResolveKey(&rent, vote_account);
+    const block_revenue_collector_key = try block_revenue_collector
+        .validateAndResolveKey(&rent, vote_account);
 
     // Verify the BLS pubkey proof of possession (consumes 34,500 CUs first,
     // matching agave's `consume_pop_compute_units` ordering).
@@ -815,7 +860,7 @@ fn updateValidatorIdentity(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_processor.rs#L348-L376
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_processor.rs#L383
 fn executeUpdateCommissionCollector(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -831,32 +876,38 @@ fn executeUpdateCommissionCollector(
         return InstructionError.InvalidInstructionData;
     }
 
-    // Determine if collector is the vote account itself or a new account.
-    const collector_account_index = 1;
-    const collector_pubkey = &(ic.ixn_info.getAccountMetaAtIndex(collector_account_index) orelse
-        return InstructionError.MissingAccount).pubkey;
+    if (ic.ixn_info.account_metas.items.len < 3) {
+        return InstructionError.MissingAccount;
+    }
 
-    const is_vote_account = collector_pubkey.equals(&vote_account.pubkey);
+    const new_collector = try readNewCollectorAccount(
+        ic,
+        vote_account,
+        1,
+    );
+    defer new_collector.release();
+
+    const rent = try ic.tc.sysvar_cache.get(Rent);
 
     try updateCommissionCollector(
         allocator,
         ic,
         vote_account,
         kind,
-        collector_pubkey.*,
-        is_vote_account,
+        new_collector,
+        &rent,
         target_version,
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L914-L973
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L1102-L1144
 fn updateCommissionCollector(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     kind: vote_instruction.CommissionKind,
-    new_collector_key: Pubkey,
-    is_vote_account: bool,
+    new_collector: NewCommissionCollector,
+    rent: *const Rent,
     target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     var vote_state = try getVoteStateChecked(
@@ -872,36 +923,10 @@ fn updateCommissionCollector(
         return InstructionError.MissingRequiredSignature;
     }
 
-    // Per SIMD-0232: the designated commission collector must either
-    // be equal to the vote account's address OR satisfy ALL of the
-    // following constraints.
-    if (!is_vote_account) {
-        const collector_account_index = 1;
-        var collector_account = try ic.borrowInstructionAccount(
-            collector_account_index,
-        );
-        defer collector_account.release();
-
-        // 1. Must be a system program owned account.
-        const system_program = sig.runtime.program.system;
-        if (!collector_account.account.owner.equals(&system_program.ID)) {
-            return InstructionError.InvalidAccountOwner;
-        }
-
-        // 2. Must be rent-exempt.
-        const data_len = collector_account.constAccountData().len;
-        if (!ic.tc.rent.isExempt(
-            collector_account.account.lamports,
-            data_len,
-        )) {
-            return InstructionError.InsufficientFunds;
-        }
-
-        // 3. Must not be a reserved account (checked via writable).
-        if (!collector_account.context.is_writable) {
-            return InstructionError.InvalidArgument;
-        }
-    }
+    const new_collector_key = try new_collector.validateAndResolveKey(
+        rent,
+        vote_account,
+    );
 
     switch (kind) {
         .inflation_rewards => {
