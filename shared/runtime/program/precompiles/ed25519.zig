@@ -2,14 +2,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../../../lib.zig");
 
-const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
-const FeatureSet = sig.core.FeatureSet;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const PrecompileProgramError = sig.runtime.program.precompiles.PrecompileProgramError;
-const verifyPrecompiles = sig.runtime.program.precompiles.verifyPrecompiles;
-const TransactionError = sig.core.transaction_error.TransactionError;
 const getInstructionData = sig.runtime.program.precompiles.getInstructionData;
 
 const Ed25519 = std.crypto.sign.Ed25519;
@@ -50,7 +46,7 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
     const instruction_data = ic.ixn_info.instruction_data;
     const instruction_datas = ic.tc.instruction_datas.?;
 
-    verify(instruction_data, instruction_datas, ic.tc.feature_set, ic.tc.slot) catch {
+    verify(instruction_data, instruction_datas) catch {
         return error.Custom;
     };
 }
@@ -60,8 +56,6 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
 pub fn verify(
     data: []const u8,
     all_instruction_datas: []const []const u8,
-    feature_set: *const FeatureSet,
-    slot: Slot,
 ) PrecompileProgramError!void {
     if (data.len < ED25519_DATA_START) {
         if (data.len == 2 and data[0] == 0) return;
@@ -113,7 +107,7 @@ pub fn verify(
             signature,
             pubkey,
             msg,
-            feature_set.active(.ed25519_precompile_verify_strict, slot),
+            true,
         ) catch return error.InvalidSignature;
     }
 }
@@ -178,8 +172,7 @@ fn testCase(
     @memcpy(instruction_data[0..2], std.mem.asBytes(&num_signatures));
     @memcpy(instruction_data[2..], std.mem.asBytes(&offsets));
 
-    try verify(&instruction_data, &.{&(.{0} ** 100)}, &.ALL_DISABLED, 0);
-    try verify(&instruction_data, &.{&(.{0} ** 100)}, &.ALL_ENABLED_AT_GENESIS, 0);
+    try verify(&instruction_data, &.{&(.{0} ** 100)});
 }
 
 test "execute" {
@@ -226,7 +219,7 @@ test "ed25519 invalid offsets" {
 
     try std.testing.expectEqual(
         error.InvalidInstructionDataSize,
-        verify(instruction_data.items, &.{}, &.ALL_DISABLED, 0),
+        verify(instruction_data.items, &.{}),
     );
 
     // invalid signature instruction index
@@ -364,23 +357,9 @@ test "ed25519_malleability" {
             message,
         );
         defer allocator.free(instruction.data);
-        const tx: sig.core.Transaction = .{
-            .msg = .{
-                .account_keys = &.{ID},
-                .instructions = &.{
-                    .{ .program_index = 0, .account_indexes = &.{0}, .data = instruction.data },
-                },
-                .signature_count = 1,
-                .readonly_signed_count = 1,
-                .readonly_unsigned_count = 0,
-                .recent_blockhash = sig.core.Hash.ZEROES,
-            },
-            .version = .legacy,
-            .signatures = &.{},
-        };
 
-        _ = try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_DISABLED, 0);
-        _ = try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0);
+        // Valid signature should always pass with strict verification
+        try verify(instruction.data, &.{instruction.data});
     }
 
     {
@@ -407,25 +386,11 @@ test "ed25519_malleability" {
         );
         const instruction = try newInstruction(allocator, &signature, &pubkey, message);
         defer allocator.free(instruction.data);
-        const tx: sig.core.Transaction = .{
-            .msg = .{
-                .account_keys = &.{ID},
-                .instructions = &.{
-                    .{ .program_index = 0, .account_indexes = &.{0}, .data = instruction.data },
-                },
-                .signature_count = 1,
-                .readonly_signed_count = 1,
-                .readonly_unsigned_count = 0,
-                .recent_blockhash = sig.core.Hash.ZEROES,
-            },
-            .version = .legacy,
-            .signatures = &.{},
-        };
 
-        _ = try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_DISABLED, 0);
+        // Malleable signature should always fail with strict verification
         try std.testing.expectEqual(
-            TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
-            try verifyPrecompiles(allocator, &tx, &FeatureSet.ALL_ENABLED_AT_GENESIS, 0),
+            error.InvalidSignature,
+            verify(instruction.data, &.{instruction.data}),
         );
     }
 }

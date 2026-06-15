@@ -3,9 +3,7 @@ const builtin = @import("builtin");
 const libsecp256k1 = @import("secp256k1");
 const sig = @import("../../../lib.zig");
 
-const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
-const FeatureSet = sig.core.FeatureSet;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const PrecompileProgramError = sig.runtime.program.precompiles.PrecompileProgramError;
@@ -53,7 +51,7 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
     const instruction_data = ic.ixn_info.instruction_data;
     const instruction_datas = ic.tc.instruction_datas.?;
 
-    verify(instruction_data, instruction_datas, ic.tc.feature_set, ic.tc.slot) catch {
+    verify(instruction_data, instruction_datas) catch {
         return error.Custom;
     };
 }
@@ -63,8 +61,6 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
 pub fn verify(
     data: []const u8,
     all_instruction_datas: []const []const u8,
-    _: *const FeatureSet,
-    _: Slot,
 ) PrecompileProgramError!void {
     if (data.len < SECP256K1_DATA_START) {
         if (data.len == 1 and data[0] == 0) return; // success
@@ -311,8 +307,7 @@ fn testCase(
     instruction_data[0] = num_signatures;
     @memcpy(instruction_data[1..], offsets.asBytes());
 
-    try verify(&instruction_data, &.{&(.{0} ** 100)}, &.ALL_DISABLED, 0);
-    try verify(&instruction_data, &.{&(.{0} ** 100)}, &.ALL_ENABLED_AT_GENESIS, 0);
+    try verify(&instruction_data, &.{&(.{0} ** 100)});
 }
 
 test "execute" {
@@ -358,8 +353,6 @@ test "secp256k1 invalid offsets" {
             verify(
                 instruction_data[0 .. instruction_data.len - 1],
                 &.{&(.{0} ** 100)},
-                &.ALL_DISABLED,
-                0,
             ),
         );
     }
@@ -461,8 +454,6 @@ test "secp256k1 count is zero but sig data exists" {
         verify(
             instruction_data[0 .. instruction_data.len - 1],
             &.{&(.{0} ** 100)},
-            &.ALL_DISABLED,
-            0,
         ),
     );
 }
@@ -476,7 +467,7 @@ test "secp256k1" {
     const instruction = try newSecp256k1Instruction(allocator, &keypair, "hello");
     defer allocator.free(instruction.data);
 
-    try verify(instruction.data, &.{instruction.data}, &.ALL_DISABLED, 0);
+    try verify(instruction.data, &.{instruction.data});
 
     {
         // instruction.data is const, working around that
@@ -488,7 +479,7 @@ test "secp256k1" {
         for (instruction_data) |*byte| {
             const old = byte.*;
             byte.* +%= 12;
-            if (verify(instruction_data, &.{instruction_data}, &.ALL_DISABLED, 0)) |_| {
+            if (verify(instruction_data, &.{instruction_data})) |_| {
                 try std.testing.expect(false); // should error
             } else |err| {
                 _ = err catch {};
@@ -691,6 +682,5 @@ test "secp256 malleability" {
 
     try instruction_data.appendSlice(data.items);
 
-    try verify(instruction_data.items, &.{instruction_data.items}, &.ALL_DISABLED, 0);
-    try verify(instruction_data.items, &.{instruction_data.items}, &.ALL_ENABLED_AT_GENESIS, 0);
+    try verify(instruction_data.items, &.{instruction_data.items});
 }
