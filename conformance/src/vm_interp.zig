@@ -88,6 +88,7 @@ fn executeVmTest(
         &tc.compute_budget,
         tc.slot,
         false,
+        false,
     );
     env.config.maximum_version = sbpf_version;
     env.loader.is_stubbed = true;

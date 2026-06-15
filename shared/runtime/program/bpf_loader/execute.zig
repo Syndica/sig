@@ -754,6 +754,7 @@ pub fn executeV4Deploy(
         bpf_loader_program.v4.ID,
         program_data,
         current_slot,
+        ic.tc.feature_set.active(.disable_sbpf_v0_v1_v2_deployment, ic.tc.slot),
     );
 
     try program_account.serializeIntoAccountData(V4State{
@@ -1253,6 +1254,7 @@ pub fn executeV3DeployWithMaxDataLen(
             ic.ixn_info.program_meta.pubkey,
             buffer_data[V3State.BUFFER_METADATA_SIZE..],
             clock.slot,
+            ic.tc.feature_set.active(.disable_sbpf_v0_v1_v2_deployment, ic.tc.slot),
         );
     }
 
@@ -1478,6 +1480,7 @@ pub fn executeV3Upgrade(
             ic.ixn_info.program_meta.pubkey,
             buffer.constAccountData()[buf.data_offset..],
             clock.slot,
+            ic.tc.feature_set.active(.disable_sbpf_v0_v1_v2_deployment, ic.tc.slot),
         );
     }
 
@@ -1597,6 +1600,26 @@ pub fn executeV3SetAuthority(
             ))) {
                 try ic.tc.log("Upgrade authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
+            }
+            // SIMD-0500: forbid finalize (SetAuthority None) on programs whose embedded
+            // ELF is older than SBPFv3. Short data short-circuits to OK, matching Agave's
+            // let-chain.
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/bpf_loader/src/lib.rs#L580-L591
+            if (new_authority == null and
+                ic.tc.feature_set.active(.disable_sbpf_v0_v1_v2_deployment, ic.tc.slot))
+            {
+                const account_data = account.constAccountData();
+                const e_flags_offset = V3State.PROGRAM_DATA_METADATA_SIZE + 48;
+                if (account_data.len >= e_flags_offset + @sizeOf(u32)) {
+                    const e_flags = std.mem.readInt(
+                        u32,
+                        account_data[e_flags_offset..][0..4],
+                        .little,
+                    );
+                    if (e_flags < @intFromEnum(sig.vm.sbpf.Version.v3)) {
+                        return InstructionError.InvalidAccountData;
+                    }
+                }
             }
             try account.serializeIntoAccountData(V3State{
                 .program_data = .{
@@ -2074,6 +2097,9 @@ fn commonExtendProgram(
             ic.ixn_info.program_meta.pubkey,
             data[V3State.PROGRAM_DATA_METADATA_SIZE..],
             clock_slot,
+            // SIMD-0500: explicitly continue to allow SBPFv0/v1/v2 for ExtendProgram.
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/bpf_loader/src/lib.rs#L971
+            false,
         );
     }
 
@@ -2318,6 +2344,7 @@ pub fn deployProgram(
     owner_id: Pubkey,
     data: []const u8,
     deploy_slot: u64,
+    disable_sbpf_v0_v1_v2_deployment: bool,
 ) (error{OutOfMemory} || InstructionError)!void {
     _ = deploy_slot;
     _ = owner_id;
@@ -2329,6 +2356,7 @@ pub fn deployProgram(
         tc.feature_set,
         &tc.compute_budget,
         if (tc.log_collector) |*lc| lc else null,
+        disable_sbpf_v0_v1_v2_deployment,
     );
 
     // Remove from the program map since it should not be accessible on this slot anymore.
@@ -2344,6 +2372,7 @@ pub fn verifyProgram(
     feature_set: *const sig.core.FeatureSet,
     compute_budget: *const sig.runtime.ComputeBudget,
     log_collector: ?*sig.runtime.LogCollector,
+    disable_sbpf_v0_v1_v2_deployment: bool,
 ) !void {
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
     var environment = vm.Environment.initV1(
@@ -2351,6 +2380,7 @@ pub fn verifyProgram(
         compute_budget,
         slot,
         true,
+        disable_sbpf_v0_v1_v2_deployment,
     );
 
     // Deployment of programs with sol_alloc_free is disabled.
@@ -2932,6 +2962,209 @@ test executeV3SetAuthority {
         },
         .{},
     );
+}
+
+test "executeV3SetAuthority SIMD-0500 finalize guard" {
+    const testing = sig.runtime.program.testing;
+    const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const program_account_key = Pubkey.initRandom(prng.random());
+    const present_authority_key = Pubkey.initRandom(prng.random());
+
+    // Build a ProgramData account that is large enough for the e_flags check
+    // (PROGRAM_DATA_METADATA_SIZE + Elf64_Ehdr.e_flags offset (48) + sizeof(u32)).
+    const e_flags_offset = V3State.PROGRAM_DATA_METADATA_SIZE + 48;
+    const account_size = e_flags_offset + @sizeOf(u32);
+
+    // Helper: create a finalize (SetAuthority None) instruction-account list +
+    // initial+final account data buffers with the given e_flags written into them.
+    const Case = struct {
+        e_flags: u32,
+        feature_active: bool,
+        expect_error: ?InstructionError,
+    };
+
+    const cases: []const Case = &.{
+        // SBPFv0 with feature active → finalize forbidden.
+        .{
+            .e_flags = 0,
+            .feature_active = true,
+            .expect_error = InstructionError.InvalidAccountData,
+        },
+        // SBPFv2 with feature active → finalize forbidden.
+        .{
+            .e_flags = 2,
+            .feature_active = true,
+            .expect_error = InstructionError.InvalidAccountData,
+        },
+        // SBPFv3 with feature active → finalize permitted.
+        .{ .e_flags = 3, .feature_active = true, .expect_error = null },
+        // SBPFv0 with feature inactive → finalize permitted (legacy behaviour).
+        .{ .e_flags = 0, .feature_active = false, .expect_error = null },
+    };
+
+    for (cases) |c| {
+        const initial_data = try allocator.alloc(u8, account_size);
+        defer allocator.free(initial_data);
+        @memset(initial_data, 0);
+        _ = try bincode.writeToSlice(initial_data, V3State{
+            .program_data = .{
+                .slot = 0,
+                .upgrade_authority_address = present_authority_key,
+            },
+        }, .{});
+        std.mem.writeInt(u32, initial_data[e_flags_offset..][0..4], c.e_flags, .little);
+
+        const final_data = try allocator.dupe(u8, initial_data);
+        defer allocator.free(final_data);
+        _ = try bincode.writeToSlice(final_data, V3State{
+            .program_data = .{
+                .slot = 0,
+                .upgrade_authority_address = null,
+            },
+        }, .{});
+
+        const feature_params: []const ExecuteContextsParams.FeatureParams =
+            if (c.feature_active)
+                &.{.{ .feature = .disable_sbpf_v0_v1_v2_deployment, .slot = 0 }}
+            else
+                &.{};
+
+        const initial_context = ExecuteContextsParams{
+            .feature_set = feature_params,
+            .accounts = &.{
+                .{
+                    .pubkey = program_account_key,
+                    .data = initial_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{ .pubkey = present_authority_key },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+        };
+        const expected_context = ExecuteContextsParams{
+            .feature_set = feature_params,
+            .accounts = &.{
+                .{
+                    .pubkey = program_account_key,
+                    .data = final_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{ .pubkey = present_authority_key },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+        };
+
+        if (c.expect_error) |err| {
+            try testing.expectProgramExecuteError(
+                err,
+                allocator,
+                bpf_loader_program.v3.ID,
+                bpf_loader_program.v3.Instruction.set_authority,
+                &.{
+                    .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                    .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+                },
+                initial_context,
+                .{},
+            );
+        } else {
+            try testing.expectProgramExecuteResult(
+                allocator,
+                bpf_loader_program.v3.ID,
+                bpf_loader_program.v3.Instruction.set_authority,
+                &.{
+                    .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                    .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+                },
+                initial_context,
+                expected_context,
+                .{},
+            );
+        }
+    }
+
+    // Short-data short-circuit: the account is shorter than the e_flags offset, so
+    // even with the feature active and an SBPFv0-shaped flag we still allow the
+    // finalize. Mirrors Agave's let-chain that yields `Some(true)` only when
+    // both slice and parse succeed.
+    {
+        const short_size = V3State.PROGRAM_DATA_METADATA_SIZE; // no ELF bytes at all
+        const initial_data = try allocator.alloc(u8, short_size);
+        defer allocator.free(initial_data);
+        @memset(initial_data, 0);
+        _ = try bincode.writeToSlice(initial_data, V3State{
+            .program_data = .{
+                .slot = 0,
+                .upgrade_authority_address = present_authority_key,
+            },
+        }, .{});
+
+        const final_data = try allocator.dupe(u8, initial_data);
+        defer allocator.free(final_data);
+        _ = try bincode.writeToSlice(final_data, V3State{
+            .program_data = .{
+                .slot = 0,
+                .upgrade_authority_address = null,
+            },
+        }, .{});
+
+        try testing.expectProgramExecuteResult(
+            allocator,
+            bpf_loader_program.v3.ID,
+            bpf_loader_program.v3.Instruction.set_authority,
+            &.{
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            },
+            .{
+                .feature_set = &.{
+                    .{ .feature = .disable_sbpf_v0_v1_v2_deployment, .slot = 0 },
+                },
+                .accounts = &.{
+                    .{
+                        .pubkey = program_account_key,
+                        .data = initial_data,
+                        .owner = bpf_loader_program.v3.ID,
+                    },
+                    .{ .pubkey = present_authority_key },
+                    .{
+                        .pubkey = bpf_loader_program.v3.ID,
+                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    },
+                },
+                .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+            },
+            .{
+                .feature_set = &.{
+                    .{ .feature = .disable_sbpf_v0_v1_v2_deployment, .slot = 0 },
+                },
+                .accounts = &.{
+                    .{
+                        .pubkey = program_account_key,
+                        .data = final_data,
+                        .owner = bpf_loader_program.v3.ID,
+                    },
+                    .{ .pubkey = present_authority_key },
+                    .{
+                        .pubkey = bpf_loader_program.v3.ID,
+                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    },
+                },
+            },
+            .{},
+        );
+    }
 }
 
 test executeV3SetAuthorityChecked {
