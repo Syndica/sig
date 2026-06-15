@@ -83,6 +83,13 @@ pub const ExtraFields = struct {
     epoch_accounts_hash: ?Hash,
     versioned_epoch_stakes: std.AutoArrayHashMapUnmanaged(Epoch, VersionedEpochStakes),
     accounts_lt_hash: sig.core.hash.LtHash,
+    /// Added to Agave's snapshot extra fields in
+    /// https://github.com/anza-xyz/agave/pull/11355 (commit d5e3f34, 2026-03-21).
+    /// Snapshots produced after that change include 33 trailing bytes here
+    /// (option tag + 32-byte hash); reading the manifest without consuming
+    /// them would leave the tar stream misaligned and silently truncate
+    /// account-file processing.
+    block_id: ?Hash,
 
     pub const @"!bincode-config": bincode.FieldConfig(ExtraFields) = .{
         .deserializer = bincodeRead,
@@ -96,6 +103,7 @@ pub const ExtraFields = struct {
         .epoch_accounts_hash = null,
         .versioned_epoch_stakes = .{},
         .accounts_lt_hash = .IDENTITY,
+        .block_id = null,
     };
 
     pub fn deinit(self: *const ExtraFields, allocator: std.mem.Allocator) void {
@@ -115,6 +123,7 @@ pub const ExtraFields = struct {
             .versioned_epoch_stakes = try sig.utils.collections
                 .cloneMapAndValues(allocator, self.versioned_epoch_stakes),
             .accounts_lt_hash = self.accounts_lt_hash,
+            .block_id = self.block_id,
         };
     }
 
@@ -165,6 +174,9 @@ pub const ExtraFields = struct {
                     random.bytes(std.mem.asBytes(&hash));
                     break :hash hash;
                 },
+
+                .block_id,
+                => field_ptr.* = Hash.initRandom(random),
             }
         }
 
@@ -195,6 +207,9 @@ pub const ExtraFields = struct {
 
                     .snapshot_persistence,
                     .epoch_accounts_hash,
+                    => bincode.read(assert_allocator, field.type, reader, params),
+
+                    .block_id,
                     => bincode.read(assert_allocator, field.type, reader, params),
 
                     // We need to deserialise this as optional, but really we should always have it
