@@ -125,7 +125,9 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                 std.log.warn("packet failed with {}", .{err});
                 continue;
             };
-            _ = result;
+
+            logger.fatal().logf("shred processed res: {}", .{result});
+            // _ = result;
         }
     }
 }

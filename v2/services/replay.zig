@@ -202,6 +202,8 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             zone.value(deshredded_fec_set.id.slot);
             zone.value(deshredded_fec_set.id.fec_set_idx);
 
+            logger.fatal().logf("GOT A FECSET", .{});
+
             const inserted = (try insertFecSet(
                 logger,
                 deshredded_fec_set,

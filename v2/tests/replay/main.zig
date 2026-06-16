@@ -3,7 +3,7 @@ const lib = @import("lib");
 const tel = lib.telemetry;
 
 const FEC_SHRED_COUNT = 32;
-const FIXTURE_PATH = lib.test_data_dir ++ "shreds/agave.blockstore.bench_write_small.shreds.bin";
+const FIXTURE_PATH = "tests/replay/shreds/410010000-fecset0.bin";
 
 pub fn main() !void {
     var dba_state: std.heap.DebugAllocator(.{}) = .init;
@@ -29,7 +29,7 @@ pub fn main() !void {
         .exec_req_response = {},
         .telemetry = .{
             .port = 12346,
-            .log_filters_encoded = lib.telemetry.log.Filter.parseListStrLitIntoBinary(.fatal, "").?,
+            .log_filters_encoded = lib.telemetry.log.Filter.parseListStrLitIntoBinary(.fatal, "replay=info").?,
             .service_count = @intCast(topology.countTotalBindingShares(.telemetry) - 1),
 
             .id_mem_len = 4096 * 16,
