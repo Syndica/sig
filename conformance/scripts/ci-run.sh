@@ -10,12 +10,26 @@ cd $conformance_dir
 echo Selecting a subset of fixtures to run
 rm -rf env/split-fixtures/
 mkdir -p env/split-fixtures/
-# Finds all .fix files in test-vectors, excludes known failures, splits across
-# CI nodes, and links the selected subset into split-fixtures
+# Build `find` prune args from scripts/excluded.txt (directory-level denylist).
+# scripts/list_excluded.py is the single resolver shared with run.py, so both
+# consumers handle comments/whitespace/trailing slashes identically.
+prune_args=()
+while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    if [ "${#prune_args[@]}" -gt 0 ]; then
+        prune_args+=(-o)
+    fi
+    prune_args+=(-path "env/test-vectors/$line")
+done < <(python3 scripts/list_excluded.py)
+if [ "${#prune_args[@]}" -gt 0 ]; then
+    prune_args=(\( "${prune_args[@]}" \) -prune -o)
+fi
+# Finds all .fix files in test-vectors, excludes pruned directories and known
+# failing files, then links the selected subset into split-fixtures.
 comm -23 \
     <(find "env/test-vectors/" \
-        -path 'env/test-vectors/block/*' -prune \
-        -o -type f -name '*.fix' -printf '%P\n' | sort) \
+        "${prune_args[@]}" \
+        -type f -name '*.fix' -printf '%P\n' | sort) \
     <(sort scripts/failing.txt) \
     | sed "s_^_$PWD/env/test-vectors/_" \
     | xargs -d '\n' ln -s -t env/split-fixtures/
