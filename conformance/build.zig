@@ -24,18 +24,8 @@ pub fn build(b: *Build) void {
             "target lacks AVX-512.",
     ) orelse (optimize == .Debug);
 
-    // Logs are on by default; pass `-Ddisable-feature-status-logs` to silence
-    // them during noisy full fixture runs.
-    const log_feature_status = !(b.option(
-        bool,
-        "disable-feature-status-logs",
-        "Suppress the debug log lines emitted for fixture features that are unknown, " ++
-            "reverted, or unsupported in Sig.",
-    ) orelse false);
-
     const build_options = b.addOptions();
     build_options.addOption(bool, "include_sig", include_sig);
-    build_options.addOption(bool, "log_feature_status", log_feature_status);
 
     const install_step = b.getInstallStep();
     const solfuzz_sig_step = b.step("solfuzz_sig", "The solfuzz sig library.");

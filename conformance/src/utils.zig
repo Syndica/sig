@@ -1,5 +1,4 @@
 const std = @import("std");
-const build_options = @import("build-options");
 const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
 const sig = @import("sig");
 
@@ -177,6 +176,8 @@ pub fn deinitTransactionContext(
 ///
 /// Iterate over the feature IDs in the protobuf message and set the corresponding features in the `FeatureSet`.
 /// Unknown, unsupported, or reverted debug logs indicate Sig is not compatible with the fixtures active features.
+/// Set the `SIG_ENABLE_FEATURE_STATUS_LOGS` environment variable to emit those debug logs; they are
+/// silenced by default to keep noisy full fixture runs readable.
 pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
     const pb_features = switch (@TypeOf(ctx)) {
         *pb.TxnContext, *const pb.TxnContext => (ctx.bank orelse return .ALL_DISABLED).features,
@@ -185,12 +186,14 @@ pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
         else => comptime unreachable,
     } orelse return .ALL_DISABLED;
 
+    const log_feature_status = std.posix.getenv("SIG_ENABLE_FEATURE_STATUS_LOGS") != null;
+
     var feature_set: FeatureSet = .ALL_DISABLED;
     for (pb_features.features.items) |id| {
         // Convert the feature ID from the protobuf message to the corresponding `Feature` enum value.
         // Log features which do not correspond to a `Feature` variant and are otherwise unknown (i.e. not present in `src/core/features.zon`).
         const feature = feature_set.getById(id) catch {
-            if (build_options.log_feature_status and
+            if (log_feature_status and
                 !sig.core.features.isKnownFeatureId(id)) std.debug.print(
                 "feature 0x{x} is unknown\n",
                 .{id},
@@ -199,7 +202,7 @@ pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
         };
 
         // Log features which appear in a fixture but are marked as reverted or unsupported in Sig.
-        if (build_options.log_feature_status) switch (sig.core.features.status_map.get(feature)) {
+        if (log_feature_status) switch (sig.core.features.status_map.get(feature)) {
             .reverted => std.debug.print("feature {} (0x{x}) is reverted\n", .{ feature, id }),
             .unsupported => std.debug.print("feature {} (0x{x}) is unsupported\n", .{ feature, id }),
             .supported, .hardcoded_for_fuzzing, .hardcoded => {},
