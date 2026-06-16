@@ -433,7 +433,10 @@ pub const Filter = struct {
         default_log_level: Level,
         str: []const u8,
     ) ParseError!u64 {
-        const buffer_len = if (@inComptime()) str.len else 4096;
+        const buffer_len = if (@inComptime())
+            str.len + (std.mem.count(u8, str, ",") + 2) * @sizeOf(Filter.Header)
+        else
+            4096;
         var buffer: [buffer_len]u8 = undefined;
         var discarding: std.Io.Writer.Discarding = .init(&buffer);
         parseListAndWriteBinary(
@@ -444,7 +447,7 @@ pub const Filter = struct {
             error.WriteFailed => unreachable,
             error.InvalidLogLevel => |e| return e,
         };
-        return discarding.count;
+        return discarding.fullCount();
     }
 
     /// Like `parseListAndWriteBinary`, but runs at comptime and directly returns the encoded bytes.
