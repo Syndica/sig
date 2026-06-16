@@ -178,6 +178,14 @@ pub fn execute(
             kind,
             target_version,
         ),
+        .update_commission_bps => |args| return try executeUpdateCommissionBps(
+            allocator,
+            ic,
+            &vote_account,
+            args,
+            target_version,
+        ),
+        ._reserved_deposit_delegator_rewards => return InstructionError.InvalidInstructionData,
     };
 }
 
@@ -674,6 +682,87 @@ fn updateCommissionCollector(
                 collector.* = new_collector_key;
             }
         },
+    }
+
+    try setVoteState(
+        allocator,
+        vote_account,
+        &vote_state,
+        &ic.tc.rent,
+        &ic.tc.accounts_resize_delta,
+    );
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_processor.rs#L361-L379
+///
+/// SIMD-0291: Commission Rate in Basis Points. Requires SIMD-0185 (Vote State V4)
+/// and SIMD-0249 (Delay Commission Updates).
+fn executeUpdateCommissionBps(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    args: vote_instruction.UpdateCommissionBps,
+    target_version: VoteVersion,
+) (error{OutOfMemory} || InstructionError)!void {
+    const commission_rate_in_basis_points =
+        ic.tc.feature_set.active(.commission_rate_in_basis_points, ic.tc.slot);
+    const delay_commission_updates =
+        ic.tc.feature_set.active(.delay_commission_updates, ic.tc.slot);
+    if (!commission_rate_in_basis_points or
+        !delay_commission_updates or
+        target_version != .v4)
+    {
+        return InstructionError.InvalidInstructionData;
+    }
+
+    try updateCommissionBps(
+        allocator,
+        ic,
+        vote_account,
+        args.commission_bps,
+        args.kind,
+        target_version,
+    );
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L829-L862
+///
+/// Update the vote account's commission in basis points (SIMD-0291, SIMD-0123).
+fn updateCommissionBps(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    commission_bps: u16,
+    kind: vote_instruction.CommissionKind,
+    target_version: VoteVersion,
+) (error{OutOfMemory} || InstructionError)!void {
+    // Per SIMD-0291: BlockRevenue returns InvalidInstructionData unless
+    // SIMD-0123 (block_revenue_sharing) is enabled.
+    // TODO: replace with `ic.tc.feature_set.active(.block_revenue_sharing, ic.tc.slot)`
+    // when SIMD-0123 lands in sig.
+    const block_revenue_sharing_enabled = false;
+    if (kind == .block_revenue and !block_revenue_sharing_enabled) {
+        return InstructionError.InvalidInstructionData;
+    }
+
+    var vote_state = try getVoteStateChecked(
+        allocator,
+        vote_account,
+        target_version,
+        true,
+    );
+    defer vote_state.deinit(allocator);
+
+    // No commission update rule, per SIMD-0249 and SIMD-0291.
+
+    // Require authorized withdrawer to sign.
+    if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawerKey().*)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    switch (kind) {
+        .inflation_rewards => vote_state.setInflationRewardsCommissionBps(commission_bps),
+        .block_revenue => vote_state.setBlockRevenueCommissionBps(commission_bps),
     }
 
     try setVoteState(
@@ -7069,6 +7158,515 @@ test "vote_program: authorize uninitialized v3-tagged returns UninitializedAccou
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
                 .{ .feature = .vote_state_v4, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+// ── SIMD-0291: UpdateCommissionBps tests ────────────────────────────
+
+// Happy path: V4 + both feature gates active, withdrawer signs, kind =
+// inflation_rewards. inflation_rewards_commission_bps must be updated.
+test "update_commission_bps inflation_rewards" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const vote_acct = Pubkey.initRandom(prng.random());
+
+    const initial_bps: u16 = 1000;
+    const final_bps: u16 = 2500;
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer initial_v4.deinit(allocator);
+    initial_v4.inflation_rewards_commission_bps = initial_bps;
+
+    var final_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer final_v4.deinit(allocator);
+    final_v4.inflation_rewards_commission_bps = final_bps;
+
+    const init_ver = VoteStateVersions{ .v4 = initial_v4 };
+    const final_ver = VoteStateVersions{ .v4 = final_v4 };
+
+    var init_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(init_bytes[0..], init_ver, .{});
+
+    var final_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(final_bytes[0..], final_ver, .{});
+
+    try testing.expectProgramExecuteResult(
+        allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .update_commission_bps = .{
+                .commission_bps = final_bps,
+                .kind = .inflation_rewards,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{ .pubkey = withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .delay_commission_updates, .slot = 0 },
+                .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = final_bytes[0..],
+                },
+                .{ .pubkey = withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+}
+
+// kind = block_revenue currently fails with InvalidInstructionData because
+// SIMD-0123 (block_revenue_sharing) is hard-coded off in updateCommissionBps.
+// When that feature lands and is wired up, this test must be updated.
+test "update_commission_bps block_revenue rejected without block_revenue_sharing" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const vote_acct = Pubkey.initRandom(prng.random());
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer initial_v4.deinit(allocator);
+
+    const init_ver = VoteStateVersions{ .v4 = initial_v4 };
+    var init_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(init_bytes[0..], init_ver, .{});
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidInstructionData,
+        allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .update_commission_bps = .{
+                .commission_bps = 5000,
+                .kind = .block_revenue,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{ .pubkey = withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .delay_commission_updates, .slot = 0 },
+                .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+// commission_rate_in_basis_points feature gate inactive => InvalidInstructionData.
+test "update_commission_bps feature commission_rate_in_basis_points disabled" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const vote_acct = Pubkey.initRandom(prng.random());
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer initial_v4.deinit(allocator);
+
+    const init_ver = VoteStateVersions{ .v4 = initial_v4 };
+    var init_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(init_bytes[0..], init_ver, .{});
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidInstructionData,
+        allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .update_commission_bps = .{
+                .commission_bps = 2500,
+                .kind = .inflation_rewards,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{ .pubkey = withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            // commission_rate_in_basis_points NOT active
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .delay_commission_updates, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+// delay_commission_updates feature gate inactive => InvalidInstructionData.
+test "update_commission_bps feature delay_commission_updates disabled" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const vote_acct = Pubkey.initRandom(prng.random());
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer initial_v4.deinit(allocator);
+
+    const init_ver = VoteStateVersions{ .v4 = initial_v4 };
+    var init_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(init_bytes[0..], init_ver, .{});
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidInstructionData,
+        allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .update_commission_bps = .{
+                .commission_bps = 2500,
+                .kind = .inflation_rewards,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{ .pubkey = withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            // delay_commission_updates NOT active
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+// vote_state_v4 inactive => target_version is V3 => InvalidInstructionData.
+test "update_commission_bps v3 target rejected" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const vote_acct = Pubkey.initRandom(prng.random());
+
+    var initial_v3 = VoteStateVersions{ .v3 = try VoteStateV3.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+    ) };
+    defer initial_v3.deinit(allocator);
+
+    var init_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(init_bytes[0..], initial_v3, .{});
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidInstructionData,
+        allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .update_commission_bps = .{
+                .commission_bps = 2500,
+                .kind = .inflation_rewards,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{ .pubkey = withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            // vote_state_v4 NOT active => V3 target
+            .feature_set = &.{
+                .{ .feature = .delay_commission_updates, .slot = 0 },
+                .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+// Withdrawer not a signer => MissingRequiredSignature.
+test "update_commission_bps withdrawer not signer" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const vote_acct = Pubkey.initRandom(prng.random());
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer initial_v4.deinit(allocator);
+
+    const init_ver = VoteStateVersions{ .v4 = initial_v4 };
+    var init_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(init_bytes[0..], init_ver, .{});
+
+    try testing.expectProgramExecuteError(
+        InstructionError.MissingRequiredSignature,
+        allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .update_commission_bps = .{
+                .commission_bps = 2500,
+                .kind = .inflation_rewards,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            // withdrawer NOT signing
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{ .pubkey = withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .delay_commission_updates, .slot = 0 },
+                .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+// _reserved_deposit_delegator_rewards (discriminant 19, SIMD-0123 placeholder)
+// must always fail with InvalidInstructionData since SIMD-0123 is not yet
+// implemented in sig. Update this test when DepositDelegatorRewards lands.
+test "update_commission_bps reserved deposit_delegator_rewards rejected" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const vote_acct = Pubkey.initRandom(prng.random());
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        withdrawer,
+        10,
+        clock.epoch,
+        vote_acct,
+    );
+    defer initial_v4.deinit(allocator);
+
+    const init_ver = VoteStateVersions{ .v4 = initial_v4 };
+    var init_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(init_bytes[0..], init_ver, .{});
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidInstructionData,
+        allocator,
+        vote_program.ID,
+        VoteProgramInstruction{ ._reserved_deposit_delegator_rewards = {} },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_acct,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = init_bytes[0..],
+                },
+                .{ .pubkey = withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .delay_commission_updates, .slot = 0 },
+                .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
             },
         },
         .{},

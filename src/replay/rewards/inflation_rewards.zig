@@ -43,7 +43,7 @@ pub fn redeemRewards(
     point_value: *const PointValue,
     stake_history: *const StakeHistory,
     new_rate_activation_epoch: ?Epoch,
-    commission_override: ?u8,
+    voter_commission_bps: u16,
 ) !RedeemRewardResult {
     const calculated_stake_rewards = try calculateStakeRewards(
         epoch,
@@ -52,7 +52,7 @@ pub fn redeemRewards(
         vote_state,
         stake_history,
         new_rate_activation_epoch,
-        commission_override,
+        voter_commission_bps,
     ) orelse return error.NoCreditsToRedeem;
 
     stake.credits_observed = calculated_stake_rewards.new_credits_observed;
@@ -71,7 +71,7 @@ pub fn calculateStakeRewards(
     vote_state: *const VoteState,
     stake_history: *const StakeHistory,
     new_rate_activation_epoch: ?Epoch,
-    commission_override: ?u8,
+    voter_commission_bps: u16,
 ) !?CalculatedStakeRewards {
     const calculated_stake_points = calculateStakePointsAndCredits(
         stake,
@@ -105,8 +105,7 @@ pub fn calculateStakeRewards(
         return null;
     }
 
-    const comm = commission_override orelse vote_state.commission();
-    const commission_split = commissionSplit(comm, rewards);
+    const commission_split = commissionSplit(voter_commission_bps, rewards);
 
     if (commission_split.leakedLamports()) {
         return null;
@@ -130,13 +129,19 @@ pub const CommissionSplit = struct {
     }
 };
 
-pub fn commissionSplit(commission: u8, rewards: u64) CommissionSplit {
-    return switch (@min(commission, 100)) {
+/// Split rewards between voter and stakers using basis points (0-10_000).
+/// Matches Agave's `commission_split` after SIMD-0291: voter and staker portions
+/// are computed independently in u128 to avoid overflow and any residual
+/// fractional lamport is intentionally discarded.
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/inflation_rewards/mod.rs#L243
+pub fn commissionSplit(commission_bps: u16, rewards: u64) CommissionSplit {
+    const MAX_BPS: u16 = 10_000;
+    return switch (@min(commission_bps, MAX_BPS)) {
         0 => .{ .voter_rewards = 0, .staker_rewards = rewards, .is_split = false },
-        100 => .{ .voter_rewards = rewards, .staker_rewards = 0, .is_split = false },
+        MAX_BPS => .{ .voter_rewards = rewards, .staker_rewards = 0, .is_split = false },
         else => |split| .{
-            .voter_rewards = rewards * split / 100,
-            .staker_rewards = rewards * (100 - split) / 100,
+            .voter_rewards = @intCast(@as(u128, rewards) * split / MAX_BPS),
+            .staker_rewards = @intCast(@as(u128, rewards) * (MAX_BPS - split) / MAX_BPS),
             .is_split = true,
         },
     };
@@ -330,7 +335,7 @@ test redeemRewards {
             &.{ .rewards = 1_000_000_000, .points = 1 },
             &StakeHistory.INIT,
             null,
-            null,
+            vote_state.inflationRewardsCommissionBps().?,
         );
         try std.testing.expectError(error.NoCreditsToRedeem, rewards);
     }
@@ -346,7 +351,7 @@ test redeemRewards {
             &.{ .rewards = 1, .points = 1 },
             &StakeHistory.INIT,
             null,
-            null,
+            vote_state.inflationRewardsCommissionBps().?,
         );
         try std.testing.expectEqual(
             RedeemRewardResult{ .stakers_reward = 2, .voters_reward = 0 },
@@ -380,7 +385,7 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
-            null,
+            vote_state.inflationRewardsCommissionBps().?,
         ),
     );
 
@@ -400,7 +405,7 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
-            null,
+            vote_state.inflationRewardsCommissionBps().?,
         ),
     );
 
@@ -419,7 +424,7 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
-            null,
+            vote_state.inflationRewardsCommissionBps().?,
         ),
     );
 
@@ -439,7 +444,7 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
-            null,
+            vote_state.inflationRewardsCommissionBps().?,
         ),
     );
 
@@ -458,7 +463,7 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
-            null,
+            vote_state.inflationRewardsCommissionBps().?,
         ),
     );
 
@@ -477,7 +482,7 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
-            null,
+            vote_state.inflationRewardsCommissionBps().?,
         ),
     );
 
@@ -492,7 +497,7 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
-            null,
+            vote_state.inflationRewardsCommissionBps().?,
         ),
     );
 
@@ -509,7 +514,7 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
-            null,
+            vote_state.inflationRewardsCommissionBps().?,
         ),
     );
 
@@ -528,7 +533,7 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
-            null,
+            vote_state.inflationRewardsCommissionBps().?,
         ),
     );
 
@@ -595,7 +600,7 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
-            null,
+            vote_state.inflationRewardsCommissionBps().?,
         ),
     );
 
@@ -615,39 +620,46 @@ test calculateStakeRewards {
             &vote_state,
             &StakeHistory.INIT,
             null,
-            null,
+            vote_state.inflationRewardsCommissionBps().?,
         ),
     );
 }
 
 test commissionSplit {
+    // 0 bps: all to staker, no split.
     try std.testing.expectEqual(
         CommissionSplit{ .staker_rewards = 1, .voter_rewards = 0, .is_split = false },
         commissionSplit(0, 1),
     );
+    // MAX_BPS (10_000): all to voter, no split.
     try std.testing.expectEqual(
         CommissionSplit{ .staker_rewards = 0, .voter_rewards = 1, .is_split = false },
-        commissionSplit(std.math.maxInt(u8), 1),
+        commissionSplit(10_000, 1),
     );
+    // Above MAX_BPS clamps to MAX_BPS.
     try std.testing.expectEqual(
-        CommissionSplit{ .staker_rewards = 0, .voter_rewards = 9, .is_split = true },
-        commissionSplit(99, 10),
+        CommissionSplit{ .staker_rewards = 0, .voter_rewards = 1, .is_split = false },
+        commissionSplit(std.math.maxInt(u16), 1),
     );
-    try std.testing.expectEqual(
-        CommissionSplit{ .staker_rewards = 9, .voter_rewards = 0, .is_split = true },
-        commissionSplit(1, 10),
-    );
+    // 50% (5000 bps) on 10 lamports: even split.
     try std.testing.expectEqual(
         CommissionSplit{ .staker_rewards = 5, .voter_rewards = 5, .is_split = true },
-        commissionSplit(50, 10),
+        commissionSplit(5_000, 10),
     );
+    // Fractional bps: 12.34% = 1234 bps on 1000 -> voter=123, staker=876.
+    try std.testing.expectEqual(
+        CommissionSplit{ .staker_rewards = 876, .voter_rewards = 123, .is_split = true },
+        commissionSplit(1_234, 1_000),
+    );
+    // 33.33% = 3333 bps on 10000 -> voter=3333, staker=6667.
+    try std.testing.expectEqual(
+        CommissionSplit{ .staker_rewards = 6_667, .voter_rewards = 3_333, .is_split = true },
+        commissionSplit(3_333, 10_000),
+    );
+    // Both sides truncate to zero -> leaked split.
     try std.testing.expectEqual(
         CommissionSplit{ .staker_rewards = 0, .voter_rewards = 0, .is_split = true },
-        commissionSplit(50, 1),
-    );
-    try std.testing.expectEqual(
-        CommissionSplit{ .staker_rewards = 1, .voter_rewards = 1, .is_split = true },
-        commissionSplit(51, 3),
+        commissionSplit(5_000, 1),
     );
 }
 
