@@ -277,11 +277,11 @@ pub fn deserializeCompactVoteStateUpdate(
     root = if (root == std.math.maxInt(Slot)) null else root;
 
     var slot = root orelse 0;
-    const lockouts_len = try std.leb.readUleb128(u16, reader);
+    const lockouts_len = try sig.bincode.shortvec.readShortU16(reader);
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
     for (lockouts) |*lockout| {
-        const offset = try std.leb.readUleb128(u64, reader);
+        const offset = try sig.bincode.shortvec.readVarInt(u64, reader);
         const confirmation_count = try reader.readInt(u8, .little);
         slot = try std.math.add(Slot, slot, offset);
         lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
@@ -388,11 +388,11 @@ pub fn deserializeTowerSync(
     root = if (root == std.math.maxInt(Slot)) null else root;
 
     var slot = root orelse 0;
-    const lockouts_len = try std.leb.readUleb128(u16, reader);
+    const lockouts_len = try sig.bincode.shortvec.readShortU16(reader);
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
     for (lockouts) |*lockout| {
-        const offset = try std.leb.readUleb128(u64, reader);
+        const offset = try sig.bincode.shortvec.readVarInt(u64, reader);
         const confirmation_count = try reader.readInt(u8, .little);
         slot = try std.math.add(Slot, slot, offset);
         lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
