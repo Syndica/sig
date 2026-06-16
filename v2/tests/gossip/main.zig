@@ -1,6 +1,15 @@
 const std = @import("std");
 const lib = @import("lib");
+const services = @import("services");
 const tel = lib.telemetry;
+const topology = lib.topology;
+
+const Region = topology.Region;
+
+const Topology = struct {
+    gossip: topology.ServiceRegions(services.gossip),
+    telemetry: topology.ServiceRegions(services.telemetry),
+};
 
 pub fn main() !void {
     var dba_state: std.heap.DebugAllocator(.{}) = .init;
@@ -19,35 +28,40 @@ pub fn main() !void {
         .entry_addrs = @splat(undefined),
     };
 
-    const service_map = try topology.serviceMap(.{
-        // gossip constants
-        .gossip_config = .{
-            .cluster_info = gossip_cluster_info,
-            // TODO: read this from identity file in signer service
-            .keypair = self_kp,
-            .turbine_recv_port = 8002,
-            .advertise_tvu_port = false,
-        },
-        // gossip -(source)-> snapshot
-        .gossip_source_to_snapshot = {},
-        // net -> gossip
-        .net_to_gossip = .{ .port = gossip_port },
-        .telemetry = .{
-            .port = 12345,
-            .log_filters_encoded = lib.telemetry.log.Filter.parseListStrLitIntoBinary(.fatal, "").?,
-            .service_count = @intCast(
-                topology.countTotalBindingShares(.telemetry) - 1,
-            ),
+    // -- Create regions -- //
 
-            .id_mem_len = 4096 * 16,
-            .gauges_len = 4096 * 2,
+    const gossip_params: lib.gossip.Config.InitParams = .{
+        .cluster_info = gossip_cluster_info,
+        // TODO: read this from identity file in signer service
+        .keypair = self_kp,
+        .turbine_recv_port = 8002,
+        .advertise_tvu_port = false,
+    };
+    var gossip_config: Region(lib.gossip.Config) = try .sized(gossip_params.size());
+    gossip_params.init(gossip_config.ptr());
 
-            .histogram_data_len = 4096 * 3,
-        },
-    });
+    var gossip_source_to_snapshot: Region(lib.snapshot.SnapshotSourceRing) = try .simple();
+    gossip_source_to_snapshot.ptr().init();
 
-    const net_to_gossip_memfd = service_map.entries.get(.gossip).?.bindings.get(.net_to_gossip).?;
-    const net_pair = try net_to_gossip_memfd.memfd.mmapStaticSize(.rw, lib.net.Pair, .{});
+    const net_to_gossip_params: lib.net.Pair.InitParams = .{ .port = gossip_port };
+    var net_to_gossip: Region(lib.net.Pair) = try .sized(net_to_gossip_params.size());
+    net_to_gossip_params.init(net_to_gossip.ptr());
+
+    // We're spawning gossip + telemetry, so 1 service shares the telemetry region (gossip).
+    const telemetry_params: tel.Region.InitParams = .{
+        .port = 12345,
+        .log_filters_encoded = lib.telemetry.log.Filter.parseListStrLitIntoBinary(.fatal, "").?,
+        .service_count = 1,
+        .id_mem_len = 4096 * 16,
+        .gauges_len = 4096 * 2,
+        .histogram_data_len = 4096 * 3,
+    };
+    var telemetry_region: Region(tel.Region) = try .sized(telemetry_params.info().regionSize());
+    telemetry_region.ptr().init(telemetry_params);
+
+    // -- Inject test packet -- //
+
+    const net_pair = try net_to_gossip.memfd.mmapStaticSize(.rw, lib.net.Pair, .{});
     defer std.posix.munmap(@ptrCast(net_pair));
 
     const ping_token: [32]u8 = @splat(12);
@@ -69,17 +83,34 @@ pub fn main() !void {
         packet.len = @intCast(fbw.end);
     }
 
-    var spawned: topology.Children = undefined;
-    try spawned.spawn(.sandboxed, &service_map);
+    // -- Spawn services -- //
+
+    var children: topology.Children = undefined;
+    try topology.spawn(&children, .sandboxed, Topology{
+        .gossip = .{
+            .ro = .{ .config = gossip_config.finish() },
+            .rw = .{
+                .net_pair = net_to_gossip.finish(),
+                .gossip_to_snapshot = gossip_source_to_snapshot.finish(),
+                .tel = telemetry_region.finish(),
+            },
+        },
+        .telemetry = .{
+            .ro = .{},
+            .rw = .{ .region = telemetry_region.finish() },
+        },
+    });
 
     // wait for gossip and telemetry to go idle
-    while (spawned.isActive()) : (std.atomic.spinLoopHint()) {}
+    while (children.isActive()) : (std.atomic.spinLoopHint()) {}
 
     // go and ask all the services to cancel
-    spawned.cancel();
+    children.cancel();
 
     // and then actually wait for the services to exit
-    try spawned.wait(2 * std.time.ns_per_s);
+    try children.wait(2 * std.time.ns_per_s);
+
+    // -- Verify outgoing messages -- //
 
     var msgs: std.ArrayList(lib.gossip.GossipMessage) = .empty;
     defer msgs.deinit(gpa);
@@ -111,53 +142,3 @@ pub fn main() !void {
 
     try std.testing.expectEqual(ping_token_hash, pong_message.hash);
 }
-
-const topology_schema: lib.topology.Schema = .{
-    .services = @import("schema"),
-};
-
-pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
-    .gossip_config = .initOne(.@"gossip:config"),
-    .gossip_source_to_snapshot = .initOne(.@"gossip:source_to_snapshot"),
-    .net_to_gossip = .initOne(.@"gossip:from_net"),
-    .telemetry = .initMany(&.{ .@"telemetry:main", .@"gossip:telemetry" }),
-}));
-
-pub const Region = union(enum) {
-    gossip_config: lib.gossip.Config.InitParams,
-    gossip_source_to_snapshot,
-    net_to_gossip: lib.net.Pair.InitParams,
-    telemetry: tel.Region.InitParams,
-
-    pub const Tag = @typeInfo(Region).@"union".tag_type.?;
-
-    pub fn size(self: Region) usize {
-        return switch (self) {
-            .gossip_config => |cfg| cfg.size(),
-            .gossip_source_to_snapshot => @sizeOf(lib.snapshot.SnapshotSourceRing),
-            .net_to_gossip => |cfg| cfg.size(),
-            .telemetry => |params| params.info().regionSize(),
-        };
-    }
-
-    pub fn init(self: Region, buf: []align(std.heap.page_size_min) u8) !void {
-        std.log.info("Initialising: {}", .{std.meta.activeTag(self)});
-
-        return switch (self) {
-            .gossip_config => |cfg| cfg.init(buf),
-            .gossip_source_to_snapshot => {
-                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotSourceRing));
-                const data: *lib.snapshot.SnapshotSourceRing = @ptrCast(buf);
-                data.init();
-            },
-            .net_to_gossip => |cfg| cfg.init(buf),
-
-            .telemetry => |params| {
-                std.debug.assert(buf.len == params.info().regionSize());
-                const data: *tel.Region = @ptrCast(buf);
-
-                data.init(params);
-            },
-        };
-    }
-};

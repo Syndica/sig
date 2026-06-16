@@ -4,6 +4,7 @@
 const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
+const services = @import("services");
 const Pair = lib.net.Pair;
 const tel = lib.telemetry;
 
@@ -15,13 +16,8 @@ pub const name = .net;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadOnly = struct {};
-
-pub const ReadWrite = struct {
-    gossip_pair: *Pair,
-    shred_pair: *Pair,
-    tel: *tel.Region,
-};
+pub const ReadOnly = services.net.ReadOnly;
+pub const ReadWrite = services.net.ReadWrite;
 
 pub fn serviceMain(
     runner: lib.runner.Connection,

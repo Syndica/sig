@@ -9,6 +9,7 @@ const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
+const services = @import("services");
 
 comptime {
     _ = start;
@@ -18,13 +19,8 @@ pub const name = .exec;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadOnly = struct {
-    replay_transaction_pool: *const lib.replay.TransactionPool,
-    block_pool: *const lib.replay.BlockPool,
-};
-pub const ReadWrite = struct {
-    exec_req_response: *lib.replay.ExecReqResponse,
-};
+pub const ReadOnly = services.exec.ReadOnly;
+pub const ReadWrite = services.exec.ReadWrite;
 
 pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
     _ = runner;

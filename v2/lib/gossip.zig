@@ -56,10 +56,7 @@ pub const Config = extern struct {
             return @sizeOf(Config);
         }
 
-        pub fn init(self: InitParams, buf: []align(std.heap.page_size_min) u8) void {
-            std.debug.assert(buf.len == @sizeOf(lib.gossip.Config));
-            const data: *lib.gossip.Config = @ptrCast(buf);
-
+        pub fn init(self: InitParams, data: *lib.gossip.Config) void {
             data.keypair = self.keypair;
             data.cluster_info = self.cluster_info;
             data.turbine_recv_port = self.turbine_recv_port;

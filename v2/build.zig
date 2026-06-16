@@ -1,10 +1,23 @@
 const std = @import("std");
 const Build = std.Build;
 
-const lib = @import("lib/lib.zig");
-/// The schema for services used in release.
-const topo_schema: lib.topology.Schema = .{ .services = @import("init/services.zon") };
-const topo_types = lib.topology.Unbound(topo_schema);
+const Service = enum {
+    net,
+    gossip,
+    shred_receiver,
+    replay,
+    snapshot,
+    accounts_db,
+    telemetry,
+    exec,
+
+    const all = std.enums.values(Service);
+};
+
+const ServiceLib = struct {
+    service: Service,
+    lib: *Build.Step.Compile,
+};
 
 const test_install_dir: Build.Step.InstallArtifact.Options.Dir = .{
     .override = .{ .custom = "bin/tests" },
@@ -204,9 +217,19 @@ pub fn build(b: *Build) !void {
         .use_llvm = use_llvm,
     });
 
+    const services_mod = b.createModule(.{
+        .root_source_file = b.path("init/services.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "lib", .module = lib_mod },
+        },
+    });
+
     const runner_imports: RunnerModuleOptions.Imports = .{
         .sig_lib = lib_mod,
         .tracy = tracy_mod,
+        .services = services_mod,
     };
 
     const sig_init_mod = createRunnerModule(b, .{
@@ -292,11 +315,11 @@ pub fn build(b: *Build) !void {
     var doc_service_modules: std.ArrayListUnmanaged(DocGenModule) = .empty;
     defer doc_service_modules.deinit(b.allocator);
 
-    var service_libs: std.EnumArray(topo_types.ServiceId, *Build.Step.Compile) = .initUndefined();
+    var service_libs: [Service.all.len]ServiceLib = undefined;
 
     // build + link services
-    inline for (topo_schema.services) |s| {
-        const service_name = @tagName(s.name);
+    inline for (Service.all, &service_libs) |service, *service_lib_entry| {
+        const service_name = @tagName(service);
         const service_mod = b.createModule(.{
             .root_source_file = b.path("services").path(b, service_name ++ ".zig"),
             .target = target,
@@ -308,6 +331,7 @@ pub fn build(b: *Build) !void {
                 .{ .name = "lib", .module = lib_mod },
                 .{ .name = "start_service", .module = start_service_mod },
                 .{ .name = "tracy", .module = tracy_mod },
+                .{ .name = "services", .module = services_mod },
             },
         });
 
@@ -317,7 +341,7 @@ pub fn build(b: *Build) !void {
             .use_llvm = true,
         });
         sig_init_mod.linkLibrary(service_lib);
-        service_libs.set(s.name, service_lib);
+        service_lib_entry.* = .{ .service = service, .lib = service_lib };
 
         _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
             .root_module = service_mod,
@@ -336,7 +360,7 @@ pub fn build(b: *Build) !void {
         .{
             .name = "gossip",
             .root_source_file = b.path("tests/gossip/main.zig"),
-            .services = .initMany(&.{ .gossip, .telemetry }),
+            .services = &.{ "gossip", "telemetry" },
         },
     };
 
@@ -411,13 +435,14 @@ const RunnerModuleOptions = struct {
     const Imports = struct {
         sig_lib: *Build.Module,
         tracy: *Build.Module,
+        services: *Build.Module,
     };
 };
 
 const BlackBoxTest = struct {
     name: []const u8,
     root_source_file: Build.LazyPath,
-    services: std.EnumSet(topo_types.ServiceId),
+    services: []const []const u8,
 };
 
 fn addBlackBoxTest(
@@ -429,7 +454,7 @@ fn addBlackBoxTest(
         target: Build.ResolvedTarget,
         optimize: std.builtin.OptimizeMode,
         imports: RunnerModuleOptions.Imports,
-        service_libs: *const std.EnumArray(topo_types.ServiceId, *Build.Step.Compile),
+        service_libs: []const ServiceLib,
     },
 ) void {
     const exe = b.addExecutable(.{
@@ -443,18 +468,11 @@ fn addBlackBoxTest(
         .use_llvm = true,
     });
 
-    var service_iter = options.test_config.services.iterator();
-    while (service_iter.next()) |service_id| {
-        exe.linkLibrary(options.service_libs.get(service_id));
+    for (options.test_config.services) |service_name| {
+        exe.linkLibrary(for (options.service_libs) |entry| {
+            if (std.mem.eql(u8, @tagName(entry.service), service_name)) break entry.lib;
+        } else std.debug.panic("unknown service '{s}'", .{service_name}));
     }
-
-    exe.root_module.addAnonymousImport("schema", .{
-        .root_source_file = topoSchemaSubsetFile(
-            b,
-            b.fmt("{s}-schema.zon", .{options.test_config.name}),
-            options.test_config.services,
-        ),
-    });
 
     _ = addExeOutputs(b, exe, bb_test_step, artifact_opts, .{
         .dest_dir = test_install_dir,
@@ -472,23 +490,9 @@ fn createRunnerModule(
         .imports = &.{
             .{ .name = "lib", .module = options.imports.sig_lib },
             .{ .name = "tracy", .module = options.imports.tracy },
+            .{ .name = "services", .module = options.imports.services },
         },
     });
-}
-
-fn topoSchemaSubsetFile(
-    b: *Build,
-    name: []const u8,
-    service_ids: std.EnumSet(topo_types.ServiceId),
-) Build.LazyPath {
-    var rendered: std.Io.Writer.Allocating = .init(b.allocator);
-    var sz: std.zon.Serializer = .{
-        .options = .{ .whitespace = true },
-        .indent_level = 0,
-        .writer = &rendered.writer,
-    };
-    topo_schema.renderPrettyZonSubset(&sz, .{}, service_ids) catch std.debug.panic("OOM", .{});
-    return b.addWriteFiles().add(name, rendered.written());
 }
 
 const ExeOutput = struct {
