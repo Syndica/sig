@@ -530,6 +530,42 @@ pub const Filter = struct {
     }
 };
 
+test Filter {
+    // Empty filter str case.
+    {
+        const encoded = comptime Filter.parseListStrLitIntoBinary(.fatal, "").?;
+        var reader: std.Io.Reader = .fixed(encoded);
+
+        const header = try reader.takeStruct(Filter.Header, tel.endian);
+        const filter = header.getFilterFromFixedReader(&reader) orelse
+            return error.TestExpectedNonNull;
+        try std.testing.expectEqual(Filter.initLevel(.fatal), filter);
+        try std.testing.expectEqual(0, reader.bufferedLen());
+    }
+
+    // case for filter str = "replay:main=info".
+    {
+        const encoded = comptime Filter.parseListStrLitIntoBinary(
+            .fatal,
+            "replay:main=info",
+        ).?;
+        var reader: std.Io.Reader = .fixed(encoded);
+
+        const replay_header = try reader.takeStruct(Filter.Header, tel.endian);
+        const replay_filter = replay_header.getFilterFromFixedReader(&reader) orelse
+            return error.TestExpectedNonNull;
+        try std.testing.expectEqual(.info, replay_filter.level);
+        try std.testing.expectEqualStrings("replay", replay_filter.service.?);
+        try std.testing.expectEqualStrings("main", replay_filter.scope.?);
+
+        const default_header = try reader.takeStruct(Filter.Header, tel.endian);
+        const default_filter = default_header.getFilterFromFixedReader(&reader) orelse
+            return error.TestExpectedNonNull;
+        try std.testing.expectEqual(Filter.initLevel(.fatal), default_filter);
+        try std.testing.expectEqual(0, reader.bufferedLen());
+    }
+}
+
 pub const EntryField = struct {
     name: []const u8,
     value: EntryValueFmt,
