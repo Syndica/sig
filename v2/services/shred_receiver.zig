@@ -1,7 +1,7 @@
 //! Incoming UDP packets (typically port 8002) are sent in by the net service, via
 //! `ReadWrite.tvu_socket`. This port is currently set by config.shred_network.recv_port.
 //!
-//! Shred receiver takes in these packets and emits completed FEC (Forward Error Correction) sets.
+//! Shred receiver takes in these packets and emits completed FEC (Foregions.rward Error Correction) sets.
 //! Each FEC set contains up to 32 packets (AKA shreds) worth of data, which are always sent out as
 //! 32 code and 32 data shreds.
 //!
@@ -51,7 +51,6 @@ const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
-const services = @import("services");
 
 const Receiver = lib.shred.Receiver;
 
@@ -63,14 +62,33 @@ pub const name = .shred_receiver;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadWrite = services.shred_receiver.ReadWrite;
-pub const ReadOnly = services.shred_receiver.ReadOnly;
-
 var scratch_memory: [1024 * 1024 * 1024]u8 = undefined;
 const max_in_progress = 8192;
 const max_done = 65536;
 
-pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
+pub const Regions = struct {
+    ro: struct {
+        config: *const lib.shred.RecvConfig,
+    },
+    rw: struct {
+        /// Transaction Validation Unit (TVU) UDP socket, i.e. where we receive
+        /// shreds. This is typically port 8002. While we've obtained a net
+        /// Pair, we only currently receive on this. I believe once we support
+        /// retransmit, we will be sending on it too.
+        tvu_socket: *lib.net.Pair,
+
+        /// Where we send our deshredded FEC (Forward Error Correction) sets to
+        /// be assembled for replay. FEC sets will be sent out as they complete.
+        ///
+        /// NOTE: it will be more performant in future to only send headers down
+        /// the ring buffer, and write to a shared fec-set pool.
+        deshredded_out: *lib.shred.DeshredRing,
+
+        tel: *lib.telemetry.Region,
+    },
+};
+
+pub fn serviceMain(runner: lib.runner.Connection, regions: Regions) !noreturn {
     _ = runner;
     const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
     defer zone.deinit();
@@ -78,15 +96,15 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     var fba: std.heap.FixedBufferAllocator = .init(&scratch_memory);
     const allocator = fba.allocator();
 
-    const logger = rw.tel.acquireLogger(@tagName(name), "main");
-    rw.tel.signalReady();
-    logger.info().logf("Waiting for shreds on port {}", .{rw.tvu_socket.port});
+    const logger = regions.rw.tel.acquireLogger(@tagName(name), "main");
+    regions.rw.tel.signalReady();
+    logger.info().logf("Waiting for shreds on port {}", .{regions.rw.tvu_socket.port});
 
     var receiver: Receiver = try .init(allocator, max_in_progress, max_done);
     defer receiver.deinit(allocator);
 
-    var packet_iter = rw.tvu_socket.recv.get(.reader);
-    var deshred_out = rw.deshredded_out.get(.writer);
+    var packet_iter = regions.rw.tvu_socket.recv.get(.reader);
+    var deshred_out = regions.rw.deshredded_out.get(.writer);
 
     while (true) {
         {
@@ -98,8 +116,8 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             defer packet_iter.markUsed();
 
             const result = receiver.processPacket(
-                &ro.config.leader_schedule,
-                ro.config.shred_version,
+                &regions.ro.config.leader_schedule,
+                regions.ro.config.shred_version,
                 packet,
                 &deshred_out,
                 logger.withScope("processPacket"),

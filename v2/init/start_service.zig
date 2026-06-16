@@ -26,12 +26,13 @@ const native_os = builtin.os.tag;
 comptime {
     _ = root;
 
-    if (!builtin.is_test) {
+    // Only enforce service-shape and emit exports when this module is being
+    // pulled into a service library build. Other roots (e.g. the runner exe
+    // that imports services purely for their `Regions` types) can transitively
+    // pull start_service in without satisfying the service contract.
+    if (!builtin.is_test and builtin.output_mode == .Lib) {
         if (!@hasDecl(root, "serviceMain"))
             @compileError("Service needs a main function");
-
-        if (builtin.output_mode != .Lib)
-            @compileError("Service must be built as library");
 
         if (!@hasDecl(root, "name"))
             @compileError("Missing service name");
@@ -102,20 +103,18 @@ fn serviceMain(params: lib.ipc.ResolvedArgs) callconv(.c) void {
     panic_state.service_idx = params.service_idx;
 
     const max_regions = lib.ipc.ResolvedArgs.max_regions;
-    var ro: root.ReadOnly = undefined;
+    var regions: root.Regions = undefined;
     comptime var ro_index: usize = 0;
-    populateFields(&ro, &ro_index, .ro, max_regions, &params.ro, &params.ro_len);
-
-    var rw: root.ReadWrite = undefined;
+    populateFields(&regions.ro, &ro_index, .ro, max_regions, &params.ro, &params.ro_len);
     comptime var rw_index: usize = 0;
-    populateFields(&rw, &rw_index, .rw, max_regions, &params.rw, &params.rw_len);
+    populateFields(&regions.rw, &rw_index, .rw, max_regions, &params.rw, &params.rw_len);
 
     var activity = params.runner.activity.serviceView();
     const connection: lib.runner.Connection = .{
         .activity = &activity,
     };
 
-    root.serviceMain(connection, ro, rw) catch |err| {
+    root.serviceMain(connection, regions) catch |err| {
         if (err == error.Canceled and
             activity.checkCanceled() == error.Canceled)
         {

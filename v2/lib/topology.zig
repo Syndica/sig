@@ -7,11 +7,14 @@
 //!     - Initialize it with `region.ptr()`.
 //!     - Call `r.finish()` to obtain a `Region(T).Initialized`, the handle that gets
 //!       passed into the topology struct. This also unmaps the memfd.
-//!  2. Define and initialize a topology struct describing every service. Each field is
-//!     named after a service and has type `ServiceRegions(spec)`. `spec` is a
-//!     `ServiceSpec` (typically declared in `init/services.zig`) whose
-//!     `ReadOnly`/`ReadWrite` types list the typed pointers each service expects;
-//!     `ServiceRegions` mirrors them with `Region(T).Initialized` fields.
+//!  2. Define and initialize a topology struct describing every service. The
+//!     topology type is produced by `Topology(Spec)`, where `Spec` is a
+//!     struct whose field names select services (driving `svc_main_<name>`
+//!     lookup) and whose field types are each service's `Regions` declaration.
+//!     A service module's `Regions` is a struct of the form
+//!     `struct { ro: struct { ...ptrs... }, rw: struct { ...ptrs... } }`,
+//!     listing the typed pointers the service expects; `Topology` mirrors
+//!     that shape with `Region(T).Initialized` fields.
 //!  3. Call `spawn(&children, mode, topology)` once. It iterates every field of the
 //!     topology, resolves regions in field-declaration order, spawns each service, and
 //!     maps runner pages in the parent. Then drive `wait`/`cancel`/`isActive` on
@@ -38,15 +41,6 @@ pub const max_services = 16;
 pub const max_regions_per_service = lib.ipc.ResolvedArgs.max_regions;
 
 pub const Mode = enum { sandboxed, threaded };
-
-/// Pair of structs declaring what regions a service consumes. `ReadOnly` and
-/// `ReadWrite` are each a struct of typed pointers (e.g. `*const Config`, `*Pair`).
-/// `ServiceRegions` mirrors them with corresponding `Region(T).Initialized` fields.
-/// Typically declared inline in `init/services.zig`.
-pub const ServiceSpec = struct {
-    ReadOnly: type,
-    ReadWrite: type,
-};
 
 /// Typed handle for a shared-memory region. Created by `Region(T).simple()` or
 /// `Region(T).sized(n)`: the memfd is allocated and mmapped RW into `buf`. Populate
@@ -103,68 +97,85 @@ pub fn Region(comptime T: type) type {
     };
 }
 
-/// Memfd container corresponding to a ServiceSpec. `ro` maps to `spec.ReadOnly` and
-/// `rw` maps to `spec.ReadWrite`. For each `*T` (or `*const T`) in the spec, there
-/// is a `Region(T).Initialized` in this struct.
+/// Memfd container corresponding to a service's `Regions` type. A service's
+/// `Regions` is a struct of the form `struct { ro: struct { ...ptrs... }, rw:
+/// Translate a topology spec — a struct whose fields are named after services
+/// and whose field types are each service's `Regions` declaration — into the
+/// matching topology struct: a struct with the same field names, but where each
+/// field is the service's `Regions` rewritten so every `*T` (or `*const T`)
+/// pointer becomes a `Region(T).Initialized`.
 ///
-/// For example, consider the following spec:
+/// For example, given:
 ///
 /// ```zig
-/// const my_service: ServiceSpec = .{
-///     ReadOnly: struct {
-///         config: *Config,
-///     },
-///     ReadWrite: struct {
-///         ring: *Ring,
+/// const Spec = struct {
+///     gossip: struct {
+///         ro: struct { config: *const Config },
+///         rw: struct { ring: *Ring },
 ///     },
 /// };
 /// ```
 ///
-/// The corresponding `ServiceRegions(my_service)` is basically this:
+/// `Topology(Spec)` is basically:
 ///
 /// ```zig
-/// const ServiceRegions(my_service) = struct {
-///     ro: struct {
-///         config: Region(*Config).Initialized,
+/// struct {
+///     gossip: struct {
+///         ro: struct { config: Region(Config).Initialized },
+///         rw: struct { ring: Region(Ring).Initialized },
 ///     },
-///     rw: struct {
-///         ring: Region(*Ring).Initialized,
-///     },
-/// };
+/// }
 /// ```
-pub fn ServiceRegions(comptime spec: ServiceSpec) type {
-    return struct {
-        ro: RegionsOf(spec.ReadOnly),
-        rw: RegionsOf(spec.ReadWrite),
-
-        /// Translates a struct of pointer fields like `{ foo: *T, bar: *const U }`
-        /// into a struct of typed initialized regions:
-        /// `{ foo: Region(T).Initialized, bar: Region(U).Initialized }`.
-        fn RegionsOf(comptime PointerStruct: type) type {
-            const fields = @typeInfo(PointerStruct).@"struct".fields;
-            var new_fields: [fields.len]std.builtin.Type.StructField = undefined;
-            for (fields, &new_fields) |old, *nf| {
-                const InitializedRegion = Region(@typeInfo(old.type).pointer.child).Initialized;
-                nf.* = .{
-                    .name = old.name,
-                    .type = InitializedRegion,
-                    .default_value_ptr = null,
-                    .is_comptime = false,
-                    .alignment = @alignOf(InitializedRegion),
-                };
-            }
-            return @Type(.{ .@"struct" = .{
-                .layout = .auto,
-                .fields = &new_fields,
-                .decls = &.{},
-                .is_tuple = false,
-            } });
-        }
-    };
+pub fn Topology(comptime TopologySpec: type) type {
+    const svc_fields = @typeInfo(TopologySpec).@"struct".fields;
+    var new_fields: [svc_fields.len]std.builtin.Type.StructField = undefined;
+    for (svc_fields, &new_fields) |old, *nf| {
+        const Mirrored = struct {
+            ro: MirroredPointers(@FieldType(old.type, "ro")),
+            rw: MirroredPointers(@FieldType(old.type, "rw")),
+        };
+        nf.* = .{
+            .name = old.name,
+            .type = Mirrored,
+            .default_value_ptr = null,
+            .is_comptime = false,
+            .alignment = @alignOf(Mirrored),
+        };
+    }
+    return @Type(.{ .@"struct" = .{
+        .layout = .auto,
+        .fields = &new_fields,
+        .decls = &.{},
+        .is_tuple = false,
+    } });
 }
 
-/// Count the number of times that RegionType appears within TopologyType, assuming
-/// TopologyType is a struct with all fields of type ServiceRegions(spec)
+/// Translates a struct of pointer fields like `{ foo: *T, bar: *const U }`
+/// into a struct of typed initialized regions:
+/// `{ foo: Region(T).Initialized, bar: Region(U).Initialized }`.
+fn MirroredPointers(comptime PointerStruct: type) type {
+    const fields = @typeInfo(PointerStruct).@"struct".fields;
+    var new_fields: [fields.len]std.builtin.Type.StructField = undefined;
+    for (fields, &new_fields) |old, *nf| {
+        const InitializedRegion = Region(@typeInfo(old.type).pointer.child).Initialized;
+        nf.* = .{
+            .name = old.name,
+            .type = InitializedRegion,
+            .default_value_ptr = null,
+            .is_comptime = false,
+            .alignment = @alignOf(InitializedRegion),
+        };
+    }
+    return @Type(.{ .@"struct" = .{
+        .layout = .auto,
+        .fields = &new_fields,
+        .decls = &.{},
+        .is_tuple = false,
+    } });
+}
+
+/// Count the number of times that RegionType appears within TopologyType, which
+/// must be a `Topology(...)`-shaped struct.
 pub fn countRegionShares(TopologyType: type, RegionType: type) comptime_int {
     comptime var count = 0;
     inline for (@typeInfo(TopologyType).@"struct".fields) |service_field| {
@@ -179,10 +190,12 @@ pub fn countRegionShares(TopologyType: type, RegionType: type) comptime_int {
 
 // -- Spawn services -- //
 
-/// Spawn every service described by `topology` in one batch. Each field of
-/// `topology` must be a `ServiceLayout(spec)`. Each field name is used to look up
-/// the service's main function (`svc_main_<name>`) and fault handler. Regions are
-/// passed in field declaration order, matching what `start_service.zig` expects.
+/// Spawn every service described by `topology` in one batch. `topology` must
+/// be a `Topology(...)`-shaped value: each field is named after a
+/// service and holds the typed initialized regions for that service. Each
+/// field name is used to look up the service's main function
+/// (`svc_main_<name>`) and fault handler. Regions are passed in field
+/// declaration order, matching what `start_service.zig` expects.
 ///
 /// `out` is treated as undefined on invocation, and it is initialized by this
 /// function. The caller's storage is what the threads (in threaded mode) hold

@@ -217,19 +217,9 @@ pub fn build(b: *Build) !void {
         .use_llvm = use_llvm,
     });
 
-    const services_mod = b.createModule(.{
-        .root_source_file = b.path("init/services.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "lib", .module = lib_mod },
-        },
-    });
-
     const runner_imports: RunnerModuleOptions.Imports = .{
         .sig_lib = lib_mod,
         .tracy = tracy_mod,
-        .services = services_mod,
     };
 
     const sig_init_mod = createRunnerModule(b, .{
@@ -331,7 +321,6 @@ pub fn build(b: *Build) !void {
                 .{ .name = "lib", .module = lib_mod },
                 .{ .name = "start_service", .module = start_service_mod },
                 .{ .name = "tracy", .module = tracy_mod },
-                .{ .name = "services", .module = services_mod },
             },
         });
 
@@ -341,6 +330,7 @@ pub fn build(b: *Build) !void {
             .use_llvm = true,
         });
         sig_init_mod.linkLibrary(service_lib);
+        sig_init_mod.addImport(service_name, service_mod);
         service_lib_entry.* = .{ .service = service, .lib = service_lib };
 
         _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
@@ -435,7 +425,6 @@ const RunnerModuleOptions = struct {
     const Imports = struct {
         sig_lib: *Build.Module,
         tracy: *Build.Module,
-        services: *Build.Module,
     };
 };
 
@@ -457,21 +446,25 @@ fn addBlackBoxTest(
         service_libs: []const ServiceLib,
     },
 ) void {
+    const root_module = createRunnerModule(b, .{
+        .root_source_file = options.test_config.root_source_file,
+        .target = options.target,
+        .optimize = options.optimize,
+        .imports = options.imports,
+    });
+
     const exe = b.addExecutable(.{
         .name = b.fmt("bbt-{s}", .{options.test_config.name}),
-        .root_module = createRunnerModule(b, .{
-            .root_source_file = options.test_config.root_source_file,
-            .target = options.target,
-            .optimize = options.optimize,
-            .imports = options.imports,
-        }),
+        .root_module = root_module,
         .use_llvm = true,
     });
 
     for (options.test_config.services) |service_name| {
-        exe.linkLibrary(for (options.service_libs) |entry| {
-            if (std.mem.eql(u8, @tagName(entry.service), service_name)) break entry.lib;
-        } else std.debug.panic("unknown service '{s}'", .{service_name}));
+        const entry = for (options.service_libs) |e| {
+            if (std.mem.eql(u8, @tagName(e.service), service_name)) break e;
+        } else std.debug.panic("unknown service '{s}'", .{service_name});
+        exe.linkLibrary(entry.lib);
+        root_module.addImport(service_name, entry.lib.root_module);
     }
 
     _ = addExeOutputs(b, exe, bb_test_step, artifact_opts, .{
@@ -490,7 +483,6 @@ fn createRunnerModule(
         .imports = &.{
             .{ .name = "lib", .module = options.imports.sig_lib },
             .{ .name = "tracy", .module = options.imports.tracy },
-            .{ .name = "services", .module = options.imports.services },
         },
     });
 }

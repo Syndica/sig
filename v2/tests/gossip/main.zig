@@ -1,15 +1,14 @@
 const std = @import("std");
 const lib = @import("lib");
-const services = @import("services");
 const tel = lib.telemetry;
 const topology = lib.topology;
 
 const Region = topology.Region;
 
-const Topology = struct {
-    gossip: topology.ServiceRegions(services.gossip),
-    telemetry: topology.ServiceRegions(services.telemetry),
-};
+const Topology = topology.Topology(struct {
+    gossip: @import("gossip").Regions,
+    telemetry: @import("telemetry").Regions,
+});
 
 pub fn main() !void {
     var dba_state: std.heap.DebugAllocator(.{}) = .init;

@@ -9,7 +9,6 @@ const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
-const services = @import("services");
 
 comptime {
     _ = start;
@@ -19,13 +18,20 @@ pub const name = .exec;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadOnly = services.exec.ReadOnly;
-pub const ReadWrite = services.exec.ReadWrite;
+pub const Regions = struct {
+    ro: struct {
+        replay_transaction_pool: *const lib.replay.TransactionPool,
+        block_pool: *const lib.replay.BlockPool,
+    },
+    rw: struct {
+        exec_req_response: *lib.replay.ExecReqResponse,
+    },
+};
 
-pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(runner: lib.runner.Connection, regions: Regions) !noreturn {
     _ = runner;
-    var request_reader = rw.exec_req_response.request_ring.get(.reader);
-    var response_writer = rw.exec_req_response.response_ring.get(.writer);
+    var request_reader = regions.rw.exec_req_response.request_ring.get(.reader);
+    var response_writer = regions.rw.exec_req_response.response_ring.get(.writer);
 
     var deserialised_buf: [4096]u8 = undefined;
     var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
@@ -45,12 +51,13 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             .txn_exec => {
                 const data = &request.data.txn_exec;
 
-                const slot = data.block_idx.constPtr(ro.block_pool).?.slot;
+                const slot = data.block_idx.constPtr(regions.ro.block_pool).?.slot;
                 zone.value(slot);
                 tracy.plot(u48, "exec slot", @intCast(slot));
 
-                var reader =
-                    std.io.Reader.fixed(ro.replay_transaction_pool.indexToConstPtr(data.tx_idx));
+                var reader = std.io.Reader.fixed(
+                    regions.ro.replay_transaction_pool.indexToConstPtr(data.tx_idx),
+                );
 
                 const transaction: lib.solana.transaction.VersionedTransaction =
                     try lib.solana.bincode.read(

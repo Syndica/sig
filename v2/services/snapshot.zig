@@ -1,7 +1,7 @@
 const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
-const services = @import("services");
+
 const tel = lib.telemetry;
 
 const download = lib.snapshot.download;
@@ -18,17 +18,25 @@ pub const name = .snapshot;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadOnly = services.snapshot.ReadOnly;
-pub const ReadWrite = services.snapshot.ReadWrite;
+pub const Regions = struct {
+    ro: struct {
+        config: *const lib.snapshot.SnapshotConfig,
+    },
+    rw: struct {
+        source_from_gossip: *lib.snapshot.SnapshotSourceRing,
+        ready_snapshot_out: *lib.snapshot.SnapshotDataRing,
+        tel: *lib.telemetry.Region,
+    },
+};
 
-pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(runner: lib.runner.Connection, regions: Regions) !noreturn {
     _ = runner;
-    const logger = rw.tel.acquireLogger(@tagName(name), "main");
-    const metrics = rw.tel.metricAppender().appendFields(Metrics, Metrics.fields_config);
-    rw.tel.signalReady();
+    const logger = regions.rw.tel.acquireLogger(@tagName(name), "main");
+    const metrics = regions.rw.tel.metricAppender().appendFields(Metrics, Metrics.fields_config);
+    regions.rw.tel.signalReady();
 
-    const snapshot_dir_path = ro.config.folder_buffer[0..ro.config.folder_len];
-    const known_validators = ro.config.knownValidators();
+    const snapshot_dir_path = regions.ro.config.folder_buffer[0..regions.ro.config.folder_len];
+    const known_validators = regions.ro.config.knownValidators();
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_path, .{ .iterate = true });
     defer snapshot_dir.close();
@@ -41,7 +49,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         }
 
         var downloader = try Downloader.init(
-            rw.source_from_gossip,
+            regions.rw.source_from_gossip,
             known_validators,
             snapshot_dir,
             metrics,
@@ -88,7 +96,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         try zst_reader.init(snapshot_dir, snapshot_path);
         defer zst_reader.deinit();
 
-        var out = rw.ready_snapshot_out.getView(.writer);
+        var out = regions.rw.ready_snapshot_out.getView(.writer);
         defer out.close();
 
         while (true) {

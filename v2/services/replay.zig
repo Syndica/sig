@@ -1,4 +1,4 @@
-//! Completed FEC (Forward Error Correction) sets flow into this service from the shred receiver.
+//! Completed FEC (Foregions.rward Error Correction) sets flow into this service from the shred receiver.
 //!
 //! Each FEC set contains its own Merkle Root, and its Chained Merkle Root, with the Chained Merkle
 //! Root referring to the FEC set of its parent, i.e. the previous FEC set.
@@ -52,7 +52,7 @@
 //!         Merkle Root.
 //!
 //!         FEC sets only end up in the orphan map if their parent wasn't in the primary map at the
-//!         time of its insertion. Typically, the parent will arrive some time soon afterwards and
+//!         time of its insertion. Typically, the parent will arrive some time soon afteregions.rwards and
 //!         will be able to find its orphaned children via the orphan map.
 //!
 //!         We link these nodes together with an LCRS tree. In the case of multiple children, the
@@ -82,7 +82,7 @@ const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
-const services = @import("services");
+
 const tel = lib.telemetry;
 
 const replay = lib.replay;
@@ -103,18 +103,26 @@ pub const name = .replay;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadOnly = services.replay.ReadOnly;
-pub const ReadWrite = services.replay.ReadWrite;
+pub const Regions = struct {
+    ro: struct {},
+    rw: struct {
+        deshredded_in: *lib.shred.DeshredRing,
+        replay_transaction_pool: *lib.replay.TransactionPool,
+        block_pool: *lib.replay.BlockPool,
+        exec_req_response: *lib.replay.ExecReqResponse,
+        tel: *lib.telemetry.Region,
+    },
+};
 
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
 const DeserialStates = [lib.replay.BlockPool.capacity]?BlockDeserialState;
 const BlockExecStates = [lib.replay.BlockPool.capacity]?BlockExecState;
 
-pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(runner: lib.runner.Connection, regions: Regions) !noreturn {
     _ = runner;
-    const logger = rw.tel.acquireLogger(@tagName(name), "main");
-    rw.tel.signalReady();
+    const logger = regions.rw.tel.acquireLogger(@tagName(name), "main");
+    regions.rw.tel.signalReady();
 
     var fba: std.heap.FixedBufferAllocator = .init(&scratch_memory);
     const allocator = fba.allocator();
@@ -127,9 +135,9 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const exec_states: *BlockExecStates = try allocator.create(BlockExecStates);
     @memset(exec_states, null);
 
-    var deshredded_iter = rw.deshredded_in.get(.reader);
-    var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
-    var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
+    var deshredded_iter = regions.rw.deshredded_in.get(.reader);
+    var exec_request_sender = regions.rw.exec_req_response.request_ring.get(.writer);
+    var exec_response_receiver = regions.rw.exec_req_response.response_ring.get(.reader);
 
     var first_slot: ?Slot = null; // this is a hack, remove it!
 
@@ -159,7 +167,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             std.debug.assert(response.request_kind == .txn_exec); // others unimplemented
             const response_data = response.data.txn_exec;
 
-            defer rw.replay_transaction_pool.destroyId(response_data.tx_idx);
+            defer regions.rw.replay_transaction_pool.destroyId(response_data.tx_idx);
 
             const block_ref = response_data.block_idx;
             const exec_state: *BlockExecState = &(exec_states[block_ref.index().?].?);
@@ -174,7 +182,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 logger.info().logf(
                     "Slot {} ({}) complete! ({}/{})",
                     .{
-                        rw.block_pool.indexToPtr(block_ref).slot,
+                        regions.rw.block_pool.indexToPtr(block_ref).slot,
                         block_ref,
                         exec_state.n_transactions_requested,
                         exec_state.n_transactions_completed,
@@ -199,7 +207,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 logger,
                 deshredded_fec_set,
                 &forest,
-                rw.block_pool,
+                regions.rw.block_pool,
             )) orelse {
                 zone.text("already found");
                 continue :task .idle;
@@ -217,14 +225,14 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
                 std.debug.assert(inserted.block_ref == .null);
 
-                const rooted_block_ref = try rw.block_pool.createId();
-                const first_block_ref = try rw.block_pool.createId();
+                const rooted_block_ref = try regions.rw.block_pool.createId();
+                const first_block_ref = try regions.rw.block_pool.createId();
 
-                rooted_block_ref.ptr(rw.block_pool).?.* = .{
+                rooted_block_ref.ptr(regions.rw.block_pool).?.* = .{
                     .slot = rooted_slot,
                     .child = first_block_ref,
                 };
-                first_block_ref.ptr(rw.block_pool).?.* = .{
+                first_block_ref.ptr(regions.rw.block_pool).?.* = .{
                     .slot = first_slot.?,
                     .parent = rooted_block_ref,
                 };
@@ -266,8 +274,8 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 inserted,
                 inserted.block_ref,
                 &forest.pool,
-                rw.block_pool,
-                rw.replay_transaction_pool,
+                regions.rw.block_pool,
+                regions.rw.replay_transaction_pool,
                 exec_states,
                 deserial_states,
                 &exec_request_sender,
@@ -423,7 +431,7 @@ fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
                 else
                     .null;
             } else {
-                // head of list is invalid, let's move it forward
+                // head of list is invalid, let's move it foregions.rward
                 children_head = next_node;
             }
 
@@ -448,7 +456,7 @@ fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
 //  a) does nothing (parent has no BlockRef)
 //  b) allocates a new BlockRef due to reaching the slot boundary
 //  c) allocates a new BlockRef due to the parent already having a child (forking/equivocation)
-//  d) carries the parent's BlockRef forward (same slot + no forking/equivocation)
+//  d) carries the parent's BlockRef foregions.rward (same slot + no forking/equivocation)
 fn setChildBlockRef(
     parent: *const MerkleNode,
     child: *MerkleNode,

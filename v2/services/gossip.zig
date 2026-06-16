@@ -4,7 +4,7 @@
 const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
-const services = @import("services");
+
 const tel = lib.telemetry;
 
 const Pair = lib.net.Pair;
@@ -23,22 +23,32 @@ pub const name = .gossip;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadWrite = services.gossip.ReadWrite;
-pub const ReadOnly = services.gossip.ReadOnly;
-
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
-pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
-    const logger = rw.tel.acquireLogger(@tagName(name), "main");
-    rw.tel.signalReady();
+pub const Regions = struct {
+    ro: struct {
+        config: *const lib.gossip.Config,
+    },
+    rw: struct {
+        net_pair: *lib.net.Pair,
+        gossip_to_snapshot: *lib.snapshot.SnapshotSourceRing,
+        tel: *lib.telemetry.Region,
+    },
+};
+
+pub fn serviceMain(runner: lib.runner.Connection, regions: Regions) !noreturn {
+    const logger = regions.rw.tel.acquireLogger(@tagName(name), "main");
+    regions.rw.tel.signalReady();
+
+    const cluster_info = &regions.ro.config.cluster_info;
 
     logger.info().logf(
         "Gossip started on :{} as {f}:\n\tshred_version:{}\n\tentrypoints:{f}",
         .{
-            rw.net_pair.port,
-            ro.config.keypair.pubkey,
-            ro.config.cluster_info.shred_version,
-            lib.util.fmtSlice(ro.config.cluster_info.getEntryAddresses()),
+            regions.rw.net_pair.port,
+            regions.ro.config.keypair.pubkey,
+            cluster_info.shred_version,
+            lib.util.fmtSlice(cluster_info.getEntryAddresses()),
         },
     );
 
@@ -86,31 +96,31 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         }
     };
 
-    var packet_writer = rw.net_pair.send.get(.writer);
-    var snapshot_writer = rw.gossip_to_snapshot.get(.writer);
+    var packet_writer = regions.rw.net_pair.send.get(.writer);
+    var snapshot_writer = regions.rw.gossip_to_snapshot.get(.writer);
     const effects: Effects = .{
         .packet_writer = &packet_writer,
         .snapshot_writer = &snapshot_writer,
-        .keypair = &ro.config.keypair,
+        .keypair = &regions.ro.config.keypair,
     };
 
     // TODO: add .rpc for serving snapshots
     var sockets: lib.gossip.SocketMap.Builder = .{};
-    sockets.set(.gossip, ro.config.cluster_info.public_ip.withPort(rw.net_pair.port));
-    if (ro.config.advertise_tvu_port) {
-        sockets.set(.tvu, ro.config.cluster_info.public_ip.withPort(ro.config.turbine_recv_port));
+    sockets.set(.gossip, cluster_info.public_ip.withPort(regions.rw.net_pair.port));
+    if (regions.ro.config.advertise_tvu_port) {
+        sockets.set(.tvu, cluster_info.public_ip.withPort(regions.ro.config.turbine_recv_port));
     }
 
     var now = lib.clock.wallclock(.ms);
     var fba = std.heap.FixedBufferAllocator.init(&scratch_memory);
     var gossip = try GossipNode(Effects).init(&fba, now, .{
         .effects = effects,
-        .shred_version = ro.config.cluster_info.shred_version,
+        .shred_version = cluster_info.shred_version,
         .socket_map = sockets.asSocketMap(),
-        .entrypoints = ro.config.cluster_info.getEntryAddresses(),
+        .entrypoints = cluster_info.getEntryAddresses(),
     });
 
-    var it = rw.net_pair.recv.get(.reader);
+    var it = regions.rw.net_pair.recv.get(.reader);
     while (true) {
         now = lib.clock.wallclock(.ms);
         try gossip.poll(.from(logger), now);

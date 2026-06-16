@@ -4,7 +4,7 @@
 const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
-const services = @import("services");
+
 const Pair = lib.net.Pair;
 const tel = lib.telemetry;
 
@@ -16,25 +16,27 @@ pub const name = .net;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadOnly = services.net.ReadOnly;
-pub const ReadWrite = services.net.ReadWrite;
+pub const Regions = struct {
+    ro: struct {},
+    rw: struct {
+        gossip_pair: *lib.net.Pair,
+        shred_pair: *lib.net.Pair,
+        tel: *lib.telemetry.Region,
+    },
+};
 
-pub fn serviceMain(
-    runner: lib.runner.Connection,
-    _: ReadOnly,
-    rw: ReadWrite,
-) !noreturn {
-    const logger = rw.tel.acquireLogger(@tagName(name), "main");
+pub fn serviceMain(runner: lib.runner.Connection, regions: Regions) !noreturn {
+    const logger = regions.rw.tel.acquireLogger(@tagName(name), "main");
 
-    const metric_appender = rw.tel.metricAppender();
+    const metric_appender = regions.rw.tel.metricAppender();
     const metrics = metric_appender.appendFields(Metrics, .{});
-    rw.tel.signalReady();
+    regions.rw.tel.signalReady();
 
     try mainInner(
         runner,
         logger,
         metrics,
-        &.{ rw.gossip_pair, rw.shred_pair },
+        &.{ regions.rw.gossip_pair, regions.rw.shred_pair },
     );
 }
 

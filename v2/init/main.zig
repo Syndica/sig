@@ -17,12 +17,10 @@ comptime {
 
 const lib = @import("lib");
 const tracy = @import("tracy");
-const services = @import("services");
 const tel = lib.telemetry;
 const topology = lib.topology;
 
 const Region = topology.Region;
-const ServiceRegions = topology.ServiceRegions;
 
 const Config = struct {
     sandboxing_mode: SandboxingMode,
@@ -91,18 +89,18 @@ const Config = struct {
 
 /// Names + region wiring for every service in the runner. One field per service:
 /// the field name selects the service to spawn (`svc_main_<name>`); the value is
-/// a `ServiceLayout` whose `.ro`/`.rw` fields hold the typed regions matching the
-/// service's `ReadOnly`/`ReadWrite` schema in `init/services.zig`.
-const Topology = struct {
-    net: ServiceRegions(services.net),
-    gossip: ServiceRegions(services.gossip),
-    shred_receiver: ServiceRegions(services.shred_receiver),
-    replay: ServiceRegions(services.replay),
-    snapshot: ServiceRegions(services.snapshot),
-    accounts_db: ServiceRegions(services.accounts_db),
-    telemetry: ServiceRegions(services.telemetry),
-    exec: ServiceRegions(services.exec),
-};
+/// the service's `Regions` declaration. `ServiceRegions` rewrites this spec
+/// into the topology struct whose fields hold typed initialized regions.
+const Topology = topology.Topology(struct {
+    net: @import("net").Regions,
+    gossip: @import("gossip").Regions,
+    shred_receiver: @import("shred_receiver").Regions,
+    replay: @import("replay").Regions,
+    snapshot: @import("snapshot").Regions,
+    accounts_db: @import("accounts_db").Regions,
+    telemetry: @import("telemetry").Regions,
+    exec: @import("exec").Regions,
+});
 
 pub fn main() !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "main" });

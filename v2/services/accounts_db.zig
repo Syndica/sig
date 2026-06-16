@@ -1,7 +1,6 @@
 const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
-const services = @import("services");
 
 const tel = lib.telemetry;
 
@@ -18,15 +17,23 @@ pub const name = .accounts_db;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadOnly = services.accounts_db.ReadOnly;
-pub const ReadWrite = services.accounts_db.ReadWrite;
+pub const Regions = struct {
+    ro: struct {},
+    rw: struct {
+        config: *lib.accounts_db.RootedConfig,
+        ready_snapshot_in: *lib.snapshot.SnapshotDataRing,
+        account_pool: *lib.accounts_db.AccountPool,
+        replay_lookups: *lib.accounts_db.AccountLookups,
+        tel: *lib.telemetry.Region,
+    },
+};
 
-pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(runner: lib.runner.Connection, regions: Regions) !noreturn {
     _ = runner;
-    const logger = rw.tel.acquireLogger(@tagName(name), "main");
-    rw.tel.signalReady();
+    const logger = regions.rw.tel.acquireLogger(@tagName(name), "main");
+    regions.rw.tel.signalReady();
 
-    const file_path = rw.config.file_path[0..rw.config.file_len];
+    const file_path = regions.rw.config.file_path[0..regions.rw.config.file_len];
     logger.info().logf("accounts_db started into file: {s}", .{file_path});
 
     const Global = struct {
@@ -39,12 +46,12 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         .from(logger),
         std.fs.cwd(),
         file_path,
-        rw.config.memory[0..].ptr[0..rw.config.memory_len],
-        rw.account_pool,
+        regions.rw.config.memory[0..].ptr[0..regions.rw.config.memory_len],
+        regions.rw.account_pool,
     );
     defer rooted.deinit();
 
-    var in = rw.ready_snapshot_in.getView(.reader);
+    var in = regions.rw.ready_snapshot_in.getView(.reader);
     defer in.close();
 
     if (rooted.table.count() == 0) {
@@ -106,8 +113,8 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
     logger.info().logf("accounts_db loaded - servicing replay requests", .{});
 
-    var replay_in = rw.replay_lookups.in.get(.reader);
-    var replay_out = rw.replay_lookups.out.get(.writer);
+    var replay_in = regions.rw.replay_lookups.in.get(.reader);
+    var replay_out = regions.rw.replay_lookups.out.get(.writer);
     while (true) : (std.atomic.spinLoopHint()) {
         if (replay_in.peek()) |pubkey| {
             if (try rooted.queueRead(.from(logger), pubkey)) {
