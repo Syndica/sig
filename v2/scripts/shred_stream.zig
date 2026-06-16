@@ -13,6 +13,7 @@ const agave_cf_meta = "meta";
 const agave_cf_data_shred = "data_shred";
 const agave_cf_code_shred = "code_shred";
 const max_shred_packet_bytes: usize = 1232;
+const shred_fec_set_index_offset: usize = 79;
 const producer_publish_packets: usize = 32;
 const stream_queue_packets = 8192;
 const no_current_slot = std.math.maxInt(Slot);
@@ -91,7 +92,8 @@ const ShredKindFilter = enum {
 
 const Config = struct {
     ledger: []const u8,
-    target: []const u8,
+    target: ?[]const u8 = null,
+    dump_shreds: ?[]const u8 = null,
     start_slot: ?Slot = null,
     end_slot: ?Slot = null,
     rate_hz: ?f64 = null,
@@ -101,6 +103,7 @@ const Config = struct {
     shred_kind: ShredKindFilter = .any,
     plan_limit: usize = 20,
     corrupt_bytes: usize = 1,
+    fec_set: ?u32 = null,
     dry_run: bool = false,
 
     fn slotSelected(self: Config, slot: Slot) bool {
@@ -124,11 +127,17 @@ const Config = struct {
             .reverse => if (self.start_slot) |start_slot| slot < start_slot else false,
         };
     }
+
+    fn fecSetSelected(self: Config, packet_data: []const u8) !bool {
+        const fec_set = self.fec_set orelse return true;
+        return try parseShredFecSetIndex(packet_data) == fec_set;
+    }
 };
 
 const PartialConfig = struct {
     ledger: ?[]const u8 = null,
     target: ?[]const u8 = null,
+    dump_shreds: ?[]const u8 = null,
     start_slot: ?Slot = null,
     end_slot: ?Slot = null,
     rate_hz: ?f64 = null,
@@ -138,6 +147,7 @@ const PartialConfig = struct {
     shred_kind: ?ShredKindFilter = null,
     plan_limit: ?usize = null,
     corrupt_bytes: ?usize = null,
+    fec_set: ?u32 = null,
     dry_run: bool = false,
 
     fn finalize(self: PartialConfig) ParseArgsError!Config {
@@ -145,16 +155,33 @@ const PartialConfig = struct {
             std.debug.print("missing required argument: --ledger <path>\n", .{});
             return error.InvalidArguments;
         };
-        const target = self.target orelse {
-            std.debug.print("missing required argument: --target <ip:port>\n", .{});
+        if (self.target != null and self.dump_shreds != null) {
+            std.debug.print("--target and --dump-shreds are mutually exclusive\n", .{});
             return error.InvalidArguments;
-        };
+        }
+        if (self.target == null and self.dump_shreds == null and !self.dry_run) {
+            std.debug.print("missing output: --target <ip:port> or --dump-shreds <path>\n", .{});
+            return error.InvalidArguments;
+        }
+        if (self.dump_shreds != null and self.rate_hz != null) {
+            std.debug.print("--rate-hz is only valid with --target\n", .{});
+            return error.InvalidArguments;
+        }
 
         if (self.start_slot != null and
             self.end_slot != null and
             self.end_slot.? < self.start_slot.?)
         {
             std.debug.print("--end-slot must be greater than or equal to --start-slot\n", .{});
+            return error.InvalidArguments;
+        }
+
+        if (self.fec_set != null and
+            (self.start_slot == null or
+                self.end_slot == null or
+                self.start_slot.? != self.end_slot.?))
+        {
+            std.debug.print("--fec-set requires equal --start-slot and --end-slot\n", .{});
             return error.InvalidArguments;
         }
 
@@ -219,7 +246,8 @@ const PartialConfig = struct {
 
         return .{
             .ledger = ledger,
-            .target = target,
+            .target = self.target,
+            .dump_shreds = self.dump_shreds,
             .start_slot = self.start_slot,
             .end_slot = self.end_slot,
             .rate_hz = self.rate_hz,
@@ -229,6 +257,7 @@ const PartialConfig = struct {
             .shred_kind = self.shred_kind orelse .any,
             .plan_limit = self.plan_limit orelse 20,
             .corrupt_bytes = self.corrupt_bytes orelse 1,
+            .fec_set = self.fec_set,
             .dry_run = self.dry_run,
         };
     }
@@ -247,6 +276,7 @@ const Arg = enum {
     help,
     ledger,
     target,
+    dump_shreds,
     start_slot,
     end_slot,
     rate_hz,
@@ -256,12 +286,14 @@ const Arg = enum {
     shred_kind,
     plan_limit,
     corrupt_bytes,
+    fec_set,
     dry_run,
 
     fn parse(raw: []const u8) ?Arg {
         if (std.mem.eql(u8, raw, "--help") or std.mem.eql(u8, raw, "-h")) return .help;
         if (std.mem.eql(u8, raw, "--ledger")) return .ledger;
         if (std.mem.eql(u8, raw, "--target")) return .target;
+        if (std.mem.eql(u8, raw, "--dump-shreds")) return .dump_shreds;
         if (std.mem.eql(u8, raw, "--start-slot")) return .start_slot;
         if (std.mem.eql(u8, raw, "--end-slot")) return .end_slot;
         if (std.mem.eql(u8, raw, "--rate-hz")) return .rate_hz;
@@ -271,6 +303,7 @@ const Arg = enum {
         if (std.mem.eql(u8, raw, "--shred-kind")) return .shred_kind;
         if (std.mem.eql(u8, raw, "--plan-limit")) return .plan_limit;
         if (std.mem.eql(u8, raw, "--corrupt-bytes")) return .corrupt_bytes;
+        if (std.mem.eql(u8, raw, "--fec-set")) return .fec_set;
         if (std.mem.eql(u8, raw, "--dry-run")) return .dry_run;
         return null;
     }
@@ -280,6 +313,7 @@ const Arg = enum {
             .help => "--help",
             .ledger => "--ledger",
             .target => "--target",
+            .dump_shreds => "--dump-shreds",
             .start_slot => "--start-slot",
             .end_slot => "--end-slot",
             .rate_hz => "--rate-hz",
@@ -289,6 +323,7 @@ const Arg = enum {
             .shred_kind => "--shred-kind",
             .plan_limit => "--plan-limit",
             .corrupt_bytes => "--corrupt-bytes",
+            .fec_set => "--fec-set",
             .dry_run => "--dry-run",
         };
     }
@@ -323,20 +358,20 @@ pub fn main() !void {
 }
 
 fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
-    const target = try std.net.Address.parseIpAndPort(config.target);
-
     var blockstore = try AgaveBlockstore.open(allocator, config.ledger);
     defer blockstore.deinit(allocator);
 
     try stdout.print("shred-stream config:\n", .{});
     try stdout.print("  ledger: {s}\n", .{config.ledger});
     try stdout.print("  rocksdb: {s}\n", .{blockstore.rocksdb_path});
-    try stdout.print("  target: {s}\n", .{config.target});
+    try stdout.print("  target: {?s}\n", .{config.target});
+    try stdout.print("  dump_shreds: {?s}\n", .{config.dump_shreds});
     try stdout.print("  start_slot: {?d}\n", .{config.start_slot});
     try stdout.print("  end_slot: {?d}\n", .{config.end_slot});
     try stdout.print("  rate_hz: {?}\n", .{config.rate_hz});
     try stdout.print("  test_mode: {s}\n", .{config.test_mode.name()});
     try stdout.print("  seed: {?}\n", .{config.seed});
+    try stdout.print("  fec_set: {?}\n", .{config.fec_set});
     if (config.test_mode.usesSelectedShreds()) {
         try stdout.print("  selected_count: {d}\n", .{config.selected_count});
         try stdout.print("  shred_kind: {s}\n", .{config.shred_kind.name()});
@@ -378,49 +413,41 @@ fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
         const stats = try scanLedger(&blockstore, config);
         try printLedgerStats(stdout, stats);
     } else {
-        const sockfd = try std.posix.socket(
-            target.any.family,
-            std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC,
-            std.posix.IPPROTO.UDP,
-        );
-        // The net thread borrows this fd. Keep ownership here so every path joins
-        // the net thread before closing the fd exactly once.
-        defer std.posix.close(sockfd);
+        const sink = try openSink(config);
+        defer sink.close();
 
         var ring: StreamPacketRing = undefined;
         ring.init();
 
         var producer_done: std.atomic.Value(bool) = .init(false);
         var stop: std.atomic.Value(bool) = .init(false);
-        var net_thread_failed: std.atomic.Value(bool) = .init(false);
-        var net_thread_stats: NetThreadStats = .{};
-        var net_progress: NetThreadProgress = .{};
+        var sink_thread_failed: std.atomic.Value(bool) = .init(false);
+        var sink_stats: SinkStats = .{};
+        var sink_progress: SinkProgress = .{};
         var producer_failed: std.atomic.Value(bool) = .init(false);
         var producer_progress: ProducerProgress = .{};
         var producer_result: ProducerThreadResult = .{};
 
-        var maybe_net_thread: ?std.Thread = null;
+        var maybe_sink_thread: ?std.Thread = null;
         var maybe_producer_thread: ?std.Thread = null;
         errdefer {
             stop.store(true, .release);
             producer_done.store(true, .release);
             if (maybe_producer_thread) |thread| thread.join();
-            if (maybe_net_thread) |thread| thread.join();
+            if (maybe_sink_thread) |thread| thread.join();
         }
 
-        maybe_net_thread = try std.Thread.spawn(
+        maybe_sink_thread = try std.Thread.spawn(
             .{},
-            netThreadMain,
+            sinkThreadMain,
             .{
                 &ring,
                 &producer_done,
                 &stop,
-                &net_thread_stats,
-                &net_progress,
-                &net_thread_failed,
-                sockfd,
-                target,
-                config.rate_hz,
+                &sink_stats,
+                &sink_progress,
+                &sink_thread_failed,
+                sink,
             },
         );
 
@@ -447,20 +474,20 @@ fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
             &producer_done,
             &stop,
             &producer_progress,
-            &net_progress,
+            &sink_progress,
             config.rate_hz,
         );
 
         maybe_producer_thread.?.join();
         maybe_producer_thread = null;
-        maybe_net_thread.?.join();
-        maybe_net_thread = null;
+        maybe_sink_thread.?.join();
+        maybe_sink_thread = null;
 
         try printProducerStats(stdout, producer_result.stats);
-        try printNetThreadStats(stdout, net_thread_stats);
+        try printSinkStats(stdout, sink_stats);
 
         if (producer_failed.load(.monotonic)) return error.ProducerThreadFailed;
-        if (net_thread_failed.load(.monotonic)) return error.NetThreadFailed;
+        if (sink_thread_failed.load(.monotonic)) return error.SinkThreadFailed;
     }
 }
 
@@ -630,14 +657,30 @@ const StreamPacket = extern struct {
 
 const StreamPacketRing = Ring(stream_queue_packets, StreamPacket);
 
-const NetThreadStats = struct {
+const Sink = union(enum) {
+    udp: struct {
+        sockfd: std.posix.fd_t,
+        target: std.net.Address,
+        rate_hz: ?f64,
+    },
+    file: std.fs.File,
+
+    fn close(self: Sink) void {
+        switch (self) {
+            .udp => |udp| std.posix.close(udp.sockfd),
+            .file => |file| file.close(),
+        }
+    }
+};
+
+const SinkStats = struct {
     data_packets: u64 = 0,
     code_packets: u64 = 0,
     payload_bytes: u64 = 0,
     empty_polls: u64 = 0,
-    send_errors: u64 = 0,
+    write_errors: u64 = 0,
 
-    fn recordPacket(self: *NetThreadStats, packet: *const StreamPacket) void {
+    fn recordPacket(self: *SinkStats, packet: *const StreamPacket) void {
         switch (packet.kind) {
             .data => self.data_packets += 1,
             .code => self.code_packets += 1,
@@ -646,19 +689,19 @@ const NetThreadStats = struct {
     }
 };
 
-const NetThreadProgress = struct {
+const SinkProgress = struct {
     data_packets: std.atomic.Value(u64) = .init(0),
     code_packets: std.atomic.Value(u64) = .init(0),
     payload_bytes: std.atomic.Value(u64) = .init(0),
     empty_polls: std.atomic.Value(u64) = .init(0),
-    send_errors: std.atomic.Value(u64) = .init(0),
+    write_errors: std.atomic.Value(u64) = .init(0),
 
-    fn store(self: *NetThreadProgress, stats: NetThreadStats) void {
+    fn store(self: *SinkProgress, stats: SinkStats) void {
         self.data_packets.store(stats.data_packets, .release);
         self.code_packets.store(stats.code_packets, .release);
         self.payload_bytes.store(stats.payload_bytes, .release);
         self.empty_polls.store(stats.empty_polls, .release);
-        self.send_errors.store(stats.send_errors, .release);
+        self.write_errors.store(stats.write_errors, .release);
     }
 };
 
@@ -709,64 +752,84 @@ const ProgressSnapshot = struct {
 
     fn init(
         producer_progress: *ProducerProgress,
-        net_progress: *NetThreadProgress,
+        sink_progress: *SinkProgress,
     ) ProgressSnapshot {
         const produced_packets = producer_progress.data_packets.load(.acquire) +
             producer_progress.code_packets.load(.acquire);
-        const sent_packets = net_progress.data_packets.load(.acquire) +
-            net_progress.code_packets.load(.acquire);
+        const sent_packets = sink_progress.data_packets.load(.acquire) +
+            sink_progress.code_packets.load(.acquire);
 
         return .{
             .produced_packets = produced_packets,
             .sent_packets = sent_packets,
             .producer_full_polls = producer_progress.full_polls.load(.acquire),
-            .sender_empty_polls = net_progress.empty_polls.load(.acquire),
+            .sender_empty_polls = sink_progress.empty_polls.load(.acquire),
         };
     }
 };
 
-// Adapts the fallible net thread loop to std.Thread.spawn's void entry point.
-fn netThreadMain(
+fn openSink(config: Config) !Sink {
+    if (config.target) |raw_target| {
+        const target = try std.net.Address.parseIpAndPort(raw_target);
+        const sockfd = try std.posix.socket(
+            target.any.family,
+            std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC,
+            std.posix.IPPROTO.UDP,
+        );
+        return .{ .udp = .{ .sockfd = sockfd, .target = target, .rate_hz = config.rate_hz } };
+    }
+
+    const file = try std.fs.cwd().createFile(config.dump_shreds.?, .{});
+    return .{ .file = file };
+}
+
+// Adapts the fallible sink thread loop to std.Thread.spawn's void entry point.
+fn sinkThreadMain(
     ring: *StreamPacketRing,
     done: *std.atomic.Value(bool),
     stop: *std.atomic.Value(bool),
-    stats: *NetThreadStats,
-    progress: *NetThreadProgress,
+    stats: *SinkStats,
+    progress: *SinkProgress,
     failed: *std.atomic.Value(bool),
-    sockfd: std.posix.fd_t,
-    target: std.net.Address,
-    rate_hz: ?f64,
+    sink: Sink,
 ) !void {
     var reader = ring.get(.reader);
-    netThreadMainInner(
+    sinkThreadMainInner(
         &reader,
         done,
         stop,
         stats,
         progress,
-        sockfd,
-        target,
-        rate_hz,
+        sink,
     ) catch |err| {
         failed.store(true, .release);
-        stats.send_errors += 1;
+        stats.write_errors += 1;
         progress.store(stats.*);
         stop.store(true, .release);
         return err;
     };
 }
 
-fn netThreadMainInner(
+fn sinkThreadMainInner(
     reader: *StreamPacketRing.Iterator(.reader),
     done: *std.atomic.Value(bool),
     stop: *std.atomic.Value(bool),
-    stats: *NetThreadStats,
-    progress: *NetThreadProgress,
-    sockfd: std.posix.fd_t,
-    target: std.net.Address,
-    rate_hz: ?f64,
+    stats: *SinkStats,
+    progress: *SinkProgress,
+    sink: Sink,
 ) !void {
     defer reader.markUsed();
+
+    var file_buf: [1024 * 1024]u8 = undefined;
+    var file_writer = switch (sink) {
+        .file => |file| file.writer(&file_buf),
+        .udp => undefined,
+    };
+
+    const rate_hz = switch (sink) {
+        .udp => |udp| udp.rate_hz,
+        .file => null,
+    };
 
     const packet_interval_ns: ?u64 = if (rate_hz) |rate|
         @max(1, @as(u64, @intFromFloat(@ceil(@as(f64, @floatFromInt(std.time.ns_per_s)) / rate))))
@@ -780,40 +843,15 @@ fn netThreadMainInner(
         while (consumed < producer_publish_packets) {
             const packet = reader.next() orelse break;
 
-            if (packet_interval_ns) |interval_ns| {
-                const now = try std.time.Instant.now();
-                const now_offset_ns = if (base_instant) |base|
-                    now.since(base)
-                else blk: {
-                    base_instant = now;
-                    break :blk 0;
-                };
-
-                if (now_offset_ns < next_send_offset_ns) {
-                    std.Thread.sleep(next_send_offset_ns - now_offset_ns);
-                }
-
-                const sent = try std.posix.sendto(
-                    sockfd,
-                    packet.data[0..packet.len],
-                    std.posix.MSG.NOSIGNAL,
-                    &target.any,
-                    target.getOsSockLen(),
-                );
-                std.debug.assert(sent == packet.len);
-
-                const after = try std.time.Instant.now();
-                const after_offset_ns = after.since(base_instant.?);
-                next_send_offset_ns = @max(next_send_offset_ns, after_offset_ns) + interval_ns;
-            } else {
-                const sent = try std.posix.sendto(
-                    sockfd,
-                    packet.data[0..packet.len],
-                    std.posix.MSG.NOSIGNAL,
-                    &target.any,
-                    target.getOsSockLen(),
-                );
-                std.debug.assert(sent == packet.len);
+            switch (sink) {
+                .udp => |udp| try sendUdpPacket(
+                    udp,
+                    packet,
+                    packet_interval_ns,
+                    &base_instant,
+                    &next_send_offset_ns,
+                ),
+                .file => try writeShredRecord(&file_writer.interface, packet),
             }
 
             stats.recordPacket(packet);
@@ -832,6 +870,56 @@ fn netThreadMainInner(
         }
         std.atomic.spinLoopHint();
     }
+
+    if (sink == .file) try file_writer.interface.flush();
+}
+
+fn sendUdpPacket(
+    udp: @TypeOf(@as(Sink, undefined).udp),
+    packet: *const StreamPacket,
+    packet_interval_ns: ?u64,
+    base_instant: *?std.time.Instant,
+    next_send_offset_ns: *u64,
+) !void {
+    if (packet_interval_ns) |interval_ns| {
+        const now = try std.time.Instant.now();
+        const now_offset_ns = if (base_instant.*) |base|
+            now.since(base)
+        else blk: {
+            base_instant.* = now;
+            break :blk 0;
+        };
+
+        if (now_offset_ns < next_send_offset_ns.*) {
+            std.Thread.sleep(next_send_offset_ns.* - now_offset_ns);
+        }
+
+        try sendUdpPacketNow(udp, packet);
+
+        const after = try std.time.Instant.now();
+        const after_offset_ns = after.since(base_instant.*.?);
+        next_send_offset_ns.* = @max(next_send_offset_ns.*, after_offset_ns) + interval_ns;
+    } else {
+        try sendUdpPacketNow(udp, packet);
+    }
+}
+
+fn sendUdpPacketNow(udp: @TypeOf(@as(Sink, undefined).udp), packet: *const StreamPacket) !void {
+    const sent = try std.posix.sendto(
+        udp.sockfd,
+        packet.data[0..packet.len],
+        std.posix.MSG.NOSIGNAL,
+        &udp.target.any,
+        udp.target.getOsSockLen(),
+    );
+    std.debug.assert(sent == packet.len);
+}
+
+fn writeShredRecord(writer: *std.Io.Writer, packet: *const StreamPacket) !void {
+    var len_buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &len_buf, packet.len, .little);
+    try writer.writeAll(&len_buf);
+    try writer.writeAll(packet.data[0..packet.len]);
 }
 
 fn producerThreadMain(
@@ -871,22 +959,22 @@ fn monitorProgress(
     producer_done: *std.atomic.Value(bool),
     stop: *std.atomic.Value(bool),
     producer_progress: *ProducerProgress,
-    net_progress: *NetThreadProgress,
+    sink_progress: *SinkProgress,
     rate_hz: ?f64,
 ) !void {
-    var last_snapshot = ProgressSnapshot.init(producer_progress, net_progress);
+    var last_snapshot = ProgressSnapshot.init(producer_progress, sink_progress);
     while (!stop.load(.acquire) and !producer_done.load(.acquire)) {
         std.Thread.sleep(std.time.ns_per_s);
-        try printProgress(stdout, ring, producer_progress, net_progress, last_snapshot, rate_hz);
-        last_snapshot = ProgressSnapshot.init(producer_progress, net_progress);
+        try printProgress(stdout, ring, producer_progress, sink_progress, last_snapshot, rate_hz);
+        last_snapshot = ProgressSnapshot.init(producer_progress, sink_progress);
     }
 
     while (!stop.load(.acquire)) {
         const queue_packets = ring.tail.value.load(.acquire) -% ring.head.value.load(.acquire);
         if (queue_packets == 0) break;
         std.Thread.sleep(std.time.ns_per_s);
-        try printProgress(stdout, ring, producer_progress, net_progress, last_snapshot, rate_hz);
-        last_snapshot = ProgressSnapshot.init(producer_progress, net_progress);
+        try printProgress(stdout, ring, producer_progress, sink_progress, last_snapshot, rate_hz);
+        last_snapshot = ProgressSnapshot.init(producer_progress, sink_progress);
     }
 }
 
@@ -894,7 +982,7 @@ fn printProgress(
     stdout: *std.Io.Writer,
     ring: *StreamPacketRing,
     producer_progress: *ProducerProgress,
-    net_progress: *NetThreadProgress,
+    sink_progress: *SinkProgress,
     last_snapshot: ProgressSnapshot,
     rate_hz: ?f64,
 ) !void {
@@ -903,14 +991,14 @@ fn printProgress(
     const produced_data = producer_progress.data_packets.load(.acquire);
     const produced_code = producer_progress.code_packets.load(.acquire);
     const produced_packets = produced_data + produced_code;
-    const sent_data = net_progress.data_packets.load(.acquire);
-    const sent_code = net_progress.code_packets.load(.acquire);
+    const sent_data = sink_progress.data_packets.load(.acquire);
+    const sent_code = sink_progress.code_packets.load(.acquire);
     const sent_packets = sent_data + sent_code;
     const send_pps = sent_packets -| last_snapshot.sent_packets;
     const produced_pps = produced_packets -| last_snapshot.produced_packets;
     const queue_packets = ring.tail.value.load(.acquire) -% ring.head.value.load(.acquire);
     const producer_full_polls = producer_progress.full_polls.load(.acquire);
-    const sender_empty_polls = net_progress.empty_polls.load(.acquire);
+    const sender_empty_polls = sink_progress.empty_polls.load(.acquire);
     const producer_blocked = queue_packets == stream_queue_packets or
         producer_full_polls != last_snapshot.producer_full_polls;
     const net_idle = sender_empty_polls != last_snapshot.sender_empty_polls;
@@ -1093,6 +1181,7 @@ fn produceOrderedLedgerPackets(
         if (direction == .reverse and blockstore.has_code_shred) {
             try produceSlotShreds(
                 blockstore,
+                config,
                 slot,
                 .code,
                 direction,
@@ -1105,6 +1194,7 @@ fn produceOrderedLedgerPackets(
         }
         try produceSlotShreds(
             blockstore,
+            config,
             slot,
             .data,
             direction,
@@ -1117,6 +1207,7 @@ fn produceOrderedLedgerPackets(
         if (direction == .forward and blockstore.has_code_shred) {
             try produceSlotShreds(
                 blockstore,
+                config,
                 slot,
                 .code,
                 direction,
@@ -1197,9 +1288,9 @@ fn produceSlotShuffledPackets(
         if (!config.slotSelected(slot)) continue;
 
         refs.clearRetainingCapacity();
-        try collectSlotShredRefs(allocator, blockstore, slot, .data, &refs, stop);
+        try collectSlotShredRefs(allocator, blockstore, config, slot, .data, &refs, stop);
         if (blockstore.has_code_shred) {
-            try collectSlotShredRefs(allocator, blockstore, slot, .code, &refs, stop);
+            try collectSlotShredRefs(allocator, blockstore, config, slot, .code, &refs, stop);
         }
 
         prng.random().shuffleWithIndex(ShredRef, refs.items, u64);
@@ -1267,9 +1358,17 @@ fn buildOrderedRefSchedule(
         if (!config.slotSelected(slot)) continue;
 
         schedule.selected_slots += 1;
-        try collectSlotShredRefs(allocator, blockstore, slot, .data, &schedule.refs, stop);
+        try collectSlotShredRefs(allocator, blockstore, config, slot, .data, &schedule.refs, stop);
         if (blockstore.has_code_shred) {
-            try collectSlotShredRefs(allocator, blockstore, slot, .code, &schedule.refs, stop);
+            try collectSlotShredRefs(
+                allocator,
+                blockstore,
+                config,
+                slot,
+                .code,
+                &schedule.refs,
+                stop,
+            );
         }
     }
 
@@ -1279,6 +1378,7 @@ fn buildOrderedRefSchedule(
 fn collectSlotShredRefs(
     allocator: Allocator,
     blockstore: *const AgaveBlockstore,
+    config: Config,
     slot: Slot,
     kind: ShredKind,
     refs: *std.ArrayList(ShredRef),
@@ -1308,6 +1408,7 @@ fn collectSlotShredRefs(
             return err;
         };
         if (key.slot != slot) break;
+        if (!try config.fecSetSelected(entry[1].data)) continue;
         try refs.append(
             allocator,
             .{ .slot = key.slot, .index = key.index, .kind = kind },
@@ -1677,6 +1778,7 @@ fn publishPacket(
 
 fn produceSlotShreds(
     blockstore: *const AgaveBlockstore,
+    config: Config,
     slot: Slot,
     kind: ShredKind,
     comptime direction: rocks.IteratorDirection,
@@ -1718,6 +1820,7 @@ fn produceSlotShreds(
             return err;
         };
         if (key.slot != slot) break;
+        if (!try config.fecSetSelected(entry[1].data)) continue;
         try publishPacket(
             key,
             kind,
@@ -1795,7 +1898,8 @@ fn scanShreds(
             return err;
         };
         if (config.pastEndSlot(key.slot)) break;
-        stats.record(key, entry[1].data.len, config.slotSelected(key.slot));
+        const selected = config.slotSelected(key.slot) and try config.fecSetSelected(entry[1].data);
+        stats.record(key, entry[1].data.len, selected);
     }
 
     return stats;
@@ -1920,14 +2024,14 @@ fn printProducerStats(stdout: *std.Io.Writer, stats: ProducerStats) !void {
     try stdout.print("  payload_bytes: {d}\n", .{stats.payload_bytes});
 }
 
-fn printNetThreadStats(stdout: *std.Io.Writer, stats: NetThreadStats) !void {
-    try stdout.print("net_thread:\n", .{});
+fn printSinkStats(stdout: *std.Io.Writer, stats: SinkStats) !void {
+    try stdout.print("sink:\n", .{});
     try stdout.print("  data_packets: {d}\n", .{stats.data_packets});
     try stdout.print("  code_packets: {d}\n", .{stats.code_packets});
     try stdout.print("  total_packets: {d}\n", .{stats.data_packets + stats.code_packets});
     try stdout.print("  payload_bytes: {d}\n", .{stats.payload_bytes});
     try stdout.print("  empty_polls: {d}\n", .{stats.empty_polls});
-    try stdout.print("  send_errors: {d}\n", .{stats.send_errors});
+    try stdout.print("  write_errors: {d}\n", .{stats.write_errors});
 }
 
 fn printShredStats(stdout: *std.Io.Writer, name: []const u8, stats: ShredStats) !void {
@@ -1961,6 +2065,17 @@ fn parseShredKey(key: []const u8) !ShredKey {
         .slot = std.mem.readInt(u64, key[0..8], .big),
         .index = std.mem.readInt(u64, key[8..16], .big),
     };
+}
+
+fn parseShredFecSetIndex(packet_data: []const u8) !u32 {
+    if (packet_data.len < shred_fec_set_index_offset + @sizeOf(u32)) {
+        return error.InvalidShredPacket;
+    }
+    return std.mem.readInt(
+        u32,
+        packet_data[shred_fec_set_index_offset..][0..@sizeOf(u32)],
+        .little,
+    );
 }
 
 fn writeShredKey(key: *[16]u8, shred_key: ShredKey) void {
@@ -2088,6 +2203,7 @@ fn parseArgs(args: []const []const u8) ParseArgsError!ParseResult {
             .help => unreachable,
             .ledger => config.ledger = try nextValue(args, &i, parsed_arg.name()),
             .target => config.target = try nextValue(args, &i, parsed_arg.name()),
+            .dump_shreds => config.dump_shreds = try nextValue(args, &i, parsed_arg.name()),
             .start_slot => config.start_slot = try parseSlot(
                 try nextValue(args, &i, parsed_arg.name()),
                 parsed_arg.name(),
@@ -2113,6 +2229,9 @@ fn parseArgs(args: []const []const u8) ParseArgsError!ParseResult {
                 try nextValue(args, &i, parsed_arg.name()),
             ),
             .corrupt_bytes => config.corrupt_bytes = try parseCorruptBytes(
+                try nextValue(args, &i, parsed_arg.name()),
+            ),
+            .fec_set => config.fec_set = try parseFecSet(
                 try nextValue(args, &i, parsed_arg.name()),
             ),
             .dry_run => config.dry_run = true,
@@ -2218,6 +2337,18 @@ fn parseCorruptBytes(value: []const u8) ParseArgsError!usize {
     return corrupt_bytes;
 }
 
+fn parseFecSet(value: []const u8) ParseArgsError!u32 {
+    const fec_set = std.fmt.parseUnsigned(u32, value, 10) catch {
+        std.debug.print("invalid fec set for --fec-set: {s}\n", .{value});
+        return error.InvalidArguments;
+    };
+    if (fec_set % 32 != 0) {
+        std.debug.print("--fec-set must be a multiple of 32\n", .{});
+        return error.InvalidArguments;
+    }
+    return fec_set;
+}
+
 fn printHelp() void {
     std.debug.print(
         \\usage: shred-stream --ledger <path> --target <ip:port> [options]
@@ -2225,6 +2356,8 @@ fn printHelp() void {
         \\required:
         \\  --ledger <path>       Agave ledger directory or rocksdb directory
         \\  --target <ip:port>    UDP target, usually 127.0.0.1:8002
+        \\  --dump-shreds <path>  Write streamed shreds to a v1 length-prefixed .bin file
+        \\                        Exactly one of --target or --dump-shreds is required unless --dry-run
         \\
         \\options:
         \\  --start-slot <slot>   First slot to stream
@@ -2236,6 +2369,7 @@ fn printHelp() void {
         \\  --shred-kind <kind>   any, data, or code shreds for selected-shred modes (default: any)
         \\  --plan-limit <n>      Maximum affected slots to preview for selected-shred modes (default: 20)
         \\  --corrupt-bytes <n>   Packet bytes to flip per selected shred in corrupt mode (default: 1)
+        \\  --fec-set <idx>       Only stream the FEC set with this index in the selected slot
         \\  --dry-run             Read and print stats without sending UDP
         \\  -h, --help            Print this help
         \\
@@ -2247,7 +2381,8 @@ test "parse arguments" {
         const result = try parseArgs(&.{ "--ledger", "ledger", "--target", "127.0.0.1:8002" });
         const config = result.config;
         try std.testing.expectEqualStrings("ledger", config.ledger);
-        try std.testing.expectEqualStrings("127.0.0.1:8002", config.target);
+        try std.testing.expectEqualStrings("127.0.0.1:8002", config.target.?);
+        try std.testing.expectEqual(@as(?[]const u8, null), config.dump_shreds);
         try std.testing.expectEqual(@as(?Slot, null), config.start_slot);
         try std.testing.expectEqual(@as(?Slot, null), config.end_slot);
         try std.testing.expectEqual(@as(?f64, null), config.rate_hz);
@@ -2257,6 +2392,29 @@ test "parse arguments" {
         try std.testing.expectEqual(.any, config.shred_kind);
         try std.testing.expectEqual(@as(usize, 20), config.plan_limit);
         try std.testing.expect(!config.dry_run);
+    }
+
+    {
+        const result = try parseArgs(&.{ "--ledger", "ledger", "--dry-run" });
+        const config = result.config;
+        try std.testing.expectEqualStrings("ledger", config.ledger);
+        try std.testing.expectEqual(@as(?[]const u8, null), config.target);
+        try std.testing.expectEqual(@as(?[]const u8, null), config.dump_shreds);
+        try std.testing.expect(config.dry_run);
+    }
+
+    {
+        const result = try parseArgs(&.{
+            "--ledger",      "ledger",
+            "--dump-shreds", "shreds.bin",
+            "--start-slot",  "10",
+            "--end-slot",    "10",
+            "--fec-set",     "32",
+        });
+        const config = result.config;
+        try std.testing.expectEqual(@as(?[]const u8, null), config.target);
+        try std.testing.expectEqualStrings("shreds.bin", config.dump_shreds.?);
+        try std.testing.expectEqual(@as(?u32, 32), config.fec_set);
     }
 
     {
@@ -2418,10 +2576,37 @@ test "parse arguments" {
         try std.testing.expectEqual(@as(usize, 3), result.config.corrupt_bytes);
     }
 
+    {
+        const result = try parseArgs(&.{
+            "--ledger",     "ledger",
+            "--target",     "127.0.0.1:8002",
+            "--start-slot", "10",
+            "--end-slot",   "10",
+            "--fec-set",    "32",
+        });
+        try std.testing.expectEqual(@as(?u32, 32), result.config.fec_set);
+    }
+
     try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "shuffle-global",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger", "ledger",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",      "ledger",
+        "--target",      "127.0.0.1:8002",
+        "--dump-shreds", "shreds.bin",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",      "ledger",
+        "--dump-shreds", "shreds.bin",
+        "--rate-hz",     "100",
     }));
 
     try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
@@ -2526,6 +2711,28 @@ test "parse arguments" {
         "--start-slot", "10",
         "--end-slot",   "20",
         "--plan-limit", "5",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",  "ledger",
+        "--target",  "127.0.0.1:8002",
+        "--fec-set", "32",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",     "ledger",
+        "--target",     "127.0.0.1:8002",
+        "--start-slot", "10",
+        "--end-slot",   "20",
+        "--fec-set",    "32",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",     "ledger",
+        "--target",     "127.0.0.1:8002",
+        "--start-slot", "10",
+        "--end-slot",   "10",
+        "--fec-set",    "31",
     }));
 
     try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
@@ -2679,6 +2886,26 @@ test "parse and write shred keys" {
     try std.testing.expectEqualSlices(u8, &key, &written_key);
 
     try std.testing.expectError(error.InvalidShredKey, parseShredKey(&.{ 1, 2, 3 }));
+}
+
+test "parse shred fec set index" {
+    var packet_data: [max_shred_packet_bytes]u8 = undefined;
+    @memset(&packet_data, 0);
+    std.mem.writeInt(
+        u32,
+        packet_data[shred_fec_set_index_offset..][0..@sizeOf(u32)],
+        64,
+        .little,
+    );
+
+    try std.testing.expectEqual(
+        @as(u32, 64),
+        try parseShredFecSetIndex(&packet_data),
+    );
+    try std.testing.expectError(
+        error.InvalidShredPacket,
+        parseShredFecSetIndex(packet_data[0..shred_fec_set_index_offset]),
+    );
 }
 
 test "slot bounds helpers respect optional bounds" {
