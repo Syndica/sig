@@ -183,6 +183,19 @@ pub const UpdateCommission = struct {
     };
 };
 
+/// SIMD-0291: Commission Rate in Basis Points
+pub const UpdateCommissionBps = struct {
+    commission_bps: u16,
+    kind: CommissionKind,
+
+    pub const AccountIndex = enum(u8) {
+        /// `[Write]` Vote account to be updated
+        account = 0,
+        /// `[SIGNER]` Withdraw authority
+        current_authority = 1,
+    };
+};
+
 pub const Withdraw = struct {
     pub const AccountIndex = enum(u8) {
         /// `[Write]` Vote account to be updated
@@ -516,6 +529,22 @@ pub const Instruction = union(enum(u32)) {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L202
     update_commission_collector: CommissionKind,
 
+    /// Update the commission for the vote account, measured in basis points (SIMD-0291).
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to be updated
+    ///   1. `[SIGNER]` Withdraw authority
+    ///
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L212-L221
+    update_commission_bps: UpdateCommissionBps,
+
+    /// Deposit delegator rewards into the vote account (SIMD-0123).
+    ///
+    /// TODO: implement when SIMD-0123 (block_revenue_sharing) lands in sig.
+    ///
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L223-L228
+    _reserved_deposit_delegator_rewards: void,
+
     pub fn deinit(self: Instruction, allocator: std.mem.Allocator) void {
         switch (self) {
             .initialize_account,
@@ -525,6 +554,8 @@ pub const Instruction = union(enum(u32)) {
             .update_commission,
             .initialize_account_v2,
             .update_commission_collector,
+            .update_commission_bps,
+            ._reserved_deposit_delegator_rewards,
             .authorize_checked,
             => {},
 

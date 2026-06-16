@@ -1539,6 +1539,12 @@
         .status = .supported,
     },
     .{
+        .name = "direct_account_pointers_in_program_input",
+        .pubkey = "ptr9umikaeAS7ZBBp2fsfRhie16F1V2jCKA2y6gXNAK",
+        .description = "SIMD-0449: Direct account pointers in program input",
+        .status = .supported,
+    },
+    .{
         .name = "account_data_direct_mapping",
         .pubkey = "CR3dVN2Yoo95Y96kLSTaziWDAQT2MNEpiWh5cqVq2pNE",
         .description = "enable account data direct mapping",
@@ -1766,6 +1772,12 @@
         .status = .supported,
     },
     .{
+        .name = "commission_rate_in_basis_points",
+        .pubkey = "Eg7tXEwMZzS98xaZ1YHUbdRHsaYZiCsSaR6sKgxreoaj",
+        .description = "SIMD-0291: Commission Rate in Basis Points",
+        .status = .supported,
+    },
+    .{
         .name = "block_revenue_sharing",
         .pubkey = "B1ockRevenueSharing111111111111111111111111",
         .description = "SIMD-0123: Block Revenue Sharing",
@@ -1792,18 +1804,6 @@
         \\ bls_pubkey_management_in_vote_account, commission_rate_in_basis_points,
         \\ custom_commission_collector, block_revenue_sharing and
         \\ vote_account_initialize_v2 are active.
-        ,
-    },
-    .{
-        .name = "commission_rate_in_basis_points",
-        .pubkey = "Eg7tXEwMZzS98xaZ1YHUbdRHsaYZiCsSaR6sKgxreoaj",
-        .description = "SIMD-0291: Commission Rate in Basis Points",
-        .status = .unsupported,
-        .note =
-        \\ TODO: Placeholder for SIMD-0291; the full implementation lands in
-        \\ a separate PR. Listed here so SIMD-0387's `is_init_account_v2_enabled`
-        \\ predicate can check this gate today, matching agave's
-        \\ five-feature AND.
         ,
     },
 }

@@ -1036,6 +1036,27 @@ pub const VoteState = union(enum(u32)) {
         }
     }
 
+    pub fn commissionBps(self: *const VoteState, use_bps: bool) u16 {
+        if (use_bps) {
+            if (self.inflationRewardsCommissionBps()) |bps| return bps;
+        }
+        return @as(u16, self.commission()) * 100;
+    }
+
+    pub fn blockRevenueCommissionBps(self: *const VoteState) ?u16 {
+        return switch (self.*) {
+            .v3 => null,
+            .v4 => |s| s.block_revenue_commission_bps,
+        };
+    }
+
+    pub fn setBlockRevenueCommissionBps(self: *VoteState, bps: u16) void {
+        switch (self.*) {
+            .v3 => {},
+            .v4 => |*s| s.block_revenue_commission_bps = bps,
+        }
+    }
+
     pub fn pendingDelegatorRewards(self: *const VoteState) u64 {
         return switch (self.*) {
             .v3 => 0,

@@ -828,6 +828,26 @@ fn parseVoteInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "updateCommissionCollector" });
         },
+        .update_commission_bps => |args| {
+            try checkNumVoteAccounts(instruction.accounts, 2);
+            var info = ObjectMap.init(arena);
+            try info.put("voteAccount", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            try info.put("withdrawAuthority", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(instruction.accounts[1])).?,
+            ));
+            try info.put("commissionBps", .{ .integer = @intCast(args.commission_bps) });
+            try info.put("commissionKind", .{ .string = switch (args.kind) {
+                .inflation_rewards => "InflationRewards",
+                .block_revenue => "BlockRevenue",
+            } });
+            try result.put("info", .{ .object = info });
+            try result.put("type", .{ .string = "updateCommissionBps" });
+        },
+        ._reserved_deposit_delegator_rewards => return error.ParseError,
     }
 
     return .{ .object = result };
