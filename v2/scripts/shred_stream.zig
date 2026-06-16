@@ -17,12 +17,38 @@ const producer_publish_packets: usize = 32;
 const stream_queue_packets = 8192;
 const no_current_slot = std.math.maxInt(Slot);
 
+const TestMode = enum {
+    linear,
+    reverse,
+    shuffle_global,
+    shuffle_slot,
+
+    fn parse(raw: []const u8) ?TestMode {
+        if (std.mem.eql(u8, raw, "linear")) return .linear;
+        if (std.mem.eql(u8, raw, "reverse")) return .reverse;
+        if (std.mem.eql(u8, raw, "shuffle-global")) return .shuffle_global;
+        if (std.mem.eql(u8, raw, "shuffle-slot")) return .shuffle_slot;
+        return null;
+    }
+
+    fn name(self: TestMode) []const u8 {
+        return switch (self) {
+            .linear => "linear",
+            .reverse => "reverse",
+            .shuffle_global => "shuffle-global",
+            .shuffle_slot => "shuffle-slot",
+        };
+    }
+};
+
 const Config = struct {
     ledger: []const u8,
     target: []const u8,
     start_slot: ?Slot = null,
     end_slot: ?Slot = null,
     rate_hz: ?f64 = null,
+    test_mode: TestMode = .linear,
+    seed: ?u64 = null,
     dry_run: bool = false,
 
     fn slotSelected(self: Config, slot: Slot) bool {
@@ -35,6 +61,17 @@ const Config = struct {
     fn pastEndSlot(self: Config, slot: Slot) bool {
         return if (self.end_slot) |end_slot| slot > end_slot else false;
     }
+
+    fn pastSlotRange(
+        self: Config,
+        slot: Slot,
+        comptime direction: rocks.IteratorDirection,
+    ) bool {
+        return switch (direction) {
+            .forward => self.pastEndSlot(slot),
+            .reverse => if (self.start_slot) |start_slot| slot < start_slot else false,
+        };
+    }
 };
 
 const PartialConfig = struct {
@@ -43,6 +80,8 @@ const PartialConfig = struct {
     start_slot: ?Slot = null,
     end_slot: ?Slot = null,
     rate_hz: ?f64 = null,
+    test_mode: TestMode = .linear,
+    seed: ?u64 = null,
     dry_run: bool = false,
 
     fn finalize(self: PartialConfig) ParseArgsError!Config {
@@ -63,12 +102,39 @@ const PartialConfig = struct {
             return error.InvalidArguments;
         }
 
+        switch (self.test_mode) {
+            .linear, .reverse => {
+                if (self.seed != null) {
+                    std.debug.print(
+                        "--seed is only valid with --test-mode shuffle-global or shuffle-slot\n",
+                        .{},
+                    );
+                    return error.InvalidArguments;
+                }
+            },
+            .shuffle_global, .shuffle_slot => {
+                if (self.seed == null) {
+                    std.debug.print("--test-mode {s} requires --seed\n", .{self.test_mode.name()});
+                    return error.InvalidArguments;
+                }
+                if (self.start_slot == null or self.end_slot == null) {
+                    std.debug.print(
+                        "--test-mode {s} requires both --start-slot and --end-slot\n",
+                        .{self.test_mode.name()},
+                    );
+                    return error.InvalidArguments;
+                }
+            },
+        }
+
         return .{
             .ledger = ledger,
             .target = target,
             .start_slot = self.start_slot,
             .end_slot = self.end_slot,
             .rate_hz = self.rate_hz,
+            .test_mode = self.test_mode,
+            .seed = self.seed,
             .dry_run = self.dry_run,
         };
     }
@@ -90,6 +156,8 @@ const Arg = enum {
     start_slot,
     end_slot,
     rate_hz,
+    test_mode,
+    seed,
     dry_run,
 
     fn parse(raw: []const u8) ?Arg {
@@ -99,6 +167,8 @@ const Arg = enum {
         if (std.mem.eql(u8, raw, "--start-slot")) return .start_slot;
         if (std.mem.eql(u8, raw, "--end-slot")) return .end_slot;
         if (std.mem.eql(u8, raw, "--rate-hz")) return .rate_hz;
+        if (std.mem.eql(u8, raw, "--test-mode")) return .test_mode;
+        if (std.mem.eql(u8, raw, "--seed")) return .seed;
         if (std.mem.eql(u8, raw, "--dry-run")) return .dry_run;
         return null;
     }
@@ -111,6 +181,8 @@ const Arg = enum {
             .start_slot => "--start-slot",
             .end_slot => "--end-slot",
             .rate_hz => "--rate-hz",
+            .test_mode => "--test-mode",
+            .seed => "--seed",
             .dry_run => "--dry-run",
         };
     }
@@ -157,6 +229,8 @@ fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
     try stdout.print("  start_slot: {?d}\n", .{config.start_slot});
     try stdout.print("  end_slot: {?d}\n", .{config.end_slot});
     try stdout.print("  rate_hz: {?}\n", .{config.rate_hz});
+    try stdout.print("  test_mode: {s}\n", .{config.test_mode.name()});
+    try stdout.print("  seed: {?}\n", .{config.seed});
     try stdout.print("  dry_run: {}\n", .{config.dry_run});
     try stdout.print("  column_families:\n", .{});
     try stdout.print("    {s}: present\n", .{agave_cf_meta});
@@ -228,6 +302,7 @@ fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
             producerThreadMain,
             .{
                 &blockstore,
+                allocator,
                 config,
                 &ring,
                 &producer_done,
@@ -372,6 +447,25 @@ const ShredKind = enum(u8) {
     }
 };
 
+const ShredRef = struct {
+    slot: Slot,
+    index: u64,
+    kind: ShredKind,
+
+    fn key(self: ShredRef) ShredKey {
+        return .{ .slot = self.slot, .index = self.index };
+    }
+};
+
+const RefSchedule = struct {
+    refs: std.ArrayList(ShredRef) = .empty,
+    selected_slots: u64 = 0,
+
+    fn deinit(self: *RefSchedule, allocator: Allocator) void {
+        self.refs.deinit(allocator);
+    }
+};
+
 const StreamPacket = extern struct {
     data: [max_shred_packet_bytes]u8,
     slot: Slot,
@@ -477,6 +571,7 @@ const ProgressSnapshot = struct {
     }
 };
 
+// Adapts the fallible net thread loop to std.Thread.spawn's void entry point.
 fn netThreadMain(
     ring: *StreamPacketRing,
     done: *std.atomic.Value(bool),
@@ -587,6 +682,7 @@ fn netThreadMainInner(
 
 fn producerThreadMain(
     blockstore: *const AgaveBlockstore,
+    allocator: Allocator,
     config: Config,
     ring: *StreamPacketRing,
     done: *std.atomic.Value(bool),
@@ -596,7 +692,14 @@ fn producerThreadMain(
     result: *ProducerThreadResult,
 ) !void {
     var writer = ring.get(.writer);
-    result.stats = produceLedgerPackets(blockstore, config, &writer, stop, progress) catch |err| {
+    result.stats = produceLedgerPackets(
+        allocator,
+        blockstore,
+        config,
+        &writer,
+        stop,
+        progress,
+    ) catch |err| {
         failed.store(true, .release);
         stop.store(true, .release);
         done.store(true, .release);
@@ -735,6 +838,160 @@ fn scanLedger(blockstore: *const AgaveBlockstore, config: Config) !LedgerStats {
 }
 
 fn produceLedgerPackets(
+    allocator: Allocator,
+    blockstore: *const AgaveBlockstore,
+    config: Config,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
+) !ProducerStats {
+    return switch (config.test_mode) {
+        .linear => produceOrderedLedgerPackets(
+            blockstore,
+            config,
+            .forward,
+            writer,
+            stop,
+            progress,
+        ),
+        .reverse => produceOrderedLedgerPackets(
+            blockstore,
+            config,
+            .reverse,
+            writer,
+            stop,
+            progress,
+        ),
+        .shuffle_global => produceGlobalShuffledRefSchedule(
+            allocator,
+            blockstore,
+            config,
+            writer,
+            stop,
+            progress,
+        ),
+        .shuffle_slot => produceSlotShuffledPackets(
+            allocator,
+            blockstore,
+            config,
+            writer,
+            stop,
+            progress,
+        ),
+    };
+}
+
+fn produceOrderedLedgerPackets(
+    blockstore: *const AgaveBlockstore,
+    config: Config,
+    comptime direction: rocks.IteratorDirection,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
+) !ProducerStats {
+    var stats: ProducerStats = .{};
+    var unpublished_packets: usize = 0;
+
+    var start_key_buf: [8]u8 = undefined;
+    const start_key_slot = switch (direction) {
+        .forward => config.start_slot,
+        .reverse => config.end_slot,
+    };
+    const start_key: ?[]const u8 = if (start_key_slot) |slot| start_key: {
+        writeSlotKey(&start_key_buf, slot);
+        break :start_key start_key_buf[0..];
+    } else null;
+
+    var slot_iter = blockstore.db.iterator(
+        try blockstore.columnFamily(agave_cf_meta),
+        direction,
+        start_key,
+    );
+    defer slot_iter.deinit();
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    while (try slot_iter.next(&err_data)) |entry| {
+        if (stop.load(.acquire)) break;
+
+        const slot = parseSlotKey(entry[0].data) catch |err| {
+            std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
+            return err;
+        };
+        if (config.pastSlotRange(slot, direction)) break;
+        if (!config.slotSelected(slot)) continue;
+
+        progress.current_slot.store(slot, .release);
+        stats.recordSlot();
+        progress.store(stats);
+        if (direction == .reverse and blockstore.has_code_shred) {
+            try produceSlotShreds(
+                blockstore,
+                slot,
+                .code,
+                direction,
+                writer,
+                stop,
+                progress,
+                &unpublished_packets,
+                &stats,
+            );
+        }
+        try produceSlotShreds(
+            blockstore,
+            slot,
+            .data,
+            direction,
+            writer,
+            stop,
+            progress,
+            &unpublished_packets,
+            &stats,
+        );
+        if (direction == .forward and blockstore.has_code_shred) {
+            try produceSlotShreds(
+                blockstore,
+                slot,
+                .code,
+                direction,
+                writer,
+                stop,
+                progress,
+                &unpublished_packets,
+                &stats,
+            );
+        }
+    }
+
+    if (unpublished_packets != 0 and !stop.load(.acquire)) {
+        progress.store(stats);
+        writer.markUsed();
+    }
+
+    progress.store(stats);
+    return stats;
+}
+
+fn produceGlobalShuffledRefSchedule(
+    allocator: Allocator,
+    blockstore: *const AgaveBlockstore,
+    config: Config,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
+) !ProducerStats {
+    var schedule = try buildOrderedRefSchedule(allocator, blockstore, config, stop);
+    defer schedule.deinit(allocator);
+
+    var prng = std.Random.DefaultPrng.init(config.seed.?);
+    prng.random().shuffleWithIndex(ShredRef, schedule.refs.items, u64);
+
+    return produceRefSchedule(blockstore, schedule, writer, stop, progress);
+}
+
+fn produceSlotShuffledPackets(
+    allocator: Allocator,
     blockstore: *const AgaveBlockstore,
     config: Config,
     writer: *StreamPacketRing.Iterator(.writer),
@@ -743,6 +1000,80 @@ fn produceLedgerPackets(
 ) !ProducerStats {
     var stats: ProducerStats = .{};
     var unpublished_packets: usize = 0;
+    var prng = std.Random.DefaultPrng.init(config.seed.?);
+
+    var start_key_buf: [8]u8 = undefined;
+    const start_key: ?[]const u8 = if (config.start_slot) |slot| start_key: {
+        writeSlotKey(&start_key_buf, slot);
+        break :start_key start_key_buf[0..];
+    } else null;
+
+    var slot_iter = blockstore.db.iterator(
+        try blockstore.columnFamily(agave_cf_meta),
+        .forward,
+        start_key,
+    );
+    defer slot_iter.deinit();
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    var refs: std.ArrayList(ShredRef) = .empty;
+    defer refs.deinit(allocator);
+
+    while (try slot_iter.next(&err_data)) |entry| {
+        if (stop.load(.acquire)) break;
+
+        const slot = parseSlotKey(entry[0].data) catch |err| {
+            std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
+            return err;
+        };
+        if (config.pastEndSlot(slot)) break;
+        if (!config.slotSelected(slot)) continue;
+
+        refs.clearRetainingCapacity();
+        try collectSlotShredRefs(allocator, blockstore, slot, .data, &refs, stop);
+        if (blockstore.has_code_shred) {
+            try collectSlotShredRefs(allocator, blockstore, slot, .code, &refs, stop);
+        }
+
+        prng.random().shuffleWithIndex(ShredRef, refs.items, u64);
+
+        progress.current_slot.store(slot, .release);
+        stats.recordSlot();
+        progress.store(stats);
+
+        for (refs.items) |shred_ref| {
+            if (stop.load(.acquire)) break;
+            try produceShredByRef(
+                blockstore,
+                shred_ref,
+                writer,
+                stop,
+                progress,
+                &unpublished_packets,
+                &stats,
+            );
+        }
+    }
+
+    if (unpublished_packets != 0 and !stop.load(.acquire)) {
+        progress.store(stats);
+        writer.markUsed();
+    }
+
+    progress.store(stats);
+    return stats;
+}
+
+fn buildOrderedRefSchedule(
+    allocator: Allocator,
+    blockstore: *const AgaveBlockstore,
+    config: Config,
+    stop: *std.atomic.Value(bool),
+) !RefSchedule {
+    var schedule: RefSchedule = .{};
+    errdefer schedule.deinit(allocator);
 
     var start_key_buf: [8]u8 = undefined;
     const start_key: ?[]const u8 = if (config.start_slot) |slot| start_key: {
@@ -770,31 +1101,78 @@ fn produceLedgerPackets(
         if (config.pastEndSlot(slot)) break;
         if (!config.slotSelected(slot)) continue;
 
-        progress.current_slot.store(slot, .release);
-        stats.recordSlot();
+        schedule.selected_slots += 1;
+        try collectSlotShredRefs(allocator, blockstore, slot, .data, &schedule.refs, stop);
+        if (blockstore.has_code_shred) {
+            try collectSlotShredRefs(allocator, blockstore, slot, .code, &schedule.refs, stop);
+        }
+    }
+
+    return schedule;
+}
+
+fn collectSlotShredRefs(
+    allocator: Allocator,
+    blockstore: *const AgaveBlockstore,
+    slot: Slot,
+    kind: ShredKind,
+    refs: *std.ArrayList(ShredRef),
+    stop: *std.atomic.Value(bool),
+) !void {
+    var start_key_buf: [16]u8 = undefined;
+    writeShredKey(&start_key_buf, .{ .slot = slot, .index = 0 });
+
+    var iter = blockstore.db.iterator(
+        try blockstore.columnFamily(kind.columnFamilyName()),
+        .forward,
+        start_key_buf[0..],
+    );
+    defer iter.deinit();
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    while (try iter.next(&err_data)) |entry| {
+        if (stop.load(.acquire)) break;
+
+        const key = parseShredKey(entry[0].data) catch |err| {
+            std.debug.print(
+                "invalid {s} key length: {d}\n",
+                .{ kind.columnFamilyName(), entry[0].data.len },
+            );
+            return err;
+        };
+        if (key.slot != slot) break;
+        try refs.append(
+            allocator,
+            .{ .slot = key.slot, .index = key.index, .kind = kind },
+        );
+    }
+}
+
+fn produceRefSchedule(
+    blockstore: *const AgaveBlockstore,
+    schedule: RefSchedule,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
+) !ProducerStats {
+    var stats: ProducerStats = .{ .slots = schedule.selected_slots };
+    var unpublished_packets: usize = 0;
+
+    for (schedule.refs.items) |shred_ref| {
+        if (stop.load(.acquire)) break;
+        progress.current_slot.store(shred_ref.slot, .release);
         progress.store(stats);
-        try produceSlotShreds(
+        try produceShredByRef(
             blockstore,
-            slot,
-            .data,
+            shred_ref,
             writer,
             stop,
             progress,
             &unpublished_packets,
             &stats,
         );
-        if (blockstore.has_code_shred) {
-            try produceSlotShreds(
-                blockstore,
-                slot,
-                .code,
-                writer,
-                stop,
-                progress,
-                &unpublished_packets,
-                &stats,
-            );
-        }
     }
 
     if (unpublished_packets != 0 and !stop.load(.acquire)) {
@@ -804,6 +1182,41 @@ fn produceLedgerPackets(
 
     progress.store(stats);
     return stats;
+}
+
+fn produceShredByRef(
+    blockstore: *const AgaveBlockstore,
+    shred_ref: ShredRef,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
+    unpublished_packets: *usize,
+    stats: *ProducerStats,
+) !void {
+    var key_buf: [16]u8 = undefined;
+    writeShredKey(&key_buf, shred_ref.key());
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    const cf = try blockstore.columnFamily(shred_ref.kind.columnFamilyName());
+    const packet = try blockstore.db.get(
+        cf,
+        key_buf[0..],
+        &err_data,
+    ) orelse return error.MissingShred;
+    defer packet.deinit();
+
+    try publishPacket(
+        shred_ref.key(),
+        shred_ref.kind,
+        packet.data,
+        writer,
+        stop,
+        progress,
+        unpublished_packets,
+        stats,
+    );
 }
 
 fn publishPacket(
@@ -850,6 +1263,7 @@ fn produceSlotShreds(
     blockstore: *const AgaveBlockstore,
     slot: Slot,
     kind: ShredKind,
+    comptime direction: rocks.IteratorDirection,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
@@ -857,11 +1271,17 @@ fn produceSlotShreds(
     stats: *ProducerStats,
 ) !void {
     var start_key_buf: [16]u8 = undefined;
-    writeShredKey(&start_key_buf, .{ .slot = slot, .index = 0 });
+    writeShredKey(&start_key_buf, .{
+        .slot = slot,
+        .index = switch (direction) {
+            .forward => 0,
+            .reverse => std.math.maxInt(u64),
+        },
+    });
 
     var iter = blockstore.db.iterator(
         try blockstore.columnFamily(kind.columnFamilyName()),
-        .forward,
+        direction,
         start_key_buf[0..],
     );
     defer iter.deinit();
@@ -1173,6 +1593,10 @@ fn parseArgs(args: []const []const u8) ParseArgsError!ParseResult {
             .rate_hz => config.rate_hz = try parseRateHz(
                 try nextValue(args, &i, parsed_arg.name()),
             ),
+            .test_mode => config.test_mode = try parseTestMode(
+                try nextValue(args, &i, parsed_arg.name()),
+            ),
+            .seed => config.seed = try parseSeed(try nextValue(args, &i, parsed_arg.name())),
             .dry_run => config.dry_run = true,
         }
     }
@@ -1211,6 +1635,28 @@ fn parseRateHz(value: []const u8) ParseArgsError!f64 {
     return rate_hz;
 }
 
+fn parseTestMode(value: []const u8) ParseArgsError!TestMode {
+    return TestMode.parse(value) orelse {
+        std.debug.print("invalid test mode for --test-mode: {s}\n", .{value});
+        std.debug.print("valid test modes: linear, reverse, shuffle-global, shuffle-slot\n", .{});
+        return error.InvalidArguments;
+    };
+}
+
+fn parseSeed(value: []const u8) ParseArgsError!u64 {
+    if (std.mem.startsWith(u8, value, "0x") or std.mem.startsWith(u8, value, "0X")) {
+        return std.fmt.parseUnsigned(u64, value[2..], 16) catch {
+            std.debug.print("invalid seed for --seed: {s}\n", .{value});
+            return error.InvalidArguments;
+        };
+    }
+
+    return std.fmt.parseUnsigned(u64, value, 10) catch {
+        std.debug.print("invalid seed for --seed: {s}\n", .{value});
+        return error.InvalidArguments;
+    };
+}
+
 fn printHelp() void {
     std.debug.print(
         \\usage: shred-stream --ledger <path> --target <ip:port> [options]
@@ -1223,6 +1669,8 @@ fn printHelp() void {
         \\  --start-slot <slot>   First slot to stream
         \\  --end-slot <slot>     Inclusive last slot to stream
         \\  --rate-hz <float>     Maximum packets per second
+        \\  --test-mode <mode>    linear, reverse, shuffle-global, or shuffle-slot
+        \\  --seed <seed>         Decimal or 0x-prefixed seed for randomized test modes
         \\  --dry-run             Read and print stats without sending UDP
         \\  -h, --help            Print this help
         \\
@@ -1238,6 +1686,8 @@ test "parse arguments" {
         try std.testing.expectEqual(@as(?Slot, null), config.start_slot);
         try std.testing.expectEqual(@as(?Slot, null), config.end_slot);
         try std.testing.expectEqual(@as(?f64, null), config.rate_hz);
+        try std.testing.expectEqual(.linear, config.test_mode);
+        try std.testing.expectEqual(@as(?u64, null), config.seed);
         try std.testing.expect(!config.dry_run);
     }
 
@@ -1248,14 +1698,114 @@ test "parse arguments" {
             "--start-slot", "10",
             "--end-slot",   "20",
             "--rate-hz",    "100.5",
+            "--test-mode",  "reverse",
             "--dry-run",
         });
         const config = result.config;
         try std.testing.expectEqual(@as(?Slot, 10), config.start_slot);
         try std.testing.expectEqual(@as(?Slot, 20), config.end_slot);
         try std.testing.expectEqual(@as(?f64, 100.5), config.rate_hz);
+        try std.testing.expectEqual(.reverse, config.test_mode);
+        try std.testing.expectEqual(@as(?u64, null), config.seed);
         try std.testing.expect(config.dry_run);
     }
+
+    {
+        const result = try parseArgs(&.{
+            "--ledger",    "ledger",
+            "--target",    "127.0.0.1:8002",
+            "--test-mode", "linear",
+        });
+        try std.testing.expectEqual(.linear, result.config.test_mode);
+    }
+
+    {
+        const result = try parseArgs(&.{
+            "--ledger",     "ledger",
+            "--target",     "127.0.0.1:8002",
+            "--start-slot", "10",
+            "--end-slot",   "20",
+            "--test-mode",  "shuffle-global",
+            "--seed",       "0xdeadbeef",
+        });
+        try std.testing.expectEqual(.shuffle_global, result.config.test_mode);
+        try std.testing.expectEqual(@as(?u64, 0xdeadbeef), result.config.seed);
+    }
+
+    {
+        const result = try parseArgs(&.{
+            "--ledger",     "ledger",
+            "--target",     "127.0.0.1:8002",
+            "--start-slot", "10",
+            "--end-slot",   "20",
+            "--test-mode",  "shuffle-global",
+            "--seed",       "12345",
+        });
+        try std.testing.expectEqual(@as(?u64, 12345), result.config.seed);
+    }
+
+    {
+        const result = try parseArgs(&.{
+            "--ledger",     "ledger",
+            "--target",     "127.0.0.1:8002",
+            "--start-slot", "10",
+            "--end-slot",   "20",
+            "--test-mode",  "shuffle-slot",
+            "--seed",       "12345",
+        });
+        try std.testing.expectEqual(.shuffle_slot, result.config.test_mode);
+        try std.testing.expectEqual(@as(?u64, 12345), result.config.seed);
+    }
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",    "ledger",
+        "--target",    "127.0.0.1:8002",
+        "--test-mode", "shuffle-global",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",    "ledger",
+        "--target",    "127.0.0.1:8002",
+        "--test-mode", "shuffle-global",
+        "--seed",      "1",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",    "ledger",
+        "--target",    "127.0.0.1:8002",
+        "--test-mode", "shuffle-slot",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",    "ledger",
+        "--target",    "127.0.0.1:8002",
+        "--test-mode", "shuffle-slot",
+        "--seed",      "1",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",     "ledger",
+        "--target",     "127.0.0.1:8002",
+        "--start-slot", "10",
+        "--end-slot",   "20",
+        "--seed",       "1",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",    "ledger",
+        "--target",    "127.0.0.1:8002",
+        "--test-mode", "reverse",
+        "--seed",      "1",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",     "ledger",
+        "--target",     "127.0.0.1:8002",
+        "--start-slot", "10",
+        "--end-slot",   "20",
+        "--test-mode",  "shuffle-global",
+        "--seed",       "not-a-seed",
+    }));
 
     try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
         "--ledger",     "ledger",
