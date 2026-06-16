@@ -3,6 +3,7 @@ const std = @import("std");
 const sig = @import("../lib.zig");
 
 const AccountSharedData = @import("AccountSharedData.zig");
+const BlockhashQueue = sig.core.BlockhashQueue;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const TransactionError = sig.core.transaction_error.TransactionError;
@@ -63,6 +64,37 @@ pub const AccountReader = struct {
         };
 
         return .{ .ctx = &Reader.noop_context, .getFn = Reader.get };
+    }
+};
+
+pub const RecentBlockhashChecker = struct {
+    ctx: *const anyopaque,
+    isRecentBlockhashValidFn: *const fn (*const anyopaque, Hash, u64) bool,
+
+    pub fn isRecentBlockhashValid(
+        self: RecentBlockhashChecker,
+        blockhash: Hash,
+        max_age: u64,
+    ) bool {
+        return self.isRecentBlockhashValidFn(self.ctx, blockhash, max_age);
+    }
+
+    pub fn fromBlockhashQueue(blockhash_queue: *const BlockhashQueue) RecentBlockhashChecker {
+        const Checker = struct {
+            fn isRecentBlockhashValid(
+                ctx: *const anyopaque,
+                blockhash: Hash,
+                max_age: u64,
+            ) bool {
+                const queue: *const BlockhashQueue = @ptrCast(@alignCast(ctx));
+                return queue.isHashValidForAge(blockhash, max_age);
+            }
+        };
+
+        return .{
+            .ctx = blockhash_queue,
+            .isRecentBlockhashValidFn = Checker.isRecentBlockhashValid,
+        };
     }
 };
 

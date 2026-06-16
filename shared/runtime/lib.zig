@@ -55,6 +55,7 @@ pub const builtin_program_costs = program.builtin_program_costs;
 pub const BorrowedAccount = borrowed_account.BorrowedAccount;
 pub const AccountReader = execution_interfaces.AccountReader;
 pub const EpochStakeReader = execution_interfaces.EpochStakeReader;
+pub const RecentBlockhashChecker = execution_interfaces.RecentBlockhashChecker;
 pub const StatusChecker = execution_interfaces.StatusChecker;
 pub const BorrowedAccountContext = borrowed_account.BorrowedAccountContext;
 pub const InstructionContext = instruction_context.InstructionContext;

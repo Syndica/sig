@@ -31,6 +31,7 @@ pub const builtin_program_costs = shared.runtime.builtin_program_costs;
 pub const BorrowedAccount = shared.runtime.BorrowedAccount;
 pub const AccountReader = shared.runtime.AccountReader;
 pub const EpochStakeReader = shared.runtime.EpochStakeReader;
+pub const RecentBlockhashChecker = shared.runtime.RecentBlockhashChecker;
 pub const StatusChecker = shared.runtime.StatusChecker;
 pub const SlotAccountReaderAdapter = execution_adapters.SlotAccountReaderAdapter;
 pub const EpochStakeReaderAdapter = execution_adapters.EpochStakeReaderAdapter;

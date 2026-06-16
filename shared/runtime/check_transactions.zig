@@ -6,6 +6,7 @@ const tracy = @import("tracy");
 const Allocator = std.mem.Allocator;
 
 const AccountReader = sig.runtime.execution_interfaces.AccountReader;
+const RecentBlockhashChecker = sig.runtime.execution_interfaces.RecentBlockhashChecker;
 
 const Hash = sig.core.Hash;
 const BlockhashQueue = sig.core.BlockhashQueue;
@@ -34,7 +35,7 @@ const AccountLoadError = sig.runtime.execution_interfaces.AccountLoadError;
 const NONCED_TX_MARKER_IX_INDEX = 0;
 
 /// Requires full transaction to find nonce account in the event that the transactions recent blockhash
-/// is not in the blockhash queue within the max age. Also worth noting that Agave returns a CheckTransactionDetails
+/// is not considered valid within the max age. Also worth noting that Agave returns a CheckTransactionDetails
 /// struct which contains a lamports_per_signature field which is unused, hence we return only the nonce account
 /// if it exists.
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L105
@@ -42,13 +43,13 @@ pub fn checkAge(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     account_reader: AccountReader,
-    blockhash_queue: *const BlockhashQueue,
+    recent_blockhash_checker: RecentBlockhashChecker,
     max_age: u64,
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
     require_static_nonce_account: bool,
 ) AccountLoadError!TransactionResult(?LoadedAccount) {
-    if (blockhash_queue.getHashInfoIfValid(transaction.recent_blockhash, max_age) != null) {
+    if (recent_blockhash_checker.isRecentBlockhashValid(transaction.recent_blockhash, max_age)) {
         return .{ .ok = null };
     }
 
@@ -555,7 +556,7 @@ test "checkAge: recent blockhash" {
                 allocator,
                 &transaction,
                 AccountReader.noop(),
-                &blockhash_queue,
+                RecentBlockhashChecker.fromBlockhashQueue(&blockhash_queue),
                 max_age,
                 &Hash.ZEROES,
                 0,
@@ -573,7 +574,7 @@ test "checkAge: recent blockhash" {
             allocator,
             &transaction,
             AccountReader.noop(),
-            &blockhash_queue,
+            RecentBlockhashChecker.fromBlockhashQueue(&blockhash_queue),
             max_age,
             &Hash.ZEROES,
             0,
@@ -691,7 +692,7 @@ test "checkAge: nonce account" {
         allocator,
         &transaction,
         AccountReader.fromMap(&account_map),
-        &blockhash_queue,
+        RecentBlockhashChecker.fromBlockhashQueue(&blockhash_queue),
         0,
         &next_durable_nonce,
         5001,
@@ -847,7 +848,7 @@ test "checkAge: SIMD-0242 ALT-resolved nonce" {
             allocator,
             &transaction,
             AccountReader.fromMap(&account_map),
-            &blockhash_queue,
+            RecentBlockhashChecker.fromBlockhashQueue(&blockhash_queue),
             0,
             &next_durable_nonce,
             5001,
@@ -862,7 +863,7 @@ test "checkAge: SIMD-0242 ALT-resolved nonce" {
             allocator,
             &transaction,
             AccountReader.fromMap(&account_map),
-            &blockhash_queue,
+            RecentBlockhashChecker.fromBlockhashQueue(&blockhash_queue),
             0,
             &next_durable_nonce,
             5001,

@@ -19,6 +19,7 @@ const RentState = sig.core.RentCollector.RentState;
 
 const AccountReader = sig.runtime.execution_interfaces.AccountReader;
 const TestEpochStakeReaderContext = sig.runtime.execution_interfaces.TestEpochStakeReaderContext;
+const RecentBlockhashChecker = sig.runtime.execution_interfaces.RecentBlockhashChecker;
 const StatusChecker = sig.runtime.execution_interfaces.StatusChecker;
 const EpochStakeReader = sig.runtime.execution_interfaces.EpochStakeReader;
 
@@ -80,7 +81,6 @@ pub const TransactionExecutionEnvironment = struct {
     status_checker: StatusChecker,
     sysvar_cache: *const SysvarCache,
     rent_collector: *const RentCollector,
-    blockhash_queue: *const BlockhashQueue,
     epoch_stake_reader: EpochStakeReader,
     vm_environment: *const vm.Environment,
     next_vm_environment: ?*const vm.Environment,
@@ -180,6 +180,7 @@ pub fn loadAndExecuteTransaction(
     tmp_allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
     account_reader: AccountReader,
+    recent_blockhash_checker: RecentBlockhashChecker,
     env: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
     program_map: *ProgramMap,
@@ -216,7 +217,7 @@ pub fn loadAndExecuteTransaction(
         tmp_allocator,
         transaction,
         account_reader,
-        env.blockhash_queue,
+        recent_blockhash_checker,
         env.max_age,
         &env.next_durable_nonce,
         env.next_lamports_per_signature,
@@ -849,7 +850,6 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .status_checker = status_checker,
         .sysvar_cache = &sysvar_cache,
         .rent_collector = &rent_collector,
-        .blockhash_queue = &blockhash_queue,
         .epoch_stake_reader = .{
             .ctx = &epoch_stake_reader_context,
             .totalStakeFn = TestEpochStakeReaderContext.totalStake,
@@ -882,6 +882,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             allocator,
             &transaction,
             AccountReader.fromMap(&account_map),
+            RecentBlockhashChecker.fromBlockhashQueue(&blockhash_queue),
             &environment,
             &config,
             &program_map,
@@ -927,6 +928,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             allocator,
             &transaction,
             AccountReader.fromMap(&account_map),
+            RecentBlockhashChecker.fromBlockhashQueue(&blockhash_queue),
             &environment,
             &config,
             &program_map,

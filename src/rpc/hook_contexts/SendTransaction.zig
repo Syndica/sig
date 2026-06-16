@@ -490,6 +490,9 @@ fn simulateRuntimeTransaction(
             arena,
             &transaction,
             account_reader_adapter.accountReader(),
+            sig.runtime.RecentBlockhashChecker.fromBlockhashQueue(
+                svm_gateway.state.blockhash_queue.get(),
+            ),
             &environment,
             &.{ .log = true, .log_messages_byte_limit = null },
             &svm_gateway.state.programs,

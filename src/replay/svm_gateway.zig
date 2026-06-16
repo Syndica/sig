@@ -43,6 +43,9 @@ pub fn executeTransaction(
         tmp_allocator,
         transaction,
         account_reader_adapter.accountReader(),
+        sig.runtime.RecentBlockhashChecker.fromBlockhashQueue(
+            svm_gateway.state.blockhash_queue.get(),
+        ),
         &environment,
         &.{ .log = true, .log_messages_byte_limit = null },
         &svm_gateway.state.programs,
@@ -169,7 +172,6 @@ pub const SvmGateway = struct {
             .status_checker = self.state.status_checker_adapter.statusChecker(),
             .sysvar_cache = &self.state.sysvar_cache,
             .rent_collector = self.params.rent_collector,
-            .blockhash_queue = self.state.blockhash_queue.get(),
             .epoch_stake_reader = self.state.epoch_stake_reader_adapter.epochStakeReader(),
             .vm_environment = &self.state.vm_environment,
             .next_vm_environment = if (self.state.next_vm_environment) |env| &env else null,
