@@ -124,6 +124,10 @@ fn executeBpfProgram(
         .virtual_address_space_adjustments,
         ic.tc.slot,
     );
+    const direct_account_pointers_in_program_input = ic.tc.feature_set.active(
+        .direct_account_pointers_in_program_input,
+        ic.tc.slot,
+    );
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
     var serialized = try bpf_serialize.serializeParameters(
@@ -131,6 +135,7 @@ fn executeBpfProgram(
         ic,
         account_data_direct_mapping,
         virtual_address_space_adjustments,
+        direct_account_pointers_in_program_input,
     );
     defer serialized.deinit(allocator);
 
@@ -5237,6 +5242,7 @@ test remapAccessViolation {
 
     tc.serialized_accounts = .{};
     tc.serialized_accounts.appendAssumeCapacity(.{
+        .vm_addr = vm_data_addr,
         .original_data_len = data_len,
         .vm_data_addr = vm_data_addr,
         .vm_key_addr = 0,
@@ -5397,6 +5403,7 @@ test "remapAccessViolation ignores stale metadata from handled growth" {
     const ic = try tc.getCurrentInstructionContext();
 
     tc.serialized_accounts.appendAssumeCapacity(.{
+        .vm_addr = vm_data_addr,
         .original_data_len = account_data.len,
         .vm_data_addr = vm_data_addr,
         .vm_key_addr = 0,

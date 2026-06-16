@@ -624,9 +624,20 @@ pub const BankFields = struct {
         if (self.max_tick_height != (self.slot + 1) * self.ticks_per_slot) {
             return error.InvalidBankFields;
         }
-        if (self.epoch_schedule.getEpoch(self.slot) != self.epoch) {
-            return error.InvalidBankFields;
-        }
+        // NOTE: the serialized `epoch` field is unused by Agave — it is
+        // always written as 0 (see `SerializableVersionedBank` in
+        // agave/runtime/src/serde_snapshot.rs, where the field is named
+        // `_unused_epoch`). The real epoch is derived from
+        // `epoch_schedule.getEpoch(slot)`. We therefore do not validate
+        // `self.epoch` against the schedule here.
+        //
+        // Relevant Agave changes:
+        // - "Ignores epoch field in snapshot" (#11129, 2026-03-09):
+        //   https://github.com/anza-xyz/agave/pull/11129
+        //   commit fe55f2e32c4f2df50f4be2dabbcf51e4cad4bb83
+        // - "Stops serializing epoch into snapshot" (#11135, 2026-03-10):
+        //   https://github.com/anza-xyz/agave/pull/11135
+        //   commit a1a08e0a28b6324379bf6f813a6cf8d1a87bc6c2
 
         // cross validation against genesis
         if (genesis_config.creation_time != self.genesis_creation_time) {

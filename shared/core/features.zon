@@ -1539,6 +1539,12 @@
         .status = .supported,
     },
     .{
+        .name = "direct_account_pointers_in_program_input",
+        .pubkey = "ptr9umikaeAS7ZBBp2fsfRhie16F1V2jCKA2y6gXNAK",
+        .description = "SIMD-0449: Direct account pointers in program input",
+        .status = .supported,
+    },
+    .{
         .name = "account_data_direct_mapping",
         .pubkey = "CR3dVN2Yoo95Y96kLSTaziWDAQT2MNEpiWh5cqVq2pNE",
         .description = "enable account data direct mapping",
@@ -1725,12 +1731,8 @@
     .{
         .name = "enable_sha512_syscall",
         .pubkey = "s512oDwgx8hjMnaQjXfqqrZroVj4HvC6TkN3iSSWXCh",
-        .description = "TODO: Add description",
-        .status = .unsupported,
-        .note =
-        \\ TODO: Low Priority.
-        \\ Not scheduled for activation.
-        ,
+        .description = "SIMD-0512: SHA512 Syscall",
+        .status = .supported,
     },
     .{
         .name = "set_lamports_per_byte_to_6333",
@@ -1772,6 +1774,12 @@
         .name = "loader_v3_minimum_extend_program_size",
         .pubkey = "YbbRLkvenrocjGPGyoQE4wjnvYzTgfsk38NFmcYK7a5",
         .description = "SIMD-0431: Loader V3 minimum extend program size",
+        .status = .supported,
+    },
+    .{
+        .name = "commission_rate_in_basis_points",
+        .pubkey = "Eg7tXEwMZzS98xaZ1YHUbdRHsaYZiCsSaR6sKgxreoaj",
+        .description = "SIMD-0291: Commission Rate in Basis Points",
         .status = .supported,
     },
 }

@@ -116,11 +116,16 @@ fn executeVmTest(
         .virtual_address_space_adjustments,
         slot,
     );
+    const direct_account_pointers_in_program_input = tc.feature_set.active(
+        .direct_account_pointers_in_program_input,
+        slot,
+    );
     var serialized = try serialize.serializeParameters(
         allocator,
         &ic,
         direct_mapping,
         virtual_address_space_adjustments,
+        direct_account_pointers_in_program_input,
     );
     defer serialized.deinit(allocator);
     tc.serialized_accounts = serialized.account_metas;

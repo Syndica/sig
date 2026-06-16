@@ -25,6 +25,7 @@ const StakeHistory = sig.runtime.sysvar.StakeHistory;
 const Stake = sig.runtime.program.stake.StakeStateV2.Stake;
 const VoteStateV3 = sig.runtime.program.vote.state.VoteStateV3;
 const VoteStateV4 = sig.runtime.program.vote.state.VoteStateV4;
+const VoteState = sig.runtime.program.vote.state.VoteState;
 
 const PreviousEpochInflationRewards = sig.replay.rewards.PreviousEpochInflationRewards;
 const VoteRewards = sig.replay.rewards.VoteRewards;
@@ -433,6 +434,8 @@ fn calculateValidatorRewards(
     ) orelse return null;
 
     const delay_commission_updates = feature_set.active(.delay_commission_updates, slot);
+    const commission_rate_in_basis_points =
+        feature_set.active(.commission_rate_in_basis_points, slot);
 
     return try calculateStakeVoteRewards(
         allocator,
@@ -443,6 +446,7 @@ fn calculateValidatorRewards(
         point_value,
         new_warmup_and_cooldown_rate_epoch,
         delay_commission_updates,
+        commission_rate_in_basis_points,
     );
 }
 
@@ -531,6 +535,7 @@ fn calculateStakeVoteRewards(
     point_value: PointValue,
     new_warmup_and_cooldown_rate_epoch: ?Epoch,
     delay_commission_updates: bool,
+    commission_rate_in_basis_points: bool,
 ) !ValidatorRewards {
     var vote_account_rewards_map = std.AutoArrayHashMapUnmanaged(Pubkey, VoteReward).empty;
     defer vote_account_rewards_map.deinit(allocator);
@@ -554,25 +559,25 @@ fn calculateStakeVoteRewards(
             .getAccount(vote_pubkey) orelse continue;
 
         // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/partitioned_epoch_rewards/calculation.rs#L470
-        // Fetch the voter commission from past epochs to attempt to
-        // delay the effect of commission updates by at least one
-        // full epoch (SIMD-0249).
-        const commission: u8 = if (delay_commission_updates) blk: {
-            const snapshot = cached_vote_accounts.snapshot_epoch_vote_accounts;
-            const vote_state_for_commission = vsfc: {
-                const s = snapshot orelse break :vsfc null;
-                const a = s.getAccount(vote_pubkey) orelse break :vsfc null;
-                break :vsfc a.state;
-            };
-            const resolved = vote_state_for_commission orelse resolved: {
-                const rewarded = cached_vote_accounts.rewarded_epoch_vote_accounts orelse
-                    break :resolved null;
-                const a = rewarded.getAccount(vote_pubkey) orelse
-                    break :resolved null;
-                break :resolved a.state;
-            };
-            break :blk (resolved orelse vote_account.state).commission();
-        } else vote_account.state.commission();
+        // SIMD-0249: prefer the snapshot epoch's commission, then the
+        // rewarded epoch's, falling back to the distribution epoch vote
+        // account. `commissionBps` collapses the SIMD-0291 (bps vs
+        // percent) decision onto VoteState itself.
+        const cached_state: ?VoteAccount = if (delay_commission_updates) blk: {
+            if (cached_vote_accounts.snapshot_epoch_vote_accounts) |s|
+                if (s.getAccount(vote_pubkey)) |a| break :blk a;
+            if (cached_vote_accounts.rewarded_epoch_vote_accounts) |r|
+                if (r.getAccount(vote_pubkey)) |a| break :blk a;
+            break :blk null;
+        } else null;
+
+        const vs_for_commission: *const VoteState =
+            if (cached_state) |*a| &a.state else &vote_account.state;
+        const commission_bps = vs_for_commission.commissionBps(commission_rate_in_basis_points);
+
+        // For RPC `Reward.commission` (?u8) we expose the percent equivalent,
+        // saturating at u8::MAX to match Agave's `CommissionView::commission_percent`.
+        const commission_pct: u8 = @intCast(@min(commission_bps / 100, std.math.maxInt(u8)));
 
         const redeemed = redeemRewards(
             rewarded_epoch,
@@ -581,7 +586,7 @@ fn calculateStakeVoteRewards(
             &point_value,
             stake_history,
             new_warmup_and_cooldown_rate_epoch,
-            commission,
+            commission_bps,
         ) catch |e| switch (e) {
             error.NoCreditsToRedeem => continue,
             else => return e,
@@ -590,7 +595,7 @@ fn calculateStakeVoteRewards(
         const voters_reward_entry = try vote_account_rewards_map.getOrPut(allocator, vote_pubkey);
         if (!voters_reward_entry.found_existing) {
             voters_reward_entry.value_ptr.* = .{
-                .commission = commission,
+                .commission = commission_pct,
                 .rewards = 0,
                 .account = vote_account.account,
             };
@@ -603,7 +608,7 @@ fn calculateStakeVoteRewards(
             .stake_pubkey = stake_pubkey,
             .stake = stake.*,
             .stake_reward = redeemed.stakers_reward,
-            .commission = commission,
+            .commission = commission_pct,
         });
     }
 
@@ -1258,6 +1263,7 @@ test calculateStakeVoteRewards {
             .{ .rewards = 1, .points = 0 },
             null,
             false,
+            false,
         );
         defer result.deinit(allocator);
 
@@ -1275,6 +1281,7 @@ test calculateStakeVoteRewards {
             rewarded_epoch,
             .ZERO,
             null,
+            false,
             false,
         );
         defer result.deinit(allocator);
@@ -1311,6 +1318,7 @@ test calculateStakeVoteRewards {
             rewarded_epoch,
             .{ .points = 1, .rewards = 1 },
             null,
+            false,
             false,
         );
         defer result.deinit(allocator);
@@ -1425,6 +1433,7 @@ test "calculateStakeVoteRewards with delay_commission_updates" {
         .{ .points = 1, .rewards = 1 },
         null,
         true, // delay_commission_updates
+        false, // commission_rate_in_basis_points
     );
     defer result_delayed.deinit(allocator);
 
@@ -1469,6 +1478,7 @@ test "calculateStakeVoteRewards with delay_commission_updates" {
         .{ .points = 1, .rewards = 1 },
         null,
         true, // delay_commission_updates
+        false, // commission_rate_in_basis_points
     );
     defer result_rewarded.deinit(allocator);
 
@@ -1491,6 +1501,7 @@ test "calculateStakeVoteRewards with delay_commission_updates" {
         .{ .points = 1, .rewards = 1 },
         null,
         true, // delay_commission_updates
+        false, // commission_rate_in_basis_points
     );
     defer result_fallback.deinit(allocator);
 
