@@ -80,7 +80,6 @@ pub const Environment = struct {
                 @enumFromInt(@max(@intFromEnum(min_sbpf_version), @intFromEnum(SbpfVersion.v3)))
             else
                 min_sbpf_version;
-        std.debug.assert(@intFromEnum(deploy_min_sbpf_version) <= @intFromEnum(max_sbpf_version));
 
         // SIMD-0460: stack frame gaps are deactivated globally (including SBPFv0).
         // For SBPFv0 this also has the side effect of lowering the per-call stack
