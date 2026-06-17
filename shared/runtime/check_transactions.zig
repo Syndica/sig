@@ -324,7 +324,17 @@ fn validateFeePayer(
         .Nonce => rent_collector.rent.minimumBalance(NonceVersions.SERIALIZED_SIZE),
     };
 
-    if (payer.lamports < min_balance) return .InsufficientFundsForFee;
+    // Matches agave's `lamports.checked_sub(min_balance).and_then(|v| v.checked_sub(fee))`
+    // guard: a payer that cannot cover BOTH the system-account minimum balance
+    // AND the fee must fail here as InsufficientFundsForFee, before the rent-state
+    // transition below has a chance to surface a misleading InsufficientFundsForRent.
+    // [agave] https://github.com/anza-xyz/agave/blob/64b616042450fa6553427471f70895f1dfe0cd86/svm/src/account_loader.rs#L320-L327
+    {
+        const lamports_min_balance_diff = std.math.sub(u64, payer.lamports, min_balance) catch
+            return .InsufficientFundsForFee;
+        _ = std.math.sub(u64, lamports_min_balance_diff, fee) catch
+            return .InsufficientFundsForFee;
+    }
 
     const pre_rent_state = rent_collector.getAccountRentState(
         payer.lamports,
