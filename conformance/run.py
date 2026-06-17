@@ -106,14 +106,17 @@ def path(path):
 
 
 def load_excluded():
-    """Resolve scripts/excluded.txt via the shared scripts/list_excluded.py
-    helper, which is also invoked by scripts/ci-run.sh. This guarantees both
-    consumers agree on how comments, whitespace, and trailing slashes are
-    parsed."""
-    output = subprocess.check_output(
-        [sys.executable, path("scripts/list_excluded.py")], text=True
-    )
-    return [line for line in output.splitlines() if line]
+    """Parse scripts/excluded.txt. Skips blank lines and `#` comment lines
+    (with optional leading whitespace); otherwise uses each line verbatim
+    as a path prefix."""
+    entries = []
+    with open(path("scripts/excluded.txt")) as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if re.match(r"^\s*(#|$)", line):
+                continue
+            entries.append(line)
+    return entries
 
 
 def discover_tests():
