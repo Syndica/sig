@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../../../lib.zig");
 
 const vote_program = sig.runtime.program.vote;
+const vote_state = vote_program.state;
 
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
@@ -9,6 +10,9 @@ const Hash = sig.core.Hash;
 const InstructionAccount = sig.core.instruction.InstructionAccount;
 
 const SEED_FIELD_CONFIG = sig.runtime.program.SEED_FIELD_CONFIG;
+
+const BLS_PUBLIC_KEY_COMPRESSED_SIZE = vote_state.BLS_PUBLIC_KEY_COMPRESSED_SIZE;
+const BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE = vote_state.BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE;
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L25
 pub const CommissionKind = enum(u8) {
@@ -106,9 +110,12 @@ pub const VoteAuthorizeCheckedWithSeedArgs = struct {
     }
 };
 
-pub const VoteAuthorize = enum {
+pub const VoteAuthorize = union(enum(u32)) {
     voter,
     withdrawer,
+    /// SIMD-0387: bind a new voter authority and register the BLS pubkey
+    /// used by Alpenglow consensus voting.
+    voter_with_bls: VoterWithBLSArgs,
 
     pub const AccountIndex = enum(u8) {
         /// `[Write]` Vote account to be updated with the Pubkey for authorization
@@ -119,6 +126,40 @@ pub const VoteAuthorize = enum {
         current_authority = 2,
         /// `[SIGNER]` New vote or withdraw authority
         new_authority = 3,
+    };
+};
+
+/// Payload of `VoteAuthorize::VoterWithBLS` (SIMD-0387).
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb87296b6af322d63627f5341fb2e942c55275b5/vote-interface/src/state/vote_instruction_data.rs#L258-L269
+pub const VoterWithBLSArgs = struct {
+    bls_pubkey: [BLS_PUBLIC_KEY_COMPRESSED_SIZE]u8,
+    bls_proof_of_possession: [BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE]u8,
+};
+
+/// Payload of `VoteInstruction::InitializeAccountV2` (SIMD-0464).
+/// Bundles SIMD-0185 (V4 layout), SIMD-0387 (BLS pubkey + PoP),
+/// SIMD-0291 (basis-points commission), SIMD-0232 (commission collectors)
+/// initialization in a single instruction. The instruction itself is gated
+/// on `vote_account_initialize_v2`; the executor wiring is added later.
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb87296b6af322d63627f5341fb2e942c55275b5/vote-interface/src/state/vote_instruction_data.rs#L222-L238
+pub const VoteInitV2 = struct {
+    node_pubkey: Pubkey,
+    authorized_voter: Pubkey,
+    authorized_voter_bls_pubkey: [BLS_PUBLIC_KEY_COMPRESSED_SIZE]u8,
+    authorized_voter_bls_proof_of_possession: [BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE]u8,
+    authorized_withdrawer: Pubkey,
+    inflation_rewards_commission_bps: u16,
+    block_revenue_commission_bps: u16,
+
+    pub const AccountIndex = enum(u8) {
+        /// `[WRITE]` Uninitialized vote account
+        account = 0,
+        /// `[SIGNER]` New validator identity (node_pubkey)
+        signer = 1,
+        /// `[WRITE]` Inflation rewards collector
+        inflation_rewards_collector = 2,
+        /// `[WRITE]` Block revenue collector
+        block_revenue_collector = 3,
     };
 };
 
@@ -468,11 +509,13 @@ pub const Instruction = union(enum(u32)) {
     ///
     /// Convergence instruction for SIMD-0185, SIMD-0387, SIMD-0291,
     /// SIMD-0232, SIMD-0123. Requires all feature gates active.
-    /// TODO: implement when dependencies (SIMD-0387, SIMD-0291,
-    /// SIMD-0123) are in sig.
+    /// The variant payload is fully wired through bincode but the
+    /// executor still rejects this instruction with
+    /// `InvalidInstructionData` until the
+    /// `vote_account_initialize_v2` feature is implemented.
     ///
     /// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_processor.rs#L307-L324
-    _reserved_initialize_account_v2: void,
+    initialize_account_v2: VoteInitV2,
 
     /// Update the commission collector for the vote account (SIMD-0232)
     ///
@@ -509,7 +552,7 @@ pub const Instruction = union(enum(u32)) {
             .withdraw,
             .update_validator_identity,
             .update_commission,
-            ._reserved_initialize_account_v2,
+            .initialize_account_v2,
             .update_commission_collector,
             .update_commission_bps,
             ._reserved_deposit_delegator_rewards,
@@ -614,6 +657,27 @@ pub fn createAuthorizeChecked(
         accountMeta(sig.runtime.sysvar.Clock.ID, .none),
         accountMeta(authorized_pubkey, .signer),
         accountMeta(new_authorized_pubkey, .signer),
+    });
+}
+
+/// SIMD-0387: bind a new voter authority along with its BLS pubkey and
+/// proof-of-possession in a single `Authorize` instruction.
+pub fn createAuthorizeVoterWithBls(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    /// currently authorized voter or withdrawer
+    authorized_pubkey: Pubkey,
+    new_authority: Pubkey,
+    args: VoterWithBLSArgs,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .authorize = .{
+        .new_authority = new_authority,
+        .vote_authorize = .{ .voter_with_bls = args },
+    } };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(authorized_pubkey, .signer),
     });
 }
 
@@ -1568,4 +1632,154 @@ test createTowerSyncSwitch {
         null,
     );
     defer message.deinit(allocator);
+}
+
+test "VoteAuthorize bincode: Voter and Withdrawer discriminants" {
+    const allocator = std.testing.allocator;
+
+    // Discriminant 0 -> Voter, 1 -> Withdrawer, 2 -> VoterWithBLS.
+    // Bincode encodes the union tag as little-endian u32.
+    {
+        const v = VoteAuthorize.voter;
+        const bytes = try sig.bincode.writeAlloc(allocator, v, .{});
+        defer allocator.free(bytes);
+        try std.testing.expectEqualSlices(u8, &.{ 0, 0, 0, 0 }, bytes);
+
+        const decoded = try sig.bincode.readFromSlice(allocator, VoteAuthorize, bytes, .{});
+        try std.testing.expect(decoded == .voter);
+    }
+    {
+        const v = VoteAuthorize.withdrawer;
+        const bytes = try sig.bincode.writeAlloc(allocator, v, .{});
+        defer allocator.free(bytes);
+        try std.testing.expectEqualSlices(u8, &.{ 1, 0, 0, 0 }, bytes);
+
+        const decoded = try sig.bincode.readFromSlice(allocator, VoteAuthorize, bytes, .{});
+        try std.testing.expect(decoded == .withdrawer);
+    }
+}
+
+test "VoteAuthorize bincode: VoterWithBLS payload roundtrip" {
+    const allocator = std.testing.allocator;
+
+    var bls_pubkey: [BLS_PUBLIC_KEY_COMPRESSED_SIZE]u8 = undefined;
+    for (&bls_pubkey, 0..) |*b, i| b.* = @intCast(0x10 +% (i % 256));
+    var bls_proof: [BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE]u8 = undefined;
+    for (&bls_proof, 0..) |*b, i| b.* = @intCast(0xA0 +% (i % 256));
+
+    const v: VoteAuthorize = .{ .voter_with_bls = .{
+        .bls_pubkey = bls_pubkey,
+        .bls_proof_of_possession = bls_proof,
+    } };
+
+    const bytes = try sig.bincode.writeAlloc(allocator, v, .{});
+    defer allocator.free(bytes);
+
+    // 4-byte LE tag (2) + 48 byte pubkey + 96 byte PoP = 148 bytes.
+    try std.testing.expectEqual(@as(usize, 4 + 48 + 96), bytes.len);
+    try std.testing.expectEqualSlices(u8, &.{ 2, 0, 0, 0 }, bytes[0..4]);
+    try std.testing.expectEqualSlices(u8, &bls_pubkey, bytes[4..][0..48]);
+    try std.testing.expectEqualSlices(u8, &bls_proof, bytes[4 + 48 ..][0..96]);
+
+    const decoded = try sig.bincode.readFromSlice(allocator, VoteAuthorize, bytes, .{});
+    try std.testing.expect(decoded == .voter_with_bls);
+    try std.testing.expectEqualSlices(u8, &bls_pubkey, &decoded.voter_with_bls.bls_pubkey);
+    try std.testing.expectEqualSlices(
+        u8,
+        &bls_proof,
+        &decoded.voter_with_bls.bls_proof_of_possession,
+    );
+}
+
+test "VoteInitV2 bincode: 244-byte fixed layout" {
+    const allocator = std.testing.allocator;
+
+    const init: VoteInitV2 = .{
+        .node_pubkey = Pubkey.ZEROES,
+        .authorized_voter = Pubkey.ZEROES,
+        .authorized_voter_bls_pubkey = @splat(0),
+        .authorized_voter_bls_proof_of_possession = @splat(0),
+        .authorized_withdrawer = Pubkey.ZEROES,
+        .inflation_rewards_commission_bps = 0x1234,
+        .block_revenue_commission_bps = 0xABCD,
+    };
+
+    const bytes = try sig.bincode.writeAlloc(allocator, init, .{});
+    defer allocator.free(bytes);
+
+    // 32*3 (pubkeys) + 48 + 96 + 2 + 2 = 244 bytes.
+    try std.testing.expectEqual(@as(usize, 32 + 32 + 48 + 96 + 32 + 2 + 2), bytes.len);
+    // Trailing two little-endian u16s.
+    try std.testing.expectEqualSlices(u8, &.{ 0x34, 0x12 }, bytes[240..242]);
+    try std.testing.expectEqualSlices(u8, &.{ 0xCD, 0xAB }, bytes[242..244]);
+
+    const decoded = try sig.bincode.readFromSlice(allocator, VoteInitV2, bytes, .{});
+    try std.testing.expectEqual(init, decoded);
+}
+
+test "Instruction bincode: initialize_account_v2 discriminant unchanged" {
+    const allocator = std.testing.allocator;
+
+    // The vote `Instruction` enum has 18 variants; `InitializeAccountV2`
+    // sits at index 16 (after `TowerSyncSwitch`, before
+    // `UpdateCommissionCollector`). Confirm the bincode discriminant
+    // matches what agave wires up.
+    const ix: Instruction = .{ .initialize_account_v2 = .{
+        .node_pubkey = Pubkey.ZEROES,
+        .authorized_voter = Pubkey.ZEROES,
+        .authorized_voter_bls_pubkey = @splat(0),
+        .authorized_voter_bls_proof_of_possession = @splat(0),
+        .authorized_withdrawer = Pubkey.ZEROES,
+        .inflation_rewards_commission_bps = 0,
+        .block_revenue_commission_bps = 0,
+    } };
+
+    const bytes = try sig.bincode.writeAlloc(allocator, ix, .{});
+    defer allocator.free(bytes);
+    try std.testing.expectEqualSlices(u8, &.{ 16, 0, 0, 0 }, bytes[0..4]);
+}
+
+test "createAuthorizeVoterWithBls: roundtrips through bincode" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    var bls_pubkey: [BLS_PUBLIC_KEY_COMPRESSED_SIZE]u8 = undefined;
+    var bls_proof: [BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE]u8 = undefined;
+    prng.random().bytes(&bls_pubkey);
+    prng.random().bytes(&bls_proof);
+
+    const vote_pk = Pubkey.initRandom(prng.random());
+    const current_voter = Pubkey.initRandom(prng.random());
+    const new_voter = Pubkey.initRandom(prng.random());
+
+    const compiled = try createAuthorizeVoterWithBls(
+        allocator,
+        vote_pk,
+        current_voter,
+        new_voter,
+        .{ .bls_pubkey = bls_pubkey, .bls_proof_of_possession = bls_proof },
+    );
+    defer sig.bincode.free(allocator, compiled);
+
+    const decoded = try sig.bincode.readFromSlice(
+        allocator,
+        Instruction,
+        compiled.data,
+        .{},
+    );
+    defer decoded.deinit(allocator);
+
+    try std.testing.expect(decoded == .authorize);
+    try std.testing.expect(decoded.authorize.new_authority.equals(&new_voter));
+    try std.testing.expect(decoded.authorize.vote_authorize == .voter_with_bls);
+    try std.testing.expectEqualSlices(
+        u8,
+        &bls_pubkey,
+        &decoded.authorize.vote_authorize.voter_with_bls.bls_pubkey,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &bls_proof,
+        &decoded.authorize.vote_authorize.voter_with_bls.bls_proof_of_possession,
+    );
 }
