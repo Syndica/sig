@@ -11,7 +11,6 @@ const AccountReader = sig.accounts_db.AccountReader;
 
 const Account = sig.core.Account;
 const Pubkey = sig.core.Pubkey;
-const Slot = sig.core.Slot;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const FeatureSet = sig.core.FeatureSet;
