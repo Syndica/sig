@@ -54,15 +54,10 @@ pub const EpochStakeReaderAdapter = struct {
         return epoch_stakes.total_stake;
     }
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/runtime/src/bank.rs#L6140-L6145
     fn stakeForVoteAccount(ctx: *const anyopaque, pubkey: Pubkey) u64 {
         const epoch_stakes: *const EpochStakes = @ptrCast(@alignCast(ctx));
-        // TODO(epoch_stake_interface): This preserves existing syscall behavior, but it may be a bug.
-        // It may need to be:
-        // epoch_stakes.stakes.vote_accounts.getDelegatedStake(vote_address.*);
-        return if (epoch_stakes.stakes.stake_accounts.getPtr(pubkey)) |delegation|
-            delegation.stake
-        else
-            0;
+        return epoch_stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
     }
 };
 
@@ -161,19 +156,21 @@ test "EpochStakeReaderAdapter" {
         .epoch_authorized_voters = .empty,
     };
     defer epoch_stakes.deinit(allocator);
-    try epoch_stakes.stakes.stake_accounts.put(allocator, vote_pubkey, .{
-        .voter_pubkey = vote_pubkey,
+
+    // Set up vote accounts with delegated stake (keyed by vote account pubkey).
+    const VoteAccount = sig.core.stakes.VoteAccount;
+    var vote_account_1: VoteAccount = try .initRandom(allocator, prng.random(), null);
+    errdefer vote_account_1.deinit(allocator);
+    var vote_account_2: VoteAccount = try .initRandom(allocator, prng.random(), null);
+    errdefer vote_account_2.deinit(allocator);
+
+    try epoch_stakes.stakes.vote_accounts.vote_accounts.put(allocator, vote_pubkey, .{
         .stake = 123,
-        .activation_epoch = 0,
-        .deactivation_epoch = 0,
-        .deprecated_warmup_cooldown_rate = 0.0,
+        .account = vote_account_1,
     });
-    try epoch_stakes.stakes.stake_accounts.put(allocator, other_vote_pubkey, .{
-        .voter_pubkey = other_vote_pubkey,
+    try epoch_stakes.stakes.vote_accounts.vote_accounts.put(allocator, other_vote_pubkey, .{
         .stake = 123,
-        .activation_epoch = 0,
-        .deactivation_epoch = 0,
-        .deprecated_warmup_cooldown_rate = 0.0,
+        .account = vote_account_2,
     });
 
     const adapter = EpochStakeReaderAdapter{ .epoch_stakes = &epoch_stakes };
