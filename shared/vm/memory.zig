@@ -685,7 +685,7 @@ const UnalignedMemoryMap = struct {
     ) !void {
         const err = accessViolation(vm_addr, self.version, self.config);
 
-        var region = try self.findRegion(vm_addr);
+        const region = try self.findRegion(vm_addr);
 
         if (region.translate(.mutable, vm_addr, @sizeOf(T))) |slice| {
             // fast path
@@ -695,33 +695,10 @@ const UnalignedMemoryMap = struct {
 
         // SIMD-0460: invoke the access-violation handler (if installed) to
         // potentially grow the region. If it succeeds, the (re)translated
-        // slice is valid; otherwise fall through to the pre-SIMD-0460
-        // byte-level cross-region fallback (when not stricter) or to the
-        // access violation (when stricter).
+        // slice is valid; otherwise return access violation.
         if (self.tryHandlerThenTranslate(.mutable, region, vm_addr, @sizeOf(T))) |slice| {
             std.mem.writeInt(T, slice[0..@sizeOf(T)], value, .little);
             return;
-        }
-
-        // SIMD-0460: cross-region splits are access violations. The byte-level
-        // fallback below is pre-SIMD-0460 behavior.
-        if (self.config.virtual_address_space_adjustments) return err;
-
-        var current_addr = vm_addr;
-        var src: []const u8 = std.mem.asBytes(&value);
-        while (src.len > 0) {
-            if (region.host_memory != .mutable) break;
-
-            const write_len = @min(region.vm_addr_end -| current_addr, src.len);
-            if (write_len == 0) break;
-
-            if (region.translate(.mutable, current_addr, write_len)) |slice| {
-                @memcpy(slice, src[0..write_len]);
-                src = src[write_len..];
-                if (src.len == 0) return; // done!
-                current_addr = current_addr +| write_len;
-                region = self.findRegion(current_addr) catch break;
-            } else break;
         }
 
         return err;
@@ -735,7 +712,7 @@ const UnalignedMemoryMap = struct {
         comptime std.debug.assert(@sizeOf(T) <= @sizeOf(u64));
         const err = accessViolation(vm_addr, self.version, self.config);
 
-        var region = try self.findRegion(vm_addr);
+        const region = try self.findRegion(vm_addr);
         if (region.translate(.constant, vm_addr, @sizeOf(T))) |slice| {
             // fast path
             return std.mem.readInt(T, slice[0..@sizeOf(T)], .little);
@@ -744,26 +721,6 @@ const UnalignedMemoryMap = struct {
         // SIMD-0460: see note in store() above.
         if (self.tryHandlerThenTranslate(.constant, region, vm_addr, @sizeOf(T))) |slice| {
             return std.mem.readInt(T, slice[0..@sizeOf(T)], .little);
-        }
-
-        // SIMD-0460: cross-region splits are access violations. The byte-level
-        // fallback below is pre-SIMD-0460 behavior.
-        if (self.config.virtual_address_space_adjustments) return err;
-
-        var dest: [@sizeOf(T)]u8 = undefined;
-        var ptr: []u8 = &dest;
-        var current_addr = vm_addr;
-
-        while (ptr.len > 0) {
-            const load_len = @min(ptr.len, region.vm_addr_end -| current_addr);
-            if (load_len == 0) break;
-            if (region.translate(.constant, current_addr, load_len)) |slice| {
-                @memcpy(ptr[0..load_len], slice);
-                ptr = ptr[load_len..];
-                if (ptr.len == 0) return @bitCast(dest);
-                current_addr = current_addr +| load_len;
-                region = self.findRegion(current_addr) catch break;
-            } else break;
         }
 
         return err;
@@ -1130,7 +1087,7 @@ test "unaligned memory map fast paths" {
     try expectEqual(0x55, try m.load(u8, INPUT_START));
 }
 
-test "unaligned memory map slow paths" {
+test "unaligned memory map rejects cross-region access" {
     const allocator = std.testing.allocator;
 
     var mem1: [7]u8 = .{0xFF} ** 7;
@@ -1142,9 +1099,10 @@ test "unaligned memory map slow paths" {
     }, .v2, .{ .aligned_memory_mapping = false });
     defer m.deinit(allocator);
 
-    try m.store(u64, INPUT_START, 0x1122334455667788);
-    try expectEqual(0x1122334455667788, try m.load(u64, INPUT_START));
+    try expectError(error.AccessViolation, m.store(u64, INPUT_START, 0x1122334455667788));
+    try expectError(error.AccessViolation, m.load(u64, INPUT_START));
 
+    // u32 and u16 fit within mem1 → succeeds.
     try m.store(u32, INPUT_START, 0xAABBCCDD);
     try expectEqual(0xAABBCCDD, try m.load(u32, INPUT_START));
 
@@ -1360,14 +1318,14 @@ test "AccessViolationHandler grows region on load miss" {
     try expectEqual(std.mem.readInt(u32, ext_buf[8..12], .little), read);
 }
 
-// Without the handler, virtual_address_space_adjustments=true forbids the
-// pre-SIMD-0460 byte-level cross-region fallback that store/load otherwise use.
-// This locks in the SIMD-0460 rule: multi-byte accesses must be wholly within
-// a single region.
-test "virtual_address_space_adjustments disables cross-region byte fallback" {
+// Cross-region multi-byte accesses are always access violations, regardless of
+// virtual_address_space_adjustments. This matches Anza, where vm_to_host
+// requires the full [addr, addr+len) range to fit within a single region.
+// [agave] https://github.com/anza-xyz/sbpf/blob/v0.19.0/src/memory_region.rs#L122-L130
+test "cross-region access is always an access violation" {
     const allocator = std.testing.allocator;
 
-    {
+    for ([_]bool{ true, false }) |vasa| {
         var mem1: [3]u8 = .{0xFF} ** 3;
         var mem2: [5]u8 = .{0xFF} ** 5;
 
@@ -1378,36 +1336,13 @@ test "virtual_address_space_adjustments disables cross-region byte fallback" {
                 Region.init(.mutable, &mem2, INPUT_START + 3),
             },
             .v2,
-            .{ .aligned_memory_mapping = false, .virtual_address_space_adjustments = true },
+            .{ .aligned_memory_mapping = false, .virtual_address_space_adjustments = vasa },
         );
         defer map.deinit(allocator);
 
-        // u32 at INPUT_START spans mem1 (3B) + mem2 (1B) → cross-region.
-        // With virtual_address_space_adjustments=true and no handler, this is
-        // an AccessViolation; the byte-level fallback path must be skipped.
+        // u32 at INPUT_START spans mem1 (3B) + mem2 (1B) → cross-region → AccessViolation.
         try expectError(error.AccessViolation, map.store(u32, INPUT_START, 0x11223344));
         try expectError(error.AccessViolation, map.load(u32, INPUT_START));
-    }
-
-    // Mirror of the existing slow-path test: with virtual_address_space_adjustments=false,
-    // the same cross-region access succeeds via the byte-level fallback.
-    {
-        var mem1: [3]u8 = .{0xFF} ** 3;
-        var mem2: [5]u8 = .{0xFF} ** 5;
-
-        const map = try MemoryMap.init(
-            allocator,
-            &.{
-                Region.init(.mutable, &mem1, INPUT_START),
-                Region.init(.mutable, &mem2, INPUT_START + 3),
-            },
-            .v2,
-            .{ .aligned_memory_mapping = false, .virtual_address_space_adjustments = false },
-        );
-        defer map.deinit(allocator);
-
-        try map.store(u32, INPUT_START, 0x11223344);
-        try expectEqual(@as(u32, 0x11223344), try map.load(u32, INPUT_START));
     }
 }
 
