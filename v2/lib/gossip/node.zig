@@ -14,7 +14,7 @@ const Pubkey = lib.solana.Pubkey;
 const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;
 
-const bincode = lib.gossip.bincode;
+const bincode = lib.solana.bincode;
 const GossipMessage = lib.gossip.GossipMessage;
 const GossipData = lib.gossip.GossipData;
 const GossipValue = lib.gossip.GossipValue;

@@ -1,6 +1,11 @@
 const std = @import("std");
 const Build = std.Build;
 
+const lib = @import("lib/lib.zig");
+/// The schema for services used in release.
+const topo_schema: lib.topology.Schema = .{ .services = @import("init/services.zon") };
+const topo_types = lib.topology.Unbound(topo_schema);
+
 const test_install_dir: Build.Step.InstallArtifact.Options.Dir = .{
     .override = .{ .custom = "bin/tests" },
 };
@@ -8,11 +13,13 @@ const test_install_dir: Build.Step.InstallArtifact.Options.Dir = .{
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const use_kcov = b.option(bool, "kcov", "Use kcov to run the tests.") orelse false;
     const use_llvm = b.option(
         bool,
         "use-llvm",
         "Force usage of LLVM (currently ignored for some artifacts).",
-    );
+    ) orelse true;
+    if (use_kcov and !use_llvm) @panic("cannot use kcov without llvm");
     const artifact_opts: ExeOutput.InitOptions = .{
         .no_bin = b.option(
             bool,
@@ -61,14 +68,24 @@ pub fn build(b: *Build) !void {
             "not silently accepted.",
     ) orelse (optimize == .Debug);
 
+    const debug_skip_shred_checks = b.option(
+        bool,
+        "debug-skip-shred-checks",
+        "Debug purposes only. Skips sig verify and ignores shred version mismatches.",
+    ) orelse false;
+
     const build_options = b.addOptions();
     build_options.addOption(bool, "allow_no_sha", allow_no_sha);
     build_options.addOption(bool, "allow_no_avx512", allow_no_avx512);
+    build_options.addOption(bool, "debug_skip_shred_checks", debug_skip_shred_checks);
+
     const build_options_mod = build_options.createModule();
 
     const install_step = b.getInstallStep();
     const run_step = b.step("run", "Run supervisor");
-    const test_step = b.step("test", "Run unit tests");
+    const test_step = b.step("test", "Run all tests.");
+    const unit_test_step = b.step("unit-test", "Run unit tests.");
+    const bb_test_step = b.step("bb-test", "Run black box tests.");
     const check_step = b.step("check", "Check step.");
     const lint_step = b.step("lint", "Run lint checks");
     const lint_test_step = b.step("lint-test", "Run lint unit tests");
@@ -77,11 +94,27 @@ pub fn build(b: *Build) !void {
     const docs_step = b.step("docs", "Emit docs");
     const shred_stream_step = b.step("shred-stream", "Stream shreds from an Agave ledger");
 
+    test_step.dependOn(unit_test_step);
+    test_step.dependOn(bb_test_step);
+
     ci_step.dependOn(test_step);
     ci_step.dependOn(install_step);
     ci_step.dependOn(lint_step);
     ci_step.dependOn(lint_test_step);
     check_step.dependOn(install_step);
+
+    const kcov_merge_run = if (use_kcov and !artifact_opts.no_run) kcov_merge: {
+        const run = b.addSystemCommand(&.{ "kcov", "--merge" });
+        const cache_dir = run.addOutputDirectoryArg("merged");
+        const install_dir = b.addInstallDirectory(.{
+            .source_dir = cache_dir,
+            .install_dir = .prefix,
+            .install_subdir = "kcov",
+        });
+        install_dir.step.dependOn(&run.step);
+        test_step.dependOn(&install_dir.step);
+        break :kcov_merge run;
+    } else null;
 
     const tracy_mod = b.dependency("tracy", .{
         .target = target,
@@ -92,7 +125,6 @@ pub fn build(b: *Build) !void {
         .tracy_on_demand = tracy_on_demand,
         .tracy_callstack = 6,
     }).module("tracy");
-    const binkode_mod = b.dependency("binkode", .{}).module("binkode");
     const base58_mod = b.dependency("base58", .{
         .target = target,
         .optimize = optimize,
@@ -158,7 +190,6 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "base58", .module = base58_mod },
-            .{ .name = "binkode", .module = binkode_mod },
             .{ .name = "tracy", .module = tracy_mod },
             .{ .name = "build-options", .module = build_options_mod },
             .{ .name = "zstd", .module = zstd_mod },
@@ -166,23 +197,25 @@ pub fn build(b: *Build) !void {
             .{ .name = "feature-set-id", .module = feature_set_id },
         },
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+    _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "lib",
         .root_module = lib_mod,
         .filters = filters,
         .use_llvm = use_llvm,
     });
 
-    const sig_init_mod = b.createModule(.{
+    const runner_imports: RunnerModuleOptions.Imports = .{
+        .sig_lib = lib_mod,
+        .tracy = tracy_mod,
+    };
+
+    const sig_init_mod = createRunnerModule(b, .{
         .root_source_file = b.path("init/main.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
-            .{ .name = "lib", .module = lib_mod },
-            .{ .name = "tracy", .module = tracy_mod },
-        },
+        .imports = runner_imports,
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+    _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "sig-init",
         .root_module = sig_init_mod,
         .filters = filters,
@@ -221,7 +254,7 @@ pub fn build(b: *Build) !void {
             .root_module = module,
             .use_llvm = true,
         });
-        _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+        _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
             .name = "shred-stream",
             .root_module = module,
             .filters = filters,
@@ -243,12 +276,13 @@ pub fn build(b: *Build) !void {
         .root_source_file = b.path("init/start_service.zig"),
         .target = target,
         .optimize = optimize,
+        .error_tracing = true,
         .imports = &.{
             .{ .name = "lib", .module = lib_mod },
             .{ .name = "tracy", .module = tracy_mod },
         },
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+    _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "start_service",
         .root_module = start_service_mod,
         .use_llvm = true,
@@ -258,8 +292,10 @@ pub fn build(b: *Build) !void {
     var doc_service_modules: std.ArrayListUnmanaged(DocGenModule) = .empty;
     defer doc_service_modules.deinit(b.allocator);
 
+    var service_libs: std.EnumArray(topo_types.ServiceId, *Build.Step.Compile) = .initUndefined();
+
     // build + link services
-    inline for (@import("init/services.zon")) |s| {
+    inline for (topo_schema.services) |s| {
         const service_name = @tagName(s.name);
         const service_mod = b.createModule(.{
             .root_source_file = b.path("services").path(b, service_name ++ ".zig"),
@@ -267,11 +303,11 @@ pub fn build(b: *Build) !void {
             .optimize = optimize,
             .single_threaded = true,
             .omit_frame_pointer = false,
+            .error_tracing = true,
             .imports = &.{
                 .{ .name = "lib", .module = lib_mod },
                 .{ .name = "start_service", .module = start_service_mod },
                 .{ .name = "tracy", .module = tracy_mod },
-                .{ .name = "binkode", .module = binkode_mod },
             },
         });
 
@@ -281,8 +317,9 @@ pub fn build(b: *Build) !void {
             .use_llvm = true,
         });
         sig_init_mod.linkLibrary(service_lib);
+        service_libs.set(s.name, service_lib);
 
-        _ = addTestOutputs(b, test_step, null, artifact_opts, .{
+        _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
             .root_module = service_mod,
             .name = service_name,
             .filters = filters,
@@ -293,6 +330,24 @@ pub fn build(b: *Build) !void {
             b.allocator,
             .{ .name = service_name, .module = service_mod },
         );
+    }
+
+    const black_box_tests: []const BlackBoxTest = &.{
+        .{
+            .name = "gossip",
+            .root_source_file = b.path("tests/gossip/main.zig"),
+            .services = .initMany(&.{ .gossip, .telemetry }),
+        },
+    };
+
+    for (black_box_tests) |black_box_test| {
+        addBlackBoxTest(b, bb_test_step, artifact_opts, .{
+            .test_config = black_box_test,
+            .target = target,
+            .optimize = optimize,
+            .imports = runner_imports,
+            .service_libs = &service_libs,
+        });
     }
 
     // generates unified docs for all modules
@@ -347,6 +402,95 @@ pub fn build(b: *Build) !void {
     }
 }
 
+const RunnerModuleOptions = struct {
+    root_source_file: Build.LazyPath,
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    imports: Imports,
+
+    const Imports = struct {
+        sig_lib: *Build.Module,
+        tracy: *Build.Module,
+    };
+};
+
+const BlackBoxTest = struct {
+    name: []const u8,
+    root_source_file: Build.LazyPath,
+    services: std.EnumSet(topo_types.ServiceId),
+};
+
+fn addBlackBoxTest(
+    b: *Build,
+    bb_test_step: *Build.Step,
+    artifact_opts: ExeOutput.InitOptions,
+    options: struct {
+        test_config: BlackBoxTest,
+        target: Build.ResolvedTarget,
+        optimize: std.builtin.OptimizeMode,
+        imports: RunnerModuleOptions.Imports,
+        service_libs: *const std.EnumArray(topo_types.ServiceId, *Build.Step.Compile),
+    },
+) void {
+    const exe = b.addExecutable(.{
+        .name = b.fmt("bbt-{s}", .{options.test_config.name}),
+        .root_module = createRunnerModule(b, .{
+            .root_source_file = options.test_config.root_source_file,
+            .target = options.target,
+            .optimize = options.optimize,
+            .imports = options.imports,
+        }),
+        .use_llvm = true,
+    });
+
+    var service_iter = options.test_config.services.iterator();
+    while (service_iter.next()) |service_id| {
+        exe.linkLibrary(options.service_libs.get(service_id));
+    }
+
+    exe.root_module.addAnonymousImport("schema", .{
+        .root_source_file = topoSchemaSubsetFile(
+            b,
+            b.fmt("{s}-schema.zon", .{options.test_config.name}),
+            options.test_config.services,
+        ),
+    });
+
+    _ = addExeOutputs(b, exe, bb_test_step, artifact_opts, .{
+        .dest_dir = test_install_dir,
+    });
+}
+
+fn createRunnerModule(
+    b: *Build,
+    options: RunnerModuleOptions,
+) *Build.Module {
+    return b.createModule(.{
+        .root_source_file = options.root_source_file,
+        .target = options.target,
+        .optimize = options.optimize,
+        .imports = &.{
+            .{ .name = "lib", .module = options.imports.sig_lib },
+            .{ .name = "tracy", .module = options.imports.tracy },
+        },
+    });
+}
+
+fn topoSchemaSubsetFile(
+    b: *Build,
+    name: []const u8,
+    service_ids: std.EnumSet(topo_types.ServiceId),
+) Build.LazyPath {
+    var rendered: std.Io.Writer.Allocating = .init(b.allocator);
+    var sz: std.zon.Serializer = .{
+        .options = .{ .whitespace = true },
+        .indent_level = 0,
+        .writer = &rendered.writer,
+    };
+    topo_schema.renderPrettyZonSubset(&sz, .{}, service_ids) catch std.debug.panic("OOM", .{});
+    return b.addWriteFiles().add(name, rendered.written());
+}
+
 const ExeOutput = struct {
     install: ?*Build.Step.InstallArtifact,
     run: ?*Build.Step.Run,
@@ -362,13 +506,36 @@ fn addTestOutputs(
     artifact_step: *Build.Step,
     dest_sub_path: ?[]const u8,
     artifact_opts: ExeOutput.InitOptions,
+    maybe_kcov_merge_run: ?*Build.Step.Run,
     test_options: Build.TestOptions,
 ) ExeOutput {
     const mod_test_exe = b.addTest(test_options);
-    return addExeOutputs(b, mod_test_exe, artifact_step, artifact_opts, .{
+    const install_opts: Build.Step.InstallArtifact.Options = .{
         .dest_sub_path = dest_sub_path,
         .dest_dir = test_install_dir,
-    });
+    };
+
+    if (maybe_kcov_merge_run) |kcov_merge_run| {
+        const kcov_run = b.addSystemCommand(&.{
+            "kcov",
+            "--collect-only",
+            "--include-pattern=v2/",
+            "--exclude-pattern=.cache",
+        });
+        const output_dir = kcov_run.addOutputDirectoryArg("output");
+        kcov_run.addArtifactArg(mod_test_exe);
+        kcov_run.has_side_effects = true;
+
+        kcov_merge_run.step.dependOn(&kcov_run.step);
+        kcov_merge_run.addDirectoryArg(output_dir);
+
+        var outputs = addExeOutputs(b, mod_test_exe, artifact_step, .{
+            .no_bin = artifact_opts.no_bin,
+            .no_run = true,
+        }, install_opts);
+        outputs.run = kcov_run;
+        return outputs;
+    } else return addExeOutputs(b, mod_test_exe, artifact_step, artifact_opts, install_opts);
 }
 
 fn addExeOutputs(
@@ -418,7 +585,7 @@ fn addFeatureSetIdGenerator(
         .root_module = b.createModule(.{
             .target = b.graph.host,
             .optimize = .Debug,
-            .root_source_file = b.path("../scripts/gen_feature_set_id.zig"),
+            .root_source_file = b.path("../shared/scripts/gen_feature_set_id.zig"),
             .imports = &.{
                 .{
                     .name = "base58",

@@ -1,5 +1,13 @@
 const sig = @import("../../../lib.zig");
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("execute.zig");
+        _ = @import("instruction.zig");
+        _ = @import("tests.zig");
+    }
+}
+
 /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/zk_elgamal_proof_program/proof_data/mod.rs#L48
 pub const ProofType = enum(u8) {
     /// Empty proof type used to distinguish if a proof context account is initialized

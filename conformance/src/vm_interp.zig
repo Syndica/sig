@@ -88,6 +88,7 @@ fn executeVmTest(
         &tc.compute_budget,
         tc.slot,
         false,
+        false,
     );
     env.config.maximum_version = sbpf_version;
     env.loader.is_stubbed = true;
@@ -119,12 +120,17 @@ fn executeVmTest(
         .mask_out_rent_epoch_in_vm_serialization,
         slot,
     );
+    const direct_account_pointers_in_program_input = tc.feature_set.active(
+        .direct_account_pointers_in_program_input,
+        slot,
+    );
     var serialized = try serialize.serializeParameters(
         allocator,
         &ic,
         direct_mapping,
         virtual_address_space_adjustments,
         mask_out_rent_epoch_in_vm_serialization,
+        direct_account_pointers_in_program_input,
     );
     defer serialized.deinit(allocator);
     tc.serialized_accounts = serialized.account_metas;

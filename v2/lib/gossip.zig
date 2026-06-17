@@ -1,7 +1,8 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const lib = @import("lib.zig");
 
-pub const bincode = @import("gossip/bincode.zig");
+pub const bincode = lib.solana.bincode;
 pub const GossipNode = @import("gossip/node.zig").GossipNode;
 comptime {
     if (@import("builtin").is_test) {
@@ -43,6 +44,28 @@ pub const Config = extern struct {
     cluster_info: ClusterInfo,
     turbine_recv_port: u16,
     advertise_tvu_port: bool,
+
+    pub const InitParams = struct {
+        cluster_info: lib.gossip.ClusterInfo,
+        // TODO: this should live in signing service
+        keypair: lib.gossip.KeyPair,
+        turbine_recv_port: u16,
+        advertise_tvu_port: bool,
+
+        pub fn size(_: InitParams) usize {
+            return @sizeOf(Config);
+        }
+
+        pub fn init(self: InitParams, buf: []align(std.heap.page_size_min) u8) void {
+            std.debug.assert(buf.len == @sizeOf(lib.gossip.Config));
+            const data: *lib.gossip.Config = @ptrCast(buf);
+
+            data.keypair = self.keypair;
+            data.cluster_info = self.cluster_info;
+            data.turbine_recv_port = self.turbine_recv_port;
+            data.advertise_tvu_port = self.advertise_tvu_port;
+        }
+    };
 };
 
 // For std.meta.eql compatibility inside `serviceMap` & defined repr across processes
@@ -91,6 +114,9 @@ pub const ClusterInfo = extern struct {
     }
 
     pub fn getFromEcho(gossip_port: u16, cluster: lib.solana.Cluster) !ClusterInfo {
+        const zone = tracy.Zone.init(@src(), .{ .name = "getFromEcho" });
+        defer zone.deinit();
+
         var result: ClusterInfo = undefined;
         result.entry_addrs_len = 0;
 

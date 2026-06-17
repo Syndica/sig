@@ -87,7 +87,7 @@
         .name = "system_transfer_zero_check",
         .pubkey = "BrTR9hzw4WBGFP65AJMbpAo64DcA3U6jdPSga9fMV5cS",
         .description = "perform all checks for transfers of 0 lamports",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "blake3_syscall_enabled",
@@ -147,7 +147,7 @@
         .name = "disable_fees_sysvar",
         .pubkey = "JAN1trEUEtZjgXYzNBYHU9DYd7GnThhXfFP7SzPXkPsG",
         .description = "disable fees sysvar",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "stake_merge_with_unmatched_credits_observed",
@@ -165,7 +165,7 @@
         .name = "curve25519_syscall_enabled",
         .pubkey = "7rcw5UtqgDTBBv2EcynNfYckgdAaH1MAsCjKgXMkN7Ri",
         .description = "enable curve25519 syscalls",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "versioned_tx_message_enabled",
@@ -573,7 +573,7 @@
         .name = "disable_deploy_of_alloc_free_syscall",
         .pubkey = "79HWsX9rpnnJBPcdNURVqygpMAfxdrAirzAGAVmf92im",
         .description = "disable new deployments of deprecated sol_alloc_free_ syscall",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "include_account_index_in_rent_error",
@@ -681,7 +681,7 @@
         .name = "loosen_cpi_size_restriction",
         .pubkey = "GDH5TVdbTPUpRnXaRyQqiKUa7uZAbZ28Q2N9bhbKoMLm",
         .description = "loosen cpi size restrictions #26641",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "use_default_units_in_fee_calculation",
@@ -729,7 +729,7 @@
         .name = "relax_authority_signer_check_for_lookup_table_creation",
         .pubkey = "FKAcEvNgSY79RpqsPNUV5gDyumopH4cEHqUxyfm8b8Ap",
         .description = "relax authority signer check for lookup table creation #27205",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "stop_sibling_instruction_search_at_parent",
@@ -795,7 +795,7 @@
         .name = "enable_alt_bn128_syscall",
         .pubkey = "A16q37opZdQMCbe5qJ6xpBB9usykfv8jZaMkxvZQi4GJ",
         .description = "add alt_bn128 syscalls #27961",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_program_redeployment_cooldown",
@@ -807,7 +807,7 @@
         .name = "commission_updates_only_allowed_in_first_half_of_epoch",
         .pubkey = "noRuG2kzACwgaY7TVmLRnUNPLKNVQE1fb7X55YWBehp",
         .description = "validator commission updates are only allowed in the first half of an epoch #29362",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_turbine_fanout_experiments",
@@ -997,7 +997,7 @@
         .name = "enable_poseidon_syscall",
         .pubkey = "FL9RsQA6TVUoh5xJQ9d936RHSebA1NLQqe3Zv9sXZRpr",
         .description = "Enable Poseidon syscall",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "timely_vote_credits",
@@ -1037,7 +1037,7 @@
         .name = "enable_alt_bn128_compression_syscall",
         .pubkey = "EJJewYSddEEtSZHiqugnvhQHiWyZKjkFDQASd7oKSagn",
         .description = "add alt_bn128 compression syscalls",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "programify_feature_gate_program",
@@ -1119,7 +1119,7 @@
         .name = "allow_commission_decrease_at_any_time",
         .pubkey = "decoMktMcnmiq6t3u7g5BfgcQu91nKZr6RvMYf9z1Jb",
         .description = "Allow commission decrease at any time in epoch #33843",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "merkle_conflict_duplicate_proofs",
@@ -1195,13 +1195,13 @@
         .name = "disable_rent_fees_collection",
         .pubkey = "CJzY83ggJHqPGDq8VisV3U91jDJLuEaALZooBrXtnnLU",
         .description = "Disable rent fees collection #33945",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "add_new_reserved_account_keys",
         .pubkey = "8U4skmMVnF6k2kMvrWbQuRUT3qQSiTYpSjqmhmgfthZu",
         .description = "add new unwritable reserved accounts #34899",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "chained_merkle_conflict_duplicate_proofs",
@@ -1219,13 +1219,13 @@
         .name = "abort_on_invalid_curve",
         .pubkey = "FuS3FPfJDKSNot99ECLXtp3rueq36hMNStJkPJwWodLh",
         .description = "SIMD-0137: Abort when elliptic curve syscalls invoked on invalid curve id",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "ed25519_precompile_verify_strict",
         .pubkey = "ed9tNscbWLYBooxWA7FE2B5KHWs8A6sxfY8EzezEcoo",
         .description = "SIMD-0152: Use strict verification in ed25519 precompile",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "zk_elgamal_proof_program_enabled",
@@ -1237,7 +1237,7 @@
         .name = "move_stake_and_move_lamports_ixs",
         .pubkey = "7bTK6Jis8Xpfrs8ZoUfiMDPazTcdPcTWheZFJTA5Z6X4",
         .description = "Enable MoveStake and MoveLamports stake program instructions #1610",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "deprecate_legacy_vote_ixs",
@@ -1296,6 +1296,12 @@
         .name = "enable_sbpf_v3_deployment_and_execution",
         .pubkey = "5cC3foj77CWun58pC51ebHFUWavHWKarWyR5UUik7dnC",
         .description = "SIMD-0178, SIMD-0189 and SIMD-0377: Enable deployment and execution of SBPFv3 programs",
+        .status = .supported,
+    },
+    .{
+        .name = "disable_sbpf_v0_v1_v2_deployment",
+        .pubkey = "B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g",
+        .description = "SIMD-0500: Disable deployment of SBPFv0, SBPFv1 and SBPFv2 programs",
         .status = .supported,
     },
     .{
@@ -1362,7 +1368,7 @@
         .name = "remove_accounts_delta_hash",
         .pubkey = "LTdLt9Ycbyoipz5fLysCi1NnDnASsZfmJLJXts5ZxZz",
         .description = "SIMD-0223: removes accounts delta hash",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "snapshots_lt_hash",
@@ -1374,7 +1380,7 @@
         .name = "reserve_minimal_cus_for_builtin_instructions",
         .pubkey = "C9oAhLxDBm3ssWtJx1yBGzPY55r2rArHmN1pbQn6HogH",
         .description = "SIMD-0170: Reserve minimal CUs for builtin instructions #2562",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "raise_block_limits_to_50m",
@@ -1403,7 +1409,7 @@
         .name = "move_precompile_verification_to_svm",
         .pubkey = "9ypxGLzkMxi89eDerRKXWDXe44UY2z4hBig4mDhNq5Dp",
         .description = "SIMD-0159: Move precompile verification into SVM",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_transaction_loading_failure_fees",
@@ -1502,7 +1508,7 @@
         .name = "enable_vote_address_leader_schedule",
         .pubkey = "5JsG4NWH8Jbrqdd8uL6BNwnyZK3dQSoieRXG5vmofj9y",
         .description = "SIMD-0180: Enable vote address leader schedule #4573",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enshrine_slashing_program",
@@ -1530,6 +1536,12 @@
         .name = "virtual_address_space_adjustments",
         .pubkey = "7VgiehxNxu53KdxgLspGQY8myE6f7UokaWa4jsGcaSz",
         .description = "SIMD-0460: Virtual Address Space Adjustments",
+        .status = .supported,
+    },
+    .{
+        .name = "direct_account_pointers_in_program_input",
+        .pubkey = "ptr9umikaeAS7ZBBp2fsfRhie16F1V2jCKA2y6gXNAK",
+        .description = "SIMD-0449: Direct account pointers in program input",
         .status = .supported,
     },
     .{
@@ -1719,12 +1731,8 @@
     .{
         .name = "enable_sha512_syscall",
         .pubkey = "s512oDwgx8hjMnaQjXfqqrZroVj4HvC6TkN3iSSWXCh",
-        .description = "TODO: Add description",
-        .status = .unsupported,
-        .note =
-        \\ TODO: Low Priority.
-        \\ Not scheduled for activation.
-        ,
+        .description = "SIMD-0512: SHA512 Syscall",
+        .status = .supported,
     },
     .{
         .name = "set_lamports_per_byte_to_6333",
@@ -1760,6 +1768,18 @@
         .name = "custom_commission_collector",
         .pubkey = "CustomCommissionCo11ector111111111111111111",
         .description = "SIMD-0232: Custom Commission Collector Account",
+        .status = .supported,
+    },
+    .{
+        .name = "loader_v3_minimum_extend_program_size",
+        .pubkey = "YbbRLkvenrocjGPGyoQE4wjnvYzTgfsk38NFmcYK7a5",
+        .description = "SIMD-0431: Loader V3 minimum extend program size",
+        .status = .supported,
+    },
+    .{
+        .name = "commission_rate_in_basis_points",
+        .pubkey = "Eg7tXEwMZzS98xaZ1YHUbdRHsaYZiCsSaR6sKgxreoaj",
+        .description = "SIMD-0291: Commission Rate in Basis Points",
         .status = .supported,
     },
 }

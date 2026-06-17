@@ -128,6 +128,10 @@ fn executeBpfProgram(
         .mask_out_rent_epoch_in_vm_serialization,
         ic.tc.slot,
     );
+    const direct_account_pointers_in_program_input = ic.tc.feature_set.active(
+        .direct_account_pointers_in_program_input,
+        ic.tc.slot,
+    );
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
     var serialized = try bpf_serialize.serializeParameters(
@@ -136,6 +140,7 @@ fn executeBpfProgram(
         account_data_direct_mapping,
         virtual_address_space_adjustments,
         mask_out_rent_epoch_in_vm_serialization,
+        direct_account_pointers_in_program_input,
     );
     defer serialized.deinit(allocator);
 
@@ -759,6 +764,7 @@ pub fn executeV4Deploy(
         bpf_loader_program.v4.ID,
         program_data,
         current_slot,
+        ic.tc.feature_set.active(.disable_sbpf_v0_v1_v2_deployment, ic.tc.slot),
     );
 
     try program_account.serializeIntoAccountData(V4State{
@@ -1258,6 +1264,7 @@ pub fn executeV3DeployWithMaxDataLen(
             ic.ixn_info.program_meta.pubkey,
             buffer_data[V3State.BUFFER_METADATA_SIZE..],
             clock.slot,
+            ic.tc.feature_set.active(.disable_sbpf_v0_v1_v2_deployment, ic.tc.slot),
         );
     }
 
@@ -1483,6 +1490,7 @@ pub fn executeV3Upgrade(
             ic.ixn_info.program_meta.pubkey,
             buffer.constAccountData()[buf.data_offset..],
             clock.slot,
+            ic.tc.feature_set.active(.disable_sbpf_v0_v1_v2_deployment, ic.tc.slot),
         );
     }
 
@@ -1602,6 +1610,26 @@ pub fn executeV3SetAuthority(
             ))) {
                 try ic.tc.log("Upgrade authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
+            }
+            // SIMD-0500: forbid finalize (SetAuthority None) on programs whose embedded
+            // ELF is older than SBPFv3. Short data short-circuits to OK, matching Agave's
+            // let-chain.
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/bpf_loader/src/lib.rs#L580-L591
+            if (new_authority == null and
+                ic.tc.feature_set.active(.disable_sbpf_v0_v1_v2_deployment, ic.tc.slot))
+            {
+                const account_data = account.constAccountData();
+                const e_flags_offset = V3State.PROGRAM_DATA_METADATA_SIZE + 48;
+                if (account_data.len >= e_flags_offset + @sizeOf(u32)) {
+                    const e_flags = std.mem.readInt(
+                        u32,
+                        account_data[e_flags_offset..][0..4],
+                        .little,
+                    );
+                    if (e_flags < @intFromEnum(sig.vm.sbpf.Version.v3)) {
+                        return InstructionError.InvalidAccountData;
+                    }
+                }
             }
             try account.serializeIntoAccountData(V3State{
                 .program_data = .{
@@ -1972,6 +2000,21 @@ fn commonExtendProgram(
         return InstructionError.InvalidRealloc;
     }
 
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/programs/bpf_loader/src/lib.rs#L861-L883
+    if (ic.tc.feature_set.active(.loader_v3_minimum_extend_program_size, ic.tc.slot)) {
+        const old_len = programdata.constAccountData().len;
+        const headroom = system_program.MAX_PERMITTED_DATA_LENGTH -| old_len;
+        const min_bytes = bpf_loader_program.v3.instruction.MINIMUM_EXTEND_PROGRAM_BYTES;
+        if (additional_bytes < min_bytes and additional_bytes != headroom) {
+            try ic.tc.log(
+                "ExtendProgram requires a minimum of {} additional bytes " ++
+                    "or to extend to maximum size, but only {} were requested",
+                .{ min_bytes, additional_bytes },
+            );
+            return InstructionError.InvalidArgument;
+        }
+    }
+
     const clock_slot = (try ic.tc.sysvar_cache.get(sysvar.Clock)).slot;
 
     const upgrade_authority_address = switch (try programdata.deserializeFromAccountData(
@@ -2064,6 +2107,9 @@ fn commonExtendProgram(
             ic.ixn_info.program_meta.pubkey,
             data[V3State.PROGRAM_DATA_METADATA_SIZE..],
             clock_slot,
+            // SIMD-0500: explicitly continue to allow SBPFv0/v1/v2 for ExtendProgram.
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/bpf_loader/src/lib.rs#L971
+            false,
         );
     }
 
@@ -2308,6 +2354,7 @@ pub fn deployProgram(
     owner_id: Pubkey,
     data: []const u8,
     deploy_slot: u64,
+    disable_sbpf_v0_v1_v2_deployment: bool,
 ) (error{OutOfMemory} || InstructionError)!void {
     _ = deploy_slot;
     _ = owner_id;
@@ -2319,6 +2366,7 @@ pub fn deployProgram(
         tc.feature_set,
         &tc.compute_budget,
         if (tc.log_collector) |*lc| lc else null,
+        disable_sbpf_v0_v1_v2_deployment,
     );
 
     // Remove from the program map since it should not be accessible on this slot anymore.
@@ -2334,6 +2382,7 @@ pub fn verifyProgram(
     feature_set: *const sig.core.FeatureSet,
     compute_budget: *const sig.runtime.ComputeBudget,
     log_collector: ?*sig.runtime.LogCollector,
+    disable_sbpf_v0_v1_v2_deployment: bool,
 ) !void {
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
     var environment = vm.Environment.initV1(
@@ -2341,6 +2390,7 @@ pub fn verifyProgram(
         compute_budget,
         slot,
         true,
+        disable_sbpf_v0_v1_v2_deployment,
     );
 
     // Deployment of programs with sol_alloc_free is disabled.
@@ -2922,6 +2972,209 @@ test executeV3SetAuthority {
         },
         .{},
     );
+}
+
+test "executeV3SetAuthority SIMD-0500 finalize guard" {
+    const testing = sig.runtime.program.testing;
+    const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const program_account_key = Pubkey.initRandom(prng.random());
+    const present_authority_key = Pubkey.initRandom(prng.random());
+
+    // Build a ProgramData account that is large enough for the e_flags check
+    // (PROGRAM_DATA_METADATA_SIZE + Elf64_Ehdr.e_flags offset (48) + sizeof(u32)).
+    const e_flags_offset = V3State.PROGRAM_DATA_METADATA_SIZE + 48;
+    const account_size = e_flags_offset + @sizeOf(u32);
+
+    // Helper: create a finalize (SetAuthority None) instruction-account list +
+    // initial+final account data buffers with the given e_flags written into them.
+    const Case = struct {
+        e_flags: u32,
+        feature_active: bool,
+        expect_error: ?InstructionError,
+    };
+
+    const cases: []const Case = &.{
+        // SBPFv0 with feature active → finalize forbidden.
+        .{
+            .e_flags = 0,
+            .feature_active = true,
+            .expect_error = InstructionError.InvalidAccountData,
+        },
+        // SBPFv2 with feature active → finalize forbidden.
+        .{
+            .e_flags = 2,
+            .feature_active = true,
+            .expect_error = InstructionError.InvalidAccountData,
+        },
+        // SBPFv3 with feature active → finalize permitted.
+        .{ .e_flags = 3, .feature_active = true, .expect_error = null },
+        // SBPFv0 with feature inactive → finalize permitted (legacy behaviour).
+        .{ .e_flags = 0, .feature_active = false, .expect_error = null },
+    };
+
+    for (cases) |c| {
+        const initial_data = try allocator.alloc(u8, account_size);
+        defer allocator.free(initial_data);
+        @memset(initial_data, 0);
+        _ = try bincode.writeToSlice(initial_data, V3State{
+            .program_data = .{
+                .slot = 0,
+                .upgrade_authority_address = present_authority_key,
+            },
+        }, .{});
+        std.mem.writeInt(u32, initial_data[e_flags_offset..][0..4], c.e_flags, .little);
+
+        const final_data = try allocator.dupe(u8, initial_data);
+        defer allocator.free(final_data);
+        _ = try bincode.writeToSlice(final_data, V3State{
+            .program_data = .{
+                .slot = 0,
+                .upgrade_authority_address = null,
+            },
+        }, .{});
+
+        const feature_params: []const ExecuteContextsParams.FeatureParams =
+            if (c.feature_active)
+                &.{.{ .feature = .disable_sbpf_v0_v1_v2_deployment, .slot = 0 }}
+            else
+                &.{};
+
+        const initial_context = ExecuteContextsParams{
+            .feature_set = feature_params,
+            .accounts = &.{
+                .{
+                    .pubkey = program_account_key,
+                    .data = initial_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{ .pubkey = present_authority_key },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+        };
+        const expected_context = ExecuteContextsParams{
+            .feature_set = feature_params,
+            .accounts = &.{
+                .{
+                    .pubkey = program_account_key,
+                    .data = final_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{ .pubkey = present_authority_key },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+        };
+
+        if (c.expect_error) |err| {
+            try testing.expectProgramExecuteError(
+                err,
+                allocator,
+                bpf_loader_program.v3.ID,
+                bpf_loader_program.v3.Instruction.set_authority,
+                &.{
+                    .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                    .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+                },
+                initial_context,
+                .{},
+            );
+        } else {
+            try testing.expectProgramExecuteResult(
+                allocator,
+                bpf_loader_program.v3.ID,
+                bpf_loader_program.v3.Instruction.set_authority,
+                &.{
+                    .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                    .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+                },
+                initial_context,
+                expected_context,
+                .{},
+            );
+        }
+    }
+
+    // Short-data short-circuit: the account is shorter than the e_flags offset, so
+    // even with the feature active and an SBPFv0-shaped flag we still allow the
+    // finalize. Mirrors Agave's let-chain that yields `Some(true)` only when
+    // both slice and parse succeed.
+    {
+        const short_size = V3State.PROGRAM_DATA_METADATA_SIZE; // no ELF bytes at all
+        const initial_data = try allocator.alloc(u8, short_size);
+        defer allocator.free(initial_data);
+        @memset(initial_data, 0);
+        _ = try bincode.writeToSlice(initial_data, V3State{
+            .program_data = .{
+                .slot = 0,
+                .upgrade_authority_address = present_authority_key,
+            },
+        }, .{});
+
+        const final_data = try allocator.dupe(u8, initial_data);
+        defer allocator.free(final_data);
+        _ = try bincode.writeToSlice(final_data, V3State{
+            .program_data = .{
+                .slot = 0,
+                .upgrade_authority_address = null,
+            },
+        }, .{});
+
+        try testing.expectProgramExecuteResult(
+            allocator,
+            bpf_loader_program.v3.ID,
+            bpf_loader_program.v3.Instruction.set_authority,
+            &.{
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            },
+            .{
+                .feature_set = &.{
+                    .{ .feature = .disable_sbpf_v0_v1_v2_deployment, .slot = 0 },
+                },
+                .accounts = &.{
+                    .{
+                        .pubkey = program_account_key,
+                        .data = initial_data,
+                        .owner = bpf_loader_program.v3.ID,
+                    },
+                    .{ .pubkey = present_authority_key },
+                    .{
+                        .pubkey = bpf_loader_program.v3.ID,
+                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    },
+                },
+                .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+            },
+            .{
+                .feature_set = &.{
+                    .{ .feature = .disable_sbpf_v0_v1_v2_deployment, .slot = 0 },
+                },
+                .accounts = &.{
+                    .{
+                        .pubkey = program_account_key,
+                        .data = final_data,
+                        .owner = bpf_loader_program.v3.ID,
+                    },
+                    .{ .pubkey = present_authority_key },
+                    .{
+                        .pubkey = bpf_loader_program.v3.ID,
+                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    },
+                },
+            },
+            .{},
+        );
+    }
 }
 
 test executeV3SetAuthorityChecked {
@@ -3823,6 +4076,123 @@ test executeV3ExtendProgram {
         );
         try std.testing.expectEqual(tc.compute_meter, 0);
     }
+}
+
+// SIMD-0431: extending by fewer than 10240 bytes (and not the headroom amount) must be
+// rejected with `InvalidArgument` when `loader_v3_minimum_extend_program_size` is active.
+test "executeV3ExtendProgram SIMD-0431 minimum_extend_program_size" {
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const payer_account_key = Pubkey.initRandom(prng.random());
+    const upgrade_authority_key = Pubkey.initRandom(prng.random());
+
+    const program_account_key = Pubkey.initRandom(prng.random());
+    const program_data_account_key, _ = pubkey_utils.findProgramAddress(
+        &.{&program_account_key.data},
+        bpf_loader_program.v3.ID,
+    ) orelse @panic("findProgramAddress failed");
+
+    var clock = sysvar.Clock.INIT;
+    clock.slot += 1337;
+
+    const initial_program_data = try createValidProgramData(
+        allocator,
+        V3State{
+            .program_data = .{
+                .slot = clock.slot - 1,
+                .upgrade_authority_address = upgrade_authority_key,
+            },
+        },
+        V3State.PROGRAM_DATA_METADATA_SIZE,
+        0,
+    );
+    defer allocator.free(initial_program_data);
+
+    const program_account_buffer = try allocator.alloc(u8, @sizeOf(V3State));
+    defer allocator.free(program_account_buffer);
+    const program_account = try bincode.writeToSlice(
+        program_account_buffer,
+        V3State{
+            .program = .{ .programdata_address = program_data_account_key },
+        },
+        .{},
+    );
+
+    const additional_bytes: u32 = 1;
+    const program_data_lamports =
+        sysvar.Rent.INIT.minimumBalance(initial_program_data.len + additional_bytes);
+    const payer_balance = prng.random().uintAtMost(u32, 1024);
+
+    const accounts = [_]sig.runtime.testing.ExecuteContextsParams.AccountParams{
+        .{
+            .pubkey = program_data_account_key,
+            .data = initial_program_data,
+            .owner = bpf_loader_program.v3.ID,
+            .lamports = program_data_lamports,
+        },
+        .{
+            .pubkey = program_account_key,
+            .data = program_account,
+            .owner = bpf_loader_program.v3.ID,
+        },
+        .{
+            .pubkey = upgrade_authority_key,
+            .owner = system_program.ID,
+        },
+        .{
+            .pubkey = system_program.ID,
+            .owner = ids.NATIVE_LOADER_ID,
+            .executable = true,
+        },
+        .{
+            .pubkey = payer_account_key,
+            .lamports = payer_balance,
+            .owner = system_program.ID,
+        },
+        .{
+            .pubkey = bpf_loader_program.v3.ID,
+            .owner = ids.NATIVE_LOADER_ID,
+        },
+    };
+
+    const instruction_accounts = [_]testing.InstructionContextAccountMetaParams{
+        // program_data
+        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+        // program
+        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+        // system_program
+        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
+        // payer
+        .{ .is_signer = true, .is_writable = true, .index_in_transaction = 4 },
+        // bpf program_id (for instruction)
+        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 5 },
+    };
+
+    // (a) feature ACTIVE + additional_bytes < MINIMUM_EXTEND_PROGRAM_BYTES → InvalidArgument
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidArgument,
+        allocator,
+        bpf_loader_program.v3.ID,
+        bpf_loader_program.v3.Instruction{
+            .extend_program = .{ .additional_bytes = additional_bytes },
+        },
+        &instruction_accounts,
+        .{
+            .accounts = &accounts,
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = sysvar.Rent.INIT,
+                .clock = clock,
+            },
+            .feature_set = &.{
+                .{ .feature = .loader_v3_minimum_extend_program_size, .slot = 0 },
+            },
+        },
+        .{},
+    );
 }
 
 test executeV3Migrate {
@@ -4877,6 +5247,7 @@ test remapAccessViolation {
 
     tc.serialized_accounts = .{};
     tc.serialized_accounts.appendAssumeCapacity(.{
+        .vm_addr = vm_data_addr,
         .original_data_len = data_len,
         .vm_data_addr = vm_data_addr,
         .vm_key_addr = 0,
@@ -5037,6 +5408,7 @@ test "remapAccessViolation ignores stale metadata from handled growth" {
     const ic = try tc.getCurrentInstructionContext();
 
     tc.serialized_accounts.appendAssumeCapacity(.{
+        .vm_addr = vm_data_addr,
         .original_data_len = account_data.len,
         .vm_data_addr = vm_data_addr,
         .vm_key_addr = 0,

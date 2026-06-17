@@ -34,12 +34,11 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Build Check
         run: |
-          brew install wget
-          ./scripts/proxy_workaround.sh zig
+          ./scripts/fetch-zig-deps.py
           zig build -Denable-tsan=false --summary all -Dno-run -Dno-bin
 
       - name: "Disk report: after build"
@@ -62,12 +61,11 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Build Tests
         run: |
-          brew install wget
-          ./scripts/proxy_workaround.sh zig
+          ./scripts/fetch-zig-deps.py
           zig build test -Dno-run -Denable-tsan=false --summary all
 
       - name: "Disk report: after build tests"
@@ -79,6 +77,12 @@ jobs:
         run: |
           set -eo pipefail
           zig-out/bin/test 2>&1 | cat
+
+      - name: Shared Tests
+        run: |
+          ./scripts/fetch-zig-deps.py shared/build.zig.zon
+          cd shared
+          zig build test -Dallow-no-sha -Dallow-no-avx512 --summary all
 
   test_macos_hashmap_ledger:
     runs-on: macos-15
@@ -95,12 +99,11 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Build Tests
         run: |
-          brew install wget
-          ./scripts/proxy_workaround.sh zig
+          ./scripts/fetch-zig-deps.py
           zig build test -Dno-run -Denable-tsan=false --summary all -Dlong-tests -Dledger=hashmap -Dfilter="ledger"
 
       - name: "Disk report: after build tests"
@@ -134,8 +137,7 @@ jobs:
 
       - name: Build and Run Webzockets Tests
         run: |
-          brew install wget
-          ./scripts/proxy_workaround.sh zig src/rpc/webzockets/build.zig.zon
+          ./scripts/fetch-zig-deps.py src/rpc/webzockets/build.zig.zon
           cd src/rpc/webzockets
           zig build test --summary all
 

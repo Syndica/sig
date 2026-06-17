@@ -24,6 +24,7 @@ pub const Environment = struct {
         compute_budget: *const ComputeBudget,
         slot: sig.core.Slot,
         reject_deployment_of_broken_elfs: bool,
+        disable_sbpf_v0_v1_v2_deployment: bool,
     ) Environment {
         const zone = tracy.Zone.init(@src(), .{ .name = "Environment.initV1" });
         defer zone.deinit();
@@ -39,6 +40,7 @@ pub const Environment = struct {
                 compute_budget,
                 slot,
                 reject_deployment_of_broken_elfs,
+                disable_sbpf_v0_v1_v2_deployment,
             ),
         };
     }
@@ -48,6 +50,7 @@ pub const Environment = struct {
         compute_budget: *const ComputeBudget,
         slot: sig.core.Slot,
         reject_deployment_of_broken_elfs: bool,
+        disable_sbpf_v0_v1_v2_deployment: bool,
     ) Config {
         const min_sbpf_version: SbpfVersion =
             if (!feature_set.active(.disable_sbpf_v0_execution, slot) or
@@ -66,6 +69,17 @@ pub const Environment = struct {
             else
                 .v0;
         std.debug.assert(@intFromEnum(min_sbpf_version) <= @intFromEnum(max_sbpf_version));
+
+        // SIMD-0500: When deploying (reject_deployment_of_broken_elfs == true) and the
+        // feature is active, restrict the minimum SBPF version to v3.  Older SBPF
+        // versions remain executable; this only affects the deployment-time
+        // verification environment.
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/program-runtime/src/deploy.rs#L24-L43
+        const deploy_min_sbpf_version: SbpfVersion =
+            if (reject_deployment_of_broken_elfs and disable_sbpf_v0_v1_v2_deployment)
+                @enumFromInt(@max(@intFromEnum(min_sbpf_version), @intFromEnum(SbpfVersion.v3)))
+            else
+                min_sbpf_version;
 
         // SIMD-0460: stack frame gaps are deactivated globally (including SBPFv0).
         // For SBPFv0 this also has the side effect of lowering the per-call stack
@@ -94,7 +108,7 @@ pub const Environment = struct {
             .aligned_memory_mapping = !virtual_address_space_adjustments,
             .allow_memory_region_zero = enable_sbpf_v3_deployment_and_execution,
             .virtual_address_space_adjustments = virtual_address_space_adjustments,
-            .minimum_version = min_sbpf_version,
+            .minimum_version = deploy_min_sbpf_version,
             .maximum_version = max_sbpf_version,
         };
     }
@@ -115,13 +129,17 @@ pub const Environment = struct {
         var iter = gates.iterator();
         while (iter.next()) |entry| {
             const gate = entry.value.* orelse continue; // always enabled syscall
-            const guard = switch (entry.key) {
-                .sol_alloc_free_ => reject_deployment_of_broken_elfs,
-                else => true,
-            };
-            const should = guard and feature_set.active(gate.feature, slot);
+            const should = feature_set.active(gate.feature, slot);
             if (gate.invert == should) loader.map.set(entry.key, null);
         }
+
+        // disable_deploy_of_alloc_free_syscall is hardcoded (always active), so
+        // sol_alloc_free_ is always disabled when reject_deployment_of_broken_elfs is set.
+        if (reject_deployment_of_broken_elfs) loader.map.set(.sol_alloc_free_, null);
+
+        // disable_fees_sysvar is hardcoded (always active), so
+        // sol_get_fees_sysvar is always disabled.
+        loader.map.set(.sol_get_fees_sysvar, null);
 
         return loader;
     }

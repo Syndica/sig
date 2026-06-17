@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const clock = @import("clock.zig");
+const tracy = @import("tracy");
 
 pub const metric = @import("telemetry/metric.zig");
 pub const log = @import("telemetry/log.zig");
@@ -11,12 +12,6 @@ comptime {
         _ = @import("telemetry/metric.zig");
         _ = @import("telemetry/prometheus.zig");
     }
-}
-
-comptime {
-    _ = metric;
-    _ = log;
-    _ = prometheus;
 }
 
 /// The native endian, which is what is used by telemetry for `std.Io.Writer` and `std.Io.Reader` IPC data.
@@ -317,6 +312,12 @@ pub fn Logger(comptime scope_str: []const u8) type {
                     comptime fmt_str: []const u8,
                     args: anytype,
                 ) void {
+                    switch (self.level) {
+                        inline else => |ilevel| {
+                            tracy.print(@tagName(ilevel) ++ ": " ++ fmt_str, args);
+                        },
+                    }
+
                     const message: log.Message = .{
                         .epoch_millis = clock.wallclock(.ms),
                         .scope = scope,

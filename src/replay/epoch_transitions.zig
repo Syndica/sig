@@ -616,6 +616,9 @@ fn migrateBuiltinProgramToCoreBpf(
         feature_set,
         &compute_budget,
         null, // no LogCollector
+        // SIMD-0500: explicitly continue to allow SBPFv0/v1/v2 for core program migrations.
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/runtime/src/bank/builtins/core_bpf_migration/mod.rs#L201
+        false,
     );
 
     // update capitalization

@@ -65,7 +65,6 @@ pub export fn sol_compat_txn_execute_v1(
 }
 
 const bank_methods = @import("bank_methods.zig");
-const builtin_programs = sig.runtime.builtin_programs;
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -313,57 +312,31 @@ fn executeTxnContext(
             //     @panic("background account hasher not implemented");
             // }
 
-            const account_reader_for_ancestors = account_store.reader().forSlot(&ancestors);
-            // Add builtin programs
-            for (builtin_programs.BUILTINS) |builtin_program| {
-                // If the feature id is not null, and the builtin program is not migrated, add
-                // to the builtin accounts map. If the builtin program has been migrated it will
-                // have an entry in accounts db with owner bpf_loader.v3.ID (i.e. it is now a BPF program).
-                // For fuzzing purposes, accounts db is currently empty so we do not need to check if
-                // the builtin program is migrated or not.
-                const builtin_is_bpf_program: bool = blk: {
-                    const account = try account_reader_for_ancestors.get(
-                        allocator,
-                        builtin_program.program_id,
-                    ) orelse break :blk false;
-                    defer account.deinit(allocator);
-                    break :blk account.owner.equals(&program.bpf_loader.v3.ID);
-                };
-
-                if (builtin_program.enable_feature_id != null or builtin_is_bpf_program) continue;
-
-                const data = try allocator.dupe(u8, builtin_program.data);
-                defer allocator.free(data);
-
-                try account_store.put(
-                    slot,
-                    builtin_program.program_id,
-                    .{
-                        .lamports = 1,
-                        .data = data,
-                        .executable = true,
-                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-                        .rent_epoch = 0,
-                    },
-                );
-            }
-
-            // Add precompiles
-            for (program.precompiles.PRECOMPILES) |precompile| {
-                if (precompile.required_feature != null) continue;
-                try account_store.put(slot, precompile.program_id, .{
-                    .lamports = 1,
-                    .data = &.{},
-                    .executable = true,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-                    .rent_epoch = 0,
-                });
-            }
+            // NOTE: Mirror the txn-fixture harness used by solfuzz-agave (the
+            // conformance vector generator) at agave-v4.1.0-beta.1. That harness
+            // builds the bank via `Bank::new_for_txn_tests` (a fork-only helper in
+            // firedancer-io/agave, not upstream anza-xyz/agave), which only runs
+            // `apply_activated_features()`, populating the program cache via
+            // `add_active_builtin_programs()`, and deliberately skips
+            // `add_builtin_program_accounts()` (the latter is reached only from
+            // `compute_and_apply_genesis_features()`, which this path bypasses).
+            // Builtin and precompile program accounts are therefore not seeded
+            // into accounts-db here: each fixture is expected to carry any program
+            // account it invokes, and missing ones must surface as
+            // `TransactionError::ProgramAccountNotFound` during account loading
+            // rather than executing against a synthetic native-loader stub.
+            //
+            // [solfuzz-agave] call site:
+            //   https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.1.0-beta.1/src/txn.rs#L364
+            // [agave] `Bank::new_for_txn_tests` (note: only `apply_activated_features`
+            // is invoked, not `add_builtin_program_accounts`):
+            //   https://github.com/firedancer-io/agave/blob/c333acac8d88168384e010c4d08462ab3c226b35/runtime/src/bank.rs#L1822-L1918
 
             vm_environment = vm.Environment.initV1(
                 &feature_set,
                 &compute_budget,
                 slot,
+                false,
                 false,
             );
         }
@@ -402,11 +375,9 @@ fn executeTxnContext(
     // fixture_slot collides (i.e. fixture_slot % MAX_SLOTS == 0).
     try account_store.updateRoot(0, &ancestors);
 
-    const slot_hash = try hashSlot(
-        allocator,
+    const slot_hash = hashSlot(
         blockhash_queue.last_hash.?,
         &feature_set,
-        account_store.reader(),
     );
 
     slot = fixture_slot;
@@ -1176,20 +1147,14 @@ fn accountFromAccountSharedData(
 /// Specifically if accounts lt hash is enabled, the returned hash is the initial hash combined with
 /// the identity hash, as there is not parent lt hash in the txn fuzzing context.
 pub fn hashSlot(
-    allocator: Allocator,
     blockhash: Hash,
     feature_set: *const FeatureSet,
-    account_reader: sig.accounts_db.AccountReader,
-) !Hash {
+) Hash {
     var signature_count_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &signature_count_bytes, 0, .little);
 
     var hash = std.crypto.hash.sha2.Sha256.init(.{});
     hash.update(&sig.core.Hash.ZEROES.data); // no parent lt hash, start with zeroes
-    if (!feature_set.active(.remove_accounts_delta_hash, 0)) {
-        const delta_hash = try freeze.deltaMerkleHash(account_reader, allocator, 0);
-        hash.update(&delta_hash.data);
-    }
     hash.update(&signature_count_bytes);
     hash.update(&blockhash.data);
     const initial_hash = hash.finalResult();

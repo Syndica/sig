@@ -3,6 +3,13 @@ const tracy = @import("tracy");
 const std14 = @import("std14");
 const sig = @import("../../../lib.zig");
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("instruction.zig");
+        _ = @import("state.zig");
+    }
+}
+
 pub const state = @import("state.zig");
 const instruction = @import("instruction.zig");
 const program = @import("lib.zig");
@@ -391,20 +398,10 @@ pub fn execute(
             return error.InvalidInstructionData;
         },
         .move_stake => |lamports| {
-            if (!ic.tc.feature_set.active(
-                .move_stake_and_move_lamports_ixs,
-                ic.tc.slot,
-            )) return error.InvalidInstructionData;
-
             try ic.ixn_info.checkNumberOfAccounts(3);
             try moveStake(allocator, ic, 0, lamports, 1, 2);
         },
         .move_lamports => |lamports| {
-            if (!ic.tc.feature_set.active(
-                .move_stake_and_move_lamports_ixs,
-                ic.tc.slot,
-            )) return error.InvalidInstructionData;
-
             try ic.ixn_info.checkNumberOfAccounts(3);
             try moveLamports(allocator, ic, 0, lamports, 1, 2);
         },
@@ -2016,7 +2013,7 @@ test "stake.delegate_stake" {
     const stake_account = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
 
-    var vote_buf: [@sizeOf(VoteStateVersions)]u8 = @splat(0);
+    var vote_buf: [VoteStateV3.MAX_VOTE_STATE_SIZE]u8 = @splat(0);
     _ = try sig.bincode.writeToSlice(
         &vote_buf,
         VoteStateVersions{ .v3 = .DEFAULT },
@@ -3235,12 +3232,12 @@ test "stake.deactivate_delinquent" {
         .prev_credits = 10,
     });
 
-    var reference_vote_buf: [@sizeOf(VoteStateVersions)]u8 = @splat(0);
+    var reference_vote_buf: [VoteStateV3.MAX_VOTE_STATE_SIZE]u8 = @splat(0);
     _ = try sig.bincode.writeToSlice(&reference_vote_buf, VoteStateVersions{
         .v3 = reference_vote_state,
     }, .{});
 
-    var delinquent_vote_buf: [@sizeOf(VoteStateVersions)]u8 = @splat(0);
+    var delinquent_vote_buf: [VoteStateV3.MAX_VOTE_STATE_SIZE]u8 = @splat(0);
     _ = try sig.bincode.writeToSlice(&delinquent_vote_buf, VoteStateVersions{
         .v3 = delinquent_vote_state,
     }, .{});
@@ -3487,9 +3484,7 @@ test "stake.move_stake" {
                 },
                 .compute_meter = 10_000,
                 .sysvar_cache = sysvar_cache,
-                .feature_set = &.{
-                    .{ .feature = .move_stake_and_move_lamports_ixs },
-                },
+                .feature_set = &.{},
             },
             .{
                 .accounts = &.{
@@ -3586,9 +3581,7 @@ test "stake.move_lamports" {
             },
             .compute_meter = 10_000,
             .sysvar_cache = sysvar_cache,
-            .feature_set = &.{
-                .{ .feature = .move_stake_and_move_lamports_ixs },
-            },
+            .feature_set = &.{},
         },
         .{
             .accounts = &.{

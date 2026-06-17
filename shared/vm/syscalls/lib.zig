@@ -2,6 +2,16 @@ const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../../lib.zig");
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("cpi.zig");
+        _ = @import("ecc.zig");
+        _ = @import("hash.zig");
+        _ = @import("memops.zig");
+        _ = @import("sysvar.zig");
+    }
+}
+
 pub const cpi = @import("cpi.zig");
 pub const memops = @import("memops.zig");
 pub const hash = @import("hash.zig");
@@ -50,6 +60,7 @@ pub const Syscall = enum {
     sol_sha256,
     sol_keccak256,
     sol_blake3,
+    sol_sha512,
     sol_poseidon,
 
     sol_secp256k1_recover,
@@ -144,6 +155,7 @@ pub const Syscall = enum {
         .sol_sha256 = hash.sha256,
         .sol_keccak256 = hash.keccak256,
         .sol_blake3 = hash.blake3,
+        .sol_sha512 = hash.sha512,
         .sol_poseidon = hash.poseidon,
 
         .sol_secp256k1_recover = ecc.secp256k1Recover,
@@ -188,22 +200,12 @@ pub const Syscall = enum {
 
     /// Describes syscalls whos activation is locked behind a feature gate.
     pub const gates = std.EnumArray(Syscall, ?Gate).initDefault(@as(?Gate, null), .{
-        // NOTE: also needs to check for `reject_deployment_of_broken_elfs`.
-        .sol_alloc_free_ = .{ .feature = .disable_deploy_of_alloc_free_syscall, .invert = true },
-
         .sol_blake3 = .{ .feature = .blake3_syscall_enabled },
-        .sol_poseidon = .{ .feature = .enable_poseidon_syscall },
-
-        .sol_curve_validate_point = .{ .feature = .curve25519_syscall_enabled },
-        .sol_curve_group_op = .{ .feature = .curve25519_syscall_enabled },
-        .sol_curve_multiscalar_mul = .{ .feature = .curve25519_syscall_enabled },
-        .sol_alt_bn128_group_op = .{ .feature = .enable_alt_bn128_syscall },
-        .sol_alt_bn128_compression = .{ .feature = .enable_alt_bn128_compression_syscall },
+        .sol_sha512 = .{ .feature = .enable_sha512_syscall },
 
         .sol_curve_decompress = .{ .feature = .enable_bls12_381_syscall },
         .sol_curve_pairing_map = .{ .feature = .enable_bls12_381_syscall },
 
-        .sol_get_fees_sysvar = .{ .feature = .disable_fees_sysvar, .invert = true },
         .sol_get_last_restart_slot = .{ .feature = .last_restart_slot_sysvar },
         .sol_remaining_compute_units = .{ .feature = .remaining_compute_units_syscall_enabled },
         .sol_get_sysvar = .{ .feature = .get_sysvar_syscall_enabled },

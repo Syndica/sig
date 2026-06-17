@@ -86,7 +86,8 @@ var scratch_memory: [1024 * 1024 * 1024]u8 = undefined;
 const max_in_progress = 8192;
 const max_done = 65536;
 
-pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
+    _ = runner;
     const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
     defer zone.deinit();
 
@@ -117,6 +118,7 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
                 ro.config.shred_version,
                 packet,
                 &deshred_out,
+                logger.withScope("processPacket"),
             ) catch |err| {
                 std.log.warn("packet failed with {}", .{err});
                 continue;

@@ -23,7 +23,11 @@ pub const ReadWrite = struct {
     tel: *tel.Region,
 };
 
-pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(
+    runner: lib.runner.Connection,
+    _: ReadOnly,
+    rw: ReadWrite,
+) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
 
     const metric_appender = rw.tel.metricAppender();
@@ -31,6 +35,7 @@ pub fn serviceMain(_: ReadOnly, rw: ReadWrite) !noreturn {
     rw.tel.signalReady();
 
     try mainInner(
+        runner,
         logger,
         metrics,
         &.{ rw.gossip_pair, rw.shred_pair },
@@ -46,10 +51,12 @@ const MAX_SOCKETS = 10;
 
 /// `ports` is the list of ports it'll listen on.
 fn mainInner(
+    runner: lib.runner.Connection,
     logger: tel.Logger("main"),
     metrics: Metrics,
     pairs: []const *Pair,
 ) !noreturn {
+    _ = runner;
     std.debug.assert(pairs.len <= MAX_SOCKETS);
 
     var sockets: [MAX_SOCKETS]std.posix.fd_t = undefined;
