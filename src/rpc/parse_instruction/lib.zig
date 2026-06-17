@@ -519,7 +519,7 @@ fn parseVoteInstruction(
                 account_keys.get(@intCast(instruction.accounts[2])).?,
             ));
             try info.put("newAuthority", try pubkeyToValue(arena, auth.new_authority));
-            try info.put("authorityType", voteAuthorizeToValue(auth.vote_authorize));
+            try info.put("authorityType", try voteAuthorizeToValue(arena, auth.vote_authorize));
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "authorize" });
         },
@@ -535,7 +535,7 @@ fn parseVoteInstruction(
                 aws.current_authority_derived_key_owner,
             ));
             try info.put("authoritySeed", .{ .string = aws.current_authority_derived_key_seed });
-            try info.put("authorityType", voteAuthorizeToValue(aws.authorization_type));
+            try info.put("authorityType", try voteAuthorizeToValue(arena, aws.authorization_type));
             try info.put("clockSysvar", try pubkeyToValue(
                 arena,
                 account_keys.get(@intCast(instruction.accounts[1])).?,
@@ -560,7 +560,7 @@ fn parseVoteInstruction(
                 acws.current_authority_derived_key_owner,
             ));
             try info.put("authoritySeed", .{ .string = acws.current_authority_derived_key_seed });
-            try info.put("authorityType", voteAuthorizeToValue(acws.authorization_type));
+            try info.put("authorityType", try voteAuthorizeToValue(arena, acws.authorization_type));
             try info.put("clockSysvar", try pubkeyToValue(
                 arena,
                 account_keys.get(@intCast(instruction.accounts[1])).?,
@@ -787,7 +787,7 @@ fn parseVoteInstruction(
                 arena,
                 account_keys.get(@intCast(instruction.accounts[2])).?,
             ));
-            try info.put("authorityType", voteAuthorizeToValue(auth_type));
+            try info.put("authorityType", try voteAuthorizeToValue(arena, auth_type));
             try info.put("clockSysvar", try pubkeyToValue(
                 arena,
                 account_keys.get(@intCast(instruction.accounts[1])).?,
@@ -803,7 +803,9 @@ fn parseVoteInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "authorizeChecked" });
         },
-        ._reserved_initialize_account_v2 => return error.ParseError,
+        .initialize_account_v2 => return error.ParseError,
+        // TODO: .updateComissionBps for SIMD-0291
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/transaction-status/src/parse_vote.rs#L292
         .update_commission_collector => |kind| {
             try checkNumVoteAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(arena);
@@ -865,12 +867,31 @@ fn hashToValue(arena: Allocator, hash: Hash) !JsonValue {
     return .{ .string = try arena.dupe(u8, hash.base58String().constSlice()) };
 }
 
-/// Convert VoteAuthorize to a JSON string value
-fn voteAuthorizeToValue(auth: sig.runtime.program.vote.vote_instruction.VoteAuthorize) JsonValue {
-    return .{ .string = switch (auth) {
-        .voter => "Voter",
-        .withdrawer => "Withdrawer",
-    } };
+/// Convert VoteAuthorize to a JSON Value, mirroring agave's serde-json
+/// representation: void variants serialize as bare strings ("Voter",
+/// "Withdrawer") while `VoterWithBLS` serializes as a nested object.
+fn voteAuthorizeToValue(
+    arena: Allocator,
+    auth: sig.runtime.program.vote.vote_instruction.VoteAuthorize,
+) Allocator.Error!JsonValue {
+    return switch (auth) {
+        .voter => .{ .string = "Voter" },
+        .withdrawer => .{ .string = "Withdrawer" },
+        .voter_with_bls => |args| blk: {
+            const pubkey_hex = std.fmt.bytesToHex(args.bls_pubkey, .lower);
+            const proof_hex = std.fmt.bytesToHex(args.bls_proof_of_possession, .lower);
+            var bls_obj = ObjectMap.init(arena);
+            try bls_obj.put("blsPubkey", .{
+                .string = try arena.dupe(u8, &pubkey_hex),
+            });
+            try bls_obj.put("blsProofOfPossession", .{
+                .string = try arena.dupe(u8, &proof_hex),
+            });
+            var outer = ObjectMap.init(arena);
+            try outer.put("VoterWithBLS", .{ .object = bls_obj });
+            break :blk .{ .object = outer };
+        },
+    };
 }
 
 /// Convert a Vote to a JSON Value object
