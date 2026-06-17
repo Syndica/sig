@@ -1054,14 +1054,18 @@ test "unaligned memory map store" {
     }, .v2, .{ .aligned_memory_mapping = false });
     defer m.deinit(allocator);
 
+    // u16 fits entirely within mem1 (2 bytes) — should succeed.
     try m.store(u16, INPUT_START, 0x1122);
     try expectEqual(0x1122, try m.load(u16, INPUT_START));
 
-    try m.store(u32, INPUT_START, 0x33445566);
-    try expectEqual(0x33445566, try m.load(u32, INPUT_START));
+    // u32 at INPUT_START spans mem1(2B) + mem2(1B) + mem3(1B) — cross-region.
+    // [agave] https://github.com/anza-xyz/sbpf/blob/v0.19.0/src/memory_region.rs#L122-L130
+    try expectError(error.AccessViolation, m.store(u32, INPUT_START, 0x33445566));
+    try expectError(error.AccessViolation, m.load(u32, INPUT_START));
 
-    try m.store(u64, INPUT_START, 0x778899AABBCCDDEE);
-    try expectEqual(0x778899AABBCCDDEE, try m.load(u64, INPUT_START));
+    // u64 at INPUT_START spans all 4 regions — cross-region.
+    try expectError(error.AccessViolation, m.store(u64, INPUT_START, 0x778899AABBCCDDEE));
+    try expectError(error.AccessViolation, m.load(u64, INPUT_START));
 }
 
 test "unaligned memory map fast paths" {
