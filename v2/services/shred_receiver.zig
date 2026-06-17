@@ -52,8 +52,6 @@ const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
 
-const Receiver = lib.shred.Receiver;
-
 comptime {
     _ = start;
 }
@@ -98,11 +96,32 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     rw.tel.signalReady();
     logger.info().logf("Waiting for shreds on port {}", .{rw.tvu_socket.port});
 
-    var receiver: Receiver = try .init(allocator, max_in_progress, max_done);
-    defer receiver.deinit(allocator);
-
     var packet_iter = rw.tvu_socket.recv.get(.reader);
     var deshred_out = rw.deshredded_out.get(.writer);
+
+    const Effects = struct {
+        const Self = @This();
+
+        pub fn reportShredParseResult(self: Self, parses_as_chained: bool) void {
+            _ = .{ self, parses_as_chained };
+        }
+
+        pub fn reportFecSetCompleted(
+            self: Self,
+            completed: *const lib.shred.DeshreddedFecSet,
+            ctx: *const lib.shred.FecSetCtx,
+        ) void {
+            _ = .{ self, completed, ctx };
+        }
+
+        pub fn reportReceiverPacketResult(self: Self, result: lib.shred.ReceiverPacketResult) void {
+            _ = .{ self, result };
+        }
+    };
+
+    const Receiver = lib.shred.Receiver(Effects);
+    var receiver: Receiver = try .init(allocator, max_in_progress, max_done, .{});
+    defer receiver.deinit(allocator);
 
     while (true) {
         {
@@ -119,9 +138,9 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                 packet,
                 &deshred_out,
                 logger.withScope("processPacket"),
-            ) catch |err| {
-                std.log.warn("packet failed with {}", .{err});
-                continue;
+            ) catch |err| switch (err) {
+                error.NoSpaceLeft => return err,
+                else => continue,
             };
             _ = result;
         }
