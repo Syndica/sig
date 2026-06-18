@@ -5,7 +5,7 @@
 # Paths are relative to env/test-vectors/. Any fixture whose path equals an
 # entry below or lives under one (matched at a directory boundary) is skipped.
 #
-# scripts/failing.txt is a separate, file-level CI denylist for individual
+# scripts/misc_failures.txt is a separate, file-level CI denylist for individual
 # `.fix` files that are known to fail.
 
 # Top-level categories not implemented by the sig runner.

@@ -12,8 +12,8 @@ rm -rf env/split-fixtures/
 mkdir -p env/split-fixtures/
 comm -23 \
     <(find env/test-vectors/ -type f -name '*.fix' -printf '%P\n' | sort) \
-    <(sort scripts/failing.txt) \
-    | grep -vE "^$(grep -vE '^\s*(#|$)' scripts/excluded.txt | paste -sd'|')" \
+    <(sort scripts/misc_failures.txt) \
+    | grep -vE "^$(grep -vE '^\s*(#|$)' scripts/unimplemented_harnesses.txt | paste -sd'|')" \
     | sed "s_^_$PWD/env/test-vectors/_" \
     | xargs -d '\n' ln -s -t env/split-fixtures/
 

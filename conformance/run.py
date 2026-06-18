@@ -94,7 +94,7 @@ def main():
             failures.append(os.path.join(result["name"], fixture + ".fix\n"))
     failures.sort()
     
-    with open("env/test-outputs/failing.txt", "w") as f:
+    with open("env/test-outputs/misc_failures.txt", "w") as f:
         f.writelines(failures)
 
     print(f"\nDetailed test results saved to env/test-outputs/\n")
@@ -106,11 +106,11 @@ def path(path):
 
 
 def load_excluded():
-    """Parse scripts/excluded.txt. Skips blank lines and `#` comment lines
+    """Parse scripts/unimplemented_harnesses.txt. Skips blank lines and `#` comment lines
     (with optional leading whitespace); otherwise uses each line verbatim
     as a path prefix."""
     entries = []
-    with open(path("scripts/excluded.txt")) as f:
+    with open(path("scripts/unimplemented_harnesses.txt")) as f:
         for line in f:
             line = line.rstrip("\n")
             if re.match(r"^\s*(#|$)", line):
@@ -121,7 +121,7 @@ def load_excluded():
 
 def discover_tests():
     """Find unique parent directories of all `.fix` files in env/test-vectors/,
-    minus any directory excluded by scripts/excluded.txt (matched at directory
+    minus any directory excluded by scripts/unimplemented_harnesses.txt (matched at directory
     boundaries)."""
     excluded = load_excluded()
     root = path("env/test-vectors")
