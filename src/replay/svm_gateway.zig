@@ -111,7 +111,6 @@ pub const SvmGateway = struct {
             &ComputeBudget.DEFAULT,
             params.slot,
             false,
-            false,
         );
 
         var sysvar_cache: SysvarCache = .{};

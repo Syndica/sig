@@ -124,10 +124,6 @@ fn executeBpfProgram(
         .virtual_address_space_adjustments,
         ic.tc.slot,
     );
-    const mask_out_rent_epoch_in_vm_serialization = ic.tc.feature_set.active(
-        .mask_out_rent_epoch_in_vm_serialization,
-        ic.tc.slot,
-    );
     const direct_account_pointers_in_program_input = ic.tc.feature_set.active(
         .direct_account_pointers_in_program_input,
         ic.tc.slot,
@@ -139,7 +135,6 @@ fn executeBpfProgram(
         ic,
         account_data_direct_mapping,
         virtual_address_space_adjustments,
-        mask_out_rent_epoch_in_vm_serialization,
         direct_account_pointers_in_program_input,
     );
     defer serialized.deinit(allocator);
@@ -2390,8 +2385,16 @@ pub fn verifyProgram(
         compute_budget,
         slot,
         true,
-        disable_sbpf_v0_v1_v2_deployment,
     );
+
+    // SIMD-0500: morph the base environment into a deployment environment.
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/program-runtime/src/deploy.rs#L30-32
+    if (disable_sbpf_v0_v1_v2_deployment) {
+        environment.config.minimum_version = @enumFromInt(@max(
+            @intFromEnum(environment.config.minimum_version),
+            @intFromEnum(sig.vm.sbpf.Version.v3),
+        ));
+    }
 
     // Deployment of programs with sol_alloc_free is disabled.
     if (environment.loader.map.get(.sol_alloc_free_) != null) {

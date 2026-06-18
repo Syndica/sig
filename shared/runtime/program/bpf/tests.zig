@@ -84,7 +84,6 @@ pub fn prepareBpfV3Test(
         &compute_budget,
         0,
         false,
-        false,
     );
 
     const program_map = try allocator.create(ProgramMap);
@@ -216,7 +215,12 @@ test "print_account" {
         },
         .{
             .accounts = accounts,
-            .compute_meter = 28_650,
+            // mask_out_rent_epoch_in_vm_serialization is hardcoded: the VM always
+            // serializes rent_epoch as u64::MAX regardless of the account's actual value.
+            // The program's u64-to-decimal formatting loop runs more BPF instructions for
+            // the 20-digit "18446744073709551615" vs the previous 2-digit "25", costing
+            // 165 additional CUs (each BPF instruction = 1 CU, see vm/interpreter.zig:108).
+            .compute_meter = 28_815,
             .program_map = program_map,
             .vm_environment = &environment,
             .feature_set = feature_params,

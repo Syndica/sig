@@ -1362,7 +1362,7 @@
         .name = "accounts_lt_hash",
         .pubkey = "LTHasHQX6661DaDD4S6A2TFi6QBuiwXKv66fB1obfHq",
         .description = "SIMD-0215: enables lattice-based accounts hash",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "remove_accounts_delta_hash",
@@ -1472,7 +1472,7 @@
         .name = "mask_out_rent_epoch_in_vm_serialization",
         .pubkey = "RENtePQcDLrAbxAsP3k8dwVcnNYQ466hi2uKvALjnXx",
         .description = "SIMD-0267: Sets rent_epoch to a constant in the VM",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "disable_zk_elgamal_proof_program",
@@ -1632,12 +1632,7 @@
         .name = "bls_pubkey_management_in_vote_account",
         .pubkey = "AnAP9zPV4KL7czAPQbFhpDKV2tx7g4UGNbK9wvXwjaRo",
         .description = "SIMD-0387: BLS Pubkey Management in Vote Account",
-        .status = .unsupported,
-        .note =
-        \\ TODO: Low Priority
-        \\ Not currently scheduled for activation.
-        \\ Implement as part of alpenglow in v2.
-        ,
+        .status = .supported,
     },
     .{
         .name = "relax_programdata_account_check_migration",
@@ -1675,12 +1670,12 @@
     },
     .{
         .name = "discard_unexpected_data_complete_shreds",
-        .pubkey = "dcomRRWHXP1FVWPqi9Mm4oxJhF4ehC795SvAtUdA9os",
+        .pubkey = "disCA4efguFL6Wqa4pGdG7jpjC7C5uiKzKnhEBqchBe",
         .description = "SIMD-0337: Markers for Alpenglow Fast Leader Handover, DATA_COMPLETE_SHRED placement rules",
         .status = .unsupported,
         .note =
         \\ TODO: Low Priority.
-        \\ Not scheduled for activation.
+        \\ Scheduled for activation in agave v4.1 release cycle.
         \\ Implement as part of alpenglow in v2.
         ,
     },
@@ -1781,5 +1776,34 @@
         .pubkey = "Eg7tXEwMZzS98xaZ1YHUbdRHsaYZiCsSaR6sKgxreoaj",
         .description = "SIMD-0291: Commission Rate in Basis Points",
         .status = .supported,
+    },
+    .{
+        .name = "block_revenue_sharing",
+        .pubkey = "B1ockRevenueSharing111111111111111111111111",
+        .description = "SIMD-0123: Block Revenue Sharing",
+        .status = .unsupported,
+        .note =
+        \\ TODO: Low Priority
+        \\ Not currently scheduled for activation.
+        \\ Listed as a co-dependency of SIMD-0387's
+        \\ `bls_pubkey_management_in_vote_account` `is_init_account_v2_enabled`
+        \\ gate; the InitializeAccountV2 instruction only activates when this
+        \\ feature is also live.
+        ,
+    },
+    .{
+        .name = "vote_account_initialize_v2",
+        .pubkey = "VoteAccount1nitia1izeV211111111111111111111",
+        .description = "SIMD-0464: Vote Account InitializeV2",
+        .status = .unsupported,
+        .note =
+        \\ TODO: Low Priority
+        \\ Not currently scheduled for activation.
+        \\ Co-dependency of `bls_pubkey_management_in_vote_account`; the
+        \\ InitializeAccountV2 instruction only activates when all of
+        \\ bls_pubkey_management_in_vote_account, commission_rate_in_basis_points,
+        \\ custom_commission_collector, block_revenue_sharing and
+        \\ vote_account_initialize_v2 are active.
+        ,
     },
 }

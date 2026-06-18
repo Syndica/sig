@@ -20,6 +20,8 @@ const VoteStateVersions = vote_program.state.VoteStateVersions;
 const VoteAuthorize = vote_program.state.VoteAuthorize;
 const VoteError = vote_program.VoteError;
 
+const bls12_381 = sig.crypto.bls12_381;
+
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const Rent = sig.runtime.sysvar.Rent;
@@ -170,7 +172,12 @@ pub fn execute(
             &vote_account,
             args.tower_sync,
         ),
-        ._reserved_initialize_account_v2 => return InstructionError.InvalidInstructionData,
+        .initialize_account_v2 => |args| try executeIntializeAccountV2(
+            allocator,
+            ic,
+            &vote_account,
+            args,
+        ),
         .update_commission_collector => |kind| return try executeUpdateCommissionCollector(
             allocator,
             ic,
@@ -298,6 +305,219 @@ fn intializeAccount(
     );
 }
 
+/// SIMD-0387: `is_init_account_v2_enabled` gate.
+///
+/// Mirrors agave's predicate, which AND-combines five SIMD-0387 / SIMD-0291 /
+/// SIMD-0232 / SIMD-0123 / SIMD-0464 feature gates.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_processor.rs#L63-L70
+fn isInitAccountV2Enabled(ic: *InstructionContext) bool {
+    const slot = ic.tc.slot;
+    const fs = ic.tc.feature_set;
+    return fs.active(.bls_pubkey_management_in_vote_account, slot) and
+        fs.active(.commission_rate_in_basis_points, slot) and
+        fs.active(.custom_commission_collector, slot) and
+        fs.active(.block_revenue_sharing, slot) and
+        fs.active(.vote_account_initialize_v2, slot);
+}
+
+/// SIMD-0232 / SIMD-0464 commission-collector argument: either the
+/// vote account itself (escape-hatch) or a separately borrowed
+/// instruction account pending validation via `validateAndResolveKey`.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L876-L912
+const NewCommissionCollector = union(enum) {
+    vote_account,
+    new_account: BorrowedAccount,
+
+    /// Release the borrowed write-lock on `.new_account`. No-op for
+    /// `.vote_account` (the vote account is held by the dispatcher).
+    pub fn release(self: *const NewCommissionCollector) void {
+        switch (self.*) {
+            .vote_account => {},
+            .new_account => |account| account.release(),
+        }
+    }
+
+    /// Validates the collector per SIMD-0232 and returns its pubkey.
+    ///
+    /// The collector must either equal the vote account's address, or
+    /// be a writable, system-program-owned, rent-exempt account.
+    ///
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L883-L912
+    pub fn validateAndResolveKey(
+        self: *const NewCommissionCollector,
+        rent: *const Rent,
+        vote_account: *const BorrowedAccount,
+    ) InstructionError!Pubkey {
+        switch (self.*) {
+            .vote_account => return vote_account.pubkey,
+            .new_account => |collector_account| {
+                // 1. Must be a system program owned account.
+                const system_program = sig.runtime.program.system;
+                if (!collector_account.account.owner.equals(&system_program.ID)) {
+                    return InstructionError.InvalidAccountOwner;
+                }
+
+                // 2. Must be rent-exempt.
+                if (!rent.isExempt(
+                    collector_account.account.lamports,
+                    collector_account.constAccountData().len,
+                )) {
+                    return InstructionError.InsufficientFunds;
+                }
+
+                // 3. Must not be a reserved account (checked via writable flag).
+                if (!collector_account.context.is_writable) {
+                    return InstructionError.InvalidArgument;
+                }
+
+                return collector_account.pubkey;
+            },
+        }
+    }
+};
+
+/// Returns `.vote_account` if the collector meta aliases the vote account,
+/// otherwise borrows the collector account.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_processor.rs#L83-L97
+fn readNewCollectorAccount(
+    ic: *InstructionContext,
+    vote_account: *const BorrowedAccount,
+    collector_index_in_instruction: u16,
+) InstructionError!NewCommissionCollector {
+    const collector_meta = ic.ixn_info.getAccountMetaAtIndex(
+        collector_index_in_instruction,
+    ) orelse return InstructionError.MissingAccount;
+
+    if (collector_meta.pubkey.equals(&vote_account.pubkey)) {
+        return .vote_account;
+    }
+
+    return .{
+        .new_account = try ic.borrowInstructionAccount(
+            collector_index_in_instruction,
+        ),
+    };
+}
+
+/// SIMD-0387: `InitializeAccountV2`.
+///
+/// Bundles SIMD-0185 (V4 layout), SIMD-0387 (BLS pubkey + PoP),
+/// SIMD-0291 (basis-points commission) and SIMD-0232 (commission collectors)
+/// initialization into a single instruction. Only available once
+/// `isInitAccountV2Enabled` returns true.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_processor.rs#L334-L361
+/// [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L1140-L1187
+fn executeIntializeAccountV2(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    vote_init: vote_instruction.VoteInitV2,
+) (error{OutOfMemory} || InstructionError)!void {
+    if (!isInitAccountV2Enabled(ic)) {
+        return InstructionError.InvalidInstructionData;
+    }
+
+    // check_number_of_instruction_accounts(4)
+    if (ic.ixn_info.account_metas.items.len < 4) {
+        return InstructionError.MissingAccount;
+    }
+
+    const inflation_rewards_collector = try readNewCollectorAccount(
+        ic,
+        vote_account,
+        @intFromEnum(vote_instruction.VoteInitV2.AccountIndex.inflation_rewards_collector),
+    );
+    defer inflation_rewards_collector.release();
+
+    const block_revenue_collector = try readNewCollectorAccount(
+        ic,
+        vote_account,
+        @intFromEnum(vote_instruction.VoteInitV2.AccountIndex.block_revenue_collector),
+    );
+    defer block_revenue_collector.release();
+
+    const clock = try ic.tc.sysvar_cache.get(Clock);
+    const rent = try ic.tc.sysvar_cache.get(Rent);
+
+    // check_vote_account_length: V4 only.
+    if (vote_account.constAccountData().len != VoteStateV4.MAX_VOTE_STATE_SIZE) {
+        return InstructionError.InvalidAccountData;
+    }
+
+    var versioned_vote_state = try vote_account.deserializeFromAccountData(
+        allocator,
+        VoteStateVersions,
+    );
+    defer versioned_vote_state.deinit(allocator);
+
+    if (!versioned_vote_state.isUninitialized()) {
+        return InstructionError.AccountAlreadyInitialized;
+    }
+
+    // node must agree to accept this vote account
+    if (!ic.ixn_info.isPubkeySigner(vote_init.node_pubkey)) {
+        try ic.tc.log(
+            "InitializeAccountV2: 'node' {f} must sign",
+            .{vote_init.node_pubkey},
+        );
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L1014-L1043
+    const inflation_rewards_collector_key = try inflation_rewards_collector
+        .validateAndResolveKey(&rent, vote_account);
+    const block_revenue_collector_key = try block_revenue_collector
+        .validateAndResolveKey(&rent, vote_account);
+
+    // Verify the BLS pubkey proof of possession (consumes 34,500 CUs first,
+    // matching agave's `consume_pop_compute_units` ordering).
+    try verifyBlsProofOfPossession(
+        ic.tc,
+        &vote_account.pubkey,
+        &vote_init.authorized_voter_bls_pubkey,
+        &vote_init.authorized_voter_bls_proof_of_possession,
+    );
+
+    // Build the new V4 state. Mirrors `VoteStateV4::new(&VoteInitV2, ...)`:
+    // basis-points commissions are taken straight from `vote_init`, the BLS
+    // pubkey is populated, and the collector keys are the validated
+    // values from above.
+    const authorized_voters = try vote_program.state.AuthorizedVoters.init(
+        allocator,
+        clock.epoch,
+        vote_init.authorized_voter,
+    );
+
+    var vote_state: VoteState = .{ .v4 = .{
+        .node_pubkey = vote_init.node_pubkey,
+        .withdrawer = vote_init.authorized_withdrawer,
+        .inflation_rewards_collector = inflation_rewards_collector_key,
+        .block_revenue_collector = block_revenue_collector_key,
+        .inflation_rewards_commission_bps = vote_init.inflation_rewards_commission_bps,
+        .block_revenue_commission_bps = vote_init.block_revenue_commission_bps,
+        .pending_delegator_rewards = 0,
+        .bls_pubkey_compressed = vote_init.authorized_voter_bls_pubkey,
+        .votes = .empty,
+        .root_slot = null,
+        .authorized_voters = authorized_voters,
+        .epoch_credits = .empty,
+        .last_timestamp = .{ .slot = 0, .timestamp = 0 },
+    } };
+    defer vote_state.deinit(allocator);
+
+    try setVoteState(
+        allocator,
+        vote_account,
+        &vote_state,
+        &ic.tc.rent,
+        &ic.tc.accounts_resize_delta,
+    );
+}
+
 /// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L77-L79
 fn executeAuthorize(
     allocator: std.mem.Allocator,
@@ -341,8 +561,26 @@ fn authorize(
     var vote_state = try getVoteStateChecked(allocator, vote_account, targetVersion(ic.tc), false);
     defer vote_state.deinit(allocator);
 
+    // [SIMD-0387] When `bls_pubkey_management_in_vote_account` is active:
+    //   * `Authorize::Voter` MUST NOT be used to overwrite a voter that
+    //     already has a BLS pubkey set; clients have to use
+    //     `Authorize::VoterWithBLS` so the new voter ↔ BLS pubkey
+    //     pairing is verified atomically.
+    //   * `Authorize::VoterWithBLS` is gated on the same feature.
+    // [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L703-L772
+    const is_with_bls_enabled = ic.tc.feature_set.active(
+        .bls_pubkey_management_in_vote_account,
+        ic.tc.slot,
+    );
+
     switch (vote_authorize) {
         .voter => {
+            // [SIMD-0387] reject `Authorize::Voter` when a BLS pubkey
+            // is already pinned to the vote account.
+            if (is_with_bls_enabled and vote_state.hasBlsPubkey()) {
+                return InstructionError.InvalidInstructionData;
+            }
+
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L697-L701
             const target_epoch = std.math.add(u64, clock.leader_schedule_epoch, 1) catch {
                 return InstructionError.InvalidAccountData;
@@ -367,6 +605,7 @@ fn authorize(
                 allocator,
                 authorized,
                 target_epoch,
+                null,
             );
             if (maybe_err) |err| {
                 ic.tc.custom_error = @intFromEnum(err);
@@ -376,6 +615,52 @@ fn authorize(
         .withdrawer => {
             try validateIsSigner(vote_state.withdrawerKey().*, signers);
             vote_state.withdrawerMut().* = authorized;
+        },
+        .voter_with_bls => |args| {
+            // [SIMD-0387] Authorize a new voter together with its BLS
+            // pubkey. The PoP is verified against the vote account
+            // pubkey (the message domain binds the two together) and
+            // 34_500 CUs are consumed regardless of the verification
+            // result, matching agave's `consume_pop_compute_units`.
+            // [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L736-L770
+            if (!is_with_bls_enabled) {
+                return InstructionError.InvalidInstructionData;
+            }
+
+            const target_epoch = std.math.add(u64, clock.leader_schedule_epoch, 1) catch {
+                return InstructionError.InvalidAccountData;
+            };
+
+            const epoch_authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
+                allocator,
+                clock.epoch,
+            );
+
+            // Match agave: the withdrawer-signer check is non-fatal
+            // here (its result is OR-ed against the epoch voter). The
+            // PoP verify still consumes its CUs even if neither is a
+            // signer, so we mirror agave's call order strictly.
+            try verifyBlsProofOfPossession(
+                ic.tc,
+                &vote_account.pubkey,
+                &args.bls_pubkey,
+                &args.bls_proof_of_possession,
+            );
+
+            validateIsSigner(vote_state.withdrawerKey().*, signers) catch {
+                try validateIsSigner(epoch_authorized_voter, signers);
+            };
+
+            const maybe_err = try vote_state.setNewAuthorizedVoter(
+                allocator,
+                authorized,
+                target_epoch,
+                &args.bls_pubkey,
+            );
+            if (maybe_err) |err| {
+                ic.tc.custom_error = @intFromEnum(err);
+                return InstructionError.Custom;
+            }
         },
     }
 
@@ -583,7 +868,7 @@ fn updateValidatorIdentity(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_processor.rs#L348-L376
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_processor.rs#L383
 fn executeUpdateCommissionCollector(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -599,32 +884,38 @@ fn executeUpdateCommissionCollector(
         return InstructionError.InvalidInstructionData;
     }
 
-    // Determine if collector is the vote account itself or a new account.
-    const collector_account_index = 1;
-    const collector_pubkey = &(ic.ixn_info.getAccountMetaAtIndex(collector_account_index) orelse
-        return InstructionError.MissingAccount).pubkey;
+    if (ic.ixn_info.account_metas.items.len < 3) {
+        return InstructionError.MissingAccount;
+    }
 
-    const is_vote_account = collector_pubkey.equals(&vote_account.pubkey);
+    const new_collector = try readNewCollectorAccount(
+        ic,
+        vote_account,
+        1,
+    );
+    defer new_collector.release();
+
+    const rent = try ic.tc.sysvar_cache.get(Rent);
 
     try updateCommissionCollector(
         allocator,
         ic,
         vote_account,
         kind,
-        collector_pubkey.*,
-        is_vote_account,
+        new_collector,
+        &rent,
         target_version,
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L914-L973
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L1102-L1144
 fn updateCommissionCollector(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     kind: vote_instruction.CommissionKind,
-    new_collector_key: Pubkey,
-    is_vote_account: bool,
+    new_collector: NewCommissionCollector,
+    rent: *const Rent,
     target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     var vote_state = try getVoteStateChecked(
@@ -640,36 +931,10 @@ fn updateCommissionCollector(
         return InstructionError.MissingRequiredSignature;
     }
 
-    // Per SIMD-0232: the designated commission collector must either
-    // be equal to the vote account's address OR satisfy ALL of the
-    // following constraints.
-    if (!is_vote_account) {
-        const collector_account_index = 1;
-        var collector_account = try ic.borrowInstructionAccount(
-            collector_account_index,
-        );
-        defer collector_account.release();
-
-        // 1. Must be a system program owned account.
-        const system_program = sig.runtime.program.system;
-        if (!collector_account.account.owner.equals(&system_program.ID)) {
-            return InstructionError.InvalidAccountOwner;
-        }
-
-        // 2. Must be rent-exempt.
-        const data_len = collector_account.constAccountData().len;
-        if (!ic.tc.rent.isExempt(
-            collector_account.account.lamports,
-            data_len,
-        )) {
-            return InstructionError.InsufficientFunds;
-        }
-
-        // 3. Must not be a reserved account (checked via writable).
-        if (!collector_account.context.is_writable) {
-            return InstructionError.InvalidArgument;
-        }
-    }
+    const new_collector_key = try new_collector.validateAndResolveKey(
+        rent,
+        vote_account,
+    );
 
     switch (kind) {
         .inflation_rewards => {
@@ -1275,6 +1540,44 @@ fn validateIsSigner(
         }
     }
     return InstructionError.MissingRequiredSignature;
+}
+
+/// [SIMD-0387] Verify the BLS proof-of-possession for a vote account.
+///
+/// Always consumes `BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS`
+/// (34_500 CUs) up front, even if the verification subsequently fails.
+/// This mirrors agave's `verify_bls_proof_of_possession` which consumes
+/// CUs unconditionally before the elliptic-curve work, and matches
+/// firedancer's `fd_bls12_381_proof_of_possession_verify` charging
+/// model. On success returns `void`; on a malformed pubkey/signature
+/// or pairing-check failure returns `InstructionError.InvalidArgument`,
+/// matching agave's mapping.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L1045-L1061
+fn verifyBlsProofOfPossession(
+    tc: *sig.runtime.TransactionContext,
+    vote_account_pubkey: *const Pubkey,
+    bls_pubkey_compressed: *const [vote_program.state.BLS_PUBLIC_KEY_COMPRESSED_SIZE]u8,
+    // zig fmt: off
+    bls_proof_of_possession_compressed: *const [vote_program.state.BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE]u8,
+    // zig fmt: on
+) InstructionError!void {
+    try tc.consumeCompute(
+        vote_program.state.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS,
+    );
+
+    var message: [vote_program.state.BLS_PROOF_OF_POSSESSION_MESSAGE_SIZE]u8 = undefined;
+    vote_program.state.generateBlsPopMessage(
+        &message,
+        vote_account_pubkey,
+        bls_pubkey_compressed,
+    );
+
+    bls12_381.proofOfPossessionVerify(
+        &message,
+        bls_proof_of_possession_compressed,
+        bls_pubkey_compressed,
+    ) catch return InstructionError.InvalidArgument;
 }
 
 fn setVoteState(
@@ -3177,8 +3480,6 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
 }
 
 test "vote_program: widthdraw all and close account with active vote account" {
-    const EpochCredit = sig.runtime.program.vote.state.EpochCredit;
-    _ = EpochCredit; // autofix
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
     // TODO use constant in other tests.
@@ -7162,6 +7463,629 @@ test "vote_program: authorize uninitialized v3-tagged returns UninitializedAccou
         },
         .{},
     );
+}
+
+// [SIMD-0387] When `bls_pubkey_management_in_vote_account` is active and
+// the vote account already has a BLS pubkey set, the legacy
+// `Authorize::Voter` variant MUST be rejected. Clients have to use
+// `Authorize::VoterWithBLS` so the new voter ↔ BLS pubkey pairing is
+// verified atomically. With the feature INactive the same instruction
+// would succeed.
+//
+// [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L703-L706
+test "vote_program: authorize voter rejected when bls_pubkey set and SIMD-0387 active" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const new_authorized_voter = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock.epoch,
+        vote_account,
+    );
+    defer initial_v4.deinit(allocator);
+    initial_v4.bls_pubkey_compressed = [_]u8{0xAB} ** 48;
+
+    const initial_versioned: VoteStateVersions = .{ .v4 = initial_v4 };
+    var initial_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_bytes[0..], initial_versioned, .{});
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidInstructionData,
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .authorize = .{
+                .new_authority = new_authorized_voter,
+                .vote_authorize = VoteAuthorize.voter,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_bytes[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+// [SIMD-0387] When `bls_pubkey_management_in_vote_account` is inactive,
+// `Authorize::VoterWithBLS` must be rejected with InvalidInstructionData
+// (the bincode for the instruction parses fine but the executor refuses
+// to apply it).
+test "vote_program: authorize voter_with_bls rejected when SIMD-0387 inactive" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const new_authorized_voter = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock.epoch,
+        vote_account,
+    );
+    defer initial_v4.deinit(allocator);
+
+    const initial_versioned: VoteStateVersions = .{ .v4 = initial_v4 };
+    var initial_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_bytes[0..], initial_versioned, .{});
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidInstructionData,
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .authorize = .{
+                .new_authority = new_authorized_voter,
+                .vote_authorize = .{ .voter_with_bls = .{
+                    .bls_pubkey = [_]u8{0} ** 48,
+                    .bls_proof_of_possession = [_]u8{0} ** 96,
+                } },
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_bytes[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+// [SIMD-0387] `Authorize::VoterWithBLS` with the feature ACTIVE but a
+// malformed BLS pubkey / proof must:
+//   (a) consume the full 34,500 CU PoP cost up front, and
+//   (b) fail with `InvalidArgument` (mapped from the crypto-layer
+//       `error.Failed`), matching agave's `verify_bls_proof_of_possession`.
+// The fixture supplies an all-zero pubkey + proof which can never satisfy
+// the PoP pairing check.
+test "vote_program: authorize voter_with_bls bad proof consumes CUs and returns InvalidArgument" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const new_authorized_voter = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    var initial_v4 = try VoteStateV4.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock.epoch,
+        vote_account,
+    );
+    defer initial_v4.deinit(allocator);
+
+    const initial_versioned: VoteStateVersions = .{ .v4 = initial_v4 };
+    var initial_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_bytes[0..], initial_versioned, .{});
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidArgument,
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{
+            .authorize = .{
+                .new_authority = new_authorized_voter,
+                .vote_authorize = .{ .voter_with_bls = .{
+                    .bls_pubkey = [_]u8{0} ** 48,
+                    .bls_proof_of_possession = [_]u8{0} ** 96,
+                } },
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_bytes[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS +
+                vote_program.state.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS,
+            .sysvar_cache = .{ .clock = clock },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+const PopFixture = struct {
+    vote_pubkey: Pubkey,
+    bls_pubkey: [48]u8,
+    bls_proof: [96]u8,
+};
+
+// Two valid Alpenglow PoP fixtures for InitializeAccountV2 success paths.
+//
+// In every callsite the fixture's `vote_pubkey` MUST be used as the vote
+// account's pubkey, otherwise the middle 32 bytes of the PoP envelope
+// ("ALPENGLOW" || vote_pubkey || bls_pubkey) no longer match the signed
+// message and verification fails.
+//
+// [0] Self-generated by sig (independent of any external implementation).
+//     Produced via blst directly with the recipe below; hardcoded so the
+//     test path stays cheap (decompress + pairing only).
+//       ikm     = "sig-alpenglow-pop-fixture-bls-2!" (32 bytes)
+//       vote_pk = "sig-alpenglow-pop-vote-acct-key!" (32 bytes ASCII)
+//       msg     = "ALPENGLOW" || vote_pk || bls_pk
+//       sk      = c.keygen(ikm)
+//       bls_pk  = c.p1_compress(c.sk_to_pk_in_g1(sk))
+//       sig     = c.p2_compress(c.sign_pk_in_g1(c.hash_to_g2(msg, PROOF_OF_POSSESSION_DST), sk))
+//
+// [1] Cross-check vector taken from firedancer's POP success case 1 (also
+//     exercised by `proofOfPossessionVerify` test in lib.zig). Catches
+//     DST / encoding drift that a self-generated vector alone would not
+//     surface.
+//       vote_pubkey hex: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+//       bls_pk hex:      b8778284f744f6ae2791145183ef8fcb66dcd6602da8ca1add3e6828904db482708fb1d9bd2cbeb72320cdef56d173bc
+//       pop hex:         b21b2bc4933e1d2cd32e9b976cc89a98d14f45c89356bb67afab0bc48a6ff9c2
+//                        d3c4d2394d68706077e5dd7596459da70227c70f2f14adbfbcf6b46ae34f970f
+//                        88b49dd8185f705333f682eb27674e8abbdf21519dd01424f6993713c9e4632d
+fn alpenglowPopFixtures() [2]PopFixture {
+    var fixtures: [2]PopFixture = undefined;
+    inline for (.{
+        // zig fmt: off
+        // [0] Self-generated by sig.
+        // vote_pubkey is the ASCII bytes of "sig-alpenglow-pop-vote-acct-key!".
+        .{
+            "7369672d616c70656e676c6f772d706f702d766f74652d616363742d6b657921",
+            "8af3bdd945e3cd2f35d865a35e55d22605108d7c936e78837621f99bf25fc9d0a03badbe58d3c978fa5f682363d231a9",
+            "8291bb74331512536b0e1d11936ed473704a09900bcabd2ede576e28d8eee1b0af6e6e6fed8ca03bd64c3a967246083c0bb548415cd4bc9a672766c8b46e0fc1c434401d0211da085b050b3fc243f26bba088496eb4925f3b8cc73d957894085",
+        },
+        // [1] Firedancer POP success case 1 cross-check.
+        // [firedancer] https://github.com/firedancer-io/firedancer/blob/f213d050148bf2a01f879a17f61547aa212b528d/src/ballet/bls/test_bls12_381.c#L1162-L1166
+        .{
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "b8778284f744f6ae2791145183ef8fcb66dcd6602da8ca1add3e6828904db482708fb1d9bd2cbeb72320cdef56d173bc",
+            "b21b2bc4933e1d2cd32e9b976cc89a98d14f45c89356bb67afab0bc48a6ff9c2d3c4d2394d68706077e5dd7596459da70227c70f2f14adbfbcf6b46ae34f970f88b49dd8185f705333f682eb27674e8abbdf21519dd01424f6993713c9e4632d",
+        },
+        // zig fmt: on
+    }, 0..) |v, i| {
+        var vote: [32]u8 = undefined;
+        var bls: [48]u8 = undefined;
+        var proof: [96]u8 = undefined;
+        _ = std.fmt.hexToBytes(&vote, v[0]) catch unreachable;
+        _ = std.fmt.hexToBytes(&bls, v[1]) catch unreachable;
+        _ = std.fmt.hexToBytes(&proof, v[2]) catch unreachable;
+        fixtures[i] = .{
+            .vote_pubkey = .{ .data = vote },
+            .bls_pubkey = bls,
+            .bls_proof = proof,
+        };
+    }
+    return fixtures;
+}
+
+// [SIMD-0387] initialize_account_v2 success path: all five co-dep features
+// active, a valid BLS PoP, and both commission collectors set to the vote
+// account itself (the SIMD-0232/SIMD-0464 escape hatch). The resulting
+// VoteStateV4 must carry the BLS pubkey, basis-points commissions and
+// collectors derived from the VoteInitV2 payload.
+test "vote_program: initialize_account_v2 success (escape-hatch collectors)" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const rent = Rent.INIT;
+    const clock: Clock = .INIT;
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+
+    // Iterate over every valid PoP fixture: a sig self-generated vector and
+    // a firedancer cross-check vector. Both must drive the executor through
+    // the same successful path. The firedancer iteration would catch any
+    // DST / encoding drift that the self-generated vector alone could mask
+    // (since sig generates and verifies with the same code path).
+    for (alpenglowPopFixtures()) |fixture| {
+        const node_pubkey = Pubkey.initRandom(prng.random());
+        const authorized_voter = Pubkey.initRandom(prng.random());
+        const authorized_withdrawer = Pubkey.initRandom(prng.random());
+
+        const vote_init: vote_instruction.VoteInitV2 = .{
+            .node_pubkey = node_pubkey,
+            .authorized_voter = authorized_voter,
+            .authorized_voter_bls_pubkey = fixture.bls_pubkey,
+            .authorized_voter_bls_proof_of_possession = fixture.bls_proof,
+            .authorized_withdrawer = authorized_withdrawer,
+            .inflation_rewards_commission_bps = 0x1234,
+            .block_revenue_commission_bps = 0xABCD,
+        };
+
+        // Construct the expected final V4 state.
+        const authorized_voters = try vote_program.state.AuthorizedVoters.init(
+            allocator,
+            clock.epoch,
+            authorized_voter,
+        );
+        var final_v4: VoteStateV4 = .{
+            .node_pubkey = node_pubkey,
+            .withdrawer = authorized_withdrawer,
+            .inflation_rewards_collector = fixture.vote_pubkey,
+            .block_revenue_collector = fixture.vote_pubkey,
+            .inflation_rewards_commission_bps = 0x1234,
+            .block_revenue_commission_bps = 0xABCD,
+            .pending_delegator_rewards = 0,
+            .bls_pubkey_compressed = fixture.bls_pubkey,
+            .votes = .empty,
+            .root_slot = null,
+            .authorized_voters = authorized_voters,
+            .epoch_credits = .empty,
+            .last_timestamp = .{ .slot = 0, .timestamp = 0 },
+        };
+        defer final_v4.deinit(allocator);
+
+        const final_versioned: VoteStateVersions = .{ .v4 = final_v4 };
+        var final_state_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+        _ = try sig.bincode.writeToSlice(final_state_bytes[0..], final_versioned, .{});
+
+        // Initial account is uninitialized but pre-sized to VoteStateV4 length.
+        const initial_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+
+        try testing.expectProgramExecuteResult(
+            std.testing.allocator,
+            vote_program.ID,
+            VoteProgramInstruction{ .initialize_account_v2 = vote_init },
+            &.{
+                // 0: vote_account (writable)
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                // 1: node identity (signer)
+                .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+                // 2: inflation-rewards collector == vote_account (escape hatch)
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                // 3: block-revenue collector == vote_account (escape hatch)
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = fixture.vote_pubkey,
+                        .lamports = RENT_EXEMPT_THRESHOLD,
+                        .owner = vote_program.ID,
+                        .data = initial_bytes[0..],
+                    },
+                    .{ .pubkey = node_pubkey },
+                    .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+                },
+                .compute_meter = vote_program.COMPUTE_UNITS +
+                    vote_program.state.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS,
+                .sysvar_cache = .{ .rent = rent, .clock = clock },
+                .feature_set = &.{
+                    .{ .feature = .vote_state_v4, .slot = 0 },
+                    .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
+                    .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
+                    .{ .feature = .custom_commission_collector, .slot = 0 },
+                    .{ .feature = .block_revenue_sharing, .slot = 0 },
+                    .{ .feature = .vote_account_initialize_v2, .slot = 0 },
+                },
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = fixture.vote_pubkey,
+                        .lamports = RENT_EXEMPT_THRESHOLD,
+                        .owner = vote_program.ID,
+                        .data = final_state_bytes[0..],
+                    },
+                    .{ .pubkey = node_pubkey },
+                    .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+                },
+                .compute_meter = 0,
+            },
+            .{},
+        );
+    }
+}
+
+// [SIMD-0387] When `is_init_account_v2_enabled` is false (any one of the
+// co-dep features inactive), InitializeAccountV2 must be rejected up front
+// with InvalidInstructionData — agave's `if (!is_init_account_v2_enabled)`
+// branch in vote_processor.rs.
+test "vote_program: initialize_account_v2 rejected when gate inactive" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+    const rent = Rent.INIT;
+
+    for (alpenglowPopFixtures()) |fixture| {
+        const node_pubkey = Pubkey.initRandom(prng.random());
+        const authorized_voter = Pubkey.initRandom(prng.random());
+        const authorized_withdrawer = Pubkey.initRandom(prng.random());
+
+        const vote_init: vote_instruction.VoteInitV2 = .{
+            .node_pubkey = node_pubkey,
+            .authorized_voter = authorized_voter,
+            .authorized_voter_bls_pubkey = fixture.bls_pubkey,
+            .authorized_voter_bls_proof_of_possession = fixture.bls_proof,
+            .authorized_withdrawer = authorized_withdrawer,
+            .inflation_rewards_commission_bps = 0,
+            .block_revenue_commission_bps = 0,
+        };
+
+        const initial_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+
+        try testing.expectProgramExecuteError(
+            InstructionError.InvalidInstructionData,
+            std.testing.allocator,
+            vote_program.ID,
+            VoteProgramInstruction{ .initialize_account_v2 = vote_init },
+            &.{
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = fixture.vote_pubkey,
+                        .lamports = 27074400,
+                        .owner = vote_program.ID,
+                        .data = initial_bytes[0..],
+                    },
+                    .{ .pubkey = node_pubkey },
+                    .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+                },
+                .compute_meter = vote_program.COMPUTE_UNITS,
+                .sysvar_cache = .{ .rent = rent, .clock = clock },
+                // Only `vote_state_v4` active: SIMD-0387 + co-deps all inactive.
+                .feature_set = &.{
+                    .{ .feature = .vote_state_v4, .slot = 0 },
+                },
+            },
+            .{},
+        );
+    }
+}
+
+// [SIMD-0387] InitializeAccountV2 with all gate features active but a
+// malformed PoP must return InvalidArgument after consuming the 34,500-CU
+// PoP cost (mirrors `verify_bls_proof_of_possession` semantics).
+test "vote_program: initialize_account_v2 bad proof returns InvalidArgument" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+    const rent = Rent.INIT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+
+    const vote_init: vote_instruction.VoteInitV2 = .{
+        .node_pubkey = node_pubkey,
+        .authorized_voter = authorized_voter,
+        .authorized_voter_bls_pubkey = [_]u8{0} ** 48,
+        .authorized_voter_bls_proof_of_possession = [_]u8{0} ** 96,
+        .authorized_withdrawer = authorized_withdrawer,
+        .inflation_rewards_commission_bps = 0,
+        .block_revenue_commission_bps = 0,
+    };
+
+    const initial_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidArgument,
+        std.testing.allocator,
+        vote_program.ID,
+        VoteProgramInstruction{ .initialize_account_v2 = vote_init },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_bytes[0..],
+                },
+                .{ .pubkey = node_pubkey },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS +
+                vote_program.state.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS,
+            .sysvar_cache = .{ .rent = rent, .clock = clock },
+            .feature_set = &.{
+                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
+                .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
+                .{ .feature = .custom_commission_collector, .slot = 0 },
+                .{ .feature = .block_revenue_sharing, .slot = 0 },
+                .{ .feature = .vote_account_initialize_v2, .slot = 0 },
+            },
+        },
+        .{},
+    );
+}
+
+// [SIMD-0387] check_number_of_instruction_accounts(4): when fewer than 4
+// instruction accounts are provided, agave returns NotEnoughAccountKeys. Sig
+// has no dedicated NotEnoughAccountKeys variant in this code path; the
+// implementation surfaces this via MissingAccount when the executor reaches
+// for the absent collector meta. Either way it must reject before touching
+// account state.
+test "vote_program: initialize_account_v2 rejects when too few accounts" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const clock: Clock = .INIT;
+    const rent = Rent.INIT;
+
+    for (alpenglowPopFixtures()) |fixture| {
+        const node_pubkey = Pubkey.initRandom(prng.random());
+        const authorized_voter = Pubkey.initRandom(prng.random());
+        const authorized_withdrawer = Pubkey.initRandom(prng.random());
+
+        const vote_init: vote_instruction.VoteInitV2 = .{
+            .node_pubkey = node_pubkey,
+            .authorized_voter = authorized_voter,
+            .authorized_voter_bls_pubkey = fixture.bls_pubkey,
+            .authorized_voter_bls_proof_of_possession = fixture.bls_proof,
+            .authorized_withdrawer = authorized_withdrawer,
+            .inflation_rewards_commission_bps = 0,
+            .block_revenue_commission_bps = 0,
+        };
+
+        const initial_bytes = ([_]u8{0} ** VoteStateV4.MAX_VOTE_STATE_SIZE);
+
+        try testing.expectProgramExecuteError(
+            InstructionError.MissingAccount,
+            std.testing.allocator,
+            vote_program.ID,
+            VoteProgramInstruction{ .initialize_account_v2 = vote_init },
+            &.{
+                // Only 2 instruction accounts: vote_account + node. Missing both
+                // collectors.
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = fixture.vote_pubkey,
+                        .lamports = 27074400,
+                        .owner = vote_program.ID,
+                        .data = initial_bytes[0..],
+                    },
+                    .{ .pubkey = node_pubkey },
+                    .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+                },
+                .compute_meter = vote_program.COMPUTE_UNITS +
+                    vote_program.state.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS,
+                .sysvar_cache = .{ .rent = rent, .clock = clock },
+                .feature_set = &.{
+                    .{ .feature = .vote_state_v4, .slot = 0 },
+                    .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
+                    .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
+                    .{ .feature = .custom_commission_collector, .slot = 0 },
+                    .{ .feature = .block_revenue_sharing, .slot = 0 },
+                    .{ .feature = .vote_account_initialize_v2, .slot = 0 },
+                },
+            },
+            .{},
+        );
+    }
 }
 
 // ── SIMD-0291: UpdateCommissionBps tests ────────────────────────────
