@@ -676,7 +676,7 @@ pub fn VarIntConfig(comptime T: type) bincode.FieldConfig(T) {
         ) !T {
             _ = params;
             _ = limit_allocator;
-            return std.leb.readUleb128(T, reader);
+            return shortvec.readVarInt(T, reader);
         }
     };
 

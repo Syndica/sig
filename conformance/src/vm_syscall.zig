@@ -144,7 +144,6 @@ fn executeSyscall(
         &tc.compute_budget,
         tc.slot,
         reject_broken_elfs,
-        false,
     );
     vm_environment.config = config;
 
