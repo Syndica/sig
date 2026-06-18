@@ -1472,7 +1472,7 @@
         .name = "mask_out_rent_epoch_in_vm_serialization",
         .pubkey = "RENtePQcDLrAbxAsP3k8dwVcnNYQ466hi2uKvALjnXx",
         .description = "SIMD-0267: Sets rent_epoch to a constant in the VM",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "disable_zk_elgamal_proof_program",
