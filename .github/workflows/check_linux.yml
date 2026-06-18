@@ -39,7 +39,9 @@ jobs:
           cache-key: kcov-${{ hashFiles('build.zig', 'build.zig.zon', 'v2/build.zig', 'v2/build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: "Disk report: after zig setup"
-        run: df -h /
+        run: |
+          df -h /
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /usr/lib/google-cloud-sdk /opt/ghc 2>/dev/null | sort -rh
 
       - name: Pre-download zig dependencies
         run: |
@@ -140,7 +142,9 @@ jobs:
           cache-key: selfhosted-release-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: "Disk report: after zig setup"
-        run: df -h /
+        run: |
+          df -h /
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /usr/lib/google-cloud-sdk /opt/ghc 2>/dev/null | sort -rh
 
       - name: Build
         run: |
@@ -187,7 +191,9 @@ jobs:
           cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: "Disk report: after zig setup"
-        run: df -h /
+        run: |
+          df -h /
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /usr/lib/google-cloud-sdk /opt/ghc 2>/dev/null | sort -rh
 
       - name: Build
         run: |
@@ -312,7 +318,9 @@ jobs:
             'conformance/build.zig', 'conformance/build.zig.zon') }}
 
       - name: "Disk report: after checkout + zig setup"
-        run: df -h /
+        run: |
+          df -h /
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /usr/lib/google-cloud-sdk /opt/ghc 2>/dev/null | sort -rh
 
       - name: Build Conformance
         run: |
