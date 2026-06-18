@@ -119,12 +119,12 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !DistributedReward
     const rewards_allocator = params.rewards_allocator orelse allocator;
     const distributed = try finalizeState(allocator, rewards_allocator, params.finalize_state);
 
-    const maybe_lt_hash, slot_hash.mut().* = try hashSlot(
+    const lt_hash, slot_hash.mut().* = try hashSlot(
         allocator,
         params.hash_slot,
         params.thread_pool,
     );
-    if (maybe_lt_hash) |lt_hash| params.accounts_lt_hash.set(lt_hash);
+    params.accounts_lt_hash.set(lt_hash);
 
     params.logger.info().logf(
         "froze slot {} with hash {s}",
@@ -445,7 +445,7 @@ pub fn hashSlot(
     allocator: Allocator,
     params: HashSlotParams,
     thread_pool: *sig.sync.ThreadPool,
-) !struct { ?LtHash, Hash } {
+) !struct { LtHash, Hash } {
     var zone = tracy.Zone.init(@src(), .{ .name = "hashSlot" });
     defer zone.deinit();
 
