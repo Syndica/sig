@@ -2390,8 +2390,16 @@ pub fn verifyProgram(
         compute_budget,
         slot,
         true,
-        disable_sbpf_v0_v1_v2_deployment,
     );
+
+    // SIMD-0500: morph the base environment into a deployment environment.
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/program-runtime/src/deploy.rs#L30-32
+    if (disable_sbpf_v0_v1_v2_deployment) {
+        environment.config.minimum_version = @enumFromInt(@max(
+            @intFromEnum(environment.config.minimum_version),
+            @intFromEnum(sig.vm.sbpf.Version.v3),
+        ));
+    }
 
     // Deployment of programs with sol_alloc_free is disabled.
     if (environment.loader.map.get(.sol_alloc_free_) != null) {
