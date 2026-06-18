@@ -26,6 +26,41 @@ pub const createTestVoteStateV4 = state_v4.createTestVoteStateV4;
 /// https://github.com/anza-xyz/solana-sdk/blob/00d056c4ce9def466ad5475533588713feebcb2c/vote-interface/src/state/mod.rs#L33
 pub const BLS_PUBLIC_KEY_COMPRESSED_SIZE: usize = 48;
 
+/// Size of a BLS proof-of-possession in a compressed point representation
+/// (G2). SIMD-0387.
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/00d056c4ce9def466ad5475533588713feebcb2c/vote-interface/src/state/mod.rs#L36
+pub const BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE: usize = 96;
+
+/// Compute unit cost of verifying a single BLS proof-of-possession.
+/// SIMD-0387.
+/// [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_processor.rs#L104
+pub const BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS: u64 = 34_500;
+
+/// Domain-separation prefix prepended to the BLS proof-of-possession message.
+/// SIMD-0387: the signed message is `"ALPENGLOW" || vote_pubkey || bls_pubkey`.
+pub const BLS_PROOF_OF_POSSESSION_DOMAIN: []const u8 = "ALPENGLOW";
+
+/// Total length of a SIMD-0387 proof-of-possession message:
+/// `"ALPENGLOW" (9)` || `vote_pubkey (32)` || `bls_pubkey (48)` = 89 bytes.
+pub const BLS_PROOF_OF_POSSESSION_MESSAGE_SIZE: usize =
+    BLS_PROOF_OF_POSSESSION_DOMAIN.len + @sizeOf(Pubkey) + BLS_PUBLIC_KEY_COMPRESSED_SIZE;
+
+/// Build the SIMD-0387 proof-of-possession message in `out`.
+/// Layout: `"ALPENGLOW" || vote_pubkey || bls_pubkey`.
+pub fn generateBlsPopMessage(
+    out: *[BLS_PROOF_OF_POSSESSION_MESSAGE_SIZE]u8,
+    vote_pubkey: *const Pubkey,
+    bls_pubkey_compressed: *const [BLS_PUBLIC_KEY_COMPRESSED_SIZE]u8,
+) void {
+    const domain_len = BLS_PROOF_OF_POSSESSION_DOMAIN.len;
+    @memcpy(out[0..domain_len], BLS_PROOF_OF_POSSESSION_DOMAIN);
+    @memcpy(out[domain_len..][0..@sizeOf(Pubkey)], &vote_pubkey.data);
+    @memcpy(
+        out[domain_len + @sizeOf(Pubkey) ..][0..BLS_PUBLIC_KEY_COMPRESSED_SIZE],
+        bls_pubkey_compressed,
+    );
+}
+
 pub const MAX_PRIOR_VOTERS: usize = 32;
 pub const MAX_LOCKOUT_HISTORY: usize = 31;
 pub const INITIAL_LOCKOUT: usize = 2;
@@ -1057,6 +1092,22 @@ pub const VoteState = union(enum(u32)) {
         };
     }
 
+    /// Compressed BLS pubkey if one is registered on this account, else null.
+    /// V3 accounts never carry a BLS pubkey (SIMD-0387 lives on V4).
+    pub fn blsPubkeyCompressed(
+        self: *const VoteState,
+    ) ?*const [BLS_PUBLIC_KEY_COMPRESSED_SIZE]u8 {
+        return switch (self.*) {
+            .v3 => null,
+            .v4 => |*s| if (s.bls_pubkey_compressed) |*pk| pk else null,
+        };
+    }
+
+    /// True iff this account has a registered BLS pubkey (SIMD-0387).
+    pub fn hasBlsPubkey(self: *const VoteState) bool {
+        return self.blsPubkeyCompressed() != null;
+    }
+
     // ── Delegating methods (same interface on both V3 and V4) ────────
 
     pub fn isUninitialized(self: VoteState) bool {
@@ -1148,17 +1199,31 @@ pub const VoteState = union(enum(u32)) {
         }
     }
 
+    /// Dispatch `setNewAuthorizedVoter`. The optional `maybe_bls_pubkey`
+    /// only takes effect on `VoteStateV4` (SIMD-0387); passing it through
+    /// while the underlying state is still V3 is a programming error
+    /// (the BLS variants are only reachable through the V4 path).
     pub fn setNewAuthorizedVoter(
         self: *VoteState,
         allocator: Allocator,
         new_authorized_voter: Pubkey,
         target_epoch: Epoch,
+        maybe_bls_pubkey: ?*const [48]u8,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline .v3, .v4 => |*s| try s.setNewAuthorizedVoter(
+            .v3 => |*s| blk: {
+                std.debug.assert(maybe_bls_pubkey == null);
+                break :blk try s.setNewAuthorizedVoter(
+                    allocator,
+                    new_authorized_voter,
+                    target_epoch,
+                );
+            },
+            .v4 => |*s| try s.setNewAuthorizedVoter(
                 allocator,
                 new_authorized_voter,
                 target_epoch,
+                maybe_bls_pubkey,
             ),
         };
     }
@@ -6421,4 +6486,63 @@ test "state.VoteStateVersions.convertToVoteState: target_v4=true converts to v4"
 
     try std.testing.expect(vs == .v4);
     try std.testing.expectEqual(50, vs.commission());
+}
+
+test "state.generateBlsPopMessage: layout matches SIMD-0387" {
+    const vote_pk = Pubkey{ .data = .{
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+        0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+        0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+    } };
+    var bls_pk: [BLS_PUBLIC_KEY_COMPRESSED_SIZE]u8 = undefined;
+    for (&bls_pk, 0..) |*b, i| b.* = @intCast(0x80 + (i % 0x40));
+
+    var msg: [BLS_PROOF_OF_POSSESSION_MESSAGE_SIZE]u8 = undefined;
+    generateBlsPopMessage(&msg, &vote_pk, &bls_pk);
+
+    try std.testing.expectEqualSlices(u8, "ALPENGLOW", msg[0..9]);
+    try std.testing.expectEqualSlices(u8, &vote_pk.data, msg[9..41]);
+    try std.testing.expectEqualSlices(u8, &bls_pk, msg[41..89]);
+    try std.testing.expectEqual(89, msg.len);
+}
+
+test "state.VoteState.hasBlsPubkey: v3 always false" {
+    const allocator = std.testing.allocator;
+    var vs: VoteState = .{ .v3 = try VoteStateV3.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+    ) };
+    defer vs.deinit(allocator);
+    try std.testing.expect(!vs.hasBlsPubkey());
+    try std.testing.expectEqual(null, vs.blsPubkeyCompressed());
+}
+
+test "state.VoteState.hasBlsPubkey: v4 reflects bls_pubkey_compressed" {
+    const allocator = std.testing.allocator;
+    const vote_pk = Pubkey.ZEROES;
+    var vs: VoteState = .{ .v4 = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        vote_pk,
+    ) };
+    defer vs.deinit(allocator);
+
+    try std.testing.expect(!vs.hasBlsPubkey());
+    try std.testing.expectEqual(null, vs.blsPubkeyCompressed());
+
+    const pk: [48]u8 = @splat(0xAB);
+    vs.v4.bls_pubkey_compressed = pk;
+
+    try std.testing.expect(vs.hasBlsPubkey());
+    const got = vs.blsPubkeyCompressed().?;
+    try std.testing.expectEqualSlices(u8, &pk, got);
 }

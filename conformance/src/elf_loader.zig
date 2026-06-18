@@ -72,7 +72,6 @@ fn executeElfTest(ctx: ELFLoaderCtx, allocator: std.mem.Allocator) !ElfLoaderEff
         &.DEFAULT,
         0,
         ctx.deploy_checks,
-        feature_set.active(.disable_sbpf_v0_v1_v2_deployment, 0),
     );
 
     const duped_elf_bytes = try allocator.dupe(u8, elf_bytes);

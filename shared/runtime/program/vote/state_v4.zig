@@ -239,11 +239,16 @@ pub const VoteStateV4 = struct {
     /// [SIMD-0185] v4: no prior_voters; setNewAuthorizedVoter only updates authorized_voters.
     /// Unlike V3, there is no `target_epoch <= latest_epoch` check here since V4 has no
     /// prior_voters to protect. The V3 path in authorize() handles that check separately.
+    ///
+    /// [SIMD-0387] When `maybe_bls_pubkey` is non-null, also updates
+    /// `bls_pubkey_compressed`. The caller must have already verified the BLS
+    /// proof of possession against the new pubkey.
     pub fn setNewAuthorizedVoter(
         self: *VoteStateV4,
         allocator: Allocator,
         new_authorized_voter: Pubkey,
         target_epoch: Epoch,
+        maybe_bls_pubkey: ?*const [48]u8,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         // The offset in slots `n` on which the target_epoch
         // (default value `DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET`) is
@@ -256,6 +261,9 @@ pub const VoteStateV4 = struct {
         }
 
         try self.authorized_voters.insert(allocator, target_epoch, new_authorized_voter);
+        if (maybe_bls_pubkey) |bls_pk| {
+            self.bls_pubkey_compressed = bls_pk.*;
+        }
         return null;
     }
 
@@ -1267,12 +1275,57 @@ test "state_v4.VoteStateV4.setNewAuthorizedVoter success and too_soon_to_reautho
 
     const new_voter = Pubkey{ .data = [_]u8{1} ** 32 };
     // Epoch 0 already has an entry, so setting again should fail
-    const result = try vs.setNewAuthorizedVoter(allocator, new_voter, 0);
+    const result = try vs.setNewAuthorizedVoter(allocator, new_voter, 0, null);
     try std.testing.expectEqual(VoteError.too_soon_to_reauthorize, result.?);
 
     // Epoch 1 should succeed
-    const result2 = try vs.setNewAuthorizedVoter(allocator, new_voter, 1);
+    const result2 = try vs.setNewAuthorizedVoter(allocator, new_voter, 1, null);
     try std.testing.expectEqual(@as(?VoteError, null), result2);
+}
+
+test "state_v4.VoteStateV4.setNewAuthorizedVoter writes bls_pubkey when provided" {
+    // SIMD-0387: passing a non-null `maybe_bls_pubkey` overwrites
+    // `bls_pubkey_compressed` on success. Passing null leaves it untouched.
+    const allocator = std.testing.allocator;
+    var vs = try VoteStateV4.init(
+        allocator,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        0,
+        0,
+        Pubkey.ZEROES,
+    );
+    defer vs.deinit(allocator);
+
+    try std.testing.expectEqual(@as(?[48]u8, null), vs.bls_pubkey_compressed);
+
+    const voter1 = Pubkey{ .data = [_]u8{1} ** 32 };
+    const bls_a: [48]u8 = [_]u8{0xAA} ** 48;
+
+    // Set voter for epoch 1 along with a BLS pubkey.
+    const r1 = try vs.setNewAuthorizedVoter(allocator, voter1, 1, &bls_a);
+    try std.testing.expectEqual(@as(?VoteError, null), r1);
+    try std.testing.expectEqualSlices(u8, &bls_a, &vs.bls_pubkey_compressed.?);
+
+    // Set voter for epoch 2 without a BLS pubkey: BLS field stays at A.
+    const voter2 = Pubkey{ .data = [_]u8{2} ** 32 };
+    const r2 = try vs.setNewAuthorizedVoter(allocator, voter2, 2, null);
+    try std.testing.expectEqual(@as(?VoteError, null), r2);
+    try std.testing.expectEqualSlices(u8, &bls_a, &vs.bls_pubkey_compressed.?);
+
+    // Re-authorize for epoch 3 with a different BLS pubkey: overwritten.
+    const voter3 = Pubkey{ .data = [_]u8{3} ** 32 };
+    const bls_b: [48]u8 = [_]u8{0xBB} ** 48;
+    const r3 = try vs.setNewAuthorizedVoter(allocator, voter3, 3, &bls_b);
+    try std.testing.expectEqual(@as(?VoteError, null), r3);
+    try std.testing.expectEqualSlices(u8, &bls_b, &vs.bls_pubkey_compressed.?);
+
+    // too_soon_to_reauthorize must NOT overwrite the BLS pubkey.
+    const bls_c: [48]u8 = [_]u8{0xCC} ** 48;
+    const r4 = try vs.setNewAuthorizedVoter(allocator, voter3, 3, &bls_c);
+    try std.testing.expectEqual(VoteError.too_soon_to_reauthorize, r4.?);
+    try std.testing.expectEqualSlices(u8, &bls_b, &vs.bls_pubkey_compressed.?);
 }
 
 test "state_v4.VoteStateV4.getAndUpdateAuthorizedVoter v4 purge" {
@@ -1289,7 +1342,7 @@ test "state_v4.VoteStateV4.getAndUpdateAuthorizedVoter v4 purge" {
     defer vs.deinit(allocator);
 
     const voter1 = Pubkey{ .data = [_]u8{1} ** 32 };
-    _ = try vs.setNewAuthorizedVoter(allocator, voter1, 1);
+    _ = try vs.setNewAuthorizedVoter(allocator, voter1, 1, null);
 
     // Get voter for epoch 1 with v4 purge
     const pubkey = try vs.getAndUpdateAuthorizedVoter(allocator, 1, true);
@@ -1310,7 +1363,7 @@ test "state_v4.VoteStateV4.getAndUpdateAuthorizedVoter v3 purge" {
     defer vs.deinit(allocator);
 
     const voter1 = Pubkey{ .data = [_]u8{1} ** 32 };
-    _ = try vs.setNewAuthorizedVoter(allocator, voter1, 1);
+    _ = try vs.setNewAuthorizedVoter(allocator, voter1, 1, null);
 
     // Get voter for epoch 1 with v3 purge
     const pubkey = try vs.getAndUpdateAuthorizedVoter(allocator, 1, false);

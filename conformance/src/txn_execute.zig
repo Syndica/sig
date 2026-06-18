@@ -337,7 +337,6 @@ fn executeTxnContext(
                 &compute_budget,
                 slot,
                 false,
-                false,
             );
         }
 
