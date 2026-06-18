@@ -195,6 +195,8 @@ pub fn main() !void {
         .transaction_pool = {},
         .block_pool = {},
         .exec_req_response = {},
+
+        .replay_scratch_memory = {},
     });
 
     switch (config.sandboxing_mode) {
@@ -206,7 +208,7 @@ pub fn main() !void {
 }
 
 const topology_schema: lib.topology.Schema = .{
-    .services = @import("./services.zon"),
+    .services = @import("services.zon"),
 };
 
 pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
@@ -214,6 +216,8 @@ pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
     .shred_recv_config = .initOne(.@"shred_receiver:config"),
     .accounts_db_config = .initOne(.@"accounts_db:config"),
     .snapshot_config = .initOne(.@"snapshot:config"),
+
+    .replay_scratch_memory = .initOne(.@"replay:scratch_memory"),
 
     .net_to_shred = .initMany(&.{
         .@"net:to_shred",
@@ -233,6 +237,7 @@ pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
     }),
     .account_pool = .initMany(&.{
         .@"accounts_db:account_pool",
+        .@"replay:account_pool",
     }),
 
     .shreds_to_replay = .initMany(&.{
@@ -240,6 +245,7 @@ pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
         .@"replay:deshredded_in",
     }),
     .replay_account_lookups = .initMany(&.{
+        .@"replay:account_lookups",
         .@"accounts_db:replay_lookups",
     }),
     .telemetry = .initMany(&.{
@@ -299,6 +305,8 @@ pub const Region = union(enum) {
 
     telemetry: tel.Region.InitParams,
 
+    replay_scratch_memory,
+
     pub const Tag = @typeInfo(Region).@"union".tag_type.?;
 
     pub fn size(self: Region) usize {
@@ -324,6 +332,7 @@ pub const Region = union(enum) {
             .exec_req_response => @sizeOf(lib.replay.ExecReqResponse),
             .transaction_pool => lib.replay.TransactionPool.size(),
             .block_pool => lib.replay.BlockPool.size(),
+            .replay_scratch_memory => lib.replay.scratch_buffer_size,
         };
     }
 
@@ -461,6 +470,10 @@ pub const Region = union(enum) {
                 const data: *lib.replay.ExecReqResponse = @ptrCast(buf);
 
                 data.init();
+            },
+
+            .replay_scratch_memory => {
+                std.debug.assert(buf.len == lib.replay.scratch_buffer_size);
             },
         };
     }

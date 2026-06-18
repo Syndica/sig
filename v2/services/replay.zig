@@ -104,27 +104,33 @@ pub const std_options = start.options;
 
 pub const ReadOnly = struct {};
 pub const ReadWrite = struct {
+    scratch_memory: *[lib.replay.scratch_buffer_size]u8,
     deshredded_in: *lib.shred.DeshredRing,
     replay_transaction_pool: *lib.replay.TransactionPool,
     block_pool: *lib.replay.BlockPool,
     exec_req_response: *lib.replay.ExecReqResponse,
+    account_pool: *lib.accounts_db.AccountPool,
+    account_lookups: *lib.accounts_db.AccountLookups,
     tel: *tel.Region,
 };
 
-var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
-
 const DeserialStates = [lib.replay.BlockPool.capacity]?BlockDeserialState;
 const BlockExecStates = [lib.replay.BlockPool.capacity]?BlockExecState;
+
+const AccountRef = lib.accounts_db.AccountPool.Index;
+const Pubkey = lib.solana.Pubkey;
 
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
     _ = runner;
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
 
-    var fba: std.heap.FixedBufferAllocator = .init(&scratch_memory);
+    var fba: std.heap.FixedBufferAllocator = .init(rw.scratch_memory);
     const allocator = fba.allocator();
 
     var forest: MerkleForest = try .init(allocator);
+
+    var unrooted: Unrooted = try .init(allocator);
 
     const deserial_states: *DeserialStates = try allocator.create(DeserialStates);
     @memset(deserial_states, null);
@@ -146,7 +152,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             const zone = tracy.Zone.init(@src(), .{ .name = "idle" });
             defer zone.deinit();
 
-            while (true) {
+            while (true) : (std.atomic.spinLoopHint()) {
                 if (exec_response_receiver.peek() != null) continue :task .exec_response;
                 if (deshredded_iter.peek() != null) continue :task .fec_set;
             }
@@ -163,6 +169,13 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
             std.debug.assert(response.request_kind == .txn_exec); // others unimplemented
             const response_data = response.data.txn_exec;
+
+            for (response_data.account_ref_buf[0..response_data.n_account_refs]) |account_ref| {
+                if (account_ref == lib.accounts_db.AccountPool.invalid_index) continue;
+
+                const account = rw.account_pool.getAccount(account_ref);
+                if (account.unref()) rw.account_pool.free(account_ref);
+            }
 
             defer rw.replay_transaction_pool.destroyId(response_data.tx_idx);
 
@@ -276,12 +289,132 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 exec_states,
                 deserial_states,
                 &exec_request_sender,
+
+                &unrooted,
+                rw.account_pool,
+                rw.account_lookups,
             );
 
             continue :task .idle;
         },
     }
 }
+
+/// Holds the accounts mutated for each tracked Block.
+const Unrooted = struct {
+    const MapCtx = struct {
+        pool: *lib.accounts_db.AccountPool,
+        map: *const Map,
+
+        pub fn hash(ctx: MapCtx, key: *const Pubkey) u32 {
+            _ = ctx;
+            // TODO: we can do better than this
+            return @truncate(key.hash(123));
+        }
+
+        pub fn eql(ctx: MapCtx, key_a: *const Pubkey, _: void, key_b_idx: usize) bool {
+            const b_account_ref = ctx.map.values()[key_b_idx];
+            return key_a.equals(&ctx.pool.getAccount(b_account_ref).pubkey);
+        }
+    };
+
+    // TODO: we'll want to share this map eventually, we should make our own extern fixed-size map.
+    // NOTE: this is where almost all of replay's memory usage comes from, this could be improved
+    // with a better map implementation.
+    const Map = std.ArrayHashMapUnmanaged(void, AccountRef, MapCtx, true);
+
+    maps: [lib.replay.BlockPool.capacity]Map,
+
+    fn init(allocator: std.mem.Allocator) !Unrooted {
+        // [firedancer] https://github.com/firedancer-io/firedancer/blob/c2050b9c7fb8787b1eaaf9e50cac421a7281f70f/src/flamenco/runtime/fd_cost_tracker.h#L78
+        // TODO: calculate this constant ourselves / keep it up to date
+        const max_mutations_per_block = 367_535;
+
+        var self: Unrooted = undefined;
+
+        for (&self.maps, 0..) |*map, i| {
+            map.* = .empty;
+
+            errdefer {
+                for (self.maps[0 .. i + 1]) |*deinit_map| deinit_map.deinit(allocator);
+            }
+
+            try map.ensureTotalCapacity(allocator, max_mutations_per_block);
+        }
+
+        return self;
+    }
+
+    // TODO:
+    // 1) *never* block the replay thread (remove this function)
+    // 2) introduce a basic transaction scheduler
+    // 3) add a prefetcher
+    // NOTE: caller is responsible for freeing the account
+    fn fetchBlocking(
+        self: *Unrooted,
+        key: *const lib.solana.Pubkey,
+
+        // current block + pool for ancestor lookups
+        block: lib.replay.BlockRef,
+        block_pool: *lib.replay.BlockPool,
+
+        // account storage
+        account_pool: *lib.accounts_db.AccountPool,
+
+        // ring buffer pair for rooted lookups
+        rooted_lookups: *lib.accounts_db.AccountLookups,
+    ) AccountRef {
+        const zone = tracy.Zone.init(@src(), .{ .name = "fetchBlocking" });
+        defer zone.deinit();
+
+        var current = block.ptr(block_pool);
+        while (current) |ancestor_block| {
+            const current_map = &self.maps[block_pool.ptrToIndex(ancestor_block).index().?];
+
+            if (current_map.getAdapted(
+                key,
+                MapCtx{ .pool = account_pool, .map = current_map },
+            )) |found_account_ref| {
+                std.debug.assert(found_account_ref != lib.accounts_db.AccountPool.invalid_index);
+                const account = account_pool.getAccount(found_account_ref);
+                account.ref();
+
+                zone.text("unrooted");
+                return found_account_ref;
+            }
+
+            current = ancestor_block.parent.ptr(block_pool);
+        }
+
+        var requester = rooted_lookups.in.get(.writer);
+        var response_queue = rooted_lookups.out.get(.reader);
+
+        const request_buf = requester.next() orelse @panic("out of space");
+        request_buf.* = key.*;
+        requester.markUsed();
+
+        // blocking the thread - do not do this
+        while (response_queue.peek() == null) {}
+
+        const response = response_queue.next().?;
+        defer response_queue.markUsed();
+
+        std.debug.assert(response.pubkey.equals(key));
+
+        if (response.account_index == lib.accounts_db.AccountPool.invalid_index) {
+            zone.text("account not found");
+            return response.account_index;
+        }
+
+        const account = account_pool.getAccount(response.account_index);
+
+        std.debug.assert(account.ref_count.load(.seq_cst) > 0);
+        std.debug.assert(account.pubkey.equals(key));
+
+        zone.text("rooted");
+        return response.account_index;
+    }
+};
 
 /// Finds a node's parent, and attaches the new node to it.
 ///
@@ -589,6 +722,11 @@ fn maybeContinueBlockExec(
     // for sending exec requests
     // NOTE: we should instead be sending to the transaction scheduler (when it is implemented)
     exec_request_sender: *replay.ExecReqResponse.RequestRing.Iterator(.writer),
+
+    // for fetching accounts
+    unrooted: *Unrooted,
+    account_pool: *lib.accounts_db.AccountPool,
+    rooted_lookups: *lib.accounts_db.AccountLookups,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "maybeContinueBlockExec" });
     defer zone.deinit();
@@ -638,6 +776,10 @@ fn maybeContinueBlockExec(
                     block_exec_states,
                     block_deserial_states,
                     exec_request_sender,
+
+                    unrooted,
+                    account_pool,
+                    rooted_lookups,
                 );
             }
             current.* = .default;
@@ -674,13 +816,98 @@ fn maybeContinueBlockExec(
         const tx_index: u32 = exec_state.n_transactions_requested;
         exec_state.n_transactions_requested += 1;
 
-        // send task to exec
+        // prepare transaction's accounts and send the task to exec
         // NOTE: in the future this should be "sent" to the transaction scheduler, not to exec
         // directly
         {
+            // TODO: replace this with something custom, this is slow - we only need to extract the
+            // accounts (including ALT accounts) here.
+            var deserialised_buf: [4096]u8 = undefined;
+            var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
+            var reader = std.io.Reader.fixed(tx);
+            const transaction: lib.solana.transaction.VersionedTransaction =
+                try lib.solana.bincode.read(
+                    &deserial_fba,
+                    &reader,
+                    lib.solana.transaction.VersionedTransaction,
+                );
+
+            var held_accounts_buf: [128]AccountRef = undefined;
+            var held_accounts: u8 = 0;
+
+            const account_keys: []const Pubkey = switch (transaction.message) {
+                inline else => |txn| txn.account_keys.items,
+            };
+
+            for (account_keys) |k| {
+                held_accounts_buf[held_accounts] = unrooted.fetchBlocking(
+                    &k,
+                    block_ref,
+                    block_pool,
+                    account_pool,
+                    rooted_lookups,
+                );
+                held_accounts += 1;
+            }
+
+            const address_lookups: []const lib.solana.transaction.AddressLookup =
+                switch (transaction.message) {
+                    .legacy => &.{},
+                    .v0 => |v0| v0.address_table_lookups.items,
+                };
+
+            const Pass = enum { read, write };
+
+            // looked up accounts are writable first, then readable
+            for (@as([]const Pass, &.{ .write, .read })) |pass| {
+                for (address_lookups) |lookup| {
+                    const account_ref = unrooted.fetchBlocking(
+                        &lookup.account_key,
+                        block_ref,
+                        block_pool,
+                        account_pool,
+                        rooted_lookups,
+                    );
+
+                    if (account_ref == lib.accounts_db.AccountPool.invalid_index)
+                        @panic("missing address lookup table / TODO: handle bad blocks");
+
+                    const ALT_account: *lib.accounts_db.AccountPool.Account =
+                        account_pool.getAccount(account_ref);
+
+                    defer if (ALT_account.unref()) account_pool.free(account_ref);
+
+                    // NOTE: this is *not* going to be conformant; TODO: respect the ALT metadata
+                    const ALT_data = ALT_account.getData();
+                    const header_len = 56;
+                    if (ALT_data.len < header_len or (ALT_data.len - header_len) % 32 != 0)
+                        @panic("invalid ALT / TODO: handle bad blocks");
+                    const ALT_pubkeys: []const Pubkey = @ptrCast(ALT_data[header_len..]);
+
+                    const indexes = switch (pass) {
+                        .write => lookup.writable_indexes.items,
+                        .read => lookup.readonly_indexes.items,
+                    };
+
+                    for (indexes) |account_idx| {
+                        if (account_idx > ALT_pubkeys.len)
+                            @panic("bad ALT lookup / TODO: handle bad blocks");
+                        const account_pk: *const Pubkey = &ALT_pubkeys[account_idx];
+
+                        held_accounts_buf[held_accounts] = unrooted.fetchBlocking(
+                            account_pk,
+                            block_ref,
+                            block_pool,
+                            account_pool,
+                            rooted_lookups,
+                        );
+                        held_accounts += 1;
+                    }
+                }
+            }
+
             const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse
                 @panic("no space");
-            defer exec_request_sender.markUsed();
             request.* = .{
                 .task_id = tx_index,
                 .request_kind = .txn_exec,
@@ -688,9 +915,12 @@ fn maybeContinueBlockExec(
                     .txn_exec = .{
                         .block_idx = block_ref,
                         .tx_idx = tx_ref,
+                        .n_account_refs = held_accounts,
+                        .account_ref_buf = held_accounts_buf,
                     },
                 },
             };
+            exec_request_sender.markUsed();
         }
     }
 
@@ -744,6 +974,10 @@ fn maybeContinueBlockExec(
             block_exec_states,
             block_deserial_states,
             exec_request_sender,
+
+            unrooted,
+            account_pool,
+            rooted_lookups,
         );
 
         maybe_child = child.sibling.ptr(forest_pool);
