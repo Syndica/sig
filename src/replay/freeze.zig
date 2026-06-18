@@ -72,7 +72,6 @@ pub const FreezeParams = struct {
                 .parent_lt_hash = &constants.parent_lt_hash,
                 .ancestors = &constants.ancestors,
                 .blockhash = blockhash,
-                .feature_set = &constants.feature_set,
                 .signature_count = state.signature_count.load(.monotonic),
             },
             .finalize_state = .{
@@ -120,12 +119,12 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !DistributedReward
     const rewards_allocator = params.rewards_allocator orelse allocator;
     const distributed = try finalizeState(allocator, rewards_allocator, params.finalize_state);
 
-    const maybe_lt_hash, slot_hash.mut().* = try hashSlot(
+    const lt_hash, slot_hash.mut().* = try hashSlot(
         allocator,
         params.hash_slot,
         params.thread_pool,
     );
-    if (maybe_lt_hash) |lt_hash| params.accounts_lt_hash.set(lt_hash);
+    params.accounts_lt_hash.set(lt_hash);
 
     params.logger.info().logf(
         "froze slot {} with hash {s}",
@@ -439,7 +438,6 @@ pub const HashSlotParams = struct {
     parent_lt_hash: *const ?LtHash,
     ancestors: *const Ancestors,
     blockhash: Hash,
-    feature_set: *const sig.core.FeatureSet,
 };
 
 /// Calculates the slot hash (known as the "bank hash" in agave)
@@ -447,7 +445,7 @@ pub fn hashSlot(
     allocator: Allocator,
     params: HashSlotParams,
     thread_pool: *sig.sync.ThreadPool,
-) !struct { ?LtHash, Hash } {
+) !struct { LtHash, Hash } {
     var zone = tracy.Zone.init(@src(), .{ .name = "hashSlot" });
     defer zone.deinit();
 
@@ -461,30 +459,23 @@ pub fn hashSlot(
 
     const initial_hash = hasher.finalResult();
 
-    if (params.feature_set.active(.accounts_lt_hash, params.slot)) {
-        var parent_ancestors = try params.ancestors.clone(allocator);
-        defer parent_ancestors.deinit(allocator);
-        assert(parent_ancestors.ancestors.swapRemove(params.slot));
+    var parent_ancestors = try params.ancestors.clone(allocator);
+    defer parent_ancestors.deinit(allocator);
+    assert(parent_ancestors.ancestors.swapRemove(params.slot));
 
-        var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
-        lt_hash.mixIn(try deltaLtHash(
-            allocator,
-            thread_pool,
-            params.account_reader,
-            params.slot,
-            &parent_ancestors,
-        ));
+    var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
+    lt_hash.mixIn(try deltaLtHash(
+        allocator,
+        thread_pool,
+        params.account_reader,
+        params.slot,
+        &parent_ancestors,
+    ));
 
-        return .{
-            lt_hash,
-            Hash.initMany(&.{ &initial_hash, lt_hash.constBytes() }),
-        };
-    } else {
-        return .{
-            null,
-            .{ .data = initial_hash },
-        };
-    }
+    return .{
+        lt_hash,
+        Hash.initMany(&.{ &initial_hash, lt_hash.constBytes() }),
+    };
 }
 
 pub fn deltaLtHash(
@@ -645,7 +636,6 @@ test "freezeSlot: trivial e2e lattice hash test" {
 
     var constants = try SlotConstants.genesis(allocator, .DEFAULT);
     defer constants.deinit(allocator);
-    constants.feature_set.setSlot(.accounts_lt_hash, 0);
 
     var state: SlotState = .GENESIS;
     defer state.deinit(allocator);
