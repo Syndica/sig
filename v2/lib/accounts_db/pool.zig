@@ -129,7 +129,7 @@ pub const AccountPool = extern struct {
         }
 
         // Bumps a ref on the account to keep it alive
-        pub fn ref(self: *Account) *Account {
+        pub fn ref(self: *Account) void {
             const rc = self.ref_count.fetchAdd(1, .monotonic);
             std.debug.assert(rc != std.math.maxInt(u32));
         }
