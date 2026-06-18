@@ -265,6 +265,8 @@ pub fn main() !void {
         try .sized(@sizeOf(lib.accounts_db.AccountPool) + unrooted_memory);
     account_pool.ptr().init(unrooted_memory);
 
+    var replay_scratch: Region([lib.replay.scratch_buffer_size]u8) = try .simple();
+
     var shreds_to_replay: Region(lib.shred.DeshredRing) = try .simple();
     shreds_to_replay.ptr().init();
 
@@ -331,11 +333,14 @@ pub fn main() !void {
         .replay = .{
             .ro = .{},
             .rw = .{
+                .scratch_memory = replay_scratch.finish(),
                 .snapshot_metadata_in = snapshot_metadata.finish(),
                 .deshredded_in = shreds_to_replay.finish(),
                 .replay_transaction_pool = transaction_pool.finish(),
                 .block_pool = block_pool.finish(),
                 .exec_req_response = exec_req_response.finish(),
+                .account_pool = account_pool.finish(),
+                .account_lookups = replay_account_lookups.finish(),
                 .tel = telemetry_region.finish(),
             },
         },

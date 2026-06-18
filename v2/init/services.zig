@@ -48,11 +48,14 @@ pub const gossip: ServiceSpec = .{
 pub const replay: ServiceSpec = .{
     .ReadOnly = struct {},
     .ReadWrite = struct {
+        scratch_memory: *[lib.replay.scratch_buffer_size]u8,
         snapshot_metadata_in: *lib.accounts_db.RuntimeMetadata,
         deshredded_in: *lib.shred.DeshredRing,
         replay_transaction_pool: *lib.replay.TransactionPool,
         block_pool: *lib.replay.BlockPool,
         exec_req_response: *lib.replay.ExecReqResponse,
+        account_pool: *lib.accounts_db.AccountPool,
+        account_lookups: *lib.accounts_db.AccountLookups,
         tel: *lib.telemetry.Region,
     },
 };
