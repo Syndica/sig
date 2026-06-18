@@ -104,36 +104,21 @@ pub fn loadTransactionAccounts(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     rent_collector: *const RentCollector,
-    feature_set: *const sig.core.FeatureSet,
-    slot: sig.core.Slot,
     compute_budget_limits: *const ComputeBudgetLimits,
     fee_payer: PreparedAccount,
 ) AccountLoadError!TransactionResult(LoadedTransactionAccounts) {
     var zone = tracy.Zone.init(@src(), .{ .name = "loadTransactionAccounts" });
     defer zone.deinit();
 
-    const result = if (feature_set.active(.formalize_loaded_transaction_data_size, slot))
-        loadTransactionAccountsSimd186(
-            account_reader,
-            allocator,
-            transaction,
-            rent_collector,
-            feature_set,
-            slot,
-            compute_budget_limits,
-            fee_payer,
-        )
-    else
-        loadTransactionAccountsOld(
-            account_reader,
-            allocator,
-            transaction,
-            rent_collector,
-            feature_set,
-            slot,
-            compute_budget_limits,
-            fee_payer,
-        );
+    // [agave] https://github.com/anza-xyz/agave/commit/d5757e29aa - formalize_loaded_transaction_data_size hardcoded
+    const result = loadTransactionAccountsSimd186(
+        account_reader,
+        allocator,
+        transaction,
+        rent_collector,
+        compute_budget_limits,
+        fee_payer,
+    );
 
     return .{
         .ok = result catch |err| return switch (err) {
@@ -159,8 +144,6 @@ fn loadTransactionAccountsSimd186(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     rent_collector: *const RentCollector,
-    feature_set: *const sig.core.FeatureSet,
-    slot: sig.core.Slot,
     compute_budget_limits: *const ComputeBudgetLimits,
     fee_payer: PreparedAccount,
 ) InternalLoadError!LoadedTransactionAccounts {
@@ -188,8 +171,6 @@ fn loadTransactionAccountsSimd186(
             allocator,
             transaction,
             rent_collector,
-            feature_set,
-            slot,
             &account_key,
         );
         fee_payer_consumed = true;
@@ -255,7 +236,6 @@ fn loadTransactionAccountsSimd186(
             allocator,
             transaction,
             program_id,
-            feature_set.active(.formalize_loaded_transaction_data_size, slot),
         ) orelse return error.ProgramAccountNotFound;
         defer program_account.account.deinit(allocator);
 
@@ -277,112 +257,11 @@ fn loadTransactionAccountsSimd186(
     return loaded;
 }
 
-fn loadTransactionAccountsOld(
-    account_reader: AccountReader,
-    allocator: Allocator,
-    transaction: *const RuntimeTransaction,
-    rent_collector: *const RentCollector,
-    feature_set: *const sig.core.FeatureSet,
-    slot: sig.core.Slot,
-    compute_budget_limits: *const ComputeBudgetLimits,
-    fee_payer: PreparedAccount,
-) InternalLoadError!LoadedTransactionAccounts {
-    var fee_payer_consumed = false;
-    errdefer if (!fee_payer_consumed) fee_payer.account.deinit(allocator);
-
-    std.debug.assert(compute_budget_limits.loaded_accounts_bytes != 0);
-
-    var loaded = LoadedTransactionAccounts.DEFAULT;
-    errdefer for (loaded.accounts.slice()) |account| account.deinit(allocator);
-
-    const accounts = transaction.accounts.slice();
-    for (accounts.items(.pubkey), 0..) |account_key, i| {
-        const prepared = if (i == 0) fee_payer else try loadTransactionAccount(
-            account_reader,
-            allocator,
-            transaction,
-            rent_collector,
-            feature_set,
-            slot,
-            &account_key,
-        );
-        fee_payer_consumed = true;
-        errdefer prepared.account.deinit(allocator);
-
-        try loaded.increase(
-            prepared.loaded_size,
-            compute_budget_limits.loaded_accounts_bytes,
-        );
-
-        // TODO: add a comment here explaining why we can assume capacity here,
-        // because I can't figure out what previous check would allow us to make
-        // this assumption.
-
-        loaded.rent_collected += prepared.rent_collected;
-
-        // ignore when rent_collected = 0
-        if (prepared.rent_collected != 0) {
-            loaded.rent_debits.appendAssumeCapacity(.{
-                .rent_balance = prepared.account.lamports,
-                .rent_collected = prepared.rent_collected,
-            });
-        }
-
-        loaded.accounts.appendAssumeCapacity(.{
-            .account = prepared.account,
-            .pubkey = account_key,
-        });
-    }
-
-    var validated_loaders: std.AutoHashMapUnmanaged(Pubkey, void) = .{};
-    defer validated_loaders.deinit(allocator);
-
-    for (transaction.instructions) |instr| {
-        if (instr.program_meta.pubkey.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
-        const program_account = try loadAccount(
-            account_reader,
-            allocator,
-            transaction,
-            &instr.program_meta.pubkey,
-            feature_set.active(.formalize_loaded_transaction_data_size, slot),
-        ) orelse return error.ProgramAccountNotFound;
-        defer program_account.account.deinit(allocator);
-
-        const owner_id = program_account.account.owner;
-
-        if (owner_id.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
-        if (validated_loaders.contains(owner_id)) continue; // only load + count owners once
-
-        const owner_account = try loadAccount(
-            account_reader,
-            allocator,
-            transaction,
-            &owner_id,
-            feature_set.active(.formalize_loaded_transaction_data_size, slot),
-        ) orelse return error.ProgramAccountNotFound;
-        defer owner_account.account.deinit(allocator);
-
-        if (!owner_account.account.owner.equals(&runtime.ids.NATIVE_LOADER_ID)) {
-            return error.InvalidProgramForExecution;
-        }
-        try loaded.increase(
-            owner_account.loaded_size,
-            compute_budget_limits.loaded_accounts_bytes,
-        );
-
-        try validated_loaders.put(allocator, owner_id, {});
-    }
-
-    return loaded;
-}
-
 fn loadTransactionAccount(
     account_reader: AccountReader,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     rent_collector: *const RentCollector,
-    feature_set: *const sig.core.FeatureSet,
-    slot: sig.core.Slot,
     key: *const Pubkey,
 ) InternalLoadError!PreparedAccount {
     if (key.equals(&runtime.sysvar.instruction.ID)) {
@@ -399,7 +278,6 @@ fn loadTransactionAccount(
         allocator,
         transaction,
         key,
-        feature_set.active(.formalize_loaded_transaction_data_size, slot),
     ) orelse {
         // a previous instruction deallocated this account, we will make a new one in its place.
         var account = AccountSharedData.EMPTY;
@@ -431,17 +309,11 @@ fn loadAccount(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     key: *const Pubkey,
-    formalized_loaded_data_size: bool,
 ) InternalLoadError!?struct {
     account: AccountSharedData,
     loaded_size: usize,
     rent_collected: u64,
 } {
-    const base_account_size: u64 = if (formalized_loaded_data_size)
-        TRANSACTION_ACCOUNT_BASE_SIZE
-    else
-        0;
-
     const account: AccountSharedData = if (key.equals(&runtime.sysvar.instruction.ID)) account: {
         @branchHint(.unlikely);
         break :account try constructInstructionsAccount(allocator, transaction);
@@ -454,7 +326,7 @@ fn loadAccount(
 
     return .{
         .account = account,
-        .loaded_size = base_account_size +| account.data.len,
+        .loaded_size = TRANSACTION_ACCOUNT_BASE_SIZE +| account.data.len,
         .rent_collected = 0,
     };
 }
@@ -538,17 +410,13 @@ fn constructInstructionsAccount(
 
 const TestingEnv = struct {
     rent_collector: RentCollector,
-    feature_set: sig.core.FeatureSet,
     compute_budget_limits: ComputeBudgetLimits,
-    slot: sig.core.Slot,
 };
 
 fn newTestingEnv() TestingEnv {
     if (!@import("builtin").is_test) @compileError("newTestingEnv for testing only");
     return .{
         .rent_collector = sig.core.rent_collector.defaultCollector(0),
-        .feature_set = .ALL_DISABLED,
-        .slot = 0,
         .compute_budget_limits = ComputeBudgetLimits{
             .heap_size = 0,
             .compute_unit_limit = 0,
@@ -600,13 +468,11 @@ test "loadTransactionAccounts empty transaction" {
         .is_simple_vote_transaction = false,
     };
 
-    const tx_accounts = try loadTransactionAccountsOld(
+    const tx_accounts = try loadTransactionAccountsSimd186(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &empty_tx,
         &env.rent_collector,
-        &env.feature_set,
-        env.slot,
         &env.compute_budget_limits,
         .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
     );
@@ -647,13 +513,11 @@ test "loadTransactionAccounts sysvar instruction" {
         .is_simple_vote_transaction = false,
     };
 
-    const tx_accounts = try loadTransactionAccountsOld(
+    const tx_accounts = try loadTransactionAccountsSimd186(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &tx,
         &env.rent_collector,
-        &env.feature_set,
-        env.slot,
         &env.compute_budget_limits,
         .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
     );
@@ -790,13 +654,11 @@ test "load accounts rent paid" {
         },
     };
 
-    const loaded_accounts = try loadTransactionAccountsOld(
+    const loaded_accounts = try loadTransactionAccountsSimd186(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &tx,
         &env.rent_collector,
-        &env.feature_set,
-        env.slot,
         &env.compute_budget_limits,
         .{
             .account = fee_payer_account,
@@ -949,8 +811,6 @@ test "load accounts with simd 186 and loaderv3 program" {
         allocator,
         &tx,
         &env.rent_collector,
-        &env.feature_set,
-        env.slot,
         &env.compute_budget_limits,
         .{
             .account = fee_payer_account,
@@ -960,8 +820,8 @@ test "load accounts with simd 186 and loaderv3 program" {
     );
     defer loaded_accounts.deinit(allocator);
 
-    // fee payer: 64 + 1024, instruction: 64 + 17, program: 64 + bincode(State), programdata: 64 + 1024
-    try std.testing.expectEqual(2165, loaded_accounts.loaded_accounts_data_size);
+    // fee payer: 1024 (passed directly), instruction: 64 + 17, program: 64 + bincode(State), programdata: 64 + 1024
+    try std.testing.expectEqual(2293, loaded_accounts.loaded_accounts_data_size);
 }
 
 test "constructInstructionsAccount" {
@@ -1047,7 +907,6 @@ test "loadAccount allocations" {
                 allocator,
                 &tx,
                 &NATIVE_LOADER_ID,
-                false,
             ) orelse @panic("account not found");
 
             try std.testing.expectEqual(1, account.account.lamports);
@@ -1084,13 +943,11 @@ test "load tx too large" {
     var tx = try emptyTxWithKeys(allocator, &.{address});
     defer tx.accounts.deinit(allocator);
 
-    const loaded_accounts_result = loadTransactionAccountsOld(
+    const loaded_accounts_result = loadTransactionAccountsSimd186(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &tx,
         &env.rent_collector,
-        &env.feature_set,
-        env.slot,
         &env.compute_budget_limits,
         .{
             .account = fee_payer_account,
@@ -1100,124 +957,6 @@ test "load tx too large" {
     );
 
     try std.testing.expectError(error.MaxLoadedAccountsDataSizeExceeded, loaded_accounts_result);
-}
-
-test "dont double count program owner account data size" {
-    const allocator = std.testing.allocator;
-    var accountsdb = sig.utils.collections.PubkeyMap(AccountSharedData).empty;
-    defer accountsdb.deinit(allocator);
-    const env = newTestingEnv();
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-    const random = prng.random();
-
-    var data1 = "data1".*; // 5
-    var data2 = "data2".*; // 5
-    var data_owner = "data_owner".*; // 10
-    const pk1 = Pubkey.initRandom(random);
-    const pk2 = Pubkey.initRandom(random);
-    const pk_owner = Pubkey.initRandom(random);
-
-    // populate accountsdb
-    try accountsdb.put(allocator, pk1, .{
-        .data = &data1,
-        .lamports = 1,
-        .executable = true,
-        .owner = pk_owner,
-        .rent_epoch = 0,
-    });
-    try accountsdb.put(allocator, pk2, .{
-        .data = &data2,
-        .lamports = 1,
-        .executable = true,
-        .owner = pk_owner,
-        .rent_epoch = 0,
-    });
-    try accountsdb.put(allocator, pk_owner, .{
-        .data = &data_owner,
-        .lamports = 1,
-        .executable = true,
-        .owner = runtime.ids.NATIVE_LOADER_ID,
-        .rent_epoch = 0,
-    });
-
-    // a transaction with two programs that share an owner
-    // I kinda hate this init, it's very redundant
-    var tx: RuntimeTransaction = blk: {
-        var tx = try emptyTxWithKeys(allocator, &.{ pk1, pk2 });
-
-        var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
-        dedupe_map[0] = 0;
-        dedupe_map[1] = 1;
-
-        var metas: sig.runtime.InstructionInfo.AccountMetas = .empty;
-        defer metas.deinit(allocator);
-
-        try metas.appendSlice(
-            allocator,
-            &.{
-                .{
-                    .pubkey = pk1,
-                    .index_in_transaction = 0,
-                    .is_signer = false,
-                    .is_writable = false,
-                },
-                .{
-                    .pubkey = pk2,
-                    .index_in_transaction = 1,
-                    .is_signer = false,
-                    .is_writable = false,
-                },
-            },
-        );
-
-        tx.instructions = &.{
-            .{
-                .program_meta = .{ .pubkey = pk2, .index_in_transaction = 1 },
-                .account_metas = metas,
-                .dedupe_map = dedupe_map,
-                .instruction_data = "",
-                .owned_instruction_data = false,
-            },
-            .{
-                .program_meta = .{ .pubkey = pk1, .index_in_transaction = 0 },
-                .account_metas = metas,
-                .dedupe_map = dedupe_map,
-                .instruction_data = "",
-                .owned_instruction_data = false,
-            },
-        };
-        break :blk tx;
-    };
-    defer tx.accounts.deinit(allocator);
-
-    const fee_payer_account = AccountSharedData{
-        .data = try allocator.dupe(u8, &data1),
-        .lamports = 1,
-        .executable = true,
-        .owner = pk_owner,
-        .rent_epoch = 0,
-    };
-
-    const loaded_accounts = try loadTransactionAccountsOld(
-        AccountReader.fromMap(&accountsdb),
-        allocator,
-        &tx,
-        &env.rent_collector,
-        &env.feature_set,
-        env.slot,
-        &env.compute_budget_limits,
-        .{
-            .account = fee_payer_account,
-            .loaded_size = fee_payer_account.data.len,
-            .rent_collected = 0,
-        },
-    );
-    defer loaded_accounts.deinit(allocator);
-
-    try std.testing.expectEqual(
-        data1.len + data2.len + data_owner.len, // owner counted once, not twice
-        loaded_accounts.loaded_accounts_data_size,
-    );
 }
 
 test "load, create new account" {
@@ -1232,13 +971,11 @@ test "load, create new account" {
     var tx = try emptyTxWithKeys(allocator, &.{new_account_pk});
     defer tx.accounts.deinit(allocator);
 
-    const loaded_accounts = try loadTransactionAccountsOld(
+    const loaded_accounts = try loadTransactionAccountsSimd186(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &tx,
         &env.rent_collector,
-        &env.feature_set,
-        env.slot,
         &env.compute_budget_limits,
         .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
     );
@@ -1249,7 +986,7 @@ test "load, create new account" {
     try std.testing.expectEqual(0, loaded_accounts.accounts.slice()[0].account.lamports);
 }
 
-test "invalid program owner owner" {
+test "invalid program owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -1258,21 +995,13 @@ test "invalid program owner owner" {
     const env = newTestingEnv();
 
     const instruction_address = Pubkey.initRandom(random);
-    const instruction_owner = Pubkey.initRandom(random);
-    const invalid_owner_owner = Pubkey.initRandom(random);
+    const invalid_owner = Pubkey.initRandom(random);
 
     try accountsdb.put(allocator, instruction_address, .{
         .data = &.{},
         .lamports = 1,
         .executable = true,
-        .owner = instruction_owner,
-        .rent_epoch = 0,
-    });
-    try accountsdb.put(allocator, instruction_owner, .{
-        .data = &.{},
-        .lamports = 1,
-        .executable = true,
-        .owner = invalid_owner_owner,
+        .owner = invalid_owner,
         .rent_epoch = 0,
     });
 
@@ -1281,21 +1010,18 @@ test "invalid program owner owner" {
     tx.instructions = &.{
         .{
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 0 },
-            .account_metas = .{},
+            .account_metas = .empty,
             .dedupe_map = @splat(0xffff),
             .instruction_data = "",
             .owned_instruction_data = false,
-            .initial_account_lamports = 0,
         },
     };
 
-    const loaded_accounts_result = loadTransactionAccountsOld(
+    const loaded_accounts_result = loadTransactionAccountsSimd186(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &tx,
         &env.rent_collector,
-        &env.feature_set,
-        env.slot,
         &env.compute_budget_limits,
         .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
     );
@@ -1303,45 +1029,32 @@ test "invalid program owner owner" {
     try std.testing.expectError(error.InvalidProgramForExecution, loaded_accounts_result);
 }
 
-test "missing program owner account" {
+test "missing program account" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
-    var accountsdb = sig.utils.collections.PubkeyMap(AccountSharedData).empty;
-    defer accountsdb.deinit(allocator);
+    const accountsdb = sig.utils.collections.PubkeyMap(AccountSharedData).empty;
     const env = newTestingEnv();
 
     const instruction_address = Pubkey.initRandom(random);
-    const instruction_owner = Pubkey.initRandom(random);
-
-    try accountsdb.put(allocator, instruction_address, .{
-        .data = &.{},
-        .lamports = 1,
-        .executable = true,
-        .owner = instruction_owner,
-        .rent_epoch = 0,
-    });
 
     var tx = try emptyTxWithKeys(allocator, &.{instruction_address});
     defer tx.accounts.deinit(allocator);
     tx.instructions = &.{
         .{
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 0 },
-            .account_metas = .{},
+            .account_metas = .empty,
             .dedupe_map = @splat(0xffff),
             .instruction_data = "",
             .owned_instruction_data = false,
-            .initial_account_lamports = 0,
         },
     };
 
-    const loaded_accounts_result = loadTransactionAccountsOld(
+    const loaded_accounts_result = loadTransactionAccountsSimd186(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &tx,
         &env.rent_collector,
-        &env.feature_set,
-        env.slot,
         &env.compute_budget_limits,
         .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
     );
@@ -1380,13 +1093,11 @@ test "deallocate account" {
     accountsdb.getPtr(dying_account).?.lamports = 0;
 
     // load with the account being dead
-    const loaded_accounts = try loadTransactionAccountsOld(
+    const loaded_accounts = try loadTransactionAccountsSimd186(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &tx,
         &env.rent_collector,
-        &env.feature_set,
-        env.slot,
         &env.compute_budget_limits,
         .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
     );
@@ -1396,90 +1107,4 @@ test "deallocate account" {
     try std.testing.expectEqual(1, loaded_accounts.accounts.len);
     try std.testing.expectEqual(0, loaded_accounts.accounts.slice()[0].account.data.len);
     try std.testing.expectEqual(0, loaded_accounts.accounts.slice()[0].account.lamports);
-}
-
-test "load v3 program" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-    const random = prng.random();
-    var accountsdb = sig.utils.collections.PubkeyMap(AccountSharedData).empty;
-    defer accountsdb.deinit(allocator);
-    const env = newTestingEnv();
-
-    const pk_v3_program = Pubkey.initRandom(random);
-    const pk_programdata = Pubkey.initRandom(random);
-
-    const v3_program = runtime.program.bpf_loader.v3.State{
-        .program = .{
-            .programdata_address = pk_programdata,
-        },
-    };
-
-    var v3_program_buf = std.array_list.Managed(u8).init(allocator);
-    defer v3_program_buf.deinit();
-
-    try sig.bincode.write(v3_program_buf.writer(), v3_program, .{});
-
-    var v3_loader_data = "v3 loader".*;
-    var programdata_data = "program data!".*;
-
-    try accountsdb.put(allocator, runtime.program.bpf_loader.v3.ID, .{
-        .data = &v3_loader_data,
-        .executable = true,
-        .owner = runtime.ids.NATIVE_LOADER_ID,
-        .lamports = 1,
-        .rent_epoch = 0,
-    });
-
-    try accountsdb.put(allocator, pk_v3_program, .{
-        .data = v3_program_buf.items,
-        .executable = true,
-        .owner = runtime.program.bpf_loader.v3.ID,
-        .lamports = 1,
-        .rent_epoch = 0,
-    });
-
-    try accountsdb.put(allocator, pk_programdata, .{
-        .data = &programdata_data,
-        .executable = true,
-        .owner = Pubkey.ZEROES,
-        .lamports = 1,
-        .rent_epoch = 0,
-    });
-
-    var tx = try emptyTxWithKeys(allocator, &.{pk_v3_program});
-    defer tx.accounts.deinit(allocator);
-
-    tx.instructions = &.{
-        .{
-            .program_meta = .{ .pubkey = pk_v3_program, .index_in_transaction = 0 },
-            .account_metas = .{},
-            .dedupe_map = @splat(0xffff),
-            .instruction_data = "",
-            .owned_instruction_data = false,
-            .initial_account_lamports = 0,
-        },
-    };
-
-    const loaded_accounts = try loadTransactionAccountsOld(
-        AccountReader.fromMap(&accountsdb),
-        allocator,
-        &tx,
-        &env.rent_collector,
-        &env.feature_set,
-        env.slot,
-        &env.compute_budget_limits,
-        .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
-    );
-    defer loaded_accounts.deinit(allocator);
-
-    // only v3 program returned (in account keys)
-    try std.testing.expectEqual(1, loaded_accounts.accounts.len);
-    try std.testing.expectEqual(pk_v3_program, loaded_accounts.accounts.slice()[0].pubkey);
-
-    // v3 program + its owner (v3 loader) + v3 programdata
-    try std.testing.expectEqual(3, accountsdb.count());
-    try std.testing.expect(accountsdb.contains(pk_v3_program));
-    try std.testing.expect(accountsdb.contains(pk_programdata));
-    try std.testing.expect(accountsdb.contains(runtime.program.bpf_loader.v3.ID));
 }

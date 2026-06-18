@@ -1490,7 +1490,7 @@
         .name = "formalize_loaded_transaction_data_size",
         .pubkey = "DeS7sR48ZcFTUmt5FFEVDr1v1bh73aAbZiZq3SYr8Eh8",
         .description = "SIMD-0186: Loaded transaction data size specification",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_extend_program_checked",
