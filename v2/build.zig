@@ -1,21 +1,8 @@
 const std = @import("std");
 const Build = std.Build;
 
-const Service = enum {
-    net,
-    gossip,
-    shred_receiver,
-    replay,
-    snapshot,
-    accounts_db,
-    telemetry,
-    exec,
-
-    const all = std.enums.values(Service);
-};
-
 const ServiceLib = struct {
-    service: Service,
+    service: []const u8,
     lib: *Build.Step.Compile,
 };
 
@@ -315,13 +302,13 @@ pub fn build(b: *Build) !void {
     var doc_service_modules: std.ArrayListUnmanaged(DocGenModule) = .empty;
     defer doc_service_modules.deinit(b.allocator);
 
-    var service_libs: [Service.all.len]ServiceLib = undefined;
+    const services = @typeInfo(@import("init/services.zig")).@"struct".decls;
+    var service_libs: [services.len]ServiceLib = undefined;
 
     // build + link services
-    inline for (Service.all, &service_libs) |service, *service_lib_entry| {
-        const service_name = @tagName(service);
+    inline for (services, &service_libs) |service, *service_lib_entry| {
         const service_mod = b.createModule(.{
-            .root_source_file = b.path("services").path(b, service_name ++ ".zig"),
+            .root_source_file = b.path("services").path(b, service.name ++ ".zig"),
             .target = target,
             .optimize = optimize,
             .single_threaded = true,
@@ -336,23 +323,23 @@ pub fn build(b: *Build) !void {
         });
 
         const service_lib = b.addLibrary(.{
-            .name = service_name,
+            .name = service.name,
             .root_module = service_mod,
             .use_llvm = true,
         });
         sig_init_mod.linkLibrary(service_lib);
-        service_lib_entry.* = .{ .service = service, .lib = service_lib };
+        service_lib_entry.* = .{ .service = service.name, .lib = service_lib };
 
         _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
             .root_module = service_mod,
-            .name = service_name,
+            .name = service.name,
             .filters = filters,
             .use_llvm = use_llvm,
         });
 
         try doc_service_modules.append(
             b.allocator,
-            .{ .name = service_name, .module = service_mod },
+            .{ .name = service.name, .module = service_mod },
         );
     }
 
@@ -470,7 +457,7 @@ fn addBlackBoxTest(
 
     for (options.test_config.services) |service_name| {
         exe.linkLibrary(for (options.service_libs) |entry| {
-            if (std.mem.eql(u8, @tagName(entry.service), service_name)) break entry.lib;
+            if (std.mem.eql(u8, entry.service, service_name)) break entry.lib;
         } else std.debug.panic("unknown service '{s}'", .{service_name}));
     }
 
