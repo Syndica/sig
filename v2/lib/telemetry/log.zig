@@ -433,12 +433,7 @@ pub const Filter = struct {
         default_log_level: Level,
         str: []const u8,
     ) ParseError!u64 {
-        const buffer_len = if (@inComptime())
-            str.len + (std.mem.count(u8, str, ",") + 2) * @sizeOf(Filter.Header)
-        else
-            4096;
-        var buffer: [buffer_len]u8 = undefined;
-        var discarding: std.Io.Writer.Discarding = .init(&buffer);
+        var discarding: std.Io.Writer.Discarding = .init(&.{});
         parseListAndWriteBinary(
             &discarding.writer,
             default_log_level,
