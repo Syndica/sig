@@ -106,7 +106,6 @@ const Clock = sig.runtime.sysvar.Clock;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const EpochRewards = sig.runtime.sysvar.EpochRewards;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
-const FeatureSet = sig.core.FeatureSet;
 const Rent = sig.runtime.sysvar.Rent;
 const SysvarCache = sig.runtime.SysvarCache;
 const RuntimeTransaction = transaction_execution.RuntimeTransaction;
@@ -337,7 +336,6 @@ fn executeTxnContext(
                 &compute_budget,
                 slot,
                 false,
-                false,
             );
         }
 
@@ -377,7 +375,6 @@ fn executeTxnContext(
 
     const slot_hash = hashSlot(
         blockhash_queue.last_hash.?,
-        &feature_set,
     );
 
     slot = fixture_slot;
@@ -1144,11 +1141,10 @@ fn accountFromAccountSharedData(
 }
 
 /// A copy of sig hashSlot which is customized to match the behaviour of bank.rehash in solfuzz-agave.
-/// Specifically if accounts lt hash is enabled, the returned hash is the initial hash combined with
-/// the identity hash, as there is not parent lt hash in the txn fuzzing context.
+/// Specifically the returned hash is the initial hash combined with the identity hash,
+/// as there is no parent lt hash in the txn fuzzing context.
 pub fn hashSlot(
     blockhash: Hash,
-    feature_set: *const FeatureSet,
 ) Hash {
     var signature_count_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &signature_count_bytes, 0, .little);
@@ -1159,13 +1155,10 @@ pub fn hashSlot(
     hash.update(&blockhash.data);
     const initial_hash = hash.finalResult();
 
-    return if (feature_set.active(.accounts_lt_hash, 0))
-        Hash.initMany(&.{
-            &initial_hash,
-            sig.core.hash.LtHash.IDENTITY.constBytes(),
-        })
-    else
-        .{ .data = initial_hash };
+    return Hash.initMany(&.{
+        &initial_hash,
+        sig.core.hash.LtHash.IDENTITY.constBytes(),
+    });
 }
 
 // const State = struct {

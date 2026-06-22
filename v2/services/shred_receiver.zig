@@ -85,7 +85,6 @@ const max_in_progress = 8192;
 const max_done = 65536;
 
 pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
-    _ = runner;
     const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
     defer zone.deinit();
 
@@ -128,10 +127,13 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         {
             const idle_zone = tracy.Zone.init(@src(), .{ .name = "idle" });
             defer idle_zone.deinit();
-            while (packet_iter.peek() == null) continue;
+            while (packet_iter.peek() == null) {
+                try runner.activity.signalIdleSpinning();
+            }
         }
         while (packet_iter.next()) |packet| {
             defer packet_iter.markUsed();
+            try runner.activity.signalActive();
 
             const result = receiver.processPacket(
                 &ro.config.leader_schedule,

@@ -144,7 +144,6 @@ fn executeSyscall(
         &tc.compute_budget,
         tc.slot,
         reject_broken_elfs,
-        false,
     );
     vm_environment.config = config;
 
@@ -216,10 +215,6 @@ fn executeSyscall(
         .virtual_address_space_adjustments,
         tc.slot,
     );
-    const mask_out_rent_epoch_in_vm_serialization = tc.feature_set.active(
-        .mask_out_rent_epoch_in_vm_serialization,
-        tc.slot,
-    );
     const direct_account_pointers_in_program_input = tc.feature_set.active(
         .direct_account_pointers_in_program_input,
         tc.slot,
@@ -229,7 +224,6 @@ fn executeSyscall(
         ic,
         direct_mapping,
         virtual_address_space_adjustments,
-        mask_out_rent_epoch_in_vm_serialization,
         direct_account_pointers_in_program_input,
     );
     defer serialized.deinit(allocator);

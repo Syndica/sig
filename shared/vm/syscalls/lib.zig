@@ -655,6 +655,14 @@ pub fn findProgramAddress(
             continue;
         };
 
+        // Pre-translate both addresses so SIMD-0460's access-violation handler
+        // settles before we keep any pointers: under direct_mapping it may
+        // `account.resize` and re-anchor `region.host_memory`, stranding a
+        // pointer obtained from an earlier translate.
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.1/syscalls/src/lib.rs#L896-L901
+        _ = try memory_map.translateType(u8, .mutable, bump_seed_addr, check_aligned);
+        _ = try memory_map.translateType(Pubkey, .mutable, pubkey_addr, check_aligned);
+
         const bump_seed_ptr = try memory_map.translateType(
             u8,
             .mutable,
