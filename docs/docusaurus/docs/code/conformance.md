@@ -252,12 +252,12 @@ After fixing a bug, follow these steps before committing:
    run
    ```
 
-2. **Update `scripts/failing.txt`** with the new results:
+2. **Update `scripts/misc_failures.txt`** with the new results:
    ```bash
-   cp env/test-outputs/failing.txt scripts/failing.txt
+   cp env/test-outputs/misc_failures.txt scripts/misc_failures.txt
    ```
 
-3. **Check for regressions.** Any lines that were added to `failing.txt` (tests that were previously passing but now fail) mean you introduced a regression. Do not commit if there are any regressions.
+3. **Check for regressions.** Any lines that were added to `misc_failures.txt` (tests that were previously passing but now fail) mean you introduced a regression. Do not commit if there are any regressions.
 
 4. **Run the CI script** to confirm it passes with the new failing list:
    ```bash
