@@ -111,7 +111,7 @@ pub fn loadTransactionAccounts(
     defer zone.deinit();
 
     // [agave] https://github.com/anza-xyz/agave/commit/d5757e29aa - formalize_loaded_transaction_data_size hardcoded
-    const result = loadTransactionAccountsSimd186(
+    const result = loadTransactionAccountsInner(
         account_reader,
         allocator,
         transaction,
@@ -139,7 +139,7 @@ const InternalLoadError = AccountLoadError || error{
     MaxLoadedAccountsDataSizeExceeded,
 };
 
-fn loadTransactionAccountsSimd186(
+fn loadTransactionAccountsInner(
     account_reader: AccountReader,
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
@@ -468,7 +468,7 @@ test "loadTransactionAccounts empty transaction" {
         .is_simple_vote_transaction = false,
     };
 
-    const tx_accounts = try loadTransactionAccountsSimd186(
+    const tx_accounts = try loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &empty_tx,
@@ -513,7 +513,7 @@ test "loadTransactionAccounts sysvar instruction" {
         .is_simple_vote_transaction = false,
     };
 
-    const tx_accounts = try loadTransactionAccountsSimd186(
+    const tx_accounts = try loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &tx,
@@ -654,7 +654,7 @@ test "load accounts rent paid" {
         },
     };
 
-    const loaded_accounts = try loadTransactionAccountsSimd186(
+    const loaded_accounts = try loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &tx,
@@ -806,7 +806,7 @@ test "load accounts with simd 186 and loaderv3 program" {
         },
     };
 
-    const loaded_accounts = try loadTransactionAccountsSimd186(
+    const loaded_accounts = try loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &tx,
@@ -943,7 +943,7 @@ test "load tx too large" {
     var tx = try emptyTxWithKeys(allocator, &.{address});
     defer tx.accounts.deinit(allocator);
 
-    const loaded_accounts_result = loadTransactionAccountsSimd186(
+    const loaded_accounts_result = loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &tx,
@@ -971,7 +971,7 @@ test "load, create new account" {
     var tx = try emptyTxWithKeys(allocator, &.{new_account_pk});
     defer tx.accounts.deinit(allocator);
 
-    const loaded_accounts = try loadTransactionAccountsSimd186(
+    const loaded_accounts = try loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &tx,
@@ -1017,7 +1017,7 @@ test "invalid program owner" {
         },
     };
 
-    const loaded_accounts_result = loadTransactionAccountsSimd186(
+    const loaded_accounts_result = loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &tx,
@@ -1050,7 +1050,7 @@ test "missing program account" {
         },
     };
 
-    const loaded_accounts_result = loadTransactionAccountsSimd186(
+    const loaded_accounts_result = loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &tx,
@@ -1093,7 +1093,7 @@ test "deallocate account" {
     accountsdb.getPtr(dying_account).?.lamports = 0;
 
     // load with the account being dead
-    const loaded_accounts = try loadTransactionAccountsSimd186(
+    const loaded_accounts = try loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
         &tx,
