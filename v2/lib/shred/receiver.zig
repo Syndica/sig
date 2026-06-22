@@ -152,8 +152,12 @@ pub fn Receiver(comptime Effects: type) type {
                 logger,
             ) catch |err| {
                 switch (err) {
-                    error.NoSpaceLeft => return err,
+                    error.NoSpaceLeft => {
+                        logger.fatal().logf("no space left while processing shred packet", .{});
+                        return err;
+                    },
                     else => |packet_err| {
+                        logger.warn().logf("packet failed with {}", .{packet_err});
                         state.effects.reportReceiverPacketResult(.{ .failed = packet_err });
                         return packet_err;
                     },
