@@ -1314,19 +1314,19 @@
         .name = "migrate_config_program_to_core_bpf",
         .pubkey = "2Fr57nzzkLYXW695UdDxDeR5fhnZWSttZeZYemrnpGFV",
         .description = "Migrate Config program to Core BPF #1378",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "migrate_address_lookup_table_program_to_core_bpf",
         .pubkey = "C97eKZygrkU4JxJsZdjgbUY7iQR7rKTr4NyDWo2E5pRm",
         .description = "Migrate Address Lookup Table program to Core BPF #1651",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "migrate_stake_program_to_core_bpf",
         .pubkey = "6M4oQ6eXneVhtLoiAr4yRYQY43eVLjrKbiDZDJc892yk",
         .description = "SIMD-0196: Migrate Stake program to Core BPF #3655",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_get_epoch_stake_syscall",

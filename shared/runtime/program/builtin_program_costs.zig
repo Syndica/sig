@@ -1,4 +1,4 @@
-//! [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/builtins-default-costs/src/lib.rs
+//! [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/builtins-default-costs/src/lib.rs
 
 const std = @import("std");
 const sig = @import("../../lib.zig");
@@ -7,7 +7,7 @@ const programs = sig.runtime.program;
 
 const Feature = sig.core.features.Feature;
 
-pub const TOTAL_COUNT_BUILTINS: usize = 12;
+pub const TOTAL_COUNT_BUILTINS: usize = 9;
 pub const BUILTIN_COSTS: std.StaticStringMap(BuiltinCost) = costs: {
     @setEvalBranchQuota(10_000);
     const entries = MIGRATING_BUILTIN_COSTS ++ NON_MIGRATING_BUILTIN_COSTS;
@@ -23,50 +23,20 @@ pub fn getMigrationFeatureId(index: usize) Feature {
     return MIGRATING_BUILTIN_COSTS[index][1].coreBpfMigrationFeature().?;
 }
 
+/// [SIMD-0387] The Vote program is NOT migrating to on-chain BPF, but the
+/// proposal removes it from builtin program cost modeling once
+/// `bls_pubkey_management_in_vote_account` activates. Re-using the
+/// migration mechanism is how agave evicts vote from the builtin cost
+/// table; see
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/builtins-default-costs/src/lib.rs#L94-L106
 pub const MIGRATING_BUILTIN_COSTS = [_]struct { []const u8, BuiltinCost }{
-    .{
-        &programs.stake.ID.data,
-        .{
-            .migrating = .{
-                .native_cost = programs.stake.COMPUTE_UNITS,
-                .core_bf_migration_feature = .migrate_stake_program_to_core_bpf,
-                .position = 0,
-            },
-        },
-    },
-    .{
-        &programs.config.ID.data,
-        .{
-            .migrating = .{
-                .native_cost = programs.config.COMPUTE_UNITS,
-                .core_bf_migration_feature = .migrate_config_program_to_core_bpf,
-                .position = 1,
-            },
-        },
-    },
-    .{
-        &programs.address_lookup_table.ID.data,
-        .{
-            .migrating = .{
-                .native_cost = programs.address_lookup_table.COMPUTE_UNITS,
-                .core_bf_migration_feature = .migrate_address_lookup_table_program_to_core_bpf,
-                .position = 2,
-            },
-        },
-    },
-    // [SIMD-0387] The Vote program is NOT migrating to on-chain BPF, but the
-    // proposal removes it from builtin program cost modeling once
-    // `bls_pubkey_management_in_vote_account` activates. Re-using the
-    // migration mechanism is how agave evicts vote from the builtin cost
-    // table; see
-    // https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/builtins-default-costs/src/lib.rs#L94-L106
     .{
         &programs.vote.ID.data,
         .{
             .migrating = .{
                 .native_cost = programs.vote.COMPUTE_UNITS,
                 .core_bf_migration_feature = .bls_pubkey_management_in_vote_account,
-                .position = 3,
+                .position = 0,
             },
         },
     },

@@ -1309,12 +1309,16 @@ test "applyFeatureActivations: Builtin Transitions" {
     defer env.deinit(allocator);
     try env.ancestors.addSlot(allocator, slot);
 
-    // Set address lookup table migration feature
+    // Use the feature_gate stateless builtin for testing migration
+    const stateless_builtin = builtin_programs.STATELESS_BUILTINS[0];
+    const migration_config = stateless_builtin.core_bpf_migration_config.?;
+
+    // Set feature gate migration feature
     try env.insertFeatureAccount(
         allocator,
         slot,
         1,
-        .migrate_address_lookup_table_program_to_core_bpf,
+        .migrate_feature_gate_program_to_core_bpf,
         null,
     );
 
@@ -1328,12 +1332,8 @@ test "applyFeatureActivations: Builtin Transitions" {
         .noop,
     );
 
-    // Get the builtin program info
-    const builtin_program = for (builtin_programs.BUILTINS) |bp| {
-        if (bp.program_id.equals(&sig.runtime.program.address_lookup_table.ID)) break bp;
-    } else unreachable;
-
-    // Attempt migration - should fail since account doesn't exist
+    // Attempt migration - should fail since account doesn't exist (stateless builtins
+    // expect no existing account, so this tests the source buffer path)
     try std.testing.expectError(error.AccountNotFound, migrateBuiltinProgramToCoreBpf(
         allocator,
         slot,
@@ -1341,35 +1341,48 @@ test "applyFeatureActivations: Builtin Transitions" {
         &env.slot_state.capitalization,
         &env.slot_constants.rent_collector.rent,
         &env.slot_constants.feature_set,
-        builtin_program.program_id,
-        builtin_program.core_bpf_migration_config.?,
-        .builtin,
+        stateless_builtin.program_id,
+        migration_config,
+        .stateless_builtin,
         false,
     ));
 
-    // Store invalid account - Incorrect Owner
-    try env.slotAccountStore(0).put(
-        builtin_program.program_id,
-        AccountSharedData{
-            .lamports = 1,
-            .data = &.{},
-            .executable = false,
-            .owner = .ZEROES,
-            .rent_epoch = 0,
-        },
-    );
-    try std.testing.expectError(error.IncorrectOwner, migrateBuiltinProgramToCoreBpf(
-        allocator,
-        slot,
-        env.slotAccountStore(slot),
-        &env.slot_state.capitalization,
-        &env.slot_constants.rent_collector.rent,
-        &env.slot_constants.feature_set,
-        builtin_program.program_id,
-        builtin_program.core_bpf_migration_config.?,
-        .builtin,
-        false,
-    ));
+    // Test IncorrectOwner path for .builtin kind migration.
+    // Use an inline migration config to exercise the owner validation code path.
+    {
+        const builtin_program_id = sig.runtime.program.address_lookup_table.ID;
+        const builtin_migration_config: builtin_programs.CoreBpfMigrationConfig = .{
+            .program_id = builtin_program_id,
+            .source_buffer_address = sig.runtime.program.address_lookup_table.SOURCE_ID,
+            .upgrade_authority_address = null,
+            .enable_feature_id = .migrate_address_lookup_table_program_to_core_bpf_hardcoded,
+        };
+
+        // Store account with incorrect owner (not native loader)
+        try env.slotAccountStore(slot).put(
+            builtin_program_id,
+            AccountSharedData{
+                .lamports = 1,
+                .data = &.{},
+                .executable = false,
+                .owner = .ZEROES,
+                .rent_epoch = 0,
+            },
+        );
+
+        try std.testing.expectError(error.IncorrectOwner, migrateBuiltinProgramToCoreBpf(
+            allocator,
+            slot,
+            env.slotAccountStore(slot),
+            &env.slot_state.capitalization,
+            &env.slot_constants.rent_collector.rent,
+            &env.slot_constants.feature_set,
+            builtin_program_id,
+            builtin_migration_config,
+            .builtin,
+            false,
+        ));
+    }
 
     // TODO: Full migration tests
     // Store program data account, store buffer account, perform migration, verify results.
@@ -1384,15 +1397,18 @@ test "SIMD-0444 relax programdata account check during migration" {
     defer env.deinit(allocator);
     try env.ancestors.addSlot(allocator, slot);
 
-    const builtin_program = for (builtin_programs.BUILTINS) |bp| {
-        if (bp.program_id.equals(&sig.runtime.program.address_lookup_table.ID)) break bp;
-    } else unreachable;
-
-    const migration_config = builtin_program.core_bpf_migration_config.?;
+    // Use inline migration config for address_lookup_table (now hardcoded, removed from BUILTINS)
+    const builtin_program_id = sig.runtime.program.address_lookup_table.ID;
+    const migration_config: builtin_programs.CoreBpfMigrationConfig = .{
+        .program_id = sig.runtime.program.address_lookup_table.ID,
+        .source_buffer_address = sig.runtime.program.address_lookup_table.SOURCE_ID,
+        .upgrade_authority_address = null,
+        .enable_feature_id = .migrate_address_lookup_table_program_to_core_bpf_hardcoded,
+    };
 
     // Store valid builtin program account (native loader owned) so we get past that check.
     try env.slotAccountStore(slot).put(
-        builtin_program.program_id,
+        builtin_program_id,
         AccountSharedData{
             .lamports = 1,
             .data = &.{},
@@ -1404,7 +1420,7 @@ test "SIMD-0444 relax programdata account check during migration" {
 
     // Derive the programdata PDA.
     const program_data_address, _ = sig.runtime.pubkey_utils.findProgramAddress(
-        &.{&builtin_program.program_id.data},
+        &.{&builtin_program_id.data},
         program.bpf_loader.v3.ID,
     ) orelse unreachable;
 
@@ -1429,7 +1445,7 @@ test "SIMD-0444 relax programdata account check during migration" {
             &env.slot_state.capitalization,
             &env.slot_constants.rent_collector.rent,
             &env.slot_constants.feature_set,
-            builtin_program.program_id,
+            builtin_program_id,
             migration_config,
             .builtin,
             true,
@@ -1443,7 +1459,7 @@ test "SIMD-0444 relax programdata account check during migration" {
             &env.slot_state.capitalization,
             &env.slot_constants.rent_collector.rent,
             &env.slot_constants.feature_set,
-            builtin_program.program_id,
+            builtin_program_id,
             migration_config,
             .builtin,
             false,
@@ -1470,7 +1486,7 @@ test "SIMD-0444 relax programdata account check during migration" {
             &env.slot_state.capitalization,
             &env.slot_constants.rent_collector.rent,
             &env.slot_constants.feature_set,
-            builtin_program.program_id,
+            builtin_program_id,
             migration_config,
             .builtin,
             false,
@@ -1499,7 +1515,7 @@ test "SIMD-0444 relax programdata account check during migration" {
             &env.slot_state.capitalization,
             &env.slot_constants.rent_collector.rent,
             &env.slot_constants.feature_set,
-            builtin_program.program_id,
+            builtin_program_id,
             migration_config,
             .builtin,
             true,
@@ -1519,7 +1535,7 @@ test "SIMD-0444 relax programdata account check during migration" {
             &env.slot_state.capitalization,
             &env.slot_constants.rent_collector.rent,
             &env.slot_constants.feature_set,
-            builtin_program.program_id,
+            builtin_program_id,
             migration_config,
             .builtin,
             false,
