@@ -309,13 +309,13 @@ pub fn execute(msg: *const Message) TransactionResult(ComputeBudgetInstructionDe
 
     if (details.requested_compute_unit_limit == null) {
         var kind_cache = [_]?ProgramKind{null} ** MAX_TRANSACTION_ACCOUNTS;
-        for (msg.instructions) |instr| {
+        for (msg.instructions, 0..) |instr, index| {
             const program_id = msg.account_keys[instr.program_index];
 
-            switch (getProgramKind(&kind_cache, instr.program_index, program_id)) {
+            switch (getProgramKind(&kind_cache, index, program_id)) {
                 .not_builtin => details.num_non_builtin_instructions +|= 1,
                 .builtin => details.num_non_migratable_builtin_instructions +|= 1,
-                .migrating_builtin => |pos| details.migrating_builtin_feature_counters[pos] +|= 1,
+                .migrating_builtin => |pos| details.migrating_builtin_feature_counters[pos] += 1,
             }
         }
     }
