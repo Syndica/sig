@@ -106,6 +106,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             _ = .{ self, parses_as_chained };
         }
 
+        /// NOTE: Pointers passed to this hook are only valid for the duration of this callback.
         pub fn reportFecSetCompleted(
             self: Self,
             completed: *const lib.shred.DeshreddedFecSet,
