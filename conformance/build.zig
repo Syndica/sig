@@ -180,6 +180,7 @@ pub fn build(b: *Build) void {
             std.fs.path.join(b.allocator, &.{ proto_dir, "vm.proto" }) catch @panic("OOM"),
             std.fs.path.join(b.allocator, &.{ proto_dir, "txn.proto" }) catch @panic("OOM"),
             std.fs.path.join(b.allocator, &.{ proto_dir, "elf.proto" }) catch @panic("OOM"),
+            std.fs.path.join(b.allocator, &.{ proto_dir, "vm_serialization.proto" }) catch @panic("OOM"),
         },
         .include_directories = &.{proto_dir},
     });
