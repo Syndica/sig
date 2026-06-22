@@ -1,6 +1,7 @@
 const solana = @import("solana.zig");
 const collections = @import("collections.zig");
 const ipc = @import("ipc.zig");
+const accounts_db = @import("accounts_db.zig");
 
 // This is a bit large currently because of the unrooted store
 pub const scratch_buffer_size = 12 * 1024 * 1024 * 1024;
@@ -54,7 +55,7 @@ pub const ExecRequest = extern struct {
             block_idx: BlockRef,
             tx_idx: TransactionPool.ItemId,
             n_account_refs: u8,
-            account_ref_buf: [128]u32,
+            account_ref_buf: [128]accounts_db.AccountPool.Index,
         },
         txn_sig_verify: extern struct {
             tx_idx: TransactionPool.ItemId,
@@ -71,7 +72,7 @@ pub const ExecResponse = extern struct {
             block_idx: BlockRef,
             tx_idx: TransactionPool.ItemId,
             n_account_refs: u8,
-            account_ref_buf: [128]u32,
+            account_ref_buf: [128]accounts_db.AccountPool.Index,
             result: TxExecResult,
         },
         txn_sig_verify: extern struct { success: bool },
