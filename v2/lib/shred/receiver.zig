@@ -677,6 +677,275 @@ const InProgressSets = struct {
     };
 };
 
+const ReceiverTestEffects = struct {
+    parse_results: [8]bool = undefined,
+    parse_result_count: usize = 0,
+
+    packet_results: [8]PacketResult = undefined,
+    packet_result_count: usize = 0,
+
+    fec_completed_count: usize = 0,
+
+    pub fn reportShredParseResult(
+        self: *ReceiverTestEffects,
+        parses_as_chained: bool,
+    ) void {
+        self.parse_results[self.parse_result_count] = parses_as_chained;
+        self.parse_result_count += 1;
+    }
+
+    pub fn reportFecSetCompleted(
+        self: *ReceiverTestEffects,
+        completed: *const DeshreddedFecSet,
+        ctx: *const FecSetCtx,
+    ) void {
+        _ = .{ completed, ctx };
+        self.fec_completed_count += 1;
+    }
+
+    pub fn reportReceiverPacketResult(
+        self: *ReceiverTestEffects,
+        result: PacketResult,
+    ) void {
+        self.packet_results[self.packet_result_count] = result;
+        self.packet_result_count += 1;
+    }
+};
+
+const TEST_DATA_SHRED_PACKET_LEN = 1203;
+
+fn initTestDataPacket(packet: *Packet, version: u16) *Shred {
+    packet.data = @splat(0);
+    packet.len = TEST_DATA_SHRED_PACKET_LEN;
+
+    const shred: *Shred = @ptrCast(packet);
+    shred.* = .{
+        .signature = .ZEROES,
+        .variant = .{ .kind = .merkle_data_chained, .merkle_count = 0 },
+        .slot = 1,
+        .slot_idx = 0,
+        .version = version,
+        .fec_set_idx = 0,
+        .code_or_data = .{
+            .data = .{
+                .parent_offset = 1,
+                .flags = .{
+                    .reference_tick = 0,
+                    .data_complete = false,
+                    .last_shred_in_slot = false,
+                },
+                .size = @offsetOf(Shred, "code_or_data") + @sizeOf(Shred.DataHeader),
+            },
+        },
+    };
+    return shred;
+}
+
+fn signTestDataPacket(packet: *Packet, keypair: *const lib.gossip.KeyPair) !void {
+    const shred: *Shred = @ptrCast(packet);
+    var merkle_root: Hash = undefined;
+    try shred.merkleRoot(&merkle_root);
+    shred.signature = try keypair.sign(&merkle_root.data);
+}
+
+test "shred.receiver: reports parse failure effects" {
+    const allocator = std.testing.allocator;
+
+    var effects: ReceiverTestEffects = .{};
+
+    const TestReceiver = Receiver(*ReceiverTestEffects);
+    var receiver: TestReceiver = try .init(allocator, 1, 1, &effects);
+    defer receiver.deinit(allocator);
+
+    var packet: Packet = undefined;
+    packet.len = 0;
+
+    const leader_schedule: *const lib.solana.LeaderSchedule = undefined;
+    var deshred_writer: DeshredRing.Iterator(.writer) = undefined;
+
+    try std.testing.expectError(
+        error.PacketUnderMinHeaderSize,
+        receiver.processPacket(
+            leader_schedule,
+            0,
+            &packet,
+            &deshred_writer,
+            .noop,
+        ),
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), effects.parse_result_count);
+    try std.testing.expectEqual(false, effects.parse_results[0]);
+
+    try std.testing.expectEqual(@as(usize, 1), effects.packet_result_count);
+    switch (effects.packet_results[0]) {
+        .failed => |err| try std.testing.expectEqual(error.PacketUnderMinHeaderSize, err),
+        .success => try std.testing.expect(false),
+    }
+
+    try std.testing.expectEqual(@as(usize, 0), effects.fec_completed_count);
+}
+
+test "shred.receiver: reports shred version mismatch after successful parse" {
+    const allocator = std.testing.allocator;
+
+    var effects: ReceiverTestEffects = .{};
+
+    const TestReceiver = Receiver(*ReceiverTestEffects);
+    var receiver: TestReceiver = try .init(allocator, 1, 1, &effects);
+    defer receiver.deinit(allocator);
+
+    var packet: Packet = undefined;
+    _ = initTestDataPacket(&packet, 1);
+
+    const leader_schedule: *const lib.solana.LeaderSchedule = undefined;
+    var deshred_writer: DeshredRing.Iterator(.writer) = undefined;
+
+    try std.testing.expectError(
+        error.ShredVersionMismatch,
+        receiver.processPacket(
+            leader_schedule,
+            2,
+            &packet,
+            &deshred_writer,
+            .noop,
+        ),
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), effects.parse_result_count);
+    try std.testing.expectEqual(true, effects.parse_results[0]);
+
+    try std.testing.expectEqual(@as(usize, 1), effects.packet_result_count);
+    switch (effects.packet_results[0]) {
+        .failed => |err| try std.testing.expectEqual(error.ShredVersionMismatch, err),
+        .success => try std.testing.expect(false),
+    }
+
+    try std.testing.expectEqual(@as(usize, 0), effects.fec_completed_count);
+}
+
+test "shred.receiver: reports unfinished fec set for first valid shred" {
+    const allocator = std.testing.allocator;
+
+    var effects: ReceiverTestEffects = .{};
+
+    const TestReceiver = Receiver(*ReceiverTestEffects);
+    var receiver: TestReceiver = try .init(allocator, 1, 1, &effects);
+    defer receiver.deinit(allocator);
+
+    const std_keypair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(@splat(1));
+    const keypair: lib.gossip.KeyPair = .fromKeyPair(std_keypair);
+
+    const leader_schedule = try allocator.create(lib.solana.LeaderSchedule);
+    defer allocator.destroy(leader_schedule);
+    leader_schedule.base_slot = 1;
+    leader_schedule.leaders[0] = keypair.pubkey;
+
+    var packet: Packet = undefined;
+    _ = initTestDataPacket(&packet, 1);
+    try signTestDataPacket(&packet, &keypair);
+
+    var deshred_writer: DeshredRing.Iterator(.writer) = undefined;
+
+    const result = try receiver.processPacket(
+        leader_schedule,
+        1,
+        &packet,
+        &deshred_writer,
+        .noop,
+    );
+    switch (result) {
+        .unfinished_fec_set => |unfinished| {
+            try std.testing.expectEqual(@as(u8, 1), unfinished.total_shreds_received);
+        },
+        else => try std.testing.expect(false),
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), effects.parse_result_count);
+    try std.testing.expectEqual(true, effects.parse_results[0]);
+
+    try std.testing.expectEqual(@as(usize, 1), effects.packet_result_count);
+    switch (effects.packet_results[0]) {
+        .success => |success| switch (success) {
+            .unfinished_fec_set => |unfinished| {
+                try std.testing.expectEqual(@as(u8, 1), unfinished.total_shreds_received);
+            },
+            else => try std.testing.expect(false),
+        },
+        .failed => try std.testing.expect(false),
+    }
+
+    try std.testing.expectEqual(@as(usize, 0), effects.fec_completed_count);
+}
+
+test "shred.receiver: reports duplicate shred before fec completion" {
+    const allocator = std.testing.allocator;
+
+    var effects: ReceiverTestEffects = .{};
+
+    const TestReceiver = Receiver(*ReceiverTestEffects);
+    var receiver: TestReceiver = try .init(allocator, 1, 1, &effects);
+    defer receiver.deinit(allocator);
+
+    const std_keypair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(@splat(1));
+    const keypair: lib.gossip.KeyPair = .fromKeyPair(std_keypair);
+
+    const leader_schedule = try allocator.create(lib.solana.LeaderSchedule);
+    defer allocator.destroy(leader_schedule);
+    leader_schedule.base_slot = 1;
+    leader_schedule.leaders[0] = keypair.pubkey;
+
+    var packet: Packet = undefined;
+    _ = initTestDataPacket(&packet, 1);
+    try signTestDataPacket(&packet, &keypair);
+
+    var deshred_writer: DeshredRing.Iterator(.writer) = undefined;
+
+    const first_result = try receiver.processPacket(
+        leader_schedule,
+        1,
+        &packet,
+        &deshred_writer,
+        .noop,
+    );
+    switch (first_result) {
+        .unfinished_fec_set => |unfinished| {
+            try std.testing.expectEqual(@as(u8, 1), unfinished.total_shreds_received);
+        },
+        else => try std.testing.expect(false),
+    }
+
+    const second_result = try receiver.processPacket(
+        leader_schedule,
+        1,
+        &packet,
+        &deshred_writer,
+        .noop,
+    );
+    try std.testing.expectEqual(PacketSuccess.shred_already_seen, second_result);
+
+    try std.testing.expectEqual(@as(usize, 2), effects.parse_result_count);
+    try std.testing.expectEqual(true, effects.parse_results[0]);
+    try std.testing.expectEqual(true, effects.parse_results[1]);
+
+    try std.testing.expectEqual(@as(usize, 2), effects.packet_result_count);
+    switch (effects.packet_results[0]) {
+        .success => |success| switch (success) {
+            .unfinished_fec_set => |unfinished| {
+                try std.testing.expectEqual(@as(u8, 1), unfinished.total_shreds_received);
+            },
+            else => try std.testing.expect(false),
+        },
+        .failed => try std.testing.expect(false),
+    }
+    try std.testing.expectEqual(
+        PacketResult{ .success = .shred_already_seen },
+        effects.packet_results[1],
+    );
+
+    try std.testing.expectEqual(@as(usize, 0), effects.fec_completed_count);
+}
+
 test "InProgressSets basic usage" {
     const allocator = std.testing.allocator;
     const set_signature: Signature = .ZEROES;
