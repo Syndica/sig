@@ -390,7 +390,7 @@ const Unrooted = struct {
         requester.markUsed();
 
         // blocking the thread - do not do this
-        while (response_queue.peek() == null) {}
+        while (response_queue.peek() == null) : (std.atomic.spinLoopHint()) {}
 
         const response = response_queue.next().?;
         defer response_queue.markUsed();
@@ -404,7 +404,7 @@ const Unrooted = struct {
 
         const account = account_pool.getAccount(response.account_index);
 
-        std.debug.assert(account.ref_count.load(.seq_cst) > 0);
+        std.debug.assert(account.ref_count.load(.monotonic) > 0);
         std.debug.assert(account.pubkey.equals(key));
 
         zone.text("rooted");
