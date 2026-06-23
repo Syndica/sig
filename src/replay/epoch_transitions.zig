@@ -1355,7 +1355,8 @@ test "applyFeatureActivations: Builtin Transitions" {
             .program_id = builtin_program_id,
             .source_buffer_address = sig.runtime.program.address_lookup_table.SOURCE_ID,
             .upgrade_authority_address = null,
-            .enable_feature_id = .migrate_address_lookup_table_program_to_core_bpf_hardcoded,
+            // unread, use any feature
+            .enable_feature_id = .bls_pubkey_management_in_vote_account,
         };
 
         // Store account with incorrect owner (not native loader)
@@ -1403,7 +1404,8 @@ test "SIMD-0444 relax programdata account check during migration" {
         .program_id = sig.runtime.program.address_lookup_table.ID,
         .source_buffer_address = sig.runtime.program.address_lookup_table.SOURCE_ID,
         .upgrade_authority_address = null,
-        .enable_feature_id = .migrate_address_lookup_table_program_to_core_bpf_hardcoded,
+        // unread, use any feature
+        .enable_feature_id = .bls_pubkey_management_in_vote_account,
     };
 
     // Store valid builtin program account (native loader owned) so we get past that check.
