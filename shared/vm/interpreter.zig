@@ -459,7 +459,7 @@ pub const Vm = struct {
             self.registers.set(.pc, frame.return_pc);
         }
 
-        /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.19.0/src/interpreter.rs#L552-L583
+        /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.21.0/src/interpreter.rs#L552-L587
         fn call_imm(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
             var resolved = false;
 
