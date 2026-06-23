@@ -326,6 +326,7 @@ pub fn Children(Topo: type) type {
             else
                 null;
 
+            // Wait for the first child to exit
             var status: u32 = 0;
             const exited_pid: linux.pid_t = pid: {
                 const ret: usize = linux.waitpid(-1, &status, 0);
@@ -344,6 +345,7 @@ pub fn Children(Topo: type) type {
         }
 
         fn waitThreaded(self: *Children(Topo), timeout_ns_opt: ?u64) error{Timeout}!void {
+            // Wait for first service to exit
             if (timeout_ns_opt) |timeout_ns| {
                 self.thread_exit.reset_event.timedWait(timeout_ns) catch {};
             } else {
@@ -369,7 +371,9 @@ fn collectRegions(
     buf: *[max_regions_per_service]Memfd,
 ) usize {
     var count: usize = 0;
-    inline for (@typeInfo(Layout).@"struct".fields) |field| {
+    const fields = @typeInfo(Layout).@"struct".fields;
+    if (fields.len > max_regions_per_service) @compileError("Too many regions for service");
+    inline for (fields) |field| {
         const region = @field(regions, field.name);
         buf[count] = region.memfd;
         count += 1;
@@ -425,7 +429,12 @@ fn spawnSandboxed(
     const parent_pid = std.os.linux.getpid();
 
     const maybe_child_pid = lib.linux.clone3.clone3(&.{
-        .flags = .{},
+        .flags = .{
+            // NOTE: all FDs currently open will remain open in the child
+            // There is no way around this, except
+            // 1) Immediately closing all FDs in the child
+            // 2) Making sure all FDs were created with CLOEXEC, and using exec in the child
+        },
         .exit_signal = std.os.linux.SIG.CHLD,
     });
 
@@ -448,10 +457,13 @@ fn spawnSandboxed(
         };
 
         const SIG = linux.SIG;
+        // standard signals in std.debug.updateSegfaultHandler
         if (e(std.os.linux.sigaction(SIG.SEGV, act, null)) != .SUCCESS) @panic("sigaction SEGV");
         if (e(std.os.linux.sigaction(SIG.ILL, act, null)) != .SUCCESS) @panic("sigaction ILL");
         if (e(std.os.linux.sigaction(SIG.BUS, act, null)) != .SUCCESS) @panic("sigaction BUS");
         if (e(std.os.linux.sigaction(SIG.FPE, act, null)) != .SUCCESS) @panic("sigaction FPE");
+
+        // catch seccomp too
         if (e(std.os.linux.sigaction(SIG.SYS, act, null)) != .SUCCESS) @panic("sigaction SYS");
     }
 
@@ -460,8 +472,12 @@ fn spawnSandboxed(
         const ret = linux.prctl(@intFromEnum(linux.PR.SET_PDEATHSIG), linux.SIG.KILL, 0, 0, 0);
         if (e(ret) != .SUCCESS) std.debug.panic("prctl failed: {}", .{e(ret)});
 
+        // NOTE: this check does not work if we spawn each service into a new pid 
+        // namespace, as getppid will return 0 (including when the parent is dead).
         const parent_pid_now = std.os.linux.getppid();
         if (parent_pid != parent_pid_now) {
+            // The parent died. In case this happened before we set
+            // SET_PDEATHSIG, let's exit ourselves.
             @branchHint(.cold);
             std.debug.panic(
                 "Parent died, parent pid changed ({}->{})\n",
@@ -472,15 +488,17 @@ fn spawnSandboxed(
 
     const resolved = try resolveArgs(args);
 
-    // mseal shared VMAs
+    // mseal our shared VMAs (essentially making sure their mapping can't be tampered with)
     for (resolved.ro, resolved.ro_len) |ptr, len| mseal(ptr orelse continue, len);
     for (resolved.rw, resolved.rw_len) |ptr, len| mseal(ptr orelse continue, len);
     mseal(@ptrCast(resolved.runner), @sizeOf(lib.runner.Region));
 
     closeAllFdsExceptStderr(resolved.stderr);
 
+    // makes it impossible for the service to gain privileges
     std.debug.assert(try std.posix.prctl(.SET_NO_NEW_PRIVS, .{ 1, 0, 0, 0 }) == 0);
 
+    // install a basic seccomp filter that bans syscalls except write+sleep
     {
         const bpf_filters = lib.linux.bpf.printSleepExit(resolved.stderr);
         const program: lib.linux.bpf.sock_fprog = .{
@@ -506,12 +524,17 @@ fn spawnSandboxedTimeout(timeout_ns: u64) linux.pid_t {
 
     if (maybe_child_pid) |child_pid| return child_pid;
 
+    // die when parent exits
     {
         const ret = linux.prctl(@intFromEnum(linux.PR.SET_PDEATHSIG), linux.SIG.KILL, 0, 0, 0);
         if (e(ret) != .SUCCESS) std.debug.panic("prctl failed: {}", .{e(ret)});
 
+        // NOTE: this check does not work if we spawn each service into a new pid 
+        // namespace, as getppid will return 0 (including when the parent is dead).
         const parent_pid_now = std.os.linux.getppid();
         if (parent_pid != parent_pid_now) {
+            // The parent died. In case this happened before we set
+            // SET_PDEATHSIG, let's exit ourselves.
             @branchHint(.cold);
             std.debug.panic(
                 "Parent died, parent pid changed ({}->{})\n",
@@ -520,10 +543,17 @@ fn spawnSandboxedTimeout(timeout_ns: u64) linux.pid_t {
         }
     }
 
-    std.posix.nanosleep(timeout_ns / std.time.ns_per_s, timeout_ns % std.time.ns_per_s);
+    // wait the specified amount of time; if the service processes take longer
+    // than this to finish, this will awaken and exit, causing the `waitpid` to
+    // exit and thus terminate all processes.
+    std.posix.nanosleep(
+        timeout_ns / std.time.ns_per_s,
+        timeout_ns % std.time.ns_per_s,
+    );
     std.process.exit(255);
 }
 
+/// Prevents VMAs from being later modified
 fn mseal(address: [*]align(std.heap.page_size_min) const u8, len: usize) void {
     switch (e(std.os.linux.mseal(address, len, 0))) {
         .SUCCESS => {},
@@ -575,7 +605,8 @@ fn spawnThreaded(
     );
 }
 
-/// Used in threaded mode: services notify this on exit/crash so the parent can wake up.
+/// Used in threaded mode: services notify this on exit/crash so the parent can
+/// wake up. Services receive it as opaque data and must not inspect it.
 pub const ThreadExit = struct {
     finished_idx: std.atomic.Value(u16) = .init(std.math.maxInt(u16)),
     reset_event: std.Thread.ResetEvent = .{},
@@ -585,6 +616,8 @@ pub const ThreadExit = struct {
         self.reset_event.set();
     }
 
+    // Called by service threads in no-sandbox mode. Uses C calling convention
+    // because the function pointer crosses service/init compilation units.
     fn signalCrashCallback(ctx: ?*anyopaque, service_idx: u16) callconv(.c) void {
         const self: *ThreadExit = @ptrCast(@alignCast(ctx orelse return));
         self.signalExit(service_idx);
