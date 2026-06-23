@@ -116,24 +116,284 @@ var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 const DeserialStates = [lib.replay.BlockPool.capacity]?BlockDeserialState;
 const BlockExecStates = [lib.replay.BlockPool.capacity]?BlockExecState;
 
+pub fn Replay(comptime Effects: type) type {
+    lib.util.assertInterface(Effects, struct {
+        pub fn reportFecSetReceived(self: Effects, fec: *const lib.shred.DeshreddedFecSet) void {
+            _ = .{ self, fec };
+        }
+
+        pub fn reportFecSetInserted(self: Effects, node: *const MerkleNode) void {
+            _ = .{ self, node };
+        }
+
+        pub fn reportFecSetDuplicate(self: Effects, fec: *const lib.shred.DeshreddedFecSet) void {
+            _ = .{ self, fec };
+        }
+
+        pub fn reportFecSetOrphaned(self: Effects, node: *const MerkleNode) void {
+            _ = .{ self, node };
+        }
+
+        pub fn reportFecSetAttached(
+            self: Effects,
+            child: *const MerkleNode,
+            parent: *const MerkleNode,
+        ) void {
+            _ = .{ self, child, parent };
+        }
+
+        pub fn reportBlockRefAssigned(
+            self: Effects,
+            node: *const MerkleNode,
+            block_ref: replay.BlockRef,
+        ) void {
+            _ = .{ self, node, block_ref };
+        }
+
+        pub fn reportTransactionRequested(
+            self: Effects,
+            block_ref: replay.BlockRef,
+            tx_index: u32,
+            tx_ref: replay.TransactionPool.ItemId,
+            tx_len: usize,
+        ) void {
+            _ = .{ self, block_ref, tx_index, tx_ref, tx_len };
+        }
+
+        pub fn reportAllTransactionsRequested(self: Effects, block_ref: replay.BlockRef) void {
+            _ = .{ self, block_ref };
+        }
+
+        pub fn reportBlockComplete(self: Effects, block_ref: replay.BlockRef) void {
+            _ = .{ self, block_ref };
+        }
+    });
+
+    return struct {
+        const Self = @This();
+
+        logger: tel.Logger("main"),
+        effects: Effects,
+
+        forest: MerkleForest,
+        deserial_states: *DeserialStates,
+        exec_states: *BlockExecStates,
+
+        deshredded_iter: lib.shred.DeshredRing.Iterator(.reader),
+        exec_request_sender: replay.ExecReqResponse.RequestRing.Iterator(.writer),
+        exec_response_receiver: replay.ExecReqResponse.ResponseRing.Iterator(.reader),
+
+        transaction_pool: *replay.TransactionPool,
+        block_pool: *replay.BlockPool,
+
+        first_slot: ?Slot = null,
+
+        pub const Args = struct {
+            effects: Effects,
+            deshredded_in: *lib.shred.DeshredRing,
+            exec_req_response: *replay.ExecReqResponse,
+            transaction_pool: *replay.TransactionPool,
+            block_pool: *replay.BlockPool,
+        };
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            logger: tel.Logger("main"),
+            args: Args,
+        ) !Self {
+            const forest: MerkleForest = try .init(allocator);
+
+            const deserial_states: *DeserialStates = try allocator.create(DeserialStates);
+            @memset(deserial_states, null);
+
+            const exec_states: *BlockExecStates = try allocator.create(BlockExecStates);
+            @memset(exec_states, null);
+
+            return .{
+                .logger = logger,
+                .effects = args.effects,
+
+                .forest = forest,
+                .deserial_states = deserial_states,
+                .exec_states = exec_states,
+
+                .deshredded_iter = args.deshredded_in.get(.reader),
+                .exec_request_sender = args.exec_req_response.request_ring.get(.writer),
+                .exec_response_receiver = args.exec_req_response.response_ring.get(.reader),
+
+                .transaction_pool = args.transaction_pool,
+                .block_pool = args.block_pool,
+            };
+        }
+
+        pub fn run(self: *Self, activity: *lib.runner.Activity.ServiceView) !noreturn {
+            task: switch (@as(enum { exec_response, fec_set, idle }, .idle)) {
+                .idle => {
+                    if (self.exec_response_receiver.peek() != null) continue :task .exec_response;
+                    if (self.deshredded_iter.peek() != null) continue :task .fec_set;
+
+                    const zone = tracy.Zone.init(@src(), .{ .name = "idle" });
+                    defer zone.deinit();
+
+                    while (true) {
+                        if (self.exec_response_receiver.peek() != null) {
+                            continue :task .exec_response;
+                        }
+                        if (self.deshredded_iter.peek() != null) {
+                            continue :task .fec_set;
+                        }
+                        try activity.signalIdleSpinning();
+                    }
+                },
+                .exec_response => {
+                    const zone = tracy.Zone.init(@src(), .{ .name = "exec_response" });
+                    defer zone.deinit();
+                    try activity.signalActive();
+
+                    const response: *const lib.replay.ExecResponse =
+                        self.exec_response_receiver.next() orelse unreachable;
+                    defer self.exec_response_receiver.markUsed();
+
+                    zone.value(response.task_id);
+
+                    std.debug.assert(response.request_kind == .txn_exec); // others unimplemented
+                    const response_data = response.data.txn_exec;
+
+                    defer self.transaction_pool.destroyId(response_data.tx_idx);
+
+                    const block_ref = response_data.block_idx;
+                    const exec_state: *BlockExecState = &(self.exec_states[block_ref.index().?].?);
+
+                    // We previously used the transaction number within the block as our "task_id".
+                    // Asserting that we're receiving them back in order (we have single threaded exec).
+                    std.debug.assert(response.task_id == exec_state.n_transactions_completed);
+
+                    exec_state.n_transactions_completed += 1;
+
+                    if (exec_state.finished()) {
+                        self.effects.reportBlockComplete(block_ref);
+                        self.logger.info().logf(
+                            "Slot {} ({}) complete! ({}/{})",
+                            .{
+                                self.block_pool.indexToPtr(block_ref).slot,
+                                block_ref,
+                                exec_state.n_transactions_requested,
+                                exec_state.n_transactions_completed,
+                            },
+                        );
+                    }
+
+                    continue :task .idle;
+                },
+                .fec_set => {
+                    const zone = tracy.Zone.init(@src(), .{ .name = "received fec set" });
+                    defer zone.deinit();
+                    try activity.signalActive();
+
+                    const deshredded_fec_set: *const lib.shred.DeshreddedFecSet =
+                        self.deshredded_iter.next() orelse unreachable;
+                    defer self.deshredded_iter.markUsed();
+
+                    zone.value(deshredded_fec_set.id.slot);
+                    zone.value(deshredded_fec_set.id.fec_set_idx);
+                    self.effects.reportFecSetReceived(deshredded_fec_set);
+
+                    const inserted = (try insertFecSet(
+                        self.logger,
+                        deshredded_fec_set,
+                        &self.forest,
+                        self.block_pool,
+                        self.effects,
+                    )) orelse {
+                        zone.text("already found");
+                        self.effects.reportFecSetDuplicate(deshredded_fec_set);
+                        continue :task .idle;
+                    };
+                    self.effects.reportFecSetInserted(inserted);
+
+                    // This is an awful hack, we are treating the first received fec set as our root.
+                    // We should instead insert the last fec set of the rooted slot, similarly allocate it
+                    // a BlockRef, and call setChildTreeBlockRefs directly after.
+                    if (self.first_slot == null) {
+                        self.logger.info().logf("inserting first {f}", .{inserted});
+                        std.debug.assert(self.first_slot == null);
+                        self.first_slot = inserted.id.slot;
+
+                        const rooted_slot = self.first_slot.? - 1;
+
+                        std.debug.assert(inserted.block_ref == .null);
+
+                        const rooted_block_ref = try self.block_pool.createId();
+                        const first_block_ref = try self.block_pool.createId();
+
+                        rooted_block_ref.ptr(self.block_pool).?.* = .{
+                            .slot = rooted_slot,
+                            .child = first_block_ref,
+                        };
+                        first_block_ref.ptr(self.block_pool).?.* = .{
+                            .slot = self.first_slot.?,
+                            .parent = rooted_block_ref,
+                        };
+
+                        self.exec_states[rooted_block_ref.index().?] = .{
+                            .n_transactions_requested = 0,
+                            .n_transactions_completed = 0,
+                            .all_transactions_requested = true,
+                        };
+                        std.debug.assert(self.exec_states[rooted_block_ref.index().?].?.finished());
+
+                        inserted.block_ref = first_block_ref;
+                        self.effects.reportBlockRefAssigned(inserted, first_block_ref);
+
+                        self.logger.info().logf("inserted first {f}", .{inserted});
+                    }
+
+                    if (inserted.id.fec_set_idx == 0) {
+                        self.logger.info().logf(
+                            "received 0th fec set of slot {}",
+                            .{inserted.id.slot},
+                        );
+                    }
+                    if (inserted.slot_complete) {
+                        self.logger.info().logf(
+                            "received last fec set of slot {} (idx={})",
+                            .{ inserted.id.slot, inserted.id.fec_set_idx },
+                        );
+                    }
+
+                    // NOTE: Currently we're doing nothing if we can't find a path from the inserted node to
+                    //       the root. We could deserialise early for prefetching.
+                    if (inserted.block_ref == .null) {
+                        zone.text("null blockref");
+                        continue :task .idle;
+                    }
+
+                    try maybeContinueBlockExec(
+                        self.logger,
+                        inserted,
+                        inserted.block_ref,
+                        &self.forest.pool,
+                        self.block_pool,
+                        self.transaction_pool,
+                        self.exec_states,
+                        self.deserial_states,
+                        &self.exec_request_sender,
+                        self.effects,
+                    );
+
+                    continue :task .idle;
+                },
+            }
+        }
+    };
+}
+
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
 
     var fba: std.heap.FixedBufferAllocator = .init(&scratch_memory);
     const allocator = fba.allocator();
-
-    var forest: MerkleForest = try .init(allocator);
-
-    const deserial_states: *DeserialStates = try allocator.create(DeserialStates);
-    @memset(deserial_states, null);
-
-    const exec_states: *BlockExecStates = try allocator.create(BlockExecStates);
-    @memset(exec_states, null);
-
-    var deshredded_iter = rw.deshredded_in.get(.reader);
-    var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
-    var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
 
     const Effects = struct {
         const Self = @This();
@@ -188,163 +448,15 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             _ = .{ self, block_ref };
         }
     };
-    const effects: Effects = .{};
 
-    var first_slot: ?Slot = null; // this is a hack, remove it!
-
-    task: switch (@as(enum { exec_response, fec_set, idle }, .idle)) {
-        .idle => {
-            if (exec_response_receiver.peek() != null) continue :task .exec_response;
-            if (deshredded_iter.peek() != null) continue :task .fec_set;
-
-            const zone = tracy.Zone.init(@src(), .{ .name = "idle" });
-            defer zone.deinit();
-
-            while (true) {
-                if (exec_response_receiver.peek() != null) continue :task .exec_response;
-                if (deshredded_iter.peek() != null) continue :task .fec_set;
-                try runner.activity.signalIdleSpinning();
-            }
-        },
-        .exec_response => {
-            const zone = tracy.Zone.init(@src(), .{ .name = "exec_response" });
-            defer zone.deinit();
-            try runner.activity.signalActive();
-
-            const response: *const lib.replay.ExecResponse = exec_response_receiver.next() orelse
-                unreachable;
-            defer exec_response_receiver.markUsed();
-
-            zone.value(response.task_id);
-
-            std.debug.assert(response.request_kind == .txn_exec); // others unimplemented
-            const response_data = response.data.txn_exec;
-
-            defer rw.replay_transaction_pool.destroyId(response_data.tx_idx);
-
-            const block_ref = response_data.block_idx;
-            const exec_state: *BlockExecState = &(exec_states[block_ref.index().?].?);
-
-            // We previously used the transaction number within the block as our "task_id".
-            // Asserting that we're receiving them back in order (we have single threaded exec).
-            std.debug.assert(response.task_id == exec_state.n_transactions_completed);
-
-            exec_state.n_transactions_completed += 1;
-
-            if (exec_state.finished()) {
-                effects.reportBlockComplete(block_ref);
-                logger.info().logf(
-                    "Slot {} ({}) complete! ({}/{})",
-                    .{
-                        rw.block_pool.indexToPtr(block_ref).slot,
-                        block_ref,
-                        exec_state.n_transactions_requested,
-                        exec_state.n_transactions_completed,
-                    },
-                );
-            }
-
-            continue :task .idle;
-        },
-        .fec_set => {
-            const zone = tracy.Zone.init(@src(), .{ .name = "received fec set" });
-            defer zone.deinit();
-            try runner.activity.signalActive();
-
-            const deshredded_fec_set: *const lib.shred.DeshreddedFecSet =
-                deshredded_iter.next() orelse unreachable;
-            defer deshredded_iter.markUsed();
-
-            zone.value(deshredded_fec_set.id.slot);
-            zone.value(deshredded_fec_set.id.fec_set_idx);
-            effects.reportFecSetReceived(deshredded_fec_set);
-
-            const inserted = (try insertFecSet(
-                logger,
-                deshredded_fec_set,
-                &forest,
-                rw.block_pool,
-                effects,
-            )) orelse {
-                zone.text("already found");
-                effects.reportFecSetDuplicate(deshredded_fec_set);
-                continue :task .idle;
-            };
-            effects.reportFecSetInserted(inserted);
-
-            // This is an awful hack, we are treating the first received fec set as our root.
-            // We should instead insert the last fec set of the rooted slot, similarly allocate it
-            // a BlockRef, and call setChildTreeBlockRefs directly after.
-            if (first_slot == null) {
-                logger.info().logf("inserting first {f}", .{inserted});
-                std.debug.assert(first_slot == null);
-                first_slot = inserted.id.slot;
-
-                const rooted_slot = first_slot.? - 1;
-
-                std.debug.assert(inserted.block_ref == .null);
-
-                const rooted_block_ref = try rw.block_pool.createId();
-                const first_block_ref = try rw.block_pool.createId();
-
-                rooted_block_ref.ptr(rw.block_pool).?.* = .{
-                    .slot = rooted_slot,
-                    .child = first_block_ref,
-                };
-                first_block_ref.ptr(rw.block_pool).?.* = .{
-                    .slot = first_slot.?,
-                    .parent = rooted_block_ref,
-                };
-
-                exec_states[rooted_block_ref.index().?] = .{
-                    .n_transactions_requested = 0,
-                    .n_transactions_completed = 0,
-                    .all_transactions_requested = true,
-                };
-                std.debug.assert(exec_states[rooted_block_ref.index().?].?.finished());
-
-                inserted.block_ref = first_block_ref;
-                effects.reportBlockRefAssigned(inserted, first_block_ref);
-
-                logger.info().logf("inserted first {f}", .{inserted});
-            }
-
-            if (inserted.id.fec_set_idx == 0) {
-                logger.info().logf(
-                    "received 0th fec set of slot {}",
-                    .{inserted.id.slot},
-                );
-            }
-            if (inserted.slot_complete) {
-                logger.info().logf(
-                    "received last fec set of slot {} (idx={})",
-                    .{ inserted.id.slot, inserted.id.fec_set_idx },
-                );
-            }
-
-            // NOTE: Currently we're doing nothing if we can't find a path from the inserted node to
-            //       the root. We could deserialise early for prefetching.
-            if (inserted.block_ref == .null) {
-                zone.text("null blockref");
-                continue :task .idle;
-            }
-
-            try maybeContinueBlockExec(
-                logger,
-                inserted,
-                inserted.block_ref,
-                &forest.pool,
-                rw.block_pool,
-                rw.replay_transaction_pool,
-                exec_states,
-                deserial_states,
-                &exec_request_sender,
-                effects,
-            );
-
-            continue :task .idle;
-        },
-    }
+    var replay_service = try Replay(Effects).init(allocator, logger, .{
+        .effects = .{},
+        .deshredded_in = rw.deshredded_in,
+        .exec_req_response = rw.exec_req_response,
+        .transaction_pool = rw.replay_transaction_pool,
+        .block_pool = rw.block_pool,
+    });
+    return replay_service.run(runner.activity);
 }
 
 /// Finds a node's parent, and attaches the new node to it.
