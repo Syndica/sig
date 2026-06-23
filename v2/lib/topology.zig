@@ -472,7 +472,7 @@ fn spawnSandboxed(
         const ret = linux.prctl(@intFromEnum(linux.PR.SET_PDEATHSIG), linux.SIG.KILL, 0, 0, 0);
         if (e(ret) != .SUCCESS) std.debug.panic("prctl failed: {}", .{e(ret)});
 
-        // NOTE: this check does not work if we spawn each service into a new pid 
+        // NOTE: this check does not work if we spawn each service into a new pid
         // namespace, as getppid will return 0 (including when the parent is dead).
         const parent_pid_now = std.os.linux.getppid();
         if (parent_pid != parent_pid_now) {
@@ -529,7 +529,7 @@ fn spawnSandboxedTimeout(timeout_ns: u64) linux.pid_t {
         const ret = linux.prctl(@intFromEnum(linux.PR.SET_PDEATHSIG), linux.SIG.KILL, 0, 0, 0);
         if (e(ret) != .SUCCESS) std.debug.panic("prctl failed: {}", .{e(ret)});
 
-        // NOTE: this check does not work if we spawn each service into a new pid 
+        // NOTE: this check does not work if we spawn each service into a new pid
         // namespace, as getppid will return 0 (including when the parent is dead).
         const parent_pid_now = std.os.linux.getppid();
         if (parent_pid != parent_pid_now) {
