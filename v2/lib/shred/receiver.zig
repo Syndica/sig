@@ -786,7 +786,7 @@ test "shred.receiver: empty packet" {
     try std.testing.expectEqual(0, effects.fec_completed_count);
 }
 
-test "shred.receiver: reports shred version mismatch after successful parse" {
+test "shred.receiver: shred version mismatch" {
     const allocator = std.testing.allocator;
 
     var effects: ReceiverTestEffects = .{};
@@ -812,19 +812,19 @@ test "shred.receiver: reports shred version mismatch after successful parse" {
         ),
     );
 
-    try std.testing.expectEqual(@as(usize, 1), effects.parse_result_count);
+    try std.testing.expectEqual(1, effects.parse_result_count);
     try std.testing.expectEqual(true, effects.parse_results[0]);
 
-    try std.testing.expectEqual(@as(usize, 1), effects.packet_result_count);
+    try std.testing.expectEqual(1, effects.packet_result_count);
     switch (effects.packet_results[0]) {
         .failed => |err| try std.testing.expectEqual(error.ShredVersionMismatch, err),
         .success => try std.testing.expect(false),
     }
 
-    try std.testing.expectEqual(@as(usize, 0), effects.fec_completed_count);
+    try std.testing.expectEqual(0, effects.fec_completed_count);
 }
 
-test "shred.receiver: reports unfinished fec set for first valid shred" {
+test "shred.receiver: one shred (unfinished fec set)" {
     const allocator = std.testing.allocator;
 
     var effects: ReceiverTestEffects = .{};
@@ -856,29 +856,29 @@ test "shred.receiver: reports unfinished fec set for first valid shred" {
     );
     switch (result) {
         .unfinished_fec_set => |unfinished| {
-            try std.testing.expectEqual(@as(u8, 1), unfinished.total_shreds_received);
+            try std.testing.expectEqual(1, unfinished.total_shreds_received);
         },
         else => try std.testing.expect(false),
     }
 
-    try std.testing.expectEqual(@as(usize, 1), effects.parse_result_count);
+    try std.testing.expectEqual(1, effects.parse_result_count);
     try std.testing.expectEqual(true, effects.parse_results[0]);
 
-    try std.testing.expectEqual(@as(usize, 1), effects.packet_result_count);
+    try std.testing.expectEqual(1, effects.packet_result_count);
     switch (effects.packet_results[0]) {
         .success => |success| switch (success) {
             .unfinished_fec_set => |unfinished| {
-                try std.testing.expectEqual(@as(u8, 1), unfinished.total_shreds_received);
+                try std.testing.expectEqual(1, unfinished.total_shreds_received);
             },
             else => try std.testing.expect(false),
         },
         .failed => try std.testing.expect(false),
     }
 
-    try std.testing.expectEqual(@as(usize, 0), effects.fec_completed_count);
+    try std.testing.expectEqual(0, effects.fec_completed_count);
 }
 
-test "shred.receiver: reports duplicate shred before fec completion" {
+test "shred.receiver: duplicate shred" {
     const allocator = std.testing.allocator;
 
     var effects: ReceiverTestEffects = .{};
@@ -910,7 +910,7 @@ test "shred.receiver: reports duplicate shred before fec completion" {
     );
     switch (first_result) {
         .unfinished_fec_set => |unfinished| {
-            try std.testing.expectEqual(@as(u8, 1), unfinished.total_shreds_received);
+            try std.testing.expectEqual(1, unfinished.total_shreds_received);
         },
         else => try std.testing.expect(false),
     }
@@ -924,15 +924,15 @@ test "shred.receiver: reports duplicate shred before fec completion" {
     );
     try std.testing.expectEqual(PacketSuccess.shred_already_seen, second_result);
 
-    try std.testing.expectEqual(@as(usize, 2), effects.parse_result_count);
+    try std.testing.expectEqual(2, effects.parse_result_count);
     try std.testing.expectEqual(true, effects.parse_results[0]);
     try std.testing.expectEqual(true, effects.parse_results[1]);
 
-    try std.testing.expectEqual(@as(usize, 2), effects.packet_result_count);
+    try std.testing.expectEqual(2, effects.packet_result_count);
     switch (effects.packet_results[0]) {
         .success => |success| switch (success) {
             .unfinished_fec_set => |unfinished| {
-                try std.testing.expectEqual(@as(u8, 1), unfinished.total_shreds_received);
+                try std.testing.expectEqual(1, unfinished.total_shreds_received);
             },
             else => try std.testing.expect(false),
         },
@@ -943,7 +943,7 @@ test "shred.receiver: reports duplicate shred before fec completion" {
         effects.packet_results[1],
     );
 
-    try std.testing.expectEqual(@as(usize, 0), effects.fec_completed_count);
+    try std.testing.expectEqual(0, effects.fec_completed_count);
 }
 
 test "InProgressSets basic usage" {
