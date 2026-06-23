@@ -748,7 +748,7 @@ fn signTestDataPacket(packet: *Packet, keypair: *const lib.gossip.KeyPair) !void
     shred.signature = try keypair.sign(&merkle_root.data);
 }
 
-test "shred.receiver: reports parse failure effects" {
+test "shred.receiver: empty packet" {
     const allocator = std.testing.allocator;
 
     var effects: ReceiverTestEffects = .{};
@@ -774,16 +774,16 @@ test "shred.receiver: reports parse failure effects" {
         ),
     );
 
-    try std.testing.expectEqual(@as(usize, 1), effects.parse_result_count);
+    try std.testing.expectEqual(1, effects.parse_result_count);
     try std.testing.expectEqual(false, effects.parse_results[0]);
 
-    try std.testing.expectEqual(@as(usize, 1), effects.packet_result_count);
+    try std.testing.expectEqual(1, effects.packet_result_count);
     switch (effects.packet_results[0]) {
         .failed => |err| try std.testing.expectEqual(error.PacketUnderMinHeaderSize, err),
         .success => try std.testing.expect(false),
     }
 
-    try std.testing.expectEqual(@as(usize, 0), effects.fec_completed_count);
+    try std.testing.expectEqual(0, effects.fec_completed_count);
 }
 
 test "shred.receiver: reports shred version mismatch after successful parse" {
