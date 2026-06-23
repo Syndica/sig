@@ -324,7 +324,17 @@ fn validateFeePayer(
         .Nonce => rent_collector.rent.minimumBalance(NonceVersions.SERIALIZED_SIZE),
     };
 
-    if (payer.lamports < min_balance) return .InsufficientFundsForFee;
+    // Matches agave's `lamports.checked_sub(min_balance).and_then(|v| v.checked_sub(fee))`
+    // guard: a payer that cannot cover BOTH the system-account minimum balance
+    // AND the fee must fail here as InsufficientFundsForFee, before the rent-state
+    // transition below has a chance to surface a misleading InsufficientFundsForRent.
+    // [agave] https://github.com/anza-xyz/agave/blob/64b616042450fa6553427471f70895f1dfe0cd86/svm/src/account_loader.rs#L320-L327
+    {
+        const lamports_min_balance_diff = std.math.sub(u64, payer.lamports, min_balance) catch
+            return .InsufficientFundsForFee;
+        _ = std.math.sub(u64, lamports_min_balance_diff, fee) catch
+            return .InsufficientFundsForFee;
+    }
 
     const pre_rent_state = rent_collector.getAccountRentState(
         payer.lamports,
@@ -378,14 +388,13 @@ fn checkLoadAndAdvanceMessageNonceAccount(
 ) AccountLoadError!?struct { LoadedAccount, u64 } {
     if (transaction.recent_blockhash.eql(next_durable_nonce.*)) return null;
 
-    const address, const nonce_account, const nonce_data =
+    const address, var nonce_account, const nonce_data =
         try loadMessageNonceAccount(
             allocator,
             transaction,
             account_reader,
             require_static_nonce_account,
         ) orelse return null;
-    defer nonce_account.deinit(allocator);
 
     const previous_lamports_per_signature = nonce_data.lamports_per_signature;
     const next_nonce_state = NonceVersions{
@@ -398,24 +407,27 @@ fn checkLoadAndAdvanceMessageNonceAccount(
         },
     };
 
-    const new_data = sig.bincode.writeAlloc(allocator, next_nonce_state, .{}) catch |e| switch (e) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return null,
-    };
-
-    const owned_account = LoadedAccount{
-        .pubkey = address,
-        .account = .{
-            .lamports = nonce_account.lamports,
-            .data = new_data,
-            .owner = nonce_account.owner,
-            .executable = nonce_account.executable,
-            .rent_epoch = nonce_account.rent_epoch,
-        },
+    // Mirror agave's `AccountSharedData::set_state`: `bincode::serialize_into`
+    // the new state over the existing buffer in place. Length and any trailing
+    // bytes past the serialized region are preserved, and both flow into the
+    // rollback account's data and `loaded_accounts_data_size`. Ownership of
+    // `nonce_account.data` transfers into the returned `LoadedAccount`.
+    _ = sig.bincode.writeToSlice(nonce_account.data, next_nonce_state, .{}) catch {
+        nonce_account.deinit(allocator);
+        return null;
     };
 
     return .{
-        owned_account,
+        .{
+            .pubkey = address,
+            .account = .{
+                .lamports = nonce_account.lamports,
+                .data = nonce_account.data,
+                .owner = nonce_account.owner,
+                .executable = nonce_account.executable,
+                .rent_epoch = nonce_account.rent_epoch,
+            },
+        },
         previous_lamports_per_signature,
     };
 }
