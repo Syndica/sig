@@ -135,6 +135,61 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
     var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
 
+    const Effects = struct {
+        const Self = @This();
+
+        pub fn reportFecSetReceived(self: Self, fec: *const lib.shred.DeshreddedFecSet) void {
+            _ = .{ self, fec };
+        }
+
+        pub fn reportFecSetInserted(self: Self, node: *const MerkleNode) void {
+            _ = .{ self, node };
+        }
+
+        pub fn reportFecSetDuplicate(self: Self, fec: *const lib.shred.DeshreddedFecSet) void {
+            _ = .{ self, fec };
+        }
+
+        pub fn reportFecSetOrphaned(self: Self, node: *const MerkleNode) void {
+            _ = .{ self, node };
+        }
+
+        pub fn reportFecSetAttached(
+            self: Self,
+            child: *const MerkleNode,
+            parent: *const MerkleNode,
+        ) void {
+            _ = .{ self, child, parent };
+        }
+
+        pub fn reportBlockRefAssigned(
+            self: Self,
+            node: *const MerkleNode,
+            block_ref: lib.replay.BlockRef,
+        ) void {
+            _ = .{ self, node, block_ref };
+        }
+
+        pub fn reportTransactionRequested(
+            self: Self,
+            block_ref: lib.replay.BlockRef,
+            tx_index: u32,
+            tx_ref: lib.replay.TransactionPool.ItemId,
+            tx_len: usize,
+        ) void {
+            _ = .{ self, block_ref, tx_index, tx_ref, tx_len };
+        }
+
+        pub fn reportAllTransactionsRequested(self: Self, block_ref: lib.replay.BlockRef) void {
+            _ = .{ self, block_ref };
+        }
+
+        pub fn reportBlockComplete(self: Self, block_ref: lib.replay.BlockRef) void {
+            _ = .{ self, block_ref };
+        }
+    };
+    const effects: Effects = .{};
+
     var first_slot: ?Slot = null; // this is a hack, remove it!
 
     task: switch (@as(enum { exec_response, fec_set, idle }, .idle)) {
@@ -177,6 +232,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             exec_state.n_transactions_completed += 1;
 
             if (exec_state.finished()) {
+                effects.reportBlockComplete(block_ref);
                 logger.info().logf(
                     "Slot {} ({}) complete! ({}/{})",
                     .{
@@ -201,16 +257,20 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
             zone.value(deshredded_fec_set.id.slot);
             zone.value(deshredded_fec_set.id.fec_set_idx);
+            effects.reportFecSetReceived(deshredded_fec_set);
 
             const inserted = (try insertFecSet(
                 logger,
                 deshredded_fec_set,
                 &forest,
                 rw.block_pool,
+                effects,
             )) orelse {
                 zone.text("already found");
+                effects.reportFecSetDuplicate(deshredded_fec_set);
                 continue :task .idle;
             };
+            effects.reportFecSetInserted(inserted);
 
             // This is an awful hack, we are treating the first received fec set as our root.
             // We should instead insert the last fec set of the rooted slot, similarly allocate it
@@ -244,6 +304,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 std.debug.assert(exec_states[rooted_block_ref.index().?].?.finished());
 
                 inserted.block_ref = first_block_ref;
+                effects.reportBlockRefAssigned(inserted, first_block_ref);
 
                 logger.info().logf("inserted first {f}", .{inserted});
             }
@@ -278,6 +339,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 exec_states,
                 deserial_states,
                 &exec_request_sender,
+                effects,
             );
 
             continue :task .idle;
@@ -295,6 +357,7 @@ fn attachParent(
     logger: tel.Logger("main"),
     node: *MerkleNode,
     forest: *MerkleForest,
+    effects: anytype,
 ) ?*MerkleNode {
     const zone = tracy.Zone.init(@src(), .{ .name = "attachParent" });
     defer zone.deinit();
@@ -342,6 +405,7 @@ fn attachParent(
             orphan_map_result.value_ptr.* = node; // TODO: double check this
         }
 
+        effects.reportFecSetOrphaned(node);
         return null; // no parent found
     };
 
@@ -356,6 +420,7 @@ fn attachParent(
     {
         std.debug.assert(node.parent == .null);
         node.parent = forest.pool.ptrToIndex(parent);
+        effects.reportFecSetAttached(node, parent);
 
         if (parent.child == .null) {
             @branchHint(.likely); // no equivocation or forking
@@ -461,6 +526,7 @@ fn setChildBlockRef(
     child: *MerkleNode,
     forest_pool: *MerkleForest.NodePool,
     block_pool: *lib.replay.BlockPool,
+    effects: anytype,
 ) !void {
     std.debug.assert(child.block_ref == .null);
     if (parent.block_ref == .null) return; // a)
@@ -491,6 +557,7 @@ fn setChildBlockRef(
         break :ref block_pool.ptrToIndex(new_block); // c)
 
     };
+    effects.reportBlockRefAssigned(child, child.block_ref);
 }
 
 fn setChildTreeBlockRefs(
@@ -498,6 +565,7 @@ fn setChildTreeBlockRefs(
     child: *MerkleNode,
     forest_pool: *MerkleForest.NodePool,
     block_pool: *lib.replay.BlockPool,
+    effects: anytype,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "setChildTreeBlockRefs" });
     defer zone.deinit();
@@ -506,14 +574,14 @@ fn setChildTreeBlockRefs(
     // doesn't apply here)
     std.debug.assert(child.parent != .null);
 
-    try setChildBlockRef(parent, child, forest_pool, block_pool);
+    try setChildBlockRef(parent, child, forest_pool, block_pool, effects);
 
     // recursively apply BlockRefs to reachable merkle nodes
     // NOTE: it is possible to do this without recursion *or* a stack, as a non-null block_ref can
     //       be used to mark a node as visited.
     var maybe_child: ?*MerkleNode = child.child.ptr(forest_pool);
     while (maybe_child) |child_node| {
-        try setChildTreeBlockRefs(child, child_node, forest_pool, block_pool);
+        try setChildTreeBlockRefs(child, child_node, forest_pool, block_pool, effects);
         maybe_child = child_node.sibling.ptr(forest_pool);
     }
 }
@@ -526,6 +594,7 @@ fn insertFecSet(
     // block associated parameters
     // additional blocks may be allocated when inserting a fec set
     block_pool: *lib.replay.BlockPool,
+    effects: anytype,
 ) error{OutOfSpace}!?*MerkleNode {
     const zone = tracy.Zone.init(@src(), .{ .name = "insertFecSet" });
     defer zone.deinit();
@@ -561,12 +630,12 @@ fn insertFecSet(
         break :newly_inserted node;
     };
 
-    const maybe_parent = attachParent(logger, node, forest);
+    const maybe_parent = attachParent(logger, node, forest, effects);
     attachChildren(node, forest);
 
     // "propagate" BlockRefs (see `setChildBlockRef` for details)
     if (maybe_parent) |parent| {
-        try setChildTreeBlockRefs(parent, node, &forest.pool, block_pool);
+        try setChildTreeBlockRefs(parent, node, &forest.pool, block_pool, effects);
     }
 
     return node;
@@ -591,6 +660,7 @@ fn maybeContinueBlockExec(
     // for sending exec requests
     // NOTE: we should instead be sending to the transaction scheduler (when it is implemented)
     exec_request_sender: *replay.ExecReqResponse.RequestRing.Iterator(.writer),
+    effects: anytype,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "maybeContinueBlockExec" });
     defer zone.deinit();
@@ -640,6 +710,7 @@ fn maybeContinueBlockExec(
                     block_exec_states,
                     block_deserial_states,
                     exec_request_sender,
+                    effects,
                 );
             }
             current.* = .default;
@@ -693,6 +764,7 @@ fn maybeContinueBlockExec(
                     },
                 },
             };
+            effects.reportTransactionRequested(block_ref, tx_index, tx_ref, tx.len);
         }
     }
 
@@ -715,6 +787,7 @@ fn maybeContinueBlockExec(
     // // start_of_batch should be false if we have finished deserialising.
     // std.debug.assert(!block_deserial_state.start_of_batch);
     exec_state.all_transactions_requested = true;
+    effects.reportAllTransactionsRequested(block_ref);
 
     logger.info().logf(
         "requested all transactions for slot {} ({})",
@@ -722,6 +795,7 @@ fn maybeContinueBlockExec(
     );
 
     if (exec_state.finished()) {
+        effects.reportBlockComplete(block_ref);
         logger.info().logf(
             "Slot {} ({}) (already) complete! ({}/{})",
             .{
@@ -746,6 +820,7 @@ fn maybeContinueBlockExec(
             block_exec_states,
             block_deserial_states,
             exec_request_sender,
+            effects,
         );
 
         maybe_child = child.sibling.ptr(forest_pool);
@@ -1295,8 +1370,32 @@ test "MerkleForest tree put" {
     pool.init();
 
     const logger = tel.Logger("main").noop;
+    const TestEffects = struct {
+        const Self = @This();
 
-    const a_inserted = (try insertFecSet(logger, &a, &tree, pool)).?;
+        pub fn reportFecSetOrphaned(self: Self, node: *const MerkleNode) void {
+            _ = .{ self, node };
+        }
+
+        pub fn reportFecSetAttached(
+            self: Self,
+            child: *const MerkleNode,
+            parent: *const MerkleNode,
+        ) void {
+            _ = .{ self, child, parent };
+        }
+
+        pub fn reportBlockRefAssigned(
+            self: Self,
+            node: *const MerkleNode,
+            block_ref: lib.replay.BlockRef,
+        ) void {
+            _ = .{ self, node, block_ref };
+        }
+    };
+    const effects: TestEffects = .{};
+
+    const a_inserted = (try insertFecSet(logger, &a, &tree, pool, effects)).?;
     try std.testing.expect(a_inserted.parent == .null);
     try std.testing.expect(a_inserted.child == .null);
     try std.testing.expect(a_inserted.block_ref == .null);
@@ -1305,23 +1404,23 @@ test "MerkleForest tree put" {
     //       case. In a real environment this would be the last fec set in the rooted slot.
     a_inserted.block_ref = .fromInt(8053);
 
-    const d_inserted = (try insertFecSet(logger, &d, &tree, pool)).?;
+    const d_inserted = (try insertFecSet(logger, &d, &tree, pool, effects)).?;
     try std.testing.expect(d_inserted.parent == .null);
     try std.testing.expect(d_inserted.child == .null);
     try std.testing.expect(d_inserted.block_ref == .null); // no path to a => null
 
-    const b_inserted = (try insertFecSet(logger, &b, &tree, pool)).?;
+    const b_inserted = (try insertFecSet(logger, &b, &tree, pool, effects)).?;
     try std.testing.expect(b_inserted.parent != .null);
     try std.testing.expect(b_inserted.child == .null);
     try std.testing.expect(b_inserted.block_ref == replay.BlockRef.fromInt(8053));
 
-    const c_inserted = (try insertFecSet(logger, &c, &tree, pool)).?;
+    const c_inserted = (try insertFecSet(logger, &c, &tree, pool, effects)).?;
     try std.testing.expect(c_inserted.parent != .null);
     try std.testing.expect(c_inserted.child != .null);
     try std.testing.expect(c_inserted.block_ref == replay.BlockRef.fromInt(8053));
     try std.testing.expect(d_inserted.block_ref == replay.BlockRef.fromInt(8053));
 
-    const e_inserted = (try insertFecSet(logger, &e, &tree, pool)).?;
+    const e_inserted = (try insertFecSet(logger, &e, &tree, pool, effects)).?;
     try std.testing.expect(e_inserted.parent != .null);
     try std.testing.expect(e_inserted.child == .null);
     // new slot => new BlockRef
@@ -1329,9 +1428,9 @@ test "MerkleForest tree put" {
     try std.testing.expect(e_inserted.block_ref != replay.BlockRef.fromInt(8053));
 
     // We cannot insert duplicates
-    try std.testing.expectEqual(null, try insertFecSet(logger, &a, &tree, pool));
-    try std.testing.expectEqual(null, try insertFecSet(logger, &b, &tree, pool));
-    try std.testing.expectEqual(null, try insertFecSet(logger, &c, &tree, pool));
-    try std.testing.expectEqual(null, try insertFecSet(logger, &d, &tree, pool));
-    try std.testing.expectEqual(null, try insertFecSet(logger, &e, &tree, pool));
+    try std.testing.expectEqual(null, try insertFecSet(logger, &a, &tree, pool, effects));
+    try std.testing.expectEqual(null, try insertFecSet(logger, &b, &tree, pool, effects));
+    try std.testing.expectEqual(null, try insertFecSet(logger, &c, &tree, pool, effects));
+    try std.testing.expectEqual(null, try insertFecSet(logger, &d, &tree, pool, effects));
+    try std.testing.expectEqual(null, try insertFecSet(logger, &e, &tree, pool, effects));
 }
