@@ -627,6 +627,23 @@ fn authorize(
                 return InstructionError.InvalidInstructionData;
             }
 
+            // Match agave's call order strictly: the BLS PoP is verified
+            // (consuming 34,500 CUs and returning InvalidArgument on
+            // failure) BEFORE the target epoch is computed and the epoch
+            // authorized voter is looked up. In agave both of the latter
+            // happen as an argument to / inside `set_new_authorized_voter`,
+            // which is called *after* `verify_bls_proof_of_possession(...)?`.
+            // Computing `leader_schedule_epoch + 1` first would let an
+            // overflow (e.g. leader_schedule_epoch == u64::MAX) short-circuit
+            // with InvalidAccountData and skip the PoP verify + CU charge.
+            // [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L732-L763
+            try verifyBlsProofOfPossession(
+                ic.tc,
+                &vote_account.pubkey,
+                &args.bls_pubkey,
+                &args.bls_proof_of_possession,
+            );
+
             const target_epoch = std.math.add(u64, clock.leader_schedule_epoch, 1) catch {
                 return InstructionError.InvalidAccountData;
             };
@@ -636,17 +653,8 @@ fn authorize(
                 clock.epoch,
             );
 
-            // Match agave: the withdrawer-signer check is non-fatal
-            // here (its result is OR-ed against the epoch voter). The
-            // PoP verify still consumes its CUs even if neither is a
-            // signer, so we mirror agave's call order strictly.
-            try verifyBlsProofOfPossession(
-                ic.tc,
-                &vote_account.pubkey,
-                &args.bls_pubkey,
-                &args.bls_proof_of_possession,
-            );
-
+            // The withdrawer-signer check is non-fatal here (its result is
+            // OR-ed against the epoch voter).
             validateIsSigner(vote_state.withdrawerKey().*, signers) catch {
                 try validateIsSigner(epoch_authorized_voter, signers);
             };
