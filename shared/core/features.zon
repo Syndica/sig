@@ -1362,7 +1362,7 @@
         .name = "accounts_lt_hash",
         .pubkey = "LTHasHQX6661DaDD4S6A2TFi6QBuiwXKv66fB1obfHq",
         .description = "SIMD-0215: enables lattice-based accounts hash",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "remove_accounts_delta_hash",
@@ -1472,7 +1472,7 @@
         .name = "mask_out_rent_epoch_in_vm_serialization",
         .pubkey = "RENtePQcDLrAbxAsP3k8dwVcnNYQ466hi2uKvALjnXx",
         .description = "SIMD-0267: Sets rent_epoch to a constant in the VM",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "disable_zk_elgamal_proof_program",
@@ -1670,12 +1670,12 @@
     },
     .{
         .name = "discard_unexpected_data_complete_shreds",
-        .pubkey = "dcomRRWHXP1FVWPqi9Mm4oxJhF4ehC795SvAtUdA9os",
+        .pubkey = "disCA4efguFL6Wqa4pGdG7jpjC7C5uiKzKnhEBqchBe",
         .description = "SIMD-0337: Markers for Alpenglow Fast Leader Handover, DATA_COMPLETE_SHRED placement rules",
         .status = .unsupported,
         .note =
         \\ TODO: Low Priority.
-        \\ Not scheduled for activation.
+        \\ Scheduled for activation in agave v4.1 release cycle.
         \\ Implement as part of alpenglow in v2.
         ,
     },

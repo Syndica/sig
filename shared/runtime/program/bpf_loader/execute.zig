@@ -124,10 +124,6 @@ fn executeBpfProgram(
         .virtual_address_space_adjustments,
         ic.tc.slot,
     );
-    const mask_out_rent_epoch_in_vm_serialization = ic.tc.feature_set.active(
-        .mask_out_rent_epoch_in_vm_serialization,
-        ic.tc.slot,
-    );
     const direct_account_pointers_in_program_input = ic.tc.feature_set.active(
         .direct_account_pointers_in_program_input,
         ic.tc.slot,
@@ -139,7 +135,6 @@ fn executeBpfProgram(
         ic,
         account_data_direct_mapping,
         virtual_address_space_adjustments,
-        mask_out_rent_epoch_in_vm_serialization,
         direct_account_pointers_in_program_input,
     );
     defer serialized.deinit(allocator);

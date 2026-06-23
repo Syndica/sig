@@ -115,10 +115,6 @@ fn executeVmTest(
         .virtual_address_space_adjustments,
         slot,
     );
-    const mask_out_rent_epoch_in_vm_serialization = tc.feature_set.active(
-        .mask_out_rent_epoch_in_vm_serialization,
-        slot,
-    );
     const direct_account_pointers_in_program_input = tc.feature_set.active(
         .direct_account_pointers_in_program_input,
         slot,
@@ -128,7 +124,6 @@ fn executeVmTest(
         &ic,
         direct_mapping,
         virtual_address_space_adjustments,
-        mask_out_rent_epoch_in_vm_serialization,
         direct_account_pointers_in_program_input,
     );
     defer serialized.deinit(allocator);
