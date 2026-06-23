@@ -67,8 +67,12 @@ pub const LoadedTransactionAccounts = struct {
         /// non-zero
         requested_loaded_accounts_data_size_limit: u32,
     ) error{MaxLoadedAccountsDataSizeExceeded}!void {
-        const account_data_sz = std.math.cast(u32, account_data_size) orelse
+        // On u32 overflow, saturate the tally so a downstream clamp to the
+        // requested limit yields the limit, matching Agave.
+        const account_data_sz = std.math.cast(u32, account_data_size) orelse {
+            self.loaded_accounts_data_size = std.math.maxInt(u32);
             return error.MaxLoadedAccountsDataSizeExceeded;
+        };
 
         self.loaded_accounts_data_size +|= account_data_sz;
 
@@ -99,6 +103,11 @@ pub const PreparedAccount = struct {
 pub const AccountLoadError = runtime.execution_interfaces.AccountLoadError;
 
 /// Loads all the accounts for a transaction and reports account loading errors.
+///
+/// On failure, `running_data_size_out` is set to the partial loaded data size
+/// at the point of failure (un-clamped); callers should clamp it to the
+/// requested limit. Used by `define_ltds_fee_only_semantics` (SIMD-186
+/// amendment) to report `loaded_accounts_data_size` for fees-only transactions.
 pub fn loadTransactionAccounts(
     account_reader: AccountReader,
     allocator: Allocator,
@@ -106,6 +115,7 @@ pub fn loadTransactionAccounts(
     rent_collector: *const RentCollector,
     compute_budget_limits: *const ComputeBudgetLimits,
     fee_payer: PreparedAccount,
+    running_data_size_out: *u32,
 ) AccountLoadError!TransactionResult(LoadedTransactionAccounts) {
     var zone = tracy.Zone.init(@src(), .{ .name = "loadTransactionAccounts" });
     defer zone.deinit();
@@ -118,6 +128,7 @@ pub fn loadTransactionAccounts(
         rent_collector,
         compute_budget_limits,
         fee_payer,
+        running_data_size_out,
     );
 
     return .{
@@ -146,6 +157,7 @@ fn loadTransactionAccountsInner(
     rent_collector: *const RentCollector,
     compute_budget_limits: *const ComputeBudgetLimits,
     fee_payer: PreparedAccount,
+    running_data_size_out: *u32,
 ) InternalLoadError!LoadedTransactionAccounts {
     var fee_payer_consumed = false;
     errdefer if (!fee_payer_consumed) fee_payer.account.deinit(allocator);
@@ -154,6 +166,8 @@ fn loadTransactionAccountsInner(
 
     var loaded = LoadedTransactionAccounts.DEFAULT;
     errdefer for (loaded.accounts.slice()) |account| account.deinit(allocator);
+    // Expose the partial tally to the fees-only path on error.
+    errdefer running_data_size_out.* = loaded.loaded_accounts_data_size;
 
     try loaded.increase(
         transaction.num_lookup_tables *| ADDRESS_LOOKUP_TABLE_BASE_SIZE,
@@ -468,6 +482,7 @@ test "loadTransactionAccounts empty transaction" {
         .is_simple_vote_transaction = false,
     };
 
+    var running_data_size: u32 = 0;
     const tx_accounts = try loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
@@ -475,9 +490,12 @@ test "loadTransactionAccounts empty transaction" {
         &env.rent_collector,
         &env.compute_budget_limits,
         .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
+        &running_data_size,
     );
 
     try std.testing.expectEqual(0, tx_accounts.accounts.len);
+    // Success path leaves `running_data_size_out` untouched.
+    try std.testing.expectEqual(0, running_data_size);
 }
 
 test "loadTransactionAccounts sysvar instruction" {
@@ -513,6 +531,7 @@ test "loadTransactionAccounts sysvar instruction" {
         .is_simple_vote_transaction = false,
     };
 
+    var running_data_size: u32 = 0;
     const tx_accounts = try loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
@@ -520,6 +539,7 @@ test "loadTransactionAccounts sysvar instruction" {
         &env.rent_collector,
         &env.compute_budget_limits,
         .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
+        &running_data_size,
     );
     defer tx_accounts.deinit(allocator);
 
@@ -530,6 +550,8 @@ test "loadTransactionAccounts sysvar instruction" {
     try std.testing.expectEqual(0, tx_accounts.rent_collected);
     try std.testing.expectEqual(0, tx_accounts.loaded_accounts_data_size);
     try std.testing.expectEqual(0, tx_accounts.rent_debits.len);
+    // Success path leaves `running_data_size_out` untouched.
+    try std.testing.expectEqual(0, running_data_size);
 }
 
 test "accumulated size" {
@@ -654,6 +676,7 @@ test "load accounts rent paid" {
         },
     };
 
+    var running_data_size: u32 = 0;
     const loaded_accounts = try loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
@@ -665,6 +688,7 @@ test "load accounts rent paid" {
             .loaded_size = fee_payer_account.data.len,
             .rent_collected = 0,
         },
+        &running_data_size,
     );
     defer loaded_accounts.deinit(allocator);
 
@@ -672,6 +696,8 @@ test "load accounts rent paid" {
     // The fee payer's rent was already collected before being passed to loadTransactionAccounts,
     // so only the instruction account's rent is counted here (which is 0 because it's executable).
     try std.testing.expectEqual(0, loaded_accounts.rent_collected);
+    // Success path leaves `running_data_size_out` untouched.
+    try std.testing.expectEqual(0, running_data_size);
 }
 
 test "load accounts with simd 186 and loaderv3 program" {
@@ -806,6 +832,7 @@ test "load accounts with simd 186 and loaderv3 program" {
         },
     };
 
+    var running_data_size: u32 = 0;
     const loaded_accounts = try loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
@@ -817,11 +844,14 @@ test "load accounts with simd 186 and loaderv3 program" {
             .loaded_size = fee_payer_account.data.len,
             .rent_collected = 0,
         },
+        &running_data_size,
     );
     defer loaded_accounts.deinit(allocator);
 
     // fee payer: 1024 (passed directly), instruction: 64 + 17, program: 64 + bincode(State), programdata: 64 + 1024
     try std.testing.expectEqual(2293, loaded_accounts.loaded_accounts_data_size);
+    // Success path leaves `running_data_size_out` untouched.
+    try std.testing.expectEqual(0, running_data_size);
 }
 
 test "constructInstructionsAccount" {
@@ -943,6 +973,7 @@ test "load tx too large" {
     var tx = try emptyTxWithKeys(allocator, &.{address});
     defer tx.accounts.deinit(allocator);
 
+    var running_data_size: u32 = 0;
     const loaded_accounts_result = loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
@@ -954,9 +985,15 @@ test "load tx too large" {
             .loaded_size = fee_payer_account.data.len,
             .rent_collected = 0,
         },
+        &running_data_size,
     );
 
     try std.testing.expectError(error.MaxLoadedAccountsDataSizeExceeded, loaded_accounts_result);
+    // On `MaxLoadedAccountsDataSizeExceeded`, the partial tally exposed via
+    // `running_data_size_out` reflects the cumulative loaded size including
+    // the offending account (the fee payer here). Consumed by the
+    // `define_ltds_fee_only_semantics` branch.
+    try std.testing.expectEqual(account_data.len, running_data_size);
 }
 
 test "dont double count programdata size" {
@@ -1067,6 +1104,7 @@ test "load, create new account" {
     var tx = try emptyTxWithKeys(allocator, &.{new_account_pk});
     defer tx.accounts.deinit(allocator);
 
+    var running_data_size: u32 = 0;
     const loaded_accounts = try loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
@@ -1074,12 +1112,15 @@ test "load, create new account" {
         &env.rent_collector,
         &env.compute_budget_limits,
         .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
+        &running_data_size,
     );
     defer loaded_accounts.deinit(allocator);
 
     try std.testing.expectEqual(1, loaded_accounts.accounts.len);
     try std.testing.expectEqual(0, loaded_accounts.rent_collected);
     try std.testing.expectEqual(0, loaded_accounts.accounts.slice()[0].account.lamports);
+    // Success path leaves `running_data_size_out` untouched.
+    try std.testing.expectEqual(0, running_data_size);
 }
 
 test "invalid program owner" {
@@ -1113,6 +1154,7 @@ test "invalid program owner" {
         },
     };
 
+    var running_data_size: u32 = 0;
     const loaded_accounts_result = loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
@@ -1120,9 +1162,13 @@ test "invalid program owner" {
         &env.rent_collector,
         &env.compute_budget_limits,
         .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
+        &running_data_size,
     );
 
     try std.testing.expectError(error.InvalidProgramForExecution, loaded_accounts_result);
+    // Fee payer is EMPTY (loaded_size=0) and the failure happens before any
+    // other account contributes to the tally.
+    try std.testing.expectEqual(0, running_data_size);
 }
 
 test "missing program account" {
@@ -1146,6 +1192,7 @@ test "missing program account" {
         },
     };
 
+    var running_data_size: u32 = 0;
     const loaded_accounts_result = loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
@@ -1153,9 +1200,13 @@ test "missing program account" {
         &env.rent_collector,
         &env.compute_budget_limits,
         .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
+        &running_data_size,
     );
 
     try std.testing.expectError(error.ProgramAccountNotFound, loaded_accounts_result);
+    // Fee payer is EMPTY (loaded_size=0) and the failure happens before any
+    // other account contributes to the tally.
+    try std.testing.expectEqual(0, running_data_size);
 }
 
 test "deallocate account" {
@@ -1189,6 +1240,7 @@ test "deallocate account" {
     accountsdb.getPtr(dying_account).?.lamports = 0;
 
     // load with the account being dead
+    var running_data_size: u32 = 0;
     const loaded_accounts = try loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
@@ -1196,6 +1248,7 @@ test "deallocate account" {
         &env.rent_collector,
         &env.compute_budget_limits,
         .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
+        &running_data_size,
     );
     defer loaded_accounts.deinit(allocator);
 
@@ -1203,6 +1256,8 @@ test "deallocate account" {
     try std.testing.expectEqual(1, loaded_accounts.accounts.len);
     try std.testing.expectEqual(0, loaded_accounts.accounts.slice()[0].account.data.len);
     try std.testing.expectEqual(0, loaded_accounts.accounts.slice()[0].account.lamports);
+    // Success path leaves `running_data_size_out` untouched.
+    try std.testing.expectEqual(0, running_data_size);
 }
 
 test "load v3 program" {
