@@ -112,7 +112,6 @@ const DeserialStates = [lib.replay.BlockPool.capacity]?BlockDeserialState;
 const BlockExecStates = [lib.replay.BlockPool.capacity]?BlockExecState;
 
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
-    _ = runner;
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
 
@@ -144,11 +143,13 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             while (true) {
                 if (exec_response_receiver.peek() != null) continue :task .exec_response;
                 if (deshredded_iter.peek() != null) continue :task .fec_set;
+                try runner.activity.signalIdleSpinning();
             }
         },
         .exec_response => {
             const zone = tracy.Zone.init(@src(), .{ .name = "exec_response" });
             defer zone.deinit();
+            try runner.activity.signalActive();
 
             const response: *const lib.replay.ExecResponse = exec_response_receiver.next() orelse
                 unreachable;
@@ -187,6 +188,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         .fec_set => {
             const zone = tracy.Zone.init(@src(), .{ .name = "received fec set" });
             defer zone.deinit();
+            try runner.activity.signalActive();
 
             const deshredded_fec_set: *const lib.shred.DeshreddedFecSet =
                 deshredded_iter.next() orelse unreachable;
