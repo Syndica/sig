@@ -197,6 +197,11 @@ pub const Service = struct {
 /// lifetime of the services (threads point into it), which is why `spawn` takes
 /// it as an out parameter rather than returning it by value.
 ///
+/// Each field of `Topology` must be a `ServiceLayout(spec)`. Each field name is
+/// used to look up the service's main function (`svc_main_<name>`) and fault
+/// handler. Regions are passed in field declaration order, matching what
+/// `start_service.zig` expects.
+///
 /// The usage flow is:
 ///  1. Create an undefined `Children` in a pinned memory location.
 ///  2. Call `spawn`. This initializes the struct and spawns every service. Do
@@ -211,32 +216,34 @@ pub fn Children(Topo: type) type {
         /// Used only in `.threaded` mode to wake up the parent on first service exit.
         thread_exit: ThreadExit,
 
-        /// Spawn every service described by `topology` in one batch. Each field of
-        /// `topology` must be a `ServiceLayout(spec)`. Each field name is used to look up
-        /// the service's main function (`svc_main_<name>`) and fault handler. Regions are
-        /// passed in field declaration order, matching what `start_service.zig` expects.
+        /// Spawn every service described by `topology` in one batch.
         ///
-        /// `out` is treated as undefined on invocation, and it is initialized by this
-        /// function. The caller's storage is what the threads (in threaded mode) hold
-        /// pointers into, so it must outlive the services. After this returns, call wait,
-        /// cancel, or isActive on `out`.
-        pub fn spawn(out: *Children(Topo), mode: Mode, topology: Topo) !void {
+        /// This is effectively the init function for `Children`. `self` is
+        /// treated as undefined on invocation. The caller's storage is what the
+        /// threads (in threaded mode) hold pointers into, so it must outlive
+        /// the services.
+        pub fn spawn(self: *Children(Topo), mode: Mode, topology: Topo) !void {
             const fields = @typeInfo(@TypeOf(topology)).@"struct".fields;
             if (fields.len > max_services)
                 @compileError("topology has more than max_services entries");
 
-            out.mode = mode;
+            self.* = .{
+                .mode = mode,
+                .services_buf = undefined,
+                .services_len = 0,
+                .thread_exit = .{},
+            };
 
             inline for (fields, 0..) |svc_field, i| {
                 const layout = @field(topology, svc_field.name);
-                out.services_buf[i] =
-                    try spawnOne(svc_field.name, layout, mode, &out.thread_exit, i);
+                self.services_buf[i] =
+                    try spawnOne(svc_field.name, layout, mode, &self.thread_exit, i);
             }
-            out.services_len = fields.len;
+            self.services_len = fields.len;
 
             // Map runner regions in the parent. Sandboxed children fork without these
             // mappings, so the runner pages remain isolated to the parent.
-            for (out.slice()) |*svc| {
+            for (self.slice()) |*svc| {
                 svc.runner = try svc.runner_memfd.mmapStaticSize(.rw, lib.runner.Region, .{});
                 svc.activity_view = svc.runner.activity.runnerView();
             }
