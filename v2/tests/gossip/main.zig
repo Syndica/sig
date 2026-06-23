@@ -85,8 +85,8 @@ pub fn main() !void {
 
     // -- Spawn services -- //
 
-    var children: topology.Children = undefined;
-    try topology.spawn(&children, .sandboxed, Topology{
+    var children: topology.Children(Topology) = undefined;
+    try children.spawn(.sandboxed, .{
         .gossip = .{
             .ro = .{ .config = gossip_config.finish() },
             .rw = .{

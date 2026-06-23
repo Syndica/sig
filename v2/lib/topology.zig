@@ -111,10 +111,10 @@ pub fn Region(comptime T: type) type {
 ///
 /// ```zig
 /// const my_service: ServiceSpec = .{
-///     ReadOnly: struct {
+///     .ReadOnly = struct {
 ///         config: *Config,
 ///     },
-///     ReadWrite: struct {
+///     .ReadWrite = struct {
 ///         ring: *Ring,
 ///     },
 /// };
@@ -177,102 +177,182 @@ pub fn countRegionShares(TopologyType: type, RegionType: type) comptime_int {
     return count;
 }
 
-// -- Spawn services -- //
+// -- Spawn and track Services -- //
 
-/// Spawn every service described by `topology` in one batch. Each field of
-/// `topology` must be a `ServiceLayout(spec)`. Each field name is used to look up
-/// the service's main function (`svc_main_<name>`) and fault handler. Regions are
-/// passed in field declaration order, matching what `start_service.zig` expects.
+/// State for one spawned service: pid (sandboxed) or thread (threaded), plus the
+/// runner memfd we'll later map in the parent. Memfds and threads are owned by the parent.
+pub const Service = struct {
+    label: [:0]const u8,
+    runner_memfd: Memfd,
+    runner: *lib.runner.Region,
+    activity_view: lib.runner.Activity.RunnerView,
+    slot: union(Mode) {
+        sandboxed: linux.pid_t,
+        threaded: std.Thread,
+    },
+};
+
+/// Represents every service in the topology once spawned, plus a `ThreadExit`
+/// used in threaded mode. The address of this struct must be stable for the
+/// lifetime of the services (threads point into it), which is why `spawn` takes
+/// it as an out parameter rather than returning it by value.
 ///
-/// `out` is treated as undefined on invocation, and it is initialized by this
-/// function. The caller's storage is what the threads (in threaded mode) hold
-/// pointers into, so it must outlive the services. After this returns, call wait,
-/// cancel, or isActive on `out`.
-pub fn spawn(out: *Children, mode: Mode, topology: anytype) !void {
-    const fields = @typeInfo(@TypeOf(topology)).@"struct".fields;
-    if (fields.len > max_services) @compileError("topology has more than max_services entries");
+/// The usage flow is:
+///  1. Create an undefined `Children` in a pinned memory location.
+///  2. Call `spawn`. This initializes the struct and spawns every service. Do
+///     not call spawn multiple times.
+///  3. After `spawn` returns, the services are running and the caller can use
+///     methods like `wait`, `cancel`, or `isActive` on the struct.
+pub fn Children(Topo: type) type {
+    return struct {
+        mode: Mode,
+        services_buf: [max_services]Service,
+        services_len: usize,
+        /// Used only in `.threaded` mode to wake up the parent on first service exit.
+        thread_exit: ThreadExit,
 
-    out.* = .{ .mode = mode };
+        /// Spawn every service described by `topology` in one batch. Each field of
+        /// `topology` must be a `ServiceLayout(spec)`. Each field name is used to look up
+        /// the service's main function (`svc_main_<name>`) and fault handler. Regions are
+        /// passed in field declaration order, matching what `start_service.zig` expects.
+        ///
+        /// `out` is treated as undefined on invocation, and it is initialized by this
+        /// function. The caller's storage is what the threads (in threaded mode) hold
+        /// pointers into, so it must outlive the services. After this returns, call wait,
+        /// cancel, or isActive on `out`.
+        pub fn spawn(out: *Children(Topo), mode: Mode, topology: Topo) !void {
+            const fields = @typeInfo(@TypeOf(topology)).@"struct".fields;
+            if (fields.len > max_services)
+                @compileError("topology has more than max_services entries");
 
-    inline for (fields, 0..) |svc_field, i| {
-        const layout = @field(topology, svc_field.name);
-        out.services_buf[i] = try spawnOne(svc_field.name, layout, mode, &out.thread_exit, i);
-    }
-    out.services_len = fields.len;
+            out.mode = mode;
 
-    // Map runner regions in the parent. Sandboxed children fork without these
-    // mappings, so the runner pages remain isolated to the parent.
-    for (out.slice()) |*svc| {
-        svc.runner = try svc.runner_memfd.mmapStaticSize(.rw, lib.runner.Region, .{});
-        svc.activity_view = svc.runner.activity.runnerView();
-    }
-}
+            inline for (fields, 0..) |svc_field, i| {
+                const layout = @field(topology, svc_field.name);
+                out.services_buf[i] =
+                    try spawnOne(svc_field.name, layout, mode, &out.thread_exit, i);
+            }
+            out.services_len = fields.len;
 
-fn spawnOne(
-    comptime svc_name: [:0]const u8,
-    layout: anytype,
-    mode: Mode,
-    thread_exit: *ThreadExit,
-    service_idx: u16,
-) !Service {
-    var rw_buf: [max_regions_per_service]Memfd = undefined;
-    var ro_buf: [max_regions_per_service]Memfd = undefined;
-    const rw_count = collectRegions(@TypeOf(layout.rw), layout.rw, &rw_buf);
-    const ro_count = collectRegions(@TypeOf(layout.ro), layout.ro, &ro_buf);
+            // Map runner regions in the parent. Sandboxed children fork without these
+            // mappings, so the runner pages remain isolated to the parent.
+            for (out.slice()) |*svc| {
+                svc.runner = try svc.runner_memfd.mmapStaticSize(.rw, lib.runner.Region, .{});
+                svc.activity_view = svc.runner.activity.runnerView();
+            }
+        }
 
-    const entrypoint = @extern(ServiceFn, .{ .name = "svc_main_" ++ svc_name });
+        fn spawnOne(
+            comptime svc_name: [:0]const u8,
+            layout: @FieldType(Topo, svc_name),
+            mode: Mode,
+            thread_exit: *ThreadExit,
+            service_idx: u16,
+        ) !Service {
+            var rw_buf: [max_regions_per_service]Memfd = undefined;
+            var ro_buf: [max_regions_per_service]Memfd = undefined;
+            const rw_count = collectRegions(@TypeOf(layout.rw), layout.rw, &rw_buf);
+            const ro_count = collectRegions(@TypeOf(layout.ro), layout.ro, &ro_buf);
 
-    const runner_memfd: Memfd = try .init(.{
-        .name = "runner_" ++ svc_name,
-        .size = @sizeOf(lib.runner.Region),
-    });
+            const entrypoint = @extern(ServiceFn, .{ .name = "svc_main_" ++ svc_name });
 
-    const args: Args = .{
-        .runner_memfd = runner_memfd,
-        .rw = rw_buf[0..rw_count],
-        .ro = ro_buf[0..ro_count],
-    };
+            const runner_memfd: Memfd = try .init(.{
+                .name = "runner_" ++ svc_name,
+                .size = @sizeOf(lib.runner.Region),
+            });
 
-    return switch (mode) {
-        .sandboxed => .{
-            .label = svc_name,
-            .runner_memfd = runner_memfd,
-            .slot = .{ .sandboxed = try spawnSandboxed(svc_name, entrypoint, args) },
-        },
-        .threaded => blk: {
-            var threaded_args = try resolveArgs(.{
+            const args: Args = .{
                 .runner_memfd = runner_memfd,
                 .rw = rw_buf[0..rw_count],
                 .ro = ro_buf[0..ro_count],
-            });
-            threaded_args.thread_crash_ctx = thread_exit;
-            threaded_args.thread_crash_fn = ThreadExit.signalCrashCallback;
-            threaded_args.service_idx = service_idx;
-
-            const ThreadEntry = struct {
-                fn run(
-                    ep: ServiceFn,
-                    rargs: lib.ipc.ResolvedArgs,
-                    idx: u16,
-                    exit: *ThreadExit,
-                ) void {
-                    tracy.setThreadName("svc: " ++ svc_name);
-                    ep(rargs);
-                    exit.signalExit(idx);
-                }
             };
 
-            const thread = try std.Thread.spawn(
-                .{},
-                ThreadEntry.run,
-                .{ entrypoint, threaded_args, service_idx, thread_exit },
-            );
-            break :blk .{
-                .label = svc_name,
-                .runner_memfd = runner_memfd,
-                .slot = .{ .threaded = thread },
+            return switch (mode) {
+                .sandboxed => .{
+                    .label = svc_name,
+                    .runner_memfd = runner_memfd,
+                    .runner = undefined, // initialized in `spawn` after all are spawned
+                    .activity_view = undefined, // initialized in `spawn` after all are spawned
+                    .slot = .{ .sandboxed = try spawnSandboxed(svc_name, entrypoint, args) },
+                },
+                .threaded => .{
+                    .label = svc_name,
+                    .runner_memfd = runner_memfd,
+                    .runner = undefined, // initialized in `spawn` after all are spawned
+                    .activity_view = undefined, // initialized in `spawn` after all are spawned
+                    .slot = .{ .threaded = try spawnThreaded(
+                        svc_name,
+                        entrypoint,
+                        args,
+                        thread_exit,
+                        service_idx,
+                    ) },
+                },
             };
-        },
+        }
+
+        /// Returns true if any service is still active.
+        pub fn isActive(self: *Children(Topo)) bool {
+            for (self.slice()) |*svc| {
+                if (svc.activity_view.isActive()) return true;
+            }
+            return false;
+        }
+
+        /// Send a cancel signal to all services.
+        pub fn cancel(self: *Children(Topo)) void {
+            for (self.slice()) |*svc| svc.activity_view.cancel();
+        }
+
+        /// Block until the first service exits, then dump its diagnostics.
+        /// If `timeout_ns_opt` is non-null, returns `error.Timeout` if no service exits in time.
+        pub fn wait(self: *Children(Topo), timeout_ns_opt: ?u64) error{Timeout}!void {
+            switch (self.mode) {
+                .sandboxed => try self.waitSandboxed(timeout_ns_opt),
+                .threaded => try self.waitThreaded(timeout_ns_opt),
+            }
+        }
+
+        fn waitSandboxed(self: *Children(Topo), timeout_ns_opt: ?u64) error{Timeout}!void {
+            const timeout_pid_opt = if (timeout_ns_opt) |timeout_ns|
+                spawnSandboxedTimeout(timeout_ns)
+            else
+                null;
+
+            var status: u32 = 0;
+            const exited_pid: linux.pid_t = pid: {
+                const ret: usize = linux.waitpid(-1, &status, 0);
+                std.debug.assert(e(ret) == .SUCCESS);
+                break :pid @intCast(ret);
+            };
+
+            if (exited_pid == timeout_pid_opt) return error.Timeout;
+
+            for (self.slice()) |*svc| {
+                if (svc.slot.sandboxed != exited_pid) continue;
+                dumpOnExit(&svc.runner.exit, svc.label, exited_pid, status);
+                return;
+            }
+            std.debug.panic("Unknown child pid {} exited", .{exited_pid});
+        }
+
+        fn waitThreaded(self: *Children(Topo), timeout_ns_opt: ?u64) error{Timeout}!void {
+            if (timeout_ns_opt) |timeout_ns| {
+                self.thread_exit.reset_event.timedWait(timeout_ns) catch {};
+            } else {
+                self.thread_exit.reset_event.wait();
+            }
+
+            const exited_idx = self.thread_exit.finished_idx.load(.seq_cst);
+            if (exited_idx == std.math.maxInt(u16)) return error.Timeout;
+
+            const svc = &self.slice()[exited_idx];
+            dumpOnExit(&svc.runner.exit, svc.label, 0, 0);
+        }
+
+        fn slice(self: *Children(Topo)) []Service {
+            return self.services_buf[0..self.services_len];
+        }
     };
 }
 
@@ -289,96 +369,6 @@ fn collectRegions(
     }
     return count;
 }
-
-// -- Service tracking -- //
-
-/// State for one spawned service: pid (sandboxed) or thread (threaded), plus the
-/// runner memfd we'll later map in the parent. Memfds and threads are owned by the parent.
-pub const Service = struct {
-    label: [:0]const u8,
-    runner_memfd: Memfd,
-    runner: *lib.runner.Region = undefined,
-    activity_view: lib.runner.Activity.RunnerView = undefined,
-    slot: union(Mode) {
-        sandboxed: linux.pid_t,
-        threaded: std.Thread,
-    },
-};
-
-/// Result of `spawn`: every service in the topology, plus a `ThreadExit` used in
-/// threaded mode. The address of this struct must be stable for the lifetime of
-/// the services (threads point into it), which is why `spawn` takes it as an out
-/// parameter rather than returning it by value.
-pub const Children = struct {
-    mode: Mode,
-    services_buf: [max_services]Service = undefined,
-    services_len: usize = 0,
-    /// Used only in `.threaded` mode to wake up the parent on first service exit.
-    thread_exit: ThreadExit = .{},
-
-    /// Returns true if any service is still active.
-    pub fn isActive(self: *Children) bool {
-        for (self.slice()) |*svc| {
-            if (svc.activity_view.isActive()) return true;
-        }
-        return false;
-    }
-
-    /// Send a cancel signal to all services.
-    pub fn cancel(self: *Children) void {
-        for (self.slice()) |*svc| svc.activity_view.cancel();
-    }
-
-    /// Block until the first service exits, then dump its diagnostics.
-    /// If `timeout_ns_opt` is non-null, returns `error.Timeout` if no service exits in time.
-    pub fn wait(self: *Children, timeout_ns_opt: ?u64) error{Timeout}!void {
-        switch (self.mode) {
-            .sandboxed => try self.waitSandboxed(timeout_ns_opt),
-            .threaded => try self.waitThreaded(timeout_ns_opt),
-        }
-    }
-
-    fn waitSandboxed(self: *Children, timeout_ns_opt: ?u64) error{Timeout}!void {
-        const timeout_pid_opt = if (timeout_ns_opt) |timeout_ns|
-            spawnSandboxedTimeout(timeout_ns)
-        else
-            null;
-
-        var status: u32 = 0;
-        const exited_pid: linux.pid_t = pid: {
-            const ret: usize = linux.waitpid(-1, &status, 0);
-            std.debug.assert(e(ret) == .SUCCESS);
-            break :pid @intCast(ret);
-        };
-
-        if (exited_pid == timeout_pid_opt) return error.Timeout;
-
-        for (self.slice()) |*svc| {
-            if (svc.slot.sandboxed != exited_pid) continue;
-            dumpOnExit(&svc.runner.exit, svc.label, exited_pid, status);
-            return;
-        }
-        std.debug.panic("Unknown child pid {} exited", .{exited_pid});
-    }
-
-    fn waitThreaded(self: *Children, timeout_ns_opt: ?u64) error{Timeout}!void {
-        if (timeout_ns_opt) |timeout_ns| {
-            self.thread_exit.reset_event.timedWait(timeout_ns) catch {};
-        } else {
-            self.thread_exit.reset_event.wait();
-        }
-
-        const exited_idx = self.thread_exit.finished_idx.load(.seq_cst);
-        if (exited_idx == std.math.maxInt(u16)) return error.Timeout;
-
-        const svc = &self.slice()[exited_idx];
-        dumpOnExit(&svc.runner.exit, svc.label, 0, 0);
-    }
-
-    fn slice(self: *Children) []Service {
-        return self.services_buf[0..self.services_len];
-    }
-};
 
 // -- Prepare a service's inputs -- //
 
@@ -545,6 +535,38 @@ fn closeAllFdsExceptStderr(stderr: linux.fd_t) void {
 }
 
 // -- Threaded Support -- //
+
+fn spawnThreaded(
+    comptime svc_name: [:0]const u8,
+    entrypoint: ServiceFn,
+    args: Args,
+    thread_exit: *ThreadExit,
+    service_idx: u16,
+) !std.Thread {
+    var threaded_args = try resolveArgs(args);
+    threaded_args.thread_crash_ctx = thread_exit;
+    threaded_args.thread_crash_fn = ThreadExit.signalCrashCallback;
+    threaded_args.service_idx = service_idx;
+
+    const ThreadEntry = struct {
+        fn run(
+            ep: ServiceFn,
+            rargs: lib.ipc.ResolvedArgs,
+            idx: u16,
+            exit: *ThreadExit,
+        ) void {
+            tracy.setThreadName("svc: " ++ svc_name);
+            ep(rargs);
+            exit.signalExit(idx);
+        }
+    };
+
+    return try std.Thread.spawn(
+        .{},
+        ThreadEntry.run,
+        .{ entrypoint, threaded_args, service_idx, thread_exit },
+    );
+}
 
 /// Used in threaded mode: services notify this on exit/crash so the parent can wake up.
 pub const ThreadExit = struct {

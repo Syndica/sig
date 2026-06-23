@@ -241,8 +241,8 @@ pub fn main() !void {
         .threaded => .threaded,
     };
 
-    var children: topology.Children = undefined;
-    try topology.spawn(&children, mode, Topology{
+    var children: topology.Children(Topology) = undefined;
+    try children.spawn(mode, .{
         .net = .{
             .ro = .{},
             .rw = .{
