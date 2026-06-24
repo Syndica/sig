@@ -9,12 +9,6 @@ const Slot = lib.solana.Slot;
 const Epoch = lib.solana.Epoch;
 const Hash = lib.solana.Hash;
 
-fn readInt(Int: type, r: anytype) !u64 {
-    var buf: [@sizeOf(Int)]u8 = undefined;
-    try r.readSliceAll(&buf);
-    return std.mem.readInt(Int, &buf, .little);
-}
-
 fn readBool(r: anytype) !bool {
     var buf: [1]u8 = undefined;
     try r.readSliceAll(&buf);
@@ -30,23 +24,23 @@ pub const StatusCache = struct {
         _ = fba;
 
         // slot_deltas: Vec({ slot: Slot, is_root: bool, status_map: StatusMap })
-        const slot_deltas_len = try readInt(u64, r);
+        const slot_deltas_len = try r.takeInt(u64, .little);
         for (0..slot_deltas_len) |_| {
             // slot(Slot) + is_root(bool)
             try r.discardAll(8 + 1);
 
             // status_map: HashMap(Hash, { fork_count: u64, entries: Vec({ key_slice: [20]u8, result: union }) })
-            const status_map_len = try readInt(u64, r);
+            const status_map_len = try r.takeInt(u64, .little);
             for (0..status_map_len) |_| {
                 // key: Hash + value.fork_count: u64
                 try r.discardAll(32 + 8);
 
                 // value.entries: Vec({ key_slice: KeySlice, result: union(enum(u32)) { ok, err: TransactionError } })
-                const entries_len = try readInt(u64, r);
+                const entries_len = try r.takeInt(u64, .little);
                 for (0..entries_len) |_| {
                     // key_slice: [20]u8 + result tag: u32
                     try r.discardAll(20);
-                    switch (try readInt(u32, r)) {
+                    switch (try r.takeInt(u32, .little)) {
                         0 => {}, // ok: void
                         1 => try discardTransactionError(r), // err: TransactionError
                         else => return error.InvalidResultTag,
@@ -61,7 +55,7 @@ pub const StatusCache = struct {
     /// Discards a TransactionError union. Most variants are void; some carry a u8 payload;
     /// InstructionError carries { index: u8, err: InstructionError }.
     fn discardTransactionError(r: anytype) !void {
-        switch (try readInt(u32, r)) {
+        switch (try r.takeInt(u32, .little)) {
             8 => { // InstructionError: { index: u8, err: InstructionError }
                 try r.discardAll(1); // index: u8
                 try discardInstructionError(r);
@@ -78,10 +72,10 @@ pub const StatusCache = struct {
     ///
     /// See SerdeInstructionError in agave's runtime/src/serde_snapshot/status_cache.rs
     fn discardInstructionError(r: anytype) !void {
-        switch (try readInt(u32, r)) {
+        switch (try r.takeInt(u32, .little)) {
             25 => try r.discardAll(4), // Custom: u32
             44 => { // BorshIoError: Vec(u8)
-                const len = try readInt(u64, r);
+                const len = try r.takeInt(u64, .little);
                 try r.discardAll(len);
             },
             else => {}, // all other variants are void
@@ -124,14 +118,14 @@ pub const BankFields = struct {
         };
 
         pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !BlockHashQueue {
-            const last_hash_index = try readInt(u64, r);
+            const last_hash_index = try r.takeInt(u64, .little);
             const maybe_last_hash: ?Hash = if (!(try readBool(r))) null else blk: {
                 var hash: Hash = undefined;
                 try r.readSliceAll(std.mem.asBytes(&hash));
                 break :blk hash;
             };
 
-            const n_hash_infos = try readInt(u64, r);
+            const n_hash_infos = try r.takeInt(u64, .little);
             const hashes = try fba.allocator().alloc(Hash, n_hash_infos);
 
             const BlockhashEntry = extern struct {
@@ -145,7 +139,7 @@ pub const BankFields = struct {
             defer fba.allocator().free(entries); // its the last allocation, so makes sense
             try r.readSliceAll(std.mem.sliceAsBytes(entries));
 
-            const max_age = try readInt(u64, r);
+            const max_age = try r.takeInt(u64, .little);
 
             // sort entries by hash_index
             std.mem.sortUnstable(BlockhashEntry, entries, {}, struct {
@@ -179,7 +173,7 @@ pub const BankFields = struct {
         const blockhash_queue = try BlockHashQueue.read(fba, r);
 
         // _unused_ancestors: HashMap(Slot, u64)
-        const ancestors_len = try readInt(u64, r);
+        const ancestors_len = try r.takeInt(u64, .little);
         try r.discardAll(ancestors_len * (8 + // key: Slot
             8 // value: u64
         ));
@@ -188,7 +182,7 @@ pub const BankFields = struct {
         try r.discardAll(32 + 32 + 8);
 
         // hard_forks: Vec({ slot: Slot, count: u64 })
-        const hard_forks_len = try readInt(u64, r);
+        const hard_forks_len = try r.takeInt(u64, .little);
         try r.discardAll(hard_forks_len * (8 + // slot: Slot
             8 // count: u64
         ));
@@ -210,7 +204,7 @@ pub const BankFields = struct {
             8 + // slots_per_year: f64
             8 // accounts_data_len: u64
         );
-        const slot = try readInt(Slot, r);
+        const slot = try r.takeInt(Slot, .little);
         try r.discardAll(
             8 + // _unused_epoch: Epoch
                 8 + // block_height: u64
@@ -257,7 +251,7 @@ pub const BankFields = struct {
         try discardVoteAccounts(r);
 
         //   stake_delegations: HashMap(Pubkey, Delegation)
-        const stake_del_len = try readInt(u64, r);
+        const stake_del_len = try r.takeInt(u64, .little);
         try r.discardAll(stake_del_len * (32 + // key: Pubkey
             // Delegation:
             32 + //   voter_pubkey: Pubkey
@@ -273,7 +267,7 @@ pub const BankFields = struct {
         );
 
         //   stake_history: Vec({ epoch: Epoch, effective: u64, activating: u64, deactivating: u64 })
-        const stake_history_len = try readInt(u64, r);
+        const stake_history_len = try r.takeInt(u64, .little);
         try r.discardAll(stake_history_len * (8 + // epoch: Epoch
             8 + // effective: u64
             8 + // activating: u64
@@ -281,17 +275,17 @@ pub const BankFields = struct {
         ));
 
         // _unused_accounts.unused1: HashSet(Pubkey)
-        const unused1_len = try readInt(u64, r);
+        const unused1_len = try r.takeInt(u64, .little);
         try r.discardAll(unused1_len * 32);
         // _unused_accounts.unused2: HashSet(Pubkey)
-        const unused2_len = try readInt(u64, r);
+        const unused2_len = try r.takeInt(u64, .little);
         try r.discardAll(unused2_len * 32);
         // _unused_accounts.unused3: HashMap(Pubkey, u64)
-        const unused3_len = try readInt(u64, r);
+        const unused3_len = try r.takeInt(u64, .little);
         try r.discardAll(unused3_len * (32 + 8));
 
         // _unused_epoch_stakes: HashSet(Epoch)
-        const epoch_stakes_len = try readInt(u64, r);
+        const epoch_stakes_len = try r.takeInt(u64, .little);
         try r.discardAll(epoch_stakes_len * 8);
 
         // is_delta: bool
@@ -319,7 +313,7 @@ pub const AccountsDbFields = struct {
         // https://github.com/anza-xyz/agave/blob/v4.2/accounts-db/src/account_storage_reader.rs#L91
         // https://github.com/anza-xyz/agave/blob/v4.2/snapshots/src/archive.rs#L179-L188
         {
-            const len = try readInt(u64, r);
+            const len = try r.takeInt(u64, .little);
             try r.discardAll(len * (8 + // slot: u64
                 8 + // small_vec.len: u64 == 1
                 16 // small_vec.data[{id: u64, file_len: u64}]
@@ -327,7 +321,7 @@ pub const AccountsDbFields = struct {
         }
 
         try r.discardAll(8); // _unused_write_version: u64
-        const slot = try readInt(u64, r);
+        const slot = try r.takeInt(u64, .little);
 
         try r.discardAll(
             // bank_hash_info:
@@ -343,7 +337,7 @@ pub const AccountsDbFields = struct {
 
         // rooted_slots: NullOnEof(Vec(Slot))
         {
-            const len = readInt(u64, r) catch |err| switch (err) {
+            const len = r.takeInt(u64, .little) catch |err| switch (err) {
                 error.EndOfStream => 0,
                 else => |e| return e,
             };
@@ -352,7 +346,7 @@ pub const AccountsDbFields = struct {
 
         // rooted_slot_hashes: NullOnEof(Vec(SlotAndHash))
         {
-            const len = readInt(u64, r) catch |err| switch (err) {
+            const len = r.takeInt(u64, .little) catch |err| switch (err) {
                 error.EndOfStream => 0,
                 else => |e| return e,
             };
@@ -411,7 +405,7 @@ pub const ExtraFields = struct {
 
         // versioned_epoch_stakes: NullOnEof(Vec({ epoch: u64, value: union(enum(u32)) { current: ... } }))
         {
-            const outer_len = readInt(u64, r) catch |err| switch (err) {
+            const outer_len = r.takeInt(u64, .little) catch |err| switch (err) {
                 error.EndOfStream => 0,
                 else => |e| return e,
             };
@@ -426,7 +420,7 @@ pub const ExtraFields = struct {
                 try discardVoteAccounts(r);
 
                 //   stake_delegations: HashMap(Pubkey, { delegation: Delegation, credits_observed: u64 })
-                const stake_del_len = try readInt(u64, r);
+                const stake_del_len = try r.takeInt(u64, .little);
                 try r.discardAll(stake_del_len * (32 + // key: Pubkey
                     32 + // delegation.voter_pubkey: Pubkey
                     8 + // delegation.stake: u64
@@ -442,19 +436,19 @@ pub const ExtraFields = struct {
                 );
 
                 //   stake_history: Vec({ epoch: Epoch, effective: u64, activating: u64, deactivating: u64 })
-                const sh_len = try readInt(u64, r);
+                const sh_len = try r.takeInt(u64, .little);
                 try r.discardAll(sh_len * (8 + 8 + 8 + 8));
 
                 // current.total_stake: u64
                 try r.discardAll(8);
 
                 // current.node_id_to_vote_accounts: HashMap(Pubkey, { vote_accounts: Vec(Pubkey), total_stake: u64 })
-                const nv_len = try readInt(u64, r);
+                const nv_len = try r.takeInt(u64, .little);
                 for (0..nv_len) |_| {
                     // key: Pubkey
                     try r.discardAll(32);
                     // value.vote_accounts: Vec(Pubkey)
-                    const va_len = try readInt(u64, r);
+                    const va_len = try r.takeInt(u64, .little);
                     try r.discardAll(
                         va_len * 32 + // vote_accounts: []Pubkey
                             8, // total_stake: u64
@@ -462,7 +456,7 @@ pub const ExtraFields = struct {
                 }
 
                 // current.epoch_authorized_voters: HashMap(Pubkey, Pubkey)
-                const eav_len = try readInt(u64, r);
+                const eav_len = try r.takeInt(u64, .little);
                 try r.discardAll(eav_len * (32 + // key: Pubkey
                     32 // value: Pubkey
                 ));
@@ -498,7 +492,7 @@ pub const ExtraFields = struct {
 /// Discards VoteAccounts: HashMap(Pubkey, { stake: u64, account: AccountSharedData })
 /// AccountSharedData contains a variable-length Vec(u8) data field, so we must loop.
 fn discardVoteAccounts(r: anytype) !void {
-    const len = try readInt(u64, r);
+    const len = try r.takeInt(u64, .little);
     for (0..len) |_| {
         try r.discardAll(
             32 + // key: Pubkey
@@ -506,7 +500,7 @@ fn discardVoteAccounts(r: anytype) !void {
                 8, // value.account.lamports: u64
         );
         // value.account.data: Vec(u8)
-        const data_len = try readInt(u64, r);
+        const data_len = try r.takeInt(u64, .little);
         try r.discardAll(
             data_len + // account data bytes
                 32 + // value.account.owner: Pubkey
@@ -543,7 +537,7 @@ pub fn SnapshotIter(comptime BufReader: type) type {
                 if (!std.mem.eql(u8, tar_file.name, "version")) return error.MissingVersionFile;
                 const expected = "1.2.0";
                 var version: [expected.len]u8 = undefined;
-                try self.tar_iter.readSliceAll(&version);
+                try self.tar_iter.reader.readSliceAll(&version);
                 if (!std.mem.eql(u8, &version, expected)) return error.InvalidVersion;
             }
 
@@ -551,13 +545,13 @@ pub fn SnapshotIter(comptime BufReader: type) type {
             {
                 const tar_file = (try self.tar_iter.next()) orelse return error.MissingMetadata;
                 if (std.mem.eql(u8, tar_file.name, "snapshots/status_cache")) {
-                    self.status_cache = try StatusCache.read(fba, &self.tar_iter);
+                    self.status_cache = try StatusCache.read(fba, &self.tar_iter.reader);
                     _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                    self.manifest = try Manifest.read(fba, &self.tar_iter);
+                    self.manifest = try Manifest.read(fba, &self.tar_iter.reader);
                 } else {
-                    self.manifest = try Manifest.read(fba, &self.tar_iter);
+                    self.manifest = try Manifest.read(fba, &self.tar_iter.reader);
                     _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                    self.status_cache = try StatusCache.read(fba, &self.tar_iter);
+                    self.status_cache = try StatusCache.read(fba, &self.tar_iter.reader);
                 }
             }
 
@@ -579,7 +573,9 @@ pub fn SnapshotIter(comptime BufReader: type) type {
 
         pub fn next(self: *Self) !?Account {
             // Skip unread data & data padding of previous Accountentry
-            self.tar_iter.discardAll(self.account_data_len + self.account_data_padding) catch {};
+            self.tar_iter.reader.discardAll(
+                self.account_data_len + self.account_data_padding,
+            ) catch {};
 
             // read /accounts/{slot}/{id} (containing Accounts in AppendVecs)
             while (self.account_file_len == 0) {
@@ -612,7 +608,7 @@ pub fn SnapshotIter(comptime BufReader: type) type {
                 hash: lib.solana.Hash,
             } = undefined;
             self.account_file_len -= @sizeOf(@TypeOf(header));
-            self.tar_iter.readSliceAll(std.mem.asBytes(&header)) catch
+            self.tar_iter.reader.readSliceAll(std.mem.asBytes(&header)) catch
                 return error.InvalidAccountHeader;
 
             // Header's hash is obsolete and always zero:
@@ -642,7 +638,7 @@ pub fn SnapshotIter(comptime BufReader: type) type {
         pub fn readSliceAll(self: *Self, buf: []u8) !void {
             if (buf.len > self.account_data_len) return error.EndOfStream;
             self.account_data_len -= buf.len;
-            try self.tar_iter.readSliceAll(buf);
+            try self.tar_iter.reader.readSliceAll(buf);
         }
     };
 }
@@ -667,6 +663,7 @@ pub fn TarZstIter(comptime BufReader: type) type {
         header: [512]u8 = undefined,
         file_size: usize = 0,
         file_padding: usize = 0,
+        reader: ReaderMixin = .{},
 
         const Self = @This();
 
@@ -707,19 +704,53 @@ pub fn TarZstIter(comptime BufReader: type) type {
             }
         }
 
-        // std.Io.Reader-like API for Manifest/StatusCache.read()
+        /// Zero-sized std.Io.Reader-like mixin API for Manifest/StatusCache's `.read()`.
+        /// Should never be copied out of the iterator, its address is used to reference the
+        /// iterator.
+        pub const ReaderMixin = struct {
+            zst: void align(@alignOf(Self)) = {},
 
-        pub fn readSliceAll(self: *Self, buf: []u8) !void {
-            if (self.file_size < buf.len) return error.EndOfStream;
-            self.file_size -= buf.len;
-            if (self.read(buf.ptr, buf.len) != buf.len) return error.EndOfStream;
-        }
+            pub fn readSliceAll(mixin: *ReaderMixin, buf: []u8) error{EndOfStream}!void {
+                const iter: *Self = @fieldParentPtr("reader", mixin);
+                if (iter.file_size < buf.len) return error.EndOfStream;
+                iter.file_size -= buf.len;
+                if (iter.read(buf.ptr, buf.len) != buf.len) return error.EndOfStream;
+            }
 
-        pub fn discardAll(self: *Self, n: usize) !void {
-            if (self.file_size < n) return error.EndOfStream;
-            self.file_size -= n;
-            if (self.read(null, n) != n) return error.EndOfStream;
-        }
+            pub fn discardAll(mixin: *ReaderMixin, n: usize) error{EndOfStream}!void {
+                const iter: *Self = @fieldParentPtr("reader", mixin);
+                if (iter.file_size < n) return error.EndOfStream;
+                iter.file_size -= n;
+                if (iter.read(null, n) != n) return error.EndOfStream;
+            }
+
+            pub fn takeByte(mixin: *ReaderMixin) error{EndOfStream}!u8 {
+                var byte: u8 = undefined;
+                try mixin.readSliceAll((&byte)[0..1]);
+                return byte;
+            }
+
+            pub fn takeInt(
+                mixin: *ReaderMixin,
+                comptime T: type,
+                endian: std.builtin.Endian,
+            ) error{EndOfStream}!T {
+                const n = @divExact(@typeInfo(T).int.bits, 8);
+                var buf: [n]u8 = undefined;
+                try mixin.readSliceAll(&buf);
+                return std.mem.readInt(T, &buf, endian);
+            }
+
+            pub fn takeEnum(
+                mixin: *ReaderMixin,
+                comptime E: type,
+                endian: std.builtin.Endian,
+            ) error{ EndOfStream, InvalidEnumTag }!E {
+                const Int = @typeInfo(E).@"enum".tag_type;
+                const int = try mixin.takeInt(Int, endian);
+                return try std.meta.intToEnum(E, int);
+            }
+        };
 
         fn read(self: *Self, maybe_buf: ?[*]u8, len: usize) usize {
             var n: usize = 0;
