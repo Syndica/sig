@@ -1493,6 +1493,12 @@
         .status = .hardcoded,
     },
     .{
+        .name = "define_ltds_fee_only_semantics",
+        .pubkey = "LTDSzjZKFJMKHYpNycG1FrWwGGTaFFwqEFjB5GGLNVD",
+        .description = "SIMD-0186 Amendment: Define fee-only semantics",
+        .status = .supported,
+    },
+    .{
         .name = "enable_extend_program_checked",
         .pubkey = "2oMRZEDWT2tqtYMofhmmfQ8SsjqUFzT6sYXppQDavxwz",
         .description = "Enable ExtendProgramChecked instruction",

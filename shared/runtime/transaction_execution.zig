@@ -252,6 +252,10 @@ pub fn loadAndExecuteTransaction(
     // Fee payer ownership is transferred to loadTransactionAccounts.
     errdefer for (rollbacks.slice()) |r| r.deinit(tmp_allocator);
 
+    // Partial loaded data size at point of failure; consumed by the
+    // `define_ltds_fee_only_semantics` branch below.
+    var running_data_size: u32 = 0;
+
     var loaded_accounts = switch (try account_loader.loadTransactionAccounts(
         account_reader,
         tmp_allocator,
@@ -259,16 +263,28 @@ pub fn loadAndExecuteTransaction(
         env.rent_collector,
         &compute_budget_limits,
         fee_payer,
+        &running_data_size,
     )) {
         .ok => |x| x,
         .err => |err| {
             var writes = ProcessedTransaction.Writes{};
             errdefer while (writes.pop()) |item| item.account.deinit(tmp_allocator);
-            var loaded_accounts_data_size: u32 = 0;
+
+            // SIMD-186 amendment: report the partial loaded size clamped to
+            // the limit. Pre-feature: raw sum of rollback account data lengths.
+            // [agave] https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/account_loader.rs#L438-L450
+            const loaded_accounts_data_size: u32 = if (env.feature_set.active(
+                .define_ltds_fee_only_semantics,
+                env.slot,
+            )) @min(running_data_size, compute_budget_limits.loaded_accounts_bytes) else size: {
+                var sum: u32 = 0;
+                for (rollbacks.slice()) |r| sum += @intCast(r.account.data.len);
+                break :size sum;
+            };
+
             while (rollbacks.pop()) |rollback| {
                 const item = writes.addOne() catch unreachable;
                 item.* = rollback;
-                loaded_accounts_data_size += @intCast(rollback.account.data.len);
             }
             // Calculate cost units even for failed transactions
             const tx_cost = cost_model.calculateTransactionCost(
