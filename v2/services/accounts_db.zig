@@ -11,6 +11,7 @@ const Rooted = lib.accounts_db.Rooted;
 const RootedConfig = lib.accounts_db.RootedConfig;
 const AccountPool = lib.accounts_db.AccountPool;
 const AccountLookups = lib.accounts_db.AccountLookups;
+const RuntimeMetadata = lib.accounts_db.RuntimeMetadata;
 
 comptime {
     _ = start;
@@ -24,6 +25,7 @@ pub const ReadOnly = struct {};
 pub const ReadWrite = struct {
     config: *RootedConfig,
     ready_snapshot_in: *SnapshotDataRing,
+    snapshot_metadata_out: *RuntimeMetadata,
     account_pool: *AccountPool,
     replay_lookups: *AccountLookups,
     tel: *tel.Region,
@@ -49,6 +51,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         file_path,
         rw.config.memory[0..].ptr[0..rw.config.memory_len],
         rw.account_pool,
+        rw.snapshot_metadata_out,
     );
     defer rooted.deinit();
 
@@ -62,7 +65,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         var snapshot_iter = try SnapshotIter(*@TypeOf(in)).init(&fba, &in);
 
         logger.info().logf("reading snapshot accounts", .{});
-        try rooted.loadSnapshot(.from(logger), &snapshot_iter);
+        try rooted.loadSnapshot(.from(logger), &snapshot_iter, rw.snapshot_metadata_out);
     }
 
     { // Load feature accounts (TODO: use this to then load leader schedule & stake/vote data)

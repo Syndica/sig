@@ -105,6 +105,7 @@ pub const std_options = start.options;
 pub const ReadOnly = struct {};
 pub const ReadWrite = struct {
     deshredded_in: *lib.shred.DeshredRing,
+    snapshot_metadata_in: *lib.accounts_db.RuntimeMetadata,
     replay_transaction_pool: *lib.replay.TransactionPool,
     block_pool: *lib.replay.BlockPool,
     exec_req_response: *lib.replay.ExecReqResponse,
@@ -115,6 +116,7 @@ var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
 const DeserialStates = [lib.replay.BlockPool.capacity]?BlockDeserialState;
 const BlockExecStates = [lib.replay.BlockPool.capacity]?BlockExecState;
+const BlockHashStates = [lib.replay.BlockPool.capacity]?Hash;
 
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
@@ -131,9 +133,29 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const exec_states: *BlockExecStates = try allocator.create(BlockExecStates);
     @memset(exec_states, null);
 
+    const blockhash_states: *BlockHashStates = try allocator.create(BlockHashStates);
+    @memset(blockhash_states, null);
+
     var deshredded_iter = rw.deshredded_in.get(.reader);
     var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
     var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
+
+    {
+        var start_block: usize = 0;
+        var blockhashes_in = rw.snapshot_metadata_in.blockhash_queue.hashes.getView(.reader);
+        blk: while (true) {
+            const hashes = while (true) : (std.atomic.spinLoopHint()) {
+                const buf = blockhashes_in.getBuffer() orelse continue;
+                if (buf.len > 0) break buf;
+                break :blk; // blockhashes_out closed their end
+            };
+            for (hashes) |*hash| {
+                blockhash_states[start_block] = hash.*;
+                start_block += 1;
+            }
+        }
+
+    }
 
     var first_slot: ?Slot = null; // this is a hack, remove it!
 

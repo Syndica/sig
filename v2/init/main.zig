@@ -176,6 +176,8 @@ pub fn main() !void {
 
         // shred receiver -> replay
         .shreds_to_replay = {},
+        // accounts_db -> replay
+        .snapshot_metadata = {},
         // replay <-> accounts_db
         .replay_account_lookups = {},
 
@@ -230,6 +232,10 @@ pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
     .snapshot_ready_to_accounts_db = .initMany(&.{
         .@"snapshot:ready_snapshot_out",
         .@"accounts_db:ready_snapshot_in",
+    }),
+    .snapshot_metadata = .initMany(&.{
+        .@"accounts_db:snapshot_metadata_out",
+        .@"replay:snapshot_metadata_in",
     }),
     .account_pool = .initMany(&.{
         .@"accounts_db:account_pool",
@@ -290,6 +296,7 @@ pub const Region = union(enum) {
     account_pool: struct { memory: usize },
 
     shreds_to_replay,
+    snapshot_metadata,
 
     exec_req_response,
     transaction_pool,
@@ -317,6 +324,7 @@ pub const Region = union(enum) {
             .account_pool => |params| @sizeOf(lib.accounts_db.AccountPool) + params.memory,
 
             .shreds_to_replay => @sizeOf(lib.shred.DeshredRing),
+            .snapshot_metadata => @sizeOf(lib.accounts_db.RuntimeMetadata),
             .replay_account_lookups => @sizeOf(lib.accounts_db.AccountLookups),
 
             .telemetry => |params| params.info().regionSize(),
@@ -427,6 +435,11 @@ pub const Region = union(enum) {
             .shreds_to_replay => {
                 std.debug.assert(buf.len == @sizeOf(lib.shred.DeshredRing));
                 const data: *lib.shred.DeshredRing = @ptrCast(buf);
+                data.init();
+            },
+            .snapshot_metadata => {
+                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.RuntimeMetadata));
+                const data: *lib.accounts_db.RuntimeMetadata = @ptrCast(buf);
                 data.init();
             },
             .replay_account_lookups => {
