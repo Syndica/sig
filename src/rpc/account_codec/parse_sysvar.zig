@@ -76,17 +76,15 @@ pub fn parseSysvar(
     } else if (pubkey.equals(&sysvar.Rent.ID)) {
         const rent = bincode.read(arena, sysvar.Rent, reader, .{}) catch
             return ParseError.InvalidAccountData;
+        // As of Agave v4.1, the rent sysvar's RPC projection exposes only
+        // `lamportsPerByte`, `exemptionThreshold`, and `burnPercent` were removed
+        // (the `Rent` sysvar's `exemption_threshold`/`burn_percent` fields are
+        // deprecated). The first u64 of the on-chain account is still `lamports_per_byte_year`
+        // on the wire, which v4.1 renames to `lamports_per_byte`, the value is unchanged.
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/account-decoder/src/parse_sysvar.rs#L56-L125
         return SysvarAccountType{
             .rent = UiRent{
-                .lamportsPerByteYear = Stringified(u64).init(rent.lamports_per_byte_year),
-                .exemptionThreshold = RyuF64.init(rent.exemption_threshold),
-                // NOTE: we report the raw serialized field, not the protocol
-                // constant `DEFAULT_BURN_PERCENT`: this is the on-chain sysvar's
-                // actual contents as returned to RPC clients, matching Agave's
-                // `parse_sysvar.rs`. Business logic (fee/rent burn calculations)
-                // should use `DEFAULT_BURN_PERCENT` instead.
-                // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs#L174
-                .burnPercent = rent.burn_percent,
+                .lamportsPerByte = Stringified(u64).init(rent.lamports_per_byte_year),
             },
         };
     } else if (pubkey.equals(&sig.runtime.ids.SYSVAR_REWARDS_ID)) {
@@ -249,11 +247,9 @@ pub const UiFees = struct {
     feeCalculator: UiFeeCalculator,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs#L143
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/account-decoder/src/parse_sysvar.rs#L120
 pub const UiRent = struct {
-    lamportsPerByteYear: Stringified(u64),
-    exemptionThreshold: RyuF64,
-    burnPercent: u8,
+    lamportsPerByte: Stringified(u64),
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs#L159
@@ -459,9 +455,10 @@ test "rpc.account_codec.parse_sysvar: parse sysvars" {
         try std.testing.expect(result != null);
         try std.testing.expect(result.? == .rent);
         const ui_rent = result.?.rent;
-        try std.testing.expectEqual(@as(u64, 10), ui_rent.lamportsPerByteYear.value);
-        try std.testing.expectEqual(@as(f64, 2.0), ui_rent.exemptionThreshold.value);
-        try std.testing.expectEqual(@as(u8, 5), ui_rent.burnPercent);
+        // v4.1 RPC projection exposes only `lamportsPerByte` (the on-chain
+        // `lamports_per_byte_year` u64); `exemptionThreshold`/`burnPercent`
+        // are no longer reported.
+        try std.testing.expectEqual(@as(u64, 10), ui_rent.lamportsPerByte.value);
     }
 
     // Rewards sysvar (deprecated, default = 0.0)

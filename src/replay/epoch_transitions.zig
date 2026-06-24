@@ -1086,7 +1086,10 @@ test "applyFeatureActivations: basic activations" {
             sig.core.genesis_config.Inflation.PICO,
             env.slot_constants.inflation,
         );
-        try std.testing.expectEqual(sig.runtime.sysvar.DEFAULT_BURN_PERCENT, env.slot_constants.fee_rate_governor.burn_percent);
+        try std.testing.expectEqual(
+            sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
+            env.slot_constants.fee_rate_governor.burn_percent,
+        );
         try std.testing.expectEqual(
             sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
             env.slot_constants.rent_collector.rent.burn_percent,
@@ -1158,7 +1161,10 @@ test "applyFeatureActivations: basic activations" {
             sig.core.genesis_config.Inflation.FULL,
             env.slot_constants.inflation,
         );
-        try std.testing.expectEqual(sig.runtime.sysvar.DEFAULT_BURN_PERCENT, env.slot_constants.fee_rate_governor.burn_percent);
+        try std.testing.expectEqual(
+            sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
+            env.slot_constants.fee_rate_governor.burn_percent,
+        );
         try std.testing.expectEqual(
             sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
             env.slot_constants.rent_collector.rent.burn_percent,
