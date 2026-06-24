@@ -1062,6 +1062,171 @@ test "missing program account" {
     try std.testing.expectError(error.ProgramAccountNotFound, loaded_accounts_result);
 }
 
+test "dont double count programdata size" {
+    // Two LoaderV3 programs sharing the same programdata address should only count
+    // the programdata once. This tests the `additional_loaded_accounts` deduplication
+    // in loadTransactionAccountsInner.
+    const allocator = std.testing.allocator;
+    var accountsdb = sig.utils.collections.PubkeyMap(AccountSharedData).empty;
+    defer accountsdb.deinit(allocator);
+    var env = newTestingEnv();
+    env.compute_budget_limits.loaded_accounts_bytes = 20_000;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    const pk1 = Pubkey.initRandom(random);
+    const pk2 = Pubkey.initRandom(random);
+    const shared_programdata = Pubkey.initRandom(random);
+
+    // Both programs point to the same programdata address
+    const program_state: runtime.program.bpf_loader.v3.State = .{
+        .program = .{ .programdata_address = shared_programdata },
+    };
+    var program_data_buffer: [1024]u8 = undefined;
+    const program_data = try sig.bincode.writeToSlice(
+        &program_data_buffer,
+        program_state,
+        .{},
+    );
+
+    var programdata_data = "shared programdata!".*;
+
+    try accountsdb.put(allocator, pk1, .{
+        .data = program_data,
+        .lamports = 1,
+        .executable = true,
+        .owner = runtime.program.bpf_loader.v3.ID,
+        .rent_epoch = 0,
+    });
+    try accountsdb.put(allocator, pk2, .{
+        .data = program_data,
+        .lamports = 1,
+        .executable = true,
+        .owner = runtime.program.bpf_loader.v3.ID,
+        .rent_epoch = 0,
+    });
+    try accountsdb.put(allocator, shared_programdata, .{
+        .data = &programdata_data,
+        .lamports = 1,
+        .executable = true,
+        .owner = Pubkey.ZEROES,
+        .rent_epoch = 0,
+    });
+
+    // Transaction with both programs as account keys and instruction targets
+    var tx: RuntimeTransaction = blk: {
+        var tx = try emptyTxWithKeys(allocator, &.{ pk1, pk2 });
+
+        tx.instructions = &.{
+            .{
+                .program_meta = .{ .pubkey = pk2, .index_in_transaction = 1 },
+                .account_metas = .empty,
+                .dedupe_map = @splat(0xffff),
+                .instruction_data = "",
+                .owned_instruction_data = false,
+            },
+            .{
+                .program_meta = .{ .pubkey = pk1, .index_in_transaction = 0 },
+                .account_metas = .empty,
+                .dedupe_map = @splat(0xffff),
+                .instruction_data = "",
+                .owned_instruction_data = false,
+            },
+        };
+        break :blk tx;
+    };
+    defer tx.accounts.deinit(allocator);
+
+    const loaded_accounts = try loadTransactionAccountsInner(
+        AccountReader.fromMap(&accountsdb),
+        allocator,
+        &tx,
+        &env.rent_collector,
+        &env.compute_budget_limits,
+        .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
+    );
+    defer loaded_accounts.deinit(allocator);
+
+    // pk1: 64 + bincode(State), pk2: 64 + bincode(State), shared programdata counted ONCE: 64 + 19
+    const program_account_size = TRANSACTION_ACCOUNT_BASE_SIZE + program_data.len;
+    const programdata_size = TRANSACTION_ACCOUNT_BASE_SIZE + programdata_data.len;
+    try std.testing.expectEqual(
+        @as(u32, program_account_size + program_account_size + programdata_size),
+        loaded_accounts.loaded_accounts_data_size,
+    );
+}
+
+test "load v3 program" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+    var accountsdb = sig.utils.collections.PubkeyMap(AccountSharedData).empty;
+    defer accountsdb.deinit(allocator);
+    var env = newTestingEnv();
+    env.compute_budget_limits.loaded_accounts_bytes = 20_000;
+
+    const pk_v3_program = Pubkey.initRandom(random);
+    const pk_programdata = Pubkey.initRandom(random);
+
+    const program_state: runtime.program.bpf_loader.v3.State = .{
+        .program = .{ .programdata_address = pk_programdata },
+    };
+    var program_data_buffer: [1024]u8 = undefined;
+    const program_data = try sig.bincode.writeToSlice(
+        &program_data_buffer,
+        program_state,
+        .{},
+    );
+
+    var programdata_data = "program data!".*;
+
+    try accountsdb.put(allocator, pk_v3_program, .{
+        .data = program_data,
+        .executable = true,
+        .owner = runtime.program.bpf_loader.v3.ID,
+        .lamports = 1,
+        .rent_epoch = 0,
+    });
+    try accountsdb.put(allocator, pk_programdata, .{
+        .data = &programdata_data,
+        .executable = true,
+        .owner = Pubkey.ZEROES,
+        .lamports = 1,
+        .rent_epoch = 0,
+    });
+
+    var tx = try emptyTxWithKeys(allocator, &.{pk_v3_program});
+    defer tx.accounts.deinit(allocator);
+    tx.instructions = &.{
+        .{
+            .program_meta = .{ .pubkey = pk_v3_program, .index_in_transaction = 0 },
+            .account_metas = .empty,
+            .dedupe_map = @splat(0xffff),
+            .instruction_data = "",
+            .owned_instruction_data = false,
+        },
+    };
+
+    const loaded_accounts = try loadTransactionAccountsInner(
+        AccountReader.fromMap(&accountsdb),
+        allocator,
+        &tx,
+        &env.rent_collector,
+        &env.compute_budget_limits,
+        .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
+    );
+    defer loaded_accounts.deinit(allocator);
+
+    // only v3 program returned in account keys
+    try std.testing.expectEqual(1, loaded_accounts.accounts.len);
+    try std.testing.expectEqual(pk_v3_program, loaded_accounts.accounts.slice()[0].pubkey);
+
+    // data size: v3 program (64 + bincode(State)) + programdata (64 + 13)
+    const expected_size = (TRANSACTION_ACCOUNT_BASE_SIZE + program_data.len) +
+        (TRANSACTION_ACCOUNT_BASE_SIZE + programdata_data.len);
+    try std.testing.expectEqual(@as(u32, expected_size), loaded_accounts.loaded_accounts_data_size);
+}
+
 test "deallocate account" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
