@@ -7,6 +7,7 @@ const tel = lib.telemetry;
 const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
 const Epoch = lib.solana.Epoch;
+const Hash = lib.solana.Hash;
 
 fn readInt(Int: type, r: anytype) !u64 {
     var buf: [@sizeOf(Int)]u8 = undefined;
@@ -105,26 +106,128 @@ pub const Manifest = struct {
 
 pub const BankFields = struct {
     slot: Slot,
+    blockhash_queue: BlockHashQueue,
+
+    pub const BlockHashQueue = struct {
+        last_hash_index: u64,
+        last_hash: ?Hash,
+        max_age: u64,
+
+        ring: []Entry,
+        head: usize,
+        tail: usize,
+
+        pub const Entry = extern struct {
+            hash: Hash,
+            hash_index: u64,
+        };
+
+        pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !BlockHashQueue {
+            const last_hash_index = try readInt(u64, r);
+            const maybe_last_hash: ?Hash = if (!(try readBool(r))) null else blk: {
+                var hash: Hash = undefined;
+                try r.readSliceAll(std.mem.asBytes(&hash));
+                break :blk hash;
+            };
+
+            // create ring to hold entries
+            const n_hash_infos = try readInt(u64, r);
+            const entry_ring = try fba.allocator().alloc(Entry, n_hash_infos);
+            var entry_tail: usize = 0;
+
+            // read all entries into the ring
+            var raw_entry: extern struct {
+                hash: Hash,
+                lamports_per_signature: u64,
+                hash_index: u64,
+                timestamp: u64,
+            } = undefined;
+            for (0..n_hash_infos) |_| {
+                try r.readSliceAll(&std.mem.asBytes(&raw_entry));
+                if (raw_entry.hash_index > last_hash_index) {
+                    @branchHint(.unlikely);
+                    return error.InvalidHashIndex;
+                }
+
+                entry_ring[entry_tail] = .{
+                    .hash = raw_entry.hash,
+                    .hash_index = raw_entry.hash_index,
+                };
+                entry_tail += 1;
+            }
+
+            // sort by hash_index so that purges can just be head increments
+            std.mem.sortUnstable(Entry, entry_ring[0..entry_tail], {}, struct {
+                fn lessThan(_: void, a: Entry, b: Entry) bool {
+                    return a.hash_index < b.hash_index;
+                }
+            }.lessThan);
+
+            // make sure ring can sustain the window for the max_age requirement
+            const max_age = try readInt(u64, r);
+            if (entry_ring.len < max_age + 1) {
+                entry_ring = try fba.allocator().realloc(entry_ring, max_age + 1);
+            }
+
+            var self: BlockHashQueue = .{
+                .last_hash_index = last_hash_index,
+                .last_hash = maybe_last_hash,
+                .max_age = max_age,
+                .ring = entry_ring,
+                .head = 0,
+                .tail = entry_tail,
+            };
+            self.prune();
+            return self;
+        }
+        
+        // https://github.com/Syndica/sig/pull/1609
+        pub fn isRecentBlockHashValid(
+            self: *const BlockHashQueue,
+            hash: *const Hash,
+            max_age: u64,
+        ) bool {
+            // tight-loop is likely fast enough for now.
+            // Scan from back to front, as txn recent_blockhash likely in front.
+            var i = self.tail;
+            const hash_index = while (i != self.head) {
+                i = if (i > 0) i - 1 else self.ring.len - 1;
+                if (self.ring[i].hash.eql(hash)) break self.ring[i].hash_index;
+            } else return false; // not found
+
+            const age = self.last_hash_index - hash_index;
+            return age <= max_age;
+        }
+
+        pub fn insert(self: *BlockHashQueue, hash: *const Hash) void {
+            self.last_hash_index += 1;
+            self.prune();
+            
+            std.debug.assert(self.tail -% self.head < self.ring.len);
+            self.ring[self.tail] = .{ .hash = hash.*, .hash_index = self.last_hash_index };
+
+            // inc tail
+            self.tail += 1;
+            if (self.tail == self.ring.len) self.tail = 0;
+        }
+
+        fn prune(self: *BlockHashQueue) void {
+            while (self.head != self.tail) {
+                const age = self.last_hash_index - self.ring[self.head].hash_index;
+                if (age <= self.max_age) break;
+
+                // inc head
+                self.head += 1;
+                if (self.head == self.ring.len) self.head = 0; // cmov
+            }
+        }
+    };
 
     pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !BankFields {
         const zone = tracy.Zone.init(@src(), .{ .name = "BankFields.read" });
         defer zone.deinit();
 
-        _ = fba;
-
-        // blockhash_queue.last_hash_index: u64
-        try r.discardAll(8);
-        // blockhash_queue.last_hash: ?Hash
-        if (try readBool(r)) try r.discardAll(32);
-        // blockhash_queue.hash_infos: HashMap(Hash, { lamports_per_signature: u64, hash_index: u64, timestamp: u64 })
-        const hash_infos_len = try readInt(u64, r);
-        try r.discardAll(hash_infos_len * (32 + // key: Hash
-            8 + // lamports_per_signature: u64
-            8 + // hash_index: u64
-            8 // timestamp: u64
-        ));
-        // blockhash_queue.max_age: u64
-        try r.discardAll(8);
+        const blockhash_queue = try BlockHashQueue.read(fba, r);
 
         // _unused_ancestors: HashMap(Slot, u64)
         const ancestors_len = try readInt(u64, r);
@@ -247,6 +350,7 @@ pub const BankFields = struct {
 
         return .{
             .slot = slot,
+            .blockhash_queue = blockhash_queue,
         };
     }
 };

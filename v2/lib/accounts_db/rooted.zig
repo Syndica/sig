@@ -152,14 +152,15 @@ pub const Rooted = struct {
     }
 
     const SectorHeader = packed struct(u64) {
-        type: enum(u2) {
+        type: enum(u3) {
             padding, // padding data to get file aligned to block_size for writing
             account, // holds an actual account
+            blockhash_queue, // holds a serialized blockhash queue
             _, // TODO: add other types of sections
         },
         info: packed union {
-            padding: u62,
-            account: packed struct(u62) {
+            block: u61,
+            account: packed struct(u61) {
                 data_len: u24,
                 executable: bool,
                 // epoch never goes this high deliberately. convert max(Epoch) = max(u37)
@@ -167,7 +168,7 @@ pub const Rooted = struct {
             },
         },
 
-        const SmallEpoch = u37;
+        const SmallEpoch = u36;
     };
 
     const AccountMeta = extern struct {
@@ -249,7 +250,7 @@ pub const Rooted = struct {
             try self.readExisting(.from(logger), @ptrCast(&header), @sizeOf(SectorHeader));
             switch (header.type) {
                 .padding => {
-                    const pad_len = header.info.padding;
+                    const pad_len = header.info.block;
                     if (pad_len > self.journal.committed_offset) return error.InvalidPadding;
 
                     // skip padding bytes
@@ -331,7 +332,10 @@ pub const Rooted = struct {
         logger: tel.Logger("Rooted.loadSnapshot"),
         snapshot_iter: anytype, // lib.solana.snapshot.SnapshotIter(anytype),
     ) !void {
-        try self.beginTransaction(.from(logger), snapshot_iter.manifest.bank_fields.slot);
+        try self.beginTransaction(
+            .from(logger),
+            snapshot_iter.manifest.bank_fields.slot,
+        );
 
         var timer = try std.time.Timer.start();
         var n_puts: usize = 0;
@@ -371,6 +375,17 @@ pub const Rooted = struct {
                 self.io.writer.io_transferred = 0;
                 self.io.writer.io_stalled = 0;
             }
+        }
+
+        // write the current blockhash queue
+        {
+            const blockhash_queue = &snapshot_iter.manifest.bank_fields.blockhash_queue;
+
+            const header: SectorHeader = .{
+                .type = .blockhash_queue,
+                .info = .{ }
+            };
+            try self.queueWrite(.from(logger));
         }
 
         try self.commitTransaction(.from(logger));
