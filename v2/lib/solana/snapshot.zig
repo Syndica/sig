@@ -9,76 +9,323 @@ const Slot = lib.solana.Slot;
 const Epoch = lib.solana.Epoch;
 
 fn readBool(r: anytype) !bool {
-    var buf: [1]u8 = undefined;
-    try r.readSliceAll(&buf);
-    if (buf[0] > 1) return error.InvalidBool;
-    return buf[0] > 0;
+    return switch (try r.takeByte()) {
+        0 => false,
+        1 => true,
+        else => return error.InvalidBool,
+    };
 }
 
-pub const StatusCache = struct {
-    pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !StatusCache {
-        const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.read" });
-        defer zone.deinit();
+/// Incremental iterative parser for the encoded StatusCache datastructure.
+pub const StatusCacheHeader = struct {
+    slot_deltas: SlotDeltas,
 
-        _ = fba;
+    pub fn init(
+        /// `std.Io.Reader` or equivalent interface.
+        r: anytype,
+    ) !StatusCacheHeader {
+        return .{
+            .slot_deltas = .{ .len = try r.takeInt(u64, .little) },
+        };
+    }
 
-        // slot_deltas: Vec({ slot: Slot, is_root: bool, status_map: StatusMap })
-        const slot_deltas_len = try r.takeInt(u64, .little);
-        for (0..slot_deltas_len) |_| {
-            // slot(Slot) + is_root(bool)
-            try r.discardAll(8 + 1);
+    pub const SlotDeltas = struct {
+        len: u64,
 
-            // status_map: HashMap(Hash, { fork_count: u64, entries: Vec({ key_slice: [20]u8, result: union }) })
-            const status_map_len = try r.takeInt(u64, .little);
-            for (0..status_map_len) |_| {
-                // key: Hash + value.fork_count: u64
-                try r.discardAll(32 + 8);
+        pub fn iterator(self: SlotDeltas) SlotDeltaIterator {
+            return .{ .slot_deltas_remaining = self.len };
+        }
+    };
 
-                // value.entries: Vec({ key_slice: KeySlice, result: union(enum(u32)) { ok, err: TransactionError } })
-                const entries_len = try r.takeInt(u64, .little);
-                for (0..entries_len) |_| {
-                    // key_slice: [20]u8 + result tag: u32
-                    try r.discardAll(20);
-                    switch (try r.takeInt(u32, .little)) {
-                        0 => {}, // ok: void
-                        1 => try discardTransactionError(r), // err: TransactionError
-                        else => return error.InvalidResultTag,
-                    }
+    pub const SlotDeltaIterator = struct {
+        slot_deltas_remaining: u64,
+
+        pub const empty: SlotDeltaIterator = .{ .slot_deltas_remaining = 0 };
+
+        pub fn next(
+            self: *SlotDeltaIterator,
+            /// `std.Io.Reader` or equivalent interface.
+            r: anytype,
+        ) !?SlotDeltaHeader {
+            if (self.slot_deltas_remaining == 0) return null;
+            self.slot_deltas_remaining -= 1;
+
+            return .{
+                .slot = try r.takeInt(Slot, .little),
+                .is_root = try readBool(r),
+                .status_map = .{ .len = try r.takeInt(u64, .little) },
+            };
+        }
+    };
+
+    pub const SlotDeltaHeader = struct {
+        slot: Slot,
+        is_root: bool,
+        status_map: StatusMapHeader,
+
+        pub const StatusMapHeader = struct {
+            len: u64,
+
+            pub fn iterator(self: StatusMapHeader) StatusMapEntryIterator {
+                return .{ .status_map_entries_remaining = self.len };
+            }
+        };
+    };
+
+    pub const StatusMapEntryIterator = struct {
+        status_map_entries_remaining: u64,
+
+        pub const empty: StatusMapEntryIterator = .{ .status_map_entries_remaining = 0 };
+
+        pub fn next(
+            self: *StatusMapEntryIterator,
+            /// `std.Io.Reader` or equivalent interface.
+            r: anytype,
+        ) !?StatusMapEntryHeader {
+            if (self.status_map_entries_remaining == 0) return null;
+            self.status_map_entries_remaining -= 1;
+
+            var hash: lib.solana.Hash = .{ .data = undefined };
+            try r.readSliceAll(&hash.data);
+            return .{
+                .hash = hash,
+                .key_index = try r.takeInt(u64, .little),
+                .status_list = .{ .len = try r.takeInt(u64, .little) },
+            };
+        }
+    };
+
+    pub const StatusMapEntryHeader = struct {
+        hash: lib.solana.Hash,
+        key_index: u64,
+        status_list: StatusList,
+
+        pub const StatusList = struct {
+            len: u64,
+
+            pub fn iterator(self: StatusList) StatusIterator {
+                return .{ .status_entries_remaining = self.len };
+            }
+        };
+    };
+
+    pub const StatusIterator = struct {
+        status_entries_remaining: u64,
+
+        pub const empty: StatusIterator = .{ .status_entries_remaining = 0 };
+
+        pub fn next(
+            self: *StatusIterator,
+            /// `std.Io.Reader` or equivalent interface.
+            r: anytype,
+        ) !?Status {
+            if (self.status_entries_remaining == 0) return null;
+            self.status_entries_remaining -= 1;
+
+            var key_slice: [20]u8 = undefined;
+            try r.readSliceAll(&key_slice);
+
+            const ResultTag = @typeInfo(Status.Result).@"union".tag_type.?;
+            const result_tag = try r.takeEnum(ResultTag, .little);
+
+            return .{
+                .key_slice = key_slice,
+                .result = switch (result_tag) {
+                    .ok => .ok,
+                    .err => .{ .err = try .read(r) },
+                },
+            };
+        }
+    };
+
+    pub const Status = struct {
+        key_slice: [20]u8,
+        result: Result,
+
+        pub const Result = union(enum(u32)) {
+            ok,
+            err: lib.solana.transaction.Error,
+        };
+    };
+
+    /// Skip the entire status cache.
+    pub fn skip(
+        /// `std.Io.Reader` or equivalent interface.
+        r: anytype,
+    ) !void {
+        const status_cache: StatusCacheHeader = try .init(r);
+        var sd_iter = status_cache.slot_deltas.iterator();
+
+        for (0..status_cache.slot_deltas.len) |_| {
+            const slot_delta = try sd_iter.next(r) orelse unreachable;
+
+            var sme_iter = slot_delta.status_map.iterator();
+            for (0..slot_delta.status_map.len) |_| {
+                const status_map_entry = try sme_iter.next(r) orelse unreachable;
+
+                var st_iter = status_map_entry.status_list.iterator();
+                for (0..status_map_entry.status_list.len) |_| {
+                    const status = try st_iter.next(r) orelse unreachable;
+                    _ = status;
                 }
             }
         }
-
-        return .{};
-    }
-
-    /// Discards a TransactionError union. Most variants are void; some carry a u8 payload;
-    /// InstructionError carries { index: u8, err: InstructionError }.
-    fn discardTransactionError(r: anytype) !void {
-        switch (try r.takeInt(u32, .little)) {
-            8 => { // InstructionError: { index: u8, err: InstructionError }
-                try r.discardAll(1); // index: u8
-                try discardInstructionError(r);
-            },
-            30, // DuplicateInstruction: u8
-            31, // InsufficientFundsForRent: u8
-            35, // ProgramExecutionTemporarilyRestricted: u8
-            => try r.discardAll(1),
-            else => {}, // all other variants are void
-        }
-    }
-
-    /// Discards an InstructionError union. Most variants are void; Custom is u32; BorshIoError is Vec(u8).
-    fn discardInstructionError(r: anytype) !void {
-        switch (try r.takeInt(u32, .little)) {
-            25 => try r.discardAll(4), // Custom: u32
-            45 => { // BorshIoError: Vec(u8)
-                const len = try r.takeInt(u64, .little);
-                try r.discardAll(len);
-            },
-            else => {}, // all other variants are void
-        }
     }
 };
+
+test StatusCacheHeader {
+    const gpa = std.testing.allocator;
+
+    const SlotDelta = struct {
+        slot: Slot,
+        is_root: bool,
+        status_map: []const StatusMapEntry,
+
+        const StatusMapEntry = struct { lib.solana.Hash, Status };
+
+        const Status = struct {
+            key_index: u64,
+            entries: []const Entry,
+
+            const Entry = struct { [20]u8, StatusCacheHeader.Status.Result };
+        };
+    };
+
+    const status0: SlotDelta.Status = .{
+        .key_index = 11,
+        .entries = &.{
+            .{ "e`]\xb9\x8a\xb28\x9a\xa8\x00C\xd3\x1e\x9ac\xfd\x0f\xa0@\xa5".*, .ok },
+            .{ "\xf5\x1cc ,l\x8d\x8d\xec\x9cG\x1e\xc4\xe1u\xa6\n\xf9\xe1|".*, .ok },
+            .{ "\xda\xaa\xf42\xbb\x13\xc6\xe1I\xb3\xad5\xc9\xec\xd4\xfe\x00\x8c\x00\x00".*, .ok },
+            .{ "\xe3t\x06\xc7J\"\xa0\xa0\x1cb\xc2\xb9RH\xdb\xba3L\xb1\xf0".*, .ok },
+            .{ "}\xde\x90$\xc7\x8dU\xf1\x89T^_:\xe6\xa1\x1c{5\xc9\r".*, .ok },
+            .{ "\xbc\xd2f\xd6s \xe9\x9a~\x1f\x18\xcf\xc6\x0cP\xbah5\xb9\xf9".*, .ok },
+        },
+    };
+    const status1: SlotDelta.Status = .{
+        .key_index = 4,
+        .entries = &.{
+            .{ "a\xa3o\x8f\xbdTr\xd1\xed\x07o\xb9\xc7\xcf\xba\xdd\x0b4QN".*, .ok },
+            .{ "r\xb0\x90\xe3\xf2\xb1\x8f\xd1v7\xca{,/NQ\xf0y\xc9\xfc".*, .ok },
+            .{ "~D\xd2&\xfeob.\xe4\xd9\xfc#\x98\x9d\xf6t\x0e\xe0\xe0\xd9".*, .ok },
+            .{ "Ry1\xd2d\x88\x05_e\xbc\xdd_G\xe9\xb9xvmN\\".*, .ok },
+            .{ "\xb7\x8e=3{s\xce^\x11\x88ia\xfc+\xcf\xd2E\xba\xeb\xed".*, .ok },
+            .{ "\x11\x0c]%^s\xf7\xee\xd0\x9f\xbc\x96\x88\x05\xf0x\xa9\xf8D\x89".*, .ok },
+        },
+    };
+    const status_cache_decoded: []const SlotDelta = &.{
+        .{
+            .slot = 0,
+            .is_root = true,
+            .status_map = &.{.{ .parse("8e8HsAXGpV5fNBf1c3AancsRjt1F7GKFZGziNMhiQoBR"), status0 }},
+        },
+        .{
+            .slot = 1,
+            .is_root = true,
+            .status_map = &.{.{ .parse("5Jq6NhSQCWgh9GhMZJ3aJJhdZdALBoX2NWjqDUrh8VK5"), status1 }},
+        },
+    };
+    const status_cache_encoded: []const u8 = &.{
+        2,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   1,   1,
+        0,   0,   0,   0,   0,   0,   0,   113, 132, 138, 200, 177, 106, 168, 112, 72,  173, 246,
+        66,  23,  17,  65,  65,  110, 153, 85,  57,  104, 143, 113, 255, 188, 234, 8,   179, 227,
+        217, 89,  124, 11,  0,   0,   0,   0,   0,   0,   0,   6,   0,   0,   0,   0,   0,   0,
+        0,   101, 96,  93,  185, 138, 178, 56,  154, 168, 0,   67,  211, 30,  154, 99,  253, 15,
+        160, 64,  165, 0,   0,   0,   0,   245, 28,  99,  32,  44,  108, 141, 141, 236, 156, 71,
+        30,  196, 225, 117, 166, 10,  249, 225, 124, 0,   0,   0,   0,   218, 170, 244, 50,  187,
+        19,  198, 225, 73,  179, 173, 53,  201, 236, 212, 254, 0,   140, 0,   0,   0,   0,   0,
+        0,   227, 116, 6,   199, 74,  34,  160, 160, 28,  98,  194, 185, 82,  72,  219, 186, 51,
+        76,  177, 240, 0,   0,   0,   0,   125, 222, 144, 36,  199, 141, 85,  241, 137, 84,  94,
+        95,  58,  230, 161, 28,  123, 53,  201, 13,  0,   0,   0,   0,   188, 210, 102, 214, 115,
+        32,  233, 154, 126, 31,  24,  207, 198, 12,  80,  186, 104, 53,  185, 249, 0,   0,   0,
+        0,   1,   0,   0,   0,   0,   0,   0,   0,   1,   1,   0,   0,   0,   0,   0,   0,   0,
+        64,  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   4,   0,   0,   0,
+        0,   0,   0,   0,   6,   0,   0,   0,   0,   0,   0,   0,   97,  163, 111, 143, 189, 84,
+        114, 209, 237, 7,   111, 185, 199, 207, 186, 221, 11,  52,  81,  78,  0,   0,   0,   0,
+        114, 176, 144, 227, 242, 177, 143, 209, 118, 55,  202, 123, 44,  47,  78,  81,  240, 121,
+        201, 252, 0,   0,   0,   0,   126, 68,  210, 38,  254, 111, 98,  46,  228, 217, 252, 35,
+        152, 157, 246, 116, 14,  224, 224, 217, 0,   0,   0,   0,   82,  121, 49,  210, 100, 136,
+        5,   95,  101, 188, 221, 95,  71,  233, 185, 120, 118, 109, 78,  92,  0,   0,   0,   0,
+        183, 142, 61,  51,  123, 115, 206, 94,  17,  136, 105, 97,  252, 43,  207, 210, 69,  186,
+        235, 237, 0,   0,   0,   0,   17,  12,  93,  37,  94,  115, 247, 238, 208, 159, 188, 150,
+        136, 5,   240, 120, 169, 248, 68,  137, 0,   0,   0,   0,
+    };
+
+    var fbr: std.Io.Reader = .fixed(status_cache_encoded);
+
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const status_cache: StatusCacheHeader = try .init(&fbr);
+
+    var actual_slot_deltas: std.ArrayList(SlotDelta) = .empty;
+    defer actual_slot_deltas.deinit(gpa);
+    try actual_slot_deltas.ensureUnusedCapacity(gpa, status_cache.slot_deltas.len);
+
+    var sc_iter = status_cache.slot_deltas.iterator();
+    while (try sc_iter.next(&fbr)) |slot_delta| {
+        var status_map_al: std.ArrayList(SlotDelta.StatusMapEntry) = .empty;
+        try status_map_al.ensureUnusedCapacity(arena, slot_delta.status_map.len);
+
+        var sme_iter = slot_delta.status_map.iterator();
+        while (try sme_iter.next(&fbr)) |status_map_entry| {
+            var status_entries: std.ArrayList(SlotDelta.Status.Entry) = .empty;
+            try status_entries.ensureUnusedCapacity(arena, status_map_entry.status_list.len);
+
+            var st_iter = status_map_entry.status_list.iterator();
+            while (try st_iter.next(&fbr)) |status| {
+                status_entries.appendAssumeCapacity(.{ status.key_slice, status.result });
+            }
+
+            status_map_al.appendAssumeCapacity(.{
+                status_map_entry.hash,
+                .{
+                    .key_index = status_map_entry.key_index,
+                    .entries = status_entries.items,
+                },
+            });
+        }
+
+        actual_slot_deltas.appendAssumeCapacity(.{
+            .slot = slot_delta.slot,
+            .is_root = slot_delta.is_root,
+            .status_map = status_map_al.items,
+        });
+    }
+
+    try std.testing.expectEqualDeep(
+        status_cache_decoded,
+        actual_slot_deltas.items,
+    );
+
+    var actual_encoded: std.Io.Writer.Allocating = .init(gpa);
+    defer actual_encoded.deinit();
+    const actual_encoded_w = &actual_encoded.writer;
+
+    try actual_encoded.writer.writeInt(u64, actual_slot_deltas.items.len, .little);
+    for (actual_slot_deltas.items) |slot_delta| {
+        try actual_encoded_w.writeInt(Slot, slot_delta.slot, .little);
+        try actual_encoded_w.writeByte(@intFromBool(slot_delta.is_root));
+
+        try actual_encoded_w.writeInt(u64, slot_delta.status_map.len, .little);
+        for (slot_delta.status_map) |status_kv| {
+            const hash, const status = status_kv;
+            try actual_encoded_w.writeAll(&hash.data);
+            try actual_encoded_w.writeInt(u64, status.key_index, .little);
+
+            try actual_encoded_w.writeInt(u64, status.entries.len, .little);
+            for (status.entries) |status_entry| {
+                const key_slice, const result = status_entry;
+                try actual_encoded_w.writeAll(&key_slice);
+                try lib.solana.bincode.write(actual_encoded_w, result);
+            }
+        }
+    }
+
+    try std.testing.expectEqualSlices(u8, status_cache_encoded, actual_encoded.written());
+}
 
 pub const Manifest = struct {
     bank_fields: BankFields,
@@ -509,7 +756,6 @@ fn discardVoteAccounts(r: anytype) !void {
 pub fn SnapshotIter(comptime BufReader: type) type {
     return struct {
         // public fields instantiated using the fba from init()
-        status_cache: StatusCache,
         manifest: Manifest,
 
         tar_iter: TarZstIter(BufReader),
@@ -541,13 +787,13 @@ pub fn SnapshotIter(comptime BufReader: type) type {
             {
                 const tar_file = (try self.tar_iter.next()) orelse return error.MissingMetadata;
                 if (std.mem.eql(u8, tar_file.name, "snapshots/status_cache")) {
-                    self.status_cache = try StatusCache.read(fba, &self.tar_iter.reader);
+                    try StatusCacheHeader.skip(&self.tar_iter.reader);
                     _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
                     self.manifest = try Manifest.read(fba, &self.tar_iter.reader);
                 } else {
                     self.manifest = try Manifest.read(fba, &self.tar_iter.reader);
                     _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                    self.status_cache = try StatusCache.read(fba, &self.tar_iter.reader);
+                    try StatusCacheHeader.skip(&self.tar_iter.reader);
                 }
             }
 
