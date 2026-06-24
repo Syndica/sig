@@ -27,7 +27,6 @@ pub const ReadWrite = struct {
 };
 
 pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
-    _ = runner;
     var request_reader = rw.exec_req_response.request_ring.get(.reader);
     var response_writer = rw.exec_req_response.response_ring.get(.writer);
 
@@ -35,9 +34,13 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
 
     while (true) {
-        const request: *const lib.replay.ExecRequest = request_reader.next() orelse continue;
+        const request: *const lib.replay.ExecRequest = request_reader.next() orelse {
+            try runner.activity.signalIdleSpinning();
+            continue;
+        };
         defer request_reader.markUsed();
         defer deserial_fba.reset();
+        try runner.activity.signalActive();
 
         const zone = tracy.Zone.init(@src(), .{});
         defer zone.deinit();
