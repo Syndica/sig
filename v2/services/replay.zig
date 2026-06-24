@@ -116,6 +116,11 @@ var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 const DeserialStates = [lib.replay.BlockPool.capacity]?BlockDeserialState;
 const BlockExecStates = [lib.replay.BlockPool.capacity]?BlockExecState;
 
+const TransactionBuffer = struct {
+    ref: replay.TransactionPool.ItemId,
+    buf: *[1232]u8,
+};
+
 pub fn Replay(comptime Effects: type) type {
     lib.util.assertInterface(Effects, struct {
         pub fn reportFecSetReceived(self: Effects, fec: *const lib.shred.DeshreddedFecSet) void {
@@ -150,14 +155,22 @@ pub fn Replay(comptime Effects: type) type {
             _ = .{ self, node, block_ref };
         }
 
-        pub fn reportTransactionRequested(
+        pub fn createTransaction(self: Effects) error{OutOfSpace}!TransactionBuffer {
+            _ = self;
+            return undefined;
+        }
+
+        pub fn sendTransactionExecRequest(
             self: Effects,
             block_ref: replay.BlockRef,
             tx_index: u32,
             tx_ref: replay.TransactionPool.ItemId,
-            tx_len: usize,
         ) void {
-            _ = .{ self, block_ref, tx_index, tx_ref, tx_len };
+            _ = .{ self, block_ref, tx_index, tx_ref };
+        }
+
+        pub fn destroyTransaction(self: Effects, tx_ref: replay.TransactionPool.ItemId) void {
+            _ = .{ self, tx_ref };
         }
 
         pub fn reportAllTransactionsRequested(self: Effects, block_ref: replay.BlockRef) void {
@@ -180,10 +193,8 @@ pub fn Replay(comptime Effects: type) type {
         exec_states: *BlockExecStates,
 
         deshredded_iter: lib.shred.DeshredRing.Iterator(.reader),
-        exec_request_sender: replay.ExecReqResponse.RequestRing.Iterator(.writer),
         exec_response_receiver: replay.ExecReqResponse.ResponseRing.Iterator(.reader),
 
-        transaction_pool: *replay.TransactionPool,
         block_pool: *replay.BlockPool,
 
         first_slot: ?Slot = null,
@@ -192,7 +203,6 @@ pub fn Replay(comptime Effects: type) type {
             effects: Effects,
             deshredded_in: *lib.shred.DeshredRing,
             exec_req_response: *replay.ExecReqResponse,
-            transaction_pool: *replay.TransactionPool,
             block_pool: *replay.BlockPool,
         };
 
@@ -218,10 +228,8 @@ pub fn Replay(comptime Effects: type) type {
                 .exec_states = exec_states,
 
                 .deshredded_iter = args.deshredded_in.get(.reader),
-                .exec_request_sender = args.exec_req_response.request_ring.get(.writer),
                 .exec_response_receiver = args.exec_req_response.response_ring.get(.reader),
 
-                .transaction_pool = args.transaction_pool,
                 .block_pool = args.block_pool,
             };
         }
@@ -259,7 +267,7 @@ pub fn Replay(comptime Effects: type) type {
                     std.debug.assert(response.request_kind == .txn_exec); // others unimplemented
                     const response_data = response.data.txn_exec;
 
-                    defer self.transaction_pool.destroyId(response_data.tx_idx);
+                    defer self.effects.destroyTransaction(response_data.tx_idx);
 
                     const block_ref = response_data.block_idx;
                     const exec_state: *BlockExecState = &(self.exec_states[block_ref.index().?].?);
@@ -374,10 +382,8 @@ pub fn Replay(comptime Effects: type) type {
                         inserted.block_ref,
                         &self.forest.pool,
                         self.block_pool,
-                        self.transaction_pool,
                         self.exec_states,
                         self.deserial_states,
-                        &self.exec_request_sender,
                         self.effects,
                     );
 
@@ -396,6 +402,9 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const allocator = fba.allocator();
 
     const Effects = struct {
+        exec_request_sender: *replay.ExecReqResponse.RequestRing.Iterator(.writer),
+        transaction_pool: *replay.TransactionPool,
+
         const Self = @This();
 
         pub fn reportFecSetReceived(self: Self, fec: *const lib.shred.DeshreddedFecSet) void {
@@ -430,14 +439,39 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             _ = .{ self, node, block_ref };
         }
 
-        pub fn reportTransactionRequested(
+        pub fn createTransaction(self: Self) error{OutOfSpace}!TransactionBuffer {
+            const tx_ref = try self.transaction_pool.createId();
+            return .{
+                .ref = tx_ref,
+                .buf = self.transaction_pool.indexToPtr(tx_ref),
+            };
+        }
+
+        pub fn sendTransactionExecRequest(
             self: Self,
-            block_ref: lib.replay.BlockRef,
+            block_ref: replay.BlockRef,
             tx_index: u32,
-            tx_ref: lib.replay.TransactionPool.ItemId,
-            tx_len: usize,
+            tx_ref: replay.TransactionPool.ItemId,
         ) void {
-            _ = .{ self, block_ref, tx_index, tx_ref, tx_len };
+            // NOTE: in the future this should be "sent" to the transaction scheduler, not to exec
+            // directly
+            const request: *lib.replay.ExecRequest = self.exec_request_sender.next() orelse
+                @panic("no space");
+            defer self.exec_request_sender.markUsed();
+            request.* = .{
+                .task_id = tx_index,
+                .request_kind = .txn_exec,
+                .data = .{
+                    .txn_exec = .{
+                        .block_idx = block_ref,
+                        .tx_idx = tx_ref,
+                    },
+                },
+            };
+        }
+
+        pub fn destroyTransaction(self: Self, tx_ref: replay.TransactionPool.ItemId) void {
+            self.transaction_pool.destroyId(tx_ref);
         }
 
         pub fn reportAllTransactionsRequested(self: Self, block_ref: lib.replay.BlockRef) void {
@@ -449,11 +483,16 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         }
     };
 
+    var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
+    const effects: Effects = .{
+        .exec_request_sender = &exec_request_sender,
+        .transaction_pool = rw.replay_transaction_pool,
+    };
+
     var replay_service = try Replay(Effects).init(allocator, logger, .{
-        .effects = .{},
+        .effects = effects,
         .deshredded_in = rw.deshredded_in,
         .exec_req_response = rw.exec_req_response,
-        .transaction_pool = rw.replay_transaction_pool,
         .block_pool = rw.block_pool,
     });
     return replay_service.run(runner.activity);
@@ -763,15 +802,10 @@ fn maybeContinueBlockExec(
     // pools
     forest_pool: *MerkleForest.NodePool,
     block_pool: *replay.BlockPool,
-    transaction_pool: *lib.replay.TransactionPool,
 
     // per-block states
     block_exec_states: *BlockExecStates,
     block_deserial_states: *DeserialStates,
-
-    // for sending exec requests
-    // NOTE: we should instead be sending to the transaction scheduler (when it is implemented)
-    exec_request_sender: *replay.ExecReqResponse.RequestRing.Iterator(.writer),
     effects: anytype,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "maybeContinueBlockExec" });
@@ -818,10 +852,8 @@ fn maybeContinueBlockExec(
                     block_ref,
                     forest_pool,
                     block_pool,
-                    transaction_pool,
                     block_exec_states,
                     block_deserial_states,
-                    exec_request_sender,
                     effects,
                 );
             }
@@ -841,43 +873,23 @@ fn maybeContinueBlockExec(
 
     // Read transactions until we can't anymore, sending to exec as we go
     while (true) {
-        const tx_ref = try transaction_pool.createId();
+        const tx = try effects.createTransaction();
         // TODO: this is a major leak risk, should use comptime errdefer unreachable
 
-        const tx_buf: *[1232]u8 = transaction_pool.indexToPtr(tx_ref);
-
-        const tx = try block_deserial_state.nextTransaction(
+        const tx_bytes = try block_deserial_state.nextTransaction(
             forest_pool,
-            tx_buf,
+            tx.buf,
         ) orelse {
-            transaction_pool.destroyId(tx_ref);
+            effects.destroyTransaction(tx.ref);
             break;
         };
-        tracy.plot(u16, "transaction size", @intCast(tx.len));
+        tracy.plot(u16, "transaction size", @intCast(tx_bytes.len));
 
         // index within the block
         const tx_index: u32 = exec_state.n_transactions_requested;
         exec_state.n_transactions_requested += 1;
 
-        // send task to exec
-        // NOTE: in the future this should be "sent" to the transaction scheduler, not to exec
-        // directly
-        {
-            const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse
-                @panic("no space");
-            defer exec_request_sender.markUsed();
-            request.* = .{
-                .task_id = tx_index,
-                .request_kind = .txn_exec,
-                .data = .{
-                    .txn_exec = .{
-                        .block_idx = block_ref,
-                        .tx_idx = tx_ref,
-                    },
-                },
-            };
-            effects.reportTransactionRequested(block_ref, tx_index, tx_ref, tx.len);
-        }
+        effects.sendTransactionExecRequest(block_ref, tx_index, tx.ref);
     }
 
     // If we've just finished a batch, we should progress to the next one, skipping any junk data
@@ -928,10 +940,8 @@ fn maybeContinueBlockExec(
             child.block_ref,
             forest_pool,
             block_pool,
-            transaction_pool,
             block_exec_states,
             block_deserial_states,
-            exec_request_sender,
             effects,
         );
 
