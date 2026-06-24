@@ -80,6 +80,12 @@ pub fn parseSysvar(
             .rent = UiRent{
                 .lamportsPerByteYear = Stringified(u64).init(rent.lamports_per_byte_year),
                 .exemptionThreshold = RyuF64.init(rent.exemption_threshold),
+                // NOTE: we report the raw serialized field, not the protocol
+                // constant `DEFAULT_BURN_PERCENT`: this is the on-chain sysvar's
+                // actual contents as returned to RPC clients, matching Agave's
+                // `parse_sysvar.rs`. Business logic (fee/rent burn calculations)
+                // should use `DEFAULT_BURN_PERCENT` instead.
+                // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs#L174
                 .burnPercent = rent.burn_percent,
             },
         };

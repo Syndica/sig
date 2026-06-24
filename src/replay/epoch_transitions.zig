@@ -315,16 +315,21 @@ pub fn applyFeatureActivations(
         }
     }
 
+    // On pico/full inflation activation, Agave resets the fee and rent burn
+    // percents to their defaults (see Agave `Bank::apply_feature_activations`).
+    // NOTE: sig's tx-fee burn no longer reads `fee_rate_governor.burn_percent`
+    // (it uses the hard-coded `DEFAULT_BURN_PERCENT` in `distributeTransactionFees`);
+    // we keep these assignments for snapshot-parity with Agave's `SlotConstants`.
     if (new_activations.active(.pico_inflation, slot)) {
         slot_constants.inflation = .PICO;
-        slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
-        slot_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
+        slot_constants.fee_rate_governor.burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT;
+        slot_constants.rent_collector.rent.burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT;
     }
 
     if (feature_set.fullInflationFeaturesEnabled(slot, &new_activations)) {
         slot_constants.inflation = .FULL;
-        slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
-        slot_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
+        slot_constants.fee_rate_governor.burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT;
+        slot_constants.rent_collector.rent.burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT;
     }
 
     try applyBuiltinProgramFeatureTransitions(
@@ -1081,9 +1086,9 @@ test "applyFeatureActivations: basic activations" {
             sig.core.genesis_config.Inflation.PICO,
             env.slot_constants.inflation,
         );
-        try std.testing.expectEqual(50, env.slot_constants.fee_rate_governor.burn_percent);
+        try std.testing.expectEqual(sig.runtime.sysvar.DEFAULT_BURN_PERCENT, env.slot_constants.fee_rate_governor.burn_percent);
         try std.testing.expectEqual(
-            50,
+            sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
             env.slot_constants.rent_collector.rent.burn_percent,
         );
     }
@@ -1153,9 +1158,9 @@ test "applyFeatureActivations: basic activations" {
             sig.core.genesis_config.Inflation.FULL,
             env.slot_constants.inflation,
         );
-        try std.testing.expectEqual(50, env.slot_constants.fee_rate_governor.burn_percent);
+        try std.testing.expectEqual(sig.runtime.sysvar.DEFAULT_BURN_PERCENT, env.slot_constants.fee_rate_governor.burn_percent);
         try std.testing.expectEqual(
-            50,
+            sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
             env.slot_constants.rent_collector.rent.burn_percent,
         );
     }

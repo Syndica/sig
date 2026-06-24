@@ -86,7 +86,6 @@ pub const FreezeParams = struct {
                 .capitalization = &state.capitalization,
                 .blockhash_queue = &state.blockhash_queue,
                 .rent = constants.rent_collector.rent,
-                .fee_burn_percent = constants.fee_rate_governor.burn_percent,
                 .slot = slot,
                 .blockhash = blockhash,
                 .lamports_per_signature = constants.fee_rate_governor.lamports_per_signature,
@@ -152,11 +151,6 @@ const FinalizeStateParams = struct {
 
     // data params
     rent: Rent,
-    /// Percentage of collected base transaction fees to burn. Comes from the
-    /// `FeeRateGovernor` (Agave burns fees via `fee_rate_governor.burn_percent`),
-    /// NOT from the rent config — the snapshot's `rent_collector` is serialized
-    /// as zeros by modern Agave, so `rent.burn_percent` is 0 here.
-    fee_burn_percent: u8,
     slot: Slot,
     blockhash: Hash,
     lamports_per_signature: u64,
@@ -195,7 +189,6 @@ fn finalizeState(
         params.account_reader,
         params.capitalization,
         params.rent,
-        params.fee_burn_percent,
         params.slot,
         params.collector_id,
         params.collected_transaction_fees,
@@ -258,7 +251,6 @@ fn distributeTransactionFees(
     account_reader: SlotAccountReader,
     capitalization: *std.atomic.Value(u64),
     rent: Rent,
-    fee_burn_percent: u8,
     slot: Slot,
     collector_id: Pubkey,
     collected_transaction_fees: u64,
@@ -270,7 +262,13 @@ fn distributeTransactionFees(
     const zone = tracy.Zone.init(@src(), .{ .name = "distributeTransactionFees" });
     defer zone.deinit();
 
-    const burn = collected_transaction_fees * fee_burn_percent / 100;
+    // Agave ignores both `rent.burn_percent` and `fee_rate_governor.burn_percent`
+    // for fee distribution and burns a hard-coded 50% via `Bank::burn_rate`. The
+    // snapshot serializes `rent_collector` as zeros, so reading either field here
+    // would burn 0%. Use the protocol constant directly so this fails loudly if
+    // the burn rate ever changes.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1/runtime/src/bank/fee_distribution.rs#L110
+    const burn = collected_transaction_fees * sig.runtime.sysvar.DEFAULT_BURN_PERCENT / 100;
     const total_fees = collected_priority_fees + collected_transaction_fees;
     const payout = total_fees -| burn;
 

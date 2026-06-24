@@ -21,6 +21,8 @@ const Pubkey = sig.core.Pubkey;
 
 pub const OWNER_ID: Pubkey = .parse("Sysvar1111111111111111111111111111111111111");
 
+pub const DEFAULT_BURN_PERCENT = @import("rent.zig").DEFAULT_BURN_PERCENT;
+
 pub const Clock = @import("clock.zig").Clock;
 pub const EpochRewards = @import("epoch_rewards.zig").EpochRewards;
 pub const EpochSchedule = sig.core.EpochSchedule;
