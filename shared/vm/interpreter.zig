@@ -459,18 +459,36 @@ pub const Vm = struct {
             self.registers.set(.pc, frame.return_pc);
         }
 
+        /// [agave] https://github.com/anza-xyz/sbpf/blob/v0.21.0/src/interpreter.rs#L552-L587
         fn call_imm(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+            var resolved = false;
+
+            // External syscall dispatch.
             if (self.loader.get(inst.imm)) |entry| {
                 try self.dispatchSyscall(entry);
-                self.registers.set(.pc, pc + 1);
-                return;
+                resolved = true;
             }
+
+            // Internal function call. In V0/V1/V2 (non-static syscalls), Anza
+            // always checks the function registry even after a successful
+            // syscall dispatch. If the same key exists in both registries, the
+            // function registry target PC is validated via check_pc and can
+            // produce CallOutsideTextSegment.
             const function_registry = &self.executable.function_registry;
             if (function_registry.lookupKey(inst.imm)) |entry| {
                 try self.pushCallFrame();
-                self.registers.set(.pc, entry.value);
+                const target_pc = entry.value;
+                const instructions = self.executable.instructions;
+                if (target_pc >= instructions.len) return error.CallOutsideTextSegment;
+                self.registers.set(.pc, target_pc);
                 return;
             }
+
+            if (resolved) {
+                self.registers.set(.pc, pc + 1);
+                return;
+            }
+
             return error.UnsupportedInstruction;
         }
 
