@@ -400,9 +400,16 @@ fn insertFromSnapshotArchive(
             defer inner_zone.deinit();
 
             if (maybe_status_cache) |_| return error.DuplicateStatusCache;
-            // Read file content into memory for bincode deserialization
-            maybe_status_cache = try StatusCache.decodeFromBincode(allocator, reader);
-            try reader.skipBytes(tar_hdr.pad_len, .{});
+            // Wrap in a limited reader so that any bincode under- or over-read
+            // is contained to this tar entry and we can keep the tar stream
+            // aligned by skipping whatever bytes remain inside the entry.
+            var status_cache_stream = std14.limitedReader(reader, tar_hdr.file_size);
+            maybe_status_cache = try StatusCache.decodeFromBincode(
+                allocator,
+                status_cache_stream.reader(),
+                .{ .allocation_limit = snapshot.data.bincodeAllocationLimit(tar_hdr.file_size) },
+            );
+            try reader.skipBytes(status_cache_stream.bytes_left + tar_hdr.pad_len, .{});
 
             // Read /snapshot/{slot}/{slot}
         } else if (std.mem.eql(u8, tar_hdr.file_name, manifest_path.constSlice())) {
@@ -410,9 +417,18 @@ fn insertFromSnapshotArchive(
             defer inner_zone.deinit();
 
             if (maybe_manifest) |_| return error.DuplicateManifest;
-            // Read file content into memory for bincode deserialization
-            maybe_manifest = try Manifest.decodeFromBincode(allocator, reader);
-            try reader.skipBytes(tar_hdr.pad_len, .{});
+            // Wrap in a limited reader so that ExtraFields' `until_eof` loop
+            // stops cleanly at the manifest's tar boundary instead of reading
+            // bytes from the next tar entry, and so any trailing fields added
+            // by newer Agave versions are auto-skipped (keeping the tar stream
+            // aligned and avoiding a downstream `error.TarHeader`).
+            var manifest_stream = std14.limitedReader(reader, tar_hdr.file_size);
+            maybe_manifest = try Manifest.decodeFromBincode(
+                allocator,
+                manifest_stream.reader(),
+                .{ .allocation_limit = snapshot.data.bincodeAllocationLimit(tar_hdr.file_size) },
+            );
+            try reader.skipBytes(manifest_stream.bytes_left + tar_hdr.pad_len, .{});
 
             if (maybe_manifest.?.accounts_db_fields.slot != slot_and_hash.slot)
                 return error.MismatchingManifestSlot;

@@ -27,6 +27,21 @@ pub const MAX_RECENT_BLOCKHASHES: usize = 300;
 pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
 const CACHED_KEY_SIZE: usize = 20;
 
+/// Floor for the bincode `LimitAllocator` budget used when deserializing a
+/// snapshot manifest or status cache. The on-disk size of these files is a
+/// poor lower bound for the working memory needed to deserialize them — small
+/// manifests still allocate hashmap capacity, nested epoch-stakes maps, etc.,
+/// where in-memory bytes can substantially exceed serialized bytes. The floor
+/// guarantees enough headroom for any well-formed file regardless of size,
+/// while `size * 8` still bounds the worst case on huge inputs.
+const MIN_BINCODE_LIMIT: usize = 32 * 1024 * 1024; // 32 MiB
+
+/// Computes the bincode allocation limit for a snapshot file of the given size.
+pub fn bincodeAllocationLimit(file_size: u64) usize {
+    const scaled: usize = @intCast(@min(file_size *| 8, @as(u64, std.math.maxInt(usize))));
+    return @max(scaled, MIN_BINCODE_LIMIT);
+}
+
 /// Analogous to [ObsoleteIncrementalSnapshotPersistence](https://github.com/anza-xyz/agave/blob/68c1077841eb5a2f0adb2b50f6cfa92a12b8d894/runtime/src/serde_snapshot.rs#L88)
 pub const ObsoleteIncrementalSnapshotPersistence = struct {
     /// slot of full snapshot
@@ -68,6 +83,13 @@ pub const ExtraFields = struct {
     epoch_accounts_hash: ?Hash,
     versioned_epoch_stakes: std.AutoArrayHashMapUnmanaged(Epoch, VersionedEpochStakes),
     accounts_lt_hash: sig.core.hash.LtHash,
+    /// Added to Agave's snapshot extra fields in
+    /// https://github.com/anza-xyz/agave/pull/11355 (commit d5e3f34, 2026-03-21).
+    /// Snapshots produced after that change include 33 trailing bytes here
+    /// (option tag + 32-byte hash); reading the manifest without consuming
+    /// them would leave the tar stream misaligned and silently truncate
+    /// account-file processing.
+    block_id: ?Hash,
 
     pub const @"!bincode-config": bincode.FieldConfig(ExtraFields) = .{
         .deserializer = bincodeRead,
@@ -81,6 +103,7 @@ pub const ExtraFields = struct {
         .epoch_accounts_hash = null,
         .versioned_epoch_stakes = .{},
         .accounts_lt_hash = .IDENTITY,
+        .block_id = null,
     };
 
     pub fn deinit(self: *const ExtraFields, allocator: std.mem.Allocator) void {
@@ -100,6 +123,7 @@ pub const ExtraFields = struct {
             .versioned_epoch_stakes = try sig.utils.collections
                 .cloneMapAndValues(allocator, self.versioned_epoch_stakes),
             .accounts_lt_hash = self.accounts_lt_hash,
+            .block_id = self.block_id,
         };
     }
 
@@ -150,6 +174,9 @@ pub const ExtraFields = struct {
                     random.bytes(std.mem.asBytes(&hash));
                     break :hash hash;
                 },
+
+                .block_id,
+                => field_ptr.* = Hash.initRandom(random),
             }
         }
 
@@ -180,6 +207,9 @@ pub const ExtraFields = struct {
 
                     .snapshot_persistence,
                     .epoch_accounts_hash,
+                    => bincode.read(assert_allocator, field.type, reader, params),
+
+                    .block_id,
                     => bincode.read(assert_allocator, field.type, reader, params),
 
                     // We need to deserialise this as optional, but really we should always have it
@@ -515,15 +545,18 @@ pub const Manifest = struct {
         defer allocator.free(contents);
 
         var fbs = std.io.fixedBufferStream(contents);
-        return bincode.read(allocator, Manifest, fbs.reader(), .{ .allocation_limit = 2 << 30 });
+        return decodeFromBincode(allocator, fbs.reader(), .{
+            .allocation_limit = bincodeAllocationLimit(size),
+        });
     }
 
     pub fn decodeFromBincode(
         allocator: std.mem.Allocator,
         /// `std.io.GenericReader(...)` | `std.io.AnyReader`
         reader: anytype,
+        params: bincode.Params,
     ) !Manifest {
-        return try bincode.read(allocator, Manifest, reader, .{ .allocation_limit = 2 << 30 });
+        return try bincode.read(allocator, Manifest, reader, params);
     }
 
     pub fn epochStakes(
@@ -718,15 +751,19 @@ pub const StatusCache = struct {
     }
 
     pub fn readFromFile(allocator: std.mem.Allocator, file: std.fs.File) !StatusCache {
-        return decodeFromBincode(allocator, file.deprecatedReader());
+        const size = (try file.stat()).size;
+        return decodeFromBincode(allocator, file.deprecatedReader(), .{
+            .allocation_limit = bincodeAllocationLimit(size),
+        });
     }
 
     pub fn decodeFromBincode(
         allocator: std.mem.Allocator,
         /// `std.io.GenericReader(...)` | `std.io.AnyReader`
         reader: anytype,
+        params: bincode.Params,
     ) !StatusCache {
-        return try bincode.read(allocator, StatusCache, reader, .{});
+        return try bincode.read(allocator, StatusCache, reader, params);
     }
 
     pub fn deinit(self: StatusCache, allocator: std.mem.Allocator) void {

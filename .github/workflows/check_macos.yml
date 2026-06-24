@@ -31,10 +31,12 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Build Check
-        run: zig build -Denable-tsan=false --summary all -Dno-run -Dno-bin
+        run: |
+          ./scripts/fetch-zig-deps.py
+          zig build -Denable-tsan=false --summary all -Dno-run -Dno-bin
 
   test_macos:
     runs-on: macos-15
@@ -48,15 +50,23 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Build Tests
-        run: zig build test -Dno-run -Denable-tsan=false --summary all
+        run: |
+          ./scripts/fetch-zig-deps.py
+          zig build test -Dno-run -Denable-tsan=false --summary all
 
       - name: Run Tests
         run: |
           set -eo pipefail
           zig-out/bin/test 2>&1 | cat
+
+      - name: Shared Tests
+        run: |
+          ./scripts/fetch-zig-deps.py shared/build.zig.zon
+          cd shared
+          zig build test -Dallow-no-sha -Dallow-no-avx512 --summary all
 
   test_macos_hashmap_ledger:
     runs-on: macos-15
@@ -70,11 +80,12 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Build Tests
-        run: zig build test -Dno-run -Denable-tsan=false --summary all -Dlong-tests
-          -Dledger=hashmap -Dfilter="ledger"
+        run: |
+          ./scripts/fetch-zig-deps.py
+          zig build test -Dno-run -Denable-tsan=false --summary all -Dlong-tests -Dledger=hashmap -Dfilter="ledger"
 
       - name: Run Tests
         run: |
@@ -99,5 +110,6 @@ jobs:
 
       - name: Build and Run Webzockets Tests
         run: |
+          ./scripts/fetch-zig-deps.py src/rpc/webzockets/build.zig.zon
           cd src/rpc/webzockets
           zig build test --summary all

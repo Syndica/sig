@@ -34,7 +34,7 @@ pub const ReadOnly = struct {
 
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
-pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
 
@@ -103,7 +103,9 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
     // TODO: add .rpc for serving snapshots
     var sockets: lib.gossip.SocketMap.Builder = .{};
     sockets.set(.gossip, ro.config.cluster_info.public_ip.withPort(rw.net_pair.port));
-    sockets.set(.tvu, ro.config.cluster_info.public_ip.withPort(ro.config.turbine_recv_port));
+    if (ro.config.advertise_tvu_port) {
+        sockets.set(.tvu, ro.config.cluster_info.public_ip.withPort(ro.config.turbine_recv_port));
+    }
 
     var now = lib.clock.wallclock(.ms);
     var fba = std.heap.FixedBufferAllocator.init(&scratch_memory);
@@ -119,7 +121,16 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         now = lib.clock.wallclock(.ms);
         try gossip.poll(.from(logger), now);
 
-        const packet = it.next() orelse continue;
+        const packet = it.next() orelse {
+            // TODO(ink): detect whether our output ring buffers (`packet_writer` and co)
+            // are all empty, and only signal idle if they are.
+            // For now this should work fine, but in theory there's a very slim chance
+            // of a race condition (it should be basically impossible to manifest
+            // in the one black-box test that currently exists for this).
+            try runner.activity.signalIdleSpinning();
+            continue;
+        };
+        try runner.activity.signalActive();
         gossip.processPacket(.from(logger), now, packet);
         it.markUsed();
     }

@@ -5,10 +5,14 @@
         "build.zig.zon",
         "build.zig",
         "src",
+        "shared",
     },
     .minimum_zig_version = "0.15.2",
     .fingerprint = 0xce1f2b0e2866b810,
     .dependencies = .{
+        .shared = .{
+            .path = "shared",
+        },
         .httpz = .{
             .url = "git+https://github.com/karlseguin/http.zig#9ef2ffe8d611ff2e1081e5cf39cb4632c145c5b9",
             .hash = "httpz-0.0.0-PNVzrIowBwAFr_kqBN1W4KBMC2Ofutasj2ZfNAIcfTzF",
@@ -30,20 +34,12 @@
             .hash = "libxev-0.0.0-86vtcwE9EwB942iWRnaNMXHv3n0BeLAs_tVhrs5cT8cQ",
         },
         .prettytable = .{
-            .url = "git+https://github.com/dying-will-bullet/prettytable-zig#43e8fbbff4cbacbef195aa4fea281375a77c2026",
-            .hash = "prettytable-0.3.0--Be65yOGAQBntw96PFuz_YR5FcewxN1yOYuPUXb5NV9y",
+            .url = "git+https://github.com/Syndica/prettytable-zig/#a7880b32606be9f2130b69ca0713c417fece8a64",
+            .hash = "prettytable-0.3.0--Be650WGAQAlzZu1XrC-FnA70LT4zLC9vlmrEvThvwi0",
         },
         .base58 = .{
             .url = "git+https://github.com/Syndica/base58-zig#2acfa605d23d4d565a7e5a8ff35ea4a827eaaab9",
             .hash = "base58-0.2.0-wW0iYMIiAABft2x6NlD5mMmFx7-VWfHJq5EAgVQw068t",
-        },
-        .poseidon = .{
-            .url = "git+https://github.com/Rexicon226/zig-poseidon#b73e6ec762676a38bde76f7689eec0806aeeddaa",
-            .hash = "poseidon-0.2.0-2qOpvz-3DQBhqfX5onUg3vP2lkcljFPAkHiDEQFkdJCu",
-        },
-        .secp256k1 = .{
-            .url = "git+https://github.com/Syndica/secp256k1-zig#24771ad4fbca40a2d0b9a7a2c8bb410e6e238249",
-            .hash = "secp256k1-0.5.0-2oLmGRAHAACjbp4BBLAoCU6Sotb_gqChbYOIIvBejN0V",
         },
         .tracy = .{
             .url = "git+https://github.com/Syndica/tracy-zig#a767a15d1b4d6d813e929cf352c2265ff97a16da",
@@ -55,10 +51,6 @@
         .sqlite = .{
             .url = "https://www.sqlite.org/2025/sqlite-amalgamation-3490200.zip",
             .hash = "N-V-__8AAH-mpwB7g3MnqYU-ooUBF1t99RP27dZ9addtMVXD",
-        },
-        .blst = .{
-            .url = "git+https://github.com/supranational/blst#806515251de5cfb9761ad12eb2f2f151b1ad0277",
-            .hash = "blst-0.3.16-fvxk1c82MABYUm65ch0-wpo2CSs1x5TCuBLvgQng0uRC",
         },
         .bzip2 = .{
             .url = "https://github.com/libarchive/bzip2/archive/refs/tags/bzip2-1.0.8.zip",

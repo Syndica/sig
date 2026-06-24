@@ -31,11 +31,43 @@ pub const Pubkey = extern struct {
         return .{ .data = Edwards25519.fromUniform(bytes).toBytes() };
     }
 
+    // Port of https://github.com/ogxd/gxhash/
+    // Since hashing [32]u8, this keeps the hashing in simd registers (vs mulx alternatives)
+    pub fn hash(self: *const Pubkey, seed: u64) u64 {
+        const AesBlock = std.crypto.core.aes.Block;
+        const KEYS: [3]AesBlock = .{
+            .fromBytes(std.mem.asBytes(&[_]u32{ 0xF2784542, 0xB09D3E21, 0x89C222E5, 0xFC3BC28E })),
+            .fromBytes(std.mem.asBytes(&[_]u32{ 0x03FCE279, 0xCB6B2E9B, 0xB361DC58, 0x39132BD9 })),
+            .fromBytes(std.mem.asBytes(&[_]u32{ 0xD0012E32, 0x689D2B7D, 0x5544B1B7, 0xC78B122B })),
+        };
+
+        // create_seed
+        var state = AesBlock.fromBytes(std.mem.asBytes(&[_]u64{ seed, seed }));
+
+        // write!
+        state = AesBlock.fromBytes(self.data[0..16]).encryptLast(state.encrypt(KEYS[0]));
+        state = AesBlock.fromBytes(self.data[16..32]).encryptLast(state.encrypt(KEYS[0]));
+
+        // finalize
+        state = state.encrypt(KEYS[0]).encrypt(KEYS[1]).encryptLast(KEYS[2]);
+
+        // finish
+        const h: u128 = @bitCast(state.toBytes());
+        return @truncate(h);
+    }
+
     pub fn order(self: Pubkey, other: Pubkey) std.math.Order {
-        return for (self.data, other.data) |a_byte, b_byte| {
-            if (a_byte > b_byte) break .gt;
-            if (a_byte < b_byte) break .lt;
-        } else .eq;
+        const xx: @Vector(SIZE, u8) = self.data;
+        const yy: @Vector(SIZE, u8) = other.data;
+
+        const diff_mask: std.meta.Int(.unsigned, SIZE) = @bitCast(xx != yy);
+        const all_eq = diff_mask == 0;
+
+        const first_diff = if (all_eq) 0 else @ctz(diff_mask);
+        const lt_or_gt: std.math.Order =
+            if (self.data[first_diff] < other.data[first_diff]) .lt else .gt;
+
+        return if (all_eq) .eq else lt_or_gt;
     }
 
     pub fn equals(self: *const Pubkey, other: *const Pubkey) bool {

@@ -2,6 +2,7 @@ const std = @import("std");
 const tracy = @import("tracy");
 const lib = @import("../lib.zig");
 const reed_sol = @import("reed_solomon.zig");
+const build_options = @import("build-options");
 
 const solana = lib.solana;
 const net = lib.net;
@@ -67,6 +68,7 @@ pub const Receiver = struct {
         network_shred_version: u16,
         packet: *const Packet,
         deshred_writer: *DeshredRing.Iterator(.writer),
+        logger: lib.telemetry.Logger("processPacket"),
     ) !NonErrorStatus {
         const zone = tracy.Zone.init(@src(), .{ .name = "processPacket" });
         defer zone.deinit();
@@ -86,7 +88,18 @@ pub const Receiver = struct {
             if (shred.slot > state.max_slot) return error.ShredTooNew;
 
             // ignore shred with wrong version
-            if (shred.version != network_shred_version) return error.ShredVersionMismatch;
+            if (shred.version != network_shred_version) {
+                if (!build_options.debug_skip_shred_checks) return error.ShredVersionMismatch;
+            }
+
+            // reject shreds greater than the max per slot
+            // [agave] https://github.com/anza-xyz/agave/blob/ce2b875e7a9587106cb505e14ab769f9356b8238/ledger/src/shred.rs#L772
+            // [firedancer] https://github.com/firedancer-io/firedancer/blob/e547465daf50329a163ffbd0aa3089b9822d1759/src/disco/shred/fd_fec_resolver.c#L505
+            const max_shreds_per_slot = 32768;
+            if (shred.fec_set_idx > max_shreds_per_slot - FecSetCtx.fec_shred_count)
+                return error.FecSetIndexTooHigh;
+            if (shred.slot_idx >= max_shreds_per_slot)
+                return error.SlotIndexTooHigh;
 
             // ignore any with bad counts or indices (SIMD 0317 enforces this)
             if (shred.variant.isCode()) {
@@ -177,15 +190,30 @@ pub const Receiver = struct {
             }
 
             // This is the first shred of a new in-progress fec set.
-            const slot_leader = leader_schedule.get(shred.slot) orelse return error.UnknownLeader;
 
-            var shred_merkle_root: Hash = undefined;
-            try shred.merkleRoot(&shred_merkle_root);
+            // The shred's merkle root must be calculated unconditionally.
+            const shred_merkle_root: Hash = blk: {
+                var shred_merkle_root: Hash = undefined;
 
-            try shred.signature.verify(
-                slot_leader,
-                &shred_merkle_root.data,
-            );
+                if (!build_options.debug_skip_shred_checks) {
+                    const slot_leader = leader_schedule.get(shred.slot) orelse {
+                        logger.warn().logf("slot {} missing?\n", .{shred.slot});
+                        return error.UnknownLeader;
+                    };
+
+                    try shred.merkleRoot(&shred_merkle_root);
+
+                    try shred.signature.verify(
+                        slot_leader,
+                        &shred_merkle_root.data,
+                    );
+                } else {
+                    // debug purposes only
+                    try shred.merkleRoot(&shred_merkle_root);
+                }
+
+                break :blk shred_merkle_root;
+            };
 
             const fec_set_ctx = try state.in_progress.createFecSetCtx(fec_set_id, &shred.signature);
 
@@ -254,7 +282,23 @@ pub const Receiver = struct {
 
         // starting fec set reconstruction now
         // NOTE: as an optimisation we should reconstruct directly into the out buffer
-        reed_sol.reconstructFecSet(fec_set_ctx);
+        {
+            const shreds_bitset, const shreds_reedsol_bufs = fec_set_ctx.erasureEncoded();
+
+            const recover_zone = tracy.Zone.init(@src(), .{ .name = "reconstructFecSet" });
+            defer recover_zone.deinit();
+
+            reed_sol.recover64(
+                shred.erasureFragment().?.len,
+                &shreds_reedsol_bufs,
+                32,
+                32,
+                shreds_bitset.mask,
+            ) catch @panic("todo: handle bad recovery");
+
+            fec_set_ctx.data_shreds_received = .initFull();
+        }
+
         std.debug.assert(fec_set_ctx.data_shreds_received.count() == FecSetCtx.data_shreds_max);
 
         // writing out deshredded fec set
@@ -273,8 +317,12 @@ pub const Receiver = struct {
 
                     len += @intCast(data_shred.dataPayload().len);
 
-                    data_complete = data_complete or flags.data_complete;
                     slot_complete = slot_complete or flags.last_shred_in_slot;
+
+                    if (flags.data_complete) {
+                        data_complete = true;
+                        break;
+                    }
                 }
                 break :blk .{ len, data_complete, slot_complete };
             };
@@ -301,11 +349,13 @@ pub const Receiver = struct {
 
             var bytes_written: u16 = 0;
             for (&fec_set_ctx.data_shreds_buf) |*buffer| {
+                // TODO: I think we need to re-validate the data shreds that we recovered
                 const data_shred: *const Shred = Shred.fromBufferUnchecked(buffer);
                 const payload = data_shred.dataPayload();
-
                 @memcpy(finished.payload_buf[bytes_written..][0..payload.len], payload);
                 bytes_written += @intCast(payload.len);
+
+                if (Shred.fromBufferUnchecked(buffer).code_or_data.data.flags.data_complete) break;
             }
 
             std.debug.assert(bytes_written == total_payload_len);
@@ -365,6 +415,62 @@ pub const FecSetCtx = extern struct {
         std.debug.assert(code_recv <= code_shreds_max);
 
         return data_recv + code_recv;
+    }
+
+    // prep for recover64
+    fn erasureEncoded(self: *FecSetCtx) struct { std.StaticBitSet(64), [64][]u8 } {
+        const base_variant = variant: {
+            for (&self.data_shreds_buf, 0..) |*data_shred, i| {
+                if (!self.data_shreds_received.isSet(i)) continue;
+                const shred: *const Shred = .fromBufferUnchecked(data_shred);
+                break :variant shred.variant;
+            }
+            for (&self.code_shreds_buf, 0..) |*code_shred, i| {
+                if (!self.code_shreds_received.isSet(i)) continue;
+                const shred: *const Shred = .fromBufferUnchecked(code_shred);
+                break :variant shred.variant;
+            }
+            unreachable;
+        };
+
+        var erasure_buffers: [64][]u8 = undefined;
+
+        for (erasure_buffers[0..32], &self.data_shreds_buf, 0..) |*erasure_buf, *data_shred, i| {
+            const shred: *Shred = .fromBufferUncheckedMut(data_shred);
+
+            // set variant for unused buffers so we can get the erasure fragment offset+size
+            if (!self.data_shreds_received.isSet(i)) {
+                shred.variant = if (base_variant.isCode())
+                    base_variant.swapType()
+                else
+                    base_variant;
+            }
+
+            erasure_buf.* = shred.erasureFragment().?;
+        }
+
+        for (erasure_buffers[32..64], &self.code_shreds_buf, 0..) |*erasure_buf, *code_shred, i| {
+            const shred: *Shred = .fromBufferUncheckedMut(code_shred);
+
+            // set variant for unused buffers so we can get the erasure fragment offset+size
+            if (!self.code_shreds_received.isSet(i)) {
+                shred.variant = if (base_variant.isData())
+                    base_variant.swapType()
+                else
+                    base_variant;
+            }
+
+            erasure_buf.* = shred.erasureFragment().?;
+        }
+
+        var bitset: std.StaticBitSet(64) = .{
+            .mask = (@as(u64, self.code_shreds_received.mask) << 32) |
+                @as(u64, self.data_shreds_received.mask),
+        };
+
+        bitset.toggleAll();
+
+        return .{ bitset, erasure_buffers };
     }
 };
 

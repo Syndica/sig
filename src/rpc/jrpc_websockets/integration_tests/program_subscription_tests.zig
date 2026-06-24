@@ -65,7 +65,7 @@ test "programSubscribe confirmed publishes on rooted without confirmed event" {
         .rent_epoch = 0,
     };
     defer account.deinit(allocator);
-    const account_shared = try sig.runtime.AccountSharedData.fromAccount(allocator, &account);
+    const account_shared = try sig.runtime.account_conversions.fromAccount(allocator, &account);
     defer account_shared.deinit(allocator);
 
     try addTrackedSlot(server, 88, 0, &.{88});
@@ -134,7 +134,7 @@ test "programSubscribe confirmed flushes frozen ancestors in order" {
         .rent_epoch = 0,
     };
     defer account1.deinit(allocator);
-    const account_shared1 = try sig.runtime.AccountSharedData.fromAccount(allocator, &account1);
+    const account_shared1 = try sig.runtime.account_conversions.fromAccount(allocator, &account1);
     defer account_shared1.deinit(allocator);
 
     const pk2: Pubkey = .{ .data = @splat(0xA2) };
@@ -148,7 +148,7 @@ test "programSubscribe confirmed flushes frozen ancestors in order" {
         .rent_epoch = 0,
     };
     defer account2.deinit(allocator);
-    const account_shared2 = try sig.runtime.AccountSharedData.fromAccount(allocator, &account2);
+    const account_shared2 = try sig.runtime.account_conversions.fromAccount(allocator, &account2);
     defer account_shared2.deinit(allocator);
 
     var pk3: Pubkey = undefined;
@@ -163,7 +163,7 @@ test "programSubscribe confirmed flushes frozen ancestors in order" {
         .rent_epoch = 0,
     };
     defer account3.deinit(allocator);
-    const account_shared3 = try sig.runtime.AccountSharedData.fromAccount(allocator, &account3);
+    const account_shared3 = try sig.runtime.account_conversions.fromAccount(allocator, &account3);
     defer account_shared3.deinit(allocator);
 
     try addTrackedSlot(server, 1, 0, &.{1});
@@ -255,7 +255,7 @@ test "programSubscribe processed publishes current tip slot if frozen before tip
         .rent_epoch = 0,
     };
     defer account.deinit(allocator);
-    const account_shared = try sig.runtime.AccountSharedData.fromAccount(allocator, &account);
+    const account_shared = try sig.runtime.account_conversions.fromAccount(allocator, &account);
     defer account_shared.deinit(allocator);
 
     try addTrackedSlot(server, 10, 0, &.{10});
@@ -326,7 +326,7 @@ test "programSubscribe processed does not publish frozen off-fork slot" {
         .rent_epoch = 0,
     };
     defer account.deinit(allocator);
-    const account_shared = try sig.runtime.AccountSharedData.fromAccount(allocator, &account);
+    const account_shared = try sig.runtime.account_conversions.fromAccount(allocator, &account);
     defer account_shared.deinit(allocator);
 
     try addTrackedSlot(server, 10, 0, &.{10});
@@ -391,7 +391,7 @@ test "programSubscribe no backfill on pure tip change" {
         .rent_epoch = 0,
     };
     defer account.deinit(allocator);
-    const account_shared = try sig.runtime.AccountSharedData.fromAccount(allocator, &account);
+    const account_shared = try sig.runtime.account_conversions.fromAccount(allocator, &account);
     defer account_shared.deinit(allocator);
 
     try addTrackedSlot(server, 10, 0, &.{10});
@@ -468,7 +468,7 @@ test "programSubscribe finalized flushes all newly rooted slots" {
         .rent_epoch = 0,
     };
     defer account10.deinit(allocator);
-    const account_shared10 = try sig.runtime.AccountSharedData.fromAccount(allocator, &account10);
+    const account_shared10 = try sig.runtime.account_conversions.fromAccount(allocator, &account10);
     defer account_shared10.deinit(allocator);
 
     const data_buf11 = try allocator.alloc(u8, 1);
@@ -481,7 +481,7 @@ test "programSubscribe finalized flushes all newly rooted slots" {
         .rent_epoch = 0,
     };
     defer account11.deinit(allocator);
-    const account_shared11 = try sig.runtime.AccountSharedData.fromAccount(allocator, &account11);
+    const account_shared11 = try sig.runtime.account_conversions.fromAccount(allocator, &account11);
     defer account_shared11.deinit(allocator);
 
     try addTrackedSlot(server, 10, 0, &.{10});
@@ -566,7 +566,7 @@ test "programSubscribe filter dataSize applied" {
         .rent_epoch = 0,
     };
     defer acct_match.deinit(allocator);
-    const shared_match = try sig.runtime.AccountSharedData.fromAccount(allocator, &acct_match);
+    const shared_match = try sig.runtime.account_conversions.fromAccount(allocator, &acct_match);
     defer shared_match.deinit(allocator);
 
     // Account with 8 bytes of data (should be filtered out by dataSize:4).
@@ -582,7 +582,7 @@ test "programSubscribe filter dataSize applied" {
         .rent_epoch = 0,
     };
     defer acct_nomatch.deinit(allocator);
-    const shared_nomatch = try sig.runtime.AccountSharedData.fromAccount(allocator, &acct_nomatch);
+    const shared_nomatch = try sig.runtime.account_conversions.fromAccount(allocator, &acct_nomatch);
     defer shared_nomatch.deinit(allocator);
 
     try addTrackedSlot(server, 50, 0, &.{50});
@@ -658,7 +658,7 @@ test "programSubscribe filter memcmp applied" {
         .rent_epoch = 0,
     };
     defer acct_match.deinit(allocator);
-    const shared_match = try sig.runtime.AccountSharedData.fromAccount(allocator, &acct_match);
+    const shared_match = try sig.runtime.account_conversions.fromAccount(allocator, &acct_match);
     defer shared_match.deinit(allocator);
 
     // Account whose data starts with [0xBE, 0xEF] -> does NOT match.
@@ -677,7 +677,7 @@ test "programSubscribe filter memcmp applied" {
         .rent_epoch = 0,
     };
     defer acct_nomatch.deinit(allocator);
-    const shared_nomatch = try sig.runtime.AccountSharedData.fromAccount(allocator, &acct_nomatch);
+    const shared_nomatch = try sig.runtime.account_conversions.fromAccount(allocator, &acct_nomatch);
     defer shared_nomatch.deinit(allocator);
 
     try addTrackedSlot(server, 60, 0, &.{60});
@@ -750,7 +750,7 @@ test "programSubscribe tokenAccountState matches account data without token owne
         .rent_epoch = 0,
     };
     defer account.deinit(allocator);
-    const shared_account = try sig.runtime.AccountSharedData.fromAccount(allocator, &account);
+    const shared_account = try sig.runtime.account_conversions.fromAccount(allocator, &account);
     defer shared_account.deinit(allocator);
 
     try addTrackedSlot(server, 65, 0, &.{65});
@@ -883,7 +883,7 @@ test "programSubscribe account with non-matching owner does not publish" {
         .rent_epoch = 0,
     };
     defer acct.deinit(allocator);
-    const acct_shared = try sig.runtime.AccountSharedData.fromAccount(allocator, &acct);
+    const acct_shared = try sig.runtime.account_conversions.fromAccount(allocator, &acct);
     defer acct_shared.deinit(allocator);
 
     try addTrackedSlot(server, 80, 0, &.{80});

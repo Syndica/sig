@@ -86,7 +86,7 @@ var scratch_memory: [1024 * 1024 * 1024]u8 = undefined;
 const max_in_progress = 8192;
 const max_done = 65536;
 
-pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
+pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
     const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
     defer zone.deinit();
 
@@ -107,16 +107,20 @@ pub fn serviceMain(ro: ReadOnly, rw: ReadWrite) !noreturn {
         {
             const idle_zone = tracy.Zone.init(@src(), .{ .name = "idle" });
             defer idle_zone.deinit();
-            while (packet_iter.peek() == null) continue;
+            while (packet_iter.peek() == null) {
+                try runner.activity.signalIdleSpinning();
+            }
         }
         while (packet_iter.next()) |packet| {
             defer packet_iter.markUsed();
+            try runner.activity.signalActive();
 
             const result = receiver.processPacket(
                 &ro.config.leader_schedule,
                 ro.config.shred_version,
                 packet,
                 &deshred_out,
+                logger.withScope("processPacket"),
             ) catch |err| {
                 std.log.warn("packet failed with {}", .{err});
                 continue;

@@ -428,6 +428,42 @@ pub const Filter = struct {
         }
     }
 
+    /// Returns the length that would be written by `parseListAndWriteBinary`.
+    pub fn calcParseListAndWriteBinaryLength(
+        default_log_level: Level,
+        str: []const u8,
+    ) ParseError!u64 {
+        var discarding: std.Io.Writer.Discarding = .init(&.{});
+        parseListAndWriteBinary(
+            &discarding.writer,
+            default_log_level,
+            str,
+        ) catch |err| switch (err) {
+            error.WriteFailed => unreachable,
+            error.InvalidLogLevel => |e| return e,
+        };
+        return discarding.fullCount();
+    }
+
+    /// Like `parseListAndWriteBinary`, but runs at comptime and directly returns the encoded bytes.
+    /// Returns null instead of an error.
+    pub inline fn parseListStrLitIntoBinary(
+        comptime default_log_level: Level,
+        comptime str: []const u8,
+    ) ?[]const u8 {
+        comptime {
+            const len = calcParseListAndWriteBinaryLength(default_log_level, str) catch return null;
+            var result: [len]u8 = @splat(255);
+            var fbw: std.Io.Writer = .fixed(&result);
+            parseListAndWriteBinary(&fbw, default_log_level, str) catch |err| switch (err) {
+                error.WriteFailed => unreachable,
+                error.InvalidLogLevel => return null,
+            };
+            const copy = fbw.buffered()[0..].*;
+            return &copy;
+        }
+    }
+
     pub fn writeBinary(
         self: Filter,
         w: *std.Io.Writer,
@@ -447,9 +483,9 @@ pub const Filter = struct {
 
     pub const Header = extern struct {
         /// Length of zero represents `null`.
-        service_len: u32,
+        service_len: u32 align(1),
         /// Length of zero represents `null`.
-        scope_len: u32,
+        scope_len: u32 align(1),
         level: Level,
 
         pub fn encodedLength(self: Header) u32 {
@@ -488,6 +524,42 @@ pub const Filter = struct {
         try w.writeAll(self.level.text());
     }
 };
+
+test Filter {
+    // Empty filter str case.
+    {
+        const encoded = comptime Filter.parseListStrLitIntoBinary(.fatal, "").?;
+        var reader: std.Io.Reader = .fixed(encoded);
+
+        const header = try reader.takeStruct(Filter.Header, tel.endian);
+        const filter = header.getFilterFromFixedReader(&reader) orelse
+            return error.TestExpectedNonNull;
+        try std.testing.expectEqual(Filter.initLevel(.fatal), filter);
+        try std.testing.expectEqual(0, reader.bufferedLen());
+    }
+
+    // case for filter str = "replay:main=info".
+    {
+        const encoded = comptime Filter.parseListStrLitIntoBinary(
+            .fatal,
+            "replay:main=info",
+        ).?;
+        var reader: std.Io.Reader = .fixed(encoded);
+
+        const replay_header = try reader.takeStruct(Filter.Header, tel.endian);
+        const replay_filter = replay_header.getFilterFromFixedReader(&reader) orelse
+            return error.TestExpectedNonNull;
+        try std.testing.expectEqual(.info, replay_filter.level);
+        try std.testing.expectEqualStrings("replay", replay_filter.service.?);
+        try std.testing.expectEqualStrings("main", replay_filter.scope.?);
+
+        const default_header = try reader.takeStruct(Filter.Header, tel.endian);
+        const default_filter = default_header.getFilterFromFixedReader(&reader) orelse
+            return error.TestExpectedNonNull;
+        try std.testing.expectEqual(Filter.initLevel(.fatal), default_filter);
+        try std.testing.expectEqual(0, reader.bufferedLen());
+    }
+}
 
 pub const EntryField = struct {
     name: []const u8,

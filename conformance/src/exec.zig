@@ -58,7 +58,8 @@ pub fn execDir(allocator: Allocator, lib: *Library, input_dir_path: []const u8) 
     defer walker.deinit();
 
     while (try walker.next()) |entry| {
-        if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".fix")) continue;
+        if (entry.kind != .file and entry.kind != .sym_link) continue;
+        if (!std.mem.endsWith(u8, entry.path, ".fix")) continue;
         const input_path = try std.fs.path.join(allocator, &.{ input_dir_path, entry.path });
         errdefer allocator.free(input_path);
         try fix_paths.append(allocator, input_path);

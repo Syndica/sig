@@ -284,7 +284,6 @@ pub const EpochTracker = struct {
             leader_schedule_epoch,
             epoch_stakes.stakes.vote_accounts,
             &self.epoch_schedule,
-            feature_set,
         );
         errdefer leaders.deinit(allocator);
 
@@ -325,7 +324,6 @@ pub const EpochTracker = struct {
             leader_schedule_epoch,
             epoch_stakes.stakes.vote_accounts,
             &self.epoch_schedule,
-            feature_set,
         );
         errdefer leaders.deinit(allocator);
 

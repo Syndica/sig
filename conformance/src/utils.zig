@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build-options");
 const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
 const sig = @import("sig");
 
@@ -111,7 +112,9 @@ pub fn createTransactionContext(
         .allocator = allocator,
         .programs_allocator = allocator,
         .feature_set = feature_set,
-        .epoch_stakes = epoch_stakes,
+        .epoch_stake_reader = (sig.runtime.EpochStakeReaderAdapter{
+            .epoch_stakes = epoch_stakes,
+        }).epochStakeReader(),
         .sysvar_cache = sysvar_cache,
         .vm_environment = vm_environment,
         .next_vm_environment = vm_environment,
@@ -126,10 +129,7 @@ pub fn createTransactionContext(
         .return_data = .{},
         .accounts_resize_delta = 0,
         .compute_meter = instr_ctx.cu_avail,
-        .compute_budget = .init(
-            instr_ctx.cu_avail,
-            feature_set.active(.increase_cpi_account_info_limit, slot),
-        ),
+        .compute_budget = .init(instr_ctx.cu_avail),
         .custom_error = null,
         .log_collector = log_collector,
         .rent = sysvar_cache.get(sysvar.Rent) catch sysvar.Rent.INIT,
@@ -155,8 +155,9 @@ pub fn deinitTransactionContext(
     allocator.destroy(tc.feature_set);
     allocator.destroy(tc.vm_environment);
 
-    tc.epoch_stakes.deinit(allocator);
-    allocator.destroy(tc.epoch_stakes);
+    const epoch_stakes: *const EpochStakes = @ptrCast(@alignCast(tc.epoch_stake_reader.ctx));
+    epoch_stakes.deinit(allocator);
+    allocator.destroy(epoch_stakes);
 
     tc.sysvar_cache.deinit(allocator);
     allocator.destroy(tc.sysvar_cache);
@@ -172,6 +173,10 @@ pub fn deinitTransactionContext(
     tc.deinit();
 }
 
+/// Create a `FeatureSet` based on the feature IDs provided in the protobuf message.
+///
+/// Iterate over the feature IDs in the protobuf message and set the corresponding features in the `FeatureSet`.
+/// Unknown, unsupported, or reverted debug logs indicate Sig is not compatible with the fixtures active features.
 pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
     const pb_features = switch (@TypeOf(ctx)) {
         *pb.TxnContext, *const pb.TxnContext => (ctx.bank orelse return .ALL_DISABLED).features,
@@ -182,10 +187,25 @@ pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
 
     var feature_set: FeatureSet = .ALL_DISABLED;
     for (pb_features.features.items) |id| {
-        // only way for `setSlotId` to fail is if the `id` doesn't exist in runtime features.
-        feature_set.setSlotId(id, 0) catch if (!sig.core.features.isKnownFeatureId(id)) {
-            std.debug.print("unknown feature id: 0x{x}\n", .{id});
+        // Convert the feature ID from the protobuf message to the corresponding `Feature` enum value.
+        // Log features which do not correspond to a `Feature` variant and are otherwise unknown (i.e. not present in `src/core/features.zon`).
+        const feature = feature_set.getById(id) catch {
+            if (build_options.log_feature_status and
+                !sig.core.features.isKnownFeatureId(id)) std.debug.print(
+                "feature 0x{x} is unknown\n",
+                .{id},
+            );
+            continue;
         };
+
+        // Log features which appear in a fixture but are marked as reverted or unsupported in Sig.
+        if (build_options.log_feature_status) switch (sig.core.features.status_map.get(feature)) {
+            .reverted => std.debug.print("feature {} (0x{x}) is reverted\n", .{ feature, id }),
+            .unsupported => std.debug.print("feature {} (0x{x}) is unsupported\n", .{ feature, id }),
+            .supported, .hardcoded_for_fuzzing, .hardcoded => {},
+        };
+
+        feature_set.setSlot(feature, 0);
     }
     return feature_set;
 }
@@ -482,17 +502,9 @@ pub fn createSyscallEffect(allocator: std.mem.Allocator, params: struct {
     registers: sig.vm.interpreter.RegisterMap = sig.vm.interpreter.RegisterMap.initFill(0),
     skip_input_data_regions: bool = false,
 }) !pb.SyscallEffects {
-    var log: std.ArrayList(u8) = .{};
-    defer log.deinit(allocator);
-    if (params.tc.log_collector) |log_collector| {
-        var iter = log_collector.iterator();
-        while (iter.next()) |msg| {
-            try log.appendSlice(allocator, msg);
-            try log.append(allocator, '\n');
-        }
-        if (log.items.len > 0) _ = log.pop();
-    }
-
+    // Protosol marks SyscallEffects field 8 (`log`) as `reserved`, i.e.
+    // conformance target no longer emits log output in the structured result
+    // [protosol] https://github.com/firedancer-io/protosol/commit/040c98bd6468fd6dc94ab18639c9db190c8c692b
     // When virtual_address_space_adjustments is enabled, Agave's cpi_common()
     // calls update_caller_account_region only after process_instruction succeeds
     // (agave: program-runtime/src/cpi.rs). On failure the `?` propagates before
@@ -514,7 +526,6 @@ pub fn createSyscallEffect(allocator: std.mem.Allocator, params: struct {
         .stack = try allocator.dupe(u8, params.stack),
         .input_data_regions = input_data_regions,
         .frame_count = params.frame_count,
-        .log = try allocator.dupe(u8, log.items),
         .rodata = try allocator.dupe(u8, params.rodata),
         .r0 = params.registers.get(.r0),
         .r1 = params.registers.get(.r1),

@@ -115,8 +115,8 @@ fn executeVmTest(
         .virtual_address_space_adjustments,
         slot,
     );
-    const mask_out_rent_epoch_in_vm_serialization = tc.feature_set.active(
-        .mask_out_rent_epoch_in_vm_serialization,
+    const direct_account_pointers_in_program_input = tc.feature_set.active(
+        .direct_account_pointers_in_program_input,
         slot,
     );
     var serialized = try serialize.serializeParameters(
@@ -124,7 +124,7 @@ fn executeVmTest(
         &ic,
         direct_mapping,
         virtual_address_space_adjustments,
-        mask_out_rent_epoch_in_vm_serialization,
+        direct_account_pointers_in_program_input,
     );
     defer serialized.deinit(allocator);
     tc.serialized_accounts = serialized.account_metas;
@@ -175,13 +175,16 @@ fn executeVmTest(
             .end = rodata.len,
         } },
         .from_asm = false,
-        .text_vaddr = if (sbpf_version.enableLowerBytecodeVaddr())
+        // SIMD-0189: v3 places .text at MM_BYTECODE_START (0x1_0000_0000) and
+        // .rodata at MM_RODATA_START (0). v0/v1/v2 keep .text at vaddr 0 and
+        // append .rodata at MM_BYTECODE_START via the bytecode region.
+        .text_vaddr = if (sbpf_version.enableLowerRodataVaddr())
             memory.BYTECODE_START
         else
             memory.RODATA_START,
     };
 
-    const verify_result = executable.verify(&env.loader);
+    const verify_result = executable.verify();
     if (std.meta.isError(verify_result)) {
         return .{
             .@"error" = -2,
@@ -209,7 +212,7 @@ fn executeVmTest(
             .mutable,
             stack,
             memory.STACK_START,
-            if (!sbpf_version.enableDynamicStackFrames() and config.enable_stack_frame_gaps)
+            if (!sbpf_version.manualStackFrameBump() and config.enable_stack_frame_gaps)
                 config.stack_frame_size
             else
                 0,

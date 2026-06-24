@@ -1,29 +1,39 @@
 const sig = @import("sig");
 const std = @import("std");
 
-const builtin_programs = sig.runtime.builtin_programs;
-
 const Allocator = std.mem.Allocator;
 
 const bincode = sig.bincode;
 const features = sig.core.features;
-const program = sig.runtime.program;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
 
 const Account = sig.core.Account;
 const Pubkey = sig.core.Pubkey;
-const Slot = sig.core.Slot;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const FeatureSet = sig.core.FeatureSet;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
-/// A minimal implementation of `Bank::apply_feature_activations` for fuzzing purposes.
-/// If a fixture hits an error, we may need to implement the missing feature activation logic.
-/// https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L6453
+/// A minimal implementation of `Bank::apply_activated_features` for fuzzing purposes.
+/// Mirrors the fork-only `Bank::new_for_txn_tests` path used by solfuzz-agave
+/// (agave PR #11880): it flips feature gates and refreshes feature accounts but
+/// does NOT seed builtin or precompile program accounts into accounts-db.
+///
+/// Upstream agave deliberately split this into two paths:
+///   - `compute_and_apply_genesis_features` seeds builtin accounts via
+///     `add_builtin_program_accounts` (genesis only).
+///   - `apply_activated_features` is program-cache only and is what the
+///     snapshot-restore and txn-test paths call.
+/// See agave PRs #7830 (epoch-boundary split) and #7914 (genesis-vs-snapshot
+/// split) for the design.
+///
+/// Each fixture must therefore carry any program account it invokes; missing
+/// ones surface as `TransactionError::ProgramAccountNotFound` during account
+/// loading, matching the contract documented in `txn_execute.zig`.
+/// https://github.com/firedancer-io/agave/blob/c333acac8d88168384e010c4d08462ab3c226b35/runtime/src/bank.rs#L4665
 pub fn applyFeatureActivations(
     allocator: Allocator,
     slot: u64,
@@ -67,109 +77,6 @@ pub fn applyFeatureActivations(
     if (feature_set.fullInflationFeaturesEnabled(slot, &new_feature_activations)) {
         return error.FullInflationActivationNotImplemented;
     }
-
-    try applyBuiltinProgramFeatureTransitions(
-        allocator,
-        slot,
-        feature_set,
-        account_store,
-        &new_feature_activations,
-        allow_new_activations,
-    );
-}
-
-fn applyBuiltinProgramFeatureTransitions(
-    allocator: Allocator,
-    slot: Slot,
-    feature_set: *const FeatureSet,
-    account_store: AccountStore,
-    new_feature_activations: *const FeatureSet,
-    allow_new_activations: bool,
-) !void {
-    for (builtin_programs.BUILTINS) |builtin_program| {
-        var is_core_bpf = false;
-        if (builtin_program.core_bpf_migration_config) |core_bpf_config| {
-            if (new_feature_activations.active(core_bpf_config.enable_feature_id, slot)) {
-                try migrateBuiltinProgramToCoreBpf();
-                is_core_bpf = true;
-            } else {
-                const maybe_account = try tryGetAccount(
-                    allocator,
-                    account_store.reader(),
-                    builtin_program.program_id,
-                );
-                defer if (maybe_account) |account| account.deinit(allocator);
-                is_core_bpf = if (maybe_account) |account|
-                    account.owner.equals(&program.bpf_loader.v3.ID)
-                else
-                    false;
-            }
-        }
-
-        if (builtin_program.enable_feature_id) |enable_feature_id| {
-            const should_enable_on_transition = !is_core_bpf and if (allow_new_activations)
-                new_feature_activations.active(enable_feature_id, slot)
-            else
-                feature_set.active(enable_feature_id, slot);
-
-            if (should_enable_on_transition) {
-                const data = try allocator.dupe(u8, builtin_program.data);
-                defer allocator.free(data);
-
-                try account_store.put(
-                    slot,
-                    builtin_program.program_id,
-                    .{
-                        .lamports = 1,
-                        .data = data,
-                        .executable = true,
-                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-                        .rent_epoch = 0,
-                    },
-                );
-            }
-        }
-    }
-
-    for (builtin_programs.STATELESS_BUILTINS) |builtin_program| {
-        const core_bpf_config = builtin_program.core_bpf_migration_config orelse continue;
-        if (new_feature_activations.active(core_bpf_config.enable_feature_id, 0)) {
-            try migrateBuiltinProgramToCoreBpf();
-        }
-    }
-
-    for (program.precompiles.PRECOMPILES) |precompile| {
-        const feature_id = precompile.required_feature orelse continue;
-        if (!feature_set.active(feature_id, 0)) continue;
-
-        const maybe_account = account_store.reader().getLatest(
-            allocator,
-            precompile.program_id,
-        ) catch |err| return err;
-        defer if (maybe_account) |account| account.deinit(allocator);
-
-        // If account is present and executable, do nothing. Otherwise burn and purge, then create a new account.
-        if (maybe_account) |account| if (account.executable) return;
-
-        // TODO: burn_and_purge_account
-
-        try account_store.put(
-            slot,
-            precompile.program_id,
-            .{
-                .lamports = 1,
-                .data = &.{},
-                .executable = true,
-                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-                .rent_epoch = 0,
-            },
-        );
-    }
-}
-
-fn migrateBuiltinProgramToCoreBpf() !void {
-    // TODO
-    return error.MigrateBuiltinProgramToCoreBpfNotImplemented;
 }
 
 fn computeActiveFeatureSet(

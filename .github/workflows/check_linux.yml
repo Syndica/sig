@@ -31,24 +31,44 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          cache-key: kcov-${{ hashFiles('build.zig', 'build.zig.zon', 'v2/build.zig', 'v2/build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
+
+      - name: Pre-download zig dependencies
+        run: |
+          ./scripts/fetch-zig-deps.py
+          ./scripts/fetch-zig-deps.py v2/build.zig.zon
+          zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Denable-tsan=false -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
+
+      - name: Set up kcov
+        run: |
+          curl -L https://github.com/Syndica/kcov/releases/download/v43-bin/kcov-v43-bin-linux-x86_64.tar.gz | tar xz
+          echo "$PWD/kcov-v43-bin-linux-x86_64/bin" >> "$GITHUB_PATH"
 
       - name: Build
         run: zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36
-          -Denable-tsan=false -Dno-network-tests -Dallow-no-sha
-          -Dallow-no-avx512 --summary all
+          -Denable-tsan=false -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
 
-      - name: Configure docker user/mount defaults
-        run: |
-          echo "DOCKER_UID_GID=$(id -u):$(id -g)" >> "$GITHUB_ENV"
-          printf 'DOCKER_MOUNT=-v %s:%s -w %s -e HOME=%s -u %s\n' "$PWD" "$PWD" "$PWD" "$PWD" "$(id -u):$(id -g)" >> "$GITHUB_ENV"
+      - name: Collect v1 coverage
+        run: bash scripts/kcov_ci.sh
 
-      - name: Test and Collect
+      - name: Collect v2 coverage
         run: |
-          docker run --security-opt seccomp=unconfined \
-                     $DOCKER_MOUNT \
-                     kcov/kcov \
-                     bash scripts/kcov_ci.sh
+          cd v2
+          zig build test -Dkcov --summary all
+
+      - name: Debug coverage reports
+        run: |
+          echo "=== v1 report ==="
+          head -15 kcov-merged/kcov-merged/cobertura.xml
+          echo ""
+          echo "--- v1 filename samples ---"
+          grep 'filename=' kcov-merged/kcov-merged/cobertura.xml | head -3
+          echo ""
+          echo "=== v2 report ==="
+          head -15 v2/zig-out/kcov/kcov-merged/cobertura.xml
+          echo ""
+          echo "--- v2 filename samples ---"
+          grep 'filename=' v2/zig-out/kcov/kcov-merged/cobertura.xml | head -3
 
       - name: Upload coverage to Codecov
         env:
@@ -79,6 +99,7 @@ jobs:
           ./codecov --verbose upload-coverage \
             --fail-on-error \
             --dir kcov-merged/kcov-merged \
+            --dir v2/zig-out/kcov/kcov-merged \
             --commit-sha "$UPLOAD_SHA"
 
   gossip_and_fuzz:
@@ -93,12 +114,11 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: selfhosted-release-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          cache-key: selfhosted-release-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Build
         run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh zig
+          ./scripts/fetch-zig-deps.py
           zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out-release --summary all
 
       - name: Run Gossip
@@ -128,16 +148,16 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Build
         run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh zig
+          ./scripts/fetch-zig-deps.py
           zig build -Denable-tsan=true -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out --summary all
 
       - name: Build Tests
-        run: zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
+        run:
+          zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
           -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Run Tests
@@ -157,7 +177,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon', 'v2/build.zig', 'v2/build.zig.zon') }}
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon', 'v2/build.zig', 'v2/build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
       - name: Install Python PIP
         run: |
@@ -166,33 +186,41 @@ jobs:
 
       - name: Lint (Zig)
         run: |
-          zig fmt --check src/ build.zig
+          zig fmt --check src/ shared/ build.zig
           cd conformance/
           zig fmt --check src/ build.zig
 
       - name: Check style
         run: |
           python3 scripts/style.py --check src
+          python3 scripts/style.py --check shared
           python3 scripts/style.py --check conformance/src
 
       - name: Check docs
         run: python3 docs/check.py ./
 
+      - name: Shared tests
+        run: |
+          ./scripts/fetch-zig-deps.py shared/build.zig.zon
+          cd shared
+          zig build test -Dallow-no-sha -Dallow-no-avx512 --summary all
+
       - name: V2 checks
         run: |
+          ./scripts/fetch-zig-deps.py v2/build.zig.zon
           cd v2/
           zig build ci -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Build and test hashmap ledger (linux)
         run: |
           set -eo pipefail
-          sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh zig
+          ./scripts/fetch-zig-deps.py
           zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" -Dallow-no-sha -Dallow-no-avx512 --summary all
           zig-out/bin/test 2>&1 | cat
 
       - name: Webzockets tests (linux)
         run: |
+          ./scripts/fetch-zig-deps.py src/rpc/webzockets/build.zig.zon
           cd src/rpc/webzockets
           zig build test --summary all
 
@@ -208,15 +236,15 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: build_conformance-v1-${{ hashFiles('build.zig', 'build.zig.zon',
+          cache-key:
+            build_conformance-v1-${{ hashFiles('build.zig', 'build.zig.zon',
             'conformance/build.zig', 'conformance/build.zig.zon') }}
 
       - name: Build Conformance
         run: |
-          sudo apt-get update -y && sudo apt-get install wget -y
-          ./scripts/proxy_workaround.sh zig
+          ./scripts/fetch-zig-deps.py conformance/build.zig.zon
           cd conformance
-          zig build -Dallow-no-sha -Dallow-no-avx512 --summary all
+          zig build -Dallow-no-sha -Dallow-no-avx512 -Ddisable-feature-status-logs --summary all
 
       - id: test_vectors_cache
         uses: actions/cache@v4
@@ -250,7 +278,8 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: feature_compat-v1-${{ hashFiles('build.zig', 'build.zig.zon',
+          cache-key:
+            feature_compat-v1-${{ hashFiles('build.zig', 'build.zig.zon',
             'conformance/build.zig', 'conformance/build.zig.zon') }}
 
       - uses: dtolnay/rust-toolchain@stable
@@ -273,6 +302,7 @@ jobs:
 
       - name: Build Sig target and Agave target
         run: |
+          ./scripts/fetch-zig-deps.py conformance/build.zig.zon
           cd conformance
           zig build solfuzz_sig -Dallow-no-sha -Dallow-no-avx512 --summary all
           . commits.env

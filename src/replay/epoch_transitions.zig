@@ -198,7 +198,20 @@ pub fn computeFeatureSet(
         ) orelse continue;
         defer feature_account.deinit(arena.allocator());
 
-        switch (try features.activationStateFromAccount(feature_account)) {
+        // Read out first 9 bytes needed to extract activation state from account,
+        // note that we have to memcpy to read from `Account`, we read out only
+        // the bytes needed.
+        var feature_data_buf: [9]u8 = undefined;
+        const feature_data: []const u8 =
+            if (feature_account.data.len() >= feature_data_buf.len) blk: {
+                _ = feature_account.data.read(0, &feature_data_buf);
+                break :blk &feature_data_buf;
+            } else &.{};
+
+        switch (try features.activationStateFromAccount(
+            feature_account.owner,
+            feature_data,
+        )) {
             .activated => |activation_slot| if (slot >= activation_slot) feature_set.setSlot(
                 feature,
                 activation_slot,
@@ -603,6 +616,9 @@ fn migrateBuiltinProgramToCoreBpf(
         feature_set,
         &compute_budget,
         null, // no LogCollector
+        // SIMD-0500: explicitly continue to allow SBPFv0/v1/v2 for core program migrations.
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/runtime/src/bank/builtins/core_bpf_migration/mod.rs#L201
+        false,
     );
 
     // update capitalization
