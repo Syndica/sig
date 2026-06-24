@@ -76,8 +76,88 @@ const Config = struct {
                     .mb => |b| b * 1024 * 1024,
                     .gb => |b| b * 1024 * 1024 * 1024,
                 };
-            }
-        };
+    }
+};
+
+// Tests for getServiceSyscalls and per-service seccomp integration
+
+const ServiceId = topology.unbound.ServiceId;
+const getServiceSyscalls = topology.unbound.getServiceSyscalls;
+
+test "getServiceSyscalls: net has 5 entries" {
+    const configs = getServiceSyscalls(.net);
+    try std.testing.expectEqual(@as(usize, 5), configs.len);
+}
+
+test "getServiceSyscalls: gossip has 1 entry" {
+    const configs = getServiceSyscalls(.gossip);
+    try std.testing.expectEqual(@as(usize, 1), configs.len);
+}
+
+test "getServiceSyscalls: shred_receiver has 0 entries" {
+    const configs = getServiceSyscalls(.shred_receiver);
+    try std.testing.expectEqual(@as(usize, 0), configs.len);
+}
+
+test "getServiceSyscalls: replay has 0 entries" {
+    const configs = getServiceSyscalls(.replay);
+    try std.testing.expectEqual(@as(usize, 0), configs.len);
+}
+
+test "getServiceSyscalls: telemetry has 10 entries" {
+    const configs = getServiceSyscalls(.telemetry);
+    try std.testing.expectEqual(@as(usize, 10), configs.len);
+}
+
+test "getServiceSyscalls: snapshot has 13 entries" {
+    const configs = getServiceSyscalls(.snapshot);
+    try std.testing.expectEqual(@as(usize, 13), configs.len);
+}
+
+test "getServiceSyscalls: net contains socket" {
+    const configs = getServiceSyscalls(.net);
+    var found = false;
+    for (configs) |c| {
+        if (c.syscall == .socket) found = true;
+    }
+    try std.testing.expect(found);
+}
+
+test "getServiceSyscalls: all services resolve without error" {
+    // Comptime check that inline else instantiates for all services
+    comptime {
+        for (std.enums.values(ServiceId)) |svc| {
+            _ = getServiceSyscalls(svc);
+        }
+    }
+}
+
+test "per-service filters have different sizes" {
+    comptime {
+        const replay_len = lib.linux.bpf.computeFilterLen(getServiceSyscalls(.replay));
+        const net_len = lib.linux.bpf.computeFilterLen(getServiceSyscalls(.net));
+        const snapshot_len = lib.linux.bpf.computeFilterLen(getServiceSyscalls(.snapshot));
+        // replay (0 extra) < net (5 extra) < snapshot (13 extra)
+        std.debug.assert(replay_len < net_len);
+        std.debug.assert(net_len < snapshot_len);
+    }
+}
+
+test "per-service filter sizes match expected values" {
+    comptime {
+        // replay/shred_receiver: 18 (minimal)
+        std.debug.assert(lib.linux.bpf.computeFilterLen(getServiceSyscalls(.replay)) == 18);
+        std.debug.assert(lib.linux.bpf.computeFilterLen(getServiceSyscalls(.shred_receiver)) == 18);
+        // gossip: 20 (1 extra × 2 + 18)
+        std.debug.assert(lib.linux.bpf.computeFilterLen(getServiceSyscalls(.gossip)) == 20);
+        // net: 28 (5 extra × 2 + 18)
+        std.debug.assert(lib.linux.bpf.computeFilterLen(getServiceSyscalls(.net)) == 28);
+        // telemetry: 38 (10 extra × 2 + 18)
+        std.debug.assert(lib.linux.bpf.computeFilterLen(getServiceSyscalls(.telemetry)) == 38);
+        // snapshot: 44 (13 extra × 2 + 18)
+        std.debug.assert(lib.linux.bpf.computeFilterLen(getServiceSyscalls(.snapshot)) == 44);
+    }
+}
     };
 
     pub fn format(self: Config, writer: *std.Io.Writer) !void {
