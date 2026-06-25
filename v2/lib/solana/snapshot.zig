@@ -825,52 +825,65 @@ fn discardVoteAccounts(r: anytype) !void {
 pub fn SnapshotIter(comptime BufReader: type) type {
     return struct {
         // public fields instantiated using the fba from init()
-        manifest: Manifest,
+        manifest: ?Manifest,
 
         tar_iter: TarZstIter(BufReader),
         account_file_len: usize,
         account_file_slot: Slot,
         account_data_len: usize,
         account_data_padding: usize,
-
+        state: enum { version, metadata, accounts },
         const Self = @This();
 
-        pub fn init(
-            fba: *std.heap.FixedBufferAllocator,
-            buf_reader: BufReader,
-        ) !Self {
-            var self: Self = undefined;
-            self.tar_iter = .{ .buf_reader = buf_reader };
+        pub fn init(buf_reader: BufReader) Self {
+            return .{
+                .manifest = null,
+                .tar_iter = .{ .buf_reader = buf_reader },
+                .account_file_len = 0,
+                .account_file_slot = 0,
+                .account_data_len = 0,
+                .account_data_padding = 0,
+                .state = .version,
+            };
+        }
+
+        pub fn checkVersion(self: *Self) !void {
+            switch (self.state) {
+                .version => {},
+                else => unreachable,
+            }
+            self.state = .metadata;
 
             // read /version
-            {
-                const tar_file = (try self.tar_iter.next()) orelse return error.MissingVersionFile;
-                if (!std.mem.eql(u8, tar_file.name, "version")) return error.MissingVersionFile;
-                const expected = "1.2.0";
-                var version: [expected.len]u8 = undefined;
-                try self.tar_iter.reader.readSliceAll(&version);
-                if (!std.mem.eql(u8, &version, expected)) return error.InvalidVersion;
+            const tar_file = (try self.tar_iter.next()) orelse return error.MissingVersionFile;
+            if (!std.mem.eql(u8, tar_file.name, "version")) return error.MissingVersionFile;
+            const expected = "1.2.0";
+            var version: [expected.len]u8 = undefined;
+            try self.tar_iter.reader.readSliceAll(&version);
+            if (!std.mem.eql(u8, &version, expected)) return error.InvalidVersion;
+        }
+
+        pub fn readMetadata(
+            self: *Self,
+            fba: *std.heap.FixedBufferAllocator,
+        ) !void {
+            switch (self.state) {
+                .metadata => {},
+                else => unreachable,
             }
+            self.state = .accounts;
 
             // read /snapshots/status_cache & /snapshots/{slot}/{slot} (can be in any order)
-            {
-                const tar_file = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                if (std.mem.eql(u8, tar_file.name, "snapshots/status_cache")) {
-                    try StatusCacheHeader.skip(&self.tar_iter.reader);
-                    _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                    self.manifest = try Manifest.read(fba, &self.tar_iter.reader);
-                } else {
-                    self.manifest = try Manifest.read(fba, &self.tar_iter.reader);
-                    _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                    try StatusCacheHeader.skip(&self.tar_iter.reader);
-                }
+            const tar_file = (try self.tar_iter.next()) orelse return error.MissingMetadata;
+            if (std.mem.eql(u8, tar_file.name, "snapshots/status_cache")) {
+                try StatusCacheHeader.skip(&self.tar_iter.reader);
+                _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
+                self.manifest = try Manifest.read(fba, &self.tar_iter.reader);
+            } else {
+                self.manifest = try Manifest.read(fba, &self.tar_iter.reader);
+                _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
+                try StatusCacheHeader.skip(&self.tar_iter.reader);
             }
-
-            self.account_file_len = 0;
-            self.account_file_slot = 0;
-            self.account_data_len = 0;
-            self.account_data_padding = 0;
-            return self;
         }
 
         pub const Account = struct {
@@ -883,6 +896,11 @@ pub fn SnapshotIter(comptime BufReader: type) type {
         };
 
         pub fn next(self: *Self) !?Account {
+            switch (self.state) {
+                .accounts => {},
+                else => unreachable,
+            }
+
             // Skip unread data & data padding of previous Accountentry
             self.tar_iter.reader.discardAll(
                 self.account_data_len + self.account_data_padding,
@@ -900,7 +918,7 @@ pub fn SnapshotIter(comptime BufReader: type) type {
 
                 const slot = std.fmt.parseInt(u64, tar_file.name["accounts/".len..split], 10) catch
                     return error.InvalidAccountFileSlot;
-                if (slot > self.manifest.accounts_db_fields.slot)
+                if (slot > self.manifest.?.accounts_db_fields.slot)
                     return error.InvalidAccountFileSlot;
 
                 self.account_file_slot = slot;
@@ -1193,23 +1211,25 @@ test "deserialized snapshot matches generated snapshot json" {
     const fba_buf = try allocator.alloc(u8, 8 * 1024 * 1024);
     defer allocator.free(fba_buf);
     var fba: std.heap.FixedBufferAllocator = .init(fba_buf);
-    var snapshot_iter = try SnapshotIter(*SnapshotBufReader).init(&fba, &snapshot_reader);
+    var snapshot_iter: SnapshotIter(*SnapshotBufReader) = .init(&snapshot_reader);
+    try snapshot_iter.checkVersion();
+    try snapshot_iter.readMetadata(&fba);
 
-    try expectEqual(jsonU64(merged.get("slot").?), snapshot_iter.manifest.bank_fields.slot);
-    try expectEqual(jsonU64(merged.get("slot").?), snapshot_iter.manifest.accounts_db_fields.slot);
+    try expectEqual(jsonU64(merged.get("slot").?), snapshot_iter.manifest.?.bank_fields.slot);
+    try expectEqual(jsonU64(merged.get("slot").?), snapshot_iter.manifest.?.accounts_db_fields.slot);
     try expectEqualStrings(
         merged.get("block_id").?.string,
-        snapshot_iter.manifest.extra_fields.block_id.base58String(&hash_buf),
+        snapshot_iter.manifest.?.extra_fields.block_id.base58String(&hash_buf),
     );
 
     const blockhash_queue_json = merged.get("blockhash_queue").?.object;
     try expectEqual(
         jsonU64(blockhash_queue_json.get("max_age").?),
-        snapshot_iter.manifest.bank_fields.blockhash_queue.max_age,
+        snapshot_iter.manifest.?.bank_fields.blockhash_queue.max_age,
     );
 
     const json_hashes = blockhash_queue_json.get("hashes").?.array.items;
-    const bhq_hashes = snapshot_iter.manifest.bank_fields.blockhash_queue.hashes;
+    const bhq_hashes = snapshot_iter.manifest.?.bank_fields.blockhash_queue.hashes;
     try expectEqual(json_hashes.len, bhq_hashes.count);
     for (bhq_hashes.array, json_hashes) |hash, json_hash| {
         try expectEqualStrings(json_hash.object.get("hash").?.string, hash.base58String(&hash_buf));
