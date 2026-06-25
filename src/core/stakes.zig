@@ -607,14 +607,11 @@ pub const VoteAccounts = struct {
             const floor_stake = entries.items[max_vote_accounts].stake;
             // Per SIMD-0357 drop everything with stake <= the first truncated
             // entry, so Pubkey ordering can never be the tiebreaker.
-            var write: usize = 0;
-            for (entries.items) |item| {
-                if (item.stake > floor_stake) {
-                    entries.items[write] = item;
-                    write += 1;
-                }
+            var num_to_keep: usize = max_vote_accounts;
+            while (num_to_keep > 0) : (num_to_keep -= 1) {
+                if (entries.items[num_to_keep - 1].stake > floor_stake) break;
             }
-            entries.shrinkRetainingCapacity(write);
+            entries.shrinkRetainingCapacity(num_to_keep);
         }
 
         var filtered_map: StakeAndVoteAccountsMap = .{};
