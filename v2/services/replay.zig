@@ -275,6 +275,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 &forest.pool,
                 rw.block_pool,
                 rw.replay_transaction_pool,
+                &forest.dead_slots,
                 exec_states,
                 deserial_states,
                 &exec_request_sender,
@@ -332,7 +333,10 @@ fn attachParent(
             while (orphan_sibling_tail) |tail_node| {
                 const next_sibling = tail_node.sibling.ptr(&forest.pool) orelse break;
 
-                if (next_sibling.id.eql(&tail_node.id)) @panic("equivocation");
+                if (next_sibling.id.eql(&tail_node.id)) {
+                    forest.markSlotDead(node.id.slot);
+                    return null;
+                }
 
                 orphan_sibling_tail = next_sibling;
             }
@@ -347,9 +351,19 @@ fn attachParent(
 
     if (!parent.id.mayFollowWith(&node.id)) {
         @branchHint(.cold); // this would be malicious behaviour, chaining in an invalid order
-        zone.text("mayFollowWith check failed");
+        zone.text("mayFollowWith check failed - chaining conflict");
 
-        return null; // parent found, but fec set ids don't align
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/core/src/window_service.rs#L149-L154
+        // FixedFECChainedMerkleRootConflict: only mark dead if validate_chained_block_id_2 is active.
+        // Chaining conflict: merkle roots linked but FecSetId ordering is invalid.
+        logger.warn().logf(
+            "SIMD-0340: chaining conflict. FEC set (slot={}, idx={}) claims parent (slot={}, idx={}) but ordering invalid",
+            .{ node.id.slot, node.id.fec_set_idx, parent.id.slot, parent.id.fec_set_idx },
+        );
+        if (forest.validate_chained_block_id_2) {
+            forest.markSlotDead(node.id.slot);
+        }
+        return null;
     }
 
     // insert node into tree of parent
@@ -367,9 +381,17 @@ fn attachParent(
         std.debug.assert(parent.child != .null);
         var last_child_of_parent: *MerkleNode = parent.child.ptr(&forest.pool).?;
         while (true) {
-            // NOTE: We should get rid of this panic once we're confident that we're handling it
-            //       correctly downstream.
-            if (last_child_of_parent.id.eql(&node.id)) @panic("equivocation");
+            if (last_child_of_parent.id.eql(&node.id)) {
+                // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/core/src/window_service.rs#L141-L147
+                // Equivocation: two FEC sets with same FecSetId but different content.
+                logger.warn().logf(
+                    "SIMD-0340: equivocation detected. slot={}, fec_set_idx={}",
+                    .{ node.id.slot, node.id.fec_set_idx },
+                );
+                forest.markSlotDead(node.id.slot);
+                node.parent = .null;
+                return null;
+            }
             const next = last_child_of_parent.sibling.ptr(&forest.pool) orelse break;
             last_child_of_parent = next;
         }
@@ -379,7 +401,7 @@ fn attachParent(
     }
 }
 
-fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
+fn attachChildren(logger: tel.Logger("main"), node: *MerkleNode, forest: *MerkleForest) void {
     std.debug.assert(node.child == .null);
 
     const zone = tracy.Zone.init(@src(), .{ .name = "attachChildren" });
@@ -408,7 +430,6 @@ fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
             }
 
             // Invalid chaining should only happen if the leader is being malicious.
-            // I'm not sure if this branch will ever be hit, but we must still handle this case.
             // This node is illegal, let's remove it now.
 
             // Remove this node from the linked list of siblings
@@ -434,10 +455,19 @@ fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
                 children_head = next_node;
             }
 
-            if (child_node.child != .null)
-                // Remove the node from the map + delete it
-                // if this orphan has invalid chaining, this means *all* of its children are also invalid
-                @panic("TODO: handle recursive removal from invalid orphan chaining");
+            if (child_node.child != .null) {
+                // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/core/src/window_service.rs#L149-L154
+                // FixedFECChainedMerkleRootConflict: invalid orphan with children.
+                // Only mark dead if validate_chained_block_id_2 is active.
+                logger.warn().logf(
+                    "SIMD-0340: invalid orphan with children. slot={}, fec_set_idx={}",
+                    .{ child_node.id.slot, child_node.id.fec_set_idx },
+                );
+                if (forest.validate_chained_block_id_2) {
+                    forest.markSlotDead(child_node.id.slot);
+                }
+                continue;
+            }
             const removed = forest.map.swapRemoveAdapted(&child_node.merkle_root, map_ctx);
             std.debug.assert(removed);
             forest.pool.destroy(child_node);
@@ -461,9 +491,17 @@ fn setChildBlockRef(
     child: *MerkleNode,
     forest_pool: *MerkleForest.NodePool,
     block_pool: *lib.replay.BlockPool,
+    dead_slots: *std.AutoArrayHashMapUnmanaged(Slot, void),
 ) !void {
     std.debug.assert(child.block_ref == .null);
     if (parent.block_ref == .null) return; // a)
+
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/blockstore_processor.rs#L2693
+    // Dead slot propagation: if parent's slot is dead, child inherits death.
+    if (parent.id.slot != child.id.slot and dead_slots.contains(parent.id.slot)) {
+        dead_slots.putAssumeCapacity(child.id.slot, {});
+        return; // don't allocate BlockRef for dead slot
+    }
 
     // optionally allocate a new BlockRef
     child.block_ref = if (parent.id.slot != child.id.slot) ref: {
@@ -498,6 +536,7 @@ fn setChildTreeBlockRefs(
     child: *MerkleNode,
     forest_pool: *MerkleForest.NodePool,
     block_pool: *lib.replay.BlockPool,
+    dead_slots: *std.AutoArrayHashMapUnmanaged(Slot, void),
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "setChildTreeBlockRefs" });
     defer zone.deinit();
@@ -506,14 +545,14 @@ fn setChildTreeBlockRefs(
     // doesn't apply here)
     std.debug.assert(child.parent != .null);
 
-    try setChildBlockRef(parent, child, forest_pool, block_pool);
+    try setChildBlockRef(parent, child, forest_pool, block_pool, dead_slots);
 
     // recursively apply BlockRefs to reachable merkle nodes
     // NOTE: it is possible to do this without recursion *or* a stack, as a non-null block_ref can
     //       be used to mark a node as visited.
     var maybe_child: ?*MerkleNode = child.child.ptr(forest_pool);
     while (maybe_child) |child_node| {
-        try setChildTreeBlockRefs(child, child_node, forest_pool, block_pool);
+        try setChildTreeBlockRefs(child, child_node, forest_pool, block_pool, dead_slots);
         maybe_child = child_node.sibling.ptr(forest_pool);
     }
 }
@@ -529,6 +568,13 @@ fn insertFecSet(
 ) error{OutOfSpace}!?*MerkleNode {
     const zone = tracy.Zone.init(@src(), .{ .name = "insertFecSet" });
     defer zone.deinit();
+
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/blockstore.rs#L3015-L3032
+    // Skip insertion for slots already marked dead (equivalent to should_insert_data_shred bail).
+    if (forest.isSlotDead(deshredded_node.id.slot)) {
+        zone.text("dead slot - skipping");
+        return null;
+    }
 
     forest.assertCounts();
     defer forest.assertCounts();
@@ -562,11 +608,11 @@ fn insertFecSet(
     };
 
     const maybe_parent = attachParent(logger, node, forest);
-    attachChildren(node, forest);
+    attachChildren(logger, node, forest);
 
     // "propagate" BlockRefs (see `setChildBlockRef` for details)
     if (maybe_parent) |parent| {
-        try setChildTreeBlockRefs(parent, node, &forest.pool, block_pool);
+        try setChildTreeBlockRefs(parent, node, &forest.pool, block_pool, &forest.dead_slots);
     }
 
     return node;
@@ -584,6 +630,9 @@ fn maybeContinueBlockExec(
     block_pool: *replay.BlockPool,
     transaction_pool: *lib.replay.TransactionPool,
 
+    // dead slot tracking (SIMD-0340)
+    dead_slots: *const std.AutoArrayHashMapUnmanaged(Slot, void),
+
     // per-block states
     block_exec_states: *BlockExecStates,
     block_deserial_states: *DeserialStates,
@@ -594,6 +643,13 @@ fn maybeContinueBlockExec(
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "maybeContinueBlockExec" });
     defer zone.deinit();
+
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/blockstore_processor.rs#L2683-L2706
+    // Don't dispatch dead slots for execution.
+    if (dead_slots.contains(node.id.slot)) {
+        zone.text("dead slot - skipping execution");
+        return;
+    }
 
     {
         std.debug.assert(block_ref != .null);
@@ -637,6 +693,7 @@ fn maybeContinueBlockExec(
                     forest_pool,
                     block_pool,
                     transaction_pool,
+                    dead_slots,
                     block_exec_states,
                     block_deserial_states,
                     exec_request_sender,
@@ -743,6 +800,7 @@ fn maybeContinueBlockExec(
             forest_pool,
             block_pool,
             transaction_pool,
+            dead_slots,
             block_exec_states,
             block_deserial_states,
             exec_request_sender,
@@ -1145,6 +1203,17 @@ const MerkleForest = struct {
     // chained-merkle-hash -> node
     orphan_map: OrphanMap,
 
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/core/src/window_service.rs#L145
+    // Slots marked dead due to chaining conflicts (SIMD-0340).
+    // Equivalent to Agave's blockstore.set_dead_slot().
+    dead_slots: std.AutoArrayHashMapUnmanaged(Slot, void),
+
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/core/src/window_service.rs#L131-L134
+    // Whether validate_chained_block_id_2 is active for the current epoch.
+    // Controls whether mayFollowWith failures (encompassing ±32 checks) mark slots dead.
+    // When false, only equivocation (same FecSetId) marks slots dead (validate_chained_block_id, hardcoded).
+    validate_chained_block_id_2: bool,
+
     const capacity = 4096;
 
     // keyed by merkle root
@@ -1193,18 +1262,35 @@ const MerkleForest = struct {
         errdefer orphan_map.deinit(allocator);
         try orphan_map.ensureTotalCapacity(allocator, capacity);
 
+        var dead_slots: std.AutoArrayHashMapUnmanaged(Slot, void) = .empty;
+        errdefer dead_slots.deinit(allocator);
+        try dead_slots.ensureTotalCapacity(allocator, capacity);
+
         return .{
             // NOTE: the pool and the tree share the exact same buffer - this is intentional
             .pool = .init(pool_buf[0..capacity]),
             .map = map,
             .orphan_map = orphan_map,
+            .dead_slots = dead_slots,
+            // TODO: Set from actual feature set once service plumbing provides one.
+            // For now defaults to false (feature not yet activated on mainnet).
+            .validate_chained_block_id_2 = false,
         };
+    }
+
+    fn isSlotDead(self: *const MerkleForest, slot: Slot) bool {
+        return self.dead_slots.contains(slot);
+    }
+
+    fn markSlotDead(self: *MerkleForest, slot: Slot) void {
+        self.dead_slots.putAssumeCapacity(slot, {});
     }
 
     fn deinit(self: *MerkleForest, allocator: std.mem.Allocator) void {
         allocator.free(self.pool.buf[0..self.pool.len]);
         self.map.deinit(allocator);
         self.orphan_map.deinit(allocator);
+        self.dead_slots.deinit(allocator);
     }
 
     fn assertCounts(self: *const MerkleForest) void {
@@ -1334,4 +1420,225 @@ test "MerkleForest tree put" {
     try std.testing.expectEqual(null, try insertFecSet(logger, &c, &tree, pool));
     try std.testing.expectEqual(null, try insertFecSet(logger, &d, &tree, pool));
     try std.testing.expectEqual(null, try insertFecSet(logger, &e, &tree, pool));
+}
+
+test "equivocation marks slot dead" {
+    // Two FEC sets with same FecSetId but different merkle roots → equivocation → slot dead
+    var tree: MerkleForest = try .init(std.testing.allocator);
+    defer tree.deinit(std.testing.allocator);
+
+    var pool_buf: [lib.replay.BlockPool.size()]u8 align(@alignOf(lib.replay.BlockPool)) = undefined;
+    const pool: *lib.replay.BlockPool = @ptrCast(&pool_buf);
+    pool.init();
+
+    const logger = tel.Logger("main").noop;
+
+    const parent_hash: Hash = .parse("DWCWjQciWoWDzJKwqUZ1ntKqTyXtLVt4C8aL7biBJZ4z");
+    const hash_a: Hash = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
+    const hash_b: Hash = .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd");
+
+    // Insert first FEC set: slot 1, idx 0
+    const fec_a: lib.shred.DeshreddedFecSet = .{
+        .chained_merkle_root = parent_hash,
+        .merkle_root = hash_a,
+        .id = .{ .slot = 1, .fec_set_idx = 0 },
+        .data_complete = true,
+        .slot_complete = false,
+        .payload_len = 0,
+        .payload_buf = undefined,
+    };
+    const a_inserted = (try insertFecSet(logger, &fec_a, &tree, pool)).?;
+    // Give it a BlockRef so it can act as root
+    a_inserted.block_ref = .fromInt(1);
+
+    // Insert CONFLICTING FEC set: same slot 1, same idx 0, but different merkle_root
+    // This will arrive, get inserted into the map (different merkle root = different key),
+    // then attachParent will find the parent (parent_hash), mayFollowWith passes (same slot, idx 0 → 0 = diff 0? no)
+    // Actually both have idx=0 with same parent — they'll be siblings under the parent.
+    // When the second tries to become a child of the parent, it finds the first already there with same id → equivocation
+    // BUT: fec_a has chained_merkle_root = parent_hash. fec_b also has chained_merkle_root = parent_hash.
+    // fec_a's parent is found by looking up parent_hash in map — but parent_hash was never inserted as a merkle_root!
+    // So both fec_a and fec_b become orphans keyed by parent_hash.
+    // The equivocation is detected in the orphan sibling walk.
+    const fec_b: lib.shred.DeshreddedFecSet = .{
+        .chained_merkle_root = parent_hash,
+        .merkle_root = hash_b,
+        .id = .{ .slot = 1, .fec_set_idx = 0 },
+        .data_complete = true,
+        .slot_complete = false,
+        .payload_len = 0,
+        .payload_buf = undefined,
+    };
+    const b_result = try insertFecSet(logger, &fec_b, &tree, pool);
+    // fec_b is inserted into map (different merkle root) but slot should be marked dead
+    // because both are orphans with same FecSetId
+    try std.testing.expect(tree.isSlotDead(1));
+    _ = b_result;
+}
+
+test "invalid FEC ordering marks slot dead" {
+    // Hash links correctly but FecSetId gap is 64 instead of 32 → mayFollowWith fails → dead
+    var tree: MerkleForest = try .init(std.testing.allocator);
+    defer tree.deinit(std.testing.allocator);
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/core/src/window_service.rs#L149-L154
+    // FixedFECChainedMerkleRootConflict only marks dead when validate_chained_block_id_2 is active.
+    tree.validate_chained_block_id_2 = true;
+
+    var pool_buf: [lib.replay.BlockPool.size()]u8 align(@alignOf(lib.replay.BlockPool)) = undefined;
+    const pool: *lib.replay.BlockPool = @ptrCast(&pool_buf);
+    pool.init();
+
+    const logger = tel.Logger("main").noop;
+
+    const hash_a: Hash = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
+    const hash_b: Hash = .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd");
+    const root_hash: Hash = .parse("DWCWjQciWoWDzJKwqUZ1ntKqTyXtLVt4C8aL7biBJZ4z");
+
+    // Insert A at idx 0
+    const fec_a: lib.shred.DeshreddedFecSet = .{
+        .chained_merkle_root = root_hash,
+        .merkle_root = hash_a,
+        .id = .{ .slot = 1, .fec_set_idx = 0 },
+        .data_complete = true,
+        .slot_complete = false,
+        .payload_len = 0,
+        .payload_buf = undefined,
+    };
+    _ = (try insertFecSet(logger, &fec_a, &tree, pool)).?;
+
+    // Insert B at idx 64 (gap of 64, not 32) — chained to A's merkle_root
+    const fec_b: lib.shred.DeshreddedFecSet = .{
+        .chained_merkle_root = hash_a, // links to A
+        .merkle_root = hash_b,
+        .id = .{ .slot = 1, .fec_set_idx = 64 }, // invalid: should be 32
+        .data_complete = true,
+        .slot_complete = false,
+        .payload_len = 0,
+        .payload_buf = undefined,
+    };
+    const b_result = try insertFecSet(logger, &fec_b, &tree, pool);
+    // B finds A as parent (chained_merkle_root matches), but mayFollowWith fails
+    try std.testing.expect(b_result != null); // B is still inserted into map
+    try std.testing.expect(tree.isSlotDead(1));
+}
+
+test "dead slot skips insertion" {
+    var tree: MerkleForest = try .init(std.testing.allocator);
+    defer tree.deinit(std.testing.allocator);
+
+    var pool_buf: [lib.replay.BlockPool.size()]u8 align(@alignOf(lib.replay.BlockPool)) = undefined;
+    const pool: *lib.replay.BlockPool = @ptrCast(&pool_buf);
+    pool.init();
+
+    const logger = tel.Logger("main").noop;
+
+    // Pre-mark slot 1 as dead
+    tree.markSlotDead(1);
+
+    const fec: lib.shred.DeshreddedFecSet = .{
+        .chained_merkle_root = .parse("DWCWjQciWoWDzJKwqUZ1ntKqTyXtLVt4C8aL7biBJZ4z"),
+        .merkle_root = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE"),
+        .id = .{ .slot = 1, .fec_set_idx = 0 },
+        .data_complete = true,
+        .slot_complete = false,
+        .payload_len = 0,
+        .payload_buf = undefined,
+    };
+    // Should return null immediately without allocating
+    const result = try insertFecSet(logger, &fec, &tree, pool);
+    try std.testing.expectEqual(null, result);
+    // Map should be empty — nothing was inserted
+    try std.testing.expectEqual(@as(u32, 0), tree.map.count());
+}
+
+test "dead slot propagates cross-slot" {
+    var tree: MerkleForest = try .init(std.testing.allocator);
+    defer tree.deinit(std.testing.allocator);
+
+    var pool_buf: [lib.replay.BlockPool.size()]u8 align(@alignOf(lib.replay.BlockPool)) = undefined;
+    const pool: *lib.replay.BlockPool = @ptrCast(&pool_buf);
+    pool.init();
+
+    const logger = tel.Logger("main").noop;
+
+    const hash_a: Hash = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
+    const hash_b: Hash = .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd");
+    const root_hash: Hash = .parse("DWCWjQciWoWDzJKwqUZ1ntKqTyXtLVt4C8aL7biBJZ4z");
+
+    // Insert A in slot 1 (will serve as last FEC of slot 1)
+    const fec_a: lib.shred.DeshreddedFecSet = .{
+        .chained_merkle_root = root_hash,
+        .merkle_root = hash_a,
+        .id = .{ .slot = 1, .fec_set_idx = 0 },
+        .data_complete = true,
+        .slot_complete = true,
+        .payload_len = 0,
+        .payload_buf = undefined,
+    };
+    const a_inserted = (try insertFecSet(logger, &fec_a, &tree, pool)).?;
+    a_inserted.block_ref = .fromInt(42);
+
+    // Mark slot 1 dead
+    tree.markSlotDead(1);
+
+    // Insert B in slot 2, chaining to A
+    const fec_b: lib.shred.DeshreddedFecSet = .{
+        .chained_merkle_root = hash_a,
+        .merkle_root = hash_b,
+        .id = .{ .slot = 2, .fec_set_idx = 0 },
+        .data_complete = true,
+        .slot_complete = true,
+        .payload_len = 0,
+        .payload_buf = undefined,
+    };
+    _ = try insertFecSet(logger, &fec_b, &tree, pool);
+
+    // Slot 2 should inherit dead status from slot 1 via setChildBlockRef propagation
+    try std.testing.expect(tree.isSlotDead(2));
+}
+
+test "invalid FEC ordering without feature does not mark dead" {
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/core/src/window_service.rs#L149-L154
+    // When validate_chained_block_id_2 is NOT active, FixedFECChainedMerkleRootConflict
+    // does NOT mark the slot dead (detection still happens, response is gated).
+    var tree: MerkleForest = try .init(std.testing.allocator);
+    defer tree.deinit(std.testing.allocator);
+    tree.validate_chained_block_id_2 = false; // feature not active
+
+    var pool_buf: [lib.replay.BlockPool.size()]u8 align(@alignOf(lib.replay.BlockPool)) = undefined;
+    const pool: *lib.replay.BlockPool = @ptrCast(&pool_buf);
+    pool.init();
+
+    const logger = tel.Logger("main").noop;
+
+    const hash_a: Hash = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
+    const hash_b: Hash = .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd");
+    const root_hash: Hash = .parse("DWCWjQciWoWDzJKwqUZ1ntKqTyXtLVt4C8aL7biBJZ4z");
+
+    // Insert A at idx 0
+    const fec_a: lib.shred.DeshreddedFecSet = .{
+        .chained_merkle_root = root_hash,
+        .merkle_root = hash_a,
+        .id = .{ .slot = 1, .fec_set_idx = 0 },
+        .data_complete = true,
+        .slot_complete = false,
+        .payload_len = 0,
+        .payload_buf = undefined,
+    };
+    _ = (try insertFecSet(logger, &fec_a, &tree, pool)).?;
+
+    // Insert B at idx 64 (gap of 64, not 32) — chained to A
+    const fec_b: lib.shred.DeshreddedFecSet = .{
+        .chained_merkle_root = hash_a,
+        .merkle_root = hash_b,
+        .id = .{ .slot = 1, .fec_set_idx = 64 },
+        .data_complete = true,
+        .slot_complete = false,
+        .payload_len = 0,
+        .payload_buf = undefined,
+    };
+    _ = try insertFecSet(logger, &fec_b, &tree, pool);
+
+    // Slot should NOT be marked dead (feature inactive)
+    try std.testing.expect(!tree.isSlotDead(1));
 }

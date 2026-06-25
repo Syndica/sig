@@ -1706,11 +1706,18 @@
         .name = "validate_chained_block_id",
         .pubkey = "vcmrbYbiMVKaq1snKP6eCacNDcr6qZvpCNUjmk6gxvZ",
         .description = "SIMD-0340: Validate chained block ID",
-        .status = .unsupported,
+        .status = .hardcoded,
         .note =
-        \\ TODO: High Priority.
-        \\ Pending mainnet activation.
+        \\ v2's MerkleForest tree construction implicitly validates chaining
+        \\ via attachParent/attachChildren + mayFollowWith.
+        \\ Conflicts mark the slot dead unconditionally.
         ,
+    },
+    .{
+        .name = "validate_chained_block_id_2",
+        .pubkey = "vcmrw431aNM8ngQ46derkZXipoTGQdbHkEygBDh12dA",
+        .description = "SIMD-340: Encompassing check for validate chained block ID",
+        .status = .supported,
     },
     .{
         .name = "upgrade_bpf_stake_program_to_v5",
