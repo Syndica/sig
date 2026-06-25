@@ -99,6 +99,8 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     var deshred_out = rw.deshredded_out.get(.writer);
 
     const Effects = struct {
+        deshred_writer: *lib.shred.DeshredRing.Iterator(.writer),
+
         const Self = @This();
 
         pub fn reportShredParseResult(self: Self, parses_as_chained: bool) void {
@@ -114,13 +116,29 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             _ = .{ self, completed, ctx };
         }
 
+        pub fn writeCompletedFecSet(self: Self) *lib.shred.DeshreddedFecSet {
+            return self.deshred_writer.next() orelse
+                // If there's nowhere to write to, then this means that services downstream haven't been
+                // keeping up for a while.
+                // For now let's just exit if this happens, however this might leave us vulnerable to denial
+                // of service.
+                //
+                // TODO: consider handling this case by pausing writing to this ring.
+                @panic("Can't send deshredded fec sets to replay, is it alive?");
+        }
+
+        pub fn flushCompletedFecSet(self: Self) void {
+            self.deshred_writer.markUsed();
+        }
+
         pub fn reportReceiverPacketResult(self: Self, result: lib.shred.ReceiverPacketResult) void {
             _ = .{ self, result };
         }
     };
 
     const Receiver = lib.shred.Receiver(Effects);
-    var receiver: Receiver = try .init(allocator, max_in_progress, max_done, .{});
+    const effects: Effects = .{ .deshred_writer = &deshred_out };
+    var receiver: Receiver = try .init(allocator, max_in_progress, max_done, effects);
     defer receiver.deinit(allocator);
 
     while (true) {
@@ -139,7 +157,6 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                 &ro.config.leader_schedule,
                 ro.config.shred_version,
                 packet,
-                &deshred_out,
                 logger.withScope("processPacket"),
             ) catch |err| switch (err) {
                 error.NoSpaceLeft => return err,

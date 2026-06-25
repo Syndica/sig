@@ -14,58 +14,8 @@ const Signature = solana.Signature;
 const Packet = net.Packet;
 
 const DeshreddedFecSet = lib.shred.DeshreddedFecSet;
-const DeshredRing = lib.shred.DeshredRing;
 const FecSetId = lib.shred.FecSetId;
 const Shred = lib.shred.Shred;
-
-pub const PacketError = error{
-    PacketUnderMinHeaderSize,
-    UnsupportedVariant,
-    PacketUnderHeaderSize,
-    DataSmallerThanHeader,
-    DataPacketUnderMinSize,
-    DataEffectiveSizeTooSmall,
-    CodeShredOverMaxSize,
-    PacketSizeUnderExpected3,
-    DataShredMarkedCompleteIsNotLastInSet,
-    BadOffset,
-    BadSlotOrParentOffset,
-    BadSlotIdx,
-    BadCodeShredIdx,
-    NoCodeOrDataCount,
-    CodeOrDataCountTooLarge,
-    InvalidMerkleProof,
-    ShredOlderThanRoot,
-    ShredTooNew,
-    ShredVersionMismatch,
-    FecSetIndexTooHigh,
-    SlotIndexTooHigh,
-    BadDataShredCount,
-    BadCodeShredCount,
-    InvalidFecSetIdx,
-    ShredIdxTooLarge,
-    MerkleCountTooLarge,
-    VariantMismatchFromFecSet,
-    MismatchedMerkleRoot,
-    EquivocationDifferentHashForSameFecSetId,
-    EquivocationFecSetIdAlreadyInProgress,
-    UnknownLeader,
-    SignatureVerificationFailed,
-};
-
-pub const PacketSuccess = union(enum) {
-    unfinished_fec_set: struct { total_shreds_received: u8 },
-    fec_set_finished,
-    fec_set_already_finished,
-    shred_already_seen,
-};
-
-pub const PacketResult = union(enum) {
-    success: PacketSuccess,
-    failed: PacketError,
-};
-
-const ProcessPacketError = PacketError || error{NoSpaceLeft};
 
 /// Takes in shreds, and writes out deshredded fec sets.
 /// For full docs see `services/shred_receiver.zig`.
@@ -81,6 +31,15 @@ pub fn Receiver(comptime Effects: type) type {
             ctx: *const FecSetCtx,
         ) void {
             _ = .{ self, completed, ctx };
+        }
+
+        pub fn writeCompletedFecSet(self: Effects) *DeshreddedFecSet {
+            _ = self;
+            return undefined;
+        }
+
+        pub fn flushCompletedFecSet(self: Effects) void {
+            _ = self;
         }
 
         pub fn reportReceiverPacketResult(self: Effects, result: PacketResult) void {
@@ -141,14 +100,12 @@ pub fn Receiver(comptime Effects: type) type {
             leader_schedule: *const lib.solana.LeaderSchedule,
             network_shred_version: u16,
             packet: *const Packet,
-            deshred_writer: *DeshredRing.Iterator(.writer),
             logger: lib.telemetry.Logger("processPacket"),
         ) ProcessPacketError!PacketSuccess {
             const result = state.processPacketInner(
                 leader_schedule,
                 network_shred_version,
                 packet,
-                deshred_writer,
                 logger,
             ) catch |err| {
                 switch (err) {
@@ -172,7 +129,6 @@ pub fn Receiver(comptime Effects: type) type {
             leader_schedule: *const lib.solana.LeaderSchedule,
             network_shred_version: u16,
             packet: *const Packet,
-            deshred_writer: *DeshredRing.Iterator(.writer),
             logger: lib.telemetry.Logger("processPacket"),
         ) ProcessPacketError!PacketSuccess {
             const zone = tracy.Zone.init(@src(), .{ .name = "processPacket" });
@@ -440,15 +396,8 @@ pub fn Receiver(comptime Effects: type) type {
                     break :blk .{ len, data_complete, slot_complete };
                 };
 
-                const finished: *DeshreddedFecSet = deshred_writer.next() orelse
-                    // If there's nowhere to write to, then this means that services downstream haven't been
-                    // keeping up for a while.
-                    // For now let's just exit if this happens, however this might leave us vulnerable to denial
-                    // of service.
-                    //
-                    // TODO: consider handling this case by pausing writing to this ring.
-                    @panic("Can't send deshredded fec sets to replay, is it alive?");
-                defer deshred_writer.markUsed();
+                const finished: *DeshreddedFecSet = state.effects.writeCompletedFecSet();
+                defer state.effects.flushCompletedFecSet();
 
                 finished.* = .{
                     .merkle_root = fec_set_ctx.merkle_root,
@@ -485,6 +434,55 @@ pub fn Receiver(comptime Effects: type) type {
         }
     };
 }
+
+pub const PacketError = error{
+    PacketUnderMinHeaderSize,
+    UnsupportedVariant,
+    PacketUnderHeaderSize,
+    DataSmallerThanHeader,
+    DataPacketUnderMinSize,
+    DataEffectiveSizeTooSmall,
+    CodeShredOverMaxSize,
+    PacketSizeUnderExpected3,
+    DataShredMarkedCompleteIsNotLastInSet,
+    BadOffset,
+    BadSlotOrParentOffset,
+    BadSlotIdx,
+    BadCodeShredIdx,
+    NoCodeOrDataCount,
+    CodeOrDataCountTooLarge,
+    InvalidMerkleProof,
+    ShredOlderThanRoot,
+    ShredTooNew,
+    ShredVersionMismatch,
+    FecSetIndexTooHigh,
+    SlotIndexTooHigh,
+    BadDataShredCount,
+    BadCodeShredCount,
+    InvalidFecSetIdx,
+    ShredIdxTooLarge,
+    MerkleCountTooLarge,
+    VariantMismatchFromFecSet,
+    MismatchedMerkleRoot,
+    EquivocationDifferentHashForSameFecSetId,
+    EquivocationFecSetIdAlreadyInProgress,
+    UnknownLeader,
+    SignatureVerificationFailed,
+};
+
+pub const PacketSuccess = union(enum) {
+    unfinished_fec_set: struct { total_shreds_received: u8 },
+    fec_set_finished,
+    fec_set_already_finished,
+    shred_already_seen,
+};
+
+pub const PacketResult = union(enum) {
+    success: PacketSuccess,
+    failed: PacketError,
+};
+
+const ProcessPacketError = PacketError || error{NoSpaceLeft};
 
 /// Represents a FEC (Forward Error Correction) set which has yet to be reconstructed.
 // TODO: use a separate pool for the packet buffers! We're using at least 2x the memory for these,
