@@ -328,16 +328,17 @@ fn attachParent(
             // NOTE: the code that finds this orphan entry later *must* attach all of the orphan's
             // siblings
 
-            // insert at tail of the existing node's siblings
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/core/src/window_service.rs#L141-L147
+            // Check new node against each existing orphan for equivocation (same FecSetId).
+            // Walk to tail, detecting equivocation along the way.
             var orphan_sibling_tail: ?*MerkleNode = orphan_map_result.value_ptr.*;
             while (orphan_sibling_tail) |tail_node| {
-                const next_sibling = tail_node.sibling.ptr(&forest.pool) orelse break;
-
-                if (next_sibling.id.eql(&tail_node.id)) {
-                    forest.markSlotDead(node.id.slot);
+                if (tail_node.id.eql(&node.id)) {
+                    // Equivocation: existing orphan has same FecSetId as new node.
+                    forest.markSlotDead(tail_node.id.slot);
                     return null;
                 }
-
+                const next_sibling = tail_node.sibling.ptr(&forest.pool) orelse break;
                 orphan_sibling_tail = next_sibling;
             }
             std.debug.assert(orphan_sibling_tail.?.sibling == .null);
@@ -401,6 +402,24 @@ fn attachParent(
     }
 }
 
+/// Recursively removes a node and its entire subtree from the map and pool.
+/// Used when an invalid orphan with children is detected — prevents pool exhaustion.
+fn removeSubtree(root_node: *MerkleNode, forest: *MerkleForest) void {
+    const map_ctx: MerkleForest.MerkleContext = .{ .map = &forest.map };
+
+    // Depth-first: remove all children first
+    var maybe_child: ?*MerkleNode = root_node.child.ptr(&forest.pool);
+    while (maybe_child) |child| {
+        const next_sibling = child.sibling.ptr(&forest.pool);
+        removeSubtree(child, forest);
+        maybe_child = next_sibling;
+    }
+
+    // Remove this node from the map and pool
+    const removed = forest.map.swapRemoveAdapted(&root_node.merkle_root, map_ctx);
+    std.debug.assert(removed);
+    forest.pool.destroy(root_node);
+}
 fn attachChildren(logger: tel.Logger("main"), node: *MerkleNode, forest: *MerkleForest) void {
     std.debug.assert(node.child == .null);
 
@@ -466,6 +485,8 @@ fn attachChildren(logger: tel.Logger("main"), node: *MerkleNode, forest: *Merkle
                 if (forest.validate_chained_block_id_2) {
                     forest.markSlotDead(child_node.id.slot);
                 }
+                // Recursively remove the invalid subtree to avoid pool exhaustion.
+                removeSubtree(child_node, forest);
                 continue;
             }
             const removed = forest.map.swapRemoveAdapted(&child_node.merkle_root, map_ctx);
@@ -609,6 +630,18 @@ fn insertFecSet(
 
     const maybe_parent = attachParent(logger, node, forest);
     attachChildren(logger, node, forest);
+
+    // If this node's slot was marked dead (e.g. by equivocation in attachParent),
+    // propagate death to any cross-slot children that attachChildren just attached.
+    if (forest.isSlotDead(node.id.slot)) {
+        var maybe_child: ?*MerkleNode = node.child.ptr(&forest.pool);
+        while (maybe_child) |child| {
+            if (child.id.slot != node.id.slot) {
+                forest.markSlotDead(child.id.slot);
+            }
+            maybe_child = child.sibling.ptr(&forest.pool);
+        }
+    }
 
     // "propagate" BlockRefs (see `setChildBlockRef` for details)
     if (maybe_parent) |parent| {
@@ -1423,7 +1456,9 @@ test "MerkleForest tree put" {
 }
 
 test "equivocation marks slot dead" {
-    // Two FEC sets with same FecSetId but different merkle roots → equivocation → slot dead
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/core/src/window_service.rs#L141-L147
+    // Two FEC sets with same FecSetId but different merkle roots → equivocation → slot dead.
+    // Both become orphans (parent_hash not in map), equivocation detected in orphan sibling walk.
     var tree: MerkleForest = try .init(std.testing.allocator);
     defer tree.deinit(std.testing.allocator);
 
@@ -1437,7 +1472,6 @@ test "equivocation marks slot dead" {
     const hash_a: Hash = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
     const hash_b: Hash = .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd");
 
-    // Insert first FEC set: slot 1, idx 0
     const fec_a: lib.shred.DeshreddedFecSet = .{
         .chained_merkle_root = parent_hash,
         .merkle_root = hash_a,
@@ -1447,19 +1481,9 @@ test "equivocation marks slot dead" {
         .payload_len = 0,
         .payload_buf = undefined,
     };
-    const a_inserted = (try insertFecSet(logger, &fec_a, &tree, pool)).?;
-    // Give it a BlockRef so it can act as root
-    a_inserted.block_ref = .fromInt(1);
+    _ = (try insertFecSet(logger, &fec_a, &tree, pool)).?;
 
-    // Insert CONFLICTING FEC set: same slot 1, same idx 0, but different merkle_root
-    // This will arrive, get inserted into the map (different merkle root = different key),
-    // then attachParent will find the parent (parent_hash), mayFollowWith passes (same slot, idx 0 → 0 = diff 0? no)
-    // Actually both have idx=0 with same parent — they'll be siblings under the parent.
-    // When the second tries to become a child of the parent, it finds the first already there with same id → equivocation
-    // BUT: fec_a has chained_merkle_root = parent_hash. fec_b also has chained_merkle_root = parent_hash.
-    // fec_a's parent is found by looking up parent_hash in map — but parent_hash was never inserted as a merkle_root!
-    // So both fec_a and fec_b become orphans keyed by parent_hash.
-    // The equivocation is detected in the orphan sibling walk.
+    // Conflicting FEC set: same FecSetId (slot=1, idx=0), different merkle_root
     const fec_b: lib.shred.DeshreddedFecSet = .{
         .chained_merkle_root = parent_hash,
         .merkle_root = hash_b,
@@ -1469,11 +1493,8 @@ test "equivocation marks slot dead" {
         .payload_len = 0,
         .payload_buf = undefined,
     };
-    const b_result = try insertFecSet(logger, &fec_b, &tree, pool);
-    // fec_b is inserted into map (different merkle root) but slot should be marked dead
-    // because both are orphans with same FecSetId
+    _ = try insertFecSet(logger, &fec_b, &tree, pool);
     try std.testing.expect(tree.isSlotDead(1));
-    _ = b_result;
 }
 
 test "invalid FEC ordering marks slot dead" {
