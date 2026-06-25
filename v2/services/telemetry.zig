@@ -4,6 +4,7 @@
 const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
+const services = @import("services");
 const api = lib.telemetry;
 
 comptime {
@@ -14,11 +15,8 @@ pub const name = .telemetry;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadOnly = struct {};
-
-pub const ReadWrite = struct {
-    region: *api.Region,
-};
+pub const ReadOnly = services.telemetry.ReadOnly;
+pub const ReadWrite = services.telemetry.ReadWrite;
 
 pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
     _ = ro;
