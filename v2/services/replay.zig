@@ -126,6 +126,14 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const exec_states: *BlockExecStates = try allocator.create(BlockExecStates);
     @memset(exec_states, null);
 
+    const status_cache: *StatusCache = try allocator.create(StatusCache);
+    status_cache.init();
+
+    _ = &StatusCache.containsTransaction;
+    _ = &StatusCache.insert;
+    _ = &StatusCache.evictBlock;
+    _ = &StatusCache.evictRooted;
+
     var deshredded_iter = rw.deshredded_in.get(.reader);
     var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
     var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
@@ -1043,6 +1051,155 @@ const BlockDeserialState = struct {
                 self.next_read = .transaction;
                 return tx_buf[0..tx_bytes_read];
             },
+        }
+    }
+};
+
+pub const StatusCache = extern struct {
+    blocks: [replay.BlockPool.capacity]Entry,
+    /// See:
+    /// * https://github.com/anza-xyz/agave/blob/5fd7325a01cc7fa687caeca4b21fc9c681e9e104/runtime/src/status_cache.rs#L220-L223
+    /// * https://github.com/anza-xyz/agave/commit/3c01f9ce54499772fac6ce929c08476543b3d81c.
+    tx_hash_slices: [replay.TransactionPool.capacity][CACHED_KEY_SIZE]u8,
+    tx_segment_pool: TxSegmentPool,
+
+    fn init(self: *StatusCache) void {
+        @memset(&self.blocks, .{ .transactions = .null });
+        @memset(&self.tx_hash_slices, @splat(0));
+        self.tx_segment_pool.init();
+    }
+
+    pub const CACHED_KEY_SIZE = 20;
+
+    pub const Entry = extern struct {
+        transactions: TxSegmentNode.Id.Optional,
+    };
+
+    pub const TxSegmentPool = lib.collections.SharedPool(
+        TxSegmentNode,
+        replay.BlockPool.capacity * 1000 / TxSegmentNode.tx_per_segment,
+    );
+
+    pub const TxSegmentNode = extern struct {
+        buf: [tx_per_segment]TxId.Optional,
+        next: Id.Optional,
+
+        pub const Id = TxSegmentPool.ItemId;
+
+        pub const tx_per_segment = std.atomic.cache_line / @sizeOf(TxId.Optional);
+        const TxId = replay.TransactionPool.ItemId;
+
+        pub fn init(self: *TxSegmentNode) void {
+            @memset(&self.buf, .null);
+            self.next = .null;
+        }
+    };
+
+    pub fn containsTransaction(
+        status_cache: *const StatusCache,
+        /// Block that's associated with the `recent_blockhash` of interest, with the implied ancestors.
+        recent_block_ref: replay.BlockRef,
+        /// The transaction key.
+        tx_key: *const Hash,
+    ) bool {
+        const entry = &status_cache.blocks[recent_block_ref.index()];
+        const lookup_key = tx_key.data[0..CACHED_KEY_SIZE];
+        var current = entry.transactions;
+        while (current.opt()) |segment_id| {
+            const segment = segment_id.constPtr(&status_cache.tx_segment_pool);
+            defer current = segment.next;
+
+            for (&segment.buf) |tx_id_opt| {
+                const tx_id = tx_id_opt.opt() orelse break;
+                const tx_hash_slice = &status_cache.tx_hash_slices[tx_id.index()];
+                if (std.mem.eql(u8, tx_hash_slice, lookup_key)) return true;
+            }
+        }
+        return false;
+    }
+
+    pub fn insert(
+        status_cache: *StatusCache,
+        /// Block that's associated with the `recent_blockhash` of interest, with the implied ancestors.
+        recent_block_ref: replay.BlockRef,
+        /// The transaction that was executed.
+        tx_id: replay.TransactionPool.ItemId,
+        /// The transaction key.
+        tx_key: *const Hash,
+    ) error{OutOfSpace}!void {
+        const entry = &status_cache.blocks[recent_block_ref.index()];
+
+        if (std.mem.allEqual(u8, &tx_key.data, 0)) {
+            std.debug.panic("Invalid tx_key (all zeroes).", .{});
+        }
+        const lookup_key = tx_key.data[0..CACHED_KEY_SIZE];
+
+        const tx_hash_slice = &status_cache.tx_hash_slices[tx_id.index()];
+        if (!std.mem.allEqual(u8, tx_hash_slice, 0) and
+            !std.mem.eql(u8, lookup_key, tx_hash_slice) //
+        ) std.debug.panic(
+            "tx_id's inserted hash slice '{f}' (full = '{f}') " ++
+                " does not match existing hash slice '{f}'.",
+            .{
+                lib.util.fmtBase58(&.BITCOIN, lookup_key),
+                tx_key.*,
+                lib.util.fmtBase58(&.BITCOIN, tx_hash_slice),
+            },
+        );
+        tx_hash_slice.* = lookup_key.*;
+
+        const first_tx_segment_id = entry.transactions.opt() orelse {
+            const tx_entry_id = try status_cache.tx_segment_pool.createId();
+            const tx_entry = tx_entry_id.ptr(&status_cache.tx_segment_pool);
+            tx_entry.init();
+            tx_entry.buf[0] = .init(tx_id);
+            return;
+        };
+        const first_tx_segment = first_tx_segment_id.ptr(&status_cache.tx_segment_pool);
+
+        var tx_segment_id_opt: TxSegmentNode.Id.Optional = .init(first_tx_segment_id);
+        while (tx_segment_id_opt.opt()) |current_tx_segment_id| {
+            const tx_segment = current_tx_segment_id.constPtr(&status_cache.tx_segment_pool);
+            defer tx_segment_id_opt = tx_segment.next;
+
+            for (&tx_segment.buf) |tx_id_opt| {
+                const current_tx_id = tx_id_opt.opt() orelse break;
+                if (tx_id == current_tx_id) return;
+            }
+        }
+
+        for (&first_tx_segment.buf) |*tx_id_opt| {
+            if (tx_id_opt.* != .null) continue;
+            tx_id_opt.* = .init(tx_id);
+            return;
+        }
+    }
+
+    /// Evicts all of the resources associated with `block_ref`.
+    pub fn evictBlock(
+        status_cache: *StatusCache,
+        block_ref: replay.BlockRef,
+    ) void {
+        const entry = &status_cache.blocks[block_ref.index()];
+        var current_id_opt = entry.transactions;
+        while (current_id_opt.opt()) |current_id| {
+            const current = current_id.ptr(&status_cache.tx_segment_pool);
+            current_id_opt = current.next;
+            status_cache.tx_segment_pool.destroyId(current_id);
+        }
+    }
+
+    /// Evicts all blocks whose slot is `<= min_root`.
+    /// Must eventually be called after any slot `> min_root` is rooted.
+    pub fn evictRooted(
+        status_cache: *StatusCache,
+        block_pool: *const replay.BlockPool,
+        min_root: Slot,
+    ) void {
+        for (0..status_cache.blocks.len) |block_ref_int| {
+            const block_ref: replay.BlockRef = .fromInt(@intCast(block_ref_int));
+            const block = block_ref.constPtr(block_pool);
+            if (block.slot <= min_root) status_cache.evictBlock(block_ref);
         }
     }
 };
