@@ -7,6 +7,7 @@ const tel = lib.telemetry;
 const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
 const Epoch = lib.solana.Epoch;
+const Hash = lib.solana.Hash;
 
 fn readInt(Int: type, r: anytype) !u64 {
     var buf: [@sizeOf(Int)]u8 = undefined;
@@ -105,26 +106,75 @@ pub const Manifest = struct {
 
 pub const BankFields = struct {
     slot: Slot,
+    blockhash_queue: BlockHashQueue,
+
+    pub const BlockHashQueue = struct {
+        last_hash: ?Hash,
+        max_age: u64,
+        hashes: struct {
+            array: []Hash,
+            count: usize,
+        },
+
+        pub const Entry = extern struct {
+            hash: Hash,
+            hash_index: u64,
+        };
+
+        pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !BlockHashQueue {
+            const last_hash_index = try readInt(u64, r);
+            const maybe_last_hash: ?Hash = if (!(try readBool(r))) null else blk: {
+                var hash: Hash = undefined;
+                try r.readSliceAll(std.mem.asBytes(&hash));
+                break :blk hash;
+            };
+
+            const n_hash_infos = try readInt(u64, r);
+            const hashes = try fba.allocator().alloc(Hash, n_hash_infos);
+
+            const BlockhashEntry = extern struct {
+                hash: Hash,
+                lamports_per_signature: u64,
+                hash_index: u64,
+                timestamp: u64,
+            };
+
+            const entries = try fba.allocator().alloc(BlockhashEntry, n_hash_infos);
+            defer fba.allocator().free(entries); // its the last allocation, so makes sense
+            try r.readSliceAll(std.mem.sliceAsBytes(entries));
+
+            const max_age = try readInt(u64, r);
+
+            // sort entries by hash_index
+            std.mem.sortUnstable(BlockhashEntry, entries, {}, struct {
+                fn lessThan(_: void, a: BlockhashEntry, b: BlockhashEntry) bool {
+                    return a.hash_index < b.hash_index;
+                }
+            }.lessThan);
+
+            // then add only the live ones by max_age to the hashes
+            var count: usize = 0;
+            for (entries) |*e| {
+                const age = last_hash_index - e.hash_index;
+                if (age <= max_age) {
+                    hashes[count] = e.hash;
+                    count += 1;
+                }
+            }
+
+            return .{
+                .last_hash = maybe_last_hash,
+                .max_age = max_age,
+                .hashes = .{ .array = hashes, .count = count },
+            };
+        }
+    };
 
     pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !BankFields {
         const zone = tracy.Zone.init(@src(), .{ .name = "BankFields.read" });
         defer zone.deinit();
 
-        _ = fba;
-
-        // blockhash_queue.last_hash_index: u64
-        try r.discardAll(8);
-        // blockhash_queue.last_hash: ?Hash
-        if (try readBool(r)) try r.discardAll(32);
-        // blockhash_queue.hash_infos: HashMap(Hash, { lamports_per_signature: u64, hash_index: u64, timestamp: u64 })
-        const hash_infos_len = try readInt(u64, r);
-        try r.discardAll(hash_infos_len * (32 + // key: Hash
-            8 + // lamports_per_signature: u64
-            8 + // hash_index: u64
-            8 // timestamp: u64
-        ));
-        // blockhash_queue.max_age: u64
-        try r.discardAll(8);
+        const blockhash_queue = try BlockHashQueue.read(fba, r);
 
         // _unused_ancestors: HashMap(Slot, u64)
         const ancestors_len = try readInt(u64, r);
@@ -247,6 +297,7 @@ pub const BankFields = struct {
 
         return .{
             .slot = slot,
+            .blockhash_queue = blockhash_queue,
         };
     }
 };

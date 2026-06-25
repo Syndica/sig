@@ -28,6 +28,7 @@
     .{
         .name = .replay,
         .regions = .{
+            .{ .name = .snapshot_metadata_in, .access = .rw },
             .{ .name = .deshredded_in, .access = .rw },
             .{ .name = .transaction_pool, .access = .rw },
             .{ .name = .block_pool, .access = .rw },
@@ -49,6 +50,7 @@
         .regions = .{
             .{ .name = .config, .access = .rw },
             .{ .name = .ready_snapshot_in, .access = .rw },
+            .{ .name = .snapshot_metadata_out, .access = .rw },
             .{ .name = .account_pool, .access = .rw },
             .{ .name = .replay_lookups, .access = .rw },
             .{ .name = .telemetry, .access = .rw },

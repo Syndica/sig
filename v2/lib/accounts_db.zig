@@ -10,6 +10,7 @@ comptime {
 }
 
 const Pubkey = lib.solana.Pubkey;
+const Hash = lib.solana.Hash;
 
 pub const AccountPool = @import("accounts_db/pool.zig").AccountPool;
 pub const Rooted = @import("accounts_db/rooted.zig").Rooted;
@@ -36,5 +37,17 @@ pub const AccountLookups = extern struct {
     pub fn init(self: *AccountLookups) void {
         self.in.init();
         self.out.init();
+    }
+};
+
+pub const RuntimeMetadata = struct {
+    blockhash_queue: struct {
+        max_age: u64,
+        hashes: lib.ipc.Ring(256, Hash),
+    },
+
+    pub fn init(self: *RuntimeMetadata) void {
+        self.blockhash_queue.max_age = 0;
+        self.blockhash_queue.hashes.init();
     }
 };
