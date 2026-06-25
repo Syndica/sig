@@ -195,7 +195,8 @@ pub fn build(b: *Build) !void {
             .addOutputFileArg("feature-set-id.zig"),
     });
 
-    const lib_mod = b.createModule(.{
+    // Exported by name so downstream packages can `dep.module("sig_v2")`.
+    const lib_mod = b.addModule("sig_v2", .{
         .root_source_file = b.path("lib/lib.zig"),
         .target = target,
         .optimize = optimize,
