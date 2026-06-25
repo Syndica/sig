@@ -30,6 +30,9 @@ var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
 pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
+    const metrics = rw.tel.metricAppender().appendFields(lib.gossip.Metrics, .{
+        .prefix = @tagName(name),
+    });
     rw.tel.signalReady();
 
     logger.info().logf(
@@ -103,7 +106,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
 
     var now = lib.clock.wallclock(.ms);
     var fba = std.heap.FixedBufferAllocator.init(&scratch_memory);
-    var gossip = try GossipNode(Effects).init(&fba, now, .{
+    var gossip = try GossipNode(Effects).init(&fba, now, metrics, .{
         .effects = effects,
         .shred_version = ro.config.cluster_info.shred_version,
         .socket_map = sockets.asSocketMap(),

@@ -649,51 +649,51 @@ const UserData = packed struct(u64) {
 
 // TODO: add support for labels to metrics (should just auto-create a histogram per label, or whatever's in line with prom. spec).
 pub const Metrics = struct {
-    snapshot_sources_received: tel.Counter,
-    snapshot_sources_deduped: tel.Counter,
-    snapshot_sources_new: tel.Counter,
-    snapshot_sources_updated: tel.Counter,
-    snapshot_probes_started: tel.Counter,
-    snapshot_probes_succeeded: tel.Counter,
-    snapshot_probes_failed: tel.Counter,
-    snapshot_probes_timed_out: tel.Counter,
-    snapshot_sq_fulls: tel.Counter,
-    snapshot_download_candidates: tel.Counter,
-    snapshot_downloads_started: tel.Counter,
-    snapshot_downloads_failed: tel.Counter,
-    snapshot_downloads_cancelled: tel.Counter,
-    snapshot_downloads_succeeded: tel.Counter,
-    snapshot_download_bytes_written: tel.Counter,
+    sources_received: tel.Counter,
+    sources_deduped: tel.Counter,
+    sources_new: tel.Counter,
+    sources_updated: tel.Counter,
+    probes_started: tel.Counter,
+    probes_succeeded: tel.Counter,
+    probes_failed: tel.Counter,
+    probes_timed_out: tel.Counter,
+    sq_fulls: tel.Counter,
+    download_candidates: tel.Counter,
+    downloads_started: tel.Counter,
+    downloads_failed: tel.Counter,
+    downloads_cancelled: tel.Counter,
+    downloads_succeeded: tel.Counter,
+    download_bytes_written: tel.Counter,
 
     io_uring_timeouts_total: tel.Counter,
     io_uring_cqe_batch_fulls_total: tel.Counter,
 
     // TODO: likely remove these, mostly used for debugging.
-    snapshot_io_latency_probe_connect: tel.Histogram,
-    snapshot_io_latency_probe_send: tel.Histogram,
-    snapshot_io_latency_probe_recv: tel.Histogram,
-    snapshot_io_latency_download_connect: tel.Histogram,
-    snapshot_io_latency_download_send: tel.Histogram,
-    snapshot_io_latency_download_recv_headers: tel.Histogram,
-    snapshot_io_latency_download_write_extra: tel.Histogram,
-    snapshot_io_latency_download_poll_in: tel.Histogram,
-    snapshot_io_latency_download_splice_in: tel.Histogram,
-    snapshot_io_latency_download_splice_out: tel.Histogram,
-    snapshot_io_latency_download_fsync: tel.Histogram,
+    io_latency_probe_connect: tel.Histogram,
+    io_latency_probe_send: tel.Histogram,
+    io_latency_probe_recv: tel.Histogram,
+    io_latency_download_connect: tel.Histogram,
+    io_latency_download_send: tel.Histogram,
+    io_latency_download_recv_headers: tel.Histogram,
+    io_latency_download_write_extra: tel.Histogram,
+    io_latency_download_poll_in: tel.Histogram,
+    io_latency_download_splice_in: tel.Histogram,
+    io_latency_download_splice_out: tel.Histogram,
+    io_latency_download_fsync: tel.Histogram,
 
     fn getHistogram(self: *const Metrics, op: Op) *const tel.Histogram {
         return switch (op) {
-            .probe_connect => &self.snapshot_io_latency_probe_connect,
-            .probe_send => &self.snapshot_io_latency_probe_send,
-            .probe_recv => &self.snapshot_io_latency_probe_recv,
-            .download_connect => &self.snapshot_io_latency_download_connect,
-            .download_send => &self.snapshot_io_latency_download_send,
-            .download_recv_headers => &self.snapshot_io_latency_download_recv_headers,
-            .download_write_extra => &self.snapshot_io_latency_download_write_extra,
-            .download_poll_in => &self.snapshot_io_latency_download_poll_in,
-            .download_splice_in => &self.snapshot_io_latency_download_splice_in,
-            .download_splice_out => &self.snapshot_io_latency_download_splice_out,
-            .download_fsync => &self.snapshot_io_latency_download_fsync,
+            .probe_connect => &self.io_latency_probe_connect,
+            .probe_send => &self.io_latency_probe_send,
+            .probe_recv => &self.io_latency_probe_recv,
+            .download_connect => &self.io_latency_download_connect,
+            .download_send => &self.io_latency_download_send,
+            .download_recv_headers => &self.io_latency_download_recv_headers,
+            .download_write_extra => &self.io_latency_download_write_extra,
+            .download_poll_in => &self.io_latency_download_poll_in,
+            .download_splice_in => &self.io_latency_download_splice_in,
+            .download_splice_out => &self.io_latency_download_splice_out,
+            .download_fsync => &self.io_latency_download_fsync,
         };
     }
 
@@ -713,10 +713,12 @@ pub const Metrics = struct {
 
     // TODO: This was to not have a big fat anon. struct with the same fields repeated. But perhaps there's a better way?
     pub const fields_config = blk: {
-        var config: tel.metric.FieldsConfig(Metrics) = .{};
+        var config: tel.metric.FieldsConfig(Metrics) = .{
+            .prefix = "snapshot",
+        };
         for (@typeInfo(Metrics).@"struct".fields) |field| {
             if (field.type == tel.Histogram) {
-                @field(config, field.name) = .{
+                @field(config.fields, field.name) = .{
                     .id_override = null,
                     .upper_bounds = IO_LATENCY_BOUNDS,
                 };
@@ -1027,7 +1029,7 @@ pub const Downloader = struct {
         while (true) {
             const source = self.gossip_iter.next() orelse break;
             drained = true;
-            self.metrics.snapshot_sources_received.increment(1);
+            self.metrics.sources_received.increment(1);
 
             // Check and skip non-whitelisted known validators.
             if (!self.known_validators.trusts(source.from)) {
@@ -1045,7 +1047,7 @@ pub const Downloader = struct {
 
             const gop = self.dedupe_map.getOrPut(key, value);
             if (!gop.found_existing) {
-                self.metrics.snapshot_sources_new.increment(1);
+                self.metrics.sources_new.increment(1);
 
                 self.startProbe(key, gop.entry) catch |err| {
                     self.logger.warn().logf(
@@ -1068,12 +1070,12 @@ pub const Downloader = struct {
                     "updated snapshot source from={f} addr={f} slot={d} hash={f}",
                     .{ source.from, source.rpc_addr, source.slot, source.hash },
                 );
-                self.metrics.snapshot_sources_updated.increment(1);
+                self.metrics.sources_updated.increment(1);
             } else {
                 // Same addr + same slot/hash. Do not retry failed probes here.
                 // A failed probe is terminal for this snapshot candidate. It will
                 // be retried only if slot/hash changes (the update path above).
-                self.metrics.snapshot_sources_deduped.increment(1);
+                self.metrics.sources_deduped.increment(1);
             }
         }
         if (drained) self.gossip_iter.markUsed();
@@ -1122,7 +1124,7 @@ pub const Downloader = struct {
 
         peer.meta.probe_status = .in_flight;
         self.active_probes += 1;
-        self.metrics.snapshot_probes_started.increment(1);
+        self.metrics.probes_started.increment(1);
     }
 
     fn getProbeForCqe(self: *Downloader, data: UserData) ?*ProbeConn {
@@ -1302,7 +1304,7 @@ pub const Downloader = struct {
                 self.logger.debug().logf("probe timed out from={f} phase={s}", .{
                     active.state.from, probe.phaseName(),
                 });
-                self.metrics.snapshot_probes_timed_out.increment(1);
+                self.metrics.probes_timed_out.increment(1);
             },
             else => {
                 self.logger.warn().logf("unexpected timeout err from={f} err={s}", .{
@@ -1548,9 +1550,9 @@ pub const Downloader = struct {
         self.active_probes -= 1;
 
         switch (result) {
-            .succeeded => self.metrics.snapshot_probes_succeeded.increment(1),
-            .failed => self.metrics.snapshot_probes_failed.increment(1),
-            .sq_full => self.metrics.snapshot_sq_fulls.increment(1),
+            .succeeded => self.metrics.probes_succeeded.increment(1),
+            .failed => self.metrics.probes_failed.increment(1),
+            .sq_full => self.metrics.sq_fulls.increment(1),
         }
     }
 
@@ -1895,7 +1897,7 @@ pub const Downloader = struct {
         }
 
         state.bytes_written += writing_extra.extra_body_len;
-        self.metrics.snapshot_download_bytes_written.increment(writing_extra.extra_body_len);
+        self.metrics.download_bytes_written.increment(writing_extra.extra_body_len);
         self.maybeSelectWinner(data.index);
 
         if (self.shouldCancelDownload(data.index)) {
@@ -2056,7 +2058,7 @@ pub const Downloader = struct {
         std.debug.assert(n <= state.pipe_pending);
         state.pipe_pending -= n;
         state.bytes_written += n;
-        self.metrics.snapshot_download_bytes_written.increment(n);
+        self.metrics.download_bytes_written.increment(n);
 
         self.maybeSelectWinner(data.index);
 
@@ -2226,7 +2228,7 @@ pub const Downloader = struct {
         race.candidates[pos] = candidate;
         race.candidate_count += 1;
 
-        self.metrics.snapshot_download_candidates.increment(1);
+        self.metrics.download_candidates.increment(1);
     }
 
     fn startPendingRacers(self: *Downloader) void {
@@ -2547,7 +2549,7 @@ pub const Downloader = struct {
 
         candidate.started = true;
         self.active_downloads += 1;
-        self.metrics.snapshot_downloads_started.increment(1);
+        self.metrics.downloads_started.increment(1);
     }
 
     fn shouldCancelDownload(self: *Downloader, index: u8) bool {
@@ -2644,9 +2646,9 @@ pub const Downloader = struct {
         const state = &active.state;
 
         switch (result) {
-            .failed => self.metrics.snapshot_downloads_failed.increment(1),
-            .cancelled => self.metrics.snapshot_downloads_cancelled.increment(1),
-            .succeeded => self.metrics.snapshot_downloads_succeeded.increment(1),
+            .failed => self.metrics.downloads_failed.increment(1),
+            .cancelled => self.metrics.downloads_cancelled.increment(1),
+            .succeeded => self.metrics.downloads_succeeded.increment(1),
         }
 
         if (state.fd >= 0) std.posix.close(state.fd);
