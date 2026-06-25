@@ -78,6 +78,8 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                             .result = .{ .success = true },
                             .block_idx = data.block_idx,
                             .tx_idx = data.tx_idx,
+                            .n_account_refs = data.n_account_refs,
+                            .account_ref_buf = data.account_ref_buf,
                         },
                     },
                 };

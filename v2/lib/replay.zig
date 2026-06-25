@@ -1,6 +1,10 @@
 const solana = @import("solana.zig");
 const collections = @import("collections.zig");
 const ipc = @import("ipc.zig");
+const accounts_db = @import("accounts_db.zig");
+
+// This is a bit large currently because of the unrooted store
+pub const scratch_buffer_size = 12 * 1024 * 1024 * 1024;
 
 pub const TransactionPool = collections.SharedPool([1232]u8, 10_000);
 
@@ -8,7 +12,7 @@ pub const BlockPool = collections.SharedPool(Node, 1024);
 
 /// NOTE: this is what we use for referencing blocks. This is equivalent to the block's index
 /// our block mem pool. If you want what Agave calls the "Block ID", this is the merkle root of
-///  the last fec set.
+/// the last fec set.
 pub const BlockRef = BlockPool.ItemId;
 
 // TODO: large values (e.g. Hashes) should probably live elsewhere in memory to keep tree
@@ -50,6 +54,8 @@ pub const ExecRequest = extern struct {
         txn_exec: extern struct {
             block_idx: BlockRef,
             tx_idx: TransactionPool.ItemId,
+            n_account_refs: u8,
+            account_ref_buf: [128]accounts_db.AccountPool.Index,
         },
         txn_sig_verify: extern struct {
             tx_idx: TransactionPool.ItemId,
@@ -65,6 +71,8 @@ pub const ExecResponse = extern struct {
         txn_exec: extern struct {
             block_idx: BlockRef,
             tx_idx: TransactionPool.ItemId,
+            n_account_refs: u8,
+            account_ref_buf: [128]accounts_db.AccountPool.Index,
             result: TxExecResult,
         },
         txn_sig_verify: extern struct { success: bool },
