@@ -51,7 +51,9 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         logger.info().logf("no existing rooted db. reading from snapshot", .{});
 
         var fba = std.heap.FixedBufferAllocator.init(&Global.fba_memory);
-        var snapshot_iter = try SnapshotIter(*@TypeOf(in)).init(&fba, &in);
+        var snapshot_iter: SnapshotIter(*@TypeOf(in)) = .init(&in);
+        try snapshot_iter.checkVersion();
+        try snapshot_iter.readMetadata(&fba);
 
         logger.info().logf("reading snapshot accounts", .{});
         try rooted.loadSnapshot(.from(logger), &snapshot_iter);
