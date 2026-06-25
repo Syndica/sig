@@ -10,7 +10,6 @@ const compute_budget_program = sig.runtime.program.compute_budget;
 const cost_model = sig.runtime.cost_model;
 const vm = sig.vm;
 
-const BlockhashQueue = sig.core.BlockhashQueue;
 const Hash = sig.core.Hash;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.Pubkey;
@@ -41,6 +40,9 @@ const ComputeBudgetInstructionDetails = compute_budget_program.ComputeBudgetInst
 const InstructionTrace = TransactionContext.InstructionTrace;
 
 const AccountLoadError = sig.runtime.account_loader.AccountLoadError;
+
+const checkLoadAndAdvanceMessageNonceAccount =
+    sig.runtime.check_transactions.checkLoadAndAdvanceMessageNonceAccount;
 
 // Transaction execution involves logic and validation which occurs in replay
 // and the svm. The location of key processes in Agave are outlined below:
@@ -80,7 +82,6 @@ pub const TransactionExecutionEnvironment = struct {
     status_checker: StatusChecker,
     sysvar_cache: *const SysvarCache,
     rent_collector: *const RentCollector,
-    blockhash_queue: *const BlockhashQueue,
     epoch_stake_reader: EpochStakeReader,
     vm_environment: *const vm.Environment,
     next_vm_environment: ?*const vm.Environment,
@@ -212,28 +213,26 @@ pub fn loadAndExecuteTransaction(
         .err => |e| return .{ .err = e },
     };
 
-    const maybe_nonce_info = switch (try sig.runtime.check_transactions.checkAge(
-        tmp_allocator,
-        transaction,
-        account_reader,
-        env.blockhash_queue,
-        env.max_age,
-        &env.next_durable_nonce,
-        env.next_lamports_per_signature,
-        env.feature_set.active(.require_static_nonce_account, env.slot),
-    )) {
-        .ok => |x| x,
-        .err => |e| return .{ .err = e },
-    };
-    var nonce_account_is_owned = true;
-    defer if (nonce_account_is_owned) if (maybe_nonce_info) |n| tmp_allocator.free(n.account.data);
-
-    if (env.status_checker.check(
+    // verify the transaction is not in another block, first by checking
+    // in recent blocks, then checking if it's a durable nonce.
+    // [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L105
+    const maybe_nonce_info: ?LoadedAccount = switch (env.status_checker.check(
         &transaction.msg_hash,
         &transaction.recent_blockhash,
-    )) |err| return .{ .err = err };
+        env.max_age,
+    )) {
+        .recent_and_unprocessed => null,
+        .already_processed => return .{ .err = .AlreadyProcessed },
+        .unknown_blockhash => if (try checkLoadAndAdvanceMessageNonceAccount(
+            tmp_allocator,
+            transaction,
+            &env.next_durable_nonce,
+            env.next_lamports_per_signature,
+            account_reader,
+            env.feature_set.active(.require_static_nonce_account, env.slot),
+        )) |nonce| nonce[0] else return .{ .err = .BlockhashNotFound },
+    };
 
-    nonce_account_is_owned = false;
     const fees, var rollbacks, const fee_payer =
         switch (try sig.runtime.check_transactions.checkFeePayer(
             tmp_allocator,
@@ -820,8 +819,9 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             _: *const anyopaque,
             _: *const Hash,
             _: *const Hash,
-        ) ?TransactionError {
-            return null;
+            _: u64,
+        ) StatusChecker.Result {
+            return .recent_and_unprocessed;
         }
     };
     const status_checker_context = PassingStatusChecker{};
@@ -835,13 +835,6 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
 
     const rent_collector = sig.core.rent_collector.defaultCollector(10);
 
-    var blockhash_queue = try BlockhashQueue.initWithSingleEntry(
-        allocator,
-        recent_blockhash,
-        5000,
-    );
-    defer blockhash_queue.deinit(allocator);
-
     const epoch_stake_reader_context: TestEpochStakeReaderContext = .{};
 
     const environment = TransactionExecutionEnvironment{
@@ -849,7 +842,6 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .status_checker = status_checker,
         .sysvar_cache = &sysvar_cache,
         .rent_collector = &rent_collector,
-        .blockhash_queue = &blockhash_queue,
         .epoch_stake_reader = .{
             .ctx = &epoch_stake_reader_context,
             .totalStakeFn = TestEpochStakeReaderContext.totalStake,
