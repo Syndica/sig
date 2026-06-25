@@ -95,16 +95,16 @@ pub const Region = extern struct {
         /// The maximum number of histogram (`u64`-sized) elements to support.
         histogram_data_len: u32,
 
-        pub fn info(params: InitParams) Info {
+        pub fn info(self: InitParams) Info {
             return .{
-                .port = params.port,
-                .log_filters_len = @intCast(params.log_filters_encoded.len),
+                .port = self.port,
+                .log_filters_len = @intCast(self.log_filters_encoded.len),
 
-                .service_count = params.service_count,
+                .service_count = self.service_count,
 
-                .id_mem_len = params.id_mem_len,
-                .gauges_len = params.gauges_len,
-                .histogram_data_len = params.histogram_data_len,
+                .id_mem_len = self.id_mem_len,
+                .gauges_len = self.gauges_len,
+                .histogram_data_len = self.histogram_data_len,
             };
         }
     };

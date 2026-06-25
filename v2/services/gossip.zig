@@ -4,6 +4,7 @@
 const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
+const services = @import("services");
 const tel = lib.telemetry;
 
 const Pair = lib.net.Pair;
@@ -22,15 +23,8 @@ pub const name = .gossip;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadWrite = struct {
-    net_pair: *Pair,
-    gossip_to_snapshot: *lib.snapshot.SnapshotSourceRing,
-    tel: *tel.Region,
-};
-
-pub const ReadOnly = struct {
-    config: *const lib.gossip.Config,
-};
+pub const ReadWrite = services.gossip.ReadWrite;
+pub const ReadOnly = services.gossip.ReadOnly;
 
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
