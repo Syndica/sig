@@ -263,7 +263,8 @@ const Sig = struct {
             })).addOutputFileArg("feature-set-id.zig"),
         });
 
-        const lib = b.createModule(.{
+        // Exported by name so downstream packages can `dep.module("sig_v2")`.
+        const lib = b.addModule("sig_v2", .{
             .root_source_file = b.path("lib/lib.zig"),
             .target = config.target,
             .optimize = config.optimize,
