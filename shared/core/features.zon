@@ -1661,11 +1661,18 @@
         .name = "validator_admission_ticket",
         .pubkey = "VAT9huvhPjRN9cyrPytq9rwvEJ3J4ADtjdncgZRyANJ",
         .description = "SIMD-0357: Alpenglow VAT implementation",
+        .status = .supported,
+    },
+    .{
+        .name = "alpenglow",
+        .pubkey = "mustRekeyVm2QHYB3JPefBiU4BY3Z6JkW2k3Scw5GWP",
+        .description = "SIMD-0326: Alpenglow: new consensus algorithm",
         .status = .unsupported,
         .note =
-        \\ TODO: Low Priority.
+        \\ TODO: Low Priority
         \\ Not scheduled for activation.
         \\ Implement as part of alpenglow in v2.
+        \\ Currently exists to match agave control flow gating.
         ,
     },
     .{
