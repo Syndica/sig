@@ -667,6 +667,7 @@ fn executeTxnContext(
     const status_checker_adapter = sig.runtime.StatusCacheStatusCheckerAdapter{
         .ancestors = &ancestors,
         .status_cache = &status_cache,
+        .blockhash_queue = &blockhash_queue,
     };
     const epoch_stake_reader_adapter = sig.runtime.EpochStakeReaderAdapter{
         .epoch_stakes = &current_epoch_stakes,
@@ -677,7 +678,6 @@ fn executeTxnContext(
         .status_checker = status_checker_adapter.statusChecker(),
         .sysvar_cache = &sysvar_cache,
         .rent_collector = &rent_collector,
-        .blockhash_queue = &blockhash_queue,
         .epoch_stake_reader = epoch_stake_reader_adapter.epochStakeReader(),
         .vm_environment = &vm_environment,
         .next_vm_environment = null,

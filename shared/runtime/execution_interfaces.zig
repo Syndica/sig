@@ -5,7 +5,6 @@ const sig = @import("../lib.zig");
 const AccountSharedData = @import("AccountSharedData.zig");
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
-const TransactionError = sig.core.transaction_error.TransactionError;
 
 pub const AccountLoadError = error{ OutOfMemory, AccountsDBError };
 
@@ -83,17 +82,38 @@ pub const EpochStakeReader = struct {
 pub const StatusChecker = struct {
     ctx: *const anyopaque,
     checkFn: *const fn (
-        *const anyopaque,
-        *const Hash,
-        *const Hash,
-    ) ?TransactionError,
+        ctx: *const anyopaque,
+        msg_hash: *const Hash,
+        recent_blockhash: *const Hash,
+        max_age: u64,
+    ) Result,
 
+    pub const Result = enum {
+        /// The transaction is recent, and has never been executed in the
+        /// current fork, so it is legal to execute this in the current block.
+        recent_and_unprocessed,
+        /// The transaction was already executed in a recent block on the
+        /// current fork, so it is not legal to include it in the current block.
+        already_processed,
+        /// The recent_blockhash was not found, so it could not be determined
+        /// whether the transaction already exists in a block. This means the
+        /// recent_blockhash is too old or invalid, or the transaction uses a
+        /// durable nonce.
+        unknown_blockhash,
+    };
+
+    /// Checks recent blocks up to max_age to see if a transaction was already
+    /// processed in any of these blocks.
+    ///
+    /// Does not locate transactions that use a durable nonce. It will return
+    /// "unknown_blockhash" for those.
     pub fn check(
         self: StatusChecker,
         msg_hash: *const Hash,
         recent_blockhash: *const Hash,
-    ) ?TransactionError {
-        return self.checkFn(self.ctx, msg_hash, recent_blockhash);
+        max_age: u64,
+    ) Result {
+        return self.checkFn(self.ctx, msg_hash, recent_blockhash, max_age);
     }
 };
 
