@@ -627,15 +627,6 @@ fn authorize(
                 return InstructionError.InvalidInstructionData;
             }
 
-            // Match agave's call order strictly: the BLS PoP is verified
-            // (consuming 34,500 CUs and returning InvalidArgument on
-            // failure) BEFORE the target epoch is computed and the epoch
-            // authorized voter is looked up. In agave both of the latter
-            // happen as an argument to / inside `set_new_authorized_voter`,
-            // which is called *after* `verify_bls_proof_of_possession(...)?`.
-            // Computing `leader_schedule_epoch + 1` first would let an
-            // overflow (e.g. leader_schedule_epoch == u64::MAX) short-circuit
-            // with InvalidAccountData and skip the PoP verify + CU charge.
             // [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L732-L763
             try verifyBlsProofOfPossession(
                 ic.tc,
