@@ -50,11 +50,20 @@ pub fn Receiver(comptime Effects: type) type {
     return struct {
         const Self = @This();
 
+        /// Per-feature activation slots. A feature is enforced for shreds
+        /// whose slot is `>= activation_slot`; the default `maxInt(Slot)`
+        /// keeps every feature inactive.
+        pub const Features = struct {
+            discard_unexpected_data_complete_shreds: Slot = std.math.maxInt(Slot),
+        };
+
         effects: Effects,
 
         // We will ignore shreds outside of this range, as they're not useful to us
         root_slot: Slot,
         max_slot: Slot,
+
+        features: Features,
 
         in_progress: InProgressSets,
         done: DoneSets,
@@ -78,6 +87,7 @@ pub fn Receiver(comptime Effects: type) type {
 
                 .root_slot = 0,
                 .max_slot = std.math.maxInt(Slot),
+                .features = .{},
             };
         }
 
@@ -86,11 +96,32 @@ pub fn Receiver(comptime Effects: type) type {
             self.done.deinit(allocator);
         }
 
+        /// Reset to the post-init state without freeing any heap memory. Intended
+        /// for callers that reuse a single Receiver across many independent
+        /// inputs (e.g. the conformance shred-parse harness, which runs one
+        /// fixture per invocation and must not leak state between them).
+        ///
+        /// Does not touch `effects` — the caller is responsible for resetting
+        /// any Effects state it owns.
+        pub fn reset(self: *Self) void {
+            self.in_progress.reset();
+            self.done.reset();
+            self.root_slot = 0;
+            self.max_slot = std.math.maxInt(Slot);
+            self.features = .{};
+        }
+
         pub fn updateSlotRange(self: *Self, root_slot: Slot, max_slot: Slot) void {
             self.root_slot = root_slot;
             self.max_slot = max_slot;
 
             // TODO: this is where we would add code to prune entries outside of the new range.
+        }
+
+        /// Replace the active feature gates. Passing `.{}` disables every
+        /// feature (the default after `init` / `reset`).
+        pub fn setFeatures(self: *Self, features: Features) void {
+            self.features = features;
         }
 
         // TODO: report return values to observability
@@ -153,17 +184,14 @@ pub fn Receiver(comptime Effects: type) type {
                 if (shred.slot > state.max_slot) return error.ShredTooNew;
 
                 // ignore shred with wrong version
-                if (shred.version != network_shred_version) {
-                    if (!build_options.debug_skip_shred_checks) return error.ShredVersionMismatch;
-                }
+                if (shred.version != network_shred_version and
+                    !build_options.debug_skip_shred_version_check)
+                    return error.ShredVersionMismatch;
 
                 // reject shreds greater than the max per slot
-                // [agave] https://github.com/anza-xyz/agave/blob/ce2b875e7a9587106cb505e14ab769f9356b8238/ledger/src/shred.rs#L772
-                // [firedancer] https://github.com/firedancer-io/firedancer/blob/e547465daf50329a163ffbd0aa3089b9822d1759/src/disco/shred/fd_fec_resolver.c#L505
-                const max_shreds_per_slot = 32768;
-                if (shred.fec_set_idx > max_shreds_per_slot - FecSetCtx.fec_shred_count)
+                if (shred.fec_set_idx > lib.shred.max_shreds_per_slot - FecSetCtx.fec_shred_count)
                     return error.FecSetIndexTooHigh;
-                if (shred.slot_idx >= max_shreds_per_slot)
+                if (shred.slot_idx >= lib.shred.max_shreds_per_slot)
                     return error.SlotIndexTooHigh;
 
                 // ignore any with bad counts or indices (SIMD 0317 enforces this)
@@ -174,6 +202,14 @@ pub fn Receiver(comptime Effects: type) type {
                         return error.BadCodeShredCount;
                     if (shred.code_or_data.code.code_shred_idx >= FecSetCtx.fec_shred_count)
                         return error.BadCodeShredIdx;
+                } else {
+                    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred/filter.rs#L327-L342
+                    if (shred.slot >= state.features.discard_unexpected_data_complete_shreds and
+                        shred.code_or_data.data.flags.data_complete and
+                        shred.slot_idx != shred.fec_set_idx + FecSetCtx.fec_shred_count - 1)
+                    {
+                        return error.UnexpectedDataCompleteShred;
+                    }
                 }
 
                 if (shred.fec_set_idx % FecSetCtx.fec_shred_count != 0) {
@@ -264,7 +300,7 @@ pub fn Receiver(comptime Effects: type) type {
                 const shred_merkle_root: Hash = blk: {
                     var shred_merkle_root: Hash = undefined;
 
-                    if (!build_options.debug_skip_shred_checks) {
+                    if (!build_options.debug_skip_shred_sig_verify) {
                         const slot_leader = leader_schedule.get(shred.slot) orelse {
                             logger.warn().logf("slot {} missing?\n", .{shred.slot});
                             return error.UnknownLeader;
@@ -462,6 +498,7 @@ pub const PacketError = error{
     InvalidFecSetIdx,
     ShredIdxTooLarge,
     MerkleCountTooLarge,
+    UnexpectedDataCompleteShred,
     VariantMismatchFromFecSet,
     MismatchedMerkleRoot,
     EquivocationDifferentHashForSameFecSetId,
@@ -637,6 +674,15 @@ const InProgressSets = struct {
 
         self.eviction.allocator = allocator;
         self.eviction.deinit();
+    }
+
+    /// Returns the set to its post-init state without freeing any heap memory.
+    /// Preserves the existing capacities of `ctx_pool`, `signature_map`, and
+    /// `eviction`.
+    fn reset(self: *InProgressSets) void {
+        self.ctx_pool.reset();
+        self.signature_map.clearRetainingCapacity();
+        self.eviction.items.len = 0;
     }
 
     fn getFecSetCtx(self: *const InProgressSets, signature: *const Signature) ?*FecSetCtx {
@@ -848,6 +894,15 @@ const DoneSets = struct {
         self.eviction.deinit();
     }
 
+    /// Returns the set to its post-init state without freeing any heap memory.
+    /// Preserves the existing capacities of `done_pool`, `done_map`, and
+    /// `eviction`.
+    fn reset(self: *DoneSets) void {
+        self.done_pool.reset();
+        self.done_map.clearRetainingCapacity();
+        self.eviction.items.len = 0;
+    }
+
     // This signature+id must not be inside DoneSet already - any shred inside DoneSets should be
     // dropped early, so setDone should be unreachable in this case.
     fn setDone(self: *DoneSets, signature: *const Signature, id: FecSetId) void {
@@ -965,4 +1020,40 @@ test "DoneSets basic usage" {
     try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_1, &sig_1)); // 1 was evicted
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_3, &sig_3));
+}
+
+test "DoneSets reset clears state without freeing" {
+    const allocator = std.testing.allocator;
+
+    var done_sets: DoneSets = try .init(allocator, 2);
+    defer done_sets.deinit(allocator);
+
+    const sig_1: Signature = .parse(
+        \\3NyXqg7XjPBX5eW2zpExpAJTdXCHpVt4RR2uPPc6XUzTCVeAphwzpNBxHtYPpipE1gne2NW6ELW6HVdaB7oV9DEn
+    );
+    const sig_2: Signature = .parse(
+        \\2RUa9Sv3T2vwxeubSwJUS63W7N2wT9RaMcaoGJS6a28zGmSvpdArZMcDe7n3JTeBtuh1BkSgaJ8eN3WF7TBMjkG6
+    );
+
+    const id_1: FecSetId = .{ .slot = 1, .fec_set_idx = 0 };
+    const id_2: FecSetId = .{ .slot = 2, .fec_set_idx = 0 };
+
+    done_sets.setDone(&sig_1, id_1);
+    done_sets.setDone(&sig_2, id_2);
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
+
+    done_sets.reset();
+
+    // After reset both lookups must miss.
+    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_1, &sig_1));
+    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_2, &sig_2));
+
+    // Capacity must be retained \u2014 we must be able to refill to the original
+    // size without any allocation (eviction.allocator is the testing failing
+    // allocator after init).
+    done_sets.setDone(&sig_1, id_1);
+    done_sets.setDone(&sig_2, id_2);
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
 }

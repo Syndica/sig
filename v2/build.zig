@@ -68,16 +68,27 @@ pub fn build(b: *Build) !void {
             "not silently accepted.",
     ) orelse (optimize == .Debug);
 
-    const debug_skip_shred_checks = b.option(
+    const debug_skip_shred_sig_verify = b.option(
         bool,
-        "debug-skip-shred-checks",
-        "Debug purposes only. Skips sig verify and ignores shred version mismatches.",
+        "debug-skip-shred-sig-verify",
+        "Debug / harness use only. Skips leader lookup and ed25519 verify on incoming " ++
+            "shreds. Required by the conformance shred-parse harness, which feeds shreds " ++
+            "whose merkle roots are not signed by any known leader.",
+    ) orelse false;
+
+    const debug_skip_shred_version_check = b.option(
+        bool,
+        "debug-skip-shred-version-check",
+        "Debug use only. Disables the shred_version mismatch rejection in Receiver. " ++
+            "Independent of -Ddebug-skip-shred-sig-verify so the harness can keep this " ++
+            "check on for FD parity.",
     ) orelse false;
 
     const build_options = b.addOptions();
     build_options.addOption(bool, "allow_no_sha", allow_no_sha);
     build_options.addOption(bool, "allow_no_avx512", allow_no_avx512);
-    build_options.addOption(bool, "debug_skip_shred_checks", debug_skip_shred_checks);
+    build_options.addOption(bool, "debug_skip_shred_sig_verify", debug_skip_shred_sig_verify);
+    build_options.addOption(bool, "debug_skip_shred_version_check", debug_skip_shred_version_check);
 
     const build_options_mod = build_options.createModule();
 

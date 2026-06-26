@@ -222,6 +222,18 @@ pub fn Pool(Item: type, IdInt: type) type {
             };
         }
 
+        /// Rebuilds the free list in place, returning every item to the pool
+        /// without freeing or reallocating the backing buffer. The buffer
+        /// contents are clobbered.
+        pub fn reset(self: *PoolSelf) void {
+            const buf = self.buf[0..self.len];
+            for (buf[0 .. buf.len - 1], 0..) |*node, i| {
+                node.* = .{ .next_free = @enumFromInt(i + 1) };
+            }
+            buf[buf.len - 1] = .{ .next_free = .null };
+            self.free_list = @enumFromInt(0);
+        }
+
         // take head off free_list
         pub fn create(self: *PoolSelf) !*Item {
             if (self.free_list == .null) return error.OutOfSpace;
