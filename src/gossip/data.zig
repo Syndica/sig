@@ -876,10 +876,12 @@ pub const Uncompressed = struct {
         if (self.num >= MAX_SLOT_PER_ENTRY) {
             return error.ValueOutOfBounds;
         }
+        if (self.slots.bits == null) {
+            return error.InvalidValue;
+        }
         if (self.slots.len % 8 != 0) {
             return error.InvalidValue;
         }
-        // TODO: check BitVec.capacity()
     }
 };
 
@@ -897,7 +899,7 @@ pub fn BitVec(comptime T: type) type {
         }
 
         pub fn deinit(self: *const BitVec(T), allocator: std.mem.Allocator) void {
-            allocator.free(self.bits.?);
+            if (self.bits) |bits| allocator.free(bits);
         }
     };
 }
@@ -2151,4 +2153,15 @@ test "sanitize vote" {
 
     vote.transaction.signatures = &[_]Signature{Signature.ZEROES} ** 3;
     try std.testing.expectError(error.TooManySignatures, vote.sanitize());
+}
+
+test "BitVec null bits rejected by sanitize" {
+    const slot = Uncompressed{
+        .first_slot = 0,
+        .num = 0,
+        .slots = .{ .bits = null, .len = 0 },
+    };
+    try std.testing.expectError(error.InvalidValue, slot.sanitize());
+    // deinit is also safe to call with null bits
+    slot.deinit(std.testing.allocator);
 }
