@@ -172,12 +172,9 @@ pub fn Receiver(comptime Effects: type) type {
                     return error.ShredVersionMismatch;
 
                 // reject shreds greater than the max per slot
-                // [agave] https://github.com/anza-xyz/agave/blob/ce2b875e7a9587106cb505e14ab769f9356b8238/ledger/src/shred.rs#L772
-                // [firedancer] https://github.com/firedancer-io/firedancer/blob/e547465daf50329a163ffbd0aa3089b9822d1759/src/disco/shred/fd_fec_resolver.c#L505
-                const max_shreds_per_slot = 32768;
-                if (shred.fec_set_idx > max_shreds_per_slot - FecSetCtx.fec_shred_count)
+                if (shred.fec_set_idx > lib.shred.max_shreds_per_slot - FecSetCtx.fec_shred_count)
                     return error.FecSetIndexTooHigh;
-                if (shred.slot_idx >= max_shreds_per_slot)
+                if (shred.slot_idx >= lib.shred.max_shreds_per_slot)
                     return error.SlotIndexTooHigh;
 
                 // ignore any with bad counts or indices (SIMD 0317 enforces this)
