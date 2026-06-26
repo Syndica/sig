@@ -349,6 +349,11 @@ pub fn build(b: *Build) !void {
             .root_source_file = b.path("tests/gossip/main.zig"),
             .services = &.{ "gossip", "telemetry" },
         },
+        .{
+            .name = "replay",
+            .root_source_file = b.path("tests/replay/main.zig"),
+            .services = &.{ "shred_receiver", "replay", "telemetry" },
+        },
     };
 
     for (black_box_tests) |black_box_test| {
