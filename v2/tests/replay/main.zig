@@ -1,26 +1,31 @@
 const std = @import("std");
 const lib = @import("lib");
-const tel = lib.telemetry;
 
-const FEC_SHRED_COUNT = 32;
-const FIXTURE_PATH = "tests/replay/shreds/410010000-fecset0.bin";
+const tel = lib.telemetry;
+const fixture_loader = @import("fixtures/load.zig");
+
+const Fixture = fixture_loader.Fixture;
+
+const fixture_for_test = 410010000;
 
 pub fn main() !void {
     var dba_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = dba_state.deinit();
     const gpa = dba_state.allocator();
 
-    var selected_packets = try loadFecSetPackets(gpa, FIXTURE_PATH);
+    var fixture: Fixture = try .load(fixture_for_test, gpa);
+    defer fixture.deinit(gpa);
+
+    var selected_packets = fixture.packets;
 
     const leader_kp: lib.gossip.KeyPair = .fromKeyPair(try .generateDeterministic(@splat(3)));
     try resignPackets(&selected_packets, &leader_kp);
-    const first_shred = try lib.shred.Shred.fromPacketChecked(&selected_packets[0]);
 
     const service_map = try topology.serviceMap(.{
         .shred_recv_config = .{
-            .base_slot = first_shred.slot,
+            .base_slot = fixture.manifest.slot,
             .leader = leader_kp.pubkey,
-            .shred_version = first_shred.version,
+            .shred_version = fixture.manifest.shreds.shred_version,
         },
         .net_to_shred = .{ .port = 8002 },
         .shreds_to_replay = {},
@@ -69,74 +74,22 @@ pub fn main() !void {
         writer.markUsed();
     }
 
-    try waitForIdle(&spawned, 2 * std.time.ns_per_s);
-    dumpReplayOutput(exec_req_response);
+    try waitForReplayOutput(
+        exec_req_response,
+        fixture.manifest.entries.transaction_count,
+        5 * std.time.ns_per_s,
+    );
+    std.log.info(
+        "replay emitted expected transaction requests: {}",
+        .{fixture.manifest.entries.transaction_count},
+    );
 
     spawned.cancel();
     try spawned.wait(2 * std.time.ns_per_s);
 }
 
-fn loadFecSetPackets(
-    allocator: std.mem.Allocator,
-    path: []const u8,
-) ![FEC_SHRED_COUNT]lib.net.Packet {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-
-    var read_buf: [4096]u8 = undefined;
-    var file_reader = file.reader(&read_buf);
-    const reader = &file_reader.interface;
-
-    var selected: [FEC_SHRED_COUNT]lib.net.Packet = undefined;
-    var selected_count: usize = 0;
-    var selected_id: ?lib.shred.FecSetId = null;
-    while (try readChunk(allocator, reader)) |chunk| {
-        defer allocator.free(chunk);
-
-        if (chunk.len > lib.net.Packet.capacity) return error.ShredPayloadTooLarge;
-        var packet: lib.net.Packet = undefined;
-        @memcpy(packet.data[0..chunk.len], chunk);
-        packet.len = @intCast(chunk.len);
-        packet.addr = .initIp4(.{ 127, 0, 0, 1 }, 0);
-
-        const shred = try lib.shred.Shred.fromPacketChecked(&packet);
-        const id: lib.shred.FecSetId = .{
-            .slot = shred.slot,
-            .fec_set_idx = shred.fec_set_idx,
-        };
-
-        if (selected_id) |current_id| {
-            if (!current_id.eql(&id)) continue;
-        } else {
-            selected_id = id;
-        }
-
-        selected[selected_count] = packet;
-        selected_count += 1;
-        if (selected_count == selected.len) return selected;
-    }
-
-    return error.FecSetNotFound;
-}
-
-// Transplanted from v1's src/ledger/tests.zig shred fixture loader.
-fn readChunk(allocator: std.mem.Allocator, reader: *std.Io.Reader) !?[]const u8 {
-    var size_bytes: [8]u8 = undefined;
-    reader.readSliceAll(&size_bytes) catch |err| switch (err) {
-        error.EndOfStream => return null,
-        else => return err,
-    };
-    const size = std.mem.readInt(u64, &size_bytes, .little);
-
-    const chunk = try allocator.alloc(u8, @intCast(size));
-    errdefer allocator.free(chunk);
-    try reader.readSliceAll(chunk);
-
-    return chunk;
-}
-
 fn resignPackets(
-    packets: *[FEC_SHRED_COUNT]lib.net.Packet,
+    packets: *[fixture_loader.FEC_SHRED_COUNT]lib.net.Packet,
     keypair: *const lib.gossip.KeyPair,
 ) !void {
     for (packets) |*packet| {
@@ -149,30 +102,27 @@ fn resignPackets(
     }
 }
 
-fn waitForIdle(spawned: *topology.Children, timeout_ns: u64) !void {
-    var timer = try std.time.Timer.start();
-    while (timer.read() < timeout_ns) {
-        if (!spawned.isActive()) return;
-        std.atomic.spinLoopHint();
-    }
-    const ids = spawned.ids();
-    const activities = spawned.activityViews();
-    for (ids, activities) |id, activity| {
-        if (activity.isActive()) std.log.err("service still active: {t}", .{id});
-    }
-    return error.ServicesDidNotBecomeIdle;
-}
-
-fn dumpReplayOutput(exec_req_response: *lib.replay.ExecReqResponse) void {
+fn waitForReplayOutput(
+    exec_req_response: *lib.replay.ExecReqResponse,
+    expected_transaction_count: u32,
+    timeout_ns: u64,
+) !void {
+    const start = lib.clock.monotonic(.ns);
     var request_reader = exec_req_response.request_ring.get(.reader);
     defer request_reader.markUsed();
 
-    while (request_reader.next()) |request| {
-        std.log.warn(
-            "replay output request: task_id={} kind={t}",
-            .{ request.task_id, request.request_kind },
-        );
+    var count: u32 = 0;
+    while (lib.clock.monotonic(.ns) - start < timeout_ns) {
+        while (request_reader.next()) |request| {
+            if (request.request_kind != .txn_exec) return error.UnexpectedReplayRequestKind;
+            count += 1;
+            if (count == expected_transaction_count) return;
+            if (count > expected_transaction_count) return error.UnexpectedReplayRequestCount;
+        }
+        std.atomic.spinLoopHint();
     }
+
+    return error.ReplayOutputTimeout;
 }
 
 const topology_schema: lib.topology.Schema = .{
