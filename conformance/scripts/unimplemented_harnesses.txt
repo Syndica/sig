@@ -12,4 +12,3 @@
 block
 cost
 shred
-vm_serialization
