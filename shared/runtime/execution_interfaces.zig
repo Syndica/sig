@@ -95,17 +95,17 @@ pub const StatusChecker = struct {
         /// The transaction was already executed in a recent block on the
         /// current fork, so it is not legal to include it in the current block.
         already_processed,
-        /// The recent_blockhash count not be identified. It could not be
-        /// determined whether the transaction already exists in a block. This
-        /// means the recent_blockhash is too old or invalid, or the transaction
-        /// uses a durable nonce.
+        /// The recent_blockhash was not found, so it could not be determined
+        /// whether the transaction already exists in a block. This means the
+        /// recent_blockhash is too old or invalid, or the transaction uses a
+        /// durable nonce.
         unknown_blockhash,
     };
 
-    /// Checks recent blocks up to max_age to see a transaction it was already
+    /// Checks recent blocks up to max_age to see if a transaction was already
     /// processed in any of these blocks.
     ///
-    /// Does not locate transactions using a durable nonce. It will return
+    /// Does not locate transactions that use a durable nonce. It will return
     /// "unknown_blockhash" for those.
     pub fn check(
         self: StatusChecker,
