@@ -283,8 +283,8 @@ pub const Shred = extern struct {
             if (flags.last_shred_in_slot and !flags.data_complete)
                 return error.DataShredMarkedCompleteIsNotLastInSet;
 
-            // TODO: support the upcoming feature shredXP8xLjJWp1AWh3gAFsFn4GSH1vohhCMDHw5koU, which
-            // drops data shreds with data_complete=true that aren't the last data shred in the set.
+            // `discard_unexpected_data_complete_shreds` is enforced in
+            // `Receiver.processPacketInner` (needs the activation slot).
 
             // TODO: drop shreds with last_shred_in_slot that aren't the last data shred in the set.
 
