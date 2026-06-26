@@ -104,9 +104,8 @@ pub fn checkFeePayer(
     const fee_payer_key = transaction.accounts.items(.pubkey)[0];
     var payer_account = try accounts.get(allocator, fee_payer_key) orelse
         return .{ .err = .AccountNotFound };
-    const formalized = feature_set.active(.formalize_loaded_transaction_data_size, slot);
-    const base: u64 = if (formalized) account_loader.TRANSACTION_ACCOUNT_BASE_SIZE else 0;
-    const payer_loaded_size = base +| payer_account.data.len;
+    // [agave] https://github.com/anza-xyz/agave/commit/d5757e29aa - formalize_loaded_transaction_data_size hardcoded
+    const payer_loaded_size = account_loader.TRANSACTION_ACCOUNT_BASE_SIZE +| payer_account.data.len;
     errdefer payer_account.deinit(allocator);
 
     const fee_payer_loaded_rent_epoch = payer_account.rent_epoch;
