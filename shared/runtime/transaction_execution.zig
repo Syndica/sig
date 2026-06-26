@@ -25,6 +25,7 @@ const EpochStakeReader = sig.runtime.execution_interfaces.EpochStakeReader;
 const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const FeatureSet = sig.core.FeatureSet;
 const FeeDetails = sig.runtime.check_transactions.FeeDetails;
+const LAMPORTS_PER_SIGNATURE = sig.runtime.check_transactions.LAMPORTS_PER_SIGNATURE;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const LoadedTransactionAccounts = sig.runtime.account_loader.LoadedTransactionAccounts;
 const LogCollector = sig.runtime.LogCollector;
@@ -91,8 +92,6 @@ pub const TransactionExecutionEnvironment = struct {
     next_durable_nonce: Hash,
     next_lamports_per_signature: u64,
     last_lamports_per_signature: u64,
-
-    lamports_per_signature: u64,
 };
 
 pub const TransactionExecutionConfig = struct {
@@ -244,7 +243,6 @@ pub fn loadAndExecuteTransaction(
             env.rent_collector,
             env.feature_set,
             env.slot,
-            env.lamports_per_signature,
         )) {
             .ok => |x| x,
             .err => |e| return .{ .err = e },
@@ -864,7 +862,6 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .next_durable_nonce = Hash.ZEROES,
         .next_lamports_per_signature = 0,
         .last_lamports_per_signature = 0,
-        .lamports_per_signature = 5000, // Default value
     };
 
     const config = TransactionExecutionConfig{
@@ -903,10 +900,10 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         const sender_account = account_map.get(sender_key).?;
         const receiver_account = account_map.get(receiver_key).?;
 
-        try std.testing.expectEqual(5_000, transaction_fee);
+        try std.testing.expectEqual(LAMPORTS_PER_SIGNATURE, transaction_fee);
         try std.testing.expectEqual(0, prioritization_fee);
         try std.testing.expectEqual(0, processed_transaction.rent);
-        try std.testing.expectEqual(4_995_000, sender_account.lamports);
+        try std.testing.expectEqual(5_000_000 - LAMPORTS_PER_SIGNATURE, sender_account.lamports);
         try std.testing.expectEqual(15_000_000, receiver_account.lamports);
         try std.testing.expectEqual(null, processed_transaction.err);
         try std.testing.expectEqual(null, executed_transaction.log_collector);
@@ -948,10 +945,10 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         const sender_account = account_map.get(sender_key).?;
         const receiver_account = account_map.get(receiver_key).?;
 
-        try std.testing.expectEqual(5_000, transaction_fee);
+        try std.testing.expectEqual(LAMPORTS_PER_SIGNATURE, transaction_fee);
         try std.testing.expectEqual(0, prioritization_fee);
         try std.testing.expectEqual(0, processed_transaction.rent);
-        try std.testing.expectEqual(4_990_000, sender_account.lamports);
+        try std.testing.expectEqual(5_000_000 - 2 * LAMPORTS_PER_SIGNATURE, sender_account.lamports);
         try std.testing.expectEqual(15_000_000, receiver_account.lamports);
         try std.testing.expectEqual(0, processed_transaction.err.?.InstructionError[0]);
         try std.testing.expectEqual(
