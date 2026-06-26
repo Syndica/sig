@@ -51,6 +51,7 @@ const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
+const services = @import("services");
 
 const Receiver = lib.shred.Receiver;
 
@@ -62,25 +63,8 @@ pub const name = .shred_receiver;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadWrite = struct {
-    /// Translation Validation Unit (TVU)'s UDP socket, i.e. where we receive shreds. This is
-    /// typically port 8002. While we've obtained a net Pair, we only currently receive on this.
-    /// I believe once we support retransmit, we will be sending on it too.
-    tvu_socket: *lib.net.Pair,
-
-    /// Where we send our deshredded FEC (Forward Error Correction) sets to be assembled for replay.
-    /// FEC sets will be sent out as they complete.
-    ///
-    /// NOTE: it will be more performant in future to only send headers down the ring buffer, and
-    /// write to a shared fec-set pool.
-    deshredded_out: *lib.shred.DeshredRing,
-
-    tel: *lib.telemetry.Region,
-};
-
-pub const ReadOnly = struct {
-    config: *const lib.shred.RecvConfig,
-};
+pub const ReadWrite = services.shred_receiver.ReadWrite;
+pub const ReadOnly = services.shred_receiver.ReadOnly;
 
 var scratch_memory: [1024 * 1024 * 1024]u8 = undefined;
 const max_in_progress = 8192;

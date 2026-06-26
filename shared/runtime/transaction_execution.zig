@@ -257,8 +257,6 @@ pub fn loadAndExecuteTransaction(
         tmp_allocator,
         transaction,
         env.rent_collector,
-        env.feature_set,
-        env.slot,
         &compute_budget_limits,
         fee_payer,
     )) {

@@ -840,7 +840,7 @@ pub const check_slot_agrees_with_cluster = struct {
                         // The duplicate confirmed slot hash does not match our frozen hash.
                         // Modify fork choice rule to exclude our version from being voted
                         // on and also repair the correct version
-                        logger.warn().logf(
+                        logger.err().logf(
                             "Cluster duplicate confirmed slot {} with hash {f}, " ++
                                 "but our version has hash {f}",
                             .{ slot, duplicate_confirmed_hash, frozen_hash },
@@ -868,7 +868,7 @@ pub const check_slot_agrees_with_cluster = struct {
                         break :check;
                     } else {
                         // The epoch slots hash does not match our frozen hash.
-                        logger.warn().logf(
+                        logger.err().logf(
                             "EpochSlots sample returned slot {} with hash {f}, " ++
                                 "but our version has hash {f}",
                             .{ slot, epoch_slots_frozen_hash, frozen_hash },
