@@ -352,7 +352,7 @@ pub fn build(b: *Build) !void {
         .{
             .name = "replay",
             .root_source_file = b.path("tests/replay/main.zig"),
-            .services = .initMany(&.{ .shred_receiver, .replay, .telemetry }),
+            .services = &.{ "shred_receiver", "replay", "telemetry" },
         },
     };
 
