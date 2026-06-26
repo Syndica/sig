@@ -114,15 +114,15 @@ fn waitForReplayOutput(
     var count: u32 = 0;
     while (lib.clock.monotonic(.ns) - start < timeout_ns) {
         while (request_reader.next()) |request| {
-            if (request.request_kind != .txn_exec) return error.UnexpectedReplayRequestKind;
+            try std.testing.expect(request.request_kind == .txn_exec);
             count += 1;
+            try std.testing.expect(count <= expected_transaction_count);
             if (count == expected_transaction_count) return;
-            if (count > expected_transaction_count) return error.UnexpectedReplayRequestCount;
         }
         std.atomic.spinLoopHint();
     }
 
-    return error.ReplayOutputTimeout;
+    try std.testing.expectEqual(expected_transaction_count, count);
 }
 
 const topology_schema: lib.topology.Schema = .{
