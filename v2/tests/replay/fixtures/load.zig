@@ -64,7 +64,7 @@ pub const Fixture = struct {
         const index = try loadZon(Index, allocator, FIXTURE_INDEX_PATH);
         defer std.zon.parse.free(allocator, index);
 
-        if (index.schema_version != 1) return error.UnsupportedFixtureIndexSchema;
+        try std.testing.expectEqual(@as(u32, 1), index.schema_version);
 
         const index_slot, const index_fec_set = for (index.slots) |index_slot| {
             if (index_slot.slot != slot) continue;
@@ -78,11 +78,9 @@ pub const Fixture = struct {
         const manifest = try loadZon(Manifest, allocator, manifest_path);
         errdefer std.zon.parse.free(allocator, manifest);
 
-        if (manifest.schema_version != 1) return error.UnsupportedFixtureManifestSchema;
-        if (manifest.slot != index_slot.slot) return error.FixtureManifestSlotMismatch;
-        if (manifest.fec_set_index != index_fec_set.fec_set_index) {
-            return error.FixtureManifestFecSetMismatch;
-        }
+        try std.testing.expectEqual(@as(u32, 1), manifest.schema_version);
+        try std.testing.expectEqual(index_slot.slot, manifest.slot);
+        try std.testing.expectEqual(index_fec_set.fec_set_index, manifest.fec_set_index);
 
         const manifest_dir = std.fs.path.dirname(index_fec_set.path) orelse {
             return error.InvalidFixtureManifestPath;
@@ -140,34 +138,32 @@ fn loadFecSetPackets(
     while (try readChunk(allocator, reader)) |chunk| {
         defer allocator.free(chunk);
 
-        if (chunk.len > lib.net.Packet.capacity) return error.ShredPayloadTooLarge;
+        try std.testing.expect(chunk.len <= lib.net.Packet.capacity);
         var packet: lib.net.Packet = undefined;
         @memcpy(packet.data[0..chunk.len], chunk);
         packet.len = @intCast(chunk.len);
         packet.addr = .initIp4(.{ 127, 0, 0, 1 }, 0);
 
         const shred = try lib.shred.Shred.fromPacketChecked(&packet);
-        if (shred.slot != manifest.slot) return error.FixtureShredSlotMismatch;
-        if (shred.fec_set_idx != manifest.fec_set_index) return error.FixtureShredFecSetMismatch;
-        if (shred.version != manifest.shreds.shred_version) return error.FixtureShredVersionMismatch;
+        try std.testing.expectEqual(manifest.slot, shred.slot);
+        try std.testing.expectEqual(manifest.fec_set_index, shred.fec_set_idx);
+        try std.testing.expectEqual(manifest.shreds.shred_version, shred.version);
 
         const shred_index = if (shred.variant.isData())
             shred.slot_idx - shred.fec_set_idx
         else
             shred.code_or_data.code.code_shred_idx;
-        if (shred_index >= FEC_SHRED_COUNT) return error.FixtureShredIndexTooLarge;
+        try std.testing.expect(shred_index < FEC_SHRED_COUNT);
 
         const expected_indices = if (shred.variant.isData())
             manifest.shreds.data_indices
         else
             manifest.shreds.coding_indices;
-        if (!containsIndex(expected_indices, shred_index)) {
-            return error.FixtureShredIndexMissingFromManifest;
-        }
+        try std.testing.expect(containsIndex(expected_indices, shred_index));
 
         const seen = if (shred.variant.isData()) &seen_data else &seen_coding;
         const bit_index: usize = @intCast(shred_index);
-        if (seen.isSet(bit_index)) return error.DuplicateFixtureShred;
+        try std.testing.expect(!seen.isSet(bit_index));
         seen.set(bit_index);
 
         selected[selected_count] = packet;
