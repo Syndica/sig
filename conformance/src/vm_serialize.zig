@@ -23,8 +23,6 @@ pub export fn sol_compat_vm_serialize_execute_v1(
     in_ptr: [*]const u8,
     in_size: u64,
 ) i32 {
-    errdefer |err| std.debug.panic("err: {s}", .{@errorName(err)});
-
     var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -42,7 +40,10 @@ pub export fn sol_compat_vm_serialize_execute_v1(
     };
 
     var writer: std.Io.Writer.Allocating = .init(allocator);
-    try effects.encode(&writer.writer, allocator);
+    effects.encode(&writer.writer, allocator) catch |err| {
+        std.debug.print("effects.encode: {s}\n", .{@errorName(err)});
+        return 0;
+    };
     const result_bytes = writer.written();
 
     const out_slice = out_ptr[0..out_size.*];
@@ -81,7 +82,7 @@ fn serializeInstruction(
 
     // serializeParameters needs an active instruction frame so it can borrow
     // the program account to decide between the aligned/unaligned layouts.
-    executor.pushInstruction(&tc, instr_info) catch unreachable;
+    executor.pushInstruction(&tc, instr_info) catch @panic("pushInstruction failed");
 
     const ic = try tc.getCurrentInstructionContext();
 
