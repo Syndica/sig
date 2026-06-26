@@ -315,21 +315,19 @@ pub fn applyFeatureActivations(
         }
     }
 
-    // On pico/full inflation activation, Agave resets the fee and rent burn
-    // percents to their defaults (see Agave `Bank::apply_feature_activations`).
-    // NOTE: sig's tx-fee burn no longer reads `fee_rate_governor.burn_percent`
-    // (it uses the hard-coded `DEFAULT_BURN_PERCENT` in `distributeTransactionFees`);
-    // we keep these assignments for snapshot-parity with Agave's `SlotConstants`.
+    // On pico/full inflation activation, Agave resets the fee burn percent to
+    // its default (see Agave `Bank::apply_feature_activations`). We keep this
+    // assignment for snapshot-parity with Agave's `SlotConstants`, even though
+    // sig's tx-fee burn no longer reads `fee_rate_governor.burn_percent` (it
+    // uses the hard-coded `DEFAULT_BURN_PERCENT` in `distributeTransactionFees`).
     if (new_activations.active(.pico_inflation, slot)) {
         slot_constants.inflation = .PICO;
         slot_constants.fee_rate_governor.burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT;
-        slot_constants.rent_collector.rent.burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT;
     }
 
     if (feature_set.fullInflationFeaturesEnabled(slot, &new_activations)) {
         slot_constants.inflation = .FULL;
         slot_constants.fee_rate_governor.burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT;
-        slot_constants.rent_collector.rent.burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT;
     }
 
     try applyBuiltinProgramFeatureTransitions(
