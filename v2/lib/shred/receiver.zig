@@ -50,11 +50,20 @@ pub fn Receiver(comptime Effects: type) type {
     return struct {
         const Self = @This();
 
+        /// Per-feature activation slots. A feature is enforced for shreds
+        /// whose slot is `>= activation_slot`; the default `maxInt(Slot)`
+        /// keeps every feature inactive.
+        pub const Features = struct {
+            discard_unexpected_data_complete_shreds: Slot = std.math.maxInt(Slot),
+        };
+
         effects: Effects,
 
         // We will ignore shreds outside of this range, as they're not useful to us
         root_slot: Slot,
         max_slot: Slot,
+
+        features: Features,
 
         in_progress: InProgressSets,
         done: DoneSets,
@@ -78,6 +87,7 @@ pub fn Receiver(comptime Effects: type) type {
 
                 .root_slot = 0,
                 .max_slot = std.math.maxInt(Slot),
+                .features = .{},
             };
         }
 
@@ -98,6 +108,7 @@ pub fn Receiver(comptime Effects: type) type {
             self.done.reset();
             self.root_slot = 0;
             self.max_slot = std.math.maxInt(Slot);
+            self.features = .{};
         }
 
         pub fn updateSlotRange(self: *Self, root_slot: Slot, max_slot: Slot) void {
@@ -105,6 +116,12 @@ pub fn Receiver(comptime Effects: type) type {
             self.max_slot = max_slot;
 
             // TODO: this is where we would add code to prune entries outside of the new range.
+        }
+
+        /// Replace the active feature gates. Passing `.{}` disables every
+        /// feature (the default after `init` / `reset`).
+        pub fn setFeatures(self: *Self, features: Features) void {
+            self.features = features;
         }
 
         // TODO: report return values to observability
@@ -185,6 +202,14 @@ pub fn Receiver(comptime Effects: type) type {
                         return error.BadCodeShredCount;
                     if (shred.code_or_data.code.code_shred_idx >= FecSetCtx.fec_shred_count)
                         return error.BadCodeShredIdx;
+                } else {
+                    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred/filter.rs#L327-L342
+                    if (shred.slot >= state.features.discard_unexpected_data_complete_shreds and
+                        shred.code_or_data.data.flags.data_complete and
+                        shred.slot_idx != shred.fec_set_idx + FecSetCtx.fec_shred_count - 1)
+                    {
+                        return error.UnexpectedDataCompleteShred;
+                    }
                 }
 
                 if (shred.fec_set_idx % FecSetCtx.fec_shred_count != 0) {
@@ -473,6 +498,7 @@ pub const PacketError = error{
     InvalidFecSetIdx,
     ShredIdxTooLarge,
     MerkleCountTooLarge,
+    UnexpectedDataCompleteShred,
     VariantMismatchFromFecSet,
     MismatchedMerkleRoot,
     EquivocationDifferentHashForSameFecSetId,
