@@ -627,6 +627,14 @@ fn authorize(
                 return InstructionError.InvalidInstructionData;
             }
 
+            // [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L732-L763
+            try verifyBlsProofOfPossession(
+                ic.tc,
+                &vote_account.pubkey,
+                &args.bls_pubkey,
+                &args.bls_proof_of_possession,
+            );
+
             const target_epoch = std.math.add(u64, clock.leader_schedule_epoch, 1) catch {
                 return InstructionError.InvalidAccountData;
             };
@@ -636,17 +644,8 @@ fn authorize(
                 clock.epoch,
             );
 
-            // Match agave: the withdrawer-signer check is non-fatal
-            // here (its result is OR-ed against the epoch voter). The
-            // PoP verify still consumes its CUs even if neither is a
-            // signer, so we mirror agave's call order strictly.
-            try verifyBlsProofOfPossession(
-                ic.tc,
-                &vote_account.pubkey,
-                &args.bls_pubkey,
-                &args.bls_proof_of_possession,
-            );
-
+            // The withdrawer-signer check is non-fatal here (its result is
+            // OR-ed against the epoch voter).
             validateIsSigner(vote_state.withdrawerKey().*, signers) catch {
                 try validateIsSigner(epoch_authorized_voter, signers);
             };
