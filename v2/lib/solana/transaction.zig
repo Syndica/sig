@@ -12,6 +12,11 @@ pub const Entry = struct {
     num_hashes: u64,
     hash: Hash,
     transactions: bincode.Vec(VersionedTransaction),
+
+    /// An entry is a "tick" iff it carries no transactions.
+    pub fn isTick(self: Entry) bool {
+        return self.transactions.items.len == 0;
+    }
 };
 
 pub const VersionedTransaction = struct {
