@@ -4,6 +4,7 @@
 const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
+const services = @import("services");
 const Pair = lib.net.Pair;
 const tel = lib.telemetry;
 
@@ -15,13 +16,8 @@ pub const name = .net;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadOnly = struct {};
-
-pub const ReadWrite = struct {
-    gossip_pair: *Pair,
-    shred_pair: *Pair,
-    tel: *tel.Region,
-};
+pub const ReadOnly = services.net.ReadOnly;
+pub const ReadWrite = services.net.ReadWrite;
 
 pub fn serviceMain(
     runner: lib.runner.Connection,
@@ -31,7 +27,9 @@ pub fn serviceMain(
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
 
     const metric_appender = rw.tel.metricAppender();
-    const metrics = metric_appender.appendFields(Metrics, .{});
+    const metrics = metric_appender.appendFields(Metrics, .{
+        .prefix = @tagName(name),
+    });
     rw.tel.signalReady();
 
     try mainInner(
@@ -45,6 +43,9 @@ pub fn serviceMain(
 const Metrics = struct {
     recv_packets: tel.Counter,
     send_packets: tel.Counter,
+
+    recv_latency: tel.Gauge,
+    send_latency: tel.Gauge,
 };
 
 const MAX_SOCKETS = 10;
@@ -80,6 +81,7 @@ fn mainInner(
         sockets_len += 1;
     }
 
+    var timer: lib.time.Timer = .start();
     while (true) {
         // send
         for (pairs, sockets[0..sockets_len]) |pair, sock| {
@@ -88,6 +90,7 @@ fn mainInner(
 
             // TODO: use std.os.linux.sendmmsg
             while (it.next()) |p| {
+                timer.reset();
                 const bytes = try std.posix.sendto(
                     sock,
                     p.data[0..p.len],
@@ -97,6 +100,7 @@ fn mainInner(
                 );
                 std.debug.assert(bytes == p.len);
                 metrics.send_packets.increment(1);
+                metrics.send_latency.set(timer.read());
             }
         }
 
@@ -107,6 +111,7 @@ fn mainInner(
 
             // TODO: use std.os.linux.recvmmsg
             while (it.peek()) |ptr| {
+                timer.reset();
                 var addr_len: std.posix.socklen_t = @sizeOf(std.net.Address);
                 ptr.len = @intCast(std.posix.recvfrom(
                     sock,
@@ -120,6 +125,7 @@ fn mainInner(
                 });
                 _ = it.next();
                 metrics.recv_packets.increment(1);
+                metrics.recv_latency.set(timer.read());
             }
         }
     }

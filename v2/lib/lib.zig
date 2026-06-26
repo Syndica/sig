@@ -16,6 +16,7 @@ comptime {
         _ = @import("snapshot.zig");
         _ = @import("solana.zig");
         _ = @import("telemetry.zig");
+        _ = @import("time.zig");
         _ = @import("topology.zig");
         _ = @import("util.zig");
     }
@@ -30,6 +31,7 @@ pub const shred = @import("shred.zig");
 pub const gossip = @import("gossip.zig");
 pub const ipc = @import("ipc.zig");
 pub const linux = @import("linux.zig");
+pub const time = @import("time.zig");
 pub const util = @import("util.zig");
 pub const collections = @import("collections.zig");
 pub const snapshot = @import("snapshot.zig");
