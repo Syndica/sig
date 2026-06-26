@@ -29,6 +29,16 @@ pub const Rent = extern struct {
     ///
     /// Valid values are in the range [0, 100]. The remaining percentage is
     /// distributed to validators.
+    ///
+    /// NOTE: This is the raw bincode-serialized sysvar value as it appears in
+    /// the on-chain account. Modern Agave snapshots serialize the rent
+    /// collector as zeros, so this field is typically 0 at runtime.
+    ///
+    /// - For RPC output of the on-chain sysvar, use this field as-is (matches
+    ///   Agave's `parse_sysvar.rs`).
+    /// - For consensus-relevant burn calculations, use the protocol constant
+    ///   `DEFAULT_BURN_PERCENT` (Agave's hard-coded `Bank::burn_rate`),
+    ///   regardless of this field's contents.
     burn_percent: u8,
 
     pub const ID: Pubkey = .parse("SysvarRent111111111111111111111111111111111");

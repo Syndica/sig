@@ -262,7 +262,13 @@ fn distributeTransactionFees(
     const zone = tracy.Zone.init(@src(), .{ .name = "distributeTransactionFees" });
     defer zone.deinit();
 
-    const burn = collected_transaction_fees * rent.burn_percent / 100;
+    // Agave ignores both `rent.burn_percent` and `fee_rate_governor.burn_percent`
+    // for fee distribution and burns a hard-coded 50% via `Bank::burn_rate`. The
+    // snapshot serializes `rent_collector` as zeros, so reading either field here
+    // would burn 0%. Use the protocol constant directly so this fails loudly if
+    // the burn rate ever changes.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1/runtime/src/bank/fee_distribution.rs#L110
+    const burn = collected_transaction_fees * sig.runtime.sysvar.DEFAULT_BURN_PERCENT / 100;
     const total_fees = collected_priority_fees + collected_transaction_fees;
     const payout = total_fees -| burn;
 

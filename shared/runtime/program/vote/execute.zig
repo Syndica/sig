@@ -6270,7 +6270,7 @@ test "update_commission_collector inflation_rewards" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = 50,
+        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6421,7 +6421,7 @@ test "update_commission_collector block_revenue" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = 50,
+        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6571,7 +6571,7 @@ test "update_commission_collector feature disabled" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = 50,
+        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6703,7 +6703,7 @@ test "update_commission_collector withdrawer not signer" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = 50,
+        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6839,7 +6839,7 @@ test "update_commission_collector not system owned" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = 50,
+        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6975,7 +6975,7 @@ test "update_commission_collector not rent exempt" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = 50,
+        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -7110,7 +7110,7 @@ test "update_commission_collector not writable" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = 50,
+        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
