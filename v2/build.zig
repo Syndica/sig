@@ -112,7 +112,7 @@ pub fn build(b: *Build) !void {
             .install_subdir = "kcov",
         });
         install_dir.step.dependOn(&run.step);
-        test_step.dependOn(&install_dir.step);
+        unit_test_step.dependOn(&install_dir.step);
         break :kcov_merge run;
     } else null;
 
@@ -197,7 +197,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "feature-set-id", .module = feature_set_id },
         },
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
+    _ = addTestOutputs(b, unit_test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "lib",
         .root_module = lib_mod,
         .filters = filters,
@@ -225,7 +225,7 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
         .imports = runner_imports,
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
+    _ = addTestOutputs(b, unit_test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "sig-init",
         .root_module = sig_init_mod,
         .filters = filters,
@@ -264,7 +264,7 @@ pub fn build(b: *Build) !void {
             .root_module = module,
             .use_llvm = true,
         });
-        _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
+        _ = addTestOutputs(b, unit_test_step, null, artifact_opts, kcov_merge_run, .{
             .name = "shred-stream",
             .root_module = module,
             .filters = filters,
@@ -292,7 +292,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "tracy", .module = tracy_mod },
         },
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
+    _ = addTestOutputs(b, unit_test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "start_service",
         .root_module = start_service_mod,
         .use_llvm = true,
@@ -330,7 +330,7 @@ pub fn build(b: *Build) !void {
         sig_init_mod.linkLibrary(service_lib);
         service_lib_entry.* = .{ .service = service.name, .lib = service_lib };
 
-        _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
+        _ = addTestOutputs(b, unit_test_step, null, artifact_opts, kcov_merge_run, .{
             .root_module = service_mod,
             .name = service.name,
             .filters = filters,
