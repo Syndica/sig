@@ -53,8 +53,6 @@ const lib = @import("lib");
 const tracy = @import("tracy");
 const services = @import("services");
 
-const Receiver = lib.shred.Receiver;
-
 comptime {
     _ = start;
 }
@@ -81,11 +79,51 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     rw.tel.signalReady();
     logger.info().logf("Waiting for shreds on port {}", .{rw.tvu_socket.port});
 
-    var receiver: Receiver = try .init(allocator, max_in_progress, max_done);
-    defer receiver.deinit(allocator);
-
     var packet_iter = rw.tvu_socket.recv.get(.reader);
     var deshred_out = rw.deshredded_out.get(.writer);
+
+    const Effects = struct {
+        deshred_writer: *lib.shred.DeshredRing.Iterator(.writer),
+
+        const Self = @This();
+
+        pub fn reportShredParseResult(self: Self, parses_as_chained: bool) void {
+            _ = .{ self, parses_as_chained };
+        }
+
+        /// NOTE: Pointers passed to this hook are only valid for the duration of this callback.
+        pub fn reportFecSetCompleted(
+            self: Self,
+            completed: *const lib.shred.DeshreddedFecSet,
+            ctx: *const lib.shred.FecSetCtx,
+        ) void {
+            _ = .{ self, completed, ctx };
+        }
+
+        pub fn writeCompletedFecSet(self: Self) *lib.shred.DeshreddedFecSet {
+            return self.deshred_writer.next() orelse
+                // If there's nowhere to write to, then this means that services downstream haven't been
+                // keeping up for a while.
+                // For now let's just exit if this happens, however this might leave us vulnerable to denial
+                // of service.
+                //
+                // TODO: consider handling this case by pausing writing to this ring.
+                @panic("Can't send deshredded fec sets to replay, is it alive?");
+        }
+
+        pub fn flushCompletedFecSet(self: Self) void {
+            self.deshred_writer.markUsed();
+        }
+
+        pub fn reportReceiverPacketResult(self: Self, result: lib.shred.ReceiverPacketResult) void {
+            _ = .{ self, result };
+        }
+    };
+
+    const Receiver = lib.shred.Receiver(Effects);
+    const effects: Effects = .{ .deshred_writer = &deshred_out };
+    var receiver: Receiver = try .init(allocator, max_in_progress, max_done, effects);
+    defer receiver.deinit(allocator);
 
     while (true) {
         {
@@ -103,11 +141,10 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                 &ro.config.leader_schedule,
                 ro.config.shred_version,
                 packet,
-                &deshred_out,
                 logger.withScope("processPacket"),
-            ) catch |err| {
-                std.log.warn("packet failed with {}", .{err});
-                continue;
+            ) catch |err| switch (err) {
+                error.NoSpaceLeft => return err,
+                else => continue,
             };
             _ = result;
         }
