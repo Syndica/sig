@@ -50,6 +50,7 @@ pub const Bloom = struct {
     }
 
     pub fn add(self: *Bloom, key: []const u8) void {
+        if (self.bits.capacity() == 0) return;
         for (self.keys.items) |hash_index| {
             const i = self.pos(key, hash_index);
             if (!self.bits.isSet(i)) {
@@ -60,6 +61,7 @@ pub const Bloom = struct {
     }
 
     pub fn contains(self: *const Bloom, key: []const u8) bool {
+        if (self.bits.capacity() == 0) return false;
         for (self.keys.items) |hash_index| {
             const i = self.pos(key, hash_index);
             if (self.bits.isSet(i)) {
@@ -181,6 +183,15 @@ test "serialized bytes equal rust (one key)" {
     };
 
     try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
+}
+
+test "zero-capacity filter does not divide by zero" {
+    var bloom = try Bloom.init(testing.allocator, 0, null);
+    defer bloom.deinit();
+
+    try bloom.addKey(1);
+    try testing.expect(!bloom.contains(&[_]u8{ 1, 2, 3 }));
+    bloom.add(&[_]u8{ 1, 2, 3 });
 }
 
 test "serialized bytes equal rust (multiple keys)" {
