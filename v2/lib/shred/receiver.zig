@@ -420,15 +420,18 @@ pub fn Receiver(comptime Effects: type) type {
             // (commit `pin chained_merkle_root per FEC set`), a single shred
             // from either side of a chain break is enough to expose it; we no
             // longer need to wait for both sets to complete. agave catches the
-            // same condition in `Blockstore::check_chained_merkle_root_consistency`.
+            // same condition in `Blockstore::check_chained_merkle_root_consistency`,
+            // which records a `ChainedMerkleRootConflict` duplicate-shred event
+            // but still inserts the shred — the conflict invalidates the block
+            // as a whole, but individual FEC sets stay independently valid and
+            // must keep accumulating so the downstream consumer sees the same
+            // completed FEC sets either implementation would emit.
             if (state.lookupFecSetRoots(.{
                 .slot = shred.slot,
                 .fec_set_idx = shred.fec_set_idx + FecSetCtx.fec_shred_count,
             })) |next| {
                 if (!fec_set_ctx.merkle_root.eql(&next.chained_merkle_root)) {
-                    state.markSlotDead(shred.slot);
                     state.effects.reportChainConflict(shred.slot);
-                    return error.ChainedMerkleRootConflict;
                 }
             }
             if (shred.fec_set_idx >= FecSetCtx.fec_shred_count) {
@@ -437,9 +440,7 @@ pub fn Receiver(comptime Effects: type) type {
                     .fec_set_idx = shred.fec_set_idx - FecSetCtx.fec_shred_count,
                 })) |prev| {
                     if (!prev.merkle_root.eql(&fec_set_ctx.chained_merkle_root)) {
-                        state.markSlotDead(shred.slot);
                         state.effects.reportChainConflict(shred.slot);
-                        return error.ChainedMerkleRootConflict;
                     }
                 }
             }
@@ -634,7 +635,6 @@ pub const PacketError = error{
     VariantMismatchFromFecSet,
     MismatchedMerkleRoot,
     MismatchedChainedMerkleRoot,
-    ChainedMerkleRootConflict,
     EquivocationDifferentHashForSameFecSetId,
     EquivocationFecSetIdAlreadyInProgress,
     UnknownLeader,
