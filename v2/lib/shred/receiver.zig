@@ -256,6 +256,14 @@ pub fn Receiver(comptime Effects: type) type {
                     // equivocation problem.
                     return error.MismatchedMerkleRoot;
 
+                // Every shred in a FEC set declares the same `chained_merkle_root`
+                // (the merkle root of the previous FEC set). Compare against the
+                // value pinned from the first-seen shred; deshredding reads from
+                // the pinned value, so this also keeps completion deterministic
+                // under shred arrival reordering.
+                if (!shred.chainedMerkleRoot().eql(&fec_set_ctx.chained_merkle_root))
+                    return error.MismatchedChainedMerkleRoot;
+
                 break :existing_set fec_set_ctx;
             } else new_set: {
                 // fec set is not currently being built (likely finished already)
@@ -332,6 +340,11 @@ pub fn Receiver(comptime Effects: type) type {
                         shred.variant.swapType(),
 
                     .merkle_root = shred_merkle_root,
+                    // Pinned from the first-seen shred and never overwritten;
+                    // every other shred in this FEC set must declare the same
+                    // value (see existing-set branch above), and deshredding
+                    // reads it back from here.
+                    .chained_merkle_root = shred.chainedMerkleRoot().*,
 
                     .data_shreds_received = .initEmpty(),
                     .code_shreds_received = .initEmpty(),
@@ -431,7 +444,7 @@ pub fn Receiver(comptime Effects: type) type {
 
                 finished.* = .{
                     .merkle_root = fec_set_ctx.merkle_root,
-                    .chained_merkle_root = shred.chainedMerkleRoot().*,
+                    .chained_merkle_root = fec_set_ctx.chained_merkle_root,
                     .id = fec_set_id,
                     .data_complete = data_complete,
                     .slot_complete = slot_complete,
@@ -495,6 +508,7 @@ pub const PacketError = error{
     UnexpectedDataCompleteShred,
     VariantMismatchFromFecSet,
     MismatchedMerkleRoot,
+    MismatchedChainedMerkleRoot,
     EquivocationDifferentHashForSameFecSetId,
     EquivocationFecSetIdAlreadyInProgress,
     UnknownLeader,
@@ -533,6 +547,10 @@ pub const FecSetCtx = extern struct {
 
     // we store the first seen, and make sure later shreds have the same one
     merkle_root: Hash,
+    // The merkle root of the previous FEC set. Identical for every shred in
+    // this set; pinned from the first-seen shred so completion output is
+    // independent of shred arrival order.
+    chained_merkle_root: Hash,
 
     // https://github.com/firedancer-io/firedancer/blob/ecd2d6d8f5b9f926d0b9aa9360efe36ea1550ad6/src/ballet/reedsol/fd_reedsol.h#L23
     // https://github.com/solana-foundation/specs/blob/main/p2p/shred.md
