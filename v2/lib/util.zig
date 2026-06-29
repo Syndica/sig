@@ -1,5 +1,6 @@
 ///! Dumping ground for random useful zig functions.
 const std = @import("std");
+const base58 = @import("base58");
 
 /// A type that wraps a slice so that it can print the items formatted.
 /// `{f}` on a such a slice in `writer.print()` doesn't work for some reason...
@@ -20,6 +21,37 @@ pub fn FmtSlice(comptime T: type) type {
 
 pub fn fmtSlice(slice: anytype) FmtSlice(@TypeOf(slice[0])) {
     return .{ .slice = slice };
+}
+
+pub fn fmtBase58(
+    table: *const base58.Table,
+    bytes: anytype,
+) FmtBase58(bytes.len) {
+    return .{
+        .table = table,
+        .bytes = bytes,
+    };
+}
+
+pub fn FmtBase58(comptime len: usize) type {
+    return struct {
+        table: *const base58.Table,
+        bytes: *const [len]u8,
+        const FmtBase58Self = @This();
+
+        const encoded_max_size = base58.encodedMaxSize(len);
+
+        pub fn format(self: FmtBase58Self, w: *std.Io.Writer) std.Io.Writer.Error!void {
+            if (w.unusedCapacityLen() >= encoded_max_size) {
+                const encoded_len = self.table.encode(w.unusedCapacitySlice(), self.bytes);
+                w.advance(encoded_len);
+            } else {
+                var encoded_buf: [base58.encodedMaxSize(len)]u8 = undefined;
+                const encoded_len = self.table.encode(&encoded_buf, self.bytes);
+                try w.writeAll(encoded_buf[0..encoded_len]);
+            }
+        }
+    };
 }
 
 pub fn assertInterface(comptime InterfaceType: type, comptime ContractStruct: type) void {
