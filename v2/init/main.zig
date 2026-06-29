@@ -228,6 +228,13 @@ pub fn main() !void {
     const shred_recv_data = shred_recv_config.ptr();
     try lib.solana.LeaderSchedule.fromCommand(&shred_recv_data.leader_schedule, &reader.interface);
     shred_recv_data.shred_version = gossip_cluster_info.shred_version;
+    // Initialize epoch schedule with mainnet defaults. This will be updated at runtime
+    // once the snapshot is loaded and the accounts_db service provides actual values.
+    shred_recv_data.epoch_schedule = .INIT;
+    shred_recv_data.root_slot = 0;
+    // Feature not yet activated — use sentinel to indicate "never"
+    shred_recv_data.discard_unexpected_data_complete_shreds_slot =
+        lib.shred.RecvConfig.max_slot_sentinel;
 
     var snapshot_config: Region(lib.snapshot.SnapshotConfig) = try .simple();
     try populateSnapshotConfig(snapshot_config.ptr(), config.snapshot, config.cluster);
@@ -346,6 +353,7 @@ pub fn main() !void {
             .ro = .{},
             .rw = .{
                 .config = accounts_db_config.finish(),
+                .shred_recv_config = shred_recv_config.finish(),
                 .ready_snapshot_in = snapshot_ready_to_accounts_db.finish(),
                 .account_pool = account_pool.finish(),
                 .replay_lookups = replay_account_lookups.finish(),

@@ -17,6 +17,11 @@ const Hash = solana.Hash;
 const Slot = solana.Slot;
 const LeaderSchedule = solana.LeaderSchedule;
 const Signature = solana.Signature;
+const FeatureSet = solana.features.Set;
+const EpochSchedule = solana.EpochSchedule;
+
+const data_shreds_per_fec_block: u32 = 32;
+const max_data_shreds_per_slot: u32 = 32768;
 
 const Ring = ipc.Ring;
 
@@ -25,6 +30,107 @@ const Packet = net.Packet;
 pub const RecvConfig = extern struct {
     leader_schedule: LeaderSchedule,
     shred_version: u16,
+    /// The epoch schedule, used for feature activation delay calculations.
+    epoch_schedule: solana.EpochSchedule,
+    /// The root slot, used for slot range filtering.
+    root_slot: Slot,
+    /// The activation slot of `discard_unexpected_data_complete_shreds` (SIMD-0337).
+    /// Set to `max_slot_sentinel` if the feature is not activated.
+    discard_unexpected_data_complete_shreds_slot: Slot,
+
+    pub const max_slot_sentinel: Slot = std.math.maxInt(Slot);
+
+    /// Returns the maximum acceptable shred slot given the current root.
+    /// Allows shreds up to 2 epochs into the future to support catching up to the tip.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred/filter.rs#L405-L414
+    pub fn maxShredSlot(self: *const RecvConfig) Slot {
+        const max_shred_distance_minimum: Slot = 500;
+        const slots_per_epoch = self.epoch_schedule.getSlotsInEpoch(
+            self.epoch_schedule.getEpoch(self.root_slot),
+        );
+        return self.root_slot +| @max(max_shred_distance_minimum, 2 * slots_per_epoch);
+    }
+
+    /// Returns true if the given feature is effective for the shred slot.
+    /// Note: unlike normal feature flags, shred feature flags take effect 1 epoch after activation.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred/filter.rs#L387-L402
+    pub fn isFeatureActiveForSlot(
+        self: *const RecvConfig,
+        feature_activation_slot: Slot,
+        shred_slot: Slot,
+    ) bool {
+        if (feature_activation_slot == max_slot_sentinel) return false;
+        const feature_epoch = self.epoch_schedule.getEpoch(feature_activation_slot);
+        const shred_epoch = self.epoch_schedule.getEpoch(shred_slot);
+        return feature_epoch < shred_epoch;
+    }
+
+    /// Returns true if SIMD-0337 (discard_unexpected_data_complete_shreds) is active for the given slot.
+    pub fn isSimd0337Active(self: *const RecvConfig, shred_slot: Slot) bool {
+        return self.isFeatureActiveForSlot(
+            self.discard_unexpected_data_complete_shreds_slot,
+            shred_slot,
+        );
+    }
+
+    /// Updates shred receiver config from bank state after snapshot load.
+    pub fn publishFromBank(
+        self: *RecvConfig,
+        slot: Slot,
+        epoch_schedule: EpochSchedule,
+        feature_set: *const FeatureSet,
+    ) void {
+        self.epoch_schedule = epoch_schedule;
+        self.root_slot = slot;
+        self.discard_unexpected_data_complete_shreds_slot =
+            feature_set.get(.discard_unexpected_data_complete_shreds) orelse max_slot_sentinel;
+    }
+
+    /// Returns true if `slot` and `parent` are valid relative to `root`.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/blockstore.rs#L6059-L6066
+    pub fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
+        if (slot == 0 and parent == 0 and root == 0) return true;
+        return root <= parent and parent < slot;
+    }
+
+    /// Applies Agave shred filter rules to a data shred. Returns true if the shred should be discarded.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred/filter.rs#L244-L369
+    pub fn shouldDiscardDataShred(
+        self: *const RecvConfig,
+        shred: *const Shred,
+        root_slot: Slot,
+        max_slot: Slot,
+        ignore_version_mismatch: bool,
+    ) bool {
+        std.debug.assert(shred.variant.isData());
+
+        if (!ignore_version_mismatch and shred.version != self.shred_version) return true;
+        if (shred.slot > max_slot) return true;
+        if (shred.slot_idx >= max_data_shreds_per_slot) return true;
+
+        const parent_offset = shred.code_or_data.data.parent_offset;
+        const slot = shred.slot;
+        if (parent_offset > slot) return true;
+        const parent = slot -| @as(Slot, parent_offset);
+        if (!verifyShredSlots(slot, parent, root_slot)) return true;
+
+        const in_type_idx = shred.slot_idx -| shred.fec_set_idx;
+        if (shred.fec_set_idx % data_shreds_per_fec_block != 0) return true;
+        if (in_type_idx >= data_shreds_per_fec_block) return true;
+
+        const flags = shred.code_or_data.data.flags;
+
+        const expected_data_complete_index = shred.fec_set_idx +| data_shreds_per_fec_block -| 1;
+        if (flags.data_complete and shred.slot_idx != expected_data_complete_index) {
+            if (self.isSimd0337Active(slot)) return true;
+        }
+
+        if (flags.last_shred_in_slot and (shred.slot_idx + 1) % data_shreds_per_fec_block != 0) {
+            return true;
+        }
+
+        return false;
+    }
 };
 
 pub const DeshredRing = Ring(1024, DeshreddedFecSet);
@@ -127,7 +233,7 @@ pub const Shred = extern struct {
         flags: Flags align(1),
         size: u16 align(1),
 
-        // [agave] https://github.com/anza-xyz/agave/blob/ce2b875e7a9587106cb505e14ab769f9356b8238/ledger/src/shred.rs#L146
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred.rs#L145-L146
         // NOTE: last_shred_in_slot implies data_complete
         pub const Flags = packed struct(u8) {
             // 0x1, 0x2, 0x4, 0x8, 0x10, 0x20
@@ -271,10 +377,8 @@ pub const Shred = extern struct {
             if (flags.last_shred_in_slot and !flags.data_complete)
                 return error.DataShredMarkedCompleteIsNotLastInSet;
 
-            // TODO: support the upcoming feature shredXP8xLjJWp1AWh3gAFsFn4GSH1vohhCMDHw5koU, which
-            // drops data shreds with data_complete=true that aren't the last data shred in the set.
-
-            // TODO: drop shreds with last_shred_in_slot that aren't the last data shred in the set.
+            // NOTE: SIMD-0337 DATA_COMPLETE placement and LAST_SHRED_IN_SLOT alignment checks
+            // are applied in the Receiver's processPacket() where feature gate state is available.
 
             if (parent_offset > slot) return error.BadOffset;
 
@@ -544,4 +648,159 @@ test "Shred layout" {
     }
 
     if (@alignOf(Shred) != 1) @compileError("Shred should be align(1)");
+}
+
+fn testDataShred(params: struct {
+    slot: Slot = 100,
+    slot_idx: u32 = 95,
+    fec_set_idx: u32 = 64,
+    version: u16 = 42,
+    parent_offset: u16 = 1,
+    flags: Shred.DataHeader.Flags = .{
+        .reference_tick = 0,
+        .data_complete = false,
+        .last_shred_in_slot = false,
+    },
+}) *const Shred {
+    const TestState = struct {
+        var buffer: [2048]u8 = .{0} ** 2048;
+    };
+    const shred: *Shred = @ptrCast(&TestState.buffer);
+    shred.* = .{
+        .signature = Signature.ZEROES,
+        .variant = .{ .merkle_count = 0, .kind = .merkle_data_chained },
+        .slot = params.slot,
+        .slot_idx = params.slot_idx,
+        .version = params.version,
+        .fec_set_idx = params.fec_set_idx,
+        .code_or_data = .{
+            .data = .{
+                .parent_offset = params.parent_offset,
+                .flags = params.flags,
+                .size = @offsetOf(Shred, "code_or_data") + @sizeOf(Shred.DataHeader) + 64,
+            },
+        },
+    };
+    return shred;
+}
+
+test "agave: shred feature activation delayed by one epoch" {
+    var config: RecvConfig = undefined;
+    config.epoch_schedule = EpochSchedule.INIT;
+    config.discard_unexpected_data_complete_shreds_slot =
+        config.epoch_schedule.getFirstSlotInEpoch(5);
+
+    const last_slot_epoch_5 = config.epoch_schedule.getLastSlotInEpoch(5);
+    const first_slot_epoch_6 = config.epoch_schedule.getFirstSlotInEpoch(6);
+
+    try std.testing.expect(!config.isSimd0337Active(last_slot_epoch_5));
+    try std.testing.expect(config.isSimd0337Active(first_slot_epoch_6));
+}
+
+test "agave: data_complete shred index validation" {
+    var config: RecvConfig = undefined;
+    config.epoch_schedule = EpochSchedule.INIT;
+    config.shred_version = 42;
+    config.discard_unexpected_data_complete_shreds_slot = 0;
+
+    const slot = config.epoch_schedule.getFirstSlotInEpoch(1);
+    config.root_slot = slot -| 1;
+    const max_slot = config.maxShredSlot();
+
+    const fec_set_idx: u32 = 64;
+    const wrong_shred = testDataShred(.{
+        .slot = slot,
+        .slot_idx = fec_set_idx + 10,
+        .fec_set_idx = fec_set_idx,
+        .version = 42,
+        .flags = .{
+            .reference_tick = 0,
+            .data_complete = true,
+            .last_shred_in_slot = false,
+        },
+    });
+    try std.testing.expect(config.shouldDiscardDataShred(
+        wrong_shred,
+        config.root_slot,
+        max_slot,
+        false,
+    ));
+
+    const correct_shred = testDataShred(.{
+        .slot = slot,
+        .slot_idx = fec_set_idx + 31,
+        .fec_set_idx = fec_set_idx,
+        .version = 42,
+        .flags = .{
+            .reference_tick = 0,
+            .data_complete = true,
+            .last_shred_in_slot = false,
+        },
+    });
+    try std.testing.expect(!config.shouldDiscardDataShred(
+        correct_shred,
+        config.root_slot,
+        max_slot,
+        false,
+    ));
+
+    config.discard_unexpected_data_complete_shreds_slot = RecvConfig.max_slot_sentinel;
+    try std.testing.expect(!config.shouldDiscardDataShred(
+        wrong_shred,
+        config.root_slot,
+        max_slot,
+        false,
+    ));
+}
+
+test "agave: misaligned last shred in slot" {
+    var config: RecvConfig = undefined;
+    config.epoch_schedule = EpochSchedule.INIT;
+    config.shred_version = 42;
+    config.discard_unexpected_data_complete_shreds_slot = RecvConfig.max_slot_sentinel;
+    config.root_slot = 99;
+    const max_slot = config.maxShredSlot();
+
+    const shred = testDataShred(.{
+        .slot = 100,
+        .slot_idx = 50,
+        .fec_set_idx = 32,
+        .flags = .{
+            .reference_tick = 0,
+            .data_complete = true,
+            .last_shred_in_slot = true,
+        },
+    });
+    try std.testing.expect(config.shouldDiscardDataShred(shred, config.root_slot, max_slot, false));
+}
+
+test "agave: verify_shred_slots" {
+    try std.testing.expect(RecvConfig.verifyShredSlots(0, 0, 0));
+    try std.testing.expect(RecvConfig.verifyShredSlots(100, 99, 50));
+    try std.testing.expect(!RecvConfig.verifyShredSlots(100, 50, 60));
+    try std.testing.expect(!RecvConfig.verifyShredSlots(50, 60, 40));
+}
+
+test "epoch schedule fromAccountData" {
+    var data: [EpochSchedule.STORAGE_SIZE]u8 = undefined;
+    const schedule = EpochSchedule.custom(.{
+        .slots_per_epoch = 432000,
+        .leader_schedule_slot_offset = 432000,
+        .warmup = true,
+    });
+    std.mem.writeInt(u64, data[0..8], schedule.slots_per_epoch, .little);
+    std.mem.writeInt(u64, data[8..16], schedule.leader_schedule_slot_offset, .little);
+    data[16] = @intFromBool(schedule.warmup);
+    std.mem.writeInt(u64, data[17..25], schedule.first_normal_epoch, .little);
+    std.mem.writeInt(u64, data[25..33], schedule.first_normal_slot, .little);
+
+    const parsed = try EpochSchedule.fromAccountData(&data);
+    try std.testing.expectEqual(schedule.slots_per_epoch, parsed.slots_per_epoch);
+    try std.testing.expectEqual(
+        schedule.leader_schedule_slot_offset,
+        parsed.leader_schedule_slot_offset,
+    );
+    try std.testing.expectEqual(schedule.warmup, parsed.warmup);
+    try std.testing.expectEqual(schedule.first_normal_epoch, parsed.first_normal_epoch);
+    try std.testing.expectEqual(schedule.first_normal_slot, parsed.first_normal_slot);
 }

@@ -7,6 +7,7 @@ pub const accounts_db: ServiceSpec = .{
     .ReadOnly = struct {},
     .ReadWrite = struct {
         config: *lib.accounts_db.RootedConfig,
+        shred_recv_config: *lib.shred.RecvConfig,
         ready_snapshot_in: *lib.snapshot.SnapshotDataRing,
         account_pool: *lib.accounts_db.AccountPool,
         replay_lookups: *lib.accounts_db.AccountLookups,

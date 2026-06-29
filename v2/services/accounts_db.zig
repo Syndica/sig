@@ -57,7 +57,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         try rooted.loadSnapshot(.from(logger), &snapshot_iter);
     }
 
-    { // Load feature accounts (TODO: use this to then load leader schedule & stake/vote data)
+    { // Load feature accounts and publish shred receiver config from bank state.
         const account_reader: struct {
             r: *Rooted,
             l: @TypeOf(logger),
@@ -102,6 +102,13 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
         it = pending_set.iterator(slot, .active);
         while (it.next()) |feature| logger.info().logf("Feature(pending) {}", .{feature});
+
+        const epoch_schedule = loadEpochSchedule(account_reader, logger);
+        rw.shred_recv_config.publishFromBank(slot, epoch_schedule, &feature_set);
+        logger.info().logf(
+            "published shred recv config: root_slot={}, simd0337_activation={?}",
+            .{ slot, feature_set.get(.discard_unexpected_data_complete_shreds) },
+        );
     }
 
     logger.info().logf("accounts_db loaded - servicing replay requests", .{});
@@ -123,4 +130,20 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             }
         }
     }
+}
+
+fn loadEpochSchedule(
+    account_reader: anytype,
+    logger: lib.telemetry.Logger("main"),
+) lib.solana.EpochSchedule {
+    if (account_reader.load(&lib.solana.EpochSchedule.ID)) |account_index| {
+        defer account_reader.free(account_index);
+        const data = account_reader.getData(account_index);
+        return lib.solana.EpochSchedule.fromAccountData(data) catch |err| {
+            logger.warn().logf("failed to parse epoch schedule sysvar: {}", .{err});
+            return lib.solana.EpochSchedule.INIT;
+        };
+    }
+    logger.warn().logf("epoch schedule sysvar missing, using mainnet defaults", .{});
+    return lib.solana.EpochSchedule.INIT;
 }

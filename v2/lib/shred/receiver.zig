@@ -64,8 +64,7 @@ pub const Receiver = struct {
     // TODO: report back equivocating shreds, so that we can construct and send out duplicate proofs
     pub fn processPacket(
         state: *Receiver,
-        leader_schedule: *const lib.solana.LeaderSchedule,
-        network_shred_version: u16,
+        config: *const lib.shred.RecvConfig,
         packet: *const Packet,
         deshred_writer: *DeshredRing.Iterator(.writer),
         logger: lib.telemetry.Logger("processPacket"),
@@ -88,12 +87,12 @@ pub const Receiver = struct {
             if (shred.slot > state.max_slot) return error.ShredTooNew;
 
             // ignore shred with wrong version
-            if (shred.version != network_shred_version) {
+            if (shred.version != config.shred_version) {
                 if (!build_options.debug_skip_shred_checks) return error.ShredVersionMismatch;
             }
 
             // reject shreds greater than the max per slot
-            // [agave] https://github.com/anza-xyz/agave/blob/ce2b875e7a9587106cb505e14ab769f9356b8238/ledger/src/shred.rs#L772
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred.rs#L125
             // [firedancer] https://github.com/firedancer-io/firedancer/blob/e547465daf50329a163ffbd0aa3089b9822d1759/src/disco/shred/fd_fec_resolver.c#L505
             const max_shreds_per_slot = 32768;
             if (shred.fec_set_idx > max_shreds_per_slot - FecSetCtx.fec_shred_count)
@@ -117,6 +116,37 @@ pub const Receiver = struct {
             const merkle_layer_count = 7;
             if (shred.variant.merkle_count > merkle_layer_count - 1) {
                 return error.MerkleCountTooLarge;
+            }
+
+            // SIMD-0337 checks for data shreds
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred/filter.rs#L327-L349
+            if (shred.variant.isData()) {
+                if (config.shouldDiscardDataShred(
+                    shred,
+                    state.root_slot,
+                    state.max_slot,
+                    build_options.debug_skip_shred_checks,
+                )) {
+                    const flags = shred.code_or_data.data.flags;
+                    if (flags.last_shred_in_slot and
+                        (shred.slot_idx + 1) % FecSetCtx.data_shreds_max != 0)
+                    {
+                        return error.MisalignedLastDataIndex;
+                    }
+                    if (flags.data_complete) {
+                        const expected_last_idx = shred.fec_set_idx + FecSetCtx.data_shreds_max - 1;
+                        if (shred.slot_idx != expected_last_idx and
+                            config.isSimd0337Active(shred.slot))
+                        {
+                            return error.UnexpectedDataCompleteShred;
+                        }
+                    }
+                    if (shred.version != config.shred_version and
+                        !build_options.debug_skip_shred_checks)
+                        return error.ShredVersionMismatch;
+                    if (shred.slot > state.max_slot) return error.ShredTooNew;
+                    return error.InvalidShredSlotChain;
+                }
             }
         }
 
@@ -196,7 +226,7 @@ pub const Receiver = struct {
                 var shred_merkle_root: Hash = undefined;
 
                 if (!build_options.debug_skip_shred_checks) {
-                    const slot_leader = leader_schedule.get(shred.slot) orelse {
+                    const slot_leader = config.leader_schedule.get(shred.slot) orelse {
                         logger.warn().logf("slot {} missing?\n", .{shred.slot});
                         return error.UnknownLeader;
                     };
@@ -296,6 +326,33 @@ pub const Receiver = struct {
                 shreds_bitset.mask,
             ) catch @panic("todo: handle bad recovery");
 
+            // Validate recovered data shreds (SIMD-0337)
+            // Only recovered shreds need validation — already-received ones were validated on ingest.
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred/filter.rs#L532-L545
+            if (config.isSimd0337Active(shred.slot)) {
+                const recovered_data_mask = fec_set_ctx.data_shreds_received.complement();
+                var it = recovered_data_mask.iterator(.{ .kind = .set });
+                while (it.next()) |idx| {
+                    const buffer = &fec_set_ctx.data_shreds_buf[idx];
+                    const recovered_shred: *const Shred = Shred.fromBufferUnchecked(buffer);
+                    if (config.shouldDiscardDataShred(
+                        recovered_shred,
+                        state.root_slot,
+                        state.max_slot,
+                        false,
+                    )) {
+                        // Discard entire FEC set — a recovered shred failed validation
+                        logger.warn().logf(
+                            "discarding FEC set (slot={}, fec_idx={}): " ++
+                                "recovered shred at idx {} failed SIMD-0337 validation",
+                            .{ shred.slot, shred.fec_set_idx, idx },
+                        );
+                        state.in_progress.removeFinishedSet(fec_set_ctx);
+                        return .fec_set_discarded;
+                    }
+                }
+            }
+
             fec_set_ctx.data_shreds_received = .initFull();
         }
 
@@ -349,7 +406,6 @@ pub const Receiver = struct {
 
             var bytes_written: u16 = 0;
             for (&fec_set_ctx.data_shreds_buf) |*buffer| {
-                // TODO: I think we need to re-validate the data shreds that we recovered
                 const data_shred: *const Shred = Shred.fromBufferUnchecked(buffer);
                 const payload = data_shred.dataPayload();
                 @memcpy(finished.payload_buf[bytes_written..][0..payload.len], payload);
@@ -376,6 +432,7 @@ pub const Receiver = struct {
         },
         fec_set_finished,
         fec_set_already_finished,
+        fec_set_discarded,
         shred_already_seen,
     };
 };

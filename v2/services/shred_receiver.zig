@@ -84,6 +84,10 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     var receiver: Receiver = try .init(allocator, max_in_progress, max_done);
     defer receiver.deinit(allocator);
 
+    var cached_root_slot: lib.solana.Slot = ro.config.root_slot;
+    var cached_max_slot: lib.solana.Slot = ro.config.maxShredSlot();
+    receiver.updateSlotRange(cached_root_slot, cached_max_slot);
+
     var packet_iter = rw.tvu_socket.recv.get(.reader);
     var deshred_out = rw.deshredded_out.get(.writer);
 
@@ -97,11 +101,19 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         }
         while (packet_iter.next()) |packet| {
             defer packet_iter.markUsed();
+
+            const root_slot = ro.config.root_slot;
+            const max_slot = ro.config.maxShredSlot();
+            if (root_slot != cached_root_slot or max_slot != cached_max_slot) {
+                cached_root_slot = root_slot;
+                cached_max_slot = max_slot;
+                receiver.updateSlotRange(cached_root_slot, cached_max_slot);
+            }
+
             try runner.activity.signalActive();
 
             const result = receiver.processPacket(
-                &ro.config.leader_schedule,
-                ro.config.shred_version,
+                ro.config,
                 packet,
                 &deshred_out,
                 logger.withScope("processPacket"),
@@ -109,7 +121,13 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                 std.log.warn("packet failed with {}", .{err});
                 continue;
             };
-            _ = result;
+            switch (result) {
+                .fec_set_discarded => logger.warn().logf(
+                    "discarded FEC set after SIMD-0337 recovery validation",
+                    .{},
+                ),
+                else => {},
+            }
         }
     }
 }

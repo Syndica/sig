@@ -1679,11 +1679,10 @@
         .name = "discard_unexpected_data_complete_shreds",
         .pubkey = "disCA4efguFL6Wqa4pGdG7jpjC7C5uiKzKnhEBqchBe",
         .description = "SIMD-0337: Markers for Alpenglow Fast Leader Handover, DATA_COMPLETE_SHRED placement rules",
-        .status = .unsupported,
+        .status = .supported,
         .note =
-        \\ TODO: Low Priority.
-        \\ Scheduled for activation in agave v4.1 release cycle.
-        \\ Implement as part of alpenglow in v2.
+        \\ Implemented in v2 shred receiver: validates DATA_COMPLETE flag placement
+        \\ on both incoming and recovered shreds. Feature-gated with 1-epoch delay.
         ,
     },
     .{

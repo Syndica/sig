@@ -15,7 +15,7 @@ pub const DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET: u64 = DEFAULT_SLOTS_PER_EPOCH;
 /// Based on `MAX_LOCKOUT_HISTORY` from `vote_program`.
 pub const MINIMUM_SLOTS_PER_EPOCH: u64 = 32;
 
-/// Analogous to [EpochSchedule](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/epoch_schedule.rs#L35)
+/// Analogous to [EpochSchedule](https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/runtime/src/bank.rs#L485)
 pub const EpochSchedule = extern struct {
     /// The maximum number of slots in each epoch.
     slots_per_epoch: u64,
@@ -182,6 +182,19 @@ pub const EpochSchedule = extern struct {
             .warmup = random.boolean(),
             .first_normal_epoch = random.int(Epoch),
             .first_normal_slot = random.int(Slot),
+        };
+    }
+
+    /// Deserializes the epoch schedule sysvar account data (33-byte `#[repr(C)]` layout).
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/runtime/src/bank.rs#L485
+    pub fn fromAccountData(data: []const u8) !EpochSchedule {
+        if (data.len < STORAGE_SIZE) return error.DataTooShort;
+        return .{
+            .slots_per_epoch = std.mem.readInt(u64, data[0..8], .little),
+            .leader_schedule_slot_offset = std.mem.readInt(u64, data[8..16], .little),
+            .warmup = data[16] != 0,
+            .first_normal_epoch = std.mem.readInt(u64, data[17..25], .little),
+            .first_normal_slot = std.mem.readInt(u64, data[25..33], .little),
         };
     }
 };
