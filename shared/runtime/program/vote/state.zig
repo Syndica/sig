@@ -700,12 +700,17 @@ pub const CircBufV1 = struct {
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v6.0.0/vote-interface/src/state/vote_state_versions.rs#L18
 /// [SIMD-0185] v4 added with discriminant 3.
 ///
-/// In `solana-vote-interface` >= 6.0 the variant-0 slot was repurposed from the
-/// legacy `V0_23_5` layout into a zero-sized `Uninitialized` marker. Bincode
-/// auto-derived deserialization therefore succeeds on a leading `u32` tag of
-/// 0 (consuming only those 4 bytes), letting callers such as
-/// `initialize_account` continue into the signer check rather than failing
-/// during deserialization of a stale V0_23_5 body.
+/// Variant 0 is a zero-sized `uninitialized` marker, mirroring how
+/// `solana-vote-interface` >= 6.0 repurposed the slot that the legacy
+/// `V0_23_5` layout used to occupy.
+///
+/// This note describes *Sig's* bincode decoding of this union, not agave's
+/// on-disk wire behaviour generally: decoding a leading `u32` tag of 0 here
+/// succeeds as `.uninitialized` (consuming only those 4 bytes), which is what
+/// the `initialize_account` path relies on, it decodes, then checks
+/// `isUninitialized` and proceeds to the signer check. The V4-target read path
+/// does *not* treat tag 0 leniently: see `getVoteStateChecked`, which rejects
+/// it with `InvalidAccountData`, matching agave's `VoteStateV4::deserialize_into_ptr`.
 pub const VoteStateVersions = union(enum(u32)) {
     uninitialized,
     v1_14_11: VoteState1_14_11,
@@ -796,31 +801,11 @@ pub const VoteStateVersions = union(enum(u32)) {
             },
             .v3 => |state| {
                 defer self.deinit(allocator);
-
-                var authorized_voters = try state.voters.clone(allocator);
-                errdefer authorized_voters.deinit(allocator);
-
-                var votes = try state.votes.clone(allocator);
-                errdefer votes.deinit(allocator);
-
-                var epoch_credits = try state.epoch_credits.clone(allocator);
-                errdefer epoch_credits.deinit(allocator);
-
-                return .{
-                    .node_pubkey = state.node_pubkey,
-                    .withdrawer = state.withdrawer,
-                    .inflation_rewards_collector = default_collector,
-                    .block_revenue_collector = state.node_pubkey,
-                    .inflation_rewards_commission_bps = @as(u16, state.commission) * 100,
-                    .block_revenue_commission_bps = 10_000,
-                    .pending_delegator_rewards = 0,
-                    .bls_pubkey_compressed = null,
-                    .votes = votes,
-                    .root_slot = state.root_slot,
-                    .authorized_voters = authorized_voters,
-                    .epoch_credits = epoch_credits,
-                    .last_timestamp = state.last_timestamp,
-                };
+                // Single-sourced with VoteStateV4.fromVoteStateV3 so the SIMD-0185
+                // V3->V4 default policy (collectors, commission_bps, etc.) lives in
+                // one place. fromVoteStateV3 borrows `state` (clones its owned data);
+                // the deferred deinit frees the original.
+                return try VoteStateV4.fromVoteStateV3(allocator, state, default_collector);
             },
             .v4 => |state| return state,
         }
