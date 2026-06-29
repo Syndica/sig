@@ -157,11 +157,10 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         }
     }
 
-    // TODO: get this from snapshot metadata 
+    // TODO: get this from snapshot metadata
     var first_slot: ?Slot = null; // this is a hack, remove it!
 
     // After the slot is supposedly populated, start shred recv (eventually Repair service) on it.
-
 
     task: switch (@as(enum { exec_response, fec_set, idle }, .idle)) {
         .idle => {

@@ -249,7 +249,6 @@ pub const Rooted = struct {
             logger.info().logf("read journal: {any}", .{self.journal});
         }
 
-        
         var blockhash_writer = runtime_metadata.blockhash_queue.hashes.getView(.writer);
         defer {
             runtime_metadata.blockhash_queue.max_age = self.journal.blockhash_max_age;
@@ -430,7 +429,7 @@ pub const Rooted = struct {
         { // write the current blockhash queue
             const blockhash_queue = &snapshot_iter.manifest.bank_fields.blockhash_queue;
             self.journal.blockhash_max_age = std.math.lossyCast(u32, blockhash_queue.max_age);
- 
+
             const num_hashes = blockhash_queue.hashes.count;
             const hashes = blockhash_queue.hashes.array[0..num_hashes];
 
@@ -442,7 +441,7 @@ pub const Rooted = struct {
 
             var r = std.Io.Reader.fixed(std.mem.asBytes(&header));
             try self.queueWrite(.from(logger), @sizeOf(SectorHeader), &r);
-            
+
             r = std.Io.Reader.fixed(std.mem.sliceAsBytes(hashes));
             try self.queueWrite(.from(logger), num_hashes * @sizeOf(Hash), &r);
 

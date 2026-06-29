@@ -47,12 +47,12 @@ pub const RuntimeMetadata = struct {
         max_age: u64, // read after consuming all of hashes
         hashes: lib.ipc.Ring(256, Hash),
     },
-    
+
     // 0 may be a valid slot, so use something that will never be reached.
     const invalid_slot = std.math.maxInt(Slot);
 
     pub fn init(self: *RuntimeMetadata) void {
-        self.slot = .init(invalid_slot); 
+        self.slot = .init(invalid_slot);
 
         self.blockhash_queue.max_age = 0;
         self.blockhash_queue.hashes.init();
@@ -70,7 +70,7 @@ pub const RuntimeMetadata = struct {
         const slot = while (true) {
             const slot = self.slot.load(.acquire);
             if (slot != invalid_slot) break slot;
-            try runner.activity.signalIdleSpinning(); 
+            try runner.activity.signalIdleSpinning();
         };
 
         try runner.activity.signalActive();

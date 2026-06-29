@@ -46,8 +46,8 @@ pub fn Ring(N: comptime_int, T: type) type {
 
                 /// Get a slice of "available" items (populated for .reader, writable for .writer).
                 /// If theres no avaiable items, returns null.
-                /// If the other side closed their end, returns an empty slice. 
-                /// 
+                /// If the other side closed their end, returns an empty slice.
+                ///
                 /// After observing the items, they can be marked as used/consumed with `advance(n)`
                 /// where n <= the slice.len returned here
                 pub fn getBuffer(self: *Self) ?Slice {
@@ -94,7 +94,7 @@ pub fn Ring(N: comptime_int, T: type) type {
 
                         const buf = while (true) {
                             try runner.activity.signalIdleSpinning();
-                            break self.getBuffer() orelse continue; 
+                            break self.getBuffer() orelse continue;
                         };
 
                         try runner.activity.signalActive();
