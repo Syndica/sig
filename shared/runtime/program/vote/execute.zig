@@ -5265,12 +5265,7 @@ test "vote_program: executeIntializeAccount v4" {
                 .rent = rent,
                 .clock = clock,
             },
-            .feature_set = &.{
-                .{
-                    .feature = .vote_state_v4_hardcoded,
-                    .slot = 0,
-                },
-            },
+            .feature_set = &.{},
         },
         .{
             .accounts = &.{
@@ -5416,10 +5411,6 @@ test "vote_program: tower sync with v4 feature" {
                     .feature = .enable_tower_sync_ix,
                     .slot = 0,
                 },
-                .{
-                    .feature = .vote_state_v4_hardcoded,
-                    .slot = 0,
-                },
             },
         },
         .{
@@ -5515,12 +5506,7 @@ test "vote_program: update_validator_identity with v4 feature" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
-            .feature_set = &.{
-                .{
-                    .feature = .vote_state_v4_hardcoded,
-                    .slot = 0,
-                },
-            },
+            .feature_set = &.{},
         },
         .{
             .accounts = &.{
@@ -5611,12 +5597,7 @@ test "vote_program: widthdraw all with v4 zeros account data" {
                 .rent = rent,
                 .clock = clock,
             },
-            .feature_set = &.{
-                .{
-                    .feature = .vote_state_v4_hardcoded,
-                    .slot = 0,
-                },
-            },
+            .feature_set = &.{},
         },
         .{
             .accounts = &.{
@@ -5728,12 +5709,7 @@ test "vote_program: widthdraw all with v4 preserves v1_14_11-sized account lengt
                 .rent = rent,
                 .clock = clock,
             },
-            .feature_set = &.{
-                .{
-                    .feature = .vote_state_v4_hardcoded,
-                    .slot = 0,
-                },
-            },
+            .feature_set = &.{},
         },
         .{
             .accounts = &.{
@@ -5834,12 +5810,7 @@ test "vote_program: widthdraw all with v4 pending rewards fails" {
                 .rent = rent,
                 .clock = clock,
             },
-            .feature_set = &.{
-                .{
-                    .feature = .vote_state_v4_hardcoded,
-                    .slot = 0,
-                },
-            },
+            .feature_set = &.{},
         },
         .{},
     );
@@ -5921,12 +5892,7 @@ test "vote_program: widthdraw with v4 pending rewards below minimum fails" {
                 .rent = rent,
                 .clock = clock,
             },
-            .feature_set = &.{
-                .{
-                    .feature = .vote_state_v4_hardcoded,
-                    .slot = 0,
-                },
-            },
+            .feature_set = &.{},
         },
         .{},
     );
@@ -6014,12 +5980,7 @@ test "vote_program: executeAuthorize withdrawer with v4 feature" {
             .sysvar_cache = .{
                 .clock = clock,
             },
-            .feature_set = &.{
-                .{
-                    .feature = .vote_state_v4_hardcoded,
-                    .slot = 0,
-                },
-            },
+            .feature_set = &.{},
         },
         .{
             .accounts = &.{
@@ -6125,12 +6086,7 @@ test "vote_program: update_commission with v4 feature" {
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{
-                .{
-                    .feature = .vote_state_v4_hardcoded,
-                    .slot = 0,
-                },
-            },
+            .feature_set = &.{},
         },
         .{
             .accounts = &.{
@@ -6241,12 +6197,7 @@ test "vote_program: vote with v4 feature" {
                 .clock = clock,
                 .slot_hashes = slot_hashes,
             },
-            .feature_set = &.{
-                .{
-                    .feature = .vote_state_v4_hardcoded,
-                    .slot = 0,
-                },
-            },
+            .feature_set = &.{},
         },
         .{
             .accounts = &.{
@@ -6388,7 +6339,6 @@ test "update_commission_collector inflation_rewards" {
                 .clock = clock,
             },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{
                     .feature = .custom_commission_collector,
                     .slot = 0,
@@ -6538,7 +6488,6 @@ test "update_commission_collector block_revenue" {
                 .clock = clock,
             },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{
                     .feature = .custom_commission_collector,
                     .slot = 0,
@@ -6668,9 +6617,7 @@ test "update_commission_collector feature disabled" {
                 .clock = clock,
             },
             // vote_state_v4 active, custom_commission_collector NOT
-            .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
-            },
+            .feature_set = &.{},
         },
         .{
             .accounts = &.{
@@ -6801,7 +6748,6 @@ test "update_commission_collector withdrawer not signer" {
                 .clock = clock,
             },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{
                     .feature = .custom_commission_collector,
                     .slot = 0,
@@ -6937,7 +6883,6 @@ test "update_commission_collector not system owned" {
                 .clock = clock,
             },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{
                     .feature = .custom_commission_collector,
                     .slot = 0,
@@ -7072,7 +7017,6 @@ test "update_commission_collector not rent exempt" {
                 .clock = clock,
             },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{
                     .feature = .custom_commission_collector,
                     .slot = 0,
@@ -7208,7 +7152,6 @@ test "update_commission_collector not writable" {
                 .clock = clock,
             },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{
                     .feature = .custom_commission_collector,
                     .slot = 0,
@@ -7296,9 +7239,7 @@ test "vote_program: authorize zero-tag short data returns InvalidAccountData" {
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
-            .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
-            },
+            .feature_set = &.{},
         },
         .{},
     );
@@ -7356,9 +7297,7 @@ test "vote_program: authorize sub-tag-length data returns InvalidAccountData" {
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
-            .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
-            },
+            .feature_set = &.{},
         },
         .{},
     );
@@ -7419,9 +7358,7 @@ test "vote_program: authorize uninitialized v3-tagged returns UninitializedAccou
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
-            .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
-            },
+            .feature_set = &.{},
         },
         .{},
     );
@@ -7497,7 +7434,6 @@ test "vote_program: authorize voter rejected when bls_pubkey set and SIMD-0387 a
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
             },
         },
@@ -7572,9 +7508,7 @@ test "vote_program: authorize voter_with_bls rejected when SIMD-0387 inactive" {
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
-            .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
-            },
+            .feature_set = &.{},
         },
         .{},
     );
@@ -7652,7 +7586,6 @@ test "vote_program: authorize voter_with_bls bad proof consumes CUs and returns 
                 vote_program.state.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
             },
         },
@@ -7822,7 +7755,6 @@ test "vote_program: initialize_account_v2 success (escape-hatch collectors)" {
                     vote_program.state.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS,
                 .sysvar_cache = .{ .rent = rent, .clock = clock },
                 .feature_set = &.{
-                    .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                     .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
                     .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
                     .{ .feature = .custom_commission_collector, .slot = 0 },
@@ -7903,9 +7835,7 @@ test "vote_program: initialize_account_v2 rejected when gate inactive" {
                 .compute_meter = vote_program.COMPUTE_UNITS,
                 .sysvar_cache = .{ .rent = rent, .clock = clock },
                 // Only `vote_state_v4` active: SIMD-0387 + co-deps all inactive.
-                .feature_set = &.{
-                    .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
-                },
+                .feature_set = &.{},
             },
             .{},
         );
@@ -7967,7 +7897,6 @@ test "vote_program: initialize_account_v2 bad proof returns InvalidArgument" {
                 vote_program.state.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS,
             .sysvar_cache = .{ .rent = rent, .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
                 .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
                 .{ .feature = .custom_commission_collector, .slot = 0 },
@@ -8037,7 +7966,6 @@ test "vote_program: initialize_account_v2 rejects when too few accounts" {
                     vote_program.state.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS,
                 .sysvar_cache = .{ .rent = rent, .clock = clock },
                 .feature_set = &.{
-                    .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                     .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
                     .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
                     .{ .feature = .custom_commission_collector, .slot = 0 },
@@ -8132,7 +8060,6 @@ test "update_commission_bps inflation_rewards" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .delay_commission_updates, .slot = 0 },
                 .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
             },
@@ -8215,7 +8142,6 @@ test "update_commission_bps block_revenue rejected without block_revenue_sharing
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .delay_commission_updates, .slot = 0 },
                 .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
             },
@@ -8284,7 +8210,6 @@ test "update_commission_bps feature commission_rate_in_basis_points disabled" {
             .sysvar_cache = .{ .clock = clock },
             // commission_rate_in_basis_points NOT active
             .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .delay_commission_updates, .slot = 0 },
             },
         },
@@ -8352,7 +8277,6 @@ test "update_commission_bps feature delay_commission_updates disabled" {
             .sysvar_cache = .{ .clock = clock },
             // delay_commission_updates NOT active
             .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
             },
         },
@@ -8420,7 +8344,6 @@ test "update_commission_bps withdrawer not signer" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .delay_commission_updates, .slot = 0 },
                 .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
             },
@@ -8485,7 +8408,6 @@ test "update_commission_bps reserved deposit_delegator_rewards rejected" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .delay_commission_updates, .slot = 0 },
                 .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
             },
