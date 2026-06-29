@@ -32,7 +32,6 @@ pub const ReadWrite = struct {
 };
 
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
-    _ = runner;
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
 
@@ -47,6 +46,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const rooted = &Global.rooted;
     try rooted.init(
         .from(logger),
+        runner,
         std.fs.cwd(),
         file_path,
         rw.config.memory[0..].ptr[0..rw.config.memory_len],
@@ -61,11 +61,35 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     if (rooted.table.count() == 0) {
         logger.info().logf("no existing rooted db. reading from snapshot", .{});
 
+        const ReadySnapshotReader = @TypeOf(in);
+        const SnapshotBufReader = struct {
+            in_: *ReadySnapshotReader,
+            runner_: lib.runner.Connection,
+
+            pub fn getBuffer(self: @This()) []const u8 {
+                return self.in_.getBufferBlocking(self.runner_) catch |err| switch (err) {
+                    error.Canceled => return &.{}, // cancel -> EOF
+                };
+            }
+
+            pub fn advance(self: @This(), n: usize) void {
+                self.in_.advance(n);
+            }
+        };
+
         var fba = std.heap.FixedBufferAllocator.init(&Global.fba_memory);
-        var snapshot_iter = try SnapshotIter(*@TypeOf(in)).init(&fba, &in);
+        var snapshot_iter = try SnapshotIter(SnapshotBufReader).init(&fba, .{
+            .in_ = &in,
+            .runner_ = runner,
+        });
 
         logger.info().logf("reading snapshot accounts", .{});
-        try rooted.loadSnapshot(.from(logger), &snapshot_iter, rw.snapshot_metadata_out);
+        try rooted.loadSnapshot(
+            .from(logger), 
+            runner,
+            &snapshot_iter,
+            rw.snapshot_metadata_out,
+        );
     }
 
     { // Load feature accounts (TODO: use this to then load leader schedule & stake/vote data)

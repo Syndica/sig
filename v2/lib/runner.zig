@@ -37,9 +37,9 @@ pub const Activity = extern struct {
     /// Should only be observed & used by the service.
     pub const ServiceView = struct {
         activity: *Activity,
-        /// Number of times consecutive times the service
+        /// Number of consecutive times the service
         /// has signalled idle since signalling activity.
-        consecutive_idles: u32 = 0,
+        consecutive_idles: u64 = 0,
 
         /// This function may need to be called multiple times consecutively before a signal is actually emitted.
         /// See the doc comment on `Activity.signalIdle` for further commentary on what it means to be "idle".

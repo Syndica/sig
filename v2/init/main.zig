@@ -236,6 +236,7 @@ pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
     .snapshot_metadata = .initMany(&.{
         .@"accounts_db:snapshot_metadata_out",
         .@"replay:snapshot_metadata_in",
+        .@"shred_receiver:snapshot_metadata",
     }),
     .account_pool = .initMany(&.{
         .@"accounts_db:account_pool",

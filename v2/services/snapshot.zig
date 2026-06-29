@@ -33,7 +33,6 @@ pub const ReadWrite = struct {
 };
 
 pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
-    _ = runner;
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     const metrics = rw.tel.metricAppender().appendFields(Metrics, Metrics.fields_config);
     rw.tel.signalReady();
@@ -103,19 +102,18 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         defer out.close();
 
         while (true) {
-            const buf: []u8 = while (true) : (std.atomic.spinLoopHint())
-                break out.getBuffer() orelse continue;
+            const buf: []u8 = try out.getBufferBlocking(runner);
             if (buf.len == 0) break; // reader closed their side
 
             // cap decompress size to ensure advance() is called frequently enough to unblock rooted
             const decompressed = buf[0..@min(buf.len, 128 * 1024)];
 
             const n = try zst_reader.read(.from(logger), decompressed);
-            if (n == 0) break;
+            if (n == 0) break; // file reader EOF
             out.advance(n);
         }
     }
 
     logger.info().logf("snapshot service finished", .{});
-    while (true) std.atomic.spinLoopHint();
+    while (true) try runner.activity.signalIdleSpinning();
 }

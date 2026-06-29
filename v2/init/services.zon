@@ -19,6 +19,7 @@
     .{
         .name = .shred_receiver,
         .regions = .{
+            .{ .name = .snapshot_metadata, .access = .rw },
             .{ .name = .from_net, .access = .rw },
             .{ .name = .config, .access = .readonly },
             .{ .name = .deshredded_out, .access = .rw },

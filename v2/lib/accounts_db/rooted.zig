@@ -83,6 +83,7 @@ pub const Rooted = struct {
     pub fn init(
         self: *Rooted,
         logger: tel.Logger("Rooted.init"),
+        runner: lib.runner.Connection,
         dir: std.fs.Dir,
         path: []const u8,
         table_memory: []u8,
@@ -102,7 +103,12 @@ pub const Rooted = struct {
             defer read_file.close();
 
             logger.info().logf("loading from existing rooted db", .{});
-            self.loadExisting(.from(logger), read_file, runtime_metadata) catch |err| switch (err) {
+            self.loadExisting(
+                .from(logger),
+                runner,
+                read_file,
+                runtime_metadata,
+            ) catch |err| switch (err) {
                 error.InvalidJournal => {
                     self.journal = .empty; // reset any modifications from loadExisting()
                     break :open_existing;
@@ -187,6 +193,7 @@ pub const Rooted = struct {
     fn loadExisting(
         self: *Rooted,
         logger: tel.Logger("Rooted.loadExisting"),
+        runner: lib.runner.Connection,
         file: std.fs.File,
         runtime_metadata: *RuntimeMetadata,
     ) !void {
@@ -296,20 +303,18 @@ pub const Rooted = struct {
                 },
                 .blockhashes => {
                     var num_hashes = header.info.count;
-                    blk: while (num_hashes > 0) {
+                    while (num_hashes > 0) {
                         // get a buffer to write hashes into
-                        const hash_buf: []Hash = while (true) : (std.atomic.spinLoopHint()) {
-                            const buf = blockhash_writer.getBuffer() orelse continue;
-                            if (buf.len > 0) break buf;
-
+                        const hash_buf: []Hash = try blockhash_writer.getBufferBlocking(runner);
+                        if (hash_buf.len == 0) {
                             // blockhash_reader closed their end. just skip the hashes then.
                             try self.readExisting(
                                 .from(logger),
                                 null,
                                 @sizeOf(Hash) * num_hashes,
                             );
-                            break :blk;
-                        };
+                            break;
+                        }
 
                         // read hashes into blockhash_writer to send over
                         const take = @min(num_hashes, hash_buf.len);
@@ -345,6 +350,10 @@ pub const Rooted = struct {
             }
         }
 
+        // write the slot to commit the RuntimeMetadata stuff
+        const slot = self.journal.committed_slot;
+        runtime_metadata.populateSlot(slot);
+
         self.table.flushPuts(&self.put_batch);
         logger.info().logf("loaded rooted db: {} accounts", .{self.table.count()});
     }
@@ -371,13 +380,12 @@ pub const Rooted = struct {
     pub fn loadSnapshot(
         self: *Rooted,
         logger: tel.Logger("Rooted.loadSnapshot"),
+        runner: lib.runner.Connection,
         snapshot_iter: anytype, // lib.solana.snapshot.SnapshotIter(anytype),
         runtime_metadata: *RuntimeMetadata,
     ) !void {
-        try self.beginTransaction(
-            .from(logger),
-            snapshot_iter.manifest.bank_fields.slot,
-        );
+        const slot = snapshot_iter.manifest.bank_fields.slot;
+        try self.beginTransaction(.from(logger), slot);
 
         var timer = try std.time.Timer.start();
         var n_puts: usize = 0;
@@ -419,8 +427,7 @@ pub const Rooted = struct {
             }
         }
 
-        // write the current blockhash queue
-        {
+        { // write the current blockhash queue
             const blockhash_queue = &snapshot_iter.manifest.bank_fields.blockhash_queue;
             self.journal.blockhash_max_age = std.math.lossyCast(u32, blockhash_queue.max_age);
  
@@ -447,12 +454,9 @@ pub const Rooted = struct {
             }
 
             var i: usize = 0;
-            blk: while (i < hashes.len) {
-                const buf = while (true) : (std.atomic.spinLoopHint()) {
-                    const buf = blockhash_writer.getBuffer() orelse continue;
-                    if (buf.len > 0) break buf;
-                    break :blk; // reader end closed somehow
-                };
+            while (i < hashes.len) {
+                const buf = try blockhash_writer.getBufferBlocking(runner);
+                if (buf.len == 0) break; // reader closed somehow
 
                 const take = @min(buf.len, hashes.len - i);
                 @memcpy(buf[0..take], hashes[i..][0..take]);
@@ -460,6 +464,9 @@ pub const Rooted = struct {
                 i += take;
             }
         }
+
+        // write the slot to commit the RuntimeMetadata stuff
+        runtime_metadata.populateSlot(slot);
 
         try self.commitTransaction(.from(logger));
         logger.info().logf("populated from snapshot: {} accounts", .{self.table.count()});

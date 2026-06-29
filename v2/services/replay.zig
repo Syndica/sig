@@ -104,8 +104,8 @@ pub const std_options = start.options;
 
 pub const ReadOnly = struct {};
 pub const ReadWrite = struct {
-    deshredded_in: *lib.shred.DeshredRing,
     snapshot_metadata_in: *lib.accounts_db.RuntimeMetadata,
+    deshredded_in: *lib.shred.DeshredRing,
     replay_transaction_pool: *lib.replay.TransactionPool,
     block_pool: *lib.replay.BlockPool,
     exec_req_response: *lib.replay.ExecReqResponse,
@@ -140,24 +140,28 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
     var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
 
-    {
-        var start_block: usize = 0;
+    { // wait for snapshot metadata from accounts_db
         var blockhashes_in = rw.snapshot_metadata_in.blockhash_queue.hashes.getView(.reader);
-        blk: while (true) {
-            const hashes = while (true) : (std.atomic.spinLoopHint()) {
-                const buf = blockhashes_in.getBuffer() orelse continue;
-                if (buf.len > 0) break buf;
-                break :blk; // blockhashes_out closed their end
-            };
+        defer blockhashes_in.close();
+
+        var start_block: usize = 0;
+        while (true) {
+            const hashes = try blockhashes_in.getBufferBlocking(runner);
+            if (hashes.len == 0) break; // blockhashes_out closed their end
+
             for (hashes) |*hash| {
                 blockhash_states[start_block] = hash.*;
                 start_block += 1;
             }
+            blockhashes_in.advance(hashes.len);
         }
-
     }
 
+    // TODO: get this from snapshot metadata 
     var first_slot: ?Slot = null; // this is a hack, remove it!
+
+    // After the slot is supposedly populated, start shred recv (eventually Repair service) on it.
+
 
     task: switch (@as(enum { exec_response, fec_set, idle }, .idle)) {
         .idle => {

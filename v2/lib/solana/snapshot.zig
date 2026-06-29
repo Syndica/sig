@@ -779,9 +779,9 @@ pub fn TarZstIter(comptime BufReader: type) type {
 
         fn read(self: *Self, maybe_buf: ?[*]u8, len: usize) usize {
             var n: usize = 0;
-            while (n < len) : (std.atomic.spinLoopHint()) {
-                const buf: []const u8 = self.buf_reader.getBuffer() orelse continue;
-                if (buf.len == 0) break;
+            while (n < len) {
+                const buf: []const u8 = self.buf_reader.getBuffer();
+                if (buf.len == 0) break; // EOF
 
                 const take = @min(buf.len, len - n);
                 if (maybe_buf) |b| @memcpy(b[n..][0..take], buf[0..take]);

@@ -1,7 +1,7 @@
 //! Streams raw shreds from an Agave ledger to a UDP target.
 
 const std = @import("std");
-const Ring = @import("ipc-ring").Ring;
+const Ring = @import("lib").ipc.Ring;
 const rocks = @import("rocksdb");
 const rocks_c = @import("rocksdb-c");
 
