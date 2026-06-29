@@ -19,32 +19,42 @@ pub fn build(b: *Build) !void {
 
     // -- CLI Commands (Top Level Steps) ----
 
-    // install -- configured when configuring other steps
+    // install (default step)
     const install_step = b.getInstallStep();
+    install_step.dependOn(sig.exe.installStep());
+    install_step.dependOn(tools.shred_stream.installStep());
+    install_step.dependOn(tools.lint.installStep());
+    for (unit_tests.tests.items) |exe| install_step.dependOn(exe.installStep());
+    for (tools.black_box_tests) |exe| install_step.dependOn(exe.installStep());
 
     // run
     const run_step = b.step("run", "Run sig");
-    sig.exe.addToSteps(config.exe, install_step, run_step);
+    sig.exe.addToStep(run_step);
 
     // sig
     const sig_step = b.step("sig", "Build only the sig binary, without running it.");
-    sig.exe.addToSteps(.{ .install = config.exe.install, .run = false }, install_step, sig_step);
+    sig_step.dependOn(sig.exe.installStep());
 
     // unit-test
     const unit_test_step = b.step("unit-test", "Run unit tests.");
-    unit_tests.addToSteps(config.exe, install_step, unit_test_step);
+    for (unit_tests.tests.items) |exe| unit_test_step.dependOn(exe.installStep());
+    if (unit_tests.kcov) |kcov| {
+        if (config.exe.run) unit_test_step.dependOn(kcov.save_results_step);
+    } else for (unit_tests.tests.items) |unit_test| {
+        if (unit_test.run) |run| unit_test_step.dependOn(&run.step);
+    }
 
     // bb-test
     const bb_test_step = b.step("bb-test", "Run black box tests.");
-    for (tools.black_box_tests) |bbt| bbt.addToSteps(config.exe, install_step, bb_test_step);
+    for (tools.black_box_tests) |bbt| bbt.addToStep(bb_test_step);
 
     // shred-stream
     const shred_stream_step = b.step("shred-stream", "Stream shreds from an Agave ledger");
-    tools.shred_stream.addToSteps(config.exe, install_step, shred_stream_step);
+    tools.shred_stream.addToStep(shred_stream_step);
 
     // lint
     const lint_step = b.step("lint", "Run lint checks");
-    tools.lint.addToSteps(config.exe, install_step, lint_step);
+    tools.lint.addToStep(lint_step);
 
     // test
     const test_step = b.step("test", "Run all tests.");
@@ -321,7 +331,7 @@ const Sig = struct {
             .start_service = start_service,
             .service_libs = service_libs,
             .sig_init = sig_init,
-            .exe = .init(b, .{
+            .exe = .init(b, config.exe, .{
                 .name = "sig-init",
                 .root_module = sig_init,
                 .use_llvm = config.use_llvm,
@@ -373,7 +383,7 @@ const Tools = struct {
                 },
             });
             unit_tests.add("shred-stream", module);
-            const shred_stream_exe: Executable = .init(b, .{
+            const shred_stream_exe: Executable = .init(b, config.exe, .{
                 .name = "shred-stream",
                 .root_module = module,
                 .use_llvm = config.use_llvm,
@@ -381,7 +391,7 @@ const Tools = struct {
             break :blk shred_stream_exe;
         };
 
-        const lint_exe: Executable = .init(b, .{
+        const lint_exe: Executable = .init(b, config.exe, .{
             .name = "sig-lint",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("lint/main.zig"),
@@ -448,7 +458,7 @@ const Tools = struct {
 
         var bbt_exes: [black_box_test_descriptions.len]Executable = undefined;
         for (black_box_test_descriptions, &bbt_exes) |description, *exe| {
-            exe.* = .init(b, .{
+            exe.* = .init(b, config.exe, .{
                 .name = b.fmt("bbt-{s}", .{description.name}),
                 .root_module = b.createModule(.{
                     .root_source_file = b.path(description.root_source_file),
@@ -486,6 +496,7 @@ const UnitTests = struct {
     use_llvm: bool,
     filters: []const []const u8,
     build: *Build,
+    exe_config: Executable.Options,
     kcov: ?struct {
         save_results_step: *Build.Step,
         merge_run: *Build.Step.Run,
@@ -497,7 +508,8 @@ const UnitTests = struct {
             .filters = config.filters,
             .build = b,
             .tests = .{},
-            .kcov = if (config.use_kcov and config.exe.run) kcov: {
+            .exe_config = config.exe,
+            .kcov = if (config.use_kcov) kcov: {
                 const merge_run = b.addSystemCommand(&.{ "kcov", "--merge" });
                 const cache_dir = merge_run.addOutputDirectoryArg("merged");
                 const save_results = b.addInstallDirectory(.{
@@ -523,11 +535,11 @@ const UnitTests = struct {
         });
         self.tests.append(self.build.allocator, .{
             .compile = unit_test,
-            .install = self.build.addInstallArtifact(unit_test, .{
+            .install = if (self.exe_config.install) self.build.addInstallArtifact(unit_test, .{
                 .dest_sub_path = name,
                 .dest_dir = test_install_dir,
-            }),
-            .run = self.build.addRunArtifact(unit_test),
+            }) else null,
+            .run = if (self.exe_config.run) self.build.addRunArtifact(unit_test) else null,
         }) catch @panic("oom");
         if (self.kcov) |kcov| {
             const kcov_run = self.build.addSystemCommand(&.{
@@ -539,67 +551,52 @@ const UnitTests = struct {
             const output_dir = kcov_run.addOutputDirectoryArg("output");
             kcov_run.addArtifactArg(unit_test);
             kcov_run.has_side_effects = true;
-
             kcov.merge_run.step.dependOn(&kcov_run.step);
             kcov.merge_run.addDirectoryArg(output_dir);
-        }
-    }
-
-    pub fn addToSteps(
-        self: *const UnitTests,
-        config: Executable.Options,
-        main_install_step: *Build.Step,
-        unit_test_step: *Build.Step,
-    ) void {
-        if (self.kcov) |kcov| {
-            if (config.run) unit_test_step.dependOn(kcov.save_results_step);
-            for (self.tests.items) |unit_test| unit_test.addToSteps(
-                .{ .install = config.install, .run = false },
-                main_install_step,
-                unit_test_step,
-            );
-        } else for (self.tests.items) |unit_test| {
-            unit_test.addToSteps(config, main_install_step, unit_test_step);
         }
     }
 };
 
 /// All executables can be compiled, installed, and run. It keeps things simple
 /// to construct all the steps together and let callers decide when to use them.
+///
+/// Install and run are optional because we don't want to create them
+/// unconditionally. Doing so forces the associated compile step to enter
+/// codegen, even if those steps are not actually depended on by any other step.
 const Executable = struct {
     compile: *Build.Step.Compile,
-    install: *Build.Step.InstallArtifact,
-    run: *Build.Step.Run,
+    install: ?*Build.Step.InstallArtifact,
+    run: ?*Build.Step.Run,
+
+    const Options = struct { install: bool, run: bool };
 
     pub fn init(
         b: *Build,
+        options: Options,
         exe_options: Build.ExecutableOptions,
         install_options: Build.Step.InstallArtifact.Options,
     ) Executable {
         const exe = b.addExecutable(exe_options);
-        const run = b.addRunArtifact(exe);
-        run.addArgs(b.args orelse &.{});
         return .{
             .compile = exe,
-            .install = b.addInstallArtifact(exe, install_options),
-            .run = run,
+            .install = if (options.install) b.addInstallArtifact(exe, install_options) else null,
+            .run = if (options.run) blk: {
+                const run = b.addRunArtifact(exe);
+                run.addArgs(b.args orelse &.{});
+                break :blk run;
+            } else null,
         };
     }
 
-    const Options = struct { install: bool, run: bool };
+    pub fn addToStep(self: *const Executable, step: *Build.Step) void {
+        step.dependOn(&self.compile.step);
+        if (self.run) |run| step.dependOn(&run.step);
+        if (self.install) |install| step.dependOn(&install.step);
+    }
 
-    pub fn addToSteps(
-        self: *const Executable,
-        config: Options,
-        main_install_step: *Build.Step,
-        my_step: *Build.Step,
-    ) void {
-        my_step.dependOn(&self.compile.step);
-        main_install_step.dependOn(&self.compile.step);
-        if (config.run) my_step.dependOn(&self.run.step);
-        if (config.install) {
-            my_step.dependOn(&self.install.step);
-            main_install_step.dependOn(&self.install.step);
-        }
+    /// The step to depend on when you want this executable installed (or only
+    /// compiled, when using -Dno-bin), but not executed under any circumstances.
+    pub fn installStep(self: *const Executable) *Build.Step {
+        return if (self.install) |install| &install.step else &self.compile.step;
     }
 };
