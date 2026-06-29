@@ -55,10 +55,12 @@ pub fn execute(
         return InstructionError.InvalidAccountOwner;
     }
 
-    const target_version: VoteVersion = if (tc.feature_set.active(.vote_state_v4, tc.slot))
-        .v4
-    else
-        .v3;
+    // The version that all newly-created / deinitialized vote state is materialized as.
+    // Hardcoded to V4 (Agave v4.1: `let target_version = VoteStateTargetVersion::V4;`). A
+    // future version's feature gate would be selected here; the exhaustive `switch
+    // (target_version)` at each construction site then forces every variant to be handled.
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1/programs/vote/src/vote_processor.rs
+    const target_version: VoteVersion = .v4;
 
     const instruction = try ic.ixn_info.deserializeInstruction(
         allocator,
@@ -83,6 +85,7 @@ pub fn execute(
             &vote_account,
             args.new_authority,
             args.vote_authorize,
+            target_version,
         ),
         .authorize_with_seed => |args| try executeAuthorizeWithSeed(
             allocator,
@@ -92,6 +95,7 @@ pub fn execute(
             args.authorization_type,
             args.current_authority_derived_key_owner,
             args.current_authority_derived_key_seed,
+            target_version,
         ),
         .authorize_checked_with_seed => |args| try executeAuthorizeCheckedWithSeed(
             allocator,
@@ -100,83 +104,97 @@ pub fn execute(
             args.authorization_type,
             args.current_authority_derived_key_owner,
             args.current_authority_derived_key_seed,
+            target_version,
         ),
         .authorize_checked => |args| try executeAuthorizeChecked(
             allocator,
             ic,
             &vote_account,
             args,
+            target_version,
         ),
         .update_validator_identity => try executeUpdateValidatorIdentity(
             allocator,
             ic,
             &vote_account,
+            target_version,
         ),
         .update_commission => |args| try executeUpdateCommission(
             allocator,
             ic,
             &vote_account,
             args,
+            target_version,
         ),
         .withdraw => |args| try executeWithdraw(
             allocator,
             ic,
             &vote_account,
             args,
+            target_version,
         ),
         .vote => |args| try executeProcessVoteWithAccount(
             allocator,
             ic,
             &vote_account,
             args.vote,
+            target_version,
         ),
         .vote_switch => |args| try executeProcessVoteWithAccount(
             allocator,
             ic,
             &vote_account,
             args.vote,
+            target_version,
         ),
         .update_vote_state => |args| return try executeUpdateVoteState(
             allocator,
             ic,
             &vote_account,
             args.vote_state_update,
+            target_version,
         ),
         .update_vote_state_switch => |args| return try executeUpdateVoteState(
             allocator,
             ic,
             &vote_account,
             args.vote_state_update,
+            target_version,
         ),
         .compact_update_vote_state => |args| return try executeUpdateVoteState(
             allocator,
             ic,
             &vote_account,
             args.vote_state_update,
+            target_version,
         ),
         .compact_update_vote_state_switch => |args| return try executeUpdateVoteState(
             allocator,
             ic,
             &vote_account,
             args.vote_state_update,
+            target_version,
         ),
         .tower_sync => |args| return try executeTowerSync(
             allocator,
             ic,
             &vote_account,
             args.tower_sync,
+            target_version,
         ),
         .tower_sync_switch => |args| return try executeTowerSync(
             allocator,
             ic,
             &vote_account,
             args.tower_sync,
+            target_version,
         ),
         .initialize_account_v2 => |args| try executeIntializeAccountV2(
             allocator,
             ic,
             &vote_account,
             args,
+            target_version,
         ),
         .update_commission_collector => |kind| return try executeUpdateCommissionCollector(
             allocator,
@@ -284,14 +302,6 @@ fn intializeAccount(
             commission,
             clock.epoch,
             vote_account.pubkey,
-        ) },
-        .v3 => .{ .v3 = try VoteStateV3.init(
-            allocator,
-            node_pubkey,
-            authorized_voter,
-            authorized_withdrawer,
-            commission,
-            clock.epoch,
         ) },
     };
     defer vote_state.deinit(allocator);
@@ -416,6 +426,7 @@ fn executeIntializeAccountV2(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     vote_init: vote_instruction.VoteInitV2,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (!isInitAccountV2Enabled(ic)) {
         return InstructionError.InvalidInstructionData;
@@ -492,21 +503,23 @@ fn executeIntializeAccountV2(
         vote_init.authorized_voter,
     );
 
-    var vote_state: VoteState = .{ .v4 = .{
-        .node_pubkey = vote_init.node_pubkey,
-        .withdrawer = vote_init.authorized_withdrawer,
-        .inflation_rewards_collector = inflation_rewards_collector_key,
-        .block_revenue_collector = block_revenue_collector_key,
-        .inflation_rewards_commission_bps = vote_init.inflation_rewards_commission_bps,
-        .block_revenue_commission_bps = vote_init.block_revenue_commission_bps,
-        .pending_delegator_rewards = 0,
-        .bls_pubkey_compressed = vote_init.authorized_voter_bls_pubkey,
-        .votes = .empty,
-        .root_slot = null,
-        .authorized_voters = authorized_voters,
-        .epoch_credits = .empty,
-        .last_timestamp = .{ .slot = 0, .timestamp = 0 },
-    } };
+    var vote_state: VoteState = switch (target_version) {
+        .v4 => .{ .v4 = .{
+            .node_pubkey = vote_init.node_pubkey,
+            .withdrawer = vote_init.authorized_withdrawer,
+            .inflation_rewards_collector = inflation_rewards_collector_key,
+            .block_revenue_collector = block_revenue_collector_key,
+            .inflation_rewards_commission_bps = vote_init.inflation_rewards_commission_bps,
+            .block_revenue_commission_bps = vote_init.block_revenue_commission_bps,
+            .pending_delegator_rewards = 0,
+            .bls_pubkey_compressed = vote_init.authorized_voter_bls_pubkey,
+            .votes = .empty,
+            .root_slot = null,
+            .authorized_voters = authorized_voters,
+            .epoch_credits = .empty,
+            .last_timestamp = .{ .slot = 0, .timestamp = 0 },
+        } },
+    };
     defer vote_state.deinit(allocator);
 
     try setVoteState(
@@ -525,6 +538,7 @@ fn executeAuthorize(
     vote_account: *BorrowedAccount,
     pubkey: Pubkey,
     vote_authorize: VoteAuthorize,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     const clock = try ic.getSysvarWithAccountCheck(
         Clock,
@@ -541,6 +555,7 @@ fn executeAuthorize(
         vote_authorize,
         clock,
         signers,
+        target_version,
     );
 }
 
@@ -557,8 +572,9 @@ fn authorize(
     vote_authorize: VoteAuthorize,
     clock: Clock,
     signers: []const Pubkey,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var vote_state = try getVoteStateChecked(allocator, vote_account, targetVersion(ic.tc), false);
+    var vote_state = try getVoteStateChecked(allocator, vote_account, target_version);
     defer vote_state.deinit(allocator);
 
     // [SIMD-0387] When `bls_pubkey_management_in_vote_account` is active:
@@ -681,6 +697,7 @@ fn executeAuthorizeWithSeed(
     authorization_type: VoteAuthorize,
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.ixn_info.checkNumberOfAccounts(3);
 
@@ -696,6 +713,7 @@ fn executeAuthorizeWithSeed(
             vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.current_base_authority,
         ),
         @intFromEnum(vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.clock_sysvar),
+        target_version,
     );
 }
 
@@ -710,6 +728,7 @@ fn authorizeWithSeed(
     seed: []const u8,
     signer_index: u8,
     clock_index: u8,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     const clock = try ic.getSysvarWithAccountCheck(Clock, clock_index);
 
@@ -736,6 +755,7 @@ fn authorizeWithSeed(
         authorization_type,
         clock,
         expected_authority_keys,
+        target_version,
     );
 }
 
@@ -747,6 +767,7 @@ fn executeAuthorizeCheckedWithSeed(
     authorization_type: VoteAuthorize,
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.ixn_info.checkNumberOfAccounts(4);
 
@@ -770,6 +791,7 @@ fn executeAuthorizeCheckedWithSeed(
             vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.current_base_authority,
         ),
         @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.clock_sysvar),
+        target_version,
     );
 }
 
@@ -779,6 +801,7 @@ fn executeAuthorizeChecked(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     vote_authorize: vote_instruction.VoteAuthorize,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.ixn_info.checkNumberOfAccounts(4);
 
@@ -805,6 +828,7 @@ fn executeAuthorizeChecked(
         vote_authorize,
         clock,
         signers,
+        target_version,
     );
 }
 
@@ -813,6 +837,7 @@ fn executeUpdateValidatorIdentity(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.ixn_info.checkNumberOfAccounts(2);
 
@@ -826,6 +851,7 @@ fn executeUpdateValidatorIdentity(
         ic,
         vote_account,
         new_identity_meta.pubkey,
+        target_version,
     );
 }
 
@@ -837,8 +863,9 @@ fn updateValidatorIdentity(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     new_identity: Pubkey,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var vote_state = try getVoteStateChecked(allocator, vote_account, targetVersion(ic.tc), false);
+    var vote_state = try getVoteStateChecked(allocator, vote_account, target_version);
     defer vote_state.deinit(allocator);
 
     // Both the current authorized withdrawer and new identity must sign.
@@ -876,10 +903,10 @@ fn executeUpdateCommissionCollector(
     target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     // SIMD-0232: Custom Commission Collector Account
-    // Requires SIMD-0185: Vote State V4
+    // Requires SIMD-0185: Vote State V4 (always the target since Agave v4.1).
     const custom_collector_enabled =
         ic.tc.feature_set.active(.custom_commission_collector, ic.tc.slot);
-    if (!(custom_collector_enabled and target_version == .v4)) {
+    if (!custom_collector_enabled) {
         return InstructionError.InvalidInstructionData;
     }
 
@@ -917,12 +944,7 @@ fn updateCommissionCollector(
     rent: *const Rent,
     target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var vote_state = try getVoteStateChecked(
-        allocator,
-        vote_account,
-        target_version,
-        true,
-    );
+    var vote_state = try getVoteStateChecked(allocator, vote_account, target_version);
     defer vote_state.deinit(allocator);
 
     // Require authorized withdrawer to sign.
@@ -973,8 +995,7 @@ fn executeUpdateCommissionBps(
     const delay_commission_updates =
         ic.tc.feature_set.active(.delay_commission_updates, ic.tc.slot);
     if (!commission_rate_in_basis_points or
-        !delay_commission_updates or
-        target_version != .v4)
+        !delay_commission_updates)
     {
         return InstructionError.InvalidInstructionData;
     }
@@ -1009,12 +1030,7 @@ fn updateCommissionBps(
         return InstructionError.InvalidInstructionData;
     }
 
-    var vote_state = try getVoteStateChecked(
-        allocator,
-        vote_account,
-        target_version,
-        true,
-    );
+    var vote_state = try getVoteStateChecked(allocator, vote_account, target_version);
     defer vote_state.deinit(allocator);
 
     // No commission update rule, per SIMD-0249 and SIMD-0291.
@@ -1044,6 +1060,7 @@ fn executeUpdateCommission(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     commission: u8,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     try updateCommission(
         allocator,
@@ -1052,6 +1069,7 @@ fn executeUpdateCommission(
         commission,
         try ic.tc.sysvar_cache.get(EpochSchedule),
         try ic.tc.sysvar_cache.get(Clock),
+        target_version,
     );
 }
 
@@ -1065,6 +1083,7 @@ fn updateCommission(
     commission: u8,
     epoch_schedule: EpochSchedule,
     clock: Clock,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     const disable_commission_update_rule =
         ic.tc.feature_set.active(.delay_commission_updates, ic.tc.slot);
@@ -1072,8 +1091,7 @@ fn updateCommission(
     var vote_state = getVoteStateChecked(
         allocator,
         vote_account,
-        targetVersion(ic.tc),
-        false,
+        target_version,
     ) catch |err| {
         // Deserialization failed - enforce the commission update rule
         if (!disable_commission_update_rule and
@@ -1136,6 +1154,7 @@ fn executeWithdraw(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     lamports: u64,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.ixn_info.checkNumberOfAccounts(2);
     const rent = try ic.tc.sysvar_cache.get(Rent);
@@ -1151,6 +1170,7 @@ fn executeWithdraw(
         @intFromEnum(vote_instruction.Withdraw.AccountIndex.recipient_authority),
         rent,
         clock,
+        target_version,
     );
 }
 
@@ -1163,11 +1183,12 @@ fn widthraw(
     to_account_index: u16,
     rent: Rent,
     clock: Clock,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     var vote_account = try ic.borrowInstructionAccount(vote_account_index);
     defer vote_account.release();
 
-    var vote_state = try getVoteStateChecked(allocator, &vote_account, targetVersion(ic.tc), false);
+    var vote_state = try getVoteStateChecked(allocator, &vote_account, target_version);
     defer vote_state.deinit(allocator);
 
     if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawerKey().*)) {
@@ -1203,22 +1224,13 @@ fn widthraw(
         if (reject_active_vote_account_close) {
             ic.tc.custom_error = @intFromEnum(VoteError.active_vote_account_close);
             return InstructionError.Custom;
-        } else {
+        } else switch (target_version) {
+            // [agave] deinitialize_vote_account_state — `match target_version { V4 => ... }`.
             // [SIMD-0185] Withdraw: completely zero vote account data for fully withdrawn v4 accounts.
-            if (vote_state == .v4) {
+            .v4 => {
                 const data = try vote_account.mutableAccountData();
                 @memset(data, 0);
-            } else {
-                var deinitialized_state: VoteState = .{ .v3 = VoteStateV3.DEFAULT };
-
-                try setVoteState(
-                    allocator,
-                    &vote_account,
-                    &deinitialized_state,
-                    &ic.tc.rent,
-                    &ic.tc.accounts_resize_delta,
-                );
-            }
+            },
         }
     } else {
         const min_rent_exempt_balance = rent.minimumBalance(vote_account.constAccountData().len);
@@ -1247,6 +1259,7 @@ fn executeProcessVoteWithAccount(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     vote: Vote,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (ic.tc.feature_set.active(.deprecate_legacy_vote_ixs, ic.tc.slot) and
         ic.tc.feature_set.active(.enable_tower_sync_ix, ic.tc.slot))
@@ -1270,6 +1283,7 @@ fn executeProcessVoteWithAccount(
         vote,
         slot_hashes,
         clock,
+        target_version,
     );
 }
 
@@ -1281,8 +1295,9 @@ fn processVoteWithAccount(
     vote: Vote,
     slot_hashes: SlotHashes,
     clock: Clock,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var vote_state = try getVoteStateChecked(allocator, vote_account, targetVersion(ic.tc), true);
+    var vote_state = try getVoteStateChecked(allocator, vote_account, target_version);
     defer vote_state.deinit(allocator);
 
     const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
@@ -1338,6 +1353,7 @@ fn executeUpdateVoteState(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     vote_state_update: VoteStateUpdate,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     var vote_state_update_mut = vote_state_update;
     if (ic.tc.feature_set.active(.deprecate_legacy_vote_ixs, ic.tc.slot) and
@@ -1356,6 +1372,7 @@ fn executeUpdateVoteState(
         slot_hashes,
         clock,
         &vote_state_update_mut,
+        target_version,
     );
 }
 
@@ -1367,8 +1384,9 @@ fn voteStateUpdate(
     slot_hashes: SlotHashes,
     clock: Clock,
     vote_state_update: *VoteStateUpdate,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var vote_state = try getVoteStateChecked(allocator, vote_account, targetVersion(ic.tc), true);
+    var vote_state = try getVoteStateChecked(allocator, vote_account, target_version);
     defer vote_state.deinit(allocator);
 
     const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
@@ -1407,6 +1425,7 @@ fn executeTowerSync(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     tower_sync: TowerSync,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     var tower_sync_mut = tower_sync;
     if (!ic.tc.feature_set.active(.enable_tower_sync_ix, ic.tc.slot)) {
@@ -1423,6 +1442,7 @@ fn executeTowerSync(
         slot_hashes,
         clock,
         &tower_sync_mut,
+        target_version,
     );
 }
 
@@ -1434,8 +1454,9 @@ fn towerSync(
     slot_hashes: SlotHashes,
     clock: Clock,
     tower_sync: *TowerSync,
+    target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var vote_state = try getVoteStateChecked(allocator, vote_account, targetVersion(ic.tc), true);
+    var vote_state = try getVoteStateChecked(allocator, vote_account, target_version);
     defer vote_state.deinit(allocator);
 
     const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
@@ -1468,65 +1489,42 @@ fn towerSync(
     );
 }
 
-/// Deserialize and validate the vote state from an account.
-/// Matches `get_vote_state_handler_checked` in agave v3.1.8.
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/programs/vote/src/vote_state/mod.rs#L45-L77
+/// Deserialize and validate the vote state from an account, converting to the V4 target.
+/// [agave] Analogous to [get_vote_state_handler_checked](https://github.com/anza-xyz/agave/blob/v4.1/programs/vote/src/vote_state/mod.rs#L33)
 fn getVoteStateChecked(
     allocator: std.mem.Allocator,
     vote_account: *BorrowedAccount,
     target_version: VoteVersion,
-    check_initialized: bool,
 ) (error{OutOfMemory} || InstructionError)!VoteState {
-    // Peek the leading u32 variant tag before attempting a full bincode decode,
-    // mirroring agave's `VoteStateV3::deserialize_into_ptr` (V3 path) and
-    // `VoteStateVersions::deserialize` (V4 path). Both helpers shortcut on
-    // variant 0 (the unsupported V0_23_5 layout) with InvalidAccountData
-    // rather than letting bincode propagate a generic error on a short or
-    // zero-tagged buffer.
-    // [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v5.1.1/vote-interface/src/state/vote_state_v3.rs#L159
-    // [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v5.1.1/vote-interface/src/state/vote_state_versions.rs#L155
-    const data = vote_account.constAccountData();
-    if (data.len < @sizeOf(u32)) {
-        return InstructionError.InvalidAccountData;
-    }
-    const variant = std.mem.readInt(u32, data[0..@sizeOf(u32)], .little);
-    if (variant == 0) {
-        return switch (target_version) {
-            .v3, .v4 => InstructionError.InvalidAccountData,
-        };
-    }
-
-    var versioned_state = try vote_account.deserializeFromAccountData(
-        allocator,
-        VoteStateVersions,
-    );
-    errdefer versioned_state.deinit(allocator);
-
-    const target_v4 = target_version == .v4;
-
     switch (target_version) {
-        .v3 => {
-            // Existing flow before v4 feature gate activation:
-            // Deserialize as VoteStateVersions (converting during deserialization).
-            // Some callsites deserialize without checking initialization status.
-            if (check_initialized and versioned_state.isUninitialized()) {
-                return InstructionError.UninitializedAccount;
-            }
-        },
+        // The V4 target always rejects uninitialized accounts.
         .v4 => {
-            // New flow after v4 feature gate activation:
-            // Always checks uninitialized.
-            if (versioned_state.isUninitialized()) {
-                return InstructionError.UninitializedAccount;
+            // Peek the leading u32 variant tag before attempting a full bincode decode,
+            // mirroring agave's `VoteStateVersions::deserialize`, which shortcuts on
+            // variant 0 (the unsupported V0_23_5 layout) with InvalidAccountData
+            // rather than letting bincode propagate a generic error on a short or
+            // zero-tagged buffer. This guard is target-independent.
+            // [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v5.1.1/vote-interface/src/state/vote_state_versions.rs#L155
+            {
+                const data = vote_account.constAccountData();
+                if (data.len < @sizeOf(u32)) return InstructionError.InvalidAccountData;
+                const variant = std.mem.readInt(u32, data[0..@sizeOf(u32)], .little);
+                if (variant == 0) return InstructionError.InvalidAccountData;
             }
+
+            var versioned_state = try vote_account.deserializeFromAccountData(
+                allocator,
+                VoteStateVersions,
+            );
+            errdefer versioned_state.deinit(allocator);
+
+            if (versioned_state.isUninitialized()) return InstructionError.UninitializedAccount;
+            return .{ .v4 = try versioned_state.convertToV4(
+                allocator,
+                vote_account.pubkey,
+            ) };
         },
     }
-
-    return versioned_state.convertToVoteState(allocator, vote_account.pubkey, target_v4);
-}
-
-fn targetVersion(tc: *const sig.runtime.TransactionContext) VoteVersion {
-    return if (tc.feature_set.active(.vote_state_v4, tc.slot)) .v4 else .v3;
 }
 
 fn validateIsSigner(
@@ -1590,7 +1588,6 @@ fn setVoteState(
         .v4 => |v4_state| {
             // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.4/programs/vote/src/vote_state/handler.rs#L655-L673
             // [SIMD-0185] v4: check rent exempt first, then resize, then serialize v4.
-            // Unlike v3, do not gracefully fall back to storing v1_14_11.
             if (account.constAccountData().len < VoteStateV4.MAX_VOTE_STATE_SIZE) {
                 if (!rent.isExempt(account.account.lamports, VoteStateV4.MAX_VOTE_STATE_SIZE)) {
                     return InstructionError.AccountNotRentExempt;
@@ -1608,45 +1605,6 @@ fn setVoteState(
                 };
             }
             return account.serializeIntoAccountData(VoteStateVersions{ .v4 = v4_state });
-        },
-        .v3 => |v3_state| {
-            const resize_needed = account.constAccountData().len < VoteStateV3.MAX_VOTE_STATE_SIZE;
-            const resize_failed = resize_needed and blk: {
-                if (!rent.isExempt(account.account.lamports, VoteStateV3.MAX_VOTE_STATE_SIZE)) {
-                    break :blk true;
-                }
-                account.setDataLength(
-                    allocator,
-                    resize_delta,
-                    VoteStateV3.MAX_VOTE_STATE_SIZE,
-                ) catch |err| switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    else => break :blk true, // InstructionError
-                };
-                break :blk false;
-            };
-
-            if (resize_failed) {
-                const landed_votes = v3_state.votes.items;
-                const votes = try allocator.alloc(Lockout, landed_votes.len);
-                defer allocator.free(votes);
-
-                for (votes, landed_votes) |*vote, landed| vote.* = landed.lockout;
-
-                return account.serializeIntoAccountData(VoteStateVersions{ .v1_14_11 = .{
-                    .node_pubkey = v3_state.node_pubkey,
-                    .withdrawer = v3_state.withdrawer,
-                    .commission = v3_state.commission,
-                    .votes = .fromOwnedSlice(votes),
-                    .root_slot = v3_state.root_slot,
-                    .voters = v3_state.voters,
-                    .prior_voters = v3_state.prior_voters,
-                    .epoch_credits = v3_state.epoch_credits,
-                    .last_timestamp = v3_state.last_timestamp,
-                } });
-            }
-
-            return account.serializeIntoAccountData(VoteStateVersions{ .v3 = v3_state });
         },
     }
 }
@@ -7226,69 +7184,13 @@ test "update_commission_collector not writable" {
     );
 }
 
-// Regression: authorize against a vote account whose data is shorter than a
-// valid VoteStateVersions encoding and whose leading u32 variant tag is 0
-// (the discontinued V0_23_5 / Uninitialized slot per SIMD-0185).
-//
-// Both target versions must shortcut on the tag rather than letting bincode
-// surface a generic InvalidAccountData from the truncated body, matching
-// solana-vote-interface 5.0.0:
-//   - V3 path -> InvalidAccountData
-//     [agave] https://github.com/anza-xyz/solana-sdk/blob/ddbf3430b08eb375de695328ae298dd61c2e1471/vote-interface/src/state/vote_state_v3.rs#L159
-//   - V4 path -> UninitializedAccount
-//     [agave] https://github.com/anza-xyz/solana-sdk/blob/ddbf3430b08eb375de695328ae298dd61c2e1471/vote-interface/src/state/vote_state_versions.rs#L155
-test "vote_program: authorize zero-tag short data returns InvalidAccountData (v3 target)" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
-
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-
-    const clock: Clock = .INIT;
-
-    const vote_account = Pubkey.initRandom(prng.random());
-    const authority = Pubkey.initRandom(prng.random());
-    const new_authority = Pubkey.initRandom(prng.random());
-
-    // 40 bytes of zeros: leading u32 tag is 0 and body is too short to
-    // bincode-decode as any VoteStateVersions variant.
-    var short_zero_data = [_]u8{0} ** 40;
-
-    try testing.expectProgramExecuteError(
-        InstructionError.InvalidAccountData,
-        std.testing.allocator,
-        vote_program.ID,
-        VoteProgramInstruction{
-            .authorize = .{
-                .new_authority = new_authority,
-                .vote_authorize = VoteAuthorize.voter,
-            },
-        },
-        &.{
-            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
-            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
-        },
-        .{
-            .accounts = &.{
-                .{
-                    .pubkey = vote_account,
-                    .lamports = 27074400,
-                    .owner = vote_program.ID,
-                    .data = short_zero_data[0..],
-                },
-                .{ .pubkey = Clock.ID },
-                .{ .pubkey = authority },
-                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
-            },
-            .compute_meter = vote_program.COMPUTE_UNITS,
-            .sysvar_cache = .{ .clock = clock },
-            .feature_set = &.{}, // vote_state_v4 NOT active -> V3 target
-        },
-        .{},
-    );
-}
-
-test "vote_program: authorize zero-tag short data returns InvalidAccountData (v4 target)" {
+// Regression: authorize against a vote account whose data has a leading u32
+// variant tag of 0 (the discontinued V0_23_5 / Uninitialized slot per
+// SIMD-0185). getVoteStateChecked must shortcut on the tag with
+// InvalidAccountData rather than letting bincode surface a generic error from
+// the truncated body.
+// [agave] https://github.com/anza-xyz/solana-sdk/blob/ddbf3430b08eb375de695328ae298dd61c2e1471/vote-interface/src/state/vote_state_versions.rs#L155
+test "vote_program: authorize zero-tag short data returns InvalidAccountData" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
@@ -8390,71 +8292,6 @@ test "update_commission_bps feature delay_commission_updates disabled" {
             // delay_commission_updates NOT active
             .feature_set = &.{
                 .{ .feature = .vote_state_v4, .slot = 0 },
-                .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
-            },
-        },
-        .{},
-    );
-}
-
-// vote_state_v4 inactive => target_version is V3 => InvalidInstructionData.
-test "update_commission_bps v3 target rejected" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
-
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-
-    const clock: Clock = .INIT;
-
-    const node_pubkey = Pubkey.initRandom(prng.random());
-    const authorized_voter = Pubkey.initRandom(prng.random());
-    const withdrawer = Pubkey.initRandom(prng.random());
-    const vote_acct = Pubkey.initRandom(prng.random());
-
-    var initial_v3 = VoteStateVersions{ .v3 = try VoteStateV3.init(
-        allocator,
-        node_pubkey,
-        authorized_voter,
-        withdrawer,
-        10,
-        clock.epoch,
-    ) };
-    defer initial_v3.deinit(allocator);
-
-    var init_bytes = ([_]u8{0} ** 3762);
-    _ = try sig.bincode.writeToSlice(init_bytes[0..], initial_v3, .{});
-
-    try testing.expectProgramExecuteError(
-        InstructionError.InvalidInstructionData,
-        allocator,
-        vote_program.ID,
-        VoteProgramInstruction{
-            .update_commission_bps = .{
-                .commission_bps = 2500,
-                .kind = .inflation_rewards,
-            },
-        },
-        &.{
-            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
-        },
-        .{
-            .accounts = &.{
-                .{
-                    .pubkey = vote_acct,
-                    .lamports = 27074400,
-                    .owner = vote_program.ID,
-                    .data = init_bytes[0..],
-                },
-                .{ .pubkey = withdrawer },
-                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
-            },
-            .compute_meter = vote_program.COMPUTE_UNITS,
-            .sysvar_cache = .{ .clock = clock },
-            // vote_state_v4 NOT active => V3 target
-            .feature_set = &.{
-                .{ .feature = .delay_commission_updates, .slot = 0 },
                 .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
             },
         },

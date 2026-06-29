@@ -1602,7 +1602,7 @@
         .name = "vote_state_v4",
         .pubkey = "Gx4XFcrVMt4HUvPzTpTSVkdDVgcDSjKhDN1RqRS6KDuZ",
         .description = "SIMD-0185: Vote State v4",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "alt_bn128_little_endian",
