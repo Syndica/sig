@@ -112,6 +112,11 @@ const Effects = struct {
     /// Set when any callback's allocator failed.
     allocator_failed: bool = false,
 
+    /// Set by `reportChainConflict` when the Receiver detects a cross-FEC
+    /// `chained_merkle_root` mismatch. Fuzz inputs are single-slot, so a
+    /// single flag captures the whole-block rejection signal.
+    chain_conflict: bool = false,
+
     /// Per-FEC-set scratch before slot-wide sort + chain validation.
     const FECSetParseResult = struct {
         merkle_root: Hash,
@@ -142,6 +147,7 @@ const Effects = struct {
         self.fec_set_results.clearRetainingCapacity();
         self.shred_parse_results.clearRetainingCapacity();
         self.allocator_failed = false;
+        self.chain_conflict = false;
     }
 
     // ----- Receiver(Effects) interface contract -----
@@ -189,6 +195,13 @@ const Effects = struct {
     pub fn reportReceiverPacketResult(self: *Effects, result: PacketResult) void {
         // Not part of `ShredParseEffects`; ignore.
         _ = .{ self, result };
+    }
+
+    pub fn reportChainConflict(self: *Effects, slot: Slot) void {
+        // The fuzzer runs one slot per input, so a single boolean suffices;
+        // any conflict means the whole block is rejected.
+        _ = slot;
+        self.chain_conflict = true;
     }
 
     /// Hand the Receiver a writable slot in the deshred ring. The harness
@@ -370,6 +383,11 @@ fn buildProtoEffects(
     );
     out.shred_results.appendSliceAssumeCapacity(effects.shred_parse_results.items);
 
+    // Receiver's per-shred chain check rejects the whole block. Cleared FEC
+    // sets are still emitted so the diff vs agave stays comparable; the block
+    // verdict overrides the tick-window result below.
+    if (effects.chain_conflict) out.block_parse_result = .REJECTED_INVALID_HEADER;
+
     // Step 5: sort by (slot, fec_set_index) and chain-validate.
     std.sort.heap(
         Effects.FECSetParseResult,
@@ -378,7 +396,9 @@ fn buildProtoEffects(
         fecOrder,
     );
 
-    // Cross-FEC chained_merkle_root check (not enforced by the Receiver).
+    // Cross-FEC chained_merkle_root check on completed sets. Redundant with
+    // the Receiver's per-shred check (see `lookupFecSetRoots`) but kept as a
+    // belt-and-braces invariant assertion on the emitted output.
     var i: usize = 0;
     while (i < effects.fec_set_results.items.len) {
         // Contiguous run of FEC sets for one slot.
