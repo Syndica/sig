@@ -44,6 +44,21 @@ const HASHES_PER_TICK: u64 = 62_500; // mainnet constant
 const IN_PROGRESS_CAPACITY: u32 = 64;
 const DONE_CAPACITY: u32 = 256;
 
+/// Upper bound on shred.slot accepted by the parse pipeline:
+/// `root + max(500, 2 * slots_in_epoch(epoch(root)))` against the default
+/// (warmup=true) epoch schedule. Shreds past this bound are "too far in the
+/// future" and must be discarded before they reach FEC assembly; the agave
+/// reference harness derives the same bound via `ShredFilterContext` against
+/// a bank built with `EpochSchedule::default()`
+/// (agave/ledger/src/shred/filter.rs).
+const MAX_SHRED_DISTANCE_MINIMUM: Slot = 500;
+fn maxShredSlot(root: Slot) Slot {
+    const schedule = sig_v2.solana.EpochSchedule.INIT;
+    const slots_in_epoch = schedule.getSlotsInEpoch(schedule.getEpoch(root));
+    const distance = @max(MAX_SHRED_DISTANCE_MINIMUM, 2 *| slots_in_epoch);
+    return root +| distance;
+}
+
 // ---------------------------------------------------------------------------
 // Entrypoint
 // ---------------------------------------------------------------------------
@@ -302,7 +317,7 @@ fn executeShredParse(
     st.receiver.reset();
     st.effects.reset();
 
-    st.receiver.updateSlotRange(ctx.root_slot, std.math.maxInt(Slot));
+    st.receiver.updateSlotRange(ctx.root_slot, maxShredSlot(ctx.root_slot));
     st.leader_schedule.base_slot = ctx.root_slot;
 
     // Map proto bool flags into the Receiver's per-feature activation slot:
