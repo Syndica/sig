@@ -77,7 +77,7 @@ pub const FeeRateGovernor = struct {
         .target_signatures_per_slot = 20_000,
         .min_lamports_per_signature = 0,
         .max_lamports_per_signature = 0,
-        .burn_percent = 50,
+        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     pub fn initDerived(
@@ -739,9 +739,9 @@ test "FeeRateGovernor.initDerived conforms with agave" {
     actual = FeeRateGovernor.initDerived(&input, latest_signatures_per_slot);
     try std.testing.expectEqual(expected, actual);
 
-    input = FeeRateGovernor{ .lamports_per_signature = 1, .target_lamports_per_signature = 4101716458, .target_signatures_per_slot = 1, .min_lamports_per_signature = 337881100, .max_lamports_per_signature = 2486922996, .burn_percent = 50 };
+    input = FeeRateGovernor{ .lamports_per_signature = 1, .target_lamports_per_signature = 4101716458, .target_signatures_per_slot = 1, .min_lamports_per_signature = 337881100, .max_lamports_per_signature = 2486922996, .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT };
     latest_signatures_per_slot = 3700185208;
-    expected = FeeRateGovernor{ .lamports_per_signature = 2050858229, .target_lamports_per_signature = 4101716458, .target_signatures_per_slot = 1, .min_lamports_per_signature = 2050858229, .max_lamports_per_signature = 41017164580, .burn_percent = 50 };
+    expected = FeeRateGovernor{ .lamports_per_signature = 2050858229, .target_lamports_per_signature = 4101716458, .target_signatures_per_slot = 1, .min_lamports_per_signature = 2050858229, .max_lamports_per_signature = 41017164580, .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT };
     actual = FeeRateGovernor.initDerived(&input, latest_signatures_per_slot);
     try std.testing.expectEqual(expected, actual);
 

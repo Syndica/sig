@@ -120,6 +120,8 @@ pub const SvmGateway = struct {
             &sysvar_cache,
         );
 
+        const blockhash_queue_guard = params.blockhash_queue.read();
+
         return .{
             .params = params,
             .state = .{
@@ -130,6 +132,7 @@ pub const SvmGateway = struct {
                 .status_checker_adapter = .{
                     .ancestors = params.ancestors,
                     .status_cache = params.status_cache,
+                    .blockhash_queue = blockhash_queue_guard.get(),
                 },
                 .epoch_stake_reader_adapter = .{ .epoch_stakes = params.epoch_stakes },
 
@@ -137,7 +140,7 @@ pub const SvmGateway = struct {
                 // which comes *after* executing all transactions, not
                 // concurrently (with this struct's existence).
                 // TODO: why does tryRead sometimes fail here - this seems weird?
-                .blockhash_queue = params.blockhash_queue.read(),
+                .blockhash_queue = blockhash_queue_guard,
             },
         };
     }
@@ -168,7 +171,6 @@ pub const SvmGateway = struct {
             .status_checker = self.state.status_checker_adapter.statusChecker(),
             .sysvar_cache = &self.state.sysvar_cache,
             .rent_collector = self.params.rent_collector,
-            .blockhash_queue = self.state.blockhash_queue.get(),
             .epoch_stake_reader = self.state.epoch_stake_reader_adapter.epochStakeReader(),
             .vm_environment = &self.state.vm_environment,
             .next_vm_environment = if (self.state.next_vm_environment) |env| &env else null,

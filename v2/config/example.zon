@@ -11,7 +11,7 @@
         .recv_port = 8002,
     },
     .telemetry = .{
-        .port = 12345,
+        .port = 9110,
         .log_level = .info,
     },
     .snapshot = .{
