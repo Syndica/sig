@@ -273,7 +273,10 @@ fn intializeAccount(
     clock: Clock,
     target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (vote_account.constAccountData().len != VoteStateV3.MAX_VOTE_STATE_SIZE) {
+    // check_vote_account_length: the V4 target requires the V4 account size.
+    // (VoteStateV3 and VoteStateV4 happen to share the same MAX_VOTE_STATE_SIZE,
+    // so this is a clarity change, not a behavioral one; matches executeIntializeAccountV2.)
+    if (vote_account.constAccountData().len != VoteStateV4.MAX_VOTE_STATE_SIZE) {
         return InstructionError.InvalidAccountData;
     }
 
