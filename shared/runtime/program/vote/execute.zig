@@ -1793,13 +1793,14 @@ test "vote_program: executeIntializeAccount" {
 
     // Account data.
     const vote_account = Pubkey.initRandom(prng.random());
-    var final_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.init(
         allocator,
         node_publey,
         authorized_voter,
         authorized_withdrawer,
         commission,
         clock.epoch,
+        vote_account,
     ) };
     defer final_vote_state.deinit(allocator);
 
@@ -1897,20 +1898,21 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
     ) };
     defer initial_vote_state.deinit(allocator);
 
-    var final_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.init(
         allocator,
         node_pubkey,
         authorized_voter,
         new_authorized_withdrawer,
         commission,
         clock.epoch,
+        vote_account,
     ) };
     defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    var final_vote_state_bytes = initial_vote_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     try testing.expectProgramExecuteResult(
@@ -1997,28 +1999,24 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
     ) };
     defer initial_vote_state.deinit(allocator);
 
-    var final_vote_state = try VoteStateV3.init(
+    var final_vote_state = try VoteStateV4.init(
         allocator,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         commission,
         clock.epoch,
+        vote_account,
     );
-    try final_vote_state.voters.insert(allocator, 1, new_authorized_voter);
-    final_vote_state.prior_voters.append(.{
-        .key = authorized_voter,
-        .start = 0,
-        .end = 1,
-    });
+    try final_vote_state.authorized_voters.insert(allocator, 1, new_authorized_voter);
 
-    var final_current_vote_state: VoteStateVersions = .{ .v3 = final_vote_state };
+    var final_current_vote_state: VoteStateVersions = .{ .v4 = final_vote_state };
     defer final_current_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    var final_vote_state_bytes = initial_vote_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_current_vote_state, .{});
 
     try testing.expectProgramExecuteResult(
@@ -2114,20 +2112,21 @@ test "vote_program: authorizeWithSeed withdrawer" {
     ) };
     defer initial_vote_state.deinit(allocator);
 
-    var final_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.init(
         allocator,
         node_pubkey,
         authorized_voter,
         new_authorized_withdrawer,
         commission,
         clock.epoch,
+        vote_account,
     ) };
     defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    var final_vote_state_bytes = initial_vote_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     try testing.expectProgramExecuteResult(
@@ -2224,20 +2223,21 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
     ) };
     defer initial_vote_state.deinit(allocator);
 
-    var final_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.init(
         allocator,
         node_pubkey,
         authorized_voter,
         new_authorized_withdrawer,
         commission,
         clock.epoch,
+        vote_account,
     ) };
     defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    var final_vote_state_bytes = initial_vote_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     try testing.expectProgramExecuteResult(
@@ -2327,20 +2327,21 @@ test "vote_program: authorizeChecked withdrawer" {
     ) };
     defer initial_vote_state.deinit(allocator);
 
-    var final_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.init(
         allocator,
         node_pubkey,
         authorized_voter,
         new_authorized_withdrawer,
         commission,
         clock.epoch,
+        vote_account,
     ) };
     defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    var final_vote_state_bytes = initial_vote_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     try testing.expectProgramExecuteResult(
@@ -2425,20 +2426,21 @@ test "vote_program: update_validator_identity" {
     ) };
     defer initial_vote_state.deinit(allocator);
 
-    var final_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.init(
         allocator,
         new_node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         commission,
         clock.epoch,
+        vote_account,
     ) };
     defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    var final_vote_state_bytes = initial_vote_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     try testing.expectProgramExecuteResult(
@@ -2515,20 +2517,21 @@ test "vote_program: update_validator_identity new authority did not sign" {
     ) };
     defer initial_vote_state.deinit(allocator);
 
-    var final_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.init(
         allocator,
         new_node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         commission,
         clock.epoch,
+        vote_account,
     ) };
     defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    var final_vote_state_bytes = initial_vote_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     const result = testing.expectProgramExecuteResult(
@@ -2608,20 +2611,21 @@ test "vote_program: update_validator_identity current authority did not sign" {
     ) };
     defer initial_vote_state.deinit(allocator);
 
-    var final_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.init(
         allocator,
         new_node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         commission,
         clock.epoch,
+        vote_account,
     ) };
     defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    var final_vote_state_bytes = initial_vote_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     const result = testing.expectProgramExecuteResult(
@@ -2709,20 +2713,21 @@ test "vote_program: update_commission increasing commission" {
     ) };
     defer initial_vote_state.deinit(allocator);
 
-    var final_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.init(
         allocator,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         final_commission,
         clock.epoch,
+        vote_account,
     ) };
     defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    var final_vote_state_bytes = initial_vote_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     try testing.expectProgramExecuteResult(
@@ -2811,20 +2816,21 @@ test "vote_program: update_commission decreasing commission" {
     ) };
     defer initial_vote_state.deinit(allocator);
 
-    var final_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.init(
         allocator,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         final_commission,
         clock.epoch,
+        vote_account,
     ) };
     defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    var final_vote_state_bytes = initial_vote_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     try testing.expectProgramExecuteResult(
@@ -2991,20 +2997,21 @@ test "vote_program: update_commission too late allowed with delay feature" {
     ) };
     defer initial_vote_state.deinit(allocator);
 
-    var final_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.init(
         allocator,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         final_commission,
         clock.epoch,
+        vote_account,
     ) };
     defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    var final_vote_state_bytes = initial_vote_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     try testing.expectProgramExecuteResult(
@@ -3098,20 +3105,21 @@ test "vote_program: update_commission error commission update too late failure" 
     ) };
     defer initial_vote_state.deinit(allocator);
 
-    var final_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.init(
         allocator,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         final_commission,
         clock.epoch,
+        vote_account,
     ) };
     defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    var final_vote_state_bytes = initial_vote_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     testing.expectProgramExecuteResult(
@@ -3204,20 +3212,21 @@ test "vote_program: update_commission missing signature" {
     ) };
     defer initial_vote_state.deinit(allocator);
 
-    var final_vote_state = VoteStateVersions{ .v3 = try VoteStateV3.init(
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.init(
         allocator,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         final_commission,
         clock.epoch,
+        vote_account,
     ) };
     defer final_vote_state.deinit(allocator);
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    var final_vote_state_bytes = initial_vote_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     testing.expectProgramExecuteResult(
@@ -3862,10 +3871,15 @@ test "vote_program: vote" {
     try final_state.votes.append(allocator, landed_vote);
     try final_state.doubleLockouts();
 
-    var final_vote_state = VoteStateVersions{ .v3 = final_state };
+    defer final_state.deinit(allocator);
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        final_state,
+        vote_account,
+    ) };
     defer final_vote_state.deinit(allocator);
 
-    var final_vote_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
+    var final_vote_state_bytes = initial_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     try testing.expectProgramExecuteResult(
@@ -3977,10 +3991,15 @@ test "vote_program: vote switch" {
     try final_state.votes.append(allocator, landed_vote);
     try final_state.doubleLockouts();
 
-    var final_vote_state = VoteStateVersions{ .v3 = final_state };
+    defer final_state.deinit(allocator);
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        final_state,
+        vote_account,
+    ) };
     defer final_vote_state.deinit(allocator);
 
-    var final_vote_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
+    var final_vote_state_bytes = initial_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     try testing.expectProgramExecuteResult(
@@ -4092,10 +4111,15 @@ test "vote_program: vote missing signature" {
     try final_state.votes.append(allocator, landed_vote);
     try final_state.doubleLockouts();
 
-    var final_vote_state = VoteStateVersions{ .v3 = final_state };
+    defer final_state.deinit(allocator);
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        final_state,
+        vote_account,
+    ) };
     defer final_vote_state.deinit(allocator);
 
-    var final_vote_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
+    var final_vote_state_bytes = initial_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     testing.expectProgramExecuteResult(
@@ -4211,10 +4235,15 @@ test "vote_program: empty vote" {
     try final_state.votes.append(allocator, landed_vote);
     try final_state.doubleLockouts();
 
-    var final_vote_state = VoteStateVersions{ .v3 = final_state };
+    defer final_state.deinit(allocator);
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        final_state,
+        vote_account,
+    ) };
     defer final_vote_state.deinit(allocator);
 
-    var final_vote_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
+    var final_vote_state_bytes = initial_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     testing.expectProgramExecuteResult(
@@ -4349,10 +4378,15 @@ test "vote_program: vote state update" {
         },
     );
 
-    var final_vote_state = VoteStateVersions{ .v3 = final_state_init };
+    defer final_state_init.deinit(allocator);
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        final_state_init,
+        vote_account,
+    ) };
     defer final_vote_state.deinit(allocator);
 
-    var final_vote_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
+    var final_vote_state_bytes = initial_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     const slot_hashes = SlotHashes.initWithEntries(
@@ -4489,10 +4523,15 @@ test "vote_program: vote state update switch" {
         },
     );
 
-    var final_vote_state = VoteStateVersions{ .v3 = final_state_init };
+    defer final_state_init.deinit(allocator);
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        final_state_init,
+        vote_account,
+    ) };
     defer final_vote_state.deinit(allocator);
 
-    var final_vote_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
+    var final_vote_state_bytes = initial_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     const slot_hashes = SlotHashes.initWithEntries(
@@ -4630,10 +4669,15 @@ test "vote_program: compact vote state update" {
         },
     );
 
-    var final_vote_state = VoteStateVersions{ .v3 = final_state_init };
+    defer final_state_init.deinit(allocator);
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        final_state_init,
+        vote_account,
+    ) };
     defer final_vote_state.deinit(allocator);
 
-    var final_vote_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
+    var final_vote_state_bytes = initial_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     const slot_hashes = SlotHashes.initWithEntries(
@@ -4770,10 +4814,15 @@ test "vote_program: compact vote state update switch" {
         },
     );
 
-    var final_vote_state = VoteStateVersions{ .v3 = final_state_init };
+    defer final_state_init.deinit(allocator);
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        final_state_init,
+        vote_account,
+    ) };
     defer final_vote_state.deinit(allocator);
 
-    var final_vote_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
+    var final_vote_state_bytes = initial_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     const slot_hashes = SlotHashes.initWithEntries(
@@ -4912,10 +4961,15 @@ test "vote_program: tower sync" {
         },
     );
 
-    var final_vote_state = VoteStateVersions{ .v3 = final_state_init };
+    defer final_state_init.deinit(allocator);
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        final_state_init,
+        vote_account,
+    ) };
     defer final_vote_state.deinit(allocator);
 
-    var final_vote_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
+    var final_vote_state_bytes = initial_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     const slot_hashes = SlotHashes.initWithEntries(
@@ -5059,10 +5113,15 @@ test "vote_program: tower sync switch" {
         },
     );
 
-    var final_vote_state = VoteStateVersions{ .v3 = final_state_init };
+    defer final_state_init.deinit(allocator);
+    var final_vote_state = VoteStateVersions{ .v4 = try VoteStateV4.fromVoteStateV3(
+        allocator,
+        final_state_init,
+        vote_account,
+    ) };
     defer final_vote_state.deinit(allocator);
 
-    var final_vote_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
+    var final_vote_state_bytes = initial_state_bytes;
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     const slot_hashes = SlotHashes.initWithEntries(
@@ -5206,7 +5265,7 @@ test "vote_program: executeIntializeAccount v4" {
             },
             .feature_set = &.{
                 .{
-                    .feature = .vote_state_v4,
+                    .feature = .vote_state_v4_hardcoded,
                     .slot = 0,
                 },
             },
@@ -5356,7 +5415,7 @@ test "vote_program: tower sync with v4 feature" {
                     .slot = 0,
                 },
                 .{
-                    .feature = .vote_state_v4,
+                    .feature = .vote_state_v4_hardcoded,
                     .slot = 0,
                 },
             },
@@ -5456,7 +5515,7 @@ test "vote_program: update_validator_identity with v4 feature" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .feature_set = &.{
                 .{
-                    .feature = .vote_state_v4,
+                    .feature = .vote_state_v4_hardcoded,
                     .slot = 0,
                 },
             },
@@ -5552,7 +5611,7 @@ test "vote_program: widthdraw all with v4 zeros account data" {
             },
             .feature_set = &.{
                 .{
-                    .feature = .vote_state_v4,
+                    .feature = .vote_state_v4_hardcoded,
                     .slot = 0,
                 },
             },
@@ -5669,7 +5728,7 @@ test "vote_program: widthdraw all with v4 preserves v1_14_11-sized account lengt
             },
             .feature_set = &.{
                 .{
-                    .feature = .vote_state_v4,
+                    .feature = .vote_state_v4_hardcoded,
                     .slot = 0,
                 },
             },
@@ -5775,7 +5834,7 @@ test "vote_program: widthdraw all with v4 pending rewards fails" {
             },
             .feature_set = &.{
                 .{
-                    .feature = .vote_state_v4,
+                    .feature = .vote_state_v4_hardcoded,
                     .slot = 0,
                 },
             },
@@ -5862,7 +5921,7 @@ test "vote_program: widthdraw with v4 pending rewards below minimum fails" {
             },
             .feature_set = &.{
                 .{
-                    .feature = .vote_state_v4,
+                    .feature = .vote_state_v4_hardcoded,
                     .slot = 0,
                 },
             },
@@ -5955,7 +6014,7 @@ test "vote_program: executeAuthorize withdrawer with v4 feature" {
             },
             .feature_set = &.{
                 .{
-                    .feature = .vote_state_v4,
+                    .feature = .vote_state_v4_hardcoded,
                     .slot = 0,
                 },
             },
@@ -6066,7 +6125,7 @@ test "vote_program: update_commission with v4 feature" {
             },
             .feature_set = &.{
                 .{
-                    .feature = .vote_state_v4,
+                    .feature = .vote_state_v4_hardcoded,
                     .slot = 0,
                 },
             },
@@ -6182,7 +6241,7 @@ test "vote_program: vote with v4 feature" {
             },
             .feature_set = &.{
                 .{
-                    .feature = .vote_state_v4,
+                    .feature = .vote_state_v4_hardcoded,
                     .slot = 0,
                 },
             },
@@ -6327,7 +6386,7 @@ test "update_commission_collector inflation_rewards" {
                 .clock = clock,
             },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{
                     .feature = .custom_commission_collector,
                     .slot = 0,
@@ -6477,7 +6536,7 @@ test "update_commission_collector block_revenue" {
                 .clock = clock,
             },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{
                     .feature = .custom_commission_collector,
                     .slot = 0,
@@ -6608,7 +6667,7 @@ test "update_commission_collector feature disabled" {
             },
             // vote_state_v4 active, custom_commission_collector NOT
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
             },
         },
         .{
@@ -6740,7 +6799,7 @@ test "update_commission_collector withdrawer not signer" {
                 .clock = clock,
             },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{
                     .feature = .custom_commission_collector,
                     .slot = 0,
@@ -6876,7 +6935,7 @@ test "update_commission_collector not system owned" {
                 .clock = clock,
             },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{
                     .feature = .custom_commission_collector,
                     .slot = 0,
@@ -7011,7 +7070,7 @@ test "update_commission_collector not rent exempt" {
                 .clock = clock,
             },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{
                     .feature = .custom_commission_collector,
                     .slot = 0,
@@ -7147,7 +7206,7 @@ test "update_commission_collector not writable" {
                 .clock = clock,
             },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{
                     .feature = .custom_commission_collector,
                     .slot = 0,
@@ -7236,7 +7295,7 @@ test "vote_program: authorize zero-tag short data returns InvalidAccountData" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
             },
         },
         .{},
@@ -7296,7 +7355,7 @@ test "vote_program: authorize sub-tag-length data returns InvalidAccountData" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
             },
         },
         .{},
@@ -7359,7 +7418,7 @@ test "vote_program: authorize uninitialized v3-tagged returns UninitializedAccou
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
             },
         },
         .{},
@@ -7436,7 +7495,7 @@ test "vote_program: authorize voter rejected when bls_pubkey set and SIMD-0387 a
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
             },
         },
@@ -7512,7 +7571,7 @@ test "vote_program: authorize voter_with_bls rejected when SIMD-0387 inactive" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
             },
         },
         .{},
@@ -7591,7 +7650,7 @@ test "vote_program: authorize voter_with_bls bad proof consumes CUs and returns 
                 vote_program.state.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
             },
         },
@@ -7761,7 +7820,7 @@ test "vote_program: initialize_account_v2 success (escape-hatch collectors)" {
                     vote_program.state.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS,
                 .sysvar_cache = .{ .rent = rent, .clock = clock },
                 .feature_set = &.{
-                    .{ .feature = .vote_state_v4, .slot = 0 },
+                    .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                     .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
                     .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
                     .{ .feature = .custom_commission_collector, .slot = 0 },
@@ -7843,7 +7902,7 @@ test "vote_program: initialize_account_v2 rejected when gate inactive" {
                 .sysvar_cache = .{ .rent = rent, .clock = clock },
                 // Only `vote_state_v4` active: SIMD-0387 + co-deps all inactive.
                 .feature_set = &.{
-                    .{ .feature = .vote_state_v4, .slot = 0 },
+                    .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 },
             },
             .{},
@@ -7906,7 +7965,7 @@ test "vote_program: initialize_account_v2 bad proof returns InvalidArgument" {
                 vote_program.state.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS,
             .sysvar_cache = .{ .rent = rent, .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
                 .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
                 .{ .feature = .custom_commission_collector, .slot = 0 },
@@ -7976,7 +8035,7 @@ test "vote_program: initialize_account_v2 rejects when too few accounts" {
                     vote_program.state.BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS,
                 .sysvar_cache = .{ .rent = rent, .clock = clock },
                 .feature_set = &.{
-                    .{ .feature = .vote_state_v4, .slot = 0 },
+                    .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                     .{ .feature = .bls_pubkey_management_in_vote_account, .slot = 0 },
                     .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
                     .{ .feature = .custom_commission_collector, .slot = 0 },
@@ -8071,7 +8130,7 @@ test "update_commission_bps inflation_rewards" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .delay_commission_updates, .slot = 0 },
                 .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
             },
@@ -8154,7 +8213,7 @@ test "update_commission_bps block_revenue rejected without block_revenue_sharing
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .delay_commission_updates, .slot = 0 },
                 .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
             },
@@ -8223,7 +8282,7 @@ test "update_commission_bps feature commission_rate_in_basis_points disabled" {
             .sysvar_cache = .{ .clock = clock },
             // commission_rate_in_basis_points NOT active
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .delay_commission_updates, .slot = 0 },
             },
         },
@@ -8291,7 +8350,7 @@ test "update_commission_bps feature delay_commission_updates disabled" {
             .sysvar_cache = .{ .clock = clock },
             // delay_commission_updates NOT active
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
             },
         },
@@ -8359,7 +8418,7 @@ test "update_commission_bps withdrawer not signer" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .delay_commission_updates, .slot = 0 },
                 .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
             },
@@ -8424,7 +8483,7 @@ test "update_commission_bps reserved deposit_delegator_rewards rejected" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{ .clock = clock },
             .feature_set = &.{
-                .{ .feature = .vote_state_v4, .slot = 0 },
+                .{ .feature = .vote_state_v4_hardcoded, .slot = 0 },
                 .{ .feature = .delay_commission_updates, .slot = 0 },
                 .{ .feature = .commission_rate_in_basis_points, .slot = 0 },
             },
