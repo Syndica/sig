@@ -63,6 +63,9 @@ pub fn Receiver(comptime Effects: type) type {
 
         effects: Effects,
 
+        /// Borrowed from `init`'s caller; used only to grow `dead_slots`.
+        allocator: std.mem.Allocator,
+
         // We will ignore shreds outside of this range, as they're not useful to us
         root_slot: Slot,
         max_slot: Slot,
@@ -71,6 +74,12 @@ pub fn Receiver(comptime Effects: type) type {
 
         in_progress: InProgressSets,
         done: DoneSets,
+
+        /// Slots that hit a fatal protocol violation (chain conflict,
+        /// malformed recovered shred, etc.). Every subsequent shred for one
+        /// of these slots is rejected at the top of `processPacket`. Pruned
+        /// in `updateSlotRange` once the root advances past the slot.
+        dead_slots: std.AutoHashMapUnmanaged(Slot, void),
 
         pub fn init(
             allocator: std.mem.Allocator,
@@ -86,8 +95,10 @@ pub fn Receiver(comptime Effects: type) type {
 
             return .{
                 .effects = effects,
+                .allocator = allocator,
                 .in_progress = in_progress,
                 .done = done,
+                .dead_slots = .empty,
 
                 .root_slot = 0,
                 .max_slot = std.math.maxInt(Slot),
@@ -98,6 +109,7 @@ pub fn Receiver(comptime Effects: type) type {
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             self.in_progress.deinit(allocator);
             self.done.deinit(allocator);
+            self.dead_slots.deinit(allocator);
         }
 
         /// Reset to the post-init state without freeing any heap memory. Intended
@@ -110,6 +122,7 @@ pub fn Receiver(comptime Effects: type) type {
         pub fn reset(self: *Self) void {
             self.in_progress.reset();
             self.done.reset();
+            self.dead_slots.clearRetainingCapacity();
             self.root_slot = 0;
             self.max_slot = std.math.maxInt(Slot);
             self.features = .{};
@@ -119,7 +132,32 @@ pub fn Receiver(comptime Effects: type) type {
             self.root_slot = root_slot;
             self.max_slot = max_slot;
 
+            // Dead-slot entries below the new root are unreachable; drop them.
+            // Bounded scratch: anything above this in a single advance is a
+            // pathological state we surface as a missed cleanup, not a crash.
+            var stale_buf: [64]Slot = undefined;
+            var stale_len: usize = 0;
+            var it = self.dead_slots.iterator();
+            while (it.next()) |entry| {
+                if (entry.key_ptr.* < root_slot) {
+                    if (stale_len == stale_buf.len) break;
+                    stale_buf[stale_len] = entry.key_ptr.*;
+                    stale_len += 1;
+                }
+            }
+            for (stale_buf[0..stale_len]) |slot| _ = self.dead_slots.remove(slot);
+
             // TODO: this is where we would add code to prune entries outside of the new range.
+        }
+
+        /// Mark `slot` as dead. Every later shred for `slot` is rejected at
+        /// the top of `processPacket` until a root advance past `slot` prunes
+        /// the entry. Any in-progress FEC sets for `slot` are returned to the
+        /// pool. OOM growing the dead-slot set is silently dropped: the slot
+        /// failed once; downstream callers already saw the originating error.
+        pub fn markSlotDead(self: *Self, slot: Slot) void {
+            self.dead_slots.put(self.allocator, slot, {}) catch {};
+            self.in_progress.dropSlot(slot);
         }
 
         /// `(merkle_root, chained_merkle_root)` pinned for some FEC set, or
@@ -191,6 +229,9 @@ pub fn Receiver(comptime Effects: type) type {
                 // ignore shred from a slot that's too old or too new
                 if (shred.slot < state.root_slot) return error.ShredOlderThanRoot;
                 if (shred.slot > state.max_slot) return error.ShredTooNew;
+
+                // Slot was previously flagged fatal; drop everything for it.
+                if (state.dead_slots.contains(shred.slot)) return error.SlotIsDead;
 
                 // ignore shred with wrong version
                 if (shred.version != network_shred_version and
@@ -385,6 +426,7 @@ pub fn Receiver(comptime Effects: type) type {
                 .fec_set_idx = shred.fec_set_idx + FecSetCtx.fec_shred_count,
             })) |next| {
                 if (!fec_set_ctx.merkle_root.eql(&next.chained_merkle_root)) {
+                    state.markSlotDead(shred.slot);
                     state.effects.reportChainConflict(shred.slot);
                     return error.ChainedMerkleRootConflict;
                 }
@@ -395,6 +437,7 @@ pub fn Receiver(comptime Effects: type) type {
                     .fec_set_idx = shred.fec_set_idx - FecSetCtx.fec_shred_count,
                 })) |prev| {
                     if (!prev.merkle_root.eql(&fec_set_ctx.chained_merkle_root)) {
+                        state.markSlotDead(shred.slot);
                         state.effects.reportChainConflict(shred.slot);
                         return error.ChainedMerkleRootConflict;
                     }
@@ -543,6 +586,7 @@ pub const PacketError = error{
     InvalidMerkleProof,
     ShredOlderThanRoot,
     ShredTooNew,
+    SlotIsDead,
     ShredVersionMismatch,
     FecSetIndexTooHigh,
     SlotIndexTooHigh,
@@ -854,6 +898,40 @@ const InProgressSets = struct {
         } else null;
     }
 
+    /// Returns every in-progress FEC set whose id matches `slot` to the pool.
+    /// Used by `Receiver.markSlotDead` so dead slots don't leak pool capacity
+    /// until their pending shreds time out via the eviction queue.
+    fn dropSlot(self: *InProgressSets, slot: Slot) void {
+        self.assertCounts();
+        defer self.assertCounts();
+
+        // Collect pool ids first; mutating `signature_map` mid-iteration is
+        // unsafe. The cap bounds the scratch buffer; per slot the live set
+        // is much smaller (one entry per FEC index, ~ledger.max_shreds_per_slot/32).
+        var victims_buf: [1024]Pool.ItemId = undefined;
+        var victims_len: usize = 0;
+        for (self.signature_map.values()) |fec_set_ctx| {
+            const pool_id = self.ctx_pool.ptrToIndex(fec_set_ctx);
+            const idx = pool_id.index().?;
+            if (self.ids[idx].slot == slot) {
+                if (victims_len == victims_buf.len) break;
+                victims_buf[victims_len] = pool_id;
+                victims_len += 1;
+            }
+        }
+
+        for (victims_buf[0..victims_len]) |pool_id| {
+            var it = self.eviction.iterator();
+            while (it.next()) |queued| {
+                if (queued == pool_id) {
+                    _ = self.eviction.removeIndex(it.count -| 1);
+                    break;
+                }
+            }
+            self.removeEvictedSet(pool_id);
+        }
+    }
+
     fn assertCounts(self: *const InProgressSets) void {
         std.debug.assert(self.signature_map.count() == self.eviction.items.len);
         tracy.plot(u32, "in-progress FEC sets", @intCast(self.eviction.items.len));
@@ -934,6 +1012,41 @@ test "InProgressSets basic usage" {
     try std.testing.expectEqual(null, in_progress.getFecSetCtx(&set_signature));
     try std.testing.expect(!in_progress.containsId(set_id));
     try std.testing.expectEqual(null, in_progress.getCtxById(set_id));
+}
+
+test "InProgressSets.dropSlot returns matching contexts to the pool" {
+    const allocator = std.testing.allocator;
+
+    var in_progress: InProgressSets = try .init(allocator, 16);
+    defer in_progress.deinit(allocator);
+
+    const sig_a: Signature = .ZEROES;
+    var sig_b_bytes: [Signature.SIZE]u8 = @splat(0);
+    sig_b_bytes[0] = 1;
+    const sig_b: Signature = @bitCast(sig_b_bytes);
+    var sig_c_bytes: [Signature.SIZE]u8 = @splat(0);
+    sig_c_bytes[0] = 2;
+    const sig_c: Signature = @bitCast(sig_c_bytes);
+
+    const slot_dead: Slot = 1234;
+    const slot_keep: Slot = 5678;
+
+    const id_a: FecSetId = .{ .slot = slot_dead, .fec_set_idx = 0 };
+    const id_b: FecSetId = .{ .slot = slot_dead, .fec_set_idx = 32 };
+    const id_c: FecSetId = .{ .slot = slot_keep, .fec_set_idx = 0 };
+
+    _ = in_progress.createFecSetCtx(id_a, &sig_a);
+    _ = in_progress.createFecSetCtx(id_b, &sig_b);
+    const ctx_c = in_progress.createFecSetCtx(id_c, &sig_c);
+
+    try std.testing.expectEqual(@as(usize, 3), in_progress.signature_map.count());
+
+    in_progress.dropSlot(slot_dead);
+
+    try std.testing.expectEqual(@as(usize, 1), in_progress.signature_map.count());
+    try std.testing.expectEqual(null, in_progress.getCtxById(id_a));
+    try std.testing.expectEqual(null, in_progress.getCtxById(id_b));
+    try std.testing.expectEqual(ctx_c, in_progress.getCtxById(id_c));
 }
 
 const DoneSets = struct {
