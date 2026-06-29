@@ -81,6 +81,17 @@ pub fn Receiver(comptime Effects: type) type {
         /// in `updateSlotRange` once the root advances past the slot.
         dead_slots: std.AutoHashMapUnmanaged(Slot, void),
 
+        /// First-seen `parent_slot` (i.e. `shred.slot - parent_offset`) for
+        /// every slot we have accepted a data shred from. A non-genesis slot
+        /// has a single parent in the canonical fork tree, so any later data
+        /// shred declaring a different parent is a protocol violation and
+        /// marks the slot dead. Agave enforces the same invariant in
+        /// `should_insert_data_shred` via `slot_meta.parent_slot` (agave
+        /// `ledger/src/blockstore.rs`); without it, fuzz-crafted shreds with
+        /// identical merkle roots but mismatched `parent_offset` slip past
+        /// the merkle/chained-merkle checks. Pruned in `updateSlotRange`.
+        slot_parents: std.AutoHashMapUnmanaged(Slot, Slot),
+
         pub fn init(
             allocator: std.mem.Allocator,
             in_progress_capacity: u32,
@@ -99,6 +110,7 @@ pub fn Receiver(comptime Effects: type) type {
                 .in_progress = in_progress,
                 .done = done,
                 .dead_slots = .empty,
+                .slot_parents = .empty,
 
                 .root_slot = 0,
                 .max_slot = std.math.maxInt(Slot),
@@ -110,6 +122,7 @@ pub fn Receiver(comptime Effects: type) type {
             self.in_progress.deinit(allocator);
             self.done.deinit(allocator);
             self.dead_slots.deinit(allocator);
+            self.slot_parents.deinit(allocator);
         }
 
         /// Reset to the post-init state without freeing any heap memory. Intended
@@ -123,6 +136,7 @@ pub fn Receiver(comptime Effects: type) type {
             self.in_progress.reset();
             self.done.reset();
             self.dead_slots.clearRetainingCapacity();
+            self.slot_parents.clearRetainingCapacity();
             self.root_slot = 0;
             self.max_slot = std.math.maxInt(Slot);
             self.features = .{};
@@ -146,6 +160,18 @@ pub fn Receiver(comptime Effects: type) type {
                 }
             }
             for (stale_buf[0..stale_len]) |slot| _ = self.dead_slots.remove(slot);
+
+            // Same bounded prune for `slot_parents`.
+            stale_len = 0;
+            var pit = self.slot_parents.iterator();
+            while (pit.next()) |entry| {
+                if (entry.key_ptr.* < root_slot) {
+                    if (stale_len == stale_buf.len) break;
+                    stale_buf[stale_len] = entry.key_ptr.*;
+                    stale_len += 1;
+                }
+            }
+            for (stale_buf[0..stale_len]) |slot| _ = self.slot_parents.remove(slot);
 
             // TODO: this is where we would add code to prune entries outside of the new range.
         }
@@ -270,6 +296,35 @@ pub fn Receiver(comptime Effects: type) type {
                 const merkle_layer_count = 7;
                 if (shred.variant.merkle_count > merkle_layer_count - 1) {
                     return error.MerkleCountTooLarge;
+                }
+            }
+
+            // Per-slot `parent_slot` consistency. Every data shred in a slot
+            // must declare the same parent (`shred.slot - parent_offset`);
+            // the slot has a single position in the fork tree. Agave enforces
+            // this in `Blockstore::should_insert_data_shred` (the
+            // `meta_parent_slot != shred_parent` branch in
+            // `ledger/src/blockstore.rs`): a mismatch returns InvalidShred,
+            // which causes `mark_slot_dead_if_not_full`. Without this check,
+            // fuzz-crafted shreds whose proof bytes collide on a single
+            // merkle root can still smuggle in mismatched parents and slip
+            // past the merkle / chained-merkle equality checks above.
+            if (shred.variant.isData()) {
+                const parent_slot = shred.slot - shred.code_or_data.data.parent_offset;
+                const gop = state.slot_parents.getOrPut(state.allocator, shred.slot) catch {
+                    // OOM: skip the bookkeeping rather than fail-closed. The
+                    // worst case is missing this check on a later shred,
+                    // which mirrors agave's behavior when its slot meta
+                    // lookup encounters allocator pressure.
+                    return error.NoSpaceLeft;
+                };
+                if (gop.found_existing) {
+                    if (gop.value_ptr.* != parent_slot) {
+                        state.markSlotDead(shred.slot);
+                        return error.ParentSlotMismatch;
+                    }
+                } else {
+                    gop.value_ptr.* = parent_slot;
                 }
             }
 
@@ -637,6 +692,7 @@ pub const PacketError = error{
     MismatchedChainedMerkleRoot,
     EquivocationDifferentHashForSameFecSetId,
     EquivocationFecSetIdAlreadyInProgress,
+    ParentSlotMismatch,
     UnknownLeader,
     SignatureVerificationFailed,
     RecoveredShredMalformed,

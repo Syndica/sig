@@ -143,6 +143,13 @@ const Effects = struct {
     /// single flag captures the whole-block rejection signal.
     chain_conflict: bool = false,
 
+    /// Set in `executeShredParse` when the Receiver flagged any slot dead
+    /// (per-slot `parent_slot` mismatch, malformed RS-recovered shred,
+    /// etc.). Mirrors agave's `mark_slot_dead_if_not_full` path: a dead
+    /// slot causes `get_slot_entries_with_shred_info` to return
+    /// `DeadSlot`, which rejects the block.
+    slot_marked_dead: bool = false,
+
     /// Per-data-shred scratch for partial-FEC tick verification.
     const DataShredCapture = struct {
         slot: Slot,
@@ -192,6 +199,7 @@ const Effects = struct {
         self.shred_parse_results.clearRetainingCapacity();
         self.allocator_failed = false;
         self.chain_conflict = false;
+        self.slot_marked_dead = false;
     }
 
     /// Copy every data shred the Receiver has accepted into this FEC
@@ -434,6 +442,12 @@ fn executeShredParse(
         st.effects.captureFromFecSetCtx(fec_set_ctx);
     }
 
+    // Any slot the Receiver flagged dead (e.g. per-slot parent_slot
+    // mismatch) rejects the whole block. Agave does the same via
+    // `mark_slot_dead_if_not_full` + `get_slot_entries_with_shred_info`
+    // returning `DeadSlot` for those slots.
+    if (st.receiver.dead_slots.count() > 0) st.effects.slot_marked_dead = true;
+
     if (st.effects.allocator_failed) return error.OutOfMemory;
 
     return try buildProtoEffects(alloc, &st.effects, ctx.shred_version);
@@ -475,7 +489,8 @@ fn buildProtoEffects(
     // Receiver's per-shred chain check rejects the whole block. Cleared FEC
     // sets are still emitted so the diff vs agave stays comparable; the block
     // verdict overrides the tick-window result below.
-    if (effects.chain_conflict) out.block_parse_result = .REJECTED_INVALID_HEADER;
+    if (effects.chain_conflict or effects.slot_marked_dead)
+        out.block_parse_result = .REJECTED_INVALID_HEADER;
 
     // Step 5: sort by (slot, fec_set_index) and chain-validate.
     std.sort.heap(
