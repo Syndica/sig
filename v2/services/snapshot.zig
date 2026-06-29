@@ -1,13 +1,10 @@
 const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
+const services = @import("services");
 const tel = lib.telemetry;
 
 const download = lib.snapshot.download;
-
-const SnapshotConfig = lib.snapshot.SnapshotConfig;
-const SnapshotSourceRing = lib.snapshot.SnapshotSourceRing;
-const SnapshotDataRing = lib.snapshot.SnapshotDataRing;
 
 const Metrics = download.Metrics;
 const DownloadResult = download.DownloadResult;
@@ -17,20 +14,12 @@ comptime {
     _ = start;
 }
 
-// Note: matches services.zon name
 pub const name = .snapshot;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadOnly = struct {
-    config: *const SnapshotConfig,
-};
-
-pub const ReadWrite = struct {
-    source_from_gossip: *SnapshotSourceRing,
-    ready_snapshot_out: *SnapshotDataRing,
-    tel: *tel.Region,
-};
+pub const ReadOnly = services.snapshot.ReadOnly;
+pub const ReadWrite = services.snapshot.ReadWrite;
 
 pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");

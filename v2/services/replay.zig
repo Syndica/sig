@@ -82,6 +82,7 @@ const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
+const services = @import("services");
 const tel = lib.telemetry;
 
 const replay = lib.replay;
@@ -102,15 +103,8 @@ pub const name = .replay;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadOnly = struct {};
-pub const ReadWrite = struct {
-    snapshot_metadata_in: *lib.accounts_db.RuntimeMetadata,
-    deshredded_in: *lib.shred.DeshredRing,
-    replay_transaction_pool: *lib.replay.TransactionPool,
-    block_pool: *lib.replay.BlockPool,
-    exec_req_response: *lib.replay.ExecReqResponse,
-    tel: *tel.Region,
-};
+pub const ReadOnly = services.replay.ReadOnly;
+pub const ReadWrite = services.replay.ReadWrite;
 
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 

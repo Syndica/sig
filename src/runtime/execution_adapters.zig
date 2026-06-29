@@ -13,7 +13,6 @@ const Pubkey = sig.core.Pubkey;
 const SlotAccountReader = sig.accounts_db.SlotAccountReader;
 const StatusCache = sig.core.StatusCache;
 const StatusChecker = sig.runtime.execution_interfaces.StatusChecker;
-const TransactionError = sig.core.transaction_error.TransactionError;
 
 pub const SlotAccountReaderAdapter = struct {
     reader: SlotAccountReader,
@@ -64,6 +63,7 @@ pub const EpochStakeReaderAdapter = struct {
 pub const StatusCacheStatusCheckerAdapter = struct {
     ancestors: *const Ancestors,
     status_cache: *StatusCache,
+    blockhash_queue: *const sig.core.BlockhashQueue,
 
     pub fn statusChecker(self: *const StatusCacheStatusCheckerAdapter) StatusChecker {
         return .{ .ctx = self, .checkFn = check };
@@ -74,15 +74,19 @@ pub const StatusCacheStatusCheckerAdapter = struct {
         ctx: *const anyopaque,
         msg_hash: *const Hash,
         recent_blockhash: *const Hash,
-    ) ?TransactionError {
+        max_age: u64,
+    ) StatusChecker.Result {
         const adapter: *const StatusCacheStatusCheckerAdapter = @ptrCast(@alignCast(ctx));
+        if (!adapter.blockhash_queue.isHashValidForAge(recent_blockhash.*, max_age)) {
+            return .unknown_blockhash;
+        }
         return switch (adapter.status_cache.getStatus(
             &msg_hash.data,
             recent_blockhash,
             adapter.ancestors,
         )) {
-            .pending => null,
-            .failed, .succeeded => .AlreadyProcessed,
+            .pending => .recent_and_unprocessed,
+            .failed, .succeeded => .already_processed,
         };
     }
 };
@@ -122,23 +126,53 @@ test "StatusCacheStatusCheckerAdapter" {
     var status_cache: StatusCache = .DEFAULT;
     defer status_cache.deinit(allocator);
 
+    const msg_hash = Hash.init("msg hash");
+    const recent_blockhash = Hash.init("recent blockhash");
+    const stale_blockhash = Hash.init("stale blockhash");
+    const max_age: u64 = 5;
+
+    var blockhash_queue: sig.core.BlockhashQueue =
+        try .initWithSingleEntry(allocator, recent_blockhash, 5000);
+    defer blockhash_queue.deinit(allocator);
+
     const adapter = StatusCacheStatusCheckerAdapter{
         .ancestors = &ancestors,
         .status_cache = &status_cache,
+        .blockhash_queue = &blockhash_queue,
     };
     const status_checker = adapter.statusChecker();
 
-    const msg_hash = Hash.init("msg hash");
-    const recent_blockhash = Hash.init("recent blockhash");
+    // recent_blockhash is in the queue, status cache empty.
+    try std.testing.expectEqual(
+        .recent_and_unprocessed,
+        status_checker.check(&msg_hash, &recent_blockhash, max_age),
+    );
 
-    try std.testing.expectEqual(null, status_checker.check(&msg_hash, &recent_blockhash));
+    // A blockhash that isn't in the queue is too old to decide,
+    // letting the caller fall through to the durable-nonce path.
+    try std.testing.expectEqual(
+        .unknown_blockhash,
+        status_checker.check(&msg_hash, &stale_blockhash, max_age),
+    );
 
     try ancestors.ancestors.put(allocator, 0, {});
     try status_cache.insert(allocator, prng.random(), &recent_blockhash, &msg_hash.data, 0, null);
 
+    // Same (msg_hash, recent_blockhash) recorded in the cache.
     try std.testing.expectEqual(
-        TransactionError.AlreadyProcessed,
-        status_checker.check(&msg_hash, &recent_blockhash),
+        .already_processed,
+        status_checker.check(&msg_hash, &recent_blockhash, max_age),
+    );
+
+    // The hash is in the status cache, but the blockhash is too old. This is
+    // technically a corrupted state or an invalid input. The contract of the
+    // status checker is that it only looks for transactions that specify their
+    // blockhashes up to a max age, otherwise it's treated as unknown. Even if
+    // we have more information about the transaction, we must return unknown
+    // here.
+    try std.testing.expectEqual(
+        .unknown_blockhash,
+        status_checker.check(&msg_hash, &stale_blockhash, max_age),
     );
 }
 

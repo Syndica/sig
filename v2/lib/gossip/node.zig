@@ -19,6 +19,7 @@ const GossipMessage = lib.gossip.GossipMessage;
 const GossipData = lib.gossip.GossipData;
 const GossipValue = lib.gossip.GossipValue;
 const BloomFilter = lib.gossip.BloomFilter;
+const Metrics = lib.gossip.Metrics;
 
 pub fn GossipNode(comptime Effects: type) type {
     lib.util.assertInterface(Effects, struct {
@@ -79,6 +80,8 @@ pub fn GossipNode(comptime Effects: type) type {
         push_timeout: u64 = 0,
         pull_timeout: u64 = 0,
         no_peers_timeout: u64 = 0,
+
+        metrics: Metrics,
 
         const PULL_INTERVAL_MS = 500;
         const PUSH_INTERVAL_MS = 5 * 1000;
@@ -229,7 +232,12 @@ pub fn GossipNode(comptime Effects: type) type {
             entrypoints: []const lib.gossip.Address,
         };
 
-        pub fn init(fba: *std.heap.FixedBufferAllocator, now: u64, config: Config) !Self {
+        pub fn init(
+            fba: *std.heap.FixedBufferAllocator,
+            now: u64,
+            metrics: Metrics,
+            config: Config,
+        ) !Self {
             var table: Table = .empty;
             try table.ensureTotalCapacity(fba.allocator(), 16384);
 
@@ -283,6 +291,7 @@ pub fn GossipNode(comptime Effects: type) type {
                 .prng = prng,
                 .config = config,
                 .created = now,
+                .metrics = metrics,
             };
         }
 
@@ -317,17 +326,31 @@ pub fn GossipNode(comptime Effects: type) type {
                     "invalid msg from ({f}, len={}): {}",
                     .{ packet.addr, packet.len, e },
                 );
+                self.metrics.invalid_packets.increment(1);
                 return;
             };
+            self.metrics.valid_packets.increment(1);
 
-            self.processMessage(.from(logger), now, packet.addr, msg) catch |e| {
+            self.processMessage(.from(logger), now, packet.addr, msg) catch |err| {
                 logger.err().logf(
                     "failed to process msg ({f}, {s}) {}",
-                    .{ packet.addr, @tagName(msg), e },
+                    .{ packet.addr, @tagName(msg), err },
                 );
+                self.metrics.invalid_messages.increment(err, 1);
                 return;
             };
+            self.metrics.processed_messages.increment(msg, 1);
         }
+
+        const ProcessMessageError = error{
+            InvalidSignature,
+            InvalidMessage,
+            InvalidPubkey,
+            UntrackedPeer,
+            UnverifiedPeer,
+            ExpiredPeer,
+            InvalidContactInfo,
+        } || InsertValueError || SendPushMessagesError;
 
         fn processMessage(
             self: *Self,
@@ -335,39 +358,47 @@ pub fn GossipNode(comptime Effects: type) type {
             now: u64,
             addr: std.net.Address,
             msg: GossipMessage,
-        ) !void {
+        ) ProcessMessageError!void {
             switch (msg) {
                 .pull_request => |pr| {
                     const from, const shred_version = switch (pr.contact_info.data) {
                         .contact_info => |v| .{ v.from, v.shred_version },
-                        else => return error.InvalidPullRequestContactInfo,
+                        else => return error.InvalidContactInfo,
                     };
 
                     // Unverified peers must respond to a ping first.
-                    const peer = try self.getOrTrackPeer(now, shred_version, addr, from) orelse
-                        return error.PullRequestFromUnverifiedPeer;
+                    const peer = self.getOrTrackPeer(now, shred_version, addr, from) orelse
+                        return error.UnverifiedPeer;
 
                     // Update the ContactInfo
                     _ = try self.insertValue(.from(logger), now, .pull, pr.contact_info);
 
                     const mask_bits = std.math.cast(u6, pr.mask_bits) orelse
-                        return error.InvalidPullRequestMaskBits;
+                        return error.InvalidContactInfo;
 
                     // Find a value that match the PullRequest mask + bloom filter
-                    for (self.table.values()) |v| {
+                    for (self.table.keys(), self.table.values()) |k, v| {
                         const lsb_mask = (~@as(u64, 0)) >> mask_bits;
                         const h: u64 = std.mem.readInt(u64, v.hash.data[0..8], .little);
                         if ((h | lsb_mask) != (pr.mask | lsb_mask)) continue;
                         if (pr.ignoring.contains(&v.hash.data)) continue;
 
                         var found_buf: [16 * 1024]u8 = undefined;
-                        var found_fba = std.heap.FixedBufferAllocator.init(&found_buf);
                         var found_reader: std.Io.Reader = .fixed(v.value[0..v.size]);
-                        const value = try bincode.read(&found_fba, &found_reader, GossipValue);
+                        const value = bincodeReadBoundedGossipValue(
+                            &found_buf,
+                            &found_reader,
+                        ) catch {
+                            logger.err().logf(
+                                "buffer of length {d} was too small to deserialize a '{t}'",
+                                .{ found_buf.len, k.tag },
+                            );
+                            continue;
+                        };
 
                         // Only technically need to send one value back to be compliant.
                         // Other nodes do this to unstaked nodes too.
-                        try self.sendMessage(peer.addr, .{ .pull_response = .{
+                        self.sendMessage(peer.addr, .{ .pull_response = .{
                             .from = self.identity(),
                             .values = .{ .items = &.{value} },
                         } });
@@ -377,13 +408,13 @@ pub fn GossipNode(comptime Effects: type) type {
                 .pull_response => |pr| {
                     // PullResponse should only be returned from a peer that we couldve sent it to.
                     const peer = self.peers.getPtr(pr.from) orelse
-                        return error.PullResponseFromUntrackedPeer;
+                        return error.UntrackedPeer;
                     const last_pong = peer.last_pong orelse
-                        return error.PullResponseFromUnverifiedPeer;
+                        return error.UnverifiedPeer;
 
                     // *1 for when selected during PullRequest. another *1 for recv window after that.
                     if (last_pong <= now -| (ACTIVE_PONG_THRESHOLD_MS * 2))
-                        return error.PullResponseFromExpiredPeer;
+                        return error.ExpiredPeer;
 
                     for (pr.values.items) |value| {
                         _ = try self.insertValue(.from(logger), now, .pull, value);
@@ -428,15 +459,17 @@ pub fn GossipNode(comptime Effects: type) type {
 
                         var sign_buf: [Packet.capacity]u8 = undefined;
                         var sign_writer: std.Io.Writer = .fixed(&sign_buf);
-                        try bincode.write(&sign_writer, .{
+                        bincode.write(&sign_writer, .{
                             .prefix = PRUNE_PREFIX.*,
                             .pubkey = self.identity(),
                             .prunes = prunes,
                             .destination = push.from,
                             .wallclock = now,
-                        });
+                        }) catch |err| switch (err) {
+                            error.WriteFailed => return error.InvalidMessage,
+                        };
 
-                        try self.sendMessage(peer.addr, .{ .prune_message = .{
+                        self.sendMessage(peer.addr, .{ .prune_message = .{
                             .from = self.identity(),
                             .data = .{
                                 .pubkey = self.identity(),
@@ -453,35 +486,39 @@ pub fn GossipNode(comptime Effects: type) type {
                 },
                 .prune_message => |prune| {
                     if (!prune.from.equals(&prune.data.pubkey))
-                        return error.InvalidPruneDataSender;
+                        return error.InvalidPubkey;
                     if (!prune.data.destination.equals(&self.identity()))
-                        return error.InvalidPruneDataDestination;
+                        return error.InvalidPubkey;
 
                     const peer = self.peers.getPtr(prune.from) orelse
-                        return error.PruneSentByUntrackedPeer;
+                        return error.UntrackedPeer;
 
                     // TODO: verify this with msg directly from the Packet
                     var sign_buf: [Packet.capacity]u8 = undefined;
                     var sign_writer: std.Io.Writer = .fixed(&sign_buf);
-                    try bincode.write(&sign_writer, .{
+                    bincode.write(&sign_writer, .{
                         .prefix = bincode.Vec(u8){ .items = PRUNE_PREFIX },
                         .pubkey = prune.data.pubkey,
                         .prunes = prune.data.prunes,
                         .destination = prune.data.destination,
                         .wallclock = prune.data.wallclock,
-                    });
+                    }) catch |err| switch (err) {
+                        error.WriteFailed => return error.InvalidMessage,
+                    };
 
                     // PruneData can be signed with or without prefix...
                     prune.data.signature.verify(&prune.from, sign_writer.buffered()) catch {
                         sign_writer = .fixed(&sign_buf);
-                        try bincode.write(&sign_writer, .{
+                        bincode.write(&sign_writer, .{
                             .pubkey = prune.data.pubkey,
                             .prunes = prune.data.prunes,
                             .destination = prune.data.destination,
                             .wallclock = prune.data.wallclock,
-                        });
+                        }) catch |err| switch (err) {
+                            error.WriteFailed => return error.InvalidMessage,
+                        };
                         prune.data.signature.verify(&prune.from, sign_writer.buffered()) catch {
-                            return error.InvalidPruneSignature;
+                            return error.InvalidSignature;
                         };
                     };
 
@@ -496,11 +533,11 @@ pub fn GossipNode(comptime Effects: type) type {
                             "invalid Ping signature from {f}:{f}",
                             .{ ping.from, addr },
                         );
-                        return;
+                        return error.InvalidSignature;
                     };
 
                     const hash = Hash.initMany(&.{ PING_PONG_PREFIX, &ping.token });
-                    try self.sendMessage(addr, .{ .pong_message = .{
+                    self.sendMessage(addr, .{ .pong_message = .{
                         .from = self.identity(),
                         .hash = hash,
                         .signature = self.sign(&hash.data),
@@ -513,7 +550,7 @@ pub fn GossipNode(comptime Effects: type) type {
                     //
                     // But PullResponses are rejected from untracked peers, so when the entrypoint Pings
                     // us, we need to start having a way to track it as well.
-                    _ = try self.getOrTrackPeer(now, null, addr, ping.from);
+                    _ = self.getOrTrackPeer(now, null, addr, ping.from);
                 },
                 .pong_message => |pong| {
                     // If not a hash in window (prev, current), not worth verifying the signature either
@@ -530,7 +567,7 @@ pub fn GossipNode(comptime Effects: type) type {
                             "invalid Pong signature from {f}:{f}",
                             .{ pong.from, addr },
                         );
-                        return;
+                        return error.InvalidSignature;
                     };
 
                     const peer = self.peers.getPtr(pong.from) orelse {
@@ -564,7 +601,7 @@ pub fn GossipNode(comptime Effects: type) type {
 
                 i += 1;
                 if (peer.last_ping.wallclock <= now -| ACTIVE_PONG_THRESHOLD_MS) {
-                    try self.sendPing(peer.addr);
+                    self.sendPing(peer.addr);
                     peer.last_ping.wallclock = now;
                     peer.last_ping.count_since_pong += 1;
                 }
@@ -619,7 +656,7 @@ pub fn GossipNode(comptime Effects: type) type {
             }
         }
 
-        fn sendPushMessages(self: *Self) !void {
+        fn sendPushMessages(self: *Self) SendPushMessagesError!void {
             // Consume pushed keys.
             const pushed_keys = self.push_buf.keys();
             if (pushed_keys.len == 0) return;
@@ -641,15 +678,21 @@ pub fn GossipNode(comptime Effects: type) type {
             }
         }
 
+        const InvalidTableValueError = error{InvalidTableValue};
+
+        const SendPushMessagesError = InvalidTableValueError;
+
         fn sendPushMessagesTo(
             self: *Self,
             addr: std.net.Address,
             pushed_keys: []const Key,
             maybe_ignore_filter: ?*const BloomFilter,
-        ) !void {
+        ) SendPushMessagesError!void {
             var value_buf: [PUSH_BUFFER_MAX]GossipValue = undefined;
             var values: std.ArrayListUnmanaged(GossipValue) = .initBuffer(&value_buf);
             assert(pushed_keys.len <= value_buf.len);
+
+            var invalid_table_value = false;
 
             var packet_size: usize = 4 + 32 + 8;
             self.push_alloc_buf.clearRetainingCapacity();
@@ -663,7 +706,7 @@ pub fn GossipNode(comptime Effects: type) type {
 
                 // Would overflow push message. Send one out with whats collected so far.
                 if (packet_size + v.size > Packet.capacity) {
-                    try self.sendMessage(addr, .{ .push_message = .{
+                    self.sendMessage(addr, .{ .push_message = .{
                         .from = self.identity(),
                         .values = .{ .items = values.items },
                     } });
@@ -675,18 +718,32 @@ pub fn GossipNode(comptime Effects: type) type {
                 // TODO: no need to actually deserialize here. Ideally, just write the v.values
                 // directly into the PushMessage packet being sent out.
                 const alloc_buf = self.push_alloc_buf.addManyAsSliceAssumeCapacity(16 * 1024);
-                var fba = std.heap.FixedBufferAllocator.init(alloc_buf);
                 var reader: std.Io.Reader = .fixed(v.value[0..v.size]);
-                const value = try bincode.read(&fba, &reader, GossipValue);
+                const value = bincodeReadBoundedGossipValue(
+                    alloc_buf,
+                    &reader,
+                ) catch |err| switch (err) {
+                    error.GossipValueInvalid,
+                    error.GossipValueTooBig,
+                    => {
+                        invalid_table_value = true;
+                        continue;
+                    },
+                };
                 values.appendAssumeCapacity(value);
+                self.metrics.pushed_values.increment(value.data, 1);
             }
 
             // Send out remaining push message.
             if (values.items.len > 0) {
-                try self.sendMessage(addr, .{ .push_message = .{
+                self.sendMessage(addr, .{ .push_message = .{
                     .from = self.identity(),
                     .values = .{ .items = values.items },
                 } });
+            }
+
+            if (invalid_table_value) {
+                return error.InvalidTableValue;
             }
         }
 
@@ -734,7 +791,7 @@ pub fn GossipNode(comptime Effects: type) type {
 
                 if (v.wallclock <= now -| STALE_TABLE_THRESHOLD_MS) {
                     self.addExpired(now, v.hash);
-                    self.table.swapRemoveAt(i);
+                    self.tableSwapRemoveAt(i);
                 } else {
                     i += 1;
                 }
@@ -755,7 +812,7 @@ pub fn GossipNode(comptime Effects: type) type {
                     const mask =
                         (@as(u65, i) << (@as(u7, 64) - mask_bits)) | (~@as(u64, 0) >> mask_bits);
 
-                    try self.sendMessage(peer.addr, .{ .pull_request = .{
+                    self.sendMessage(peer.addr, .{ .pull_request = .{
                         .ignoring = bloom_filters.items[i],
                         .mask = @intCast(mask),
                         .mask_bits = mask_bits,
@@ -787,7 +844,7 @@ pub fn GossipNode(comptime Effects: type) type {
                         (@as(u65, 0) << (@as(u7, 64) - mask_bits)) | (~@as(u64, 0) >> mask_bits);
 
                     for (self.config.entrypoints) |entry_addr| {
-                        try self.sendMessage(entry_addr.toNetAddress(), .{ .pull_request = .{
+                        self.sendMessage(entry_addr.toNetAddress(), .{ .pull_request = .{
                             .ignoring = bloom_filters.items[0],
                             .mask = @intCast(mask),
                             .mask_bits = mask_bits,
@@ -824,7 +881,7 @@ pub fn GossipNode(comptime Effects: type) type {
         }
 
         /// Sign and insert our own gossip data.
-        pub fn insert(self: *Self, now: u64, data: GossipData) !void {
+        pub fn insert(self: *Self, now: u64, data: GossipData) InsertValueError!void {
             const signed_value = try signData(now, self.config.effects, data);
             return try self.insertSigned(now, signed_value);
         }
@@ -834,11 +891,16 @@ pub fn GossipNode(comptime Effects: type) type {
             logger: tel.Logger("insertSigned"),
             now: u64,
             value: GossipValue,
-        ) !void {
+        ) InsertValueError!void {
             const maybe_key_value = try self.insertValue(.from(logger), now, .us, value);
             const key, _ = maybe_key_value orelse unreachable;
             assert(key.from.equals(&self.identity()));
         }
+
+        pub const InsertValueError = error{
+            InsertSigverifyFail,
+            InvalidTableValue,
+        } || SendPushMessagesError;
 
         fn insertValue(
             self: *Self,
@@ -846,7 +908,7 @@ pub fn GossipNode(comptime Effects: type) type {
             now: u64,
             caller: enum { us, pull, push },
             value: GossipValue,
-        ) !?struct { Key, u8 } {
+        ) InsertValueError!?struct { Key, u8 } {
             // Extract key information from the data.
             var deprecated = false;
             const from: Pubkey, const wallclock: u64, const index: u16 = switch (value.data) {
@@ -873,10 +935,12 @@ pub fn GossipNode(comptime Effects: type) type {
             // TODO: verify directly from packet & memcpy from packet directly into table entry.
             var value_buf: [Packet.capacity]u8 = undefined;
             var value_writer: std.Io.Writer = .fixed(&value_buf);
-            try bincode.write(&value_writer, value);
+            bincode.write(&value_writer, value) catch |err| switch (err) {
+                error.WriteFailed => unreachable, // we should not send values that are too large
+            };
 
             const value_bytes = value_writer.buffered();
-            try value.signature.verify(&from, value_bytes[64..]);
+            value.signature.verify(&from, value_bytes[64..]) catch return error.InsertSigverifyFail;
             const hash = Hash.init(value_bytes);
 
             // Check wallclock in general
@@ -932,10 +996,10 @@ pub fn GossipNode(comptime Effects: type) type {
                     for (self.table.values()[1..], 1..) |*v, j| {
                         if (v.wallclock < self.table.values()[i].wallclock) i = j;
                     }
-                    self.table.swapRemoveAt(i);
+                    self.tableSwapRemoveAt(i);
                 }
 
-                const gop = self.table.getOrPutAssumeCapacity(key);
+                const gop = self.tableGetOrPutAssumeCapacity(key);
                 break :blk .{ gop.found_existing, gop.value_ptr };
             };
 
@@ -988,15 +1052,17 @@ pub fn GossipNode(comptime Effects: type) type {
             return .{ key, 0 };
         }
 
+        const OnDiscoveredValueError = InvalidTableValueError;
+
         fn onDiscoveredValue(
             self: *Self,
             logger: tel.Logger("onDiscoveredValue"),
             now: u64,
             key: Key,
             value: GossipValue,
-        ) !void {
+        ) OnDiscoveredValueError!void {
             if (!key.from.equals(&self.identity())) {
-                logger.debug().logf("Discovered {f}", .{key});
+                logger.trace().logf("Discovered {f}", .{key});
 
                 switch (value.data) {
                     .vote => {}, // TODO: send to consensus service
@@ -1011,9 +1077,15 @@ pub fn GossipNode(comptime Effects: type) type {
                             .tag = .contact_info,
                         })) |v| {
                             var alloc_buf: [16 * 1024]u8 = undefined;
-                            var fba = std.heap.FixedBufferAllocator.init(&alloc_buf);
                             var reader = std.Io.Reader.fixed(v.value[0..v.size]);
-                            const ci_val = try bincode.read(&fba, &reader, GossipValue);
+                            const ci_val = bincodeReadBoundedGossipValue(
+                                &alloc_buf,
+                                &reader,
+                            ) catch |err| switch (err) {
+                                error.GossipValueTooBig,
+                                error.GossipValueInvalid,
+                                => return error.InvalidTableValue,
+                            };
                             if (ci_val.data.contact_info.socket_map.get(.rpc)) |rpc_addr| {
                                 self.config.effects.reportSnapshotSource(
                                     key.from,
@@ -1026,7 +1098,7 @@ pub fn GossipNode(comptime Effects: type) type {
                     }, // TODO: send to snapshot service
                     .contact_info => |ci| {
                         if (ci.socket_map.get(.gossip)) |addr| {
-                            if (try self.getOrTrackPeer(
+                            if (self.getOrTrackPeer(
                                 now,
                                 ci.shred_version,
                                 addr,
@@ -1047,9 +1119,15 @@ pub fn GossipNode(comptime Effects: type) type {
                                 .tag = .snapshot_hashes,
                             })) |v| {
                                 var alloc_buf: [16 * 1024]u8 = undefined;
-                                var fba = std.heap.FixedBufferAllocator.init(&alloc_buf);
                                 var reader = std.Io.Reader.fixed(v.value[0..v.size]);
-                                const sh_val = try bincode.read(&fba, &reader, GossipValue);
+                                const sh_val = bincodeReadBoundedGossipValue(
+                                    &alloc_buf,
+                                    &reader,
+                                ) catch |err| switch (err) {
+                                    error.GossipValueTooBig,
+                                    error.GossipValueInvalid,
+                                    => return error.InvalidTableValue,
+                                };
                                 const sh = sh_val.data.snapshot_hashes.full;
                                 self.config.effects.reportSnapshotSource(
                                     key.from,
@@ -1066,6 +1144,7 @@ pub fn GossipNode(comptime Effects: type) type {
                         unreachable;
                     },
                 }
+                self.metrics.discoveries.increment(value.data, 1);
             }
         }
 
@@ -1088,7 +1167,7 @@ pub fn GossipNode(comptime Effects: type) type {
             maybe_shred_version: ?u16,
             addr: std.net.Address,
             from: Pubkey,
-        ) !?*Peer {
+        ) ?*Peer {
             const exists, const peer = blk: {
                 if (self.peers.count() == self.peers.capacity()) {
                     if (self.peers.getPtr(from)) |peer| {
@@ -1117,11 +1196,25 @@ pub fn GossipNode(comptime Effects: type) type {
                     .last_pong = null,
                     .ignoring = .init(self.prng.random()),
                 };
-                try self.sendPing(addr);
+                self.sendPing(addr);
                 return null;
             }
 
             return peer;
+        }
+
+        fn tableGetOrPutAssumeCapacity(self: *Self, key: Key) Table.GetOrPutResult {
+            const gop = self.table.getOrPutAssumeCapacity(key);
+            if (!gop.found_existing) {
+                self.metrics.table_entry_count.increment(key.tag, 1);
+            }
+            return gop;
+        }
+
+        fn tableSwapRemoveAt(self: *Self, index: usize) void {
+            const removed_tag = self.table.keys()[index].tag;
+            self.table.swapRemoveAt(index);
+            self.metrics.table_entry_count.decrement(removed_tag, 1);
         }
 
         fn identity(self: *const Self) Pubkey {
@@ -1132,24 +1225,50 @@ pub fn GossipNode(comptime Effects: type) type {
             return self.config.effects.sign(msg);
         }
 
-        fn sendPing(self: *Self, addr: std.net.Address) !void {
+        fn sendPing(self: *Self, addr: std.net.Address) void {
             const latest = &self.ping_window.new;
-            return try self.sendMessage(addr, .{ .ping_message = .{
+            self.sendMessage(addr, .{ .ping_message = .{
                 .from = self.identity(),
                 .token = latest.token,
                 .signature = latest.signature,
             } });
         }
 
-        fn sendMessage(self: *Self, addr: std.net.Address, msg: GossipMessage) !void {
+        fn sendMessage(self: *Self, addr: std.net.Address, msg: GossipMessage) void {
             const packet: *Packet = self.config.effects.writePacket();
             packet.addr = addr;
 
             var writer: std.Io.Writer = .fixed(&packet.data);
-            try bincode.write(&writer, msg);
+            bincode.write(&writer, msg) catch |err| switch (err) {
+                error.WriteFailed => unreachable, // we should not send values that are too large
+            };
             packet.len = @intCast(writer.buffered().len);
 
             self.config.effects.flushWrittenPackets();
+            self.metrics.pushed_messages.increment(msg, 1);
         }
+    };
+}
+
+const ReadBoundedGossipValueError = error{
+    GossipValueTooBig,
+    GossipValueInvalid,
+};
+
+fn bincodeReadBoundedGossipValue(
+    alloc_buffer: []u8,
+    reader: *std.Io.Reader,
+) ReadBoundedGossipValueError!GossipValue {
+    var fba: std.heap.FixedBufferAllocator = .init(alloc_buffer);
+    return bincode.read(&fba, reader, GossipValue) catch |err| switch (err) {
+        error.OutOfMemory,
+        => return error.GossipValueTooBig,
+        error.ReadFailed,
+        error.EndOfStream,
+        error.InvalidEnumTag,
+        error.InvalidOptional,
+        error.InvalidBitCapacity,
+        error.Overflow,
+        => return error.GossipValueInvalid,
     };
 }

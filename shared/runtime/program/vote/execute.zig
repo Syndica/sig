@@ -627,6 +627,14 @@ fn authorize(
                 return InstructionError.InvalidInstructionData;
             }
 
+            // [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L732-L763
+            try verifyBlsProofOfPossession(
+                ic.tc,
+                &vote_account.pubkey,
+                &args.bls_pubkey,
+                &args.bls_proof_of_possession,
+            );
+
             const target_epoch = std.math.add(u64, clock.leader_schedule_epoch, 1) catch {
                 return InstructionError.InvalidAccountData;
             };
@@ -636,17 +644,8 @@ fn authorize(
                 clock.epoch,
             );
 
-            // Match agave: the withdrawer-signer check is non-fatal
-            // here (its result is OR-ed against the epoch voter). The
-            // PoP verify still consumes its CUs even if neither is a
-            // signer, so we mirror agave's call order strictly.
-            try verifyBlsProofOfPossession(
-                ic.tc,
-                &vote_account.pubkey,
-                &args.bls_pubkey,
-                &args.bls_proof_of_possession,
-            );
-
+            // The withdrawer-signer check is non-fatal here (its result is
+            // OR-ed against the epoch voter).
             validateIsSigner(vote_state.withdrawerKey().*, signers) catch {
                 try validateIsSigner(epoch_authorized_voter, signers);
             };
@@ -6270,7 +6269,7 @@ test "update_commission_collector inflation_rewards" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = 50,
+        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6421,7 +6420,7 @@ test "update_commission_collector block_revenue" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = 50,
+        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6571,7 +6570,7 @@ test "update_commission_collector feature disabled" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = 50,
+        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6703,7 +6702,7 @@ test "update_commission_collector withdrawer not signer" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = 50,
+        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6839,7 +6838,7 @@ test "update_commission_collector not system owned" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = 50,
+        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6975,7 +6974,7 @@ test "update_commission_collector not rent exempt" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = 50,
+        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -7110,7 +7109,7 @@ test "update_commission_collector not writable" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = 50,
+        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());

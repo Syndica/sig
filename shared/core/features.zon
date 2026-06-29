@@ -1314,19 +1314,19 @@
         .name = "migrate_config_program_to_core_bpf",
         .pubkey = "2Fr57nzzkLYXW695UdDxDeR5fhnZWSttZeZYemrnpGFV",
         .description = "Migrate Config program to Core BPF #1378",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "migrate_address_lookup_table_program_to_core_bpf",
         .pubkey = "C97eKZygrkU4JxJsZdjgbUY7iQR7rKTr4NyDWo2E5pRm",
         .description = "Migrate Address Lookup Table program to Core BPF #1651",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "migrate_stake_program_to_core_bpf",
         .pubkey = "6M4oQ6eXneVhtLoiAr4yRYQY43eVLjrKbiDZDJc892yk",
         .description = "SIMD-0196: Migrate Stake program to Core BPF #3655",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_get_epoch_stake_syscall",
@@ -1490,7 +1490,7 @@
         .name = "formalize_loaded_transaction_data_size",
         .pubkey = "DeS7sR48ZcFTUmt5FFEVDr1v1bh73aAbZiZq3SYr8Eh8",
         .description = "SIMD-0186: Loaded transaction data size specification",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_extend_program_checked",
@@ -1661,11 +1661,18 @@
         .name = "validator_admission_ticket",
         .pubkey = "VAT9huvhPjRN9cyrPytq9rwvEJ3J4ADtjdncgZRyANJ",
         .description = "SIMD-0357: Alpenglow VAT implementation",
+        .status = .supported,
+    },
+    .{
+        .name = "alpenglow",
+        .pubkey = "mustRekeyVm2QHYB3JPefBiU4BY3Z6JkW2k3Scw5GWP",
+        .description = "SIMD-0326: Alpenglow: new consensus algorithm",
         .status = .unsupported,
         .note =
-        \\ TODO: Low Priority.
+        \\ TODO: Low Priority
         \\ Not scheduled for activation.
         \\ Implement as part of alpenglow in v2.
+        \\ Currently exists to match agave control flow gating.
         ,
     },
     .{

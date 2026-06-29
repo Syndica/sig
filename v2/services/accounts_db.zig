@@ -1,14 +1,13 @@
 const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
+const services = @import("services");
 
 const tel = lib.telemetry;
 
-const SnapshotDataRing = lib.snapshot.SnapshotDataRing;
 const SnapshotIter = lib.solana.snapshot.SnapshotIter;
 
 const Rooted = lib.accounts_db.Rooted;
-const RootedConfig = lib.accounts_db.RootedConfig;
 const AccountPool = lib.accounts_db.AccountPool;
 const AccountLookups = lib.accounts_db.AccountLookups;
 const RuntimeMetadata = lib.accounts_db.RuntimeMetadata;
@@ -21,15 +20,8 @@ pub const name = .accounts_db;
 pub const panic = start.panic;
 pub const std_options = start.options;
 
-pub const ReadOnly = struct {};
-pub const ReadWrite = struct {
-    config: *RootedConfig,
-    ready_snapshot_in: *SnapshotDataRing,
-    snapshot_metadata_out: *RuntimeMetadata,
-    account_pool: *AccountPool,
-    replay_lookups: *AccountLookups,
-    tel: *tel.Region,
-};
+pub const ReadOnly = services.accounts_db.ReadOnly;
+pub const ReadWrite = services.accounts_db.ReadWrite;
 
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");

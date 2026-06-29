@@ -1,10 +1,10 @@
 const std = @import("std");
 const Build = std.Build;
 
-const lib = @import("lib/lib.zig");
-/// The schema for services used in release.
-const topo_schema: lib.topology.Schema = .{ .services = @import("init/services.zon") };
-const topo_types = lib.topology.Unbound(topo_schema);
+const ServiceLib = struct {
+    service: []const u8,
+    lib: *Build.Step.Compile,
+};
 
 const test_install_dir: Build.Step.InstallArtifact.Options.Dir = .{
     .override = .{ .custom = "bin/tests" },
@@ -112,7 +112,7 @@ pub fn build(b: *Build) !void {
             .install_subdir = "kcov",
         });
         install_dir.step.dependOn(&run.step);
-        test_step.dependOn(&install_dir.step);
+        unit_test_step.dependOn(&install_dir.step);
         break :kcov_merge run;
     } else null;
 
@@ -192,16 +192,26 @@ pub fn build(b: *Build) !void {
             .{ .name = "feature-set-id", .module = feature_set_id },
         },
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
+    _ = addTestOutputs(b, unit_test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "lib",
         .root_module = lib_mod,
         .filters = filters,
         .use_llvm = use_llvm,
     });
 
+    const services_mod = b.createModule(.{
+        .root_source_file = b.path("init/services.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "lib", .module = lib_mod },
+        },
+    });
+
     const runner_imports: RunnerModuleOptions.Imports = .{
         .sig_lib = lib_mod,
         .tracy = tracy_mod,
+        .services = services_mod,
     };
 
     const sig_init_mod = createRunnerModule(b, .{
@@ -210,7 +220,7 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
         .imports = runner_imports,
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
+    _ = addTestOutputs(b, unit_test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "sig-init",
         .root_module = sig_init_mod,
         .filters = filters,
@@ -249,7 +259,7 @@ pub fn build(b: *Build) !void {
             .root_module = module,
             .use_llvm = true,
         });
-        _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
+        _ = addTestOutputs(b, unit_test_step, null, artifact_opts, kcov_merge_run, .{
             .name = "shred-stream",
             .root_module = module,
             .filters = filters,
@@ -277,7 +287,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "tracy", .module = tracy_mod },
         },
     });
-    _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
+    _ = addTestOutputs(b, unit_test_step, null, artifact_opts, kcov_merge_run, .{
         .name = "start_service",
         .root_module = start_service_mod,
         .use_llvm = true,
@@ -287,13 +297,13 @@ pub fn build(b: *Build) !void {
     var doc_service_modules: std.ArrayListUnmanaged(DocGenModule) = .empty;
     defer doc_service_modules.deinit(b.allocator);
 
-    var service_libs: std.EnumArray(topo_types.ServiceId, *Build.Step.Compile) = .initUndefined();
+    const services = @typeInfo(@import("init/services.zig")).@"struct".decls;
+    var service_libs: [services.len]ServiceLib = undefined;
 
     // build + link services
-    inline for (topo_schema.services) |s| {
-        const service_name = @tagName(s.name);
+    inline for (services, &service_libs) |service, *service_lib_entry| {
         const service_mod = b.createModule(.{
-            .root_source_file = b.path("services").path(b, service_name ++ ".zig"),
+            .root_source_file = b.path("services").path(b, service.name ++ ".zig"),
             .target = target,
             .optimize = optimize,
             .single_threaded = true,
@@ -303,27 +313,28 @@ pub fn build(b: *Build) !void {
                 .{ .name = "lib", .module = lib_mod },
                 .{ .name = "start_service", .module = start_service_mod },
                 .{ .name = "tracy", .module = tracy_mod },
+                .{ .name = "services", .module = services_mod },
             },
         });
 
         const service_lib = b.addLibrary(.{
-            .name = service_name,
+            .name = service.name,
             .root_module = service_mod,
             .use_llvm = true,
         });
         sig_init_mod.linkLibrary(service_lib);
-        service_libs.set(s.name, service_lib);
+        service_lib_entry.* = .{ .service = service.name, .lib = service_lib };
 
-        _ = addTestOutputs(b, test_step, null, artifact_opts, kcov_merge_run, .{
+        _ = addTestOutputs(b, unit_test_step, null, artifact_opts, kcov_merge_run, .{
             .root_module = service_mod,
-            .name = service_name,
+            .name = service.name,
             .filters = filters,
             .use_llvm = use_llvm,
         });
 
         try doc_service_modules.append(
             b.allocator,
-            .{ .name = service_name, .module = service_mod },
+            .{ .name = service.name, .module = service_mod },
         );
     }
 
@@ -331,7 +342,7 @@ pub fn build(b: *Build) !void {
         .{
             .name = "gossip",
             .root_source_file = b.path("tests/gossip/main.zig"),
-            .services = .initMany(&.{ .gossip, .telemetry }),
+            .services = &.{ "gossip", "telemetry" },
         },
     };
 
@@ -406,13 +417,14 @@ const RunnerModuleOptions = struct {
     const Imports = struct {
         sig_lib: *Build.Module,
         tracy: *Build.Module,
+        services: *Build.Module,
     };
 };
 
 const BlackBoxTest = struct {
     name: []const u8,
     root_source_file: Build.LazyPath,
-    services: std.EnumSet(topo_types.ServiceId),
+    services: []const []const u8,
 };
 
 fn addBlackBoxTest(
@@ -424,7 +436,7 @@ fn addBlackBoxTest(
         target: Build.ResolvedTarget,
         optimize: std.builtin.OptimizeMode,
         imports: RunnerModuleOptions.Imports,
-        service_libs: *const std.EnumArray(topo_types.ServiceId, *Build.Step.Compile),
+        service_libs: []const ServiceLib,
     },
 ) void {
     const exe = b.addExecutable(.{
@@ -438,18 +450,11 @@ fn addBlackBoxTest(
         .use_llvm = true,
     });
 
-    var service_iter = options.test_config.services.iterator();
-    while (service_iter.next()) |service_id| {
-        exe.linkLibrary(options.service_libs.get(service_id));
+    for (options.test_config.services) |service_name| {
+        exe.linkLibrary(for (options.service_libs) |entry| {
+            if (std.mem.eql(u8, entry.service, service_name)) break entry.lib;
+        } else std.debug.panic("unknown service '{s}'", .{service_name}));
     }
-
-    exe.root_module.addAnonymousImport("schema", .{
-        .root_source_file = topoSchemaSubsetFile(
-            b,
-            b.fmt("{s}-schema.zon", .{options.test_config.name}),
-            options.test_config.services,
-        ),
-    });
 
     _ = addExeOutputs(b, exe, bb_test_step, artifact_opts, .{
         .dest_dir = test_install_dir,
@@ -467,23 +472,9 @@ fn createRunnerModule(
         .imports = &.{
             .{ .name = "lib", .module = options.imports.sig_lib },
             .{ .name = "tracy", .module = options.imports.tracy },
+            .{ .name = "services", .module = options.imports.services },
         },
     });
-}
-
-fn topoSchemaSubsetFile(
-    b: *Build,
-    name: []const u8,
-    service_ids: std.EnumSet(topo_types.ServiceId),
-) Build.LazyPath {
-    var rendered: std.Io.Writer.Allocating = .init(b.allocator);
-    var sz: std.zon.Serializer = .{
-        .options = .{ .whitespace = true },
-        .indent_level = 0,
-        .writer = &rendered.writer,
-    };
-    topo_schema.renderPrettyZonSubset(&sz, .{}, service_ids) catch std.debug.panic("OOM", .{});
-    return b.addWriteFiles().add(name, rendered.written());
 }
 
 const ExeOutput = struct {

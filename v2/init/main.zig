@@ -8,7 +8,6 @@
 //!  - Waiting for first service failure, and shutdown
 //!
 //! See `services` for how this works.
-//!
 
 const std = @import("std");
 
@@ -18,7 +17,12 @@ comptime {
 
 const lib = @import("lib");
 const tracy = @import("tracy");
+const services = @import("services");
 const tel = lib.telemetry;
+const topology = lib.topology;
+
+const Region = topology.Region;
+const ServiceRegions = topology.ServiceRegions;
 
 const Config = struct {
     sandboxing_mode: SandboxingMode,
@@ -83,6 +87,78 @@ const Config = struct {
     pub fn format(self: Config, writer: *std.Io.Writer) !void {
         try std.zon.stringify.serialize(self, .{ .whitespace = true }, writer);
     }
+
+    fn zonFmt(self: Config, params: ZonFmt.Params) ZonFmt {
+        return .{
+            .value = self,
+            .params = params,
+        };
+    }
+
+    const ZonFmt = struct {
+        value: Config,
+        params: Params,
+
+        pub const Params = struct {
+            indent_level: u8 = 0,
+        };
+
+        pub fn format(self: ZonFmt, w: *std.Io.Writer) std.Io.Writer.Error!void {
+            var sz: std.zon.Serializer = .{
+                .writer = w,
+                .indent_level = self.params.indent_level,
+                .options = .{ .whitespace = true },
+            };
+            var struct_sz = try sz.beginStruct(.{
+                .whitespace_style = .{ .wrap = true },
+            });
+
+            const FieldEnum = std.meta.FieldEnum(Config);
+            inline for (@typeInfo(Config).@"struct".fields) |s_field| {
+                try struct_sz.fieldPrefix(s_field.name);
+                const field_ptr = &@field(self.value, s_field.name);
+                switch (@field(FieldEnum, s_field.name)) {
+                    .sandboxing_mode,
+                    .cluster,
+                    .leader_schedule_file,
+                    => try sz.value(field_ptr.*, .{}),
+                    // print all structs as mult-line
+                    .gossip,
+                    .shred_network,
+                    .snapshot,
+                    .accounts_db,
+                    .telemetry,
+                    => {
+                        var field_struct_sz = try sz.beginStruct(.{
+                            .whitespace_style = .{ .wrap = true },
+                        });
+                        inline for (@typeInfo(s_field.type).@"struct".fields) |s_field_field| {
+                            try field_struct_sz.fieldPrefix(s_field_field.name);
+                            try sz.value(@field(field_ptr, s_field_field.name), .{});
+                        }
+                        try field_struct_sz.end();
+                    },
+                }
+            }
+
+            try struct_sz.end();
+        }
+    };
+};
+
+/// Names + region wiring for every service in the runner. One field per service:
+/// the field name selects the service to spawn (`svc_main_<name>`); the value is
+/// a `ServiceLayout` whose `.ro`/`.rw` fields hold the typed regions matching the
+/// service's `ReadOnly`/`ReadWrite` schema in `init/services.zig`.
+const Topology = struct {
+    net: ServiceRegions(services.net),
+    gossip: ServiceRegions(services.gossip),
+    shred_receiver: ServiceRegions(services.shred_receiver),
+    replay: ServiceRegions(services.replay),
+    snapshot: ServiceRegions(services.snapshot),
+    accounts_db: ServiceRegions(services.accounts_db),
+    telemetry: ServiceRegions(services.telemetry),
+    exec: ServiceRegions(services.exec),
 };
 
 pub fn main() !void {
@@ -126,7 +202,7 @@ pub fn main() !void {
     };
     defer std.zon.parse.free(allocator, config);
 
-    std.log.info("config: {f}", .{config});
+    std.log.info("config: {f}", .{config.zonFmt(.{})});
 
     const gossip_cluster_info: lib.gossip.ClusterInfo =
         try .getFromEcho(config.gossip.port, config.cluster);
@@ -136,346 +212,219 @@ pub fn main() !void {
     var reader_buf: [4096]u8 = undefined;
     var reader = schedule_file.reader(&reader_buf);
 
-    const service_map = try topology.serviceMap(.{
-        // gossip constants
-        .gossip_config = .{
-            .cluster_info = gossip_cluster_info,
-            // TODO: read this from identity file in signer service
-            .keypair = .fromKeyPair(.generate()),
-            .turbine_recv_port = config.shred_network.recv_port,
-            .advertise_tvu_port = config.gossip.advertise_tvu_port,
-        },
-        // shred constants
-        .shred_recv_config = .{
-            .schedule_string = &reader.interface,
-            .shred_version = gossip_cluster_info.shred_version,
-        },
-        // snapshot constants
-        .snapshot_config = .{
-            .folder_path = config.snapshot.folder,
-            .cluster = config.cluster,
-            .known_validators = config.snapshot.known_validators,
-        },
-        // accounts_db constants + rooted memory
-        .accounts_db_config = .{
-            .file_path = config.accounts_db.file,
-            .memory = config.accounts_db.rooted.toBytes(),
-        },
+    // -- Create + initialise shared memory regions -- //
 
-        // net -> shred
-        .net_to_shred = .{ .port = config.shred_network.recv_port },
-        // net <-> gossip
-        .net_to_gossip = .{ .port = config.gossip.port },
+    const gossip_params: lib.gossip.Config.InitParams = .{
+        .cluster_info = gossip_cluster_info,
+        // TODO: read this from identity file in signer service
+        .keypair = .fromKeyPair(.generate()),
+        .turbine_recv_port = config.shred_network.recv_port,
+        .advertise_tvu_port = config.gossip.advertise_tvu_port,
+    };
+    var gossip_config: Region(lib.gossip.Config) = try .sized(gossip_params.size());
+    gossip_params.init(gossip_config.ptr());
 
-        // gossip -(source)-> snapshot
-        .gossip_source_to_snapshot = {},
-        // snapshot -> accounts_db
-        .snapshot_ready_to_accounts_db = {},
-        // pool <-> { accounts_db, replay }
-        .account_pool = .{ .memory = config.accounts_db.unrooted.toBytes() },
+    var shred_recv_config: Region(lib.shred.RecvConfig) = try .simple();
+    const shred_recv_data = shred_recv_config.ptr();
+    try lib.solana.LeaderSchedule.fromCommand(&shred_recv_data.leader_schedule, &reader.interface);
+    shred_recv_data.shred_version = gossip_cluster_info.shred_version;
 
-        // shred receiver -> replay
-        .shreds_to_replay = {},
-        // accounts_db -> replay
-        .snapshot_metadata = {},
-        // replay <-> accounts_db
-        .replay_account_lookups = {},
+    var snapshot_config: Region(lib.snapshot.SnapshotConfig) = try .simple();
+    try populateSnapshotConfig(snapshot_config.ptr(), config.snapshot, config.cluster);
 
+    var accounts_db_config: Region(lib.accounts_db.RootedConfig) = try .sized(
+        @sizeOf(lib.accounts_db.RootedConfig) + config.accounts_db.rooted.toBytes(),
+    );
+    accounts_db_config.ptr().file_len = @intCast(config.accounts_db.file.len);
+    @memcpy(
+        accounts_db_config.ptr().file_path[0..accounts_db_config.ptr().file_len],
+        config.accounts_db.file,
+    );
+    accounts_db_config.ptr().memory_len = config.accounts_db.rooted.toBytes();
+
+    const net_to_shred_params: lib.net.Pair.InitParams =
+        .{ .port = config.shred_network.recv_port };
+    var net_to_shred: Region(lib.net.Pair) = try .sized(net_to_shred_params.size());
+    net_to_shred_params.init(net_to_shred.ptr());
+
+    const net_to_gossip_params: lib.net.Pair.InitParams = .{ .port = config.gossip.port };
+    var net_to_gossip: Region(lib.net.Pair) = try .sized(net_to_gossip_params.size());
+    net_to_gossip_params.init(net_to_gossip.ptr());
+
+    var gossip_source_to_snapshot: Region(lib.snapshot.SnapshotSourceRing) = try .simple();
+    gossip_source_to_snapshot.ptr().init();
+
+    var snapshot_ready_to_accounts_db: Region(lib.snapshot.SnapshotDataRing) = try .simple();
+    snapshot_ready_to_accounts_db.ptr().init();
+
+    var snapshot_metadata: Region(lib.accounts_db.RuntimeMetadata) = try .simple();
+    snapshot_metadata.ptr().init();
+
+    const unrooted_memory = config.accounts_db.unrooted.toBytes();
+    var account_pool: Region(lib.accounts_db.AccountPool) =
+        try .sized(@sizeOf(lib.accounts_db.AccountPool) + unrooted_memory);
+    account_pool.ptr().init(unrooted_memory);
+
+    var shreds_to_replay: Region(lib.shred.DeshredRing) = try .simple();
+    shreds_to_replay.ptr().init();
+
+    var replay_account_lookups: Region(lib.accounts_db.AccountLookups) = try .simple();
+    replay_account_lookups.ptr().init();
+
+    var transaction_pool: Region(lib.replay.TransactionPool) =
+        try .sized(lib.replay.TransactionPool.size());
+    transaction_pool.ptr().init();
+
+    var block_pool: Region(lib.replay.BlockPool) = try .sized(lib.replay.BlockPool.size());
+    block_pool.ptr().init();
+
+    var exec_req_response: Region(lib.replay.ExecReqResponse) = try .simple();
+    exec_req_response.ptr().init();
+
+    // The telemetry service owns one share; every other telemetry share belongs to a service
+    // that will call signalReady once it has registered its metrics/log stream.
+    const telemetry_params: tel.Region.InitParams = .{
+        .port = config.telemetry.port,
+        .log_filters_encoded = log_filters.written(),
+        .service_count = topology.countRegionShares(Topology, tel.Region) - 1,
+        .id_mem_len = 4096 * 16,
+        .gauges_len = 4096 * 2,
+        .histogram_data_len = 4096 * 3,
+    };
+    var telemetry_region: Region(tel.Region) = try .sized(telemetry_params.info().regionSize());
+    telemetry_region.ptr().init(telemetry_params);
+
+    // -- Build the topology and spawn -- //
+
+    const mode: topology.Mode = switch (config.sandboxing_mode) {
+        .sandboxed => .sandboxed,
+        .threaded => .threaded,
+    };
+
+    var children: topology.Children(Topology) = undefined;
+    try children.spawn(mode, .{
+        .net = .{
+            .ro = .{},
+            .rw = .{
+                .gossip_pair = net_to_gossip.finish(),
+                .shred_pair = net_to_shred.finish(),
+                .tel = telemetry_region.finish(),
+            },
+        },
+        .gossip = .{
+            .ro = .{ .config = gossip_config.finish() },
+            .rw = .{
+                .net_pair = net_to_gossip.finish(),
+                .gossip_to_snapshot = gossip_source_to_snapshot.finish(),
+                .tel = telemetry_region.finish(),
+            },
+        },
+        .shred_receiver = .{
+            .ro = .{ .config = shred_recv_config.finish() },
+            .rw = .{
+                .snapshot_metadata = snapshot_metadata.finish(),
+                .tvu_socket = net_to_shred.finish(),
+                .deshredded_out = shreds_to_replay.finish(),
+                .tel = telemetry_region.finish(),
+            },
+        },
+        .replay = .{
+            .ro = .{},
+            .rw = .{
+                .snapshot_metadata_in = snapshot_metadata.finish(),
+                .deshredded_in = shreds_to_replay.finish(),
+                .replay_transaction_pool = transaction_pool.finish(),
+                .block_pool = block_pool.finish(),
+                .exec_req_response = exec_req_response.finish(),
+                .tel = telemetry_region.finish(),
+            },
+        },
+        .snapshot = .{
+            .ro = .{ .config = snapshot_config.finish() },
+            .rw = .{
+                .source_from_gossip = gossip_source_to_snapshot.finish(),
+                .ready_snapshot_out = snapshot_ready_to_accounts_db.finish(),
+                .tel = telemetry_region.finish(),
+            },
+        },
+        .accounts_db = .{
+            .ro = .{},
+            .rw = .{
+                .config = accounts_db_config.finish(),
+                .ready_snapshot_in = snapshot_ready_to_accounts_db.finish(),
+                .snapshot_metadata_out = snapshot_metadata.finish(),
+                .account_pool = account_pool.finish(),
+                .replay_lookups = replay_account_lookups.finish(),
+                .tel = telemetry_region.finish(),
+            },
+        },
         .telemetry = .{
-            .port = config.telemetry.port,
-            .log_filters_encoded = log_filters.written(),
-            .service_count = @intCast(
-                topology.countTotalBindingShares(.telemetry) - 1,
-            ),
-
-            .id_mem_len = 4096 * 16,
-            .gauges_len = 4096 * 2,
-
-            .histogram_data_len = 4096 * 3,
+            .ro = .{},
+            .rw = .{ .region = telemetry_region.finish() },
         },
-
-        .transaction_pool = {},
-        .block_pool = {},
-        .exec_req_response = {},
+        .exec = .{
+            .ro = .{
+                .replay_transaction_pool = transaction_pool.finish(),
+                .block_pool = block_pool.finish(),
+            },
+            .rw = .{ .exec_req_response = exec_req_response.finish() },
+        },
     });
-
-    switch (config.sandboxing_mode) {
-        .sandboxed => try topology.spawnAndWait(&service_map),
-        .threaded => try topology.spawnAndWaitNoSandbox(&service_map),
-    }
+    try children.wait(null);
 
     tracy.message("exiting");
 }
 
-const topology_schema: lib.topology.Schema = .{
-    .services = @import("./services.zon"),
-};
-
-pub const topology = lib.topology.Bind(topology_schema, Region, .init(.{
-    .gossip_config = .initOne(.@"gossip:config"),
-    .shred_recv_config = .initOne(.@"shred_receiver:config"),
-    .accounts_db_config = .initOne(.@"accounts_db:config"),
-    .snapshot_config = .initOne(.@"snapshot:config"),
-
-    .net_to_shred = .initMany(&.{
-        .@"net:to_shred",
-        .@"shred_receiver:from_net",
-    }),
-    .net_to_gossip = .initMany(&.{
-        .@"net:to_gossip",
-        .@"gossip:from_net",
-    }),
-    .gossip_source_to_snapshot = .initMany(&.{
-        .@"gossip:source_to_snapshot",
-        .@"snapshot:source_from_gossip",
-    }),
-    .snapshot_ready_to_accounts_db = .initMany(&.{
-        .@"snapshot:ready_snapshot_out",
-        .@"accounts_db:ready_snapshot_in",
-    }),
-    .snapshot_metadata = .initMany(&.{
-        .@"accounts_db:snapshot_metadata_out",
-        .@"replay:snapshot_metadata_in",
-        .@"shred_receiver:snapshot_metadata",
-    }),
-    .account_pool = .initMany(&.{
-        .@"accounts_db:account_pool",
-    }),
-
-    .shreds_to_replay = .initMany(&.{
-        .@"shred_receiver:deshredded_out",
-        .@"replay:deshredded_in",
-    }),
-    .replay_account_lookups = .initMany(&.{
-        .@"accounts_db:replay_lookups",
-    }),
-    .telemetry = .initMany(&.{
-        .@"telemetry:main",
-        .@"net:telemetry",
-        .@"gossip:telemetry",
-        .@"shred_receiver:telemetry",
-        .@"snapshot:telemetry",
-        .@"accounts_db:telemetry",
-        .@"replay:telemetry",
-    }),
-    .exec_req_response = .initMany(&.{
-        .@"replay:exec_req_response",
-        .@"exec:exec_req_response",
-    }),
-    .transaction_pool = .initMany(&.{
-        .@"replay:transaction_pool",
-        .@"exec:transaction_pool",
-    }),
-    .block_pool = .initMany(&.{
-        .@"replay:block_pool",
-        .@"exec:block_pool",
-    }),
-}));
-
-pub const Region = union(enum) {
-    gossip_config: lib.gossip.Config.InitParams,
-    shred_recv_config: struct {
-        // TODO: this should not exist - remove once we can open snapshots again
-        schedule_string: *std.Io.Reader,
-        shred_version: u16,
-    },
-    snapshot_config: struct {
-        folder_path: []const u8,
-        cluster: lib.solana.Cluster,
-        known_validators: []const []const u8,
-    },
-    accounts_db_config: struct {
-        file_path: []const u8,
-        memory: usize,
-    },
-
-    net_to_shred: lib.net.Pair.InitParams,
-    net_to_gossip: lib.net.Pair.InitParams,
-
-    gossip_source_to_snapshot,
-    snapshot_ready_to_accounts_db,
-    account_pool: struct { memory: usize },
-
-    shreds_to_replay,
-    snapshot_metadata,
-
-    exec_req_response,
-    transaction_pool,
-    block_pool,
-
-    replay_account_lookups,
-
-    telemetry: tel.Region.InitParams,
-
-    pub const Tag = @typeInfo(Region).@"union".tag_type.?;
-
-    pub fn size(self: Region) usize {
-        return switch (self) {
-            .gossip_config => |cfg| cfg.size(),
-            .shred_recv_config => @sizeOf(lib.shred.RecvConfig),
-            .snapshot_config => @sizeOf(lib.snapshot.SnapshotConfig),
-            .accounts_db_config => |params| @sizeOf(lib.accounts_db.RootedConfig) + params.memory,
-
-            .net_to_gossip,
-            .net_to_shred,
-            => |cfg| cfg.size(),
-
-            .gossip_source_to_snapshot => @sizeOf(lib.snapshot.SnapshotSourceRing),
-            .snapshot_ready_to_accounts_db => @sizeOf(lib.snapshot.SnapshotDataRing),
-            .account_pool => |params| @sizeOf(lib.accounts_db.AccountPool) + params.memory,
-
-            .shreds_to_replay => @sizeOf(lib.shred.DeshredRing),
-            .snapshot_metadata => @sizeOf(lib.accounts_db.RuntimeMetadata),
-            .replay_account_lookups => @sizeOf(lib.accounts_db.AccountLookups),
-
-            .telemetry => |params| params.info().regionSize(),
-
-            .exec_req_response => @sizeOf(lib.replay.ExecReqResponse),
-            .transaction_pool => lib.replay.TransactionPool.size(),
-            .block_pool => lib.replay.BlockPool.size(),
-        };
+fn populateSnapshotConfig(
+    data: *lib.snapshot.SnapshotConfig,
+    cfg: Config.Snapshot,
+    cluster: lib.solana.Cluster,
+) !void {
+    if (cfg.known_validators.len == 0) {
+        std.log.err(
+            "known_validators must not be empty. Specify validator pubkeys, " ++
+                "or \"*\" to opt in to untrusted snapshot sources.",
+            .{},
+        );
+        return error.NoKnownValidators;
+    }
+    if (cfg.known_validators.len > lib.snapshot.SnapshotConfig.MAX_KNOWN_VALIDATORS) {
+        return error.TooManyKnownValidators;
     }
 
-    pub fn init(self: Region, buf: []align(std.heap.page_size_min) u8) !void {
-        std.log.info("Initialising: {}", .{std.meta.activeTag(self)});
+    @memcpy(data.folder_buffer[0..cfg.folder.len], cfg.folder);
+    data.folder_len = @intCast(cfg.folder.len);
+    data.cluster = cluster;
 
-        return switch (self) {
-            .gossip_config => |cfg| cfg.init(buf),
-            .shred_recv_config => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(lib.shred.RecvConfig));
-                const data: *lib.shred.RecvConfig = @ptrCast(buf);
+    const has_wildcard = for (cfg.known_validators) |entry| {
+        if (std.mem.eql(u8, entry, "*")) break true;
+    } else false;
 
-                try lib.solana.LeaderSchedule.fromCommand(
-                    &data.leader_schedule,
-                    cfg.schedule_string,
+    if (has_wildcard) {
+        if (cfg.known_validators.len > 1) {
+            std.log.warn(
+                "known_validators contains \"*\" alongside other entries; " ++
+                    "\"*\" takes precedence, ignoring the rest.",
+                .{},
+            );
+        }
+        data.known_validators_allow_all = true;
+        // NOTE: we zero out known_validators_len to make it clear that no validator pubkeys were provided.
+        data.known_validators_len = 0;
+    } else {
+        data.known_validators_allow_all = false;
+        data.known_validators_len = @intCast(cfg.known_validators.len);
+        for (
+            cfg.known_validators,
+            data.known_validators_buffer[0..cfg.known_validators.len],
+        ) |pkstr, *pkptr| {
+            pkptr.* = lib.solana.Pubkey.parseRuntime(pkstr) catch |err| {
+                std.log.err(
+                    "invalid known_validator entry '{s}': {s}",
+                    .{ pkstr, @errorName(err) },
                 );
-                data.shred_version = cfg.shred_version;
-            },
-            .snapshot_config => |cfg| {
-                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotConfig));
-                const data: *lib.snapshot.SnapshotConfig = @ptrCast(buf);
-
-                if (cfg.known_validators.len == 0) {
-                    std.log.err(
-                        "known_validators must not be empty. Specify validator " ++
-                            "pubkeys, or \"*\" to opt in to untrusted snapshot sources.",
-                        .{},
-                    );
-                    return error.NoKnownValidators;
-                }
-                if (cfg.known_validators.len > lib.snapshot.SnapshotConfig.MAX_KNOWN_VALIDATORS) {
-                    return error.TooManyKnownValidators;
-                }
-
-                @memcpy(data.folder_buffer[0..cfg.folder_path.len], cfg.folder_path);
-                data.folder_len = @intCast(cfg.folder_path.len);
-                data.cluster = cfg.cluster;
-
-                const has_wildcard = for (cfg.known_validators) |entry| {
-                    if (std.mem.eql(u8, entry, "*")) break true;
-                } else false;
-
-                if (has_wildcard) {
-                    if (cfg.known_validators.len > 1) {
-                        std.log.warn(
-                            "known_validators contains \"*\" alongside other entries; " ++
-                                "\"*\" takes precedence, ignoring the rest.",
-                            .{},
-                        );
-                    }
-                    data.known_validators_allow_all = true;
-                    // NOTE: we zero out known_validators_len to make it clear that no validator pubkeys were provided.
-                    data.known_validators_len = 0;
-                } else {
-                    data.known_validators_allow_all = false;
-                    data.known_validators_len = @intCast(cfg.known_validators.len);
-                    for (
-                        cfg.known_validators,
-                        data.known_validators_buffer[0..cfg.known_validators.len],
-                    ) |pkstr, *pkptr| {
-                        pkptr.* = lib.solana.Pubkey.parseRuntime(pkstr) catch |err| {
-                            std.log.err(
-                                "invalid known_validator entry '{s}': {s}",
-                                .{ pkstr, @errorName(err) },
-                            );
-                            return err;
-                        };
-                    }
-                }
-            },
-            .accounts_db_config => |params| {
-                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.RootedConfig) + params.memory);
-                const data: *lib.accounts_db.RootedConfig = @ptrCast(buf);
-
-                data.file_len = @intCast(params.file_path.len);
-                @memcpy(data.file_path[0..data.file_len], params.file_path);
-
-                data.memory_len = params.memory;
-            },
-
-            .net_to_shred,
-            .net_to_gossip,
-            => |cfg| cfg.init(buf),
-
-            .gossip_source_to_snapshot => {
-                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotSourceRing));
-                const data: *lib.snapshot.SnapshotSourceRing = @ptrCast(buf);
-                data.init();
-            },
-            .snapshot_ready_to_accounts_db => {
-                std.debug.assert(buf.len == @sizeOf(lib.snapshot.SnapshotDataRing));
-                const data: *lib.snapshot.SnapshotDataRing = @ptrCast(buf);
-                data.init();
-            },
-            .account_pool => |params| {
-                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.AccountPool) + params.memory);
-                const data: *lib.accounts_db.AccountPool = @ptrCast(buf);
-                data.init(params.memory);
-            },
-
-            .shreds_to_replay => {
-                std.debug.assert(buf.len == @sizeOf(lib.shred.DeshredRing));
-                const data: *lib.shred.DeshredRing = @ptrCast(buf);
-                data.init();
-            },
-            .snapshot_metadata => {
-                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.RuntimeMetadata));
-                const data: *lib.accounts_db.RuntimeMetadata = @ptrCast(buf);
-                data.init();
-            },
-            .replay_account_lookups => {
-                std.debug.assert(buf.len == @sizeOf(lib.accounts_db.AccountLookups));
-                const data: *lib.accounts_db.AccountLookups = @ptrCast(buf);
-                data.init();
-            },
-
-            .telemetry => |params| {
-                std.debug.assert(buf.len == params.info().regionSize());
-                const data: *tel.Region = @ptrCast(buf);
-
-                data.init(params);
-            },
-
-            .block_pool => {
-                std.debug.assert(buf.len == lib.replay.BlockPool.size());
-                const data: *lib.replay.BlockPool = @ptrCast(buf);
-
-                data.init();
-            },
-
-            .transaction_pool => {
-                std.debug.assert(buf.len == lib.replay.TransactionPool.size());
-                const data: *lib.replay.TransactionPool = @ptrCast(buf);
-
-                data.init();
-            },
-
-            .exec_req_response => {
-                std.debug.assert(buf.len == @sizeOf(lib.replay.ExecReqResponse));
-                const data: *lib.replay.ExecReqResponse = @ptrCast(buf);
-
-                data.init();
-            },
-        };
+                return err;
+            };
+        }
     }
-};
+}

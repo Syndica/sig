@@ -32,9 +32,7 @@ pub const Pair = extern struct {
             return @sizeOf(Pair);
         }
 
-        pub fn init(cfg: InitParams, buf: []align(std.heap.page_size_min) u8) void {
-            std.debug.assert(buf.len == @sizeOf(Pair));
-            const data: *Pair = @ptrCast(buf);
+        pub fn init(cfg: InitParams, data: *Pair) void {
             data.recv.init();
             data.send.init();
             data.port = cfg.port;

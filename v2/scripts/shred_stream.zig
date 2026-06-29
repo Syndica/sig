@@ -25,6 +25,7 @@ const TestMode = enum {
     drop,
     late,
     duplicate,
+    corrupt,
 
     fn parse(raw: []const u8) ?TestMode {
         if (std.mem.eql(u8, raw, "linear")) return .linear;
@@ -34,6 +35,7 @@ const TestMode = enum {
         if (std.mem.eql(u8, raw, "drop")) return .drop;
         if (std.mem.eql(u8, raw, "late")) return .late;
         if (std.mem.eql(u8, raw, "duplicate")) return .duplicate;
+        if (std.mem.eql(u8, raw, "corrupt")) return .corrupt;
         return null;
     }
 
@@ -46,12 +48,13 @@ const TestMode = enum {
             .drop => "drop",
             .late => "late",
             .duplicate => "duplicate",
+            .corrupt => "corrupt",
         };
     }
 
     fn usesSelectedShreds(self: TestMode) bool {
         return switch (self) {
-            .drop, .late, .duplicate => true,
+            .drop, .late, .duplicate, .corrupt => true,
             .linear, .reverse, .shuffle_global, .shuffle_slot => false,
         };
     }
@@ -97,6 +100,7 @@ const Config = struct {
     selected_count: usize = 1,
     shred_kind: ShredKindFilter = .any,
     plan_limit: usize = 20,
+    corrupt_bytes: usize = 1,
     dry_run: bool = false,
 
     fn slotSelected(self: Config, slot: Slot) bool {
@@ -133,6 +137,7 @@ const PartialConfig = struct {
     selected_count: ?usize = null,
     shred_kind: ?ShredKindFilter = null,
     plan_limit: ?usize = null,
+    corrupt_bytes: ?usize = null,
     dry_run: bool = false,
 
     fn finalize(self: PartialConfig) ParseArgsError!Config {
@@ -158,13 +163,13 @@ const PartialConfig = struct {
                 if (self.seed != null) {
                     std.debug.print(
                         "--seed is only valid with --test-mode shuffle-global, " ++
-                            "shuffle-slot, drop, late, or duplicate\n",
+                            "shuffle-slot, drop, late, duplicate, or corrupt\n",
                         .{},
                     );
                     return error.InvalidArguments;
                 }
             },
-            .shuffle_global, .shuffle_slot, .drop, .late, .duplicate => {
+            .shuffle_global, .shuffle_slot, .drop, .late, .duplicate, .corrupt => {
                 if (self.seed == null) {
                     std.debug.print("--test-mode {s} requires --seed\n", .{self.test_mode.name()});
                     return error.InvalidArguments;
@@ -182,25 +187,34 @@ const PartialConfig = struct {
         if (!self.test_mode.usesSelectedShreds()) {
             if (self.selected_count != null) {
                 std.debug.print(
-                    "--count is only valid with --test-mode drop, late, or duplicate\n",
+                    "--count is only valid with --test-mode drop, late, duplicate, or corrupt\n",
                     .{},
                 );
                 return error.InvalidArguments;
             }
             if (self.shred_kind != null) {
                 std.debug.print(
-                    "--shred-kind is only valid with --test-mode drop, late, or duplicate\n",
+                    "--shred-kind is only valid with --test-mode drop, late, " ++
+                        "duplicate, or corrupt\n",
                     .{},
                 );
                 return error.InvalidArguments;
             }
             if (self.plan_limit != null) {
                 std.debug.print(
-                    "--plan-limit is only valid with --test-mode drop, late, or duplicate\n",
+                    "--plan-limit is only valid with --test-mode drop, late, " ++
+                        "duplicate, or corrupt\n",
                     .{},
                 );
                 return error.InvalidArguments;
             }
+            if (self.corrupt_bytes != null) {
+                std.debug.print("--corrupt-bytes is only valid with --test-mode corrupt\n", .{});
+                return error.InvalidArguments;
+            }
+        } else if (self.test_mode != .corrupt and self.corrupt_bytes != null) {
+            std.debug.print("--corrupt-bytes is only valid with --test-mode corrupt\n", .{});
+            return error.InvalidArguments;
         }
 
         return .{
@@ -214,6 +228,7 @@ const PartialConfig = struct {
             .selected_count = self.selected_count orelse 1,
             .shred_kind = self.shred_kind orelse .any,
             .plan_limit = self.plan_limit orelse 20,
+            .corrupt_bytes = self.corrupt_bytes orelse 1,
             .dry_run = self.dry_run,
         };
     }
@@ -240,6 +255,7 @@ const Arg = enum {
     count,
     shred_kind,
     plan_limit,
+    corrupt_bytes,
     dry_run,
 
     fn parse(raw: []const u8) ?Arg {
@@ -254,6 +270,7 @@ const Arg = enum {
         if (std.mem.eql(u8, raw, "--count")) return .count;
         if (std.mem.eql(u8, raw, "--shred-kind")) return .shred_kind;
         if (std.mem.eql(u8, raw, "--plan-limit")) return .plan_limit;
+        if (std.mem.eql(u8, raw, "--corrupt-bytes")) return .corrupt_bytes;
         if (std.mem.eql(u8, raw, "--dry-run")) return .dry_run;
         return null;
     }
@@ -271,6 +288,7 @@ const Arg = enum {
             .count => "--count",
             .shred_kind => "--shred-kind",
             .plan_limit => "--plan-limit",
+            .corrupt_bytes => "--corrupt-bytes",
             .dry_run => "--dry-run",
         };
     }
@@ -323,6 +341,9 @@ fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
         try stdout.print("  selected_count: {d}\n", .{config.selected_count});
         try stdout.print("  shred_kind: {s}\n", .{config.shred_kind.name()});
         try stdout.print("  plan_limit: {d}\n", .{config.plan_limit});
+        if (config.test_mode == .corrupt) {
+            try stdout.print("  corrupt_bytes: {d}\n", .{config.corrupt_bytes});
+        }
     }
     try stdout.print("  dry_run: {}\n", .{config.dry_run});
     try stdout.print("  column_families:\n", .{});
@@ -581,6 +602,21 @@ const SelectedShredPlan = struct {
     fn deinit(self: *SelectedShredPlan, allocator: Allocator) void {
         self.selected_ref_indices.deinit(allocator);
         self.schedule.deinit(allocator);
+    }
+};
+
+const SelectedShredAction = enum {
+    skip,
+    send_twice,
+    send_corrupt,
+
+    fn fromTestMode(test_mode: TestMode) SelectedShredAction {
+        return switch (test_mode) {
+            .drop, .late => .skip,
+            .duplicate => .send_twice,
+            .corrupt => .send_corrupt,
+            .linear, .reverse, .shuffle_global, .shuffle_slot => unreachable,
+        };
     }
 };
 
@@ -999,10 +1035,10 @@ fn produceLedgerPackets(
             stop,
             progress,
         ),
-        .drop, .late, .duplicate => produceSelectedShredSchedule(
+        .drop, .late, .duplicate, .corrupt => produceSelectedShredSchedule(
             blockstore,
             selected_shreds.?,
-            config.test_mode,
+            config,
             writer,
             stop,
             progress,
@@ -1304,13 +1340,15 @@ fn buildSelectedShredPlan(
 fn produceSelectedShredSchedule(
     blockstore: *const AgaveBlockstore,
     selected_shreds: *const SelectedShredPlan,
-    test_mode: TestMode,
+    config: Config,
     writer: *StreamPacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
 ) !ProducerStats {
     const refs = selected_shreds.schedule.refs.items;
     const selected_ref_indices = selected_shreds.selected_ref_indices.items;
+    const selected_action = SelectedShredAction.fromTestMode(config.test_mode);
+    var prng = std.Random.DefaultPrng.init(config.seed.?);
 
     var stats: ProducerStats = .{ .slots = selected_shreds.schedule.selected_slots };
     var unpublished_packets: usize = 0;
@@ -1319,25 +1357,18 @@ fn produceSelectedShredSchedule(
     for (refs, 0..) |shred_ref, ref_index| {
         if (stop.load(.acquire)) break;
 
-        const is_selected = selected_cursor < selected_ref_indices.len and
-            selected_ref_indices[selected_cursor] == ref_index;
-        if (is_selected) selected_cursor += 1;
-
-        if (is_selected and test_mode != .duplicate) continue;
+        const is_selected = consumeSelectedRefIndex(
+            selected_ref_indices,
+            &selected_cursor,
+            ref_index,
+        );
+        if (is_selected and selected_action == .skip) continue;
 
         progress.current_slot.store(shred_ref.slot, .release);
         progress.store(stats);
-        try produceShredByRef(
-            blockstore,
-            shred_ref,
-            writer,
-            stop,
-            progress,
-            &unpublished_packets,
-            &stats,
-        );
 
-        if (is_selected and test_mode == .duplicate) {
+        if (!is_selected) {
+            // No special action for this shred, just send it.
             try produceShredByRef(
                 blockstore,
                 shred_ref,
@@ -1347,6 +1378,42 @@ fn produceSelectedShredSchedule(
                 &unpublished_packets,
                 &stats,
             );
+            continue;
+        }
+
+        switch (selected_action) {
+            .skip => unreachable,
+            .send_twice => {
+                try produceShredByRef(
+                    blockstore,
+                    shred_ref,
+                    writer,
+                    stop,
+                    progress,
+                    &unpublished_packets,
+                    &stats,
+                );
+                try produceShredByRef(
+                    blockstore,
+                    shred_ref,
+                    writer,
+                    stop,
+                    progress,
+                    &unpublished_packets,
+                    &stats,
+                );
+            },
+            .send_corrupt => try produceCorruptShredByRef(
+                blockstore,
+                shred_ref,
+                config.corrupt_bytes,
+                prng.random(),
+                writer,
+                stop,
+                progress,
+                &unpublished_packets,
+                &stats,
+            ),
         }
     }
 
@@ -1356,7 +1423,7 @@ fn produceSelectedShredSchedule(
         unpublished_packets = 0;
     }
 
-    if (test_mode == .late) {
+    if (config.test_mode == .late) {
         for (selected_ref_indices) |index| {
             if (stop.load(.acquire)) break;
             const shred_ref = refs[index];
@@ -1381,6 +1448,17 @@ fn produceSelectedShredSchedule(
 
     progress.store(stats);
     return stats;
+}
+
+fn consumeSelectedRefIndex(
+    selected_ref_indices: []const usize,
+    selected_cursor: *usize,
+    ref_index: usize,
+) bool {
+    if (selected_cursor.* >= selected_ref_indices.len) return false;
+    if (selected_ref_indices[selected_cursor.*] != ref_index) return false;
+    selected_cursor.* += 1;
+    return true;
 }
 
 fn countEligibleShreds(refs: []const ShredRef, shred_kind: ShredKindFilter) usize {
@@ -1461,6 +1539,65 @@ fn produceRefSchedule(
 
     progress.store(stats);
     return stats;
+}
+
+fn produceCorruptShredByRef(
+    blockstore: *const AgaveBlockstore,
+    shred_ref: ShredRef,
+    corrupt_bytes: usize,
+    random: std.Random,
+    writer: *StreamPacketRing.Iterator(.writer),
+    stop: *std.atomic.Value(bool),
+    progress: *ProducerProgress,
+    unpublished_packets: *usize,
+    stats: *ProducerStats,
+) !void {
+    var key_buf: [16]u8 = undefined;
+    writeShredKey(&key_buf, shred_ref.key());
+
+    var err_data: ?rocks.Data = null;
+    defer if (err_data) |err| err.deinit();
+
+    const cf = try blockstore.columnFamily(shred_ref.kind.columnFamilyName());
+    const packet = try blockstore.db.get(
+        cf,
+        key_buf[0..],
+        &err_data,
+    ) orelse return error.MissingShred;
+    defer packet.deinit();
+
+    if (packet.data.len > max_shred_packet_bytes) return error.ShredPacketTooLarge;
+
+    var corrupt_packet: [max_shred_packet_bytes]u8 = undefined;
+    const corrupt_data = corrupt_packet[0..packet.data.len];
+    @memcpy(corrupt_data, packet.data);
+    try corruptPacketBytes(corrupt_data, corrupt_bytes, random);
+
+    try publishPacket(
+        shred_ref.key(),
+        shred_ref.kind,
+        corrupt_data,
+        writer,
+        stop,
+        progress,
+        unpublished_packets,
+        stats,
+    );
+}
+
+fn corruptPacketBytes(packet_data: []u8, corrupt_bytes: usize, random: std.Random) !void {
+    if (corrupt_bytes > packet_data.len) return error.CorruptBytesExceedPacket;
+
+    var indices: [max_shred_packet_bytes]usize = undefined;
+    for (indices[0..packet_data.len], 0..) |*index, value| {
+        index.* = value;
+    }
+    random.shuffleWithIndex(usize, indices[0..packet_data.len], u64);
+
+    for (indices[0..corrupt_bytes]) |index| {
+        const bit_index: u3 = @intCast(random.uintLessThan(u8, 8));
+        packet_data[index] ^= @as(u8, 1) << bit_index;
+    }
 }
 
 fn produceShredByRef(
@@ -1697,6 +1834,7 @@ fn printSelectedShredPlan(
         .drop => "dropped",
         .late => "delayed",
         .duplicate => "duplicated",
+        .corrupt => "corrupted",
         .linear, .reverse, .shuffle_global, .shuffle_slot => unreachable,
     };
 
@@ -1974,6 +2112,9 @@ fn parseArgs(args: []const []const u8) ParseArgsError!ParseResult {
             .plan_limit => config.plan_limit = try parsePlanLimit(
                 try nextValue(args, &i, parsed_arg.name()),
             ),
+            .corrupt_bytes => config.corrupt_bytes = try parseCorruptBytes(
+                try nextValue(args, &i, parsed_arg.name()),
+            ),
             .dry_run => config.dry_run = true,
         }
     }
@@ -2017,7 +2158,7 @@ fn parseTestMode(value: []const u8) ParseArgsError!TestMode {
         std.debug.print("invalid test mode for --test-mode: {s}\n", .{value});
         std.debug.print(
             "valid test modes: linear, reverse, shuffle-global, shuffle-slot, drop, late, " ++
-                "duplicate\n",
+                "duplicate, corrupt\n",
             .{},
         );
         return error.InvalidArguments;
@@ -2065,6 +2206,18 @@ fn parsePlanLimit(value: []const u8) ParseArgsError!usize {
     };
 }
 
+fn parseCorruptBytes(value: []const u8) ParseArgsError!usize {
+    const corrupt_bytes = std.fmt.parseUnsigned(usize, value, 10) catch {
+        std.debug.print("invalid byte count for --corrupt-bytes: {s}\n", .{value});
+        return error.InvalidArguments;
+    };
+    if (corrupt_bytes == 0) {
+        std.debug.print("--corrupt-bytes must be greater than zero\n", .{});
+        return error.InvalidArguments;
+    }
+    return corrupt_bytes;
+}
+
 fn printHelp() void {
     std.debug.print(
         \\usage: shred-stream --ledger <path> --target <ip:port> [options]
@@ -2077,11 +2230,12 @@ fn printHelp() void {
         \\  --start-slot <slot>   First slot to stream
         \\  --end-slot <slot>     Inclusive last slot to stream
         \\  --rate-hz <float>     Maximum packets per second
-        \\  --test-mode <mode>    linear, reverse, shuffle-global, shuffle-slot, drop, late, or duplicate
+        \\  --test-mode <mode>    linear, reverse, shuffle-global, shuffle-slot, drop, late, duplicate, or corrupt
         \\  --seed <seed>         Decimal or 0x-prefixed seed for randomized test modes
-        \\  --count <n>           Number of selected shreds for drop/late/duplicate modes (default: 1)
-        \\  --shred-kind <kind>   any, data, or code shreds for drop/late/duplicate modes (default: any)
-        \\  --plan-limit <n>      Maximum affected slots to preview for drop/late/duplicate modes (default: 20)
+        \\  --count <n>           Number of selected shreds for selected-shred modes (default: 1)
+        \\  --shred-kind <kind>   any, data, or code shreds for selected-shred modes (default: any)
+        \\  --plan-limit <n>      Maximum affected slots to preview for selected-shred modes (default: 20)
+        \\  --corrupt-bytes <n>   Packet bytes to flip per selected shred in corrupt mode (default: 1)
         \\  --dry-run             Read and print stats without sending UDP
         \\  -h, --help            Print this help
         \\
@@ -2243,6 +2397,27 @@ test "parse arguments" {
         try std.testing.expectEqual(@as(usize, 7), result.config.plan_limit);
     }
 
+    {
+        const result = try parseArgs(&.{
+            "--ledger",        "ledger",
+            "--target",        "127.0.0.1:8002",
+            "--start-slot",    "10",
+            "--end-slot",      "20",
+            "--test-mode",     "corrupt",
+            "--seed",          "12345",
+            "--count",         "4",
+            "--shred-kind",    "data",
+            "--plan-limit",    "7",
+            "--corrupt-bytes", "3",
+        });
+        try std.testing.expectEqual(.corrupt, result.config.test_mode);
+        try std.testing.expectEqual(@as(?u64, 12345), result.config.seed);
+        try std.testing.expectEqual(@as(usize, 4), result.config.selected_count);
+        try std.testing.expectEqual(.data, result.config.shred_kind);
+        try std.testing.expectEqual(@as(usize, 7), result.config.plan_limit);
+        try std.testing.expectEqual(@as(usize, 3), result.config.corrupt_bytes);
+    }
+
     try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
@@ -2290,6 +2465,12 @@ test "parse arguments" {
     try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
+        "--test-mode", "corrupt",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",    "ledger",
+        "--target",    "127.0.0.1:8002",
         "--test-mode", "drop",
         "--seed",      "1",
     }));
@@ -2305,6 +2486,13 @@ test "parse arguments" {
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "duplicate",
+        "--seed",      "1",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",    "ledger",
+        "--target",    "127.0.0.1:8002",
+        "--test-mode", "corrupt",
         "--seed",      "1",
     }));
 
@@ -2338,6 +2526,14 @@ test "parse arguments" {
         "--start-slot", "10",
         "--end-slot",   "20",
         "--plan-limit", "5",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",        "ledger",
+        "--target",        "127.0.0.1:8002",
+        "--start-slot",    "10",
+        "--end-slot",      "20",
+        "--corrupt-bytes", "1",
     }));
 
     try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
@@ -2375,6 +2571,36 @@ test "parse arguments" {
         "--test-mode",  "drop",
         "--seed",       "1",
         "--plan-limit", "not-a-limit",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",        "ledger",
+        "--target",        "127.0.0.1:8002",
+        "--start-slot",    "10",
+        "--end-slot",      "20",
+        "--test-mode",     "drop",
+        "--seed",          "1",
+        "--corrupt-bytes", "1",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",        "ledger",
+        "--target",        "127.0.0.1:8002",
+        "--start-slot",    "10",
+        "--end-slot",      "20",
+        "--test-mode",     "corrupt",
+        "--seed",          "1",
+        "--corrupt-bytes", "0",
+    }));
+
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+        "--ledger",        "ledger",
+        "--target",        "127.0.0.1:8002",
+        "--start-slot",    "10",
+        "--end-slot",      "20",
+        "--test-mode",     "corrupt",
+        "--seed",          "1",
+        "--corrupt-bytes", "not-a-count",
     }));
 
     try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
