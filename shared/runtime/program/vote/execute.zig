@@ -618,8 +618,7 @@ fn authorize(
                 try validateIsSigner(epoch_authorized_voter, signers);
             };
 
-            // V3's setNewAuthorizedVoter handles prior_voters internally.
-            // V4's setNewAuthorizedVoter has no prior_voters (by design).
+            // V4's setNewAuthorizedVoter has no prior_voters (SIMD-0185).
             const maybe_err = try vote_state.setNewAuthorizedVoter(
                 allocator,
                 authorized,
