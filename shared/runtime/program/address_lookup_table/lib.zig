@@ -2,7 +2,6 @@ const sig = @import("../../../lib.zig");
 
 comptime {
     if (@import("builtin").is_test) {
-        _ = @import("execute.zig");
         _ = @import("instruction.zig");
         _ = @import("state.zig");
     }
@@ -20,9 +19,3 @@ pub const ProgramState = state.ProgramState;
 const Pubkey = sig.core.Pubkey;
 
 pub const ID: Pubkey = .parse("AddressLookupTab1e1111111111111111111111111");
-pub const SOURCE_ID: Pubkey = .parse("AhXWrD9BBUYcKjtpA3zuiiZG4ysbo6C6wjHo1QhERk6A");
-
-pub const execute = @import("execute.zig").execute;
-
-// https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L23
-pub const COMPUTE_UNITS = 750;

@@ -6,16 +6,20 @@ const Pubkey = sig.core.Pubkey;
 /// Based off of: https://cmph.sourceforge.net/papers/esa09.pdf.
 /// Meant for low key amounts (<= ~32).
 pub fn pht(V: type, entries: []const struct { Pubkey, V }) type {
-    const LAMBDA = 5;
+    @setEvalBranchQuota(500_000);
+
+    const LAMBDA = 3;
     const table_len = entries.len;
     const bucket_len = (table_len + LAMBDA - 1) / LAMBDA;
 
     const window = 4;
     const length = 32;
     const unique = outer: for (0..length - window + 1) |i| {
-        const first = entries[0][0].data[i..][0..window];
-        for (entries[1..]) |entry| {
-            if (std.mem.eql(u8, entry[0].data[i..][0..window], first)) continue :outer;
+        for (entries, 0..) |entry_a, a| {
+            for (entries[a + 1 ..]) |entry_b| {
+                if (std.mem.eql(u8, entry_a[0].data[i..][0..window], entry_b[0].data[i..][0..window]))
+                    continue :outer;
+            }
         }
         break i;
     } else @compileError("keys have no unique window");
@@ -78,9 +82,10 @@ pub fn pht(V: type, entries: []const struct { Pubkey, V }) type {
             }
             std.mem.sortUnstable(Bucket, &g.buckets, {}, Bucket.greaterThan);
             var generation = 0;
+            const search_len = @max(table_len, 16);
             buckets: for (g.buckets) |bucket| {
-                for (0..table_len) |d1| {
-                    disps: for (0..table_len) |d2| {
+                for (0..search_len) |d1| {
+                    disps: for (0..search_len) |d2| {
                         var vta: []const struct { usize, usize } = &.{};
                         generation += 1;
                         for (bucket.keys) |key| {
@@ -105,7 +110,6 @@ pub fn pht(V: type, entries: []const struct { Pubkey, V }) type {
     var prng: std.Random.DefaultPrng = .init(0);
     const random = prng.random();
 
-    @setEvalBranchQuota(100_000);
     const key, const disps, const data = for (0..100) |_| {
         const key = random.int(u8);
         var generator: Generator = .empty;
