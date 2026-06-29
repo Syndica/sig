@@ -478,6 +478,7 @@ pub fn Receiver(comptime Effects: type) type {
 
             // starting fec set reconstruction now
             // NOTE: as an optimisation we should reconstruct directly into the out buffer
+            const data_received_before_recovery = fec_set_ctx.data_shreds_received;
             {
                 const shreds_bitset, const shreds_reedsol_bufs = fec_set_ctx.erasureEncoded();
 
@@ -496,6 +497,41 @@ pub fn Receiver(comptime Effects: type) type {
             }
 
             std.debug.assert(fec_set_ctx.data_shreds_received.count() == FecSetCtx.data_shreds_max);
+
+            // Re-validate every data shred we just reconstructed. RS recovery
+            // fills the erasure-protected region (header + payload) but leaves
+            // the trailer (chained_merkle_root, merkle proof, optional
+            // retransmitter sig) and the leading signature untouched, so we
+            // can only re-check invariants derivable from the recovered
+            // bytes: structural layout, slot/fec_set_idx vs the pinned ctx,
+            // variant consistency, and positional `slot_idx`. The merkle and
+            // chained-merkle roots are pinned on `FecSetCtx` from the first
+            // wire shred; a recovered shred can't disagree with values it
+            // doesn't carry.
+            //
+            // agave runs the equivalent gauntlet in
+            // `Blockstore::handle_shred_recovery` -> `check_insert_data_shred`.
+            for (0..FecSetCtx.data_shreds_max) |idx| {
+                if (data_received_before_recovery.isSet(idx)) continue;
+                var recovered_packet: Packet = .{
+                    .data = fec_set_ctx.data_shreds_buf[idx],
+                    .len = lib.shred.Shred.min_size,
+                    .addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0),
+                };
+                const recovered = Shred.fromPacketChecked(&recovered_packet) catch {
+                    state.markSlotDead(shred.slot);
+                    return error.RecoveredShredMalformed;
+                };
+                if (recovered.slot != shred.slot or
+                    recovered.fec_set_idx != shred.fec_set_idx or
+                    !recovered.variant.isData() or
+                    !recovered.variant.eql(fec_set_ctx.data_variant) or
+                    recovered.slot_idx != shred.fec_set_idx + idx)
+                {
+                    state.markSlotDead(shred.slot);
+                    return error.RecoveredShredMalformed;
+                }
+            }
 
             // writing out deshredded fec set
             {
@@ -538,7 +574,6 @@ pub fn Receiver(comptime Effects: type) type {
 
                 var bytes_written: u16 = 0;
                 for (&fec_set_ctx.data_shreds_buf) |*buffer| {
-                    // TODO: I think we need to re-validate the data shreds that we recovered
                     const data_shred: *const Shred = Shred.fromBufferUnchecked(buffer);
                     const payload = data_shred.dataPayload();
                     @memcpy(finished.payload_buf[bytes_written..][0..payload.len], payload);
@@ -604,6 +639,7 @@ pub const PacketError = error{
     EquivocationFecSetIdAlreadyInProgress,
     UnknownLeader,
     SignatureVerificationFailed,
+    RecoveredShredMalformed,
 };
 
 pub const PacketSuccess = union(enum) {
