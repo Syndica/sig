@@ -124,6 +124,17 @@ const Effects = struct {
     /// before being encoded to proto.
     fec_set_results: std.ArrayListUnmanaged(FECSetParseResult) = .empty,
 
+    /// Per-(slot, slot_idx) data shreds the Receiver has accepted, either
+    /// directly from the wire or via RS recovery. Drives partial-FEC tick
+    /// verification: agave's blockstore-driven
+    /// `get_slot_entries_with_shred_info` reconstructs entries from any
+    /// DATA_COMPLETE-bounded contiguous data-shred run regardless of FEC
+    /// completion, but sig's Receiver only surfaces data on FEC
+    /// completion. The harness reaches into the in-progress and just-
+    /// completed FEC contexts to recover the same view so a partial FEC set
+    /// whose prefix is DATA_COMPLETE-terminated still gets tick-verified.
+    data_shreds: std.ArrayListUnmanaged(DataShredCapture) = .empty,
+
     /// Set when any callback's allocator failed.
     allocator_failed: bool = false,
 
@@ -131,6 +142,20 @@ const Effects = struct {
     /// `chained_merkle_root` mismatch. Fuzz inputs are single-slot, so a
     /// single flag captures the whole-block rejection signal.
     chain_conflict: bool = false,
+
+    /// Per-data-shred scratch for partial-FEC tick verification.
+    const DataShredCapture = struct {
+        slot: Slot,
+        slot_idx: u32,
+        /// LAST_SHRED_IN_BATCH (a.k.a. data_complete): terminates an entry
+        /// batch — the bytes from index `prev_batch_end .. slot_idx`
+        /// inclusive bincode-decode as one `Vec<Entry>`.
+        data_complete: bool,
+        /// LAST_SHRED_IN_SLOT: terminates the slot. Implies `data_complete`.
+        last_shred_in_slot: bool,
+        /// Owned copy of `Shred.dataPayload()`. Freed in `reset` / `deinit`.
+        payload: []u8,
+    };
 
     /// Per-FEC-set scratch before slot-wide sort + chain validation.
     const FECSetParseResult = struct {
@@ -153,6 +178,8 @@ const Effects = struct {
     fn deinit(self: *Effects, alloc: Allocator) void {
         for (self.fec_set_results.items) |it| alloc.free(it.payload);
         self.fec_set_results.deinit(alloc);
+        for (self.data_shreds.items) |it| alloc.free(it.payload);
+        self.data_shreds.deinit(alloc);
         self.shred_parse_results.deinit(alloc);
     }
 
@@ -160,9 +187,37 @@ const Effects = struct {
     fn reset(self: *Effects) void {
         for (self.fec_set_results.items) |it| self.allocator.free(it.payload);
         self.fec_set_results.clearRetainingCapacity();
+        for (self.data_shreds.items) |it| self.allocator.free(it.payload);
+        self.data_shreds.clearRetainingCapacity();
         self.shred_parse_results.clearRetainingCapacity();
         self.allocator_failed = false;
         self.chain_conflict = false;
+    }
+
+    /// Copy every data shred the Receiver has accepted into this FEC
+    /// context (received or RS-recovered) into `data_shreds`. Iterates
+    /// `data_shreds_received` — set bits index the populated entries of
+    /// `data_shreds_buf`; unset bits are uninitialised memory.
+    fn captureFromFecSetCtx(self: *Effects, ctx: *const FecSetCtx) void {
+        var bit_iter = ctx.data_shreds_received.iterator(.{});
+        while (bit_iter.next()) |idx| {
+            const shred: *const Shred = .fromBufferUnchecked(&ctx.data_shreds_buf[idx]);
+            const payload_copy = self.allocator.dupe(u8, shred.dataPayload()) catch {
+                self.allocator_failed = true;
+                return;
+            };
+            self.data_shreds.append(self.allocator, .{
+                .slot = shred.slot,
+                .slot_idx = shred.slot_idx,
+                .data_complete = shred.code_or_data.data.flags.data_complete,
+                .last_shred_in_slot = shred.code_or_data.data.flags.last_shred_in_slot,
+                .payload = payload_copy,
+            }) catch {
+                self.allocator.free(payload_copy);
+                self.allocator_failed = true;
+                return;
+            };
+        }
     }
 
     // ----- Receiver(Effects) interface contract -----
@@ -180,6 +235,11 @@ const Effects = struct {
         completed: *const DeshreddedFecSet,
         ctx: *const FecSetCtx,
     ) void {
+        // Capture every data shred in the completed FEC set for partial-FEC
+        // tick verification. After recovery the bitset is `.initFull()`, so
+        // this picks up both received and RS-recovered shreds.
+        self.captureFromFecSetCtx(ctx);
+
         // parent_offset is per-shred, not per-FEC-set; read it from the
         // first data shred (all 32 are valid after RS recovery).
         const first_data: *const Shred = .fromBufferUnchecked(&ctx.data_shreds_buf[0]);
@@ -365,6 +425,15 @@ fn executeShredParse(
         };
     }
 
+    // In-progress FEC sets never fire `reportFecSetCompleted`; reach into
+    // the Receiver to capture their already-accepted data shreds so the
+    // partial-FEC tick-verify path sees them. Mirrors agave's blockstore,
+    // which exposes every inserted shred to `get_slot_entries_with_shred_info`
+    // regardless of FEC completion.
+    for (st.receiver.in_progress.signature_map.values()) |fec_set_ctx| {
+        st.effects.captureFromFecSetCtx(fec_set_ctx);
+    }
+
     if (st.effects.allocator_failed) return error.OutOfMemory;
 
     return try buildProtoEffects(alloc, &st.effects, ctx.shred_version);
@@ -377,6 +446,11 @@ fn executeShredParse(
 fn fecOrder(_: void, a: Effects.FECSetParseResult, b: Effects.FECSetParseResult) bool {
     if (a.slot != b.slot) return a.slot < b.slot;
     return a.fec_set_index < b.fec_set_index;
+}
+
+fn dataShredOrder(_: void, a: Effects.DataShredCapture, b: Effects.DataShredCapture) bool {
+    if (a.slot != b.slot) return a.slot < b.slot;
+    return a.slot_idx < b.slot_idx;
 }
 
 fn buildProtoEffects(
@@ -425,22 +499,15 @@ fn buildProtoEffects(
 
         var expected_idx: u32 = 0;
         var prev_merkle: ?Hash = null;
-        // When the chain breaks (gap, out-of-order, or root mismatch) the
-        // rest of the slot is dropped from tick verification.
-        var chain_broken = false;
-        // Number of FECs that chained, before any break.
-        var slot_chained_count: usize = 0;
         for (effects.fec_set_results.items[i..j]) |*r| {
             // Gap or out-of-order -> remaining sets in this slot are dropped.
             if (r.fec_set_index != expected_idx) {
                 out.block_parse_result = .REJECTED_INVALID_HEADER;
-                chain_broken = true;
                 break;
             }
             if (prev_merkle) |pm| {
                 if (!pm.eql(&r.chained_merkle_root)) {
                     out.block_parse_result = .REJECTED_INVALID_HEADER;
-                    chain_broken = true;
                     break;
                 }
             }
@@ -460,19 +527,41 @@ fn buildProtoEffects(
 
             prev_merkle = r.merkle_root;
             expected_idx += FEC_DATA_SHREDS;
-            slot_chained_count += 1;
         }
 
-        // Tick verification over the chain-valid prefix. Tick-window or
-        // bincode failures reject the whole block.
-        if (!chain_broken and slot_chained_count > 0 and out.block_parse_result != .REJECTED_INVALID_HEADER) {
-            switch (try verifyTicksForSlot(alloc, slot, effects.fec_set_results.items[i .. i + slot_chained_count])) {
+        i = j;
+    }
+
+    // Per-slot tick verification, driven by every data shred the Receiver
+    // accepted (received or RS-recovered). Mirrors agave's
+    // `get_slot_entries_with_shred_info + verify_ticks`, which reconstructs
+    // entries at DATA_COMPLETE-batch granularity from whatever data shreds
+    // sit in the blockstore — independent of FEC-set completion. The
+    // FEC-completion-only path would skip slots whose terminating FEC set
+    // never completed, missing the DATA_COMPLETE-bounded prefix agave still
+    // tick-verifies; that gap surfaced as crash 1a39b2 (Sig accepted a
+    // partial-FEC slot agave rejected for `TooFewTicks`).
+    std.sort.heap(Effects.DataShredCapture, effects.data_shreds.items, {}, dataShredOrder);
+    var ds_i: usize = 0;
+    while (ds_i < effects.data_shreds.items.len) {
+        const slot = effects.data_shreds.items[ds_i].slot;
+        var ds_j = ds_i + 1;
+        while (ds_j < effects.data_shreds.items.len and
+            effects.data_shreds.items[ds_j].slot == slot) : (ds_j += 1)
+        {}
+
+        if (out.block_parse_result != .REJECTED_INVALID_HEADER) {
+            switch (try verifyTicksFromDataShreds(
+                alloc,
+                slot,
+                effects.data_shreds.items[ds_i..ds_j],
+            )) {
                 .ok => {},
                 .rejected => out.block_parse_result = .REJECTED_INVALID_HEADER,
             }
         }
 
-        i = j;
+        ds_i = ds_j;
     }
 
     return out;
@@ -480,17 +569,20 @@ fn buildProtoEffects(
 
 const TickVerifyOutcome = enum { ok, rejected };
 
-/// Per-slot tick verification. Decodes each shredder batch (concat the
-/// `data_complete` run, bincode-decode as `Vec<Entry>`) and runs the v2
-/// `verifyTicks` primitive. Returns `.rejected` on any decode or
-/// tick-window failure, `.ok` otherwise; a trailing in-progress batch is
-/// dropped silently per protocol.
-fn verifyTicksForSlot(
+/// Per-slot tick verification driven by accepted data shreds. Walks the
+/// contiguous prefix `slot_idx = 0, 1, 2, ...`; each DATA_COMPLETE-bounded
+/// run concatenates to one bincode `Vec<Entry>` record (one shredder
+/// batch). Stops at the first gap — agave's blockstore lookup behaves the
+/// same way: `get_slot_entries_with_shred_info` only returns entries from
+/// the contiguous-from-zero prefix. A trailing run with no terminating
+/// DATA_COMPLETE is silently dropped. Returns `.rejected` on any decode or
+/// tick-window failure, `.ok` otherwise.
+fn verifyTicksFromDataShreds(
     alloc: Allocator,
     slot: Slot,
-    fecs: []const Effects.FECSetParseResult,
+    shreds: []const Effects.DataShredCapture, // sorted by slot_idx
 ) error{OutOfMemory}!TickVerifyOutcome {
-    std.debug.assert(fecs.len > 0);
+    std.debug.assert(shreds.len > 0);
 
     // Per-slot scratch arena. 64 MiB easily covers any one slot (raw shred
     // data is at most ~2 MiB pre-recovery).
@@ -499,55 +591,37 @@ fn verifyTicksForSlot(
     defer alloc.free(fba_buf);
     var fba = std.heap.FixedBufferAllocator.init(fba_buf);
 
-    // slot_is_full := any FEC in this slot carried LAST_SHRED_IN_SLOT.
+    // slot_is_full := any captured shred carried LAST_SHRED_IN_SLOT.
     var slot_is_full = false;
-    for (fecs) |r| slot_is_full = slot_is_full or r.slot_complete;
+    for (shreds) |s| slot_is_full = slot_is_full or s.last_shred_in_slot;
 
-    // Each `data_complete` run is one bincode `Vec<Entry>` record (one per
-    // shredder batch); concatenate the run and decode.
     var all_entries: std.ArrayListUnmanaged(sig_v2.solana.transaction.Entry) = .empty;
     // No deinit: storage is in `fba_buf`, freed via defer above.
 
-    var batch_start: usize = 0;
-    while (batch_start < fecs.len) {
-        // Group up to (and including) the next data_complete FEC. A trailing
-        // run with no data_complete is an incomplete batch and is dropped.
-        var batch_end: usize = batch_start;
-        while (batch_end < fecs.len and !fecs[batch_end].data_complete) batch_end += 1;
-        if (batch_end >= fecs.len) break; // no terminating data_complete; drop
-        batch_end += 1; // include the data_complete FEC itself
-
-        // Concatenate the batch payloads into a contiguous bincode input.
-        var total: usize = 0;
-        for (fecs[batch_start..batch_end]) |r| total += r.payload.len;
-
-        // Zero-byte batch -> zero entries. Feeding this to bincode would
-        // fail to decode the u64 length prefix and incorrectly reject.
-        if (total == 0) {
-            batch_start = batch_end;
-            continue;
+    var expected_idx: u32 = 0;
+    var batch_buf: std.ArrayListUnmanaged(u8) = .empty;
+    for (shreds) |s| {
+        // Gap in the contiguous-from-zero prefix -> stop. Anything past a
+        // gap is unreachable from `get_slot_entries_with_shred_info`.
+        if (s.slot_idx != expected_idx) break;
+        batch_buf.appendSlice(fba.allocator(), s.payload) catch return .rejected;
+        if (s.data_complete) {
+            // Zero-byte batch -> zero entries. Bincode would fail to decode
+            // the u64 length prefix and incorrectly reject.
+            if (batch_buf.items.len != 0) {
+                var reader: std.Io.Reader = .fixed(batch_buf.items);
+                const entries = sig_v2.solana.bincode.read(
+                    &fba,
+                    &reader,
+                    sig_v2.solana.bincode.Vec(sig_v2.solana.transaction.Entry),
+                ) catch return .rejected;
+                for (entries.items) |e| {
+                    all_entries.append(fba.allocator(), e) catch return .rejected;
+                }
+            }
+            batch_buf = .empty;
         }
-
-        const batch_buf = fba.allocator().alloc(u8, total) catch return .rejected;
-        var off: usize = 0;
-        for (fecs[batch_start..batch_end]) |r| {
-            @memcpy(batch_buf[off..][0..r.payload.len], r.payload);
-            off += r.payload.len;
-        }
-
-        // bincode-deserialise as Vec<Entry>. On any error, reject.
-        var reader: std.Io.Reader = .fixed(batch_buf);
-        const entries = sig_v2.solana.bincode.read(
-            &fba,
-            &reader,
-            sig_v2.solana.bincode.Vec(sig_v2.solana.transaction.Entry),
-        ) catch return .rejected;
-
-        for (entries.items) |e| {
-            all_entries.append(fba.allocator(), e) catch return .rejected;
-        }
-
-        batch_start = batch_end;
+        expected_idx += 1;
     }
 
     // No decoded entries -> skip tick verify (would reject TooFewTicks when
