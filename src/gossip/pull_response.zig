@@ -151,7 +151,7 @@ test "gossip.pull_response: test filtering values works" {
 test "gossip.pull_response: zero-capacity filter does not divide by zero" {
     // a filter with keys but a zero-length bit array makes the response call
     // contains on a zero-capacity filter
-    var prng = std.Random.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     var gossip_table = try GossipTable.init(std.testing.allocator, std.testing.allocator);

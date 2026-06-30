@@ -203,10 +203,10 @@ test "deserialized zero-capacity filter does not divide by zero" {
     var buf: [10000]u8 = undefined;
     const out = try bincode.writeToSlice(buf[0..], bloom, .{});
 
-    var deserialized = try bincode.readFromSlice(testing.allocator, Bloom, out, .{});
+    var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, .{});
     defer bincode.free(testing.allocator, deserialized);
 
-    try testing.expectEqual(@as(u64, 0), deserialized.bits.capacity());
+    try testing.expectEqual(@as(usize, 0), deserialized.bits.capacity());
     try testing.expect(!deserialized.contains(&[_]u8{ 1, 2, 3 }));
     deserialized.add(&[_]u8{ 1, 2, 3 });
 }

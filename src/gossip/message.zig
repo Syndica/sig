@@ -205,9 +205,9 @@ test "pull request with a zero-capacity filter does not divide by zero" {
     const deserialized = try bincode.readFromSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
     defer bincode.free(testing.allocator, deserialized);
 
-    const pull_filter = deserialized.PullRequest[0].filter;
-    try testing.expectEqual(@as(u64, 0), pull_filter.bits.capacity());
-    try testing.expect(!pull_filter.contains(&[_]u8{ 1, 2, 3 }));
+    const bloom = deserialized.PullRequest[0].filter;
+    try testing.expectEqual(@as(usize, 0), bloom.bits.capacity());
+    try testing.expect(!bloom.contains(&[_]u8{ 1, 2, 3 }));
 }
 
 test "push message serializes and deserializes correctly" {
