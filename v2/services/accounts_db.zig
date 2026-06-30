@@ -9,8 +9,6 @@ const SnapshotIter = lib.solana.snapshot.SnapshotIter;
 
 const Rooted = lib.accounts_db.Rooted;
 const AccountPool = lib.accounts_db.AccountPool;
-const AccountLookups = lib.accounts_db.AccountLookups;
-const RuntimeMetadata = lib.accounts_db.RuntimeMetadata;
 
 comptime {
     _ = start;
