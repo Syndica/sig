@@ -277,7 +277,11 @@ pub fn loadAndExecuteTransaction(
                 env.slot,
             )) @min(running_data_size, compute_budget_limits.loaded_accounts_bytes) else size: {
                 var sum: u32 = 0;
-                for (rollbacks.slice()) |r| sum += @intCast(r.account.data.len);
+                for (rollbacks.slice()) |r| {
+                    const len_u32 = std.math.cast(u32, r.account.data.len) orelse
+                        std.math.maxInt(u32);
+                    sum +|= len_u32;
+                }
                 break :size sum;
             };
 
