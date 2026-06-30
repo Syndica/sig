@@ -56,6 +56,7 @@ pub const ExecRequest = extern struct {
     request_kind: RequestKind,
     data: extern union {
         txn_exec: extern struct {
+            recent_blockhash: solana.Hash,
             block_idx: BlockRef,
             tx_idx: TransactionPool.ItemId,
             n_account_refs: u8,
@@ -73,6 +74,7 @@ pub const ExecResponse = extern struct {
     request_kind: RequestKind,
     data: extern union {
         txn_exec: extern struct {
+            recent_blockhash: solana.Hash,
             block_idx: BlockRef,
             tx_idx: TransactionPool.ItemId,
             n_account_refs: u8,
@@ -85,6 +87,7 @@ pub const ExecResponse = extern struct {
 
 pub const TxExecResult = extern struct {
     success: bool,
+    tx_hash: solana.Hash,
 };
 
 /// Stores hashes of transactions that have been recently executed.

@@ -360,6 +360,12 @@ pub const VersionedMessage = union(enum) {
         }
     }
 
+    pub fn recentBlockhash(self: *const VersionedMessage) *const Hash {
+        return switch (self.*) {
+            inline .legacy, .v0 => |*msg| &msg.recent_blockhash,
+        };
+    }
+
     pub fn computeHash(self: *const VersionedMessage) Hash {
         var buffer: [1232]u8 = undefined;
         var hashing: std.Io.Writer.Hashing(std.crypto.hash.Blake3) = .init(&buffer);
