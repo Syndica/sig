@@ -85,6 +85,7 @@ pub const ExecResponse = extern struct {
 
 pub const TxExecResult = extern struct {
     success: bool,
+    tx_hash: solana.Hash,
 };
 
 /// Represents a minimal subset of what is known as `StatusCache` in agave.
