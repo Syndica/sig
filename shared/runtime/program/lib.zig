@@ -55,7 +55,7 @@ const Program = struct {
 };
 
 // zig fmt: off
-const native_entries = [_]struct { sig.core.Pubkey, Program }{
+pub const NATIVE = sig.utils.pht(Program, &.{
     .{ bpf_loader.v1.ID,        .{ .func = bpf_loader.execute } },
     .{ bpf_loader.v2.ID,        .{ .func = bpf_loader.execute } },
     .{ bpf_loader.v3.ID,        .{ .func = bpf_loader.execute } },
@@ -64,17 +64,8 @@ const native_entries = [_]struct { sig.core.Pubkey, Program }{
     .{ vote.ID,                 .{ .func = vote.execute } },
     .{ compute_budget.ID,       .{ .func = compute_budget.entrypoint } },
     .{ zk_elgamal.ID,           .{ .func = zk_elgamal.execute, .gate = .zk_elgamal_proof_program_enabled } },
-};
+});
 // zig fmt: on
-
-pub const NATIVE = struct {
-    pub fn get(target: *const sig.core.Pubkey) ?Program {
-        for (&native_entries) |*entry| {
-            if (entry[0].equals(target)) return entry[1];
-        }
-        return null;
-    }
-};
 
 // zig fmt: off
 pub const PRECOMPILE = sig.utils.pht(Program, &.{

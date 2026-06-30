@@ -58,9 +58,17 @@ pub fn pht(V: type, entries: []const struct { Pubkey, V }) type {
             }
         };
 
-        fn hash(x: *const Pubkey, key: u8) Hash {
+        fn hash(x: *const Pubkey, key: u32) Hash {
             const int: u32 = @bitCast(x.data[unique..][0..window].*);
-            const result = @as(u64, key) *% int;
+            // SplitMix64 finalizer over (key, int) — `key *% int` alone has
+            // too little mixing to reliably produce a perfect hash for
+            // small entry sets.
+            var result = (@as(u64, key) << 32) | @as(u64, int);
+            result ^= result >> 33;
+            result *%= 0xFF51AFD7ED558CCD;
+            result ^= result >> 33;
+            result *%= 0xC4CEB9FE1A85EC53;
+            result ^= result >> 33;
             return .{
                 .g = @intCast(result >> 32),
                 .f1 = @truncate(result),
@@ -102,12 +110,9 @@ pub fn pht(V: type, entries: []const struct { Pubkey, V }) type {
         }
     };
 
-    var prng: std.Random.DefaultPrng = .init(0);
-    const random = prng.random();
-
-    @setEvalBranchQuota(100_000);
-    const key, const disps, const data = for (0..100) |_| {
-        const key = random.int(u8);
+    @setEvalBranchQuota(1_000_000);
+    const key, const disps, const data = for (0..100) |key_int| {
+        const key: u32 = @intCast(key_int);
         var generator: Generator = .empty;
         for (entries, 0..) |entry, i| {
             generator.hashes[i] = Generator.hash(&entry[0], key);
@@ -120,7 +125,7 @@ pub fn pht(V: type, entries: []const struct { Pubkey, V }) type {
             data[i] = entries[e.?];
         }
         break .{ key, generator.disps, data };
-    } else @compileError("could not compute pft");
+    } else @compileError("could not compute pht");
 
     return struct {
         pub fn get(target: *const Pubkey) ?V {
