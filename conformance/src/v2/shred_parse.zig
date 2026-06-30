@@ -239,7 +239,23 @@ const Effects = struct {
         const first_data: *const Shred = .fromBufferUnchecked(&ctx.data_shreds_buf[0]);
         const parent_offset: u16 = first_data.code_or_data.data.parent_offset;
 
-        const payload_copy = self.allocator.dupe(u8, completed.payload()) catch {
+        // FD parity: emit the full concatenation of every data shred's data
+        // region across all 32 slots, regardless of any mid-set
+        // `data_complete` flag. The Receiver's `DeshreddedFecSet.payload`
+        // intentionally truncates at the first `data_complete` boundary
+        // because downstream consumers only want the deshredded entry
+        // batch, but the conformance fixture mirrors agave's
+        // `FecSetParseResult.payload` which is the raw 32-shred concat.
+        var payload = std.ArrayListUnmanaged(u8){};
+        defer payload.deinit(self.allocator);
+        for (&ctx.data_shreds_buf) |*buffer| {
+            const data_shred: *const Shred = .fromBufferUnchecked(buffer);
+            payload.appendSlice(self.allocator, data_shred.dataPayload()) catch {
+                self.allocator_failed = true;
+                return;
+            };
+        }
+        const payload_copy = payload.toOwnedSlice(self.allocator) catch {
             self.allocator_failed = true;
             return;
         };
