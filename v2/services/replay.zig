@@ -124,7 +124,8 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
     var forest: MerkleForest = try .init(allocator);
 
-    var unrooted: Unrooted = try .init(allocator);
+    const unrooted: *Unrooted = try allocator.create(Unrooted);
+    unrooted.init();
 
     const deserial_states: *DeserialStates = try allocator.create(DeserialStates);
     @memset(deserial_states, null);
@@ -311,7 +312,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 deserial_states,
                 &exec_request_sender,
 
-                &unrooted,
+                unrooted,
                 rw.account_pool,
                 rw.account_lookups,
             );
@@ -322,48 +323,96 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 }
 
 /// Holds the accounts mutated for each tracked Block.
-const Unrooted = struct {
-    const MapCtx = struct {
-        pool: *lib.accounts_db.AccountPool,
-        map: *const Map,
+const Unrooted = extern struct {
+    maps: [max_blocks]Map, // we could initialise with `= @splat(.{})`, but lld disagrees
 
-        pub fn hash(ctx: MapCtx, key: *const Pubkey) u32 {
-            _ = ctx;
-            // TODO: we can use a smaller hash without truncating for better performance
-            return @truncate(key.hash(123));
+    // [firedancer] https://github.com/firedancer-io/firedancer/blob/c2050b9c7fb8787b1eaaf9e50cac421a7281f70f/src/flamenco/runtime/fd_cost_tracker.h#L78
+    // TODO: calculate this constant ourselves / keep it up to date
+    const max_mutations_per_block = 367_535;
+
+    const max_blocks = lib.replay.BlockPool.capacity;
+
+    // 2MiB entries + 4B len
+    const Map = extern struct {
+        len: u32 = 0, // only used to assert `max_mutations_per_block` holds true
+        data: [N]AccountRef = @splat(lib.accounts_db.AccountPool.invalid_index), // 2MiB
+
+        const N = std.math.ceilPowerOfTwo(usize, max_mutations_per_block) catch unreachable;
+
+        fn EntryPtr(comptime SelfPtr: type) type {
+            return switch (SelfPtr) {
+                *Map => *AccountRef,
+                *const Map => *const AccountRef,
+                else => unreachable,
+            };
         }
 
-        pub fn eql(ctx: MapCtx, key_a: *const Pubkey, _: void, key_b_idx: usize) bool {
-            const b_account_ref = ctx.map.values()[key_b_idx];
-            return key_a.equals(&ctx.pool.getAccount(b_account_ref).pubkey);
+        fn entry(
+            self: anytype,
+            seed: u64,
+            account_pool: *lib.accounts_db.AccountPool,
+            pubkey: *const Pubkey,
+        ) EntryPtr(@TypeOf(self)) {
+            var i: usize = @intCast(pubkey.hash(seed) & (N - 1));
+
+            while (true) : (i = (i + 1) % N) {
+                if (self.data[i] == lib.accounts_db.AccountPool.invalid_index)
+                    return &self.data[i];
+                if (pubkey.equals(&account_pool.getAccount(self.data[i]).pubkey))
+                    return &self.data[i];
+            }
+        }
+
+        fn get(
+            self: *const Map,
+            seed: u64, // see `Unrooted.fetch` for how to use the correct seed
+            account_pool: *lib.accounts_db.AccountPool,
+            pubkey: *const Pubkey,
+        ) AccountRef {
+            return self.entry(seed, account_pool, pubkey).*;
+        }
+
+        // The map takes a ref to the new account.
+        // Returns the replaced entry, which the caller is expected to unref/free.
+        fn put(
+            self: *Map,
+            seed: u64, // see `Unrooted.fetch` for how to use the correct seed
+            account_pool: *lib.accounts_db.AccountPool,
+            new_account_ref: AccountRef,
+        ) AccountRef {
+            const zone = tracy.Zone.init(@src(), .{ .name = "Map.put" });
+            defer zone.deinit();
+
+            std.debug.assert(new_account_ref != lib.accounts_db.AccountPool.invalid_index);
+            const new_account = account_pool.getAccount(new_account_ref);
+            const pubkey: *const Pubkey = &new_account.pubkey;
+
+            const found_entry: *u32 = self.entry(seed, account_pool, pubkey);
+
+            // don't "replace" an accountref with itself!
+            std.debug.assert(found_entry.* != new_account_ref);
+
+            const old_account_ref = found_entry.*;
+            if (old_account_ref != lib.accounts_db.AccountPool.invalid_index) {
+                zone.text("replace");
+
+                std.debug.assert(pubkey.equals(&account_pool.getAccount(old_account_ref).pubkey));
+            } else {
+                zone.text("insert");
+
+                self.len += 1;
+                if (self.len > max_mutations_per_block) @panic("max_mutations_per_block exceeded");
+            }
+
+            found_entry.* = new_account_ref;
+            new_account.ref();
+
+            return old_account_ref;
         }
     };
 
-    // TODO: we'll want to share this map eventually, we should make our own extern fixed-size map.
-    // NOTE: this is where almost all of replay's memory usage comes from, this could be improved
-    // with a better map implementation.
-    const Map = std.ArrayHashMapUnmanaged(void, AccountRef, MapCtx, true);
-
-    maps: [lib.replay.BlockPool.capacity]Map,
-
-    fn init(allocator: std.mem.Allocator) !Unrooted {
-        // [firedancer] https://github.com/firedancer-io/firedancer/blob/c2050b9c7fb8787b1eaaf9e50cac421a7281f70f/src/flamenco/runtime/fd_cost_tracker.h#L78
-        // TODO: calculate this constant ourselves / keep it up to date
-        const max_mutations_per_block = 367_535;
-
-        var self: Unrooted = undefined;
-
-        for (&self.maps, 0..) |*map, i| {
-            map.* = .empty;
-
-            errdefer {
-                for (self.maps[0 .. i + 1]) |*deinit_map| deinit_map.deinit(allocator);
-            }
-
-            try map.ensureTotalCapacity(allocator, max_mutations_per_block);
-        }
-
-        return self;
+    fn init(self: *Unrooted) void {
+        for (&self.maps) |*map| map.* = .{};
     }
 
     /// Get an account purely from the unrooted store.
@@ -383,28 +432,32 @@ const Unrooted = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.fetch" });
         defer zone.deinit();
 
-        var current = block.ptr(block_pool);
-        while (current) |ancestor_block| {
-            const current_map = &self.maps[block_pool.ptrToIndex(ancestor_block).index().?];
+        // TODO:
+        // 1) create randomly + secretly at startup, to avoid performance degradation from attackers
+        //    using pre-made keys to cause bad clustering
+        // 2) change the seed used per block to avoid possibility of worst-case clustering
+        const seed = 123;
 
-            if (current_map.getAdapted(
-                key,
-                MapCtx{ .pool = account_pool, .map = current_map },
-            )) |found_account_ref| {
-                std.debug.assert(found_account_ref != lib.accounts_db.AccountPool.invalid_index);
-                const account = account_pool.getAccount(found_account_ref);
+        var current = block.ptr(block_pool);
+        while (current) |ancestor_block| : (current = ancestor_block.parent.ptr(block_pool)) {
+            const current_map: *const Map =
+                &self.maps[block_pool.ptrToIndex(ancestor_block).index().?];
+
+            const account_ref = current_map.get(seed, account_pool, key);
+            if (account_ref != lib.accounts_db.AccountPool.invalid_index) {
+                const account = account_pool.getAccount(account_ref);
                 account.ref();
 
                 zone.text("found");
-                return found_account_ref;
-            }
 
-            current = ancestor_block.parent.ptr(block_pool);
+                return account_ref;
+            }
         }
 
         return lib.accounts_db.AccountPool.invalid_index;
     }
 };
+
 // TODO:
 // 1) *never* block the replay thread (remove this function)
 // 2) introduce a basic transaction scheduler
