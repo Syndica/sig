@@ -658,16 +658,7 @@ fn executeTxnContext(
         .slots_per_year = genesis_config.slotsPerYear(),
     };
 
-    // Mirror solfuzz-agave: the dummy epoch-stakes entries are seeded with the
-    // fixture's `bank.total_epoch_stake`, so the `sol_get_epoch_stake` syscall
-    // (null vote pubkey) returns that total. Leaving it at 0 made the syscall
-    // return 0 and could spuriously trap programs that divide by the result.
-    // [agave] https://github.com/firedancer-io/agave/blob/0acaab9e8095346c703b47283accfb3e79c99917/runtime/src/epoch_stakes.rs#L256
-    const current_epoch_stakes: EpochStakes = blk: {
-        var stakes: EpochStakes = .EMPTY;
-        if (pb_txn_ctx.bank) |bank| stakes.total_stake = bank.total_epoch_stake;
-        break :blk stakes;
-    };
+    const current_epoch_stakes: EpochStakes = .EMPTY;
     defer current_epoch_stakes.deinit(allocator);
 
     var status_cache: StatusCache = .DEFAULT;
