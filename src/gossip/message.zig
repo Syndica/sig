@@ -184,6 +184,32 @@ test "pull request serializes and deserializes" {
     try std.testing.expectEqualDeep(pull, deserialized);
 }
 
+test "pull request with a zero-capacity filter does not divide by zero" {
+    // the filter encodes to capacity 0 (keys present, zero-length bit array)
+    const keypair = try KeyPair.generateDeterministic([_]u8{1} ** 32);
+    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+
+    const value = SignedGossipData.initSigned(&keypair, .{
+        .LegacyContactInfo = LegacyContactInfo.default(pubkey),
+    });
+
+    var filter = try GossipPullFilter.init(testing.allocator);
+    defer filter.deinit();
+    try filter.filter.addKey(1);
+
+    const request: GossipMessage = .{ .PullRequest = .{ filter, value } };
+
+    var buf = [_]u8{0} ** 1232;
+    const serialized = try bincode.writeToSlice(buf[0..], request, bincode.Params.standard);
+
+    const deserialized = try bincode.readFromSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
+    defer bincode.free(testing.allocator, deserialized);
+
+    const pull_filter = deserialized.PullRequest[0].filter;
+    try testing.expectEqual(@as(u64, 0), pull_filter.bits.capacity());
+    try testing.expect(!pull_filter.contains(&[_]u8{ 1, 2, 3 }));
+}
+
 test "push message serializes and deserializes correctly" {
     const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.generateDeterministic(kp_bytes);
