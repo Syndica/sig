@@ -879,7 +879,12 @@ pub const Uncompressed = struct {
         if (self.slots.len % 8 != 0) {
             return error.InvalidValue;
         }
-        // TODO: check BitVec.capacity()
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/gossip/src/epoch_slots.rs#L37-L41
+        // A BitVec<u8> with a length that's a multiple of 8 will always have
+        // len() equal to capacity(), assuming no bit manipulation.
+        if (self.slots.len != self.slots.capacity()) {
+            return error.InvalidValue;
+        }
     }
 };
 
@@ -897,7 +902,18 @@ pub fn BitVec(comptime T: type) type {
         }
 
         pub fn deinit(self: *const BitVec(T), allocator: std.mem.Allocator) void {
-            allocator.free(self.bits.?);
+            if (self.bits) |bits| {
+                allocator.free(bits);
+            }
+        }
+
+        /// Returns the total number of bits the BitVec can hold without
+        /// reallocation, i.e. the storage length in blocks times the bit
+        /// width of each block.
+        /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/gossip/src/epoch_slots.rs#L37
+        pub fn capacity(self: *const BitVec(T)) usize {
+            const bits = self.bits orelse return 0;
+            return bits.len * @bitSizeOf(T);
         }
     };
 }
@@ -2151,4 +2167,56 @@ test "sanitize vote" {
 
     vote.transaction.signatures = &[_]Signature{Signature.ZEROES} ** 3;
     try std.testing.expectError(error.TooManySignatures, vote.sanitize());
+}
+
+test "BitVec null bits deinit does not panic" {
+    // bits = null is produced by BitVec.initFromBitSet when capacity is zero.
+    // deinit must handle this gracefully instead of panicking on unwrap.
+    const bitvec = BitVec(u8){ .bits = null, .len = 0 };
+    bitvec.deinit(std.testing.allocator); // must not panic
+}
+
+test "BitVec capacity" {
+    // null bits → capacity 0
+    const null_bv = BitVec(u8){ .bits = null, .len = 0 };
+    try std.testing.expectEqual(@as(usize, 0), null_bv.capacity());
+
+    // non-null bits → capacity = blocks * bitSizeOf(T)
+    var block = [_]u8{ 0xFF, 0x00 };
+    const bv = BitVec(u8){ .bits = &block, .len = 16 };
+    try std.testing.expectEqual(@as(usize, 16), bv.capacity());
+}
+
+test "Uncompressed sanitize rejects null bits with nonzero len" {
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/gossip/src/epoch_slots.rs#L37-L41
+    // len != capacity must be rejected.
+    const slot = Uncompressed{
+        .first_slot = 0,
+        .num = 0,
+        .slots = .{ .bits = null, .len = 8 }, // len=8 but capacity=0
+    };
+    try std.testing.expectError(error.InvalidValue, slot.sanitize());
+}
+
+test "Uncompressed sanitize accepts null bits with zero len" {
+    // A zero-capacity BitVec is valid: len=0, bits=null.
+    const slot = Uncompressed{
+        .first_slot = 0,
+        .num = 0,
+        .slots = .{ .bits = null, .len = 0 },
+    };
+    try slot.sanitize();
+    slot.deinit(std.testing.allocator); // must not panic
+}
+
+test "Uncompressed sanitize rejects len != capacity" {
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/gossip/src/epoch_slots.rs#L37-L41
+    // bits has 1 byte (capacity=8) but len=16 → mismatch.
+    var block = [_]u8{0x00};
+    const slot = Uncompressed{
+        .first_slot = 0,
+        .num = 0,
+        .slots = .{ .bits = &block, .len = 16 },
+    };
+    try std.testing.expectError(error.InvalidValue, slot.sanitize());
 }
