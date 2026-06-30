@@ -26,7 +26,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     var request_reader = rw.exec_req_response.request_ring.get(.reader);
     var response_writer = rw.exec_req_response.response_ring.get(.writer);
 
-    var deserialised_buf: [4096]u8 = undefined;
+    var deserialised_buf: [16 * 1024]u8 = undefined;
     var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
 
     while (true) {
