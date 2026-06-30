@@ -4,7 +4,7 @@ const ipc = @import("ipc.zig");
 const accounts_db = @import("accounts_db.zig");
 
 // This is a bit large currently because of the unrooted store
-pub const scratch_buffer_size = 12 * 1024 * 1024 * 1024;
+pub const scratch_buffer_size = 4 * 1024 * 1024 * 1024;
 
 pub const TransactionPool = collections.SharedPool([1232]u8, 10_000);
 
