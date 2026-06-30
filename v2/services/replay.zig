@@ -111,7 +111,7 @@ var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 const DeserialStates = [lib.replay.BlockPool.capacity]?BlockDeserialState;
 const BlockExecStates = [lib.replay.BlockPool.capacity]?BlockExecState;
 
-const AccountRef = lib.accounts_db.AccountPool.Index;
+const AccountRef = lib.accounts_db.AccountPool.AccountRef;
 const Pubkey = lib.solana.Pubkey;
 
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
@@ -167,7 +167,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             const response_data = response.data.txn_exec;
 
             for (response_data.account_ref_buf[0..response_data.n_account_refs]) |account_ref| {
-                if (account_ref == lib.accounts_db.AccountPool.invalid_index) continue;
+                if (account_ref == .invalid) continue;
 
                 const account = rw.account_pool.getAccount(account_ref);
                 if (account.unref()) rw.account_pool.free(account_ref);
@@ -310,7 +310,7 @@ const Unrooted = extern struct {
     // 2MiB entries + 4B len
     const Map = extern struct {
         len: u32 = 0, // only used to assert `max_mutations_per_block` holds true
-        data: [N]AccountRef = @splat(lib.accounts_db.AccountPool.invalid_index), // 2MiB
+        data: [N]AccountRef = @splat(.invalid), // 2MiB
 
         const N = std.math.ceilPowerOfTwo(usize, max_mutations_per_block) catch unreachable;
 
@@ -331,7 +331,7 @@ const Unrooted = extern struct {
             var i: usize = @intCast(pubkey.hash(seed) & (N - 1));
 
             while (true) : (i = (i + 1) % N) {
-                if (self.data[i] == lib.accounts_db.AccountPool.invalid_index)
+                if (self.data[i] == .invalid)
                     return &self.data[i];
                 if (pubkey.equals(&account_pool.getAccount(self.data[i]).pubkey))
                     return &self.data[i];
@@ -358,7 +358,7 @@ const Unrooted = extern struct {
             const zone = tracy.Zone.init(@src(), .{ .name = "Map.put" });
             defer zone.deinit();
 
-            std.debug.assert(new_account_ref != lib.accounts_db.AccountPool.invalid_index);
+            std.debug.assert(new_account_ref != .invalid);
             const new_account = account_pool.getAccount(new_account_ref);
             const pubkey: *const Pubkey = &new_account.pubkey;
 
@@ -368,7 +368,7 @@ const Unrooted = extern struct {
             std.debug.assert(found_entry.* != new_account_ref);
 
             const old_account_ref = found_entry.*;
-            if (old_account_ref != lib.accounts_db.AccountPool.invalid_index) {
+            if (old_account_ref != .invalid) {
                 zone.text("replace");
 
                 std.debug.assert(pubkey.equals(&account_pool.getAccount(old_account_ref).pubkey));
@@ -419,7 +419,7 @@ const Unrooted = extern struct {
                 &self.maps[block_pool.ptrToIndex(ancestor_block).index().?];
 
             const account_ref = current_map.get(seed, account_pool, key);
-            if (account_ref != lib.accounts_db.AccountPool.invalid_index) {
+            if (account_ref != .invalid) {
                 const account = account_pool.getAccount(account_ref);
                 account.ref();
 
@@ -429,7 +429,7 @@ const Unrooted = extern struct {
             }
         }
 
-        return lib.accounts_db.AccountPool.invalid_index;
+        return .invalid;
     }
 };
 
@@ -457,7 +457,7 @@ fn fetchBlocking(
     defer zone.deinit();
 
     const unrooted_account = unrooted.fetch(key, block, block_pool, account_pool);
-    if (unrooted_account != lib.accounts_db.AccountPool.invalid_index) {
+    if (unrooted_account != .invalid) {
         zone.text("unrooted");
         return unrooted_account;
     }
@@ -477,7 +477,7 @@ fn fetchBlocking(
 
     std.debug.assert(response.pubkey.equals(key));
 
-    if (response.account_index == lib.accounts_db.AccountPool.invalid_index) {
+    if (response.account_index == .invalid) {
         zone.text("account not found");
         return response.account_index;
     }
@@ -946,7 +946,7 @@ fn maybeContinueBlockExec(
                         rooted_lookups,
                     );
 
-                    if (account_ref == lib.accounts_db.AccountPool.invalid_index)
+                    if (account_ref == .invalid)
                         @panic("missing address lookup table / TODO: handle bad blocks");
 
                     const ALT_account: *lib.accounts_db.AccountPool.Account =
