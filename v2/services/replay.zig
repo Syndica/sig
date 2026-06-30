@@ -165,32 +165,39 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
             zone.value(response.task_id);
 
-            std.debug.assert(response.request_kind == .txn_exec); // others unimplemented
-            const response_data = response.data.txn_exec;
+            switch (response.request_kind) {
+                .txn_exec => {
+                    const response_data = response.data.txn_exec;
+                    defer rw.replay_transaction_pool.destroyId(response_data.tx_idx);
 
-            defer rw.replay_transaction_pool.destroyId(response_data.tx_idx);
+                    const block_ref = response_data.block_idx;
+                    const exec_state: *BlockExecState = &(exec_states[block_ref.index()].?);
 
-            const block_ref = response_data.block_idx;
-            const exec_state: *BlockExecState = &(exec_states[block_ref.index()].?);
+                    // We previously used the transaction number within the block as our "task_id".
+                    // Asserting that we're receiving them back in order (we have single threaded exec).
+                    std.debug.assert(response.task_id == exec_state.n_transactions_completed);
 
-            // We previously used the transaction number within the block as our "task_id".
-            // Asserting that we're receiving them back in order (we have single threaded exec).
-            std.debug.assert(response.task_id == exec_state.n_transactions_completed);
+                    exec_state.n_transactions_completed += 1;
 
-            exec_state.n_transactions_completed += 1;
-
-            if (exec_state.finished()) {
-                logger.info().logf(
-                    "Slot {} ({}) complete! ({}/{})",
-                    .{
-                        rw.block_pool.indexToPtr(block_ref).slot,
-                        block_ref,
-                        exec_state.n_transactions_requested,
-                        exec_state.n_transactions_completed,
-                    },
-                );
+                    if (exec_state.finished()) {
+                        logger.info().logf(
+                            "Slot {} ({}) complete! ({}/{})",
+                            .{
+                                rw.block_pool.indexToPtr(block_ref).slot,
+                                block_ref,
+                                exec_state.n_transactions_requested,
+                                exec_state.n_transactions_completed,
+                            },
+                        );
+                        try status_cache.insert(
+                            response_data.block_idx,
+                            response_data.tx_idx,
+                            &response_data.result.tx_hash,
+                        );
+                    }
+                },
+                .txn_sig_verify => |tag| std.debug.panic("TODO: {t} unimplemented", .{tag}),
             }
-
             continue :task .idle;
         },
         .fec_set => {
