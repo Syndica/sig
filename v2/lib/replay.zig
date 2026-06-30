@@ -4,7 +4,7 @@ const ipc = @import("ipc.zig");
 const accounts_db = @import("accounts_db.zig");
 
 // This is a bit large currently because of the unrooted store
-pub const scratch_buffer_size = 4 * 1024 * 1024 * 1024;
+pub const scratch_buffer_size = 3 * 1024 * 1024 * 1024;
 
 pub const TransactionPool = collections.SharedPool([1232]u8, 10_000);
 
@@ -55,7 +55,7 @@ pub const ExecRequest = extern struct {
             block_idx: BlockRef,
             tx_idx: TransactionPool.ItemId,
             n_account_refs: u8,
-            account_ref_buf: [128]accounts_db.AccountPool.Index,
+            account_ref_buf: [128]accounts_db.AccountPool.AccountRef,
         },
         txn_sig_verify: extern struct {
             tx_idx: TransactionPool.ItemId,
@@ -72,7 +72,7 @@ pub const ExecResponse = extern struct {
             block_idx: BlockRef,
             tx_idx: TransactionPool.ItemId,
             n_account_refs: u8,
-            account_ref_buf: [128]accounts_db.AccountPool.Index,
+            account_ref_buf: [128]accounts_db.AccountPool.AccountRef,
             result: TxExecResult,
         },
         txn_sig_verify: extern struct { success: bool },

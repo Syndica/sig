@@ -686,7 +686,7 @@ pub const Rooted = struct {
 
         const entry = self.table.get(pubkey);
         if (entry.isEmpty()) { // not found. complete immediately.
-            node.result = .{ .pubkey = pubkey.*, .account_index = AccountPool.invalid_index };
+            node.result = .{ .pubkey = pubkey.*, .account_index = .invalid };
             node.next = self.ready_lookups;
             self.ready_lookups = lookup_idx;
             return true;
