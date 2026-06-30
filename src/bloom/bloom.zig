@@ -194,6 +194,23 @@ test "zero-capacity filter does not divide by zero" {
     bloom.add(&[_]u8{ 1, 2, 3 });
 }
 
+test "deserialized zero-capacity filter does not divide by zero" {
+    // a filter with keys but a zero-length bit array encodes to capacity 0
+    var bloom = try Bloom.init(testing.allocator, 0, null);
+    defer bloom.deinit();
+    try bloom.addKey(1);
+
+    var buf: [10000]u8 = undefined;
+    const out = try bincode.writeToSlice(buf[0..], bloom, .{});
+
+    var deserialized = try bincode.readFromSlice(testing.allocator, Bloom, out, .{});
+    defer bincode.free(testing.allocator, deserialized);
+
+    try testing.expectEqual(@as(u64, 0), deserialized.bits.capacity());
+    try testing.expect(!deserialized.contains(&[_]u8{ 1, 2, 3 }));
+    deserialized.add(&[_]u8{ 1, 2, 3 });
+}
+
 test "serialized bytes equal rust (multiple keys)" {
     var bloom = try Bloom.init(testing.allocator, 128, null);
     defer bloom.deinit();
