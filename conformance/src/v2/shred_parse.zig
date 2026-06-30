@@ -438,8 +438,66 @@ fn executeShredParse(
     // partial-FEC tick-verify path sees them. Mirrors agave's blockstore,
     // which exposes every inserted shred to `get_slot_entries_with_shred_info`
     // regardless of FEC completion.
+    //
+    // Additionally, a FEC set that reached 32/32 data shreds but whose
+    // slot was flagged dead between the slot becoming fatal and completion
+    // never reaches the deshred-ring emission path (the runtime suppresses
+    // output for dead slots so replay doesn't see further data for an
+    // unrecoverable slot). Agave's `check_insert_data_shred` doesn't
+    // consult `is_dead`, so the blockstore row fills regardless and
+    // `solfuzz-agave` emits the completed set in `fec_set_results`.
+    // Synthesize a matching `FECSetParseResult` here, mirroring
+    // `reportFecSetCompleted`'s field construction.
     for (st.receiver.in_progress.signature_map.values()) |fec_set_ctx| {
         st.effects.captureFromFecSetCtx(fec_set_ctx);
+
+        if (fec_set_ctx.data_shreds_received.count() != FecSetCtx.data_shreds_max) continue;
+
+        var total_payload_len: usize = 0;
+        var data_complete = false;
+        var slot_complete = false;
+        for (&fec_set_ctx.data_shreds_buf) |*buf| {
+            const ds: *const Shred = .fromBufferUnchecked(buf);
+            const flags = ds.code_or_data.data.flags;
+            total_payload_len += ds.dataPayload().len;
+            slot_complete = slot_complete or flags.last_shred_in_slot;
+            if (flags.data_complete) {
+                data_complete = true;
+                break;
+            }
+        }
+
+        const payload_copy = alloc.alloc(u8, total_payload_len) catch {
+            st.effects.allocator_failed = true;
+            break;
+        };
+        var written: usize = 0;
+        for (&fec_set_ctx.data_shreds_buf) |*buf| {
+            const ds: *const Shred = .fromBufferUnchecked(buf);
+            const p = ds.dataPayload();
+            @memcpy(payload_copy[written..][0..p.len], p);
+            written += p.len;
+            if (ds.code_or_data.data.flags.data_complete) break;
+        }
+        std.debug.assert(written == total_payload_len);
+
+        const first: *const Shred = .fromBufferUnchecked(&fec_set_ctx.data_shreds_buf[0]);
+        st.effects.fec_set_results.append(alloc, .{
+            .merkle_root = fec_set_ctx.merkle_root,
+            .chained_merkle_root = fec_set_ctx.chained_merkle_root,
+            .payload = payload_copy,
+            .slot = first.slot,
+            .fec_set_index = first.fec_set_idx,
+            .parent_offset = first.code_or_data.data.parent_offset,
+            .num_data_shreds = FEC_DATA_SHREDS,
+            .num_coding_shreds = FEC_CODING_SHREDS,
+            .data_complete = data_complete,
+            .slot_complete = slot_complete,
+        }) catch {
+            alloc.free(payload_copy);
+            st.effects.allocator_failed = true;
+            break;
+        };
     }
 
     // Any slot the Receiver flagged dead (e.g. per-slot parent_slot
