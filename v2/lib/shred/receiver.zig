@@ -320,6 +320,19 @@ pub fn Receiver(comptime Effects: type) type {
             // past the merkle / chained-merkle equality checks above.
             if (shred.variant.isData()) {
                 const parent_slot = shred.slot - shred.code_or_data.data.parent_offset;
+                // [agave] Drop data shreds whose declared parent is older
+                // than the current root: agave's
+                // `ShredFilterContext::should_discard_shred` rejects these
+                // at the layout level via `verify_shred_slots` (in
+                // `ledger/src/shred/filter.rs`) before they ever reach
+                // `insert_shreds`, so they never participate in the
+                // slot-meta `meta_parent_slot != shred_parent` check
+                // below and never trigger `mark_slot_dead_if_not_full`.
+                // Without this gate, a fuzz-crafted shred whose
+                // `parent_offset` chains to a pre-root slot would be
+                // treated here as a slot_parents conflict and incorrectly
+                // mark the slot dead, diverging from agave.
+                if (parent_slot < state.root_slot) return error.ShredParentBeforeRoot;
                 const gop = state.slot_parents.getOrPut(state.allocator, shred.slot) catch {
                     // OOM: skip the bookkeeping rather than fail-closed. The
                     // worst case is missing this check on a later shred,
@@ -712,6 +725,7 @@ pub const PacketError = error{
     EquivocationDifferentHashForSameFecSetId,
     EquivocationFecSetIdAlreadyInProgress,
     ParentSlotMismatch,
+    ShredParentBeforeRoot,
     UnknownLeader,
     SignatureVerificationFailed,
     RecoveredShredMalformed,
