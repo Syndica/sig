@@ -311,15 +311,13 @@ pub fn Receiver(comptime Effects: type) type {
             // Per-slot `parent_slot` consistency. Every data shred in a slot
             // must declare the same parent (`shred.slot - parent_offset`);
             // the slot has a single position in the fork tree. Agave enforces
-            // the same invariant in `Blockstore::should_insert_data_shred`
-            // (the `meta_parent_slot != shred_parent` branch in
-            // `ledger/src/blockstore.rs`): a conflicting shred returns
-            // `InvalidShred` and is dropped from the slot meta, but the
-            // slot's already-recorded shreds keep accumulating from the
-            // first-seen parent. Mirror that here: reject the offending
-            // shred, keep the slot live. Dead-slot marking belongs to a
-            // higher layer that observes whether the slot ultimately
-            // completes (agave's `mark_slot_dead_if_not_full`).
+            // this in `Blockstore::should_insert_data_shred` (the
+            // `meta_parent_slot != shred_parent` branch in
+            // `ledger/src/blockstore.rs`): a mismatch returns InvalidShred,
+            // which causes `mark_slot_dead_if_not_full`. Without this check,
+            // fuzz-crafted shreds whose proof bytes collide on a single
+            // merkle root can still smuggle in mismatched parents and slip
+            // past the merkle / chained-merkle equality checks above.
             if (shred.variant.isData()) {
                 const parent_slot = shred.slot - shred.code_or_data.data.parent_offset;
                 const gop = state.slot_parents.getOrPut(state.allocator, shred.slot) catch {
@@ -331,6 +329,7 @@ pub fn Receiver(comptime Effects: type) type {
                 };
                 if (gop.found_existing) {
                     if (gop.value_ptr.* != parent_slot) {
+                        state.markSlotDead(shred.slot);
                         return error.ParentSlotMismatch;
                     }
                 } else {
