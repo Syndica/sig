@@ -897,7 +897,7 @@ fn maybeContinueBlockExec(
         {
             // TODO: replace this with something custom, this is slow - we only need to extract the
             // accounts (including ALT accounts) here.
-            var deserialised_buf: [4096]u8 = undefined;
+            var deserialised_buf: [16 * 1024]u8 = undefined;
             var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
             var reader = std.io.Reader.fixed(tx);
             const transaction: lib.solana.transaction.VersionedTransaction =
