@@ -833,6 +833,7 @@ test "load accounts with simd 186 and loaderv3 program" {
     };
 
     var running_data_size: u32 = 0;
+    const fee_payer_loaded_size = TRANSACTION_ACCOUNT_BASE_SIZE +| fee_payer_account.data.len;
     const loaded_accounts = try loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
@@ -841,15 +842,15 @@ test "load accounts with simd 186 and loaderv3 program" {
         &env.compute_budget_limits,
         .{
             .account = fee_payer_account,
-            .loaded_size = fee_payer_account.data.len,
+            .loaded_size = fee_payer_loaded_size,
             .rent_collected = 0,
         },
         &running_data_size,
     );
     defer loaded_accounts.deinit(allocator);
 
-    // fee payer: 1024 (passed directly), instruction: 64 + 17, program: 64 + bincode(State), programdata: 64 + 1024
-    try std.testing.expectEqual(2293, loaded_accounts.loaded_accounts_data_size);
+    // fee payer: 64 + 1024 (passed directly), instruction: 64 + 17, program: 64 + bincode(State), programdata: 64 + 1024
+    try std.testing.expectEqual(2357, loaded_accounts.loaded_accounts_data_size);
     // Success path leaves `running_data_size_out` untouched.
     try std.testing.expectEqual(0, running_data_size);
 }
@@ -974,6 +975,7 @@ test "load tx too large" {
     defer tx.accounts.deinit(allocator);
 
     var running_data_size: u32 = 0;
+    const fee_payer_loaded_size = TRANSACTION_ACCOUNT_BASE_SIZE +| fee_payer_account.data.len;
     const loaded_accounts_result = loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
@@ -982,7 +984,7 @@ test "load tx too large" {
         &env.compute_budget_limits,
         .{
             .account = fee_payer_account,
-            .loaded_size = fee_payer_account.data.len,
+            .loaded_size = fee_payer_loaded_size,
             .rent_collected = 0,
         },
         &running_data_size,
@@ -993,7 +995,7 @@ test "load tx too large" {
     // `running_data_size_out` reflects the cumulative loaded size including
     // the offending account (the fee payer here). Consumed by the
     // `define_ltds_fee_only_semantics` branch.
-    try std.testing.expectEqual(account_data.len, running_data_size);
+    try std.testing.expectEqual(fee_payer_loaded_size, running_data_size);
 }
 
 test "dont double count programdata size" {
@@ -1072,6 +1074,7 @@ test "dont double count programdata size" {
     };
     defer tx.accounts.deinit(allocator);
 
+    var running_data_size: u32 = 0;
     const loaded_accounts = try loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
@@ -1079,6 +1082,7 @@ test "dont double count programdata size" {
         &env.rent_collector,
         &env.compute_budget_limits,
         .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
+        &running_data_size,
     );
     defer loaded_accounts.deinit(allocator);
 
@@ -1312,6 +1316,7 @@ test "load v3 program" {
         },
     };
 
+    var running_data_size: u32 = 0;
     const loaded_accounts = try loadTransactionAccountsInner(
         AccountReader.fromMap(&accountsdb),
         allocator,
@@ -1319,6 +1324,7 @@ test "load v3 program" {
         &env.rent_collector,
         &env.compute_budget_limits,
         .{ .account = AccountSharedData.EMPTY, .loaded_size = 0, .rent_collected = 0 },
+        &running_data_size,
     );
     defer loaded_accounts.deinit(allocator);
 
