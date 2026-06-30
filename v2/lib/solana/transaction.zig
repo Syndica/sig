@@ -347,7 +347,10 @@ pub const VersionedMessage = union(enum) {
         };
     }
 
-    pub fn bincodeWrite(self: *const VersionedMessage, writer: *std.Io.Writer) !void {
+    pub fn bincodeWrite(
+        self: *const VersionedMessage,
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
         switch (self.*) {
             .legacy => |msg| try bincode.write(writer, msg),
             .v0 => |msg| {
@@ -355,6 +358,19 @@ pub const VersionedMessage = union(enum) {
                 try bincode.write(writer, msg);
             },
         }
+    }
+
+    pub fn computeHash(self: *const VersionedMessage) Hash {
+        var buffer: [1232]u8 = undefined;
+        var hashing: std.Io.Writer.Hashing(std.crypto.hash.Blake3) = .init(&buffer);
+
+        hashing.hasher.update("solana-tx-message-v1");
+        self.bincodeWrite(&hashing.writer) catch unreachable;
+        hashing.writer.flush() catch unreachable;
+
+        var result: Hash = .{ .data = undefined };
+        hashing.hasher.final(&result.data);
+        return result;
     }
 };
 
