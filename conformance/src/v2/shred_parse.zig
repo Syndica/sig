@@ -391,17 +391,19 @@ fn executeShredParse(
     // Map proto bool flags into the Receiver's per-feature activation slot.
     // Agave's `check_feature_activation` uses an epoch-delayed semantic:
     // a feature activated at slot `s` only takes effect for shreds in
-    // epoch > epoch(s). With agave's harness `EpochSchedule::default()`
-    // (warmup=false, slots_per_epoch=DEFAULT_SLOTS_PER_EPOCH), activating
-    // at slot 0 means the feature first applies at the start of epoch 1
-    // (= slot `DEFAULT_SLOTS_PER_EPOCH`). The Receiver's check is a
-    // plain `shred.slot >= activation_slot`, so the harness has to set
-    // the activation slot to that first-effective slot rather than 0.
+    // epoch > epoch(s). Agave's harness uses `EpochSchedule::default()`,
+    // which sets `warmup = true`: epoch 0 is only `MINIMUM_SLOTS_PER_EPOCH`
+    // (= 32) slots long, and later epochs double in size up to
+    // `DEFAULT_SLOTS_PER_EPOCH`. A feature activated at slot 0 therefore
+    // first applies at the start of epoch 1, i.e. slot 32. The Receiver's
+    // check is a plain `shred.slot >= activation_slot`, so map proto
+    // `true` to slot 32 so sig's gate mirrors agave's epoch-aware check.
     // `false` -> disabled (maxInt).
+    const MINIMUM_SLOTS_PER_EPOCH: Slot = 32;
     const features = ctx.features orelse pb.ShredFeatures{};
     st.receiver.features = .{
         .discard_unexpected_data_complete_shreds = if (features.discard_unexpected_data_complete_shreds)
-            sig_v2.solana.time.DEFAULT_SLOTS_PER_EPOCH
+            MINIMUM_SLOTS_PER_EPOCH
         else
             std.math.maxInt(Slot),
     };
