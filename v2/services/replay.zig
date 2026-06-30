@@ -329,7 +329,7 @@ const Unrooted = struct {
 
         pub fn hash(ctx: MapCtx, key: *const Pubkey) u32 {
             _ = ctx;
-            // TODO: we can do better than this
+            // TODO: we can use a smaller hash without truncating for better performance
             return @truncate(key.hash(123));
         }
 
@@ -366,12 +366,10 @@ const Unrooted = struct {
         return self;
     }
 
-    // TODO:
-    // 1) *never* block the replay thread (remove this function)
-    // 2) introduce a basic transaction scheduler
-    // 3) add a prefetcher
-    // NOTE: caller is responsible for freeing the account
-    fn fetchBlocking(
+    /// Get an account purely from the unrooted store.
+    /// For internal/testing usage only.
+    /// NOTE: caller is responsible for freeing the account
+    fn fetch(
         self: *Unrooted,
         key: *const lib.solana.Pubkey,
 
@@ -381,11 +379,8 @@ const Unrooted = struct {
 
         // account storage
         account_pool: *lib.accounts_db.AccountPool,
-
-        // ring buffer pair for rooted lookups
-        rooted_lookups: *lib.accounts_db.AccountLookups,
     ) AccountRef {
-        const zone = tracy.Zone.init(@src(), .{ .name = "fetchBlocking" });
+        const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.fetch" });
         defer zone.deinit();
 
         var current = block.ptr(block_pool);
@@ -400,42 +395,73 @@ const Unrooted = struct {
                 const account = account_pool.getAccount(found_account_ref);
                 account.ref();
 
-                zone.text("unrooted");
+                zone.text("found");
                 return found_account_ref;
             }
 
             current = ancestor_block.parent.ptr(block_pool);
         }
 
-        var requester = rooted_lookups.in.get(.writer);
-        var response_queue = rooted_lookups.out.get(.reader);
-
-        const request_buf = requester.next() orelse @panic("out of space");
-        request_buf.* = key.*;
-        requester.markUsed();
-
-        // blocking the thread - do not do this
-        while (response_queue.peek() == null) : (std.atomic.spinLoopHint()) {}
-
-        const response = response_queue.next().?;
-        defer response_queue.markUsed();
-
-        std.debug.assert(response.pubkey.equals(key));
-
-        if (response.account_index == lib.accounts_db.AccountPool.invalid_index) {
-            zone.text("account not found");
-            return response.account_index;
-        }
-
-        const account = account_pool.getAccount(response.account_index);
-
-        std.debug.assert(account.ref_count.load(.monotonic) > 0);
-        std.debug.assert(account.pubkey.equals(key));
-
-        zone.text("rooted");
-        return response.account_index;
+        return lib.accounts_db.AccountPool.invalid_index;
     }
 };
+// TODO:
+// 1) *never* block the replay thread (remove this function)
+// 2) introduce a basic transaction scheduler
+// 3) add a prefetcher
+/// Gets an account, trying the unrooted store before asking rooted.
+/// NOTE: caller is responsible for freeing the account
+fn fetchBlocking(
+    unrooted: *Unrooted,
+    key: *const lib.solana.Pubkey,
+
+    // current block + pool for ancestor lookups
+    block: lib.replay.BlockRef,
+    block_pool: *lib.replay.BlockPool,
+
+    // account storage
+    account_pool: *lib.accounts_db.AccountPool,
+
+    // ring buffer pair for rooted lookups
+    rooted_lookups: *lib.accounts_db.AccountLookups,
+) AccountRef {
+    const zone = tracy.Zone.init(@src(), .{ .name = "fetchBlocking" });
+    defer zone.deinit();
+
+    const unrooted_account = unrooted.fetch(key, block, block_pool, account_pool);
+    if (unrooted_account != lib.accounts_db.AccountPool.invalid_index) {
+        zone.text("unrooted");
+        return unrooted_account;
+    }
+
+    var requester = rooted_lookups.in.get(.writer);
+    var response_queue = rooted_lookups.out.get(.reader);
+
+    const request_buf = requester.next() orelse @panic("out of space");
+    request_buf.* = key.*;
+    requester.markUsed();
+
+    // blocking the thread - do not do this
+    while (response_queue.peek() == null) : (std.atomic.spinLoopHint()) {}
+
+    const response = response_queue.next().?;
+    defer response_queue.markUsed();
+
+    std.debug.assert(response.pubkey.equals(key));
+
+    if (response.account_index == lib.accounts_db.AccountPool.invalid_index) {
+        zone.text("account not found");
+        return response.account_index;
+    }
+
+    const account = account_pool.getAccount(response.account_index);
+
+    std.debug.assert(account.ref_count.load(.monotonic) > 0);
+    std.debug.assert(account.pubkey.equals(key));
+
+    zone.text("rooted");
+    return response.account_index;
+}
 
 /// Finds a node's parent, and attaches the new node to it.
 ///
@@ -858,9 +884,10 @@ fn maybeContinueBlockExec(
                 inline else => |txn| txn.account_keys.items,
             };
 
-            for (account_keys) |k| {
-                held_accounts_buf[held_accounts] = unrooted.fetchBlocking(
-                    &k,
+            for (account_keys) |*k| {
+                held_accounts_buf[held_accounts] = fetchBlocking(
+                    unrooted,
+                    k,
                     block_ref,
                     block_pool,
                     account_pool,
@@ -875,12 +902,13 @@ fn maybeContinueBlockExec(
                     .v0 => |v0| v0.address_table_lookups.items,
                 };
 
-            const Pass = enum { read, write };
+            const Pass = enum { write, read };
 
             // looked up accounts are writable first, then readable
             for (@as([]const Pass, &.{ .write, .read })) |pass| {
                 for (address_lookups) |lookup| {
-                    const account_ref = unrooted.fetchBlocking(
+                    const account_ref = fetchBlocking(
+                        unrooted,
                         &lookup.account_key,
                         block_ref,
                         block_pool,
@@ -896,7 +924,10 @@ fn maybeContinueBlockExec(
 
                     defer if (ALT_account.unref()) account_pool.free(account_ref);
 
-                    // NOTE: this is *not* going to be conformant; TODO: respect the ALT metadata
+                    // NOTE: this is *not* a conformant implementation of an Address Lookup Table
+                    // lookup; we need to respect the fields in the ALT account's header.
+                    // Here we are just skipping over the header (56 bytes), which means we could be
+                    // fetching accounts which are not yet active in the ALT.
                     const ALT_data = ALT_account.getData();
                     const header_len = 56;
                     if (ALT_data.len < header_len or (ALT_data.len - header_len) % 32 != 0)
@@ -909,11 +940,15 @@ fn maybeContinueBlockExec(
                     };
 
                     for (indexes) |account_idx| {
-                        if (account_idx > ALT_pubkeys.len)
+                        if (account_idx >= ALT_pubkeys.len)
                             @panic("bad ALT lookup / TODO: handle bad blocks");
                         const account_pk: *const Pubkey = &ALT_pubkeys[account_idx];
 
-                        held_accounts_buf[held_accounts] = unrooted.fetchBlocking(
+                        if (held_accounts >= held_accounts_buf.len)
+                            @panic("too many accounts for transaction / TODO: handle bad blocks");
+
+                        held_accounts_buf[held_accounts] = fetchBlocking(
+                            unrooted,
                             account_pk,
                             block_ref,
                             block_pool,
