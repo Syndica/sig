@@ -133,18 +133,7 @@ const Effects = struct {
     /// completion. The harness reaches into the in-progress and just-
     /// completed FEC contexts to recover the same view so a partial FEC set
     /// whose prefix is DATA_COMPLETE-terminated still gets tick-verified.
-    ///
-    /// Also captures parsed data shreds the Receiver later drops as
-    /// equivocations (`EquivocationFecSetIdAlreadyInProgress` /
-    /// `EquivocationDifferentHashForSameFecSetId`): agave's blockstore
-    /// inserts shreds by `(slot, slot_idx)` and does not enforce
-    /// signature/merkle-root equality across an FEC set at insertion, so
-    /// the equivocating shreds still feed `get_slot_entries_with_shred_info`.
-    /// First-wins per `(slot, slot_idx)` (matches blockstore behaviour).
     data_shreds: std.ArrayListUnmanaged(DataShredCapture) = .empty,
-
-    /// Dedup set for `data_shreds` — first-wins per `(slot, slot_idx)`.
-    data_shred_keys: std.AutoHashMapUnmanaged(DataShredKey, void) = .empty,
 
     /// Set when any callback's allocator failed.
     allocator_failed: bool = false,
@@ -175,9 +164,6 @@ const Effects = struct {
         payload: []u8,
     };
 
-    /// Dedup key for `data_shreds` — first-wins per `(slot, slot_idx)`.
-    const DataShredKey = struct { slot: Slot, slot_idx: u32 };
-
     /// Per-FEC-set scratch before slot-wide sort + chain validation.
     const FECSetParseResult = struct {
         merkle_root: Hash,
@@ -201,7 +187,6 @@ const Effects = struct {
         self.fec_set_results.deinit(alloc);
         for (self.data_shreds.items) |it| alloc.free(it.payload);
         self.data_shreds.deinit(alloc);
-        self.data_shred_keys.deinit(alloc);
         self.shred_parse_results.deinit(alloc);
     }
 
@@ -211,40 +196,10 @@ const Effects = struct {
         self.fec_set_results.clearRetainingCapacity();
         for (self.data_shreds.items) |it| self.allocator.free(it.payload);
         self.data_shreds.clearRetainingCapacity();
-        self.data_shred_keys.clearRetainingCapacity();
         self.shred_parse_results.clearRetainingCapacity();
         self.allocator_failed = false;
         self.chain_conflict = false;
         self.slot_marked_dead = false;
-    }
-
-    /// Capture a single data shred (received, RS-recovered, or
-    /// equivocating-but-parsed) into `data_shreds`. First-wins per
-    /// `(slot, slot_idx)` — matches agave's blockstore, which inserts the
-    /// first shred at a given `(slot, slot_idx)` and ignores later
-    /// arrivals.
-    fn recordDataShredOnce(self: *Effects, shred: *const Shred) void {
-        const key: DataShredKey = .{ .slot = shred.slot, .slot_idx = shred.slot_idx };
-        const gop = self.data_shred_keys.getOrPut(self.allocator, key) catch {
-            self.allocator_failed = true;
-            return;
-        };
-        if (gop.found_existing) return;
-
-        const payload_copy = self.allocator.dupe(u8, shred.dataPayload()) catch {
-            self.allocator_failed = true;
-            return;
-        };
-        self.data_shreds.append(self.allocator, .{
-            .slot = shred.slot,
-            .slot_idx = shred.slot_idx,
-            .data_complete = shred.code_or_data.data.flags.data_complete,
-            .last_shred_in_slot = shred.code_or_data.data.flags.last_shred_in_slot,
-            .payload = payload_copy,
-        }) catch {
-            self.allocator.free(payload_copy);
-            self.allocator_failed = true;
-        };
     }
 
     /// Copy every data shred the Receiver has accepted into this FEC
@@ -255,7 +210,21 @@ const Effects = struct {
         var bit_iter = ctx.data_shreds_received.iterator(.{});
         while (bit_iter.next()) |idx| {
             const shred: *const Shred = .fromBufferUnchecked(&ctx.data_shreds_buf[idx]);
-            self.recordDataShredOnce(shred);
+            const payload_copy = self.allocator.dupe(u8, shred.dataPayload()) catch {
+                self.allocator_failed = true;
+                return;
+            };
+            self.data_shreds.append(self.allocator, .{
+                .slot = shred.slot,
+                .slot_idx = shred.slot_idx,
+                .data_complete = shred.code_or_data.data.flags.data_complete,
+                .last_shred_in_slot = shred.code_or_data.data.flags.last_shred_in_slot,
+                .payload = payload_copy,
+            }) catch {
+                self.allocator.free(payload_copy);
+                self.allocator_failed = true;
+                return;
+            };
         }
     }
 
@@ -475,29 +444,6 @@ fn executeShredParse(
         @memset(packet.data[bytes.len..], 0);
         packet.len = @intCast(bytes.len);
         packet.addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0);
-
-        // Capture every parsed data shred for partial-FEC tick verify
-        // BEFORE handing the packet to the Receiver. The Receiver drops
-        // shreds whose FEC-set signature/merkle root conflicts with an
-        // in-progress set (`EquivocationFecSetIdAlreadyInProgress`), but
-        // agave's blockstore inserts shreds keyed by `(slot, slot_idx)`
-        // without enforcing FEC-set signature equality, so the dropped
-        // shreds still feed agave's `get_slot_entries_with_shred_info`.
-        // First-wins dedup matches blockstore semantics.
-        if (bytes.len >= Shred.min_size and Shred.hasSupportedVariant(&packet.data)) {
-            const shred_ptr: *const Shred = .fromBufferUnchecked(&packet.data);
-            if (shred_ptr.variant.isData() and
-                shred_ptr.slot_idx >= shred_ptr.fec_set_idx and
-                shred_ptr.slot_idx - shred_ptr.fec_set_idx < FecSetCtx.fec_shred_count)
-            {
-                const data_payload_start: u16 = @offsetOf(Shred, "code_or_data") +
-                    @sizeOf(Shred.DataHeader);
-                const declared_size: u16 = shred_ptr.code_or_data.data.size;
-                if (declared_size >= data_payload_start and declared_size <= Packet.capacity) {
-                    st.effects.recordDataShredOnce(shred_ptr);
-                }
-            }
-        }
 
         // shred_version is u16 on the wire but u32 in the proto schema;
         // truncate.
