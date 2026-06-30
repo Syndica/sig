@@ -349,6 +349,7 @@ const Unrooted = extern struct {
 
         // The map takes a ref to the new account.
         // Returns the replaced entry, which the caller is expected to unref/free.
+        // lint: allow_unused
         fn put(
             self: *Map,
             seed: u64, // see `Unrooted.fetch` for how to use the correct seed
