@@ -12,6 +12,10 @@ comptime {
 }
 
 pub const Receiver = @import("shred/receiver.zig").Receiver;
+pub const PacketError = @import("shred/receiver.zig").PacketError;
+pub const ReceiverPacketSuccess = @import("shred/receiver.zig").PacketSuccess;
+pub const ReceiverPacketResult = @import("shred/receiver.zig").PacketResult;
+pub const FecSetCtx = @import("shred/receiver.zig").FecSetCtx;
 
 const Hash = solana.Hash;
 const Slot = solana.Slot;
@@ -225,7 +229,7 @@ pub const Shred = extern struct {
 
     // [firedancer] https://github.com/firedancer-io/firedancer/commit/7cbb71919ec9b8045c247957280e5b15d1e0cb85
     /// Makes sure that the *layout* of the Shred is valid.
-    pub fn fromPacketChecked(packet: *const Packet) !*const Shred {
+    pub fn fromPacketChecked(packet: *const Packet) PacketError!*const Shred {
         if (packet.len < min_header_size) return error.PacketUnderMinHeaderSize;
         if (!Shred.hasSupportedVariant(&packet.data)) return error.UnsupportedVariant;
 
