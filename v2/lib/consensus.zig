@@ -27,6 +27,11 @@ pub const SimpleConsensus = struct {
         };
     }
 
+    pub const RecordError = error{
+        ExecutedBlockHasNoParent,
+        MissingUnrootedBlock,
+    };
+
     // TODO: verify leaves are still consistent with block pool (not needed but
     // more of a safety check)
 
@@ -34,19 +39,19 @@ pub const SimpleConsensus = struct {
     // happen, and it won't with the current design. but the struct would be
     // more robust if it handled this correctly.
 
-    pub fn update(self: *SimpleConsensus, block_ref: BlockRef, passed: bool) ?BlockRef {
-        if (!self.record(block_ref, passed)) return null;
+    pub fn update(self: *SimpleConsensus, block_ref: BlockRef, passed: bool) RecordError!?BlockRef {
+        if (!try self.record(block_ref, passed)) return null;
         return self.finalize();
     }
 
     /// Returns whether an update was made
-    fn record(self: *SimpleConsensus, block_ref: BlockRef, passed: bool) bool {
+    fn record(self: *SimpleConsensus, block_ref: BlockRef, passed: bool) RecordError!bool {
         if (!passed) return false; // TODO: log
 
         const executed = block_ref.constPtr(self.pool);
 
         // Check for common case: new block is a child of a leaf.
-        const parent = executed.parent.opt() orelse @panic("executed block must chain off another");
+        const parent = executed.parent.opt() orelse return error.ExecutedBlockHasNoParent;
         for (self.leaves[0..self.num_leaves]) |*leaf| {
             if (leaf.* == parent) {
                 leaf.* = block_ref;
@@ -57,8 +62,7 @@ pub const SimpleConsensus = struct {
         // this is a new fork, it doesn't descend from a leaf.
         var node = executed;
         while (node.slot > self.root.constPtr(self.pool).slot) {
-            const parent_id = node.parent.opt() orelse
-                @panic("missing unrooted block in block tree");
+            const parent_id = node.parent.opt() orelse return error.MissingUnrootedBlock;
             node = parent_id.constPtr(self.pool);
         }
 
