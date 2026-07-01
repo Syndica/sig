@@ -258,7 +258,12 @@ pub const Shred = extern struct {
             const payload_size = shred.code_or_data.data.size - header_size;
 
             const effective_size = min_size;
-            if (effective_size < header_size + payload_size + trailer_size)
+            // `data.size` is a u16 field straight off the wire, so
+            // `header_size + payload_size + trailer_size` overflows u16 for
+            // declared sizes near 2^16. Widen to u32 to match agave's
+            // usize arithmetic in `merkle.rs::get_data`, which bounds
+            // `size <= SIZE_OF_HEADERS + capacity`.
+            if (@as(u32, header_size) + @as(u32, payload_size) + @as(u32, trailer_size) > effective_size)
                 return error.DataEffectiveSizeTooSmall;
 
             break :sizes .{
