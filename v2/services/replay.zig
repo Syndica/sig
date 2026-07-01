@@ -163,7 +163,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             defer rw.replay_transaction_pool.destroyId(response_data.tx_idx);
 
             const block_ref = response_data.block_idx;
-            const exec_state: *BlockExecState = &(exec_states[block_ref.index().?].?);
+            const exec_state: *BlockExecState = &(exec_states[block_ref.index()].?);
 
             // We previously used the transaction number within the block as our "task_id".
             // Asserting that we're receiving them back in order (we have single threaded exec).
@@ -222,23 +222,23 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 const rooted_block_ref = try rw.block_pool.createId();
                 const first_block_ref = try rw.block_pool.createId();
 
-                rooted_block_ref.ptr(rw.block_pool).?.* = .{
+                rooted_block_ref.ptr(rw.block_pool).* = .{
                     .slot = rooted_slot,
-                    .child = first_block_ref,
+                    .child = .init(first_block_ref),
                 };
-                first_block_ref.ptr(rw.block_pool).?.* = .{
+                first_block_ref.ptr(rw.block_pool).* = .{
                     .slot = first_slot.?,
-                    .parent = rooted_block_ref,
+                    .parent = .init(rooted_block_ref),
                 };
 
-                exec_states[rooted_block_ref.index().?] = .{
+                exec_states[rooted_block_ref.index()] = .{
                     .n_transactions_requested = 0,
                     .n_transactions_completed = 0,
                     .all_transactions_requested = true,
                 };
-                std.debug.assert(exec_states[rooted_block_ref.index().?].?.finished());
+                std.debug.assert(exec_states[rooted_block_ref.index()].?.finished());
 
-                inserted.block_ref = first_block_ref;
+                inserted.block_ref = .init(first_block_ref);
 
                 logger.info().logf("inserted first {f}", .{inserted});
             }
@@ -258,15 +258,15 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
             // NOTE: Currently we're doing nothing if we can't find a path from the inserted node to
             //       the root. We could deserialise early for prefetching.
-            if (inserted.block_ref == .null) {
+            const inserted_block_ref = inserted.block_ref.opt() orelse {
                 zone.text("null blockref");
                 continue :task .idle;
-            }
+            };
 
             try maybeContinueBlockExec(
                 logger,
                 inserted,
-                inserted.block_ref,
+                inserted_block_ref,
                 &forest.pool,
                 rw.block_pool,
                 rw.replay_transaction_pool,
@@ -325,14 +325,14 @@ fn attachParent(
             // insert at tail of the existing node's siblings
             var orphan_sibling_tail: ?*MerkleNode = orphan_map_result.value_ptr.*;
             while (orphan_sibling_tail) |tail_node| {
-                const next_sibling = tail_node.sibling.ptr(&forest.pool) orelse break;
+                const next_sibling = (tail_node.sibling.opt() orelse break).ptr(&forest.pool);
 
                 if (next_sibling.id.eql(&tail_node.id)) @panic("equivocation");
 
                 orphan_sibling_tail = next_sibling;
             }
             std.debug.assert(orphan_sibling_tail.?.sibling == .null);
-            orphan_sibling_tail.?.sibling = forest.pool.ptrToIndex(node);
+            orphan_sibling_tail.?.sibling = .init(forest.pool.ptrToIndex(node));
         } else {
             orphan_map_result.value_ptr.* = node; // TODO: double check this
         }
@@ -350,26 +350,26 @@ fn attachParent(
     // insert node into tree of parent
     {
         std.debug.assert(node.parent == .null);
-        node.parent = forest.pool.ptrToIndex(parent);
+        node.parent = .init(forest.pool.ptrToIndex(parent));
 
         if (parent.child == .null) {
             @branchHint(.likely); // no equivocation or forking
 
-            parent.child = forest.pool.ptrToIndex(node);
+            parent.child = .init(forest.pool.ptrToIndex(node));
             return parent;
         }
 
         std.debug.assert(parent.child != .null);
-        var last_child_of_parent: *MerkleNode = parent.child.ptr(&forest.pool).?;
+        var last_child_of_parent: *MerkleNode = parent.child.opt().?.ptr(&forest.pool);
         while (true) {
             // NOTE: We should get rid of this panic once we're confident that we're handling it
             //       correctly downstream.
             if (last_child_of_parent.id.eql(&node.id)) @panic("equivocation");
-            const next = last_child_of_parent.sibling.ptr(&forest.pool) orelse break;
+            const next = (last_child_of_parent.sibling.opt() orelse break).ptr(&forest.pool);
             last_child_of_parent = next;
         }
 
-        last_child_of_parent.sibling = forest.pool.ptrToIndex(node);
+        last_child_of_parent.sibling = .init(forest.pool.ptrToIndex(node));
         return parent;
     }
 }
@@ -393,11 +393,11 @@ fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
         var maybe_child_node: ?*MerkleNode = children_head;
         while (maybe_child_node) |child_node| {
             std.debug.assert(child_node.parent == .null);
-            maybe_child_node = child_node.sibling.ptr(&forest.pool);
+            maybe_child_node = if (child_node.sibling.opt()) |s| s.ptr(&forest.pool) else null;
 
             if (node.id.mayFollowWith(&child_node.id)) {
                 @branchHint(.likely);
-                child_node.parent = forest.pool.ptrToIndex(node);
+                child_node.parent = .init(forest.pool.ptrToIndex(node));
 
                 continue;
             }
@@ -407,13 +407,13 @@ fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
             // This node is illegal, let's remove it now.
 
             // Remove this node from the linked list of siblings
-            const next_node: ?*MerkleNode = child_node.sibling.ptr(&forest.pool);
+            const next_node = if (child_node.sibling.opt()) |s| s.ptr(&forest.pool) else null;
             const prev_node: ?*MerkleNode = node: {
                 if (child_node == children_head) break :node null;
 
                 var prev_node: ?*MerkleNode = children_head;
                 break :node while (prev_node) |n| {
-                    const next = n.sibling.ptr(&forest.pool);
+                    const next = if (n.sibling.opt()) |s| s.ptr(&forest.pool) else null;
                     if (next == child_node) break n;
                     prev_node = next.?;
                 } else unreachable; // either we're the head node, or we have a prev
@@ -421,7 +421,7 @@ fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
 
             if (prev_node) |prev| {
                 prev.sibling = if (next_node) |next|
-                    forest.pool.ptrToIndex(next)
+                    .init(forest.pool.ptrToIndex(next))
                 else
                     .null;
             } else {
@@ -439,7 +439,7 @@ fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
         }
     }
 
-    if (children_head) |c_h| node.child = forest.pool.ptrToIndex(c_h);
+    if (children_head) |c_h| node.child = .init(forest.pool.ptrToIndex(c_h));
 
     // NOTE: this 2nd map lookup could be removed (we looked up this entry earlier)
     const removed = forest.orphan_map.swapRemoveAdapted(&node.merkle_root, orphan_map_ctx);
@@ -458,32 +458,32 @@ fn setChildBlockRef(
     block_pool: *lib.replay.BlockPool,
 ) !void {
     std.debug.assert(child.block_ref == .null);
-    if (parent.block_ref == .null) return; // a)
+    const parent_block_ref = parent.block_ref.opt() orelse return; // a)
 
     // optionally allocate a new BlockRef
     child.block_ref = if (parent.id.slot != child.id.slot) ref: {
         // new slot, let's create a new BlockRef
         const new_block = try block_pool.create();
         new_block.* = .{
-            .parent = parent.block_ref,
+            .parent = .init(parent_block_ref),
             .slot = child.id.slot,
         };
 
-        break :ref block_pool.ptrToIndex(new_block); // b)
+        break :ref .init(block_pool.ptrToIndex(new_block)); // b)
     } else ref: {
         // treat the first child as the canonical path
-        if (forest_pool.ptrToIndex(child) == parent.child) {
-            break :ref parent.block_ref; // d)
-        }
+        if (parent.child.opt()) |child_id| if (child_id == forest_pool.ptrToIndex(child)) {
+            break :ref .init(parent_block_ref); // d)
+        };
 
         // forking/equivocation
         const new_block = try block_pool.create();
         new_block.* = .{
-            .parent = parent.block_ref,
+            .parent = .init(parent_block_ref),
             .slot = child.id.slot,
         };
 
-        break :ref block_pool.ptrToIndex(new_block); // c)
+        break :ref .init(block_pool.ptrToIndex(new_block)); // c)
 
     };
 }
@@ -506,10 +506,10 @@ fn setChildTreeBlockRefs(
     // recursively apply BlockRefs to reachable merkle nodes
     // NOTE: it is possible to do this without recursion *or* a stack, as a non-null block_ref can
     //       be used to mark a node as visited.
-    var maybe_child: ?*MerkleNode = child.child.ptr(forest_pool);
+    var maybe_child = if (child.child.opt()) |id| id.ptr(forest_pool) else null;
     while (maybe_child) |child_node| {
         try setChildTreeBlockRefs(child, child_node, forest_pool, block_pool);
-        maybe_child = child_node.sibling.ptr(forest_pool);
+        maybe_child = if (child_node.sibling.opt()) |id| id.ptr(forest_pool) else null;
     }
 }
 
@@ -591,21 +591,20 @@ fn maybeContinueBlockExec(
     defer zone.deinit();
 
     {
-        std.debug.assert(block_ref != .null);
-        const block: *const replay.Node = block_ref.ptr(block_pool).?;
+        const block: *const replay.Node = block_ref.ptr(block_pool);
 
         // parentless blocks shouldn't ever reach this stage
-        std.debug.assert(block.parent != .null);
+        const block_parent = block.parent.opt().?;
 
         // parent state not initialised => parent not finished
         // parent not finished => can't start exec for child
         const parent_exec_state: *BlockExecState =
-            &(block_exec_states[block.parent.index().?] orelse return);
+            &(block_exec_states[block_parent.index()] orelse return);
         if (!parent_exec_state.all_transactions_requested) return;
     }
 
     const exec_state: *BlockExecState = blk: {
-        const current: *?BlockExecState = &block_exec_states[block_ref.index().?];
+        const current: *?BlockExecState = &block_exec_states[block_ref.index()];
         if (current.* == null) {
             if (node.id.fec_set_idx != 0) {
                 // This branch happens when the idx=0 node of a block wasn't allocated a BlockRef
@@ -615,10 +614,9 @@ fn maybeContinueBlockExec(
                 // Find the fec_set_idx=0 node by walking up the parent chain
                 var root = node;
                 while (root.id.fec_set_idx != 0) {
-                    root = root.parent.ptr(forest_pool) orelse
-                        // The current node has a BlockRef, therefore it must be possible to reach
-                        // an ancestor with idx=0
-                        unreachable;
+                    // The current node has a BlockRef, therefore it must be possible to reach
+                    // an ancestor with idx=0
+                    root = root.parent.opt().?.ptr(forest_pool);
                 }
 
                 // return after calling, as this call semantically "replaces" the current call
@@ -643,7 +641,7 @@ fn maybeContinueBlockExec(
     };
 
     const block_deserial_state: *BlockDeserialState = blk: {
-        const current: *?BlockDeserialState = &block_deserial_states[block_ref.index().?];
+        const current: *?BlockDeserialState = &block_deserial_states[block_ref.index()];
         if (current.* == null) {
             std.debug.assert(node.id.fec_set_idx == 0);
             current.* = .init(node);
@@ -713,14 +711,14 @@ fn maybeContinueBlockExec(
 
     logger.info().logf(
         "requested all transactions for slot {} ({})",
-        .{ block_ref.ptr(block_pool).?.slot, block_ref },
+        .{ block_ref.ptr(block_pool).slot, block_ref },
     );
 
     if (exec_state.finished()) {
         logger.info().logf(
             "Slot {} ({}) (already) complete! ({}/{})",
             .{
-                block_ref.ptr(block_pool).?.slot,
+                block_ref.ptr(block_pool).slot,
                 block_ref,
                 exec_state.n_transactions_requested,
                 exec_state.n_transactions_completed,
@@ -729,12 +727,15 @@ fn maybeContinueBlockExec(
     }
 
     // try to exec children
-    var maybe_child = block_deserial_state.pos_node.child.ptr(forest_pool);
+    var maybe_child = if (block_deserial_state.pos_node.child.opt()) |id|
+        id.ptr(forest_pool)
+    else
+        null;
     while (maybe_child) |child| {
         try maybeContinueBlockExec(
             logger,
             child,
-            child.block_ref,
+            child.block_ref.opt().?,
             forest_pool,
             block_pool,
             transaction_pool,
@@ -743,7 +744,7 @@ fn maybeContinueBlockExec(
             exec_request_sender,
         );
 
-        maybe_child = child.sibling.ptr(forest_pool);
+        maybe_child = if (child.sibling.opt()) |id| id.ptr(forest_pool) else null;
     }
 }
 
@@ -886,8 +887,9 @@ const BlockDeserialState = struct {
         }
 
         fn nextNode(self: *Reader) error{EndOfStream}!void {
-            const child = self.deserial_state.pos_node.child.constPtr(self.merkle_pool) orelse
+            const child_id = self.deserial_state.pos_node.child.opt() orelse
                 return error.EndOfStream;
+            const child = child_id.constPtr(self.merkle_pool);
 
             std.debug.assert(child.block_ref != .null);
             std.debug.assert(child.parent != .null);
@@ -928,8 +930,7 @@ const BlockDeserialState = struct {
     ) usize {
         if (before.pos_node == after.pos_node) return after.pos_offset - before.pos_offset;
 
-        const after_parent: *const MerkleNode = after.pos_node.parent.constPtr(merkle_pool) orelse
-            unreachable;
+        const after_parent: *const MerkleNode = after.pos_node.parent.opt().?.constPtr(merkle_pool);
 
         std.debug.assert(after_parent == before.pos_node);
 
@@ -1072,9 +1073,9 @@ const BlockExecState = struct {
 /// NOTE: When used inside the Pool, these may be items in a free list. However such nodes should
 /// not be in either map or the tree.
 const MerkleNode = extern struct {
-    parent: MerkleForest.NodePool.ItemId = .null,
-    child: MerkleForest.NodePool.ItemId = .null,
-    sibling: MerkleForest.NodePool.ItemId = .null,
+    parent: MerkleForest.NodePool.ItemId.Optional = .null,
+    child: MerkleForest.NodePool.ItemId.Optional = .null,
+    sibling: MerkleForest.NodePool.ItemId.Optional = .null,
 
     merkle_root: Hash,
     chained_merkle_root: Hash,
@@ -1084,7 +1085,7 @@ const MerkleNode = extern struct {
 
     // allocated upon insertion of 1st fec set, copied down through children
     // TODO: eviction
-    block_ref: lib.replay.BlockRef,
+    block_ref: lib.replay.BlockRef.Optional,
 
     payload_len: u16,
 
@@ -1298,7 +1299,9 @@ test "MerkleForest tree put" {
     // give the ancestor block a BlockRef, so that it may propagate
     // NOTE: it is expected that the root-most fec set to be inserted first this way as a special
     //       case. In a real environment this would be the last fec set in the rooted slot.
-    a_inserted.block_ref = .fromInt(8053);
+    a_inserted.block_ref = .init(replay.BlockRef.fromInt(8053));
+
+    const expected_block_ref: replay.BlockRef.Optional = .init(replay.BlockRef.fromInt(8053));
 
     const d_inserted = (try insertFecSet(logger, &d, &tree, pool)).?;
     try std.testing.expect(d_inserted.parent == .null);
@@ -1308,20 +1311,20 @@ test "MerkleForest tree put" {
     const b_inserted = (try insertFecSet(logger, &b, &tree, pool)).?;
     try std.testing.expect(b_inserted.parent != .null);
     try std.testing.expect(b_inserted.child == .null);
-    try std.testing.expect(b_inserted.block_ref == replay.BlockRef.fromInt(8053));
+    try std.testing.expect(b_inserted.block_ref == expected_block_ref);
 
     const c_inserted = (try insertFecSet(logger, &c, &tree, pool)).?;
     try std.testing.expect(c_inserted.parent != .null);
     try std.testing.expect(c_inserted.child != .null);
-    try std.testing.expect(c_inserted.block_ref == replay.BlockRef.fromInt(8053));
-    try std.testing.expect(d_inserted.block_ref == replay.BlockRef.fromInt(8053));
+    try std.testing.expect(c_inserted.block_ref == expected_block_ref);
+    try std.testing.expect(d_inserted.block_ref == expected_block_ref);
 
     const e_inserted = (try insertFecSet(logger, &e, &tree, pool)).?;
     try std.testing.expect(e_inserted.parent != .null);
     try std.testing.expect(e_inserted.child == .null);
     // new slot => new BlockRef
     try std.testing.expect(e_inserted.block_ref != .null);
-    try std.testing.expect(e_inserted.block_ref != replay.BlockRef.fromInt(8053));
+    try std.testing.expect(e_inserted.block_ref != expected_block_ref);
 
     // We cannot insert duplicates
     try std.testing.expectEqual(null, try insertFecSet(logger, &a, &tree, pool));

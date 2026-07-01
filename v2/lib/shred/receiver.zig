@@ -557,7 +557,7 @@ const InProgressSets = struct {
             break :id self.ctx_pool.createId() catch unreachable;
         };
 
-        const new_idx: u32 = new_pool_id.index().?;
+        const new_idx: u32 = new_pool_id.index();
 
         self.ids[new_idx] = id;
         self.eviction.add(new_pool_id) catch unreachable; // eviction can't be full, we *just* evicted
@@ -602,7 +602,7 @@ const InProgressSets = struct {
     fn removeEvictedSet(self: *InProgressSets, evicted_pool_idx: Pool.ItemId) void {
         const map_ctx = self.mapContext();
 
-        const evicted_idx = evicted_pool_idx.index().?;
+        const evicted_idx = evicted_pool_idx.index();
 
         const evicted_sig: *Signature = &self.signatures[evicted_idx];
         // const node: *FecSetCtx = @ptrCast(&self.ctx_pool.buf[evicted_idx]);
@@ -623,7 +623,7 @@ const InProgressSets = struct {
     fn containsId(self: *const InProgressSets, id: FecSetId) bool {
         return for (self.signature_map.values()) |fec_set_ctx| {
             const pool_id = self.ctx_pool.ptrToIndex(fec_set_ctx);
-            const idx = pool_id.index().?;
+            const idx = pool_id.index();
 
             if (self.ids[idx].eql(&id)) break true;
         } else false;
@@ -657,7 +657,7 @@ const InProgressSets = struct {
         pub fn eql(ctx: SignatureContext, a: *const Signature, _: void, key_idx: usize) bool {
             const set: *FecSetCtx = ctx.map.values()[key_idx];
             const pool_id = ctx.ctx_pool.ptrToIndex(set);
-            const idx = pool_id.index().?;
+            const idx = pool_id.index();
 
             const b: *const Signature = &ctx.signatures[idx];
             return a.eql(b);
@@ -670,8 +670,8 @@ const InProgressSets = struct {
 
             // remove greatest (slot, fec id) first
             return std.math.Order.invert(FecSetId.order(
-                &self.ids[a.index().?],
-                &self.ids[b.index().?],
+                &self.ids[a.index()],
+                &self.ids[b.index()],
             ));
         }
     };

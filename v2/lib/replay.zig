@@ -15,9 +15,9 @@ pub const BlockRef = BlockPool.ItemId;
 // traversal fast
 // This could maybe be 24 bytes (u32 idx * 3, slot u64, last merkle root hash u32)
 pub const Node = extern struct {
-    parent: BlockRef = .null,
-    child: BlockRef = .null,
-    sibling: BlockRef = .null,
+    parent: BlockRef.Optional = .null,
+    child: BlockRef.Optional = .null,
+    sibling: BlockRef.Optional = .null,
     slot: solana.Slot,
 };
 
