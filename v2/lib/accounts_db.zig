@@ -30,7 +30,7 @@ pub const AccountLookups = extern struct {
     pub const Request = Pubkey;
     pub const Result = extern struct {
         pubkey: Pubkey,
-        account_index: AccountPool.Index, // .invalid_index if not found
+        account_index: AccountPool.AccountRef, // .invalid if not found
     };
 
     pub fn init(self: *AccountLookups) void {
