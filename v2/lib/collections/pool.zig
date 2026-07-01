@@ -226,12 +226,8 @@ pub fn Pool(Item: type, IdInt: type) type {
         /// without freeing or reallocating the backing buffer. The buffer
         /// contents are clobbered.
         pub fn reset(self: *PoolSelf) void {
-            const buf = self.buf[0..self.len];
-            for (buf[0 .. buf.len - 1], 0..) |*node, i| {
-                node.* = .{ .next_free = @enumFromInt(i + 1) };
-            }
-            buf[buf.len - 1] = .{ .next_free = .null };
-            self.free_list = @enumFromInt(0);
+            const item_buf: []Item = @ptrCast(self.buf[0..self.len]);
+            self.* = init(item_buf);
         }
 
         // take head off free_list
