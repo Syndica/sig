@@ -86,6 +86,7 @@ pub const RepairService = struct {
     targeted_repair_peer_fanout: usize,
     targeted_repair_min_slot: ?Slot,
     targeted_repair_max_slot: ?Slot,
+    max_addressed_requests_per_loop: usize,
 
     const RequestBatchThreadPool = ScopedThreadPool(RepairRequester.sendRepairRequestBatch);
 
@@ -193,6 +194,11 @@ pub const RepairService = struct {
             ),
             MAX_CONTINUITY_REPAIR_PEER_FANOUT,
         );
+        const max_addressed_requests_per_loop = try readEnvUsize(
+            allocator,
+            "SIG_REPAIR_MAX_ADDRESSED_REQUESTS_PER_LOOP",
+            0,
+        );
 
         var targeted_repair_plan = ArrayList(RepairRequest).init(allocator);
         errdefer targeted_repair_plan.deinit();
@@ -224,7 +230,7 @@ pub const RepairService = struct {
         const repair_jitter_seed = std.crypto.random.int(u64);
 
         logger.info().logf(
-            "repair continuity config slot_window={} open_ended_prefix_repairs={} exact_shreds_per_slot={} peer_fanout={} only_bottom_slot={} bottom_open_ended_prefix_repairs={} bottom_exact_shreds_per_slot={} bottom_peer_fanout={} bottom_rotate_cursor={} max_peer_fanout={} repair_jitter_seed={}",
+            "repair continuity config slot_window={} open_ended_prefix_repairs={} exact_shreds_per_slot={} peer_fanout={} only_bottom_slot={} bottom_open_ended_prefix_repairs={} bottom_exact_shreds_per_slot={} bottom_peer_fanout={} bottom_rotate_cursor={} max_addressed_requests_per_loop={} max_peer_fanout={} repair_jitter_seed={}",
             .{
                 continuity_repair_slot_window,
                 continuity_repair_open_ended_prefix_repairs,
@@ -235,6 +241,7 @@ pub const RepairService = struct {
                 continuity_repair_bottom_exact_shreds_per_slot,
                 continuity_repair_bottom_peer_fanout,
                 continuity_repair_bottom_rotate_cursor,
+                max_addressed_requests_per_loop,
                 MAX_CONTINUITY_REPAIR_PEER_FANOUT,
                 repair_jitter_seed,
             },
@@ -273,6 +280,7 @@ pub const RepairService = struct {
             .targeted_repair_peer_fanout = targeted_repair_peer_fanout,
             .targeted_repair_min_slot = targeted_repair_min_slot,
             .targeted_repair_max_slot = targeted_repair_max_slot,
+            .max_addressed_requests_per_loop = max_addressed_requests_per_loop,
         };
     }
 
@@ -333,25 +341,32 @@ pub const RepairService = struct {
         self.metrics.request_count.add(repair_requests.items.len);
         const addressed_requests = try self.assignRequestsToPeers(repair_requests.items);
         defer addressed_requests.deinit();
+        const requests_to_send = self.limitAddressedRequests(addressed_requests.items);
 
-        if (addressed_requests.items.len < 4) {
-            try self.requester.sendRepairRequestBatch(addressed_requests.items);
+        if (requests_to_send.len < 4) {
+            try self.requester.sendRepairRequestBatch(requests_to_send);
         } else {
-            const num_threads = numRequesterThreads(addressed_requests.items.len);
+            const num_threads = numRequesterThreads(requests_to_send.len);
             for (0..num_threads) |i| {
-                const start = (addressed_requests.items.len * i) / num_threads;
-                const end = (addressed_requests.items.len * (i + 1)) / num_threads;
+                const start = (requests_to_send.len * i) / num_threads;
+                const end = (requests_to_send.len * (i + 1)) / num_threads;
                 try self.thread_pool.schedule(self.allocator, .{
                     &self.requester,
-                    addressed_requests.items[start..end],
+                    requests_to_send[start..end],
                 });
             }
             try self.thread_pool.join();
         }
 
-        try self.logStartupRepairSendQueuedOnce(self.shred_tracker.current_bottom_slot, addressed_requests.items);
+        try self.logStartupRepairSendQueuedOnce(self.shred_tracker.current_bottom_slot, requests_to_send);
 
-        return addressed_requests.items.len;
+        return requests_to_send.len;
+    }
+
+    fn limitAddressedRequests(self: *const Self, requests: []AddressedRepairRequest) []AddressedRepairRequest {
+        const limit = self.max_addressed_requests_per_loop;
+        if (limit == 0 or requests.len <= limit) return requests;
+        return requests[0..limit];
     }
 
     /// The maximum number of `.Shred` repairs to request.
