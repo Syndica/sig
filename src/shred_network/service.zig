@@ -26,6 +26,8 @@ const RepairRequester = shred_network.repair_service.RepairRequester;
 const RepairService = shred_network.repair_service.RepairService;
 const ShredReceiver = shred_network.shred_receiver.ShredReceiver;
 
+const REPAIR_TRACKER_LEDGER_SEED_SLOT_WINDOW = 128;
+
 /// Settings which instruct the Shred Network how to behave.
 pub const ShredNetworkConfig = struct {
     root_slot: Slot,
@@ -123,6 +125,14 @@ pub fn start(
         conf.log_finished_slots,
     );
     try defers.deferCall(BasicShredTracker.deinit, .{shred_tracker});
+    try seedShredTrackerFromLedger(
+        deps.allocator,
+        .from(deps.logger),
+        deps.ledger,
+        shred_tracker,
+        conf.root_slot + 1,
+        conf.root_slot +| REPAIR_TRACKER_LEDGER_SEED_SLOT_WINDOW,
+    );
 
     // channels (cant use arena as they need to alloc/free frequently &
     // potentially from multiple sender threads)
@@ -181,35 +191,43 @@ pub fn start(
     }
 
     // repair (thread)
-    const repair_peer_provider = try RepairPeerProvider.init(
-        deps.allocator,
-        deps.random,
-        deps.registry,
-        deps.gossip_table_rw,
-        Pubkey.fromPublicKey(&deps.my_keypair.public_key),
-        deps.my_shred_version,
-    );
-    const repair_requester = try RepairRequester.init(
-        deps.allocator,
-        .from(deps.logger),
-        deps.random,
-        deps.registry,
-        deps.my_keypair,
-        repair_socket,
-        deps.exit,
-    );
-    const repair_svc = try arena.create(RepairService);
-    try defers.deferCall(RepairService.deinit, .{repair_svc});
-    repair_svc.* = try RepairService.init(
-        deps.allocator,
-        .from(deps.logger),
-        deps.exit,
-        deps.registry,
-        repair_requester,
-        repair_peer_provider,
-        shred_tracker,
-    );
-    try service_manager.spawn("Repair Service", RepairService.run, .{repair_svc});
+    if (try readEnvBool("SIG_SHRED_NETWORK_DISABLE_REPAIR_SERVICE", false)) {
+        deps.logger.info().logf(
+            "repair service disabled by SIG_SHRED_NETWORK_DISABLE_REPAIR_SERVICE",
+            .{},
+        );
+    } else {
+        const repair_peer_provider = try RepairPeerProvider.init(
+            deps.allocator,
+            deps.random,
+            deps.registry,
+            deps.gossip_table_rw,
+            deps.epoch_tracker,
+            Pubkey.fromPublicKey(&deps.my_keypair.public_key),
+            deps.my_shred_version,
+        );
+        const repair_requester = try RepairRequester.init(
+            deps.allocator,
+            .from(deps.logger),
+            deps.random,
+            deps.registry,
+            deps.my_keypair,
+            repair_socket,
+            deps.exit,
+        );
+        const repair_svc = try arena.create(RepairService);
+        try defers.deferCall(RepairService.deinit, .{repair_svc});
+        repair_svc.* = try RepairService.init(
+            deps.allocator,
+            .from(deps.logger),
+            deps.exit,
+            deps.registry,
+            repair_requester,
+            repair_peer_provider,
+            shred_tracker,
+        );
+        try service_manager.spawn("Repair Service", RepairService.run, .{repair_svc});
+    }
 
     // duplicate shred listener (thread)
     if (deps.duplicate) |duplicate| if (duplicate.slots_sender) |duplicate_slots_sender| {
@@ -257,13 +275,117 @@ pub fn start(
 fn bindUdpReusable(port: u16) !sig.net.UdpSocket {
     var socket = try sig.net.UdpSocket.create(.ipv4);
     try socket.enablePortReuse(true);
+    const receive_buffer_bytes = try readEnvUsize("SIG_SHRED_NETWORK_UDP_RCVBUF_BYTES", 0);
+    if (receive_buffer_bytes > 0) {
+        try socket.setReceiveBufferSize(receive_buffer_bytes);
+    }
     try socket.bindToPort(port);
     try socket.setReadTimeout(sig.net.SOCKET_TIMEOUT_US);
     return socket;
 }
 
+fn readEnvUsize(key: []const u8, default_value: usize) !usize {
+    const allocator = std.heap.page_allocator;
+    const raw = std.process.getEnvVarOwned(allocator, key) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return default_value,
+        else => return err,
+    };
+    defer allocator.free(raw);
+    return try std.fmt.parseUnsigned(usize, raw, 10);
+}
+
+fn readEnvBool(key: []const u8, default_value: bool) !bool {
+    const allocator = std.heap.page_allocator;
+    const raw = std.process.getEnvVarOwned(allocator, key) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return default_value,
+        else => return err,
+    };
+    defer allocator.free(raw);
+
+    if (std.mem.eql(u8, raw, "1") or
+        std.ascii.eqlIgnoreCase(raw, "true") or
+        std.ascii.eqlIgnoreCase(raw, "yes"))
+    {
+        return true;
+    }
+    if (std.mem.eql(u8, raw, "0") or
+        std.ascii.eqlIgnoreCase(raw, "false") or
+        std.ascii.eqlIgnoreCase(raw, "no"))
+    {
+        return false;
+    }
+    return error.InvalidBooleanEnvironmentVariable;
+}
+
 fn closeSocket(socket: sig.net.UdpSocket) void {
     socket.close();
+}
+
+fn seedShredTrackerFromLedger(
+    allocator: Allocator,
+    logger: Logger,
+    ledger: *sig.ledger.Ledger,
+    tracker: *BasicShredTracker,
+    start_slot: Slot,
+    end_slot: Slot,
+) !void {
+    const schema = sig.ledger.schema.schema;
+    const key_serializer = sig.ledger.database.key_serializer;
+
+    var iter = try ledger.db.iterator(schema.data_shred, .forward, .{ start_slot, 0 });
+    defer iter.deinit();
+
+    var seeded_data_shreds: usize = 0;
+    var parse_failures: usize = 0;
+    var register_failures: usize = 0;
+    var first_seeded_slot: ?Slot = null;
+    var last_seeded_slot: ?Slot = null;
+
+    while (try iter.nextBytes()) |entry| {
+        const key, const payload = entry;
+        defer key.deinit();
+        defer payload.deinit();
+
+        const slot, _ = try key_serializer.deserialize(
+            schema.data_shred.Key,
+            allocator,
+            key.data,
+        );
+        if (slot < start_slot) continue;
+        if (slot > end_slot) break;
+
+        var shred = sig.ledger.shred.Shred.fromPayload(allocator, payload.data) catch {
+            parse_failures += 1;
+            continue;
+        };
+        defer shred.deinit();
+
+        switch (shred) {
+            .data => |data_shred| {
+                tracker.registerDataShred(&data_shred, sig.time.Instant.now()) catch {
+                    register_failures += 1;
+                    continue;
+                };
+                seeded_data_shreds += 1;
+                first_seeded_slot = first_seeded_slot orelse slot;
+                last_seeded_slot = slot;
+            },
+            .code => {},
+        }
+    }
+
+    logger.info().logf(
+        "seeded shred tracker from ledger start_slot={} end_slot={} seeded_data_shreds={} first_seeded_slot={?} last_seeded_slot={?} parse_failures={} register_failures={}",
+        .{
+            start_slot,
+            end_slot,
+            seeded_data_shreds,
+            first_seeded_slot,
+            last_seeded_slot,
+            parse_failures,
+            register_failures,
+        },
+    );
 }
 
 // This test verifies that the shred_network:

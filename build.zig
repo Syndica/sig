@@ -220,6 +220,10 @@ pub fn build(b: *Build) !void {
     const test_step = b.step("test", "Run library tests");
     const fuzz_step = b.step("fuzz", "Gossip fuzz testing");
     const ledger_inspect_step = b.step("ledger_inspect", "Inspect a ledger RocksDB for replay handoff debugging");
+    const repair_lab_step = b.step("repair_lab", "Inspect per-FEC repair/recovery state for a ledger slot");
+    const fec_capture_probe_step = b.step("fec_capture_probe", "Probe FEC completion from raw Chimera shred spool files");
+    const compressed_store_smoke_step = b.step("compressed_store_smoke", "Smoke-test Rooted.get through compressed account store");
+    const reduced_checkpoint_from_manifest_step = b.step("reduced_checkpoint_from_manifest", "Write reduced checkpoint metadata from snapshot manifest bincode files");
     const benchmark_step = b.step("benchmark", "Benchmark client");
     const geyser_reader_step = b.step("geyser_reader", "Read data from geyser");
     const vm_step = b.step("vm", "Run the VM client");
@@ -402,6 +406,90 @@ pub fn build(b: *Build) !void {
         .hashmap => {},
     }
     addInstallAndRun(b, ledger_inspect_step, ledger_inspect_exe, config);
+
+    const repair_lab_exe = b.addExecutable(.{
+        .name = "sig-repair-lab",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/sig_repair_lab.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+            .error_tracing = config.error_tracing,
+            .link_libc = true,
+        }),
+        .use_llvm = config.use_llvm,
+    });
+    repair_lab_exe.root_module.addImport("sig", sig_mod);
+    repair_lab_exe.root_module.addImport("std14", std14_mod);
+    repair_lab_exe.root_module.addObject(memcpy);
+    switch (config.ledger_db) {
+        .rocksdb => repair_lab_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .hashmap => {},
+    }
+    addInstallAndRun(b, repair_lab_step, repair_lab_exe, config);
+
+    const fec_capture_probe_exe = b.addExecutable(.{
+        .name = "fec-capture-probe",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/fec_capture_probe.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+            .error_tracing = config.error_tracing,
+            .link_libc = true,
+        }),
+        .use_llvm = config.use_llvm,
+    });
+    fec_capture_probe_exe.root_module.addImport("sig", sig_mod);
+    fec_capture_probe_exe.root_module.addImport("std14", std14_mod);
+    fec_capture_probe_exe.root_module.addObject(memcpy);
+    switch (config.ledger_db) {
+        .rocksdb => fec_capture_probe_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .hashmap => {},
+    }
+    addInstallAndRun(b, fec_capture_probe_step, fec_capture_probe_exe, config);
+
+    const compressed_store_smoke_exe = b.addExecutable(.{
+        .name = "compressed-account-store-smoke",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/compressed_account_store_smoke.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+            .error_tracing = config.error_tracing,
+            .link_libc = true,
+        }),
+        .use_llvm = config.use_llvm,
+    });
+    compressed_store_smoke_exe.root_module.addImport("sig", sig_mod);
+    compressed_store_smoke_exe.root_module.addImport("std14", std14_mod);
+    compressed_store_smoke_exe.root_module.addObject(memcpy);
+    switch (config.ledger_db) {
+        .rocksdb => compressed_store_smoke_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .hashmap => {},
+    }
+    addInstallAndRun(b, compressed_store_smoke_step, compressed_store_smoke_exe, config);
+
+    const reduced_checkpoint_from_manifest_exe = b.addExecutable(.{
+        .name = "reduced-checkpoint-from-manifest",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/reduced_checkpoint_from_manifest.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+            .error_tracing = config.error_tracing,
+            .link_libc = true,
+        }),
+        .use_llvm = config.use_llvm,
+    });
+    reduced_checkpoint_from_manifest_exe.root_module.addImport("sig", sig_mod);
+    reduced_checkpoint_from_manifest_exe.root_module.addImport("std14", std14_mod);
+    reduced_checkpoint_from_manifest_exe.root_module.addObject(memcpy);
+    switch (config.ledger_db) {
+        .rocksdb => reduced_checkpoint_from_manifest_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .hashmap => {},
+    }
+    addInstallAndRun(b, reduced_checkpoint_from_manifest_step, reduced_checkpoint_from_manifest_exe, config);
 
     const unit_tests_exe = b.addTest(.{
         .root_module = b.createModule(.{

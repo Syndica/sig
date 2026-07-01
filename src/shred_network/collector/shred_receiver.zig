@@ -14,6 +14,7 @@ const KeyPair = sig.identity.KeyPair;
 const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
 const Channel = sig.sync.Channel;
 const Counter = sig.prometheus.Counter;
+const Gauge = sig.prometheus.Gauge;
 const Histogram = sig.prometheus.Histogram;
 const Packet = sig.net.Packet;
 const Ping = sig.gossip.Ping;
@@ -23,6 +24,7 @@ const Shred = sig.ledger.shred.Shred;
 const ShredInserter = sig.ledger.ShredInserter;
 const Slot = sig.core.Slot;
 const SocketThread = sig.net.SocketThread;
+const Timer = sig.time.Timer;
 const ExitCondition = sig.sync.ExitCondition;
 const VariantCounter = sig.prometheus.VariantCounter;
 
@@ -35,6 +37,87 @@ const DUPLICATE_SHRED_MAX_PAYLOAD_SIZE =
 const DUPLICATE_SHRED_HEADER_SIZE =
     shred_network.duplicate_shred_handler.DUPLICATE_SHRED_HEADER_SIZE;
 
+const PacketBatchEntry = struct {
+    packet: Packet,
+    is_repair: bool,
+};
+
+const ParsedShredEntry = struct {
+    shred: Shred,
+    is_repair: bool,
+};
+
+const ParallelParseWorker = struct {
+    allocator: Allocator = std.heap.page_allocator,
+    packets: []const PacketBatchEntry,
+    root_slot: Slot,
+    shred_version: *const Atomic(u16),
+    metrics: ShredReceiverMetrics,
+    drop_code_shreds: bool,
+    parsed: std.MultiArrayList(ParsedShredEntry) = .empty,
+    moved: bool = false,
+    err: ?anyerror = null,
+
+    fn run(self: *ParallelParseWorker) void {
+        self.runInner() catch |err| {
+            self.err = err;
+        };
+    }
+
+    fn runInner(self: *ParallelParseWorker) !void {
+        try self.parsed.ensureUnusedCapacity(self.allocator, self.packets.len);
+        for (self.packets) |entry| {
+            const packet = &entry.packet;
+            const shred_payload = layout.getShred(packet) orelse {
+                self.metrics.discard.observe(error.insufficient_shred_size);
+                self.metrics.incValidationDiscard(entry.is_repair, error.insufficient_shred_size);
+                continue;
+            };
+            validateShred(
+                packet,
+                self.root_slot,
+                self.shred_version,
+                std.math.maxInt(Slot),
+            ) catch |err| {
+                self.metrics.discard.observe(err);
+                self.metrics.incValidationDiscard(entry.is_repair, err);
+                continue;
+            };
+            self.metrics.satisfactory_shred_count.inc();
+            self.metrics.skipped_verifier_count.inc();
+
+            if (self.drop_code_shreds) {
+                const variant = layout.getShredVariant(shred_payload) orelse {
+                    self.metrics.discard.observe(error.variant_missing);
+                    self.metrics.incValidationDiscard(entry.is_repair, error.variant_missing);
+                    continue;
+                };
+                if (variant.shred_type == .code) {
+                    self.metrics.dropped_code_shred_count.inc();
+                    continue;
+                }
+            }
+
+            const shred = Shred.fromPayload(self.allocator, shred_payload) catch {
+                self.metrics.incDeserializeFail(entry.is_repair);
+                continue;
+            };
+            self.metrics.received_shred.observe(shredSourceKind(entry.is_repair, shred));
+            self.parsed.appendAssumeCapacity(.{
+                .shred = shred,
+                .is_repair = entry.is_repair,
+            });
+        }
+    }
+
+    fn deinit(self: *ParallelParseWorker) void {
+        if (!self.moved) {
+            for (self.parsed.items(.shred)) |shred| shred.deinit();
+        }
+        self.parsed.deinit(self.allocator);
+    }
+};
+
 /// Analogous to [ShredFetchStage](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/shred_fetch_stage.rs#L34)
 pub const ShredReceiver = struct {
     params: Params,
@@ -45,9 +128,35 @@ pub const ShredReceiver = struct {
 
     metrics: ShredReceiverMetrics,
     verifier_metrics: shred_verifier.Metrics,
+    seen_shred_packet_keys: std.AutoHashMap(u128, void),
 
     verified_merkle_roots: VerifiedMerkleRoots,
+    packet_batch: std.ArrayListUnmanaged(PacketBatchEntry),
     shred_batch: std.MultiArrayList(struct { shred: Shred, is_repair: bool }),
+    max_shreds_per_iter: usize,
+    parallel_parse_workers: usize,
+    max_pending_packets: usize,
+    drop_to_pending_packets: usize,
+    skip_shred_verifier: bool,
+    dedup_shred_packets: bool,
+    trusted_insert: bool,
+    drop_code_shreds: bool,
+    skip_inserter_recovery: bool,
+    skip_inserter_tracker: bool,
+    skip_data_recovery_meta: bool,
+    debug_logged_batches: usize,
+    debug_logged_missing_leader_schedules: usize,
+    debug_logged_validation_failures: usize,
+    debug_logged_verifier_failures: usize,
+    debug_logged_skip_verifier: bool,
+    debug_logged_insert_batches: usize,
+    debug_logged_backlog_drops: usize,
+    debug_target_repair_slot: ?Slot,
+    debug_logged_target_repair_candidates: usize,
+    debug_logged_target_repair_validation_failures: usize,
+    debug_logged_target_repair_verifier_failures: usize,
+    debug_logged_target_repair_verified: usize,
+    debug_logged_target_repair_deserialize_failures: usize,
 
     const Params = struct {
         keypair: *const KeyPair,
@@ -90,6 +199,67 @@ pub const ShredReceiver = struct {
 
         const metrics = try registry.initStruct(ShredReceiverMetrics);
         const verifier_metrics = try registry.initStruct(shred_verifier.Metrics);
+        var seen_shred_packet_keys = std.AutoHashMap(u128, void).init(allocator);
+        errdefer seen_shred_packet_keys.deinit();
+        const max_shreds_per_iter = readEnvUsize(
+            allocator,
+            "SIG_SHRED_RECEIVER_MAX_SHREDS_PER_ITER",
+            DEFAULT_MAX_SHREDS_PER_ITER,
+        );
+        const parallel_parse_workers = readEnvUsize(
+            allocator,
+            "SIG_SHRED_RECEIVER_PARALLEL_PARSE_WORKERS",
+            1,
+        );
+        const max_pending_packets = readEnvUsize(
+            allocator,
+            "SIG_SHRED_RECEIVER_MAX_PENDING_PACKETS",
+            0,
+        );
+        const default_drop_to_pending = if (max_pending_packets > 0)
+            @max(max_shreds_per_iter, max_pending_packets / 2)
+        else
+            0;
+        const drop_to_pending_packets = readEnvUsize(
+            allocator,
+            "SIG_SHRED_RECEIVER_DROP_TO_PENDING_PACKETS",
+            default_drop_to_pending,
+        );
+        const skip_shred_verifier = readEnvBool(
+            allocator,
+            "SIG_SHRED_RECEIVER_SKIP_VERIFIER",
+            false,
+        );
+        const dedup_shred_packets = readEnvBool(
+            allocator,
+            "SIG_SHRED_RECEIVER_DEDUP_PACKETS",
+            false,
+        );
+        const trusted_insert = readEnvBool(
+            allocator,
+            "SIG_SHRED_RECEIVER_TRUSTED_INSERT",
+            false,
+        );
+        const drop_code_shreds = readEnvBool(
+            allocator,
+            "SIG_SHRED_RECEIVER_DROP_CODE_SHREDS",
+            false,
+        );
+        const skip_inserter_recovery = readEnvBool(
+            allocator,
+            "SIG_SHRED_INSERTER_SKIP_RECOVERY",
+            false,
+        );
+        const skip_inserter_tracker = readEnvBool(
+            allocator,
+            "SIG_SHRED_INSERTER_SKIP_TRACKER",
+            false,
+        );
+        const skip_data_recovery_meta = readEnvBool(
+            allocator,
+            "SIG_SHRED_INSERTER_SKIP_DATA_RECOVERY_META",
+            false,
+        );
 
         return ShredReceiver{
             .params = params,
@@ -98,15 +268,49 @@ pub const ShredReceiver = struct {
             .outgoing_pongs = outgoing_pongs,
             .metrics = metrics,
             .verifier_metrics = verifier_metrics,
+            .seen_shred_packet_keys = seen_shred_packet_keys,
             .verified_merkle_roots = verified_merkle_roots,
+            .packet_batch = .empty,
             .shred_batch = .empty,
+            .max_shreds_per_iter = if (max_shreds_per_iter == 0)
+                DEFAULT_MAX_SHREDS_PER_ITER
+            else
+                max_shreds_per_iter,
+            .parallel_parse_workers = parallel_parse_workers,
+            .max_pending_packets = max_pending_packets,
+            .drop_to_pending_packets = if (max_pending_packets > 0)
+                @min(drop_to_pending_packets, max_pending_packets)
+            else
+                0,
+            .skip_shred_verifier = skip_shred_verifier,
+            .dedup_shred_packets = dedup_shred_packets,
+            .trusted_insert = trusted_insert,
+            .drop_code_shreds = drop_code_shreds,
+            .skip_inserter_recovery = skip_inserter_recovery,
+            .skip_inserter_tracker = skip_inserter_tracker,
+            .skip_data_recovery_meta = skip_data_recovery_meta,
+            .debug_logged_batches = 0,
+            .debug_logged_missing_leader_schedules = 0,
+            .debug_logged_validation_failures = 0,
+            .debug_logged_verifier_failures = 0,
+            .debug_logged_skip_verifier = false,
+            .debug_logged_insert_batches = 0,
+            .debug_logged_backlog_drops = 0,
+            .debug_target_repair_slot = null,
+            .debug_logged_target_repair_candidates = 0,
+            .debug_logged_target_repair_validation_failures = 0,
+            .debug_logged_target_repair_verifier_failures = 0,
+            .debug_logged_target_repair_verified = 0,
+            .debug_logged_target_repair_deserialize_failures = 0,
         };
     }
 
     pub fn deinit(self: *ShredReceiver, allocator: Allocator) void {
         self.incoming_shreds.deinit();
         self.outgoing_pongs.deinit();
+        self.seen_shred_packet_keys.deinit();
         self.verified_merkle_roots.deinit();
+        self.packet_batch.deinit(allocator);
         self.shred_batch.deinit(allocator);
     }
 
@@ -158,7 +362,7 @@ pub const ShredReceiver = struct {
         }
     }
 
-    const MAX_SHREDS_PER_ITER = 1024;
+    const DEFAULT_MAX_SHREDS_PER_ITER = 1024;
 
     fn handleBatch(self: *ShredReceiver, allocator: Allocator) !void {
         defer {
@@ -166,14 +370,28 @@ pub const ShredReceiver = struct {
             self.shred_batch.clearRetainingCapacity();
         }
 
+        if (self.canUseParallelParse()) {
+            return self.handleBatchParallelParse(allocator);
+        }
+
         const leader_schedules_with_infos = self.params.epoch_tracker.getLeaderSchedules() catch {
             // Leader schedule not yet populated (RpcLeaderScheduleService hasn't run yet).
             // Drain the channel to prevent backpressure and retry on the next call.
-            while (self.incoming_shreds.tryReceive()) |_| {}
+            var drained: usize = 0;
+            while (self.incoming_shreds.tryReceive()) |_| drained += 1;
+            if (drained > 0 and self.debug_logged_missing_leader_schedules < 8) {
+                self.debug_logged_missing_leader_schedules += 1;
+                self.logger.warn().logf(
+                    "discarded shred batch because leader schedules are unavailable packets={}",
+                    .{drained},
+                );
+            }
             return;
         };
         defer leader_schedules_with_infos.release();
         const leader_schedules = leader_schedules_with_infos.leader_schedules;
+
+        self.trimIncomingBacklog();
 
         var packet_count: usize = 0;
         while (self.incoming_shreds.tryReceive()) |packet| {
@@ -183,14 +401,23 @@ pub const ShredReceiver = struct {
             packet_count += 1;
             tracy.plot(u32, "shred-batch packets received", @intCast(packet_count));
 
-            if (try self.handlePacket(allocator, &leader_schedules, packet)) |shred| {
+            if (try self.handlePacket(allocator, &leader_schedules, packet, is_repair)) |shred| {
                 self.metrics.received_shred.observe(shredSourceKind(is_repair, shred));
                 try self.shred_batch.append(allocator, .{
                     .shred = shred,
                     .is_repair = is_repair,
                 });
-                if (self.shred_batch.len == MAX_SHREDS_PER_ITER) break;
+                if (self.shred_batch.len == self.max_shreds_per_iter) break;
             }
+        }
+        self.metrics.incoming_pending_packets.set(@intCast(self.incoming_shreds.len()));
+
+        if (packet_count > 0 and self.debug_logged_batches < 8) {
+            self.debug_logged_batches += 1;
+            self.logger.info().logf(
+                "received shred batch packets={} valid_shreds={}",
+                .{ packet_count, self.shred_batch.len },
+            );
         }
 
         const result = try self.params.inserter.insertShreds(
@@ -198,11 +425,22 @@ pub const ShredReceiver = struct {
             self.shred_batch.items(.shred),
             self.shred_batch.items(.is_repair),
             .{
+                .is_trusted = self.trusted_insert,
                 .leader_schedules = &leader_schedules,
                 .shred_tracker = self.params.tracker,
+                .skip_recovery = self.skip_inserter_recovery,
+                .skip_shred_tracker = self.skip_inserter_tracker,
+                .skip_data_recovery_meta_load = self.skip_data_recovery_meta,
             },
         );
         self.metrics.passed_to_inserter_count.add(self.shred_batch.len);
+        if (self.debug_logged_insert_batches < 8) {
+            self.debug_logged_insert_batches += 1;
+            self.logger.info().logf(
+                "inserted shred batch candidate_count={}",
+                .{self.shred_batch.len},
+            );
+        }
 
         try self.params.duplicate_handler.handleDuplicateSlots(allocator, &result);
 
@@ -211,12 +449,216 @@ pub const ShredReceiver = struct {
         self.metrics.batch_size.observe(self.shred_batch.len);
     }
 
+    fn canUseParallelParse(self: *const ShredReceiver) bool {
+        return self.parallel_parse_workers > 1 and
+            self.skip_shred_verifier and
+            self.params.maybe_retransmit_shred_sender == null;
+    }
+
+    fn handleBatchParallelParse(self: *ShredReceiver, allocator: Allocator) !void {
+        const leader_schedules_with_infos = self.params.epoch_tracker.getLeaderSchedules() catch {
+            var drained: usize = 0;
+            while (self.incoming_shreds.tryReceive()) |_| drained += 1;
+            if (drained > 0 and self.debug_logged_missing_leader_schedules < 8) {
+                self.debug_logged_missing_leader_schedules += 1;
+                self.logger.warn().logf(
+                    "discarded shred batch because leader schedules are unavailable packets={}",
+                    .{drained},
+                );
+            }
+            return;
+        };
+        defer leader_schedules_with_infos.release();
+        const leader_schedules = leader_schedules_with_infos.leader_schedules;
+
+        self.packet_batch.clearRetainingCapacity();
+        defer self.packet_batch.clearRetainingCapacity();
+
+        self.trimIncomingBacklog();
+
+        var packet_count: usize = 0;
+        while (self.incoming_shreds.tryReceive()) |packet| {
+            const is_repair = packet.flags.isSet(.repair);
+            self.metrics.incReceived(is_repair);
+            packet_count += 1;
+            tracy.plot(u32, "shred-batch packets received", @intCast(packet_count));
+
+            if (packet.size == REPAIR_RESPONSE_SERIALIZED_PING_BYTES) {
+                if (try handlePing(
+                    allocator,
+                    &packet,
+                    self.metrics,
+                    self.params.keypair,
+                )) |pong_packet| {
+                    try self.outgoing_pongs.send(pong_packet);
+                    self.metrics.pong_sent_count.inc();
+                }
+                continue;
+            }
+
+            if (self.dedup_shred_packets) {
+                if (layout.getShred(&packet)) |shred_payload| {
+                    if (shredPacketKey(shred_payload)) |packet_key| {
+                        const packet_entry = try self.seen_shred_packet_keys.getOrPut(packet_key);
+                        if (packet_entry.found_existing) {
+                            self.metrics.duplicate_packet_drop_count.inc();
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            try self.packet_batch.append(allocator, .{
+                .packet = packet,
+                .is_repair = is_repair,
+            });
+            if (self.packet_batch.items.len == self.max_shreds_per_iter) break;
+        }
+        self.metrics.incoming_pending_packets.set(@intCast(self.incoming_shreds.len()));
+
+        if (packet_count > 0 and self.debug_logged_batches < 8) {
+            self.debug_logged_batches += 1;
+            self.logger.info().logf(
+                "received parallel shred packet batch packets={} candidates={} workers={}",
+                .{ packet_count, self.packet_batch.items.len, self.parallel_parse_workers },
+            );
+        }
+
+        try self.parsePacketsInParallel(allocator, self.packet_batch.items);
+
+        const result = try self.params.inserter.insertShreds(
+            allocator,
+            self.shred_batch.items(.shred),
+            self.shred_batch.items(.is_repair),
+            .{
+                .is_trusted = self.trusted_insert,
+                .leader_schedules = &leader_schedules,
+                .shred_tracker = self.params.tracker,
+                .skip_recovery = self.skip_inserter_recovery,
+                .skip_shred_tracker = self.skip_inserter_tracker,
+                .skip_data_recovery_meta_load = self.skip_data_recovery_meta,
+            },
+        );
+        self.metrics.passed_to_inserter_count.add(self.shred_batch.len);
+        if (self.debug_logged_insert_batches < 8) {
+            self.debug_logged_insert_batches += 1;
+            self.logger.info().logf(
+                "inserted parallel shred batch candidate_count={}",
+                .{self.shred_batch.len},
+            );
+        }
+
+        try self.params.duplicate_handler.handleDuplicateSlots(allocator, &result);
+
+        result.deinit();
+
+        self.metrics.batch_size.observe(self.shred_batch.len);
+    }
+
+    fn parsePacketsInParallel(
+        self: *ShredReceiver,
+        allocator: Allocator,
+        packets: []const PacketBatchEntry,
+    ) !void {
+        if (packets.len == 0) return;
+
+        const worker_count = @min(self.parallel_parse_workers, packets.len);
+        var workers = try allocator.alloc(ParallelParseWorker, worker_count);
+        defer allocator.free(workers);
+        var threads = try allocator.alloc(std.Thread, worker_count);
+        defer allocator.free(threads);
+
+        const root_slot = self.params.epoch_tracker.root_slot.load(.monotonic);
+
+        var timer = Timer.start();
+        var initialized: usize = 0;
+        defer {
+            for (workers[0..initialized]) |*worker| worker.deinit();
+        }
+        var spawned: usize = 0;
+        errdefer {
+            for (threads[0..spawned]) |*thread| thread.join();
+        }
+        for (workers, 0..) |*worker, worker_index| {
+            const start = worker_index * packets.len / worker_count;
+            const end = (worker_index + 1) * packets.len / worker_count;
+            worker.* = .{
+                .packets = packets[start..end],
+                .root_slot = root_slot,
+                .shred_version = self.params.shred_version,
+                .metrics = self.metrics,
+                .drop_code_shreds = self.drop_code_shreds,
+            };
+            initialized += 1;
+            threads[worker_index] = try std.Thread.spawn(.{}, ParallelParseWorker.run, .{worker});
+            spawned += 1;
+        }
+
+        for (threads[0..spawned]) |*thread| thread.join();
+        self.metrics.parallel_parse_batch_count.inc();
+        self.metrics.parallel_parse_elapsed_us.add(timer.read().asMicros());
+        self.metrics.parallel_parse_worker_count.set(@intCast(worker_count));
+
+        var total_parsed: usize = 0;
+        for (workers) |*worker| {
+            if (worker.err) |err| return err;
+            total_parsed += worker.parsed.len;
+        }
+
+        try self.shred_batch.ensureUnusedCapacity(allocator, total_parsed);
+        for (workers) |*worker| {
+            for (worker.parsed.items(.shred), worker.parsed.items(.is_repair)) |shred, is_repair| {
+                self.shred_batch.appendAssumeCapacity(.{
+                    .shred = shred,
+                    .is_repair = is_repair,
+                });
+            }
+            worker.moved = true;
+        }
+    }
+
+    fn trimIncomingBacklog(self: *ShredReceiver) void {
+        const max_pending_packets = self.max_pending_packets;
+        const pending_packets = self.incoming_shreds.len();
+        if (max_pending_packets == 0 or pending_packets <= max_pending_packets) {
+            self.metrics.incoming_pending_packets.set(@intCast(pending_packets));
+            return;
+        }
+
+        const target_pending_packets = if (self.drop_to_pending_packets > 0)
+            self.drop_to_pending_packets
+        else
+            @min(max_pending_packets, self.max_shreds_per_iter);
+
+        var dropped_packets: usize = 0;
+        while (pending_packets - dropped_packets > target_pending_packets) {
+            if (self.incoming_shreds.tryReceive()) |_| {
+                dropped_packets += 1;
+            } else {
+                break;
+            }
+        }
+
+        if (dropped_packets > 0) {
+            self.metrics.stale_packet_drop_count.add(dropped_packets);
+            if (self.debug_logged_backlog_drops < 16) {
+                self.debug_logged_backlog_drops += 1;
+                self.logger.warn().logf(
+                    "dropped stale incoming shred packets pending_before={} dropped={} target_pending={}",
+                    .{ pending_packets, dropped_packets, target_pending_packets },
+                );
+            }
+        }
+        self.metrics.incoming_pending_packets.set(@intCast(self.incoming_shreds.len()));
+    }
+
     /// Handle a single packet and return a shred if it's a valid shred.
     fn handlePacket(
         self: *ShredReceiver,
         allocator: Allocator,
         leader_schedule: *const sig.core.leader_schedule.LeaderSchedules,
         packet: Packet,
+        is_repair: bool,
     ) !?Shred {
         if (packet.size == REPAIR_RESPONSE_SERIALIZED_PING_BYTES) {
             if (try handlePing(
@@ -230,6 +672,61 @@ pub const ShredReceiver = struct {
             }
             return null;
         } else {
+            const current_repair_target_slot = self.params.tracker.current_bottom_slot;
+            if (is_repair) self.resetTargetRepairDebugIfSlotChanged(current_repair_target_slot);
+            const target_payload = layout.getShred(&packet);
+            const is_target_repair = is_repair and if (target_payload) |payload|
+                layout.getSlot(payload) == current_repair_target_slot
+            else
+                false;
+            if (is_target_repair and self.debug_logged_target_repair_candidates < 64) {
+                self.debug_logged_target_repair_candidates += 1;
+                self.logger.info().logf(
+                    "target repair response candidate slot={?} index={?} size={} from={any}",
+                    .{
+                        if (target_payload) |payload| layout.getSlot(payload) else null,
+                        if (target_payload) |payload| layout.getIndex(payload) else null,
+                        packet.size,
+                        packet.addr,
+                    },
+                );
+            }
+            const shred_payload = target_payload orelse {
+                validateShred(
+                    &packet,
+                    self.params.epoch_tracker.root_slot.load(.monotonic),
+                    self.params.shred_version,
+                    std.math.maxInt(Slot),
+                ) catch |err| {
+                    self.metrics.discard.observe(err);
+                    self.metrics.incValidationDiscard(is_repair, err);
+                    if (self.debug_logged_validation_failures < 32) {
+                        self.debug_logged_validation_failures += 1;
+                        self.logger.warn().logf(
+                            "discarded shred validation err={s} size={} slot={?} index={?} version={?} variant={?}",
+                            .{
+                                @errorName(err),
+                                packet.size,
+                                if (target_payload) |payload| layout.getSlot(payload) else null,
+                                if (target_payload) |payload| layout.getIndex(payload) else null,
+                                if (target_payload) |payload| layout.getVersion(payload) else null,
+                                if (target_payload) |payload| layout.getShredVariant(payload) else null,
+                            },
+                        );
+                    }
+                    return null;
+                };
+                return error.InvalidVerifiedShred;
+            };
+            if (self.dedup_shred_packets) {
+                if (shredPacketKey(shred_payload)) |packet_key| {
+                    const packet_entry = try self.seen_shred_packet_keys.getOrPut(packet_key);
+                    if (packet_entry.found_existing) {
+                        self.metrics.duplicate_packet_drop_count.inc();
+                        return null;
+                    }
+                }
+            }
             const max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
             validateShred(
                 &packet,
@@ -238,27 +735,123 @@ pub const ShredReceiver = struct {
                 max_slot,
             ) catch |err| {
                 self.metrics.discard.observe(err);
+                self.metrics.incValidationDiscard(is_repair, err);
+                if (self.debug_logged_validation_failures < 32) {
+                    self.debug_logged_validation_failures += 1;
+                    const validation_payload = layout.getShred(&packet);
+                    self.logger.warn().logf(
+                        "discarded shred validation err={s} size={} slot={?} index={?} version={?} variant={?}",
+                        .{
+                            @errorName(err),
+                            packet.size,
+                            if (validation_payload) |payload| layout.getSlot(payload) else null,
+                            if (validation_payload) |payload| layout.getIndex(payload) else null,
+                            if (validation_payload) |payload| layout.getVersion(payload) else null,
+                            if (validation_payload) |payload| layout.getShredVariant(payload) else null,
+                        },
+                    );
+                }
+                if (is_target_repair and self.debug_logged_target_repair_validation_failures < 64) {
+                    self.debug_logged_target_repair_validation_failures += 1;
+                    const target_validation_payload = layout.getShred(&packet);
+                    self.logger.warn().logf(
+                        "target repair response discarded validation err={s} size={} slot={?} index={?} version={?} variant={?} from={any}",
+                        .{
+                            @errorName(err),
+                            packet.size,
+                            if (target_validation_payload) |payload| layout.getSlot(payload) else null,
+                            if (target_validation_payload) |payload| layout.getIndex(payload) else null,
+                            if (target_validation_payload) |payload| layout.getVersion(payload) else null,
+                            if (target_validation_payload) |payload| layout.getShredVariant(payload) else null,
+                            packet.addr,
+                        },
+                    );
+                }
                 return null;
             };
             self.metrics.satisfactory_shred_count.inc();
 
-            shred_verifier.verifyShred(
-                &packet,
-                leader_schedule,
-                &self.verified_merkle_roots,
-                self.verifier_metrics,
-            ) catch |err| {
-                self.verifier_metrics.fail.observe(err);
-                return null;
-            };
-            self.verifier_metrics.verified_count.inc();
+            if (self.skip_shred_verifier) {
+                self.metrics.skipped_verifier_count.inc();
+                if (!self.debug_logged_skip_verifier) {
+                    self.debug_logged_skip_verifier = true;
+                    self.logger.warn().log("skipping shred verifier because SIG_SHRED_RECEIVER_SKIP_VERIFIER is enabled");
+                }
+            } else {
+                shred_verifier.verifyShred(
+                    &packet,
+                    leader_schedule,
+                    &self.verified_merkle_roots,
+                    self.verifier_metrics,
+                ) catch |err| {
+                    self.verifier_metrics.fail.observe(err);
+                    self.metrics.incVerifierDiscard(is_repair, err);
+                    if (self.debug_logged_verifier_failures < 32) {
+                        self.debug_logged_verifier_failures += 1;
+                        self.logger.warn().logf(
+                            "discarded shred verifier err={s} size={} slot={?} index={?} version={?} variant={?}",
+                            .{
+                                @errorName(err),
+                                packet.size,
+                                layout.getSlot(shred_payload),
+                                layout.getIndex(shred_payload),
+                                layout.getVersion(shred_payload),
+                                layout.getShredVariant(shred_payload),
+                            },
+                        );
+                    }
+                    if (is_target_repair and self.debug_logged_target_repair_verifier_failures < 64) {
+                        self.debug_logged_target_repair_verifier_failures += 1;
+                        self.logger.warn().logf(
+                            "target repair response discarded verifier err={s} size={} slot={?} index={?} version={?} variant={?} from={any}",
+                            .{
+                                @errorName(err),
+                                packet.size,
+                                layout.getSlot(shred_payload),
+                                layout.getIndex(shred_payload),
+                                layout.getVersion(shred_payload),
+                                layout.getShredVariant(shred_payload),
+                                packet.addr,
+                            },
+                        );
+                    }
+                    return null;
+                };
+                self.verifier_metrics.verified_count.inc();
+            }
 
             if (self.params.maybe_retransmit_shred_sender) |retransmit_shred_sender| {
                 try retransmit_shred_sender.send(packet);
             }
 
-            const shred_payload = layout.getShred(&packet) orelse return error.InvalidVerifiedShred;
+            if (is_target_repair and self.debug_logged_target_repair_verified < 64) {
+                self.debug_logged_target_repair_verified += 1;
+                self.logger.info().logf(
+                    "target repair response verified slot={?} index={?} variant={?} from={any}",
+                    .{
+                        layout.getSlot(shred_payload),
+                        layout.getIndex(shred_payload),
+                        layout.getShredVariant(shred_payload),
+                        packet.addr,
+                    },
+                );
+            }
+            if (self.drop_code_shreds) {
+                const variant = layout.getShredVariant(shred_payload) orelse return null;
+                if (variant.shred_type == .code) {
+                    self.metrics.dropped_code_shred_count.inc();
+                    return null;
+                }
+            }
             return Shred.fromPayload(allocator, shred_payload) catch |err| {
+                self.metrics.incDeserializeFail(is_repair);
+                if (is_target_repair and self.debug_logged_target_repair_deserialize_failures < 64) {
+                    self.debug_logged_target_repair_deserialize_failures += 1;
+                    self.logger.err().logf(
+                        "target repair response deserialize failed slot={?} index={?} err={s} from={any}",
+                        .{ layout.getSlot(shred_payload), layout.getIndex(shred_payload), @errorName(err), packet.addr },
+                    );
+                }
                 self.logger.err().logf(
                     "failed to deserialize verified shred {?}.{?}: {}",
                     .{ layout.getSlot(shred_payload), layout.getIndex(shred_payload), err },
@@ -266,6 +859,19 @@ pub const ShredReceiver = struct {
                 return null;
             };
         }
+    }
+
+    fn resetTargetRepairDebugIfSlotChanged(self: *ShredReceiver, slot: Slot) void {
+        if (self.debug_target_repair_slot) |current_slot| {
+            if (current_slot == slot) return;
+        }
+
+        self.debug_target_repair_slot = slot;
+        self.debug_logged_target_repair_candidates = 0;
+        self.debug_logged_target_repair_validation_failures = 0;
+        self.debug_logged_target_repair_verifier_failures = 0;
+        self.debug_logged_target_repair_verified = 0;
+        self.debug_logged_target_repair_deserialize_failures = 0;
     }
 
     fn handlePing(
@@ -492,14 +1098,28 @@ pub const ShredReceiverMetrics = struct {
     received_count: *Counter,
     turbine_received_count: *Counter,
     repair_received_count: *Counter,
+    incoming_pending_packets: *Gauge(u64),
+    stale_packet_drop_count: *Counter,
+    duplicate_packet_drop_count: *Counter,
+    dropped_code_shred_count: *Counter,
+    skipped_verifier_count: *Counter,
     satisfactory_shred_count: *Counter,
     passed_to_inserter_count: *Counter,
     valid_ping_count: *Counter,
     ping_deserialize_fail_count: *Counter,
     ping_verify_fail_count: *Counter,
     pong_sent_count: *Counter,
+    turbine_deserialize_fail_count: *Counter,
+    repair_deserialize_fail_count: *Counter,
+    parallel_parse_batch_count: *Counter,
+    parallel_parse_elapsed_us: *Counter,
+    parallel_parse_worker_count: *Gauge(u64),
     batch_size: *Histogram,
     discard: *VariantCounter(ShredValidationError),
+    turbine_validation_discard: *VariantCounter(ShredValidationError),
+    repair_validation_discard: *VariantCounter(ShredValidationError),
+    turbine_verifier_discard: *VariantCounter(shred_verifier.ShredVerificationFailure),
+    repair_verifier_discard: *VariantCounter(shred_verifier.ShredVerificationFailure),
     received_shred: *VariantCounter(ReceivedShredKind),
 
     pub const prefix = "shred_receiver";
@@ -513,7 +1133,80 @@ pub const ShredReceiverMetrics = struct {
             self.turbine_received_count.inc();
         }
     }
+
+    pub fn incValidationDiscard(
+        self: *const ShredReceiverMetrics,
+        is_repair: bool,
+        err: ShredValidationError,
+    ) void {
+        if (is_repair) {
+            self.repair_validation_discard.observe(err);
+        } else {
+            self.turbine_validation_discard.observe(err);
+        }
+    }
+
+    pub fn incVerifierDiscard(
+        self: *const ShredReceiverMetrics,
+        is_repair: bool,
+        err: shred_verifier.ShredVerificationFailure,
+    ) void {
+        if (is_repair) {
+            self.repair_verifier_discard.observe(err);
+        } else {
+            self.turbine_verifier_discard.observe(err);
+        }
+    }
+
+    pub fn incDeserializeFail(self: *const ShredReceiverMetrics, is_repair: bool) void {
+        if (is_repair) {
+            self.repair_deserialize_fail_count.inc();
+        } else {
+            self.turbine_deserialize_fail_count.inc();
+        }
+    }
 };
+
+fn readEnvUsize(allocator: Allocator, key: []const u8, default: usize) usize {
+    const raw = std.process.getEnvVarOwned(allocator, key) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return default,
+        else => return default,
+    };
+    defer allocator.free(raw);
+    if (raw.len == 0) return default;
+    return std.fmt.parseInt(usize, raw, 10) catch default;
+}
+
+fn readEnvBool(allocator: Allocator, key: []const u8, default: bool) bool {
+    const raw = std.process.getEnvVarOwned(allocator, key) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return default,
+        else => return default,
+    };
+    defer allocator.free(raw);
+    if (raw.len == 0) return default;
+    if (std.mem.eql(u8, raw, "1")) return true;
+    if (std.ascii.eqlIgnoreCase(raw, "true")) return true;
+    if (std.ascii.eqlIgnoreCase(raw, "yes")) return true;
+    if (std.ascii.eqlIgnoreCase(raw, "on")) return true;
+    if (std.mem.eql(u8, raw, "0")) return false;
+    if (std.ascii.eqlIgnoreCase(raw, "false")) return false;
+    if (std.ascii.eqlIgnoreCase(raw, "no")) return false;
+    if (std.ascii.eqlIgnoreCase(raw, "off")) return false;
+    return default;
+}
+
+fn shredPacketKey(shred_payload: []const u8) ?u128 {
+    const slot = layout.getSlot(shred_payload) orelse return null;
+    const index = layout.getIndex(shred_payload) orelse return null;
+    const variant = layout.getShredVariant(shred_payload) orelse return null;
+    const type_bit: u128 = switch (variant.shred_type) {
+        .data => 0,
+        .code => 1,
+    };
+    return (@as(u128, slot) << 33) |
+        (@as(u128, index) << 1) |
+        type_bit;
+}
 
 /// Something about the shred was unexpected, so we will discard it.
 pub const ShredValidationError = error{

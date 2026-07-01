@@ -62,6 +62,23 @@ pub const UdpSocket = struct {
         );
     }
 
+    pub fn setReceiveBufferSize(
+        self: *const UdpSocket,
+        size_bytes: usize,
+    ) posix.SetSockOptError!void {
+        std.debug.assert(size_bytes > 0);
+        const opt: c_int = @intCast(@min(
+            size_bytes,
+            @as(usize, @intCast(std.math.maxInt(c_int))),
+        ));
+        try posix.setsockopt(
+            self.handle,
+            posix.SOL.SOCKET,
+            posix.SO.RCVBUF,
+            std.mem.asBytes(&opt),
+        );
+    }
+
     pub fn receive(self: *const UdpSocket, data: []u8) posix.RecvFromError!usize {
         return try posix.recvfrom(self.handle, data, 0, null, null);
     }

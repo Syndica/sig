@@ -31,6 +31,7 @@ const getShredAndIPFromEchoServer = sig.net.echo.getShredAndIPFromEchoServer;
 const getWallclockMs = sig.time.getWallclockMs;
 const globalRegistry = sig.prometheus.globalRegistry;
 const loadSnapshot = sig.accounts_db.snapshot.load.loadSnapshot;
+const readSnapshotArchiveManifestInfo = sig.accounts_db.snapshot.load.readSnapshotArchiveManifestInfo;
 const servePrometheus = sig.prometheus.servePrometheus;
 const downloadAndExtractGenesis = sig.core.genesis_download.downloadAndExtractGenesis;
 
@@ -145,6 +146,7 @@ pub fn main() !void {
             );
             current_config.replay_threads = params.replay_threads;
             current_config.disable_consensus = params.disable_consensus;
+            current_config.disable_transaction_status_writes = params.disable_transaction_status_writes;
             current_config.stop_at_slot = params.stop_at_slot;
             current_config.voting_enabled = params.voting_enabled or params.vote_account != null;
             current_config.rpc_port = params.rpc_port;
@@ -232,6 +234,10 @@ pub fn main() !void {
             @panic("TODO: support snapshot creation");
         },
         .print_manifest => |params| {
+            if (params.archive_path) |archive_path| {
+                try printArchiveManifestInfo(gpa, archive_path, params.archive_kind, params.archive_base_slot);
+                return;
+            }
             current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
                 gpa,
                 params.snapshot_dir,
@@ -456,6 +462,33 @@ const Cmd = struct {
             "Defaults to <validator-dir>/accounts_db. Overrides --validator-dir for this path.",
     };
 
+    const snapshot_archive_path_arg: cli.ArgumentInfo(?[]const u8) = .{
+        .kind = .named,
+        .name_override = "archive-path",
+        .alias = .none,
+        .default_value = null,
+        .config = .string,
+        .help = "path to a compressed snapshot archive to inspect without requiring a Sig snapshot filename",
+    };
+
+    const snapshot_archive_kind_arg: cli.ArgumentInfo(?[]const u8) = .{
+        .kind = .named,
+        .name_override = "archive-kind",
+        .alias = .none,
+        .default_value = null,
+        .config = .string,
+        .help = "archive kind for --archive-path output: full or incremental",
+    };
+
+    const snapshot_archive_base_slot_arg: cli.ArgumentInfo(?Slot) = .{
+        .kind = .named,
+        .name_override = "archive-base-slot",
+        .alias = .none,
+        .default_value = null,
+        .config = {},
+        .help = "full snapshot base slot to print for an incremental --archive-path",
+    };
+
     const genesis_file_path_arg: cli.ArgumentInfo(?[]const u8) = .{
         .kind = .named,
         .name_override = "genesis-file-path",
@@ -492,6 +525,15 @@ const Cmd = struct {
         .default_value = false,
         .config = {},
         .help = "Disable running consensus in replay.",
+    };
+
+    const disable_transaction_status_writes_arg: cli.ArgumentInfo(bool) = .{
+        .kind = .named,
+        .name_override = "disable-transaction-status-writes",
+        .alias = .none,
+        .default_value = false,
+        .config = {},
+        .help = "Disable ledger transaction status writes during replay.",
     };
 
     const stop_at_slot_arg: cli.ArgumentInfo(?Slot) = .{
@@ -605,6 +647,8 @@ const Cmd = struct {
     const AccountsDbArgumentsBase = struct {
         tracked_pubkeys_file: ?[]const u8,
         tracked_pubkeys_only: bool,
+        load_all_snapshot_accounts: bool,
+        snapshot_ref_index: bool,
         reduced_checkpoint_path: ?[]const u8,
         n_threads_snapshot_load: u32,
         n_threads_snapshot_unpack: u16,
@@ -628,6 +672,22 @@ const Cmd = struct {
                 .default_value = false,
                 .config = {},
                 .help = "load only explicit tracked pubkeys plus mandatory runtime/sysvar accounts; disables broad built-in owner filters",
+            },
+            .load_all_snapshot_accounts = .{
+                .kind = .named,
+                .name_override = "load-all-snapshot-accounts",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "load every account from the snapshot into rooted disk storage; enables demand-loading by pubkey during replay",
+            },
+            .snapshot_ref_index = .{
+                .kind = .named,
+                .name_override = "snapshot-ref-index",
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "store snapshot pubkey->AppendVec offset refs instead of full account rows; requires unpacked accounts/ and --skip-snapshot-validation for now",
             },
             .reduced_checkpoint_path = .{
                 .kind = .named,
@@ -686,6 +746,8 @@ const Cmd = struct {
         fn apply(args: @This(), cfg: *config.Cmd) void {
             cfg.accounts_db.tracked_pubkeys_file = args.tracked_pubkeys_file;
             cfg.accounts_db.tracked_pubkeys_only = args.tracked_pubkeys_only;
+            cfg.accounts_db.load_all_snapshot_accounts = args.load_all_snapshot_accounts;
+            cfg.accounts_db.snapshot_ref_index = args.snapshot_ref_index;
             cfg.accounts_db.reduced_checkpoint_path = args.reduced_checkpoint_path;
             cfg.accounts_db.num_threads_snapshot_load = args.n_threads_snapshot_load;
             cfg.accounts_db.num_threads_snapshot_unpack = args.n_threads_snapshot_unpack;
@@ -987,6 +1049,7 @@ const Cmd = struct {
         geyser: GeyserArgumentsBase,
         replay_threads: u16,
         disable_consensus: bool,
+        disable_transaction_status_writes: bool,
         stop_at_slot: ?sig.core.Slot,
         voting_enabled: bool,
         rpc_port: ?u16,
@@ -1011,6 +1074,7 @@ const Cmd = struct {
                 .geyser = GeyserArgumentsBase.cmd_info,
                 .replay_threads = replay_threads_arg,
                 .disable_consensus = disable_consensus_arg,
+                .disable_transaction_status_writes = disable_transaction_status_writes_arg,
                 .voting_enabled = voting_enabled_arg,
                 .rpc_port = rpc_port_arg,
                 .stop_at_slot = stop_at_slot_arg,
@@ -1144,14 +1208,20 @@ const Cmd = struct {
 
     const PrintManifest = struct {
         snapshot_dir: []const u8,
+        archive_path: ?[]const u8,
+        archive_kind: ?[]const u8,
+        archive_base_slot: ?Slot,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
                 .short = "Prints a manifest file.",
-                .long = "Loads and prints a manifest file.",
+                .long = "Loads and prints a manifest file, or inspects a snapshot archive alias.",
             },
             .sub = .{
                 .snapshot_dir = snapshot_dir_arg,
+                .archive_path = snapshot_archive_path_arg,
+                .archive_kind = snapshot_archive_kind_arg,
+                .archive_base_slot = snapshot_archive_base_slot_arg,
             },
         };
     };
@@ -1609,7 +1679,7 @@ fn validator(
     rooted_db.sqlite_mem_used = allocation_metrics.allocated_bytes_sqlite;
 
     const use_reduced_checkpoint = cfg.accounts_db.reduced_checkpoint_path != null and
-        (init_db_exists or rooted_db.count() > 0);
+        (init_db_exists or rooted_db.count() > 0 or rooted_db.hasCompressedAccountStore());
 
     var ledger_tracy: tracy.TracingAllocator = .{
         .name = "Ledger",
@@ -1650,7 +1720,24 @@ fn validator(
             genesis_file_path,
         )
     else blk: {
-        const snapshot_files = try sig.accounts_db.snapshot.download.getOrDownloadSnapshotFiles(
+        const snapshot_files = if (cfg.accounts_db.snapshot_ref_index) blk_snapshot_files: {
+            var snapshot_fields, const files =
+                try sig.accounts_db.snapshot.download.getOrDownloadAndUnpackSnapshot(
+                    snapshot_tracy_metrics.allocator(),
+                    .from(app_base.logger),
+                    cfg.accounts_db.snapshot_dir,
+                    .{
+                        .gossip_service = gossip_service,
+                        .force_new_snapshot_download = cfg.accounts_db.force_new_snapshot_download,
+                        .force_unpack_snapshot = cfg.accounts_db.force_unpack_snapshot,
+                        .num_threads_snapshot_unpack = cfg.accounts_db.num_threads_snapshot_unpack,
+                        .min_snapshot_download_speed_mbs = cfg.accounts_db.min_snapshot_download_speed_mbs,
+                        .max_number_of_download_attempts = cfg.accounts_db.max_number_of_snapshot_download_attempts,
+                    },
+                );
+            snapshot_fields.deinit(snapshot_tracy_metrics.allocator());
+            break :blk_snapshot_files files;
+        } else try sig.accounts_db.snapshot.download.getOrDownloadSnapshotFiles(
             snapshot_tracy_metrics.allocator(),
             .from(app_base.logger),
             snapshot_dir,
@@ -1658,8 +1745,7 @@ fn validator(
                 .gossip_service = gossip_service,
                 .force_new_snapshot_download = cfg.accounts_db.force_new_snapshot_download,
                 .min_snapshot_download_speed_mbs = cfg.accounts_db.min_snapshot_download_speed_mbs,
-                .max_number_of_download_attempts = //
-                cfg.accounts_db.max_number_of_snapshot_download_attempts,
+                .max_number_of_download_attempts = cfg.accounts_db.max_number_of_snapshot_download_attempts,
             },
         );
 
@@ -1690,19 +1776,27 @@ fn validator(
             );
             errdefer warm_tracker.deinit();
 
-            var rls = RpcLeaderScheduleService.init(
-                allocator,
-                .from(app_base.logger),
-                warm_tracker,
-                warm_rpc_client,
-            );
-            rls.refresh() catch |e| {
-                app_base.logger.warn()
-                    .field("err", @errorName(e))
-                    .log("warm ledger capture: failed to fetch initial leader schedule; shreds may be discarded until final startup");
-            };
-
             warm_capture_epoch_tracker = warm_tracker;
+            if (try getLeaderScheduleFromCli(allocator, cfg)) |leaders| {
+                app_base.logger.info().logf(
+                    "warm ledger capture: loaded leader schedule start={} end={}",
+                    .{ leaders.start, leaders.end },
+                );
+                try warm_tracker.seedRootedLeaderSchedule(allocator, leaders);
+            } else {
+                var rls = RpcLeaderScheduleService.init(
+                    allocator,
+                    .from(app_base.logger),
+                    warm_tracker,
+                    warm_rpc_client,
+                );
+                rls.refresh() catch |e| {
+                    app_base.logger.warn()
+                        .field("err", @errorName(e))
+                        .log("warm ledger capture: failed to fetch initial leader schedule; shreds may be discarded until final startup");
+                };
+            }
+
             warm_capture_manager = try sig.shred_network.start(
                 cfg.shred_network.toConfig(warm_root_slot),
                 .{
@@ -1717,13 +1811,11 @@ fn validator(
                     .gossip_table_rw = &gossip_service.gossip_table_rw,
                     .my_shred_version = &gossip_service.my_shred_version,
                     .epoch_tracker = warm_tracker,
-                    .my_contact_info =
-                        sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(
+                    .my_contact_info = sig.gossip.data.ThreadSafeContactInfo.fromContactInfo(
                         gossip_service.my_contact_info,
                     ),
                     .n_retransmit_threads = cfg.turbine.num_retransmit_threads,
-                    .overwrite_turbine_stake_for_testing =
-                        cfg.turbine.overwrite_stake_for_testing,
+                    .overwrite_turbine_stake_for_testing = cfg.turbine.overwrite_stake_for_testing,
                     .rpc_hooks = null,
                     .duplicate = null,
                     .push_msg_queue_mux = &gossip_service.push_msg_queue_mux,
@@ -1740,6 +1832,8 @@ fn validator(
                 .genesis_file_path = genesis_file_path,
                 .tracked_pubkeys_file_path = cfg.accounts_db.tracked_pubkeys_file,
                 .tracked_pubkeys_only = cfg.accounts_db.tracked_pubkeys_only,
+                .load_all_snapshot_accounts = cfg.accounts_db.load_all_snapshot_accounts,
+                .snapshot_ref_index = cfg.accounts_db.snapshot_ref_index,
                 .extract = if (init_db_exists)
                     .metadata_only
                 else if (cfg.accounts_db.skip_snapshot_validation)
@@ -1853,6 +1947,7 @@ fn validator(
         .epoch_tracker = &epoch_tracker,
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
+        .disable_transaction_status_writes = cfg.disable_transaction_status_writes,
         .voting_enabled = voting_enabled,
         .vote_account_address = maybe_vote_pubkey,
         .stop_at_slot = cfg.stop_at_slot,
@@ -2052,6 +2147,8 @@ fn replayOffline(
             .genesis_file_path = genesis_file_path,
             .tracked_pubkeys_file_path = cfg.accounts_db.tracked_pubkeys_file,
             .tracked_pubkeys_only = cfg.accounts_db.tracked_pubkeys_only,
+            .load_all_snapshot_accounts = cfg.accounts_db.load_all_snapshot_accounts,
+            .snapshot_ref_index = cfg.accounts_db.snapshot_ref_index,
             .extract = if (init_db_exists)
                 .metadata_only
             else if (cfg.accounts_db.skip_snapshot_validation)
@@ -2119,6 +2216,7 @@ fn replayOffline(
         .epoch_tracker = &epoch_tracker,
         .replay_threads = cfg.replay_threads,
         .disable_consensus = cfg.disable_consensus,
+        .disable_transaction_status_writes = cfg.disable_transaction_status_writes,
         .voting_enabled = false,
         .vote_account_address = null,
         .stop_at_slot = cfg.stop_at_slot,
@@ -2190,19 +2288,25 @@ fn shredNetwork(
     );
     defer epoch_tracker.deinit();
 
-    // Fetch the current epoch's leader schedule from RPC and populate epoch_tracker.
-    // This is REQUIRED: ShredReceiver.handleBatch() calls getLeaderSchedules() on every
-    // batch, and verifyShred() checks each shred's signature against the slot leader.
-    // Without a populated epoch_tracker, all shreds are discarded (LeaderUnknown) and
-    // ledger_insertion_num_inserted stays 0 forever.
-    //
-    // NOTE: std.http.Client.fetch may panic in Zig 0.15.2 for large responses.
-    // If a panic occurs here, use the pre-fetch workaround:
-    //   curl -s -X POST <rpc_url> -H "Content-Type: application/json" \
-    //     -d '{"jsonrpc":"2.0","id":1,"method":"getLeaderSchedule","params":[null]}' \
-    //     > /tmp/leader-schedule.json
-    //   sig shred-network --leader-schedule-path /tmp/leader-schedule.json ...
-    {
+    if (try getLeaderScheduleFromCli(allocator, cfg)) |leaders| {
+        app_base.logger.info().logf(
+            "loaded leader schedule start={} end={}",
+            .{ leaders.start, leaders.end },
+        );
+        try epoch_tracker.seedRootedLeaderSchedule(allocator, leaders);
+    } else {
+        // Fetch the current epoch's leader schedule from RPC and populate epoch_tracker.
+        // This is REQUIRED: ShredReceiver.handleBatch() calls getLeaderSchedules() on every
+        // batch, and verifyShred() checks each shred's signature against the slot leader.
+        // Without a populated epoch_tracker, all shreds are discarded (LeaderUnknown) and
+        // ledger_insertion_num_inserted stays 0 forever.
+        //
+        // NOTE: std.http.Client.fetch may panic in Zig 0.15.2 for large responses.
+        // If a panic occurs here, use the pre-fetch workaround:
+        //   curl -s -X POST <rpc_url> -H "Content-Type: application/json" \
+        //     -d '{"jsonrpc":"2.0","id":1,"method":"getLeaderSchedule","params":[null]}' \
+        //     > /tmp/leader-schedule.json
+        //   sig shred-network --leader-schedule-path /tmp/leader-schedule.json ...
         var rls = RpcLeaderScheduleService.init(
             allocator,
             .from(app_base.logger),
@@ -2347,6 +2451,46 @@ fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     std.debug.print("full snapshots: {any}\n", .{snapshots.full.bank_fields});
 }
 
+fn printArchiveManifestInfo(
+    allocator: std.mem.Allocator,
+    archive_path: []const u8,
+    maybe_kind: ?[]const u8,
+    maybe_base_slot: ?Slot,
+) !void {
+    const info = try readSnapshotArchiveManifestInfo(allocator, archive_path);
+    const hash = info.hash.base58String();
+    const kind = maybe_kind orelse "full";
+
+    if (std.mem.eql(u8, kind, "full")) {
+        std.debug.print("kind=full slot={d} hash={s}\n", .{
+            info.slot,
+            hash.constSlice(),
+        });
+        std.debug.print("filename=snapshot-{d}-{s}.tar.zst\n", .{
+            info.slot,
+            hash.constSlice(),
+        });
+        return;
+    }
+
+    if (std.mem.eql(u8, kind, "incremental")) {
+        const base_slot = maybe_base_slot orelse return error.MissingIncrementalBaseSlot;
+        std.debug.print("kind=incremental base={d} slot={d} hash={s}\n", .{
+            base_slot,
+            info.slot,
+            hash.constSlice(),
+        });
+        std.debug.print("filename=incremental-snapshot-{d}-{d}-{s}.tar.zst\n", .{
+            base_slot,
+            info.slot,
+            hash.constSlice(),
+        });
+        return;
+    }
+
+    return error.InvalidArchiveKind;
+}
+
 // fn createSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
 //     var app_base = try AppBase.init(allocator, cfg);
 //     defer {
@@ -2430,10 +2574,32 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         allocator.destroy(geyser);
     };
 
-    const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
+    const snapshot_files = if (cfg.accounts_db.snapshot_ref_index) blk: {
+        var snapshot_fields, const files =
+            try sig.accounts_db.snapshot.download.getOrDownloadAndUnpackSnapshot(
+                allocator,
+                .from(app_base.logger),
+                snapshot_dir_str,
+                .{
+                    .gossip_service = null,
+                    .force_new_snapshot_download = cfg.accounts_db.force_new_snapshot_download,
+                    .force_unpack_snapshot = cfg.accounts_db.force_unpack_snapshot,
+                    .num_threads_snapshot_unpack = cfg.accounts_db.num_threads_snapshot_unpack,
+                    .min_snapshot_download_speed_mbs = cfg.accounts_db.min_snapshot_download_speed_mbs,
+                    .max_number_of_download_attempts = cfg.accounts_db.max_number_of_snapshot_download_attempts,
+                },
+            );
+        snapshot_fields.deinit(allocator);
+        break :blk files;
+    } else try SnapshotFiles.find(allocator, snapshot_dir);
 
     const rooted_file = try std.fs.path.joinZ(allocator, &.{ snapshot_dir_str, "accounts.db" });
     defer allocator.free(rooted_file);
+
+    const init_db_exists: bool = if (cfg.accounts_db.dbg_db_init)
+        try restoreDbInitIfExists(snapshot_dir, .from(app_base.logger))
+    else
+        false;
 
     var rooted_db: sig.accounts_db.Db.Rooted = try .init(rooted_file);
     defer rooted_db.deinit();
@@ -2447,10 +2613,20 @@ fn validateSnapshot(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
             .genesis_file_path = genesis_file_path,
             .tracked_pubkeys_file_path = cfg.accounts_db.tracked_pubkeys_file,
             .tracked_pubkeys_only = cfg.accounts_db.tracked_pubkeys_only,
-            .extract = .{ .entire_snapshot_and_validate = &rooted_db },
+            .load_all_snapshot_accounts = cfg.accounts_db.load_all_snapshot_accounts,
+            .snapshot_ref_index = cfg.accounts_db.snapshot_ref_index,
+            .extract = if (init_db_exists)
+                .metadata_only
+            else if (cfg.accounts_db.skip_snapshot_validation)
+                .{ .entire_snapshot = &rooted_db }
+            else
+                .{ .entire_snapshot_and_validate = &rooted_db },
         },
     );
     defer loaded_snapshot.deinit();
+
+    if (cfg.accounts_db.dbg_db_init and !init_db_exists)
+        try saveDbInit(snapshot_dir, .from(app_base.logger));
 }
 
 /// entrypoint to print the leader schedule and then exit
@@ -2992,6 +3168,7 @@ const ReplayAndConsensusServiceState = struct {
             epoch_tracker: *sig.core.EpochTracker,
             replay_threads: u32,
             disable_consensus: bool,
+            disable_transaction_status_writes: bool,
             voting_enabled: bool,
             vote_account_address: ?Pubkey,
             stop_at_slot: ?Slot,
@@ -3051,6 +3228,7 @@ const ReplayAndConsensusServiceState = struct {
                 },
                 .hard_forks = hard_forks,
                 .replay_threads = params.replay_threads,
+                .disable_transaction_status_writes = params.disable_transaction_status_writes,
                 .stop_at_slot = params.stop_at_slot,
                 .geyser_writer = params.geyser_writer,
             }, if (params.disable_consensus) .disabled else .enabled);

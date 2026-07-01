@@ -49,6 +49,9 @@ pub const BasicShredTracker = struct {
     metrics: Metrics,
     /// Whether to log when finished_slots_through is updated
     log_finished_slots: bool,
+    slide_on_overflow: bool,
+    slide_lag_slots: ?Slot,
+    disable_optimistic_skip: bool,
 
     const num_slots: usize = 1024;
 
@@ -70,7 +73,7 @@ pub const BasicShredTracker = struct {
         log_finished_slots: bool,
     ) !void {
         const metrics = try registry.initStruct(Metrics);
-        metrics.finished_slots_through.set(slot);
+        metrics.finished_slots_through.set(slot -| 1);
         metrics.max_slot_processed.set(slot);
         self.* = .{
             .start_slot = slot,
@@ -81,6 +84,9 @@ pub const BasicShredTracker = struct {
             .logger = logger,
             .metrics = metrics,
             .log_finished_slots = log_finished_slots,
+            .slide_on_overflow = readEnvBool(allocator, "SIG_SHRED_TRACKER_SLIDE_ON_OVERFLOW", false),
+            .slide_lag_slots = readEnvSlot(allocator, "SIG_SHRED_TRACKER_SLIDE_LAG_SLOTS"),
+            .disable_optimistic_skip = readEnvBool(allocator, "SIG_SHRED_TRACKER_DISABLE_OPTIMISTIC_SKIP", false),
         };
     }
 
@@ -117,6 +123,28 @@ pub const BasicShredTracker = struct {
 
         self.mux.lock();
         defer self.mux.unlock();
+
+        if (self.slide_lag_slots) |lag_slots| {
+            if (lag_slots > 0 and slot > self.current_bottom_slot +| lag_slots) {
+                const new_bottom = slot -| lag_slots;
+                if (new_bottom <= self.current_bottom_slot + num_slots - 1) {
+                    self.setBottom(new_bottom);
+                    self.logger.warn().logf(
+                        "slid shred tracker bottom to slot {} after lag on observed slot {}",
+                        .{ new_bottom, slot },
+                    );
+                } else {
+                    self.jumpBottom(new_bottom, slot);
+                }
+            }
+        }
+
+        if (slot > self.current_bottom_slot + num_slots - 1) {
+            if (!self.slide_on_overflow) return error.SlotOverflow;
+
+            const new_bottom = slot -| (num_slots - 1);
+            self.jumpBottom(new_bottom, slot);
+        }
 
         const monitored_slot = try self.observeSlot(slot);
 
@@ -215,7 +243,9 @@ pub const BasicShredTracker = struct {
                     .lt(MIN_SLOT_AGE_TO_REPORT_AS_MISSING))
                 continue;
 
-            if (try self.slotShouldBeSkipped(monitored_slot, slot, last_slot_to_check, now)) {
+            if (!self.disable_optimistic_skip and
+                try self.slotShouldBeSkipped(monitored_slot, slot, last_slot_to_check, now))
+            {
                 this_slot_needs_more_shreds = false;
                 continue;
             }
@@ -236,8 +266,9 @@ pub const BasicShredTracker = struct {
     ///
     /// skip the slot if:
     /// - marked as skipped by another slot
-    /// - there are at least 32 more slots we've received after this one
-    /// - 80% of those are complete or skipped
+    /// - there are at least 32 more slots in a competing fork that excludes
+    ///   this slot
+    /// - there is not a sufficiently developed fork that includes this slot
     /// - it has been at least 10 seconds since we received any shreds for this
     ///   slot
     ///
@@ -274,7 +305,8 @@ pub const BasicShredTracker = struct {
             }
         }
 
-        return forks.hasFork(this_slot, 32) and
+        return !forks.hasForkIncluding(this_slot, 32) and
+            forks.hasFork(this_slot, 32) and
             now.elapsedSince(slot_in_question.last_unique_received_timestamp).asSecs() > 10;
     }
 
@@ -289,6 +321,22 @@ pub const BasicShredTracker = struct {
         if (self.log_finished_slots) {
             self.logger.info().logf("tracked to slot: {}", .{slot -| 1});
         }
+    }
+
+    /// Sliding mode is only intended for standalone warm capture. It prevents
+    /// one old missing slot from pinning the fixed-size tracker forever while
+    /// the ledger continues ingesting live turbine shreds.
+    fn jumpBottom(self: *Self, slot: Slot, observed_slot: Slot) void {
+        if (slot <= self.current_bottom_slot) return;
+        for (&self.slots) |*monitored_slot| {
+            monitored_slot.* = .{};
+        }
+        self.current_bottom_slot = slot;
+        self.metrics.finished_slots_through.max(slot -| 1);
+        self.logger.warn().logf(
+            "slid shred tracker bottom to slot {} after observed slot {}",
+            .{ slot, observed_slot },
+        );
     }
 
     /// - Record that a slot has been observed.
@@ -310,6 +358,29 @@ pub const BasicShredTracker = struct {
     }
 };
 
+fn readEnvBool(allocator: Allocator, key: []const u8, default: bool) bool {
+    const raw = std.process.getEnvVarOwned(allocator, key) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return default,
+        else => return default,
+    };
+    defer allocator.free(raw);
+    if (std.mem.eql(u8, raw, "1")) return true;
+    if (std.ascii.eqlIgnoreCase(raw, "true")) return true;
+    if (std.ascii.eqlIgnoreCase(raw, "yes")) return true;
+    if (std.ascii.eqlIgnoreCase(raw, "on")) return true;
+    return false;
+}
+
+fn readEnvSlot(allocator: Allocator, key: []const u8) ?Slot {
+    const raw = std.process.getEnvVarOwned(allocator, key) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return null,
+        else => return null,
+    };
+    defer allocator.free(raw);
+    if (raw.len == 0) return null;
+    return std.fmt.parseInt(Slot, raw, 10) catch null;
+}
+
 /// Contains multiple trees, where each tree may contain many forks.
 pub const ForkForest = struct {
     /// Every single node
@@ -325,6 +396,14 @@ pub const ForkForest = struct {
         parent: Slot,
         next: List(*Node),
 
+        fn hasPathLength(self: *const Node, minimum_length: usize) bool {
+            if (minimum_length == 0) return true;
+            for (self.next.items) |next| {
+                if (next.hasPathLength(minimum_length - 1)) return true;
+            }
+            return false;
+        }
+
         fn hasFork(self: *const Node, disallowed_slot: Slot, minimum_length: usize) bool {
             if (self.parent == disallowed_slot or self.slot == disallowed_slot) return false;
             if (minimum_length == 0) return true;
@@ -332,6 +411,16 @@ pub const ForkForest = struct {
                 if (next.hasFork(disallowed_slot, minimum_length - 1)) {
                     return true;
                 }
+            }
+            return false;
+        }
+
+        fn hasForkIncluding(self: *const Node, included_slot: Slot, minimum_length: usize) bool {
+            if (self.parent == included_slot or self.slot == included_slot) {
+                return self.hasPathLength(minimum_length);
+            }
+            for (self.next.items) |next| {
+                if (next.hasForkIncluding(included_slot, minimum_length)) return true;
             }
             return false;
         }
@@ -365,6 +454,15 @@ pub const ForkForest = struct {
     pub fn hasFork(self: *const ForkForest, disallowed_slot: Slot, minimum_length: usize) bool {
         for (self.roots.items) |tree| {
             if (tree.hasFork(disallowed_slot, minimum_length)) return true;
+        }
+        return false;
+    }
+
+    /// Returns whether at least one fork has the requested slot in its ancestry
+    /// and has at least `minimum_length` slots after that point.
+    pub fn hasForkIncluding(self: *const ForkForest, included_slot: Slot, minimum_length: usize) bool {
+        for (self.roots.items) |tree| {
+            if (tree.hasForkIncluding(included_slot, minimum_length)) return true;
         }
         return false;
     }
@@ -497,8 +595,9 @@ const MonitoredSlot = struct {
                 gap_start = i;
             }
         }
-        if (self.last_shred == null or self.max_seen == null) {
-            try missing_shreds.append(.{ .start = 0, .end = null });
+        if (self.last_shred == null) {
+            const start = if (self.max_seen) |max_seen| max_seen + 1 else 0;
+            try missing_shreds.append(.{ .start = start, .end = null });
         } else if (self.max_seen.? < self.last_shred.?) {
             try missing_shreds.append(.{ .start = self.max_seen.? + 1, .end = self.last_shred });
         }
@@ -565,8 +664,39 @@ test "1 registered shred is identified" {
     try std.testing.expect(2 == report.missing_shreds.items.len);
     try std.testing.expect(0 == report.missing_shreds.items[0].start);
     try std.testing.expect(123 == report.missing_shreds.items[0].end);
-    try std.testing.expect(0 == report.missing_shreds.items[1].start);
+    try std.testing.expect(124 == report.missing_shreds.items[1].start);
     try std.testing.expect(null == report.missing_shreds.items[1].end);
+}
+
+test "open ended missing range starts after highest observed shred" {
+    const allocator = std.testing.allocator;
+
+    var msr = MultiSlotReport.init(allocator);
+    defer msr.deinit();
+
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    const tracker = try allocator.create(BasicShredTracker);
+    defer allocator.destroy(tracker);
+    try tracker.init(allocator, 13579, .noop, &registry, false);
+    defer tracker.deinit();
+
+    try tracker.registerShred(13579, 45, 13578, false, .EPOCH_ZERO);
+    try tracker.registerShred(13579, 1247, 13578, false, .EPOCH_ZERO);
+
+    _ = try tracker.identifyMissing(&msr, Instant.EPOCH_ZERO.plus(Duration.fromSecs(1)));
+    try std.testing.expectEqual(1, msr.len);
+
+    const report = msr.items()[0];
+    try std.testing.expectEqual(13579, report.slot);
+    try std.testing.expectEqual(3, report.missing_shreds.items.len);
+    try std.testing.expectEqual(0, report.missing_shreds.items[0].start);
+    try std.testing.expectEqual(45, report.missing_shreds.items[0].end.?);
+    try std.testing.expectEqual(46, report.missing_shreds.items[1].start);
+    try std.testing.expectEqual(1247, report.missing_shreds.items[1].end.?);
+    try std.testing.expectEqual(1248, report.missing_shreds.items[2].start);
+    try std.testing.expectEqual(null, report.missing_shreds.items[2].end);
 }
 
 test "slots are only skipped after a competing fork has developed sufficiently" {
@@ -619,6 +749,41 @@ test "slots are only skipped after a competing fork has developed sufficiently" 
     // now 32 slots AND 10 seconds have passed, so we should be good to skip slot 2
     _ = try tracker.identifyMissing(&msr, start.plus(.fromSecs(11)));
     try std.testing.expectEqual(4, msr.items()[0].slot);
+}
+
+test "slots are not skipped when a developed fork includes the slot" {
+    const allocator = std.testing.allocator;
+
+    var msr = MultiSlotReport.init(allocator);
+    defer msr.deinit();
+
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    const tracker = try allocator.create(BasicShredTracker);
+    defer allocator.destroy(tracker);
+    try tracker.init(allocator, 1, .noop, &registry, false);
+    defer tracker.deinit();
+
+    const start: Instant = .EPOCH_ZERO;
+
+    // Slot 3 marks slot 2 as skipped, and slots 4..40 develop a competing
+    // fork that excludes slot 2.
+    try tracker.registerShred(1, 0, 0, true, start);
+    try tracker.registerShred(3, 0, 1, true, start);
+    for (4..41) |slot| {
+        try tracker.registerShred(slot, 0, slot - 1, false, start);
+    }
+
+    // A separate developed fork includes slot 2. The tracker must keep
+    // repairing slot 2 instead of abandoning it based on the competing fork.
+    try tracker.registerShred(50, 0, 2, false, start);
+    for (51..88) |slot| {
+        try tracker.registerShred(slot, 0, slot - 1, false, start);
+    }
+
+    _ = try tracker.identifyMissing(&msr, start.plus(.fromSecs(11)));
+    try std.testing.expectEqual(2, msr.items()[0].slot);
 }
 
 test "slots are not skipped when the current fork is developed" {

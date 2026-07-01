@@ -11,6 +11,7 @@ const Allocator = std.mem.Allocator;
 
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
+const Slot = sig.core.Slot;
 const ThreadPool = sig.sync.ThreadPool;
 const Rooted = sig.accounts_db.Db.Rooted;
 const GenesisConfig = sig.core.GenesisConfig;
@@ -19,6 +20,8 @@ const StatusCache = sig.accounts_db.snapshot.StatusCache;
 const Manifest = sig.accounts_db.snapshot.Manifest;
 const SnapshotFiles = sig.accounts_db.snapshot.SnapshotFiles;
 const FullAndIncrementalManifest = sig.accounts_db.snapshot.FullAndIncrementalManifest;
+const AccountFile = sig.accounts_db.accounts_file.AccountFile;
+const BufferPool = sig.accounts_db.buffer_pool.BufferPool;
 
 const Logger = sig.trace.Logger("accountsdb.snapshot.load");
 const TrackedPubkeySet = std.AutoHashMap(Pubkey, void);
@@ -26,6 +29,11 @@ const SNAPSHOT_SQLITE_COMMIT_INTERVAL: u64 = 10_000;
 const SNAPSHOT_SCAN_PRESSURE_RELIEF_INTERVAL: u64 = 100_000;
 
 extern "c" fn malloc_zone_pressure_relief(zone: ?*anyopaque, goal: usize) usize;
+
+pub const SnapshotArchiveManifestInfo = struct {
+    slot: Slot,
+    hash: Hash,
+};
 
 fn relieveMallocPressure() void {
     if (builtin.os.tag == .macos) {
@@ -68,6 +76,80 @@ pub const LoadedSnapshot = struct {
     }
 };
 
+pub fn readSnapshotArchiveManifestInfo(
+    allocator: Allocator,
+    archive_path: []const u8,
+) !SnapshotArchiveManifestInfo {
+    const file = try std.fs.cwd().openFile(archive_path, .{ .mode = .read_only });
+    defer file.close();
+
+    const file_size = (try file.stat()).size;
+    if (file_size == 0) return error.ZeroSizedTarball;
+
+    var file_read_buf: [256 * 1024]u8 = undefined;
+    var file_reader = file.reader(&file_read_buf);
+
+    var zstd_buf: [std_zstd.default_window_len + std_zstd.block_size_max]u8 = undefined;
+    var archive_stream: std_zstd.Decompress = .init(
+        &file_reader.interface,
+        &zstd_buf,
+        .{},
+    );
+
+    const tar = sig.utils.tar;
+    var reader = std14.deprecatedReader(&archive_stream.reader);
+    var tar_file_name_buf: [tar.TarHeaderMinimal.MAX_NAME_SIZE]u8 = undefined;
+
+    tar_loop: while (true) {
+        var header_buf: [512]u8 = undefined;
+        const header_bytes_read = try reader.readAtLeast(&header_buf, 512);
+        if (header_bytes_read == 0) break :tar_loop;
+        if (header_bytes_read < 512) return error.UnexpectedEndOfStream;
+
+        const tar_header: tar.TarHeaderMinimal = .{ .bytes = &header_buf };
+        const tar_file_size = try tar_header.size();
+        const rounded_tar_size = std.mem.alignForward(u64, tar_file_size, 512);
+        const pad_len: usize = @intCast(rounded_tar_size - tar_file_size);
+        const tar_file_name = try tar_header.fullName(&tar_file_name_buf);
+        const tar_file_kind = tar_header.kind();
+
+        if (tar_file_size == 0 and tar_file_name.len == 0) break :tar_loop;
+
+        if (tar_file_kind != .normal) {
+            try reader.skipBytes(rounded_tar_size, .{});
+            continue :tar_loop;
+        }
+
+        if (parseSnapshotManifestMemberSlot(tar_file_name)) |slot| {
+            var manifest = try Manifest.decodeFromBincode(allocator, reader);
+            defer manifest.deinit(allocator);
+            try reader.skipBytes(pad_len, .{});
+
+            if (manifest.accounts_db_fields.slot != slot) return error.MismatchingManifestSlot;
+            return .{
+                .slot = manifest.accounts_db_fields.slot,
+                .hash = manifest.bank_extra.accounts_lt_hash.checksum(),
+            };
+        }
+
+        try reader.skipBytes(rounded_tar_size, .{});
+    }
+
+    return error.MissingManifest;
+}
+
+fn parseSnapshotManifestMemberSlot(path: []const u8) ?Slot {
+    const prefix = "snapshots/";
+    if (!std.mem.startsWith(u8, path, prefix)) return null;
+    const rest = path[prefix.len..];
+    const slash = std.mem.indexOfScalar(u8, rest, '/') orelse return null;
+    if (slash == 0 or slash == rest.len - 1) return null;
+    const first = rest[0..slash];
+    const second = rest[slash + 1 ..];
+    if (!std.mem.eql(u8, first, second)) return null;
+    return std.fmt.parseInt(Slot, first, 10) catch null;
+}
+
 /// Similar to `loadSnapshot`, but avoids untar-ing the snapshot into files on disk.
 /// If provided, populates a Rooted DB instance with the accounts if DB is empty.
 pub fn loadSnapshot(
@@ -84,6 +166,12 @@ pub fn loadSnapshot(
         // If set, skip broad built-in owner filters and load only explicit
         // tracked pubkeys plus mandatory runtime/sysvar accounts.
         tracked_pubkeys_only: bool = false,
+        // If set, load every snapshot account into rooted disk storage so
+        // replay can demand-load cold accounts by pubkey from SSD.
+        load_all_snapshot_accounts: bool = false,
+        // If set, store snapshot pubkey -> AppendVec offset refs instead of
+        // full account payloads in Rooted SQLite. Requires unpacked accounts/.
+        snapshot_ref_index: bool = false,
         // How and what to load from the snapshot files
         extract: union(enum) {
             /// Extract only the snapshot metadata (not the accounts)
@@ -98,6 +186,13 @@ pub fn loadSnapshot(
 ) !LoadedSnapshot {
     const zone = tracy.Zone.init(@src(), .{ .name = "loadSnapshot" });
     defer zone.deinit();
+
+    if (options.tracked_pubkeys_only and options.load_all_snapshot_accounts) {
+        return error.ConflictingSnapshotAccountLoadModes;
+    }
+    if (options.snapshot_ref_index and !options.load_all_snapshot_accounts) {
+        return error.SnapshotRefIndexRequiresLoadAllSnapshotAccounts;
+    }
 
     // Read genesis before trying to load the snapshot
     logger.info().log("reading genesis...");
@@ -138,16 +233,34 @@ pub fn loadSnapshot(
             .entire_snapshot => |rooted_db| .{ rooted_db, false },
             .entire_snapshot_and_validate => |rooted_db| .{ rooted_db, true },
         };
+    if (options.snapshot_ref_index and validate_snapshot) {
+        return error.SnapshotRefIndexValidationNotImplemented;
+    }
 
     // Check if we should populate rooted_db with accounts.
     var db_has_entries = false;
     if (maybe_rooted_db) |rooted_db| {
-        db_has_entries = rooted_db.count() > 0;
+        db_has_entries = if (options.snapshot_ref_index)
+            rooted_db.snapshotRefCount() > 0
+        else
+            rooted_db.count() > 0;
         if (db_has_entries) {
             logger.info().logf("db has entries, skipping insert from snapshot", .{});
         } else {
             logger.info().logf("db is empty - inserting from snapshot!", .{});
         }
+    }
+
+    if (options.snapshot_ref_index) {
+        return try loadSnapshotRefIndexFromUnpacked(
+            allocator,
+            logger,
+            snapshot_dir,
+            snapshot_files,
+            maybe_rooted_db,
+            db_has_entries,
+            genesis_config,
+        );
     }
 
     const full_manifest: Manifest, //
@@ -165,6 +278,8 @@ pub fn loadSnapshot(
             .{ .slot = snapshot_files.full.slot, .hash = snapshot_files.full.hash },
             &tracked_pubkeys,
             options.tracked_pubkeys_only,
+            options.load_all_snapshot_accounts or validate_snapshot,
+            options.snapshot_ref_index,
         );
     };
     errdefer full_manifest.deinit(allocator);
@@ -216,6 +331,8 @@ pub fn loadSnapshot(
             info.slotAndHash(),
             &tracked_pubkeys,
             options.tracked_pubkeys_only,
+            options.load_all_snapshot_accounts or validate_snapshot,
+            options.snapshot_ref_index,
         );
     };
     errdefer if (maybe_incremental_manifest) |manifest| manifest.deinit(allocator);
@@ -305,6 +422,215 @@ pub fn loadSnapshot(
     };
 }
 
+fn loadSnapshotRefIndexFromUnpacked(
+    allocator: Allocator,
+    logger: Logger,
+    snapshot_dir: std.fs.Dir,
+    snapshot_files: SnapshotFiles,
+    maybe_rooted_db: ?*Rooted,
+    db_has_entries: bool,
+    genesis_config: GenesisConfig,
+) !LoadedSnapshot {
+    const zone = tracy.Zone.init(@src(), .{ .name = "loadSnapshotRefIndexFromUnpacked" });
+    defer zone.deinit();
+
+    var timer = try std.time.Timer.start();
+    logger.info().log("loading snapshot-ref metadata from unpacked snapshot files");
+    defer logger.info().logf(
+        "loaded snapshot-ref metadata from unpacked files in {D}",
+        .{timer.read()},
+    );
+
+    const combined_manifest = try FullAndIncrementalManifest.fromFiles(
+        allocator,
+        .from(logger),
+        snapshot_dir,
+        snapshot_files,
+    );
+    errdefer combined_manifest.deinit(allocator);
+
+    const status_cache = try StatusCache.initFromDir(allocator, snapshot_dir);
+    defer status_cache.deinit(allocator);
+
+    if (maybe_rooted_db) |rooted_db| {
+        if (!db_has_entries) {
+            try insertSnapshotRefsFromUnpackedAccounts(
+                allocator,
+                logger,
+                snapshot_dir,
+                &combined_manifest.full,
+                rooted_db,
+            );
+            if (combined_manifest.incremental) |*incremental_manifest| {
+                try insertSnapshotRefsFromUnpackedAccounts(
+                    allocator,
+                    logger,
+                    snapshot_dir,
+                    incremental_manifest,
+                    rooted_db,
+                );
+            }
+        }
+    }
+
+    const collapsed_manifest = try combined_manifest.collapse(allocator);
+    errdefer collapsed_manifest.deinit(allocator);
+
+    logger.info().log("validating bank...");
+    try collapsed_manifest.bank_fields.validate(&genesis_config);
+
+    const rooted_db = maybe_rooted_db orelse {
+        logger.info().log("metadata loading done...");
+        return .{
+            .allocator = allocator,
+            .combined_manifest = combined_manifest,
+            .collapsed_manifest = collapsed_manifest,
+            .genesis_config = genesis_config,
+        };
+    };
+    rooted_db.largest_rooted_slot = collapsed_manifest.bank_fields.slot;
+
+    const slot_history = blk: {
+        const account = (try rooted_db.get(allocator, sig.runtime.sysvar.SlotHistory.ID)) orelse
+            return error.PubkeyNotInIndex;
+        defer account.deinit(allocator);
+
+        var fbs = std.io.fixedBufferStream(account.data);
+        break :blk try sig.bincode.read(
+            allocator,
+            sig.runtime.sysvar.SlotHistory,
+            fbs.reader(),
+            .{},
+        );
+    };
+    defer slot_history.deinit(allocator);
+
+    try status_cache.validate(allocator, collapsed_manifest.bank_fields.slot, &slot_history);
+
+    logger.info().log("accounts-db snapshot-ref setup done...");
+
+    return .{
+        .allocator = allocator,
+        .combined_manifest = combined_manifest,
+        .collapsed_manifest = collapsed_manifest,
+        .genesis_config = genesis_config,
+    };
+}
+
+fn insertSnapshotRefsFromUnpackedAccounts(
+    allocator: Allocator,
+    logger: Logger,
+    snapshot_dir: std.fs.Dir,
+    manifest: *const Manifest,
+    rooted_db: *Rooted,
+) !void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "insertSnapshotRefsFromUnpackedAccounts" });
+    defer zone.deinit();
+
+    var timer = try std.time.Timer.start();
+    const snapshot_slot = manifest.accounts_db_fields.slot;
+    logger.info().logf(
+        "building snapshot-ref index from unpacked accounts: snapshot_slot={} account_file_count={}",
+        .{ snapshot_slot, manifest.accounts_db_fields.file_map.count() },
+    );
+    defer logger.info().logf(
+        "built snapshot-ref index for snapshot_slot={} in {D}",
+        .{ snapshot_slot, timer.read() },
+    );
+
+    var buffer_pool = try BufferPool.init(allocator, 1024);
+    defer buffer_pool.deinit(allocator);
+
+    rooted_db.beginTransaction();
+    defer rooted_db.commitTransaction();
+
+    var progress_timer = try std.time.Timer.start();
+    const progress_interval_ns: u64 = 10 * std.time.ns_per_s;
+    var account_files_seen: u64 = 0;
+    var account_records_seen: u64 = 0;
+    var inserted_since_commit: u64 = 0;
+
+    for (
+        manifest.accounts_db_fields.file_map.keys(),
+        manifest.accounts_db_fields.file_map.values(),
+    ) |slot, info| {
+        const rel_path_bounded = sig.utils.fmt.boundedFmt(
+            "accounts/{d}.{d}",
+            .{ slot, info.id.toInt() },
+        );
+        const rel_path = rel_path_bounded.constSlice();
+
+        const file = snapshot_dir.openFile(rel_path, .{ .mode = .read_only }) catch |err| {
+            logger.err().logf(
+                "failed to open unpacked account file path={s} err={}",
+                .{ rel_path, err },
+            );
+            return err;
+        };
+        var account_file = AccountFile.init(file, info, slot) catch |err| {
+            file.close();
+            return err;
+        };
+        defer account_file.deinit();
+
+        account_files_seen += 1;
+        if (account_files_seen == 1 or account_files_seen % 10_000 == 0) {
+            logger.info().logf(
+                "snapshot-ref index progress: account file start snapshot_slot={} path={s} account_files={} file_bytes={}",
+                .{ snapshot_slot, rel_path, account_files_seen, info.length },
+            );
+        }
+
+        var iter = account_file.iterator(&buffer_pool);
+        while (try iter.nextNoData()) |account| {
+            defer account.deinit(allocator);
+
+            if (!account.hash.eql(Hash.ZEROES)) return error.InvalidAccount;
+            if (account.data.len() > sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH)
+                return error.InvalidAccount;
+
+            rooted_db.putSnapshotRef(
+                account.store_info.pubkey,
+                slot,
+                info.id.toInt(),
+                @intCast(account.offset),
+                @intCast(account.len),
+            );
+
+            account_records_seen += 1;
+            inserted_since_commit += 1;
+
+            if (inserted_since_commit >= SNAPSHOT_SQLITE_COMMIT_INTERVAL) {
+                rooted_db.commitTransaction();
+                rooted_db.beginTransaction();
+                inserted_since_commit = 0;
+                relieveMallocPressure();
+                logger.info().logf(
+                    "snapshot-ref index progress: committed batch snapshot_slot={} account_files={} account_records={}",
+                    .{ snapshot_slot, account_files_seen, account_records_seen },
+                );
+            }
+
+            if (progress_timer.read() >= progress_interval_ns) {
+                logger.info().logf(
+                    "snapshot-ref index progress: indexing snapshot_slot={} account_files={} account_records={} current_path={s}",
+                    .{ snapshot_slot, account_files_seen, account_records_seen, rel_path },
+                );
+                progress_timer.reset();
+            }
+        }
+
+        if (iter.offset != std.mem.alignForward(usize, account_file.length, @sizeOf(u64))) {
+            return error.InvalidAccountFileLength;
+        }
+    }
+
+    logger.info().logf(
+        "snapshot-ref index complete: snapshot_slot={} account_files={} account_records={}",
+        .{ snapshot_slot, account_files_seen, account_records_seen },
+    );
+}
+
 fn insertFromSnapshotArchive(
     allocator: std.mem.Allocator,
     logger: Logger,
@@ -314,12 +640,25 @@ fn insertFromSnapshotArchive(
     slot_and_hash: sig.core.hash.SlotAndHash,
     tracked_pubkeys: *const TrackedPubkeySet,
     tracked_pubkeys_only: bool,
+    load_all_snapshot_accounts: bool,
+    snapshot_ref_index: bool,
 ) !struct { Manifest, StatusCache } {
     const zone = tracy.Zone.init(@src(), .{ .name = "insertFromSnapshotArchive" });
     defer zone.deinit();
 
     var timer = try std.time.Timer.start();
-    logger.info().logf("loading snapshot archive: {s}", .{snapshot_path});
+    const account_load_mode = if (snapshot_ref_index)
+        "snapshot-ref-index"
+    else if (tracked_pubkeys_only)
+        "tracked-pubkeys-only"
+    else if (load_all_snapshot_accounts)
+        "all-snapshot-accounts"
+    else
+        "chimera-owner-filtered";
+    logger.info().logf(
+        "loading snapshot archive: {s} account_load_mode={s}",
+        .{ snapshot_path, account_load_mode },
+    );
     defer logger.info().logf(
         "loaded snapshot archive in {D}",
         .{timer.read()},
@@ -515,6 +854,8 @@ fn insertFromSnapshotArchive(
             var account_file_stream = std14.limitedReader(reader, info.length);
             while (account_file_stream.bytes_left > 0) {
                 const r = account_file_stream.reader();
+                const record_offset: u64 =
+                    @as(u64, @intCast(info.length)) - account_file_stream.bytes_left;
 
                 const account_zone = tracy.Zone.init(@src(), .{ .name = "Snapshot.readAccount" });
                 defer account_zone.deinit();
@@ -547,8 +888,10 @@ fn insertFromSnapshotArchive(
                 const header_padding = std.mem.alignForward(usize, header_size, 8) - header_size;
                 r.skipBytes(header_padding, .{}) catch return error.InvalidAccountFile;
 
-                // Owner filter: only load accounts Chimera needs.
-                // Skips ~395M accounts, reducing SQLite DB from ~30GB to ~6GB.
+                // Snapshot account load policy. The default keeps the historic
+                // Chimera owner filter for fast diagnostics. The explicit
+                // all-snapshot-accounts mode keeps full rooted state on SSD so
+                // replay can demand-load cold accounts by pubkey.
                 const chimera_owners = [_]Pubkey{
                     Pubkey.parse("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"), // PumpFun
                     Pubkey.parse("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"), // PumpSwap
@@ -576,7 +919,10 @@ fn insertFromSnapshotArchive(
                     for (mandatory_pubkeys) |allowed| {
                         if (header.pubkey.equals(&allowed)) break true;
                     } else false;
-                const should_load = mandatory_ok or owner_ok or tracked_pubkeys.contains(header.pubkey);
+                const should_load = mandatory_ok or
+                    load_all_snapshot_accounts or
+                    owner_ok or
+                    tracked_pubkeys.contains(header.pubkey);
                 if (!should_load) {
                     skipped_accounts += 1;
                     skipped_since_pressure_relief += 1;
@@ -612,6 +958,51 @@ fn insertFromSnapshotArchive(
 
                 if (header.data_len > sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH)
                     return error.InvalidAccount;
+                if (header.executable > 1) return error.InvalidAccount;
+
+                if (snapshot_ref_index) {
+                    const skip = @min(
+                        account_file_stream.bytes_left,
+                        std.mem.alignForward(u64, header.data_len, 8),
+                    );
+                    r.skipBytes(skip, .{}) catch return error.InvalidAccountFile;
+                    const next_record_offset: u64 =
+                        @as(u64, @intCast(info.length)) - account_file_stream.bytes_left;
+                    rooted_db.putSnapshotRef(
+                        header.pubkey,
+                        slot,
+                        id,
+                        record_offset,
+                        next_record_offset - record_offset,
+                    );
+                    inserted_since_commit += 1;
+                    if (inserted_since_commit >= SNAPSHOT_SQLITE_COMMIT_INTERVAL) {
+                        rooted_db.commitTransaction();
+                        rooted_db.beginTransaction();
+                        inserted_since_commit = 0;
+                        logger.info().logf(
+                            "snapshot archive progress: committed snapshot ref batch archive={s} matched={} account_records={}",
+                            .{ snapshot_path, matched_accounts, account_records_seen },
+                        );
+                    }
+                    if (progress_timer.read() >= progress_interval_ns) {
+                        logger.info().logf(
+                            "snapshot archive progress: indexing archive={s} account_files={} account_records={} matched={} skipped={} account_data_bytes_seen={} current_member={s}",
+                            .{
+                                snapshot_path,
+                                account_files_seen,
+                                account_records_seen,
+                                matched_accounts,
+                                skipped_accounts,
+                                account_data_bytes_seen,
+                                tar_hdr.file_name,
+                            },
+                        );
+                        progress_timer.reset();
+                    }
+                    continue;
+                }
+
                 try account_data_buf.resize(allocator, header.data_len);
                 const actual_data_size = try r.readAll(account_data_buf.items);
                 if (actual_data_size < header.data_len)

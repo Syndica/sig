@@ -37,7 +37,26 @@ pub fn init(
     path: []const u8,
     registry: ?*sig.prometheus.Registry(.{}),
 ) !Ledger {
-    var db = try LedgerDB.open(allocator, .from(logger), path, false);
+    return try initWithOpenMode(allocator, logger, path, registry, false);
+}
+
+pub fn initReadOnly(
+    allocator: Allocator,
+    logger: sig.trace.Logger("ledger"),
+    path: []const u8,
+    registry: ?*sig.prometheus.Registry(.{}),
+) !Ledger {
+    return try initWithOpenMode(allocator, logger, path, registry, true);
+}
+
+fn initWithOpenMode(
+    allocator: Allocator,
+    logger: sig.trace.Logger("ledger"),
+    path: []const u8,
+    registry: ?*sig.prometheus.Registry(.{}),
+    read_only: bool,
+) !Ledger {
+    var db = try LedgerDB.open(allocator, .from(logger), path, read_only);
     errdefer db.deinit();
 
     return .{

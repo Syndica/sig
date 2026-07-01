@@ -31,6 +31,7 @@ pub const Cmd = struct {
     shred_version: ?u16 = null,
     replay_threads: u16 = 4,
     disable_consensus: bool = false,
+    disable_transaction_status_writes: bool = false,
     voting_enabled: bool = false,
     rpc_port: ?u16 = null,
     vote_account: ?[]const u8 = null,
@@ -139,6 +140,14 @@ pub const AccountsDB = struct {
     /// When true, skip broad built-in owner filters and load only explicit
     /// tracked pubkeys plus mandatory runtime/sysvar accounts.
     tracked_pubkeys_only: bool = false,
+    /// When true, do not apply Chimera's owner filter while loading the
+    /// snapshot. This builds a wide/full rooted account store on disk so replay
+    /// can demand-load accounts by pubkey from SSD.
+    load_all_snapshot_accounts: bool = false,
+    /// When true, snapshot loading stores pubkey -> AppendVec offset refs
+    /// instead of copying full snapshot account data into SQLite. Requires
+    /// unpacked accounts/ files and currently requires skip_snapshot_validation.
+    snapshot_ref_index: bool = false,
     /// number of threads to load snapshot
     num_threads_snapshot_load: u32 = 0,
     /// number of threads to unpack snapshot from .tar.zstd

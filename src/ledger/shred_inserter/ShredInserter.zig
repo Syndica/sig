@@ -63,6 +63,14 @@ pub const Options = struct {
     retransmit_sender: ?RetransmitSender = null,
     /// Records all shreds.
     shred_tracker: ?*sig.shred_network.shred_tracker.BasicShredTracker = null,
+    /// Capture-only fast path: do not attempt erasure recovery after insertion.
+    skip_recovery: bool = false,
+    /// Capture-only fast path: do not update the in-memory shred tracker for
+    /// each data shred. Ledger metadata remains the authority for window scans.
+    skip_shred_tracker: bool = false,
+    /// Capture-only fast path: when trusted, skip data-shred metadata used only
+    /// for erasure recovery/conflict checks.
+    skip_data_recovery_meta_load: bool = false,
 };
 
 pub const RetransmitSender = struct {
@@ -212,15 +220,18 @@ pub fn insertShreds(
         const startup_slot = isStartupWindowSlot(options.shred_tracker, shred.commonHeader().slot);
         switch (shred) {
             .data => |data_shred| {
+                const target_repair_slot = is_repair and isCurrentRepairTargetSlot(options.shred_tracker, data_shred.common.slot);
                 if (startup_slot) if (self.metrics) |m| m.startup_data_shreds_seen.inc();
-                if (options.shred_tracker) |tracker| {
-                    tracker.registerDataShred(&shred.data, timestamp) catch |err| {
-                        if (self.metrics) |m| m.register_shred_error.observe(@errorCast(err));
-                        switch (err) {
-                            error.SlotUnderflow, error.SlotOverflow => {},
-                            else => return err,
-                        }
-                    };
+                if (!options.skip_shred_tracker) {
+                    if (options.shred_tracker) |tracker| {
+                        tracker.registerDataShred(&shred.data, timestamp) catch |err| {
+                            if (self.metrics) |m| m.register_shred_error.observe(@errorCast(err));
+                            switch (err) {
+                                error.SlotUnderflow, error.SlotOverflow => {},
+                                else => return err,
+                            }
+                        };
+                    }
                 }
                 if (self.checkInsertDataShred(
                     data_shred,
@@ -230,6 +241,7 @@ pub fn insertShreds(
                     options.is_trusted,
                     options.leader_schedules,
                     shred_source,
+                    options.skip_data_recovery_meta_load,
                 )) |completed_data_sets| {
                     if (is_repair) {
                         if (self.metrics) |m| m.num_repair.inc();
@@ -238,13 +250,35 @@ pub fn insertShreds(
                     try newly_completed_data_sets.appendSlice(completed_data_sets.items);
                     if (self.metrics) |m| m.num_inserted.inc();
                     if (startup_slot) if (self.metrics) |m| m.startup_data_shreds_inserted.inc();
+                    if (target_repair_slot) {
+                        self.logger.info().logf(
+                            "target repair shred inserted slot={} index={} completed_sets={}",
+                            .{ data_shred.common.slot, data_shred.common.index, completed_data_sets.items.len },
+                        );
+                    }
                 } else |e| switch (e) {
-                    error.Exists => if (is_repair) {
-                        if (self.metrics) |m| m.num_repaired_data_shreds_exists.inc();
-                    } else {
-                        if (self.metrics) |m| m.num_turbine_data_shreds_exists.inc();
+                    error.Exists => {
+                        if (is_repair) {
+                            if (self.metrics) |m| m.num_repaired_data_shreds_exists.inc();
+                        } else {
+                            if (self.metrics) |m| m.num_turbine_data_shreds_exists.inc();
+                        }
+                        if (target_repair_slot) {
+                            self.logger.info().logf(
+                                "target repair shred skipped exists slot={} index={}",
+                                .{ data_shred.common.slot, data_shred.common.index },
+                            );
+                        }
                     },
-                    error.InvalidShred => if (self.metrics) |m| m.num_data_shreds_invalid.inc(),
+                    error.InvalidShred => {
+                        if (self.metrics) |m| m.num_data_shreds_invalid.inc();
+                        if (target_repair_slot) {
+                            self.logger.warn().logf(
+                                "target repair shred rejected invalid slot={} index={}",
+                                .{ data_shred.common.slot, data_shred.common.index },
+                            );
+                        }
+                    },
                     // error.LedgerError => {
                     //     self.shred_inserter_metrics.num_data_shreds_ledger_error.inc();
                     //     // TODO improve this (maybe should be an error set)
@@ -283,82 +317,87 @@ pub fn insertShreds(
     var shred_recovery_timer = Timer.start();
     var valid_recovered_shreds = ArrayList([]const u8).init(allocator);
     defer valid_recovered_shreds.deinit();
-    if (options.leader_schedules) |leaders| {
-        var reed_solomon_cache = try ReedSolomonCache.init(allocator);
-        defer reed_solomon_cache.deinit();
-        const recovered_shreds = try self.tryShredRecovery(
-            allocator,
-            &state.erasure_metas,
-            &state.index_working_set,
-            state.shreds(),
-            &reed_solomon_cache,
-        );
-        defer {
-            for (recovered_shreds.items) |shred| {
-                shred.deinit();
-            }
-            recovered_shreds.deinit();
-        }
-
-        for (recovered_shreds.items) |shred| {
-            if (shred == .data) {
-                if (self.metrics) |m| m.num_recovered.inc();
-            }
-            const leader = leaders.getLeader(shred.commonHeader().slot) catch null;
-            if (leader == null) {
-                continue;
-            }
-            if (std.meta.isError(shred.verify(leader.?))) {
-                if (self.metrics) |m| m.num_recovered_failed_sig.inc();
-                continue;
-            }
-            // Since the data shreds are fully recovered from the
-            // erasure batch, no need to store code shreds in
-            // ledger.
-            if (shred == .code) {
-                try valid_recovered_shreds.append(shred.payload());
-                continue;
-            }
-            if (options.shred_tracker) |tracker| {
-                tracker.registerDataShred(&shred.data, timestamp) catch |err| {
-                    if (self.metrics) |m| m.register_shred_error.observe(@errorCast(err));
-                    switch (err) {
-                        error.SlotUnderflow, error.SlotOverflow => {},
-                        else => return err,
-                    }
-                };
-            }
-            if (self.checkInsertDataShred(
-                shred.data,
-                &state,
-                merkle_root_validator,
-                write_batch,
-                options.is_trusted,
-                leaders,
-                .recovered,
-            )) |completed_data_sets| {
-                defer completed_data_sets.deinit();
-                try newly_completed_data_sets.appendSlice(completed_data_sets.items);
-                if (self.metrics) |m| m.num_recovered_inserted.inc();
-                if (isStartupWindowSlot(options.shred_tracker, shred.commonHeader().slot)) {
-                    if (self.metrics) |m| m.startup_recovered_data_shreds_inserted.inc();
+    if (!options.skip_recovery) {
+        if (options.leader_schedules) |leaders| {
+            var reed_solomon_cache = try ReedSolomonCache.init(allocator);
+            defer reed_solomon_cache.deinit();
+            const recovered_shreds = try self.tryShredRecovery(
+                allocator,
+                &state.erasure_metas,
+                &state.index_working_set,
+                state.shreds(),
+                &reed_solomon_cache,
+            );
+            defer {
+                for (recovered_shreds.items) |shred| {
+                    shred.deinit();
                 }
-                try valid_recovered_shreds.append(shred.payload());
-            } else |e| switch (e) {
-                error.Exists => if (self.metrics) |m| m.num_recovered_exists.inc(),
-                error.InvalidShred => if (self.metrics) |m| m.num_recovered_failed_invalid.inc(),
-                // error.LedgerError => {
-                //     self.shred_inserter_metrics.num_recovered_ledger_error.inc();
-                //     // TODO improve this (maybe should be an error set)
-                // },
-                else => return e, // TODO explicit
+                recovered_shreds.deinit();
             }
+
+            for (recovered_shreds.items) |shred| {
+                if (shred == .data) {
+                    if (self.metrics) |m| m.num_recovered.inc();
+                }
+                const leader = leaders.getLeader(shred.commonHeader().slot) catch null;
+                if (leader == null) {
+                    continue;
+                }
+                if (std.meta.isError(shred.verify(leader.?))) {
+                    if (self.metrics) |m| m.num_recovered_failed_sig.inc();
+                    continue;
+                }
+                // Since the data shreds are fully recovered from the
+                // erasure batch, no need to store code shreds in
+                // ledger.
+                if (shred == .code) {
+                    try valid_recovered_shreds.append(shred.payload());
+                    continue;
+                }
+                if (!options.skip_shred_tracker) {
+                    if (options.shred_tracker) |tracker| {
+                        tracker.registerDataShred(&shred.data, timestamp) catch |err| {
+                            if (self.metrics) |m| m.register_shred_error.observe(@errorCast(err));
+                            switch (err) {
+                                error.SlotUnderflow, error.SlotOverflow => {},
+                                else => return err,
+                            }
+                        };
+                    }
+                }
+                if (self.checkInsertDataShred(
+                    shred.data,
+                    &state,
+                    merkle_root_validator,
+                    write_batch,
+                    options.is_trusted,
+                    leaders,
+                    .recovered,
+                    false,
+                )) |completed_data_sets| {
+                    defer completed_data_sets.deinit();
+                    try newly_completed_data_sets.appendSlice(completed_data_sets.items);
+                    if (self.metrics) |m| m.num_recovered_inserted.inc();
+                    if (isStartupWindowSlot(options.shred_tracker, shred.commonHeader().slot)) {
+                        if (self.metrics) |m| m.startup_recovered_data_shreds_inserted.inc();
+                    }
+                    try valid_recovered_shreds.append(shred.payload());
+                } else |e| switch (e) {
+                    error.Exists => if (self.metrics) |m| m.num_recovered_exists.inc(),
+                    error.InvalidShred => if (self.metrics) |m| m.num_recovered_failed_invalid.inc(),
+                    // error.LedgerError => {
+                    //     self.shred_inserter_metrics.num_recovered_ledger_error.inc();
+                    //     // TODO improve this (maybe should be an error set)
+                    // },
+                    else => return e, // TODO explicit
+                }
+            }
+            if (valid_recovered_shreds.items.len > 0) if (options.retransmit_sender) |_| {
+                // TODO: This needs to be implemented differently, probably with
+                // a channel, and with proper consideration for lifetimes.
+                // sender.send(valid_recovered_shreds.items);
+            };
         }
-        if (valid_recovered_shreds.items.len > 0) if (options.retransmit_sender) |_| {
-            // TODO: This needs to be implemented differently, probably with
-            // a channel, and with proper consideration for lifetimes.
-            // sender.send(valid_recovered_shreds.items);
-        };
     }
     if (self.metrics) |m| m.shred_recovery_elapsed_us.add(shred_recovery_timer.read().asMicros());
 
@@ -656,6 +695,7 @@ fn checkInsertDataShred(
     is_trusted: bool,
     leader_schedule: ?*const sig.core.leader_schedule.LeaderSchedules,
     shred_source: ShredSource,
+    skip_data_recovery_meta_load: bool,
 ) !ArrayList(CompletedDataSetInfo) {
     const slot = shred.common.slot;
     const shred_index: u64 = @intCast(shred.common.index);
@@ -667,7 +707,10 @@ fn checkInsertDataShred(
     const slot_meta = &slot_meta_entry.new_slot_meta;
 
     const erasure_set_id = shred.common.erasureSetId();
-    try state.merkleRootMetas().load(erasure_set_id);
+    const skip_recovery_meta = is_trusted and skip_data_recovery_meta_load;
+    if (!skip_recovery_meta) {
+        try state.merkleRootMetas().load(erasure_set_id);
+    }
 
     if (!is_trusted) {
         if (isDataShredPresent(shred, slot_meta, &index_meta.data_index)) {
@@ -732,12 +775,16 @@ fn checkInsertDataShred(
         write_batch,
         shred_source,
     );
-    try state.merkleRootMetas().initIfMissing(erasure_set_id, shred);
+    if (!skip_recovery_meta) {
+        try state.merkleRootMetas().initIfMissing(erasure_set_id, shred);
+    }
     try state.just_inserted_shreds.put(shred.id(), shred_union); // TODO check first?
     index_meta_working_set_entry.did_insert_occur = true;
     slot_meta_entry.did_insert_occur = true;
 
-    try state.erasureMetas().load(erasure_set_id);
+    if (!skip_recovery_meta) {
+        try state.erasureMetas().load(erasure_set_id);
+    }
 
     return newly_completed_data_sets;
 }
@@ -912,6 +959,14 @@ fn isStartupWindowSlot(
     return slot >= start_slot and slot <= start_slot +| 128;
 }
 
+fn isCurrentRepairTargetSlot(
+    maybe_tracker: ?*sig.shred_network.shred_tracker.BasicShredTracker,
+    slot: Slot,
+) bool {
+    const tracker = maybe_tracker orelse return false;
+    return slot == tracker.current_bottom_slot;
+}
+
 /// send slot full timing point to poh_timing_report service
 /// agave: send_slot_full_timing
 fn sendSlotFullTiming(self: *const ShredInserter, slot: Slot) void {
@@ -934,6 +989,12 @@ fn tryShredRecovery(
     // 2. For new data shreds, check if an erasure set exists. If not, don't try recovery
     // 3. Before trying recovery, check if enough number of shreds have been received
     // 3a. Enough number of shreds = (#data + #code shreds) > erasure.num_data
+    var recovered_shreds = ArrayList(Shred).init(allocator);
+    errdefer {
+        for (recovered_shreds.items) |shred| shred.deinit();
+        recovered_shreds.deinit();
+    }
+
     const keys, const values = erasure_metas.items();
     // let index = &mut index_meta_entry.index;
     for (keys, values) |erasure_set, *working_erasure_meta| {
@@ -942,14 +1003,26 @@ fn tryShredRecovery(
             return error.Unwrap; // TODO: consider all the unwraps
         };
         switch (erasure_meta.status(&index_meta_entry.index)) {
-            .can_recover => return try recoverShreds(
-                .from(self.logger),
-                allocator,
-                &index_meta_entry.index,
-                erasure_meta,
-                shred_store,
-                reed_solomon_cache,
-            ),
+            .can_recover => {
+                var recovered_set = try recoverShreds(
+                    .from(self.logger),
+                    allocator,
+                    &index_meta_entry.index,
+                    erasure_meta,
+                    shred_store,
+                    reed_solomon_cache,
+                );
+                errdefer {
+                    for (recovered_set.items) |shred| shred.deinit();
+                }
+                defer recovered_set.deinit();
+
+                try recovered_shreds.ensureUnusedCapacity(recovered_set.items.len);
+                for (recovered_set.items) |shred| {
+                    recovered_shreds.appendAssumeCapacity(shred);
+                }
+                recovered_set.clearRetainingCapacity();
+            },
             .data_full => {
                 submitRecoveryMetrics(
                     .from(self.logger),
@@ -973,7 +1046,7 @@ fn tryShredRecovery(
             },
         }
     }
-    return std.array_list.Managed(Shred).init(allocator);
+    return recovered_shreds;
 }
 
 /// agave: recover_shreds

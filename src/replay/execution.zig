@@ -536,6 +536,7 @@ fn prepareSlot(
         .account_reader = slot_account_reader,
         .reserved_accounts = &slot_info.constants().reserved_accounts,
         .slot_hashes = slot_hashes,
+        .logger = state.logger.withScope("replay-resolve"),
     });
     errdefer {
         for (resolved_txns) |transaction| transaction.deinit(state.allocator);
@@ -564,6 +565,7 @@ fn prepareSlot(
         .new_rate_activation_epoch = new_rate_activation_epoch,
         .replay_votes_sender = state.replay_votes_channel,
         .ledger = state.ledger,
+        .disable_transaction_status_writes = state.disable_transaction_status_writes,
         .account_store = svm_gateway.params.account_store,
         .geyser_writer = state.geyser_writer,
     };

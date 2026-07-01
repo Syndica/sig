@@ -40,6 +40,7 @@ new_rate_activation_epoch: ?sig.core.Epoch,
 replay_votes_sender: ?*Channel(ParsedVote),
 /// Ledger for persisting transaction status metadata (optional for backwards compatibility)
 ledger: ?*Ledger,
+disable_transaction_status_writes: bool = false,
 /// Account store for looking up accounts (e.g. mint accounts for token balance resolution)
 account_store: ?SlotAccountStore,
 /// Geyser writer for streaming account updates to external consumers
@@ -137,17 +138,20 @@ pub fn commitTransactions(
             );
         }
 
-        // Write transaction status to ledger for RPC (getBlock, getTransaction)
-        if (self.ledger) |ledger| {
-            try writeTransactionStatus(
-                temp_allocator,
-                ledger,
-                slot,
-                transaction,
-                tx_result.*,
-                transaction_index,
-                self.account_store,
-            );
+        // Optional RPC history path; live Geyser-only oracle runs can skip this
+        // RocksDB-heavy write while still replaying and emitting trade events.
+        if (!self.disable_transaction_status_writes) {
+            if (self.ledger) |ledger| {
+                try writeTransactionStatus(
+                    temp_allocator,
+                    ledger,
+                    slot,
+                    transaction,
+                    tx_result.*,
+                    transaction_index,
+                    self.account_store,
+                );
+            }
         }
     }
 
@@ -226,24 +230,20 @@ fn writeTransactionStatus(
     }
 
     // Populate loaded addresses and address_signatures index keys
-    var writable_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
-        allocator,
-        num_static_addresses + num_loaded_writable,
-    );
+    const max_loaded_addresses = num_accounts -| @min(num_static_addresses, num_accounts);
+
+    var writable_keys = try ArrayListUnmanaged(Pubkey).initCapacity(allocator, num_accounts);
     defer writable_keys.deinit(allocator);
-    var readonly_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
-        allocator,
-        num_static_addresses + num_loaded_readonly,
-    );
+    var readonly_keys = try ArrayListUnmanaged(Pubkey).initCapacity(allocator, num_accounts);
     defer readonly_keys.deinit(allocator);
     var loaded_writable_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
         allocator,
-        num_loaded_writable,
+        @max(num_loaded_writable, max_loaded_addresses),
     );
     defer loaded_writable_keys.deinit(allocator);
     var loaded_readonly_keys = try ArrayListUnmanaged(Pubkey).initCapacity(
         allocator,
-        num_loaded_readonly,
+        @max(num_loaded_readonly, max_loaded_addresses),
     );
     defer loaded_readonly_keys.deinit(allocator);
     for (

@@ -325,6 +325,33 @@ pub const EpochTracker = struct {
         try lock.mut().insert(epoch, epoch_info_ptr);
     }
 
+    pub fn seedRootedLeaderSchedule(
+        self: *EpochTracker,
+        allocator: Allocator,
+        leaders: LeaderSchedule,
+    ) !void {
+        const epoch = self.epoch_schedule.getEpoch(
+            leaders.start -| self.epoch_schedule.leader_schedule_slot_offset,
+        );
+        var epoch_stakes = EpochStakes.EMPTY;
+        epoch_stakes.stakes.epoch = epoch;
+
+        const epoch_info_ptr = try allocator.create(EpochInfo);
+        errdefer allocator.destroy(epoch_info_ptr);
+        errdefer leaders.deinit(allocator);
+
+        epoch_info_ptr.* = .{
+            .allocator = allocator,
+            .leaders = leaders,
+            .stakes = epoch_stakes,
+            .feature_set = .ALL_DISABLED,
+        };
+
+        var lock = self.rooted_epochs.write();
+        defer lock.unlock();
+        try lock.mut().seed(epoch, epoch_info_ptr);
+    }
+
     pub fn insertUnrootedEpochInfo(
         self: *EpochTracker,
         allocator: Allocator,

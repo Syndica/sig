@@ -87,8 +87,8 @@ pub const TradeEventV1 = struct {
 pub const PumpSwapPoolCreatedV1 = struct {
     slot: u64,
     pool: [32]u8,
-    mint: [32]u8,      // meme token mint
-    base_amount: u64,  // tokens seeded into pool (vtokens)
+    mint: [32]u8, // meme token mint
+    base_amount: u64, // tokens seeded into pool (vtokens)
     quote_amount: u64, // SOL lamports seeded into pool (vsol)
 };
 
@@ -514,7 +514,8 @@ pub const GeyserReader = struct {
 
 pub fn openPipe(pipe_path: []const u8) !std.fs.File {
     // setup the pipe
-    const rc = c.mkfifo(@ptrCast(pipe_path), c.S_IRWXU);
+    const pipe_path_c = try std.posix.toPosixPath(pipe_path);
+    const rc = c.mkfifo(&pipe_path_c, c.S_IRWXU);
     if (rc != 0) {
         const err = std.posix.errno(rc);
         switch (err) {

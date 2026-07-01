@@ -10,3 +10,5 @@ pub const SlotAccountStore = account_store.SlotAccountStore;
 pub const SlotAccountReader = account_store.SlotAccountReader;
 
 pub const Db = @import("Db.zig");
+pub const Rooted = @import("Rooted.zig");
+pub const CompressedAccountStore = @import("CompressedAccountStore.zig");

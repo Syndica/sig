@@ -82,6 +82,7 @@ pub const SlotResolver = struct {
     account_reader: SlotAccountReader,
     reserved_accounts: *const ReservedAccounts,
     slot_hashes: SlotHashes,
+    logger: Logger = .noop,
 };
 
 pub fn resolveBlock(
@@ -104,18 +105,51 @@ pub fn resolveBlock(
         resolved_transactions.deinit(allocator);
     }
 
-    for (entries) |*entry| {
+    var skipped_alt_not_found: usize = 0;
+    var skipped_alt_invalid: usize = 0;
+
+    for (entries, 0..) |*entry, entry_index| {
         if (!entry.isTick()) {
-            for (entry.transactions) |txn| {
+            for (entry.transactions, 0..) |txn, tx_index| {
                 const resolved = resolveTransaction(allocator, txn, resolver) catch |err| switch (err) {
                     // Skip transactions whose ALTs are not in our filtered AccountsDB.
                     // Safe for spy/non-consensus nodes.
-                    error.AddressLookupTableNotFound => continue,
+                    error.AddressLookupTableNotFound => {
+                        skipped_alt_not_found += 1;
+                        continue;
+                    },
+                    // Lookup table owner/data/index failures are transaction-level
+                    // address loading failures. They must not kill replay for the
+                    // entire slot in this non-consensus Chimera proof path.
+                    error.InvalidAddressLookupTableOwner,
+                    error.InvalidAddressLookupTableData,
+                    error.InvalidAddressLookupTableIndex,
+                    => {
+                        skipped_alt_invalid += 1;
+                        resolver.logger.warn().logf(
+                            "skipping transaction with address lookup failure slot={} entry={} tx={} err={s}",
+                            .{ resolver.slot, entry_index, tx_index, @errorName(err) },
+                        );
+                        continue;
+                    },
                     else => return err,
                 };
                 resolved_transactions.appendAssumeCapacity(resolved);
             }
         }
+    }
+
+    if (skipped_alt_not_found != 0 or skipped_alt_invalid != 0) {
+        resolver.logger.warn().logf(
+            "resolved block with skipped lookup failures slot={} skipped_alt_not_found={} skipped_alt_invalid={} resolved_txns={} total_txns={}",
+            .{
+                resolver.slot,
+                skipped_alt_not_found,
+                skipped_alt_invalid,
+                resolved_transactions.items.len,
+                transaction_count,
+            },
+        );
     }
 
     return try resolved_transactions.toOwnedSlice(allocator);

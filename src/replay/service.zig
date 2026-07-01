@@ -169,6 +169,7 @@ pub const Dependencies = struct {
     /// ownership transferred to replay
     hard_forks: sig.core.HardForks,
     replay_threads: u32,
+    disable_transaction_status_writes: bool = false,
     stop_at_slot: ?Slot,
     geyser_writer: ?*sig.geyser.GeyserWriter = null,
 };
@@ -194,6 +195,7 @@ pub const ReplayState = struct {
     status_cache: sig.core.StatusCache,
     execution_log_helper: replay.execution.LogHelper,
     replay_votes_channel: ?*Channel(ParsedVote),
+    disable_transaction_status_writes: bool,
     stop_at_slot: ?sig.core.Slot,
     geyser_writer: ?*sig.geyser.GeyserWriter,
 
@@ -269,6 +271,7 @@ pub const ReplayState = struct {
             .status_cache = .DEFAULT,
             .execution_log_helper = .init(.from(deps.logger)),
             .replay_votes_channel = replay_votes_channel,
+            .disable_transaction_status_writes = deps.disable_transaction_status_writes,
             .stop_at_slot = deps.stop_at_slot,
             .geyser_writer = deps.geyser_writer,
         };

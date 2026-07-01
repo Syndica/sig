@@ -363,6 +363,8 @@ const PerThread = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "runReceiver" });
         defer zone.deinit();
 
+        st.logger.info().log("readSocket loop starting");
+
         defer {
             st.exit.afterExit();
             st.logger.info().log("readSocket loop closed");
@@ -371,6 +373,7 @@ const PerThread = struct {
         // NOTE: we set a timeout to periodically check if we should exit
         try st.socket.setReadTimeout(SOCKET_TIMEOUT_US);
 
+        var debug_logged_packets: usize = 0;
         while (st.exit.shouldRun()) {
             var packet: Packet = Packet.ANY_EMPTY;
             const packet_size, //
@@ -386,6 +389,13 @@ const PerThread = struct {
             packet.addr = .initAddress(socket_addr);
             packet.flags = st.flags;
             if (packet.size == 0) return error.SocketClosed;
+            if (debug_logged_packets < 8) {
+                debug_logged_packets += 1;
+                st.logger.info().logf(
+                    "readSocket packet size={} flags={any}",
+                    .{ packet.size, packet.flags },
+                );
+            }
             try st.channel.send(packet);
         }
     }
@@ -426,6 +436,19 @@ const PerThread = struct {
                     };
                 };
                 std.debug.assert(bytes_sent == p.size);
+                if (st.debug_logged_sends < 16) {
+                    st.debug_logged_sends += 1;
+                    const local_addr: ?std.net.Address = st.socket.getLocalEndPoint() catch null;
+                    st.logger.info().logf(
+                        "sendSocket packet size={} local={any} remote={any} flags={any}",
+                        .{
+                            p.size,
+                            local_addr,
+                            p.addr,
+                            p.flags,
+                        },
+                    );
+                }
             }
         }
     }
@@ -594,6 +617,7 @@ pub const SocketThread = struct {
     direction: Direction,
     handle: SocketBackend.Handle,
     flags: Packet.Flags,
+    debug_logged_sends: usize,
 
     const Direction = enum { sender, receiver };
 
@@ -640,6 +664,7 @@ pub const SocketThread = struct {
             .direction = direction,
             .handle = undefined,
             .flags = flags,
+            .debug_logged_sends = 0,
         };
 
         try SocketBackend.spawn(self);

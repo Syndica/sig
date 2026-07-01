@@ -31,6 +31,7 @@ const Channel = sig.sync.Channel;
 const Slot = sig.core.Slot;
 
 const BasicShredTracker = shred_network.shred_tracker.BasicShredTracker;
+const MissingRange = shred_network.shred_tracker.Range;
 const MultiSlotReport = shred_network.shred_tracker.MultiSlotReport;
 const RepairRequest = shred_network.repair_message.RepairRequest;
 const RepairMessage = shred_network.repair_message.RepairMessage;
@@ -40,6 +41,11 @@ const Logger = sig.trace.Logger("repair_service");
 const serializeRepairRequest = shred_network.repair_message.serializeRepairRequest;
 
 const MAX_DATA_SHREDS_PER_SLOT = sig.ledger.shred.DataShred.constants.max_per_slot;
+const EPOCH_SLOTS_DECOMPRESSED_BYTES = sig.gossip.data.MAX_SLOT_PER_ENTRY / 8;
+const DEFAULT_CONTINUITY_REPAIR_PEER_FANOUT = 16;
+const MAX_CONTINUITY_REPAIR_PEER_FANOUT = 2048;
+const DEFAULT_MIN_STRICT_SLOT_SUPPORTED_REPAIR_PEERS = DEFAULT_CONTINUITY_REPAIR_PEER_FANOUT;
+const TARGET_REPAIR_DEBUG_LOG_LIMIT = 12;
 
 /// Identifies which repairs are needed and sends them
 /// - delegates to RepairPeerProvider to identify repair peers.
@@ -59,6 +65,27 @@ pub const RepairService = struct {
     metrics: Metrics,
     prng: std.Random.DefaultPrng,
     debug_logged_repair_slots: AutoHashMap(Slot, void),
+    debug_logged_assignment_slots: AutoHashMap(Slot, void),
+    debug_logged_send_slots: AutoHashMap(Slot, void),
+    continuity_repair_next_index_by_slot: AutoHashMap(Slot, usize),
+    debug_target_slot: ?Slot,
+    debug_target_assignment_log_count: usize,
+    debug_target_send_log_count: usize,
+    continuity_repair_slot_window: Slot,
+    continuity_repair_open_ended_prefix_repairs: usize,
+    continuity_repair_exact_shreds_per_slot: usize,
+    continuity_repair_peer_fanout: usize,
+    continuity_repair_only_bottom_slot: bool,
+    continuity_repair_bottom_open_ended_prefix_repairs: usize,
+    continuity_repair_bottom_exact_shreds_per_slot: usize,
+    continuity_repair_bottom_peer_fanout: usize,
+    continuity_repair_bottom_rotate_cursor: bool,
+    targeted_repair_plan: ArrayList(RepairRequest),
+    targeted_repair_next_index: usize,
+    targeted_repair_max_per_loop: usize,
+    targeted_repair_peer_fanout: usize,
+    targeted_repair_min_slot: ?Slot,
+    targeted_repair_max_slot: ?Slot,
 
     const RequestBatchThreadPool = ScopedThreadPool(RepairRequester.sendRepairRequestBatch);
 
@@ -102,6 +129,117 @@ pub const RepairService = struct {
         const thread_pool = try RequestBatchThreadPool.init(allocator, n_threads);
         errdefer thread_pool.deinit(allocator);
 
+        const continuity_repair_slot_window = try readEnvU64(
+            allocator,
+            "SIG_CONTINUITY_REPAIR_SLOT_WINDOW",
+            CONTINUITY_REPAIR_SLOT_WINDOW,
+        );
+        const continuity_repair_open_ended_prefix_repairs = try readEnvUsize(
+            allocator,
+            "SIG_CONTINUITY_REPAIR_OPEN_ENDED_PREFIX_REPAIRS",
+            CONTINUITY_REPAIR_OPEN_ENDED_PREFIX_REPAIRS,
+        );
+        const continuity_repair_exact_shreds_per_slot = try readEnvUsize(
+            allocator,
+            "SIG_CONTINUITY_REPAIR_EXACT_SHREDS_PER_SLOT",
+            CONTINUITY_REPAIR_EXACT_SHREDS_PER_SLOT,
+        );
+        const continuity_repair_peer_fanout = @min(
+            try readEnvUsize(
+                allocator,
+                "SIG_CONTINUITY_REPAIR_PEER_FANOUT",
+                DEFAULT_CONTINUITY_REPAIR_PEER_FANOUT,
+            ),
+            MAX_CONTINUITY_REPAIR_PEER_FANOUT,
+        );
+        const continuity_repair_only_bottom_slot = try readEnvBool(
+            allocator,
+            "SIG_CONTINUITY_REPAIR_ONLY_BOTTOM_SLOT",
+            false,
+        );
+        const continuity_repair_bottom_open_ended_prefix_repairs = try readEnvUsize(
+            allocator,
+            "SIG_CONTINUITY_REPAIR_BOTTOM_OPEN_ENDED_PREFIX_REPAIRS",
+            continuity_repair_open_ended_prefix_repairs,
+        );
+        const continuity_repair_bottom_exact_shreds_per_slot = try readEnvUsize(
+            allocator,
+            "SIG_CONTINUITY_REPAIR_BOTTOM_EXACT_SHREDS_PER_SLOT",
+            continuity_repair_exact_shreds_per_slot,
+        );
+        const continuity_repair_bottom_peer_fanout = @min(
+            try readEnvUsize(
+                allocator,
+                "SIG_CONTINUITY_REPAIR_BOTTOM_PEER_FANOUT",
+                continuity_repair_peer_fanout,
+            ),
+            MAX_CONTINUITY_REPAIR_PEER_FANOUT,
+        );
+        const continuity_repair_bottom_rotate_cursor = try readEnvBool(
+            allocator,
+            "SIG_CONTINUITY_REPAIR_BOTTOM_ROTATE_CURSOR",
+            false,
+        );
+        const targeted_repair_max_per_loop = try readEnvUsize(
+            allocator,
+            "SIG_TARGETED_REPAIR_PLAN_MAX_PER_LOOP",
+            4096,
+        );
+        const targeted_repair_peer_fanout = @min(
+            try readEnvUsize(
+                allocator,
+                "SIG_TARGETED_REPAIR_PLAN_PEER_FANOUT",
+                continuity_repair_peer_fanout,
+            ),
+            MAX_CONTINUITY_REPAIR_PEER_FANOUT,
+        );
+
+        var targeted_repair_plan = ArrayList(RepairRequest).init(allocator);
+        errdefer targeted_repair_plan.deinit();
+        var targeted_repair_min_slot: ?Slot = null;
+        var targeted_repair_max_slot: ?Slot = null;
+        const targeted_plan_path = try readOptionalEnvOwned(allocator, "SIG_TARGETED_REPAIR_PLAN_PATH");
+        defer if (targeted_plan_path) |path| allocator.free(path);
+        if (targeted_plan_path) |path| {
+            const plan_stats = try loadTargetedRepairPlan(
+                allocator,
+                path,
+                &targeted_repair_plan,
+            );
+            targeted_repair_min_slot = plan_stats.min_slot;
+            targeted_repair_max_slot = plan_stats.max_slot;
+            logger.info().logf(
+                "targeted repair plan loaded path={s} request_count={} min_slot={?} max_slot={?} max_per_loop={} peer_fanout={}",
+                .{
+                    path,
+                    plan_stats.request_count,
+                    plan_stats.min_slot,
+                    plan_stats.max_slot,
+                    targeted_repair_max_per_loop,
+                    targeted_repair_peer_fanout,
+                },
+            );
+        }
+
+        const repair_jitter_seed = std.crypto.random.int(u64);
+
+        logger.info().logf(
+            "repair continuity config slot_window={} open_ended_prefix_repairs={} exact_shreds_per_slot={} peer_fanout={} only_bottom_slot={} bottom_open_ended_prefix_repairs={} bottom_exact_shreds_per_slot={} bottom_peer_fanout={} bottom_rotate_cursor={} max_peer_fanout={} repair_jitter_seed={}",
+            .{
+                continuity_repair_slot_window,
+                continuity_repair_open_ended_prefix_repairs,
+                continuity_repair_exact_shreds_per_slot,
+                continuity_repair_peer_fanout,
+                continuity_repair_only_bottom_slot,
+                continuity_repair_bottom_open_ended_prefix_repairs,
+                continuity_repair_bottom_exact_shreds_per_slot,
+                continuity_repair_bottom_peer_fanout,
+                continuity_repair_bottom_rotate_cursor,
+                MAX_CONTINUITY_REPAIR_PEER_FANOUT,
+                repair_jitter_seed,
+            },
+        );
+
         return RepairService{
             .allocator = allocator,
             .requester = requester,
@@ -112,8 +250,29 @@ pub const RepairService = struct {
             .report = MultiSlotReport.init(allocator),
             .thread_pool = thread_pool,
             .metrics = try registry.initStruct(Metrics),
-            .prng = std.Random.DefaultPrng.init(0),
+            .prng = std.Random.DefaultPrng.init(repair_jitter_seed),
             .debug_logged_repair_slots = AutoHashMap(Slot, void).init(allocator),
+            .debug_logged_assignment_slots = AutoHashMap(Slot, void).init(allocator),
+            .debug_logged_send_slots = AutoHashMap(Slot, void).init(allocator),
+            .continuity_repair_next_index_by_slot = AutoHashMap(Slot, usize).init(allocator),
+            .debug_target_slot = null,
+            .debug_target_assignment_log_count = 0,
+            .debug_target_send_log_count = 0,
+            .continuity_repair_slot_window = continuity_repair_slot_window,
+            .continuity_repair_open_ended_prefix_repairs = continuity_repair_open_ended_prefix_repairs,
+            .continuity_repair_exact_shreds_per_slot = continuity_repair_exact_shreds_per_slot,
+            .continuity_repair_peer_fanout = continuity_repair_peer_fanout,
+            .continuity_repair_only_bottom_slot = continuity_repair_only_bottom_slot,
+            .continuity_repair_bottom_open_ended_prefix_repairs = continuity_repair_bottom_open_ended_prefix_repairs,
+            .continuity_repair_bottom_exact_shreds_per_slot = continuity_repair_bottom_exact_shreds_per_slot,
+            .continuity_repair_bottom_peer_fanout = continuity_repair_bottom_peer_fanout,
+            .continuity_repair_bottom_rotate_cursor = continuity_repair_bottom_rotate_cursor,
+            .targeted_repair_plan = targeted_repair_plan,
+            .targeted_repair_next_index = 0,
+            .targeted_repair_max_per_loop = targeted_repair_max_per_loop,
+            .targeted_repair_peer_fanout = targeted_repair_peer_fanout,
+            .targeted_repair_min_slot = targeted_repair_min_slot,
+            .targeted_repair_max_slot = targeted_repair_max_slot,
         };
     }
 
@@ -127,6 +286,10 @@ pub const RepairService = struct {
         self.thread_pool.deinit(self.allocator);
         self.report.deinit();
         self.debug_logged_repair_slots.deinit();
+        self.debug_logged_assignment_slots.deinit();
+        self.debug_logged_send_slots.deinit();
+        self.continuity_repair_next_index_by_slot.deinit();
+        self.targeted_repair_plan.deinit();
     }
 
     pub fn run(self: *Self) !void {
@@ -186,6 +349,8 @@ pub const RepairService = struct {
             try self.thread_pool.join();
         }
 
+        try self.logStartupRepairSendQueuedOnce(self.shred_tracker.current_bottom_slot, addressed_requests.items);
+
         return addressed_requests.items.len;
     }
 
@@ -195,6 +360,11 @@ pub const RepairService = struct {
     /// during a repair loop iteration. This ensures it is always possible to
     /// catch up, assuming the current hardware is powerful enough.
     const MAX_SHRED_REPAIRS = (MAX_DATA_SHREDS_PER_SLOT * MAX_REPAIR_LOOP_DURATION_TARGET.asMillis()) / 400;
+    // Match the warm handoff gate: repair enough post-root slots to prove a
+    // contiguous replay bridge, while MAX_SHRED_REPAIRS still caps each loop.
+    const CONTINUITY_REPAIR_SLOT_WINDOW = 128;
+    const CONTINUITY_REPAIR_OPEN_ENDED_PREFIX_REPAIRS = 2048;
+    const CONTINUITY_REPAIR_EXACT_SHREDS_PER_SLOT = 2048;
 
     fn getRepairs(self: *Self) !ArrayList(RepairRequest) {
         const zone = tracy.Zone.init(@src(), .{ .name = "getRepairs" });
@@ -204,32 +374,109 @@ pub const RepairService = struct {
         var newest_slot_needing_repair: u64 = 0;
         var repairs = ArrayList(RepairRequest).init(self.allocator);
         if (!try self.shred_tracker.identifyMissing(&self.report, sig.time.Instant.now())) {
+            _ = try self.appendTargetedRepairPlanRequests(&repairs);
             return repairs;
         }
         var individual_count: usize = 0;
         var highest_count: usize = 0;
         var slot: Slot = 0;
         const debug_start_slot = self.shred_tracker.start_slot;
+        const continuity_repair_start = self.shred_tracker.current_bottom_slot;
+        const continuity_repair_slot_window = if (self.continuity_repair_only_bottom_slot)
+            1
+        else
+            self.continuity_repair_slot_window;
+        const continuity_repair_end = continuity_repair_start +| continuity_repair_slot_window;
 
         // request every shred that is reported missing, up to MAX_SHRED_REPAIRS
         for (self.report.items()) |*report| {
             slot = report.slot;
             oldest_slot_needing_repair = @min(slot, oldest_slot_needing_repair);
             newest_slot_needing_repair = @max(slot, newest_slot_needing_repair);
-            if (debug_start_slot) |start_slot| {
-                if (slot >= start_slot and slot <= start_slot +| 128) {
-                    try self.logStartupRepairReportOnce(start_slot, report);
+            const is_continuity_repair_slot =
+                slot >= continuity_repair_start and slot < continuity_repair_end;
+            const is_bottom_continuity_repair_slot = slot == continuity_repair_start;
+            const exact_shreds_per_slot = if (is_bottom_continuity_repair_slot)
+                self.continuity_repair_bottom_exact_shreds_per_slot
+            else
+                self.continuity_repair_exact_shreds_per_slot;
+            const open_ended_prefix_repairs = if (is_bottom_continuity_repair_slot)
+                self.continuity_repair_bottom_open_ended_prefix_repairs
+            else
+                self.continuity_repair_open_ended_prefix_repairs;
+            var planned_shred_requests_for_slot: usize = 0;
+            var first_planned_index: ?usize = null;
+            var last_planned_index: ?usize = null;
+            if (individual_count < MAX_SHRED_REPAIRS and is_continuity_repair_slot) {
+                const rotate_bottom_cursor =
+                    is_bottom_continuity_repair_slot and self.continuity_repair_bottom_rotate_cursor;
+                const repair_cursor = if (is_bottom_continuity_repair_slot and !rotate_bottom_cursor)
+                    0
+                else
+                    self.continuity_repair_next_index_by_slot.get(slot) orelse 0;
+                const planned_exact_from_cursor = try appendExactRepairsFromCursor(
+                    &repairs,
+                    slot,
+                    report.missing_shreds.items,
+                    repair_cursor,
+                    exact_shreds_per_slot,
+                    &individual_count,
+                    &planned_shred_requests_for_slot,
+                    &first_planned_index,
+                    &last_planned_index,
+                );
+                if (planned_exact_from_cursor == 0 and repair_cursor != 0) {
+                    _ = try appendExactRepairsFromCursor(
+                        &repairs,
+                        slot,
+                        report.missing_shreds.items,
+                        0,
+                        exact_shreds_per_slot,
+                        &individual_count,
+                        &planned_shred_requests_for_slot,
+                        &first_planned_index,
+                        &last_planned_index,
+                    );
                 }
-            }
-            if (individual_count < MAX_SHRED_REPAIRS) {
+                if (last_planned_index) |last| {
+                    if (is_bottom_continuity_repair_slot and !rotate_bottom_cursor) {
+                        _ = self.continuity_repair_next_index_by_slot.remove(slot);
+                    } else {
+                        const next_index = if (last + 1 >= MAX_DATA_SHREDS_PER_SLOT) 0 else last + 1;
+                        try self.continuity_repair_next_index_by_slot.put(slot, next_index);
+                    }
+                } else {
+                    _ = self.continuity_repair_next_index_by_slot.remove(slot);
+                }
+
                 for (report.missing_shreds.items) |shred_window| mid_loop: {
-                    if (shred_window.end) |end| {
+                    if (shred_window.end == null) {
+                        const start: usize = shred_window.start;
+                        const end: u32 = @intCast(@min(
+                            start + open_ended_prefix_repairs,
+                            MAX_DATA_SHREDS_PER_SLOT,
+                        ));
                         for (shred_window.start..end) |i| {
-                            if (individual_count > MAX_SHRED_REPAIRS) break :mid_loop;
+                            if (individual_count >= MAX_SHRED_REPAIRS) break :mid_loop;
                             individual_count += 1;
+                            planned_shred_requests_for_slot += 1;
+                            if (first_planned_index == null) first_planned_index = i;
+                            last_planned_index = i;
                             try repairs.append(.{ .Shred = .{ slot, i } });
                         }
                     }
+                }
+            }
+            if (debug_start_slot) |start_slot| {
+                if (slot >= start_slot and slot <= start_slot +| 128) {
+                    try self.logStartupRepairReportOnce(
+                        start_slot,
+                        report,
+                        is_continuity_repair_slot,
+                        planned_shred_requests_for_slot,
+                        first_planned_index,
+                        last_planned_index,
+                    );
                 }
             }
             highest_count += 1;
@@ -243,16 +490,44 @@ pub const RepairService = struct {
         const num_slots_ahead = self.prng.random().intRangeAtMost(u32, 10, 50);
         try repairs.append(.{ .HighestShred = .{ slot + num_slots_ahead, 0 } });
 
+        _ = try self.appendTargetedRepairPlanRequests(&repairs);
+
         self.metrics.oldest_slot_needing_repair.set(oldest_slot_needing_repair);
         self.metrics.newest_slot_needing_repair.set(newest_slot_needing_repair);
 
         return repairs;
     }
 
+    fn appendTargetedRepairPlanRequests(self: *Self, repairs: *ArrayList(RepairRequest)) !usize {
+        if (self.targeted_repair_plan.items.len == 0 or self.targeted_repair_max_per_loop == 0) {
+            return 0;
+        }
+
+        const limit = @min(self.targeted_repair_max_per_loop, self.targeted_repair_plan.items.len);
+        for (0..limit) |offset| {
+            const index = (self.targeted_repair_next_index + offset) % self.targeted_repair_plan.items.len;
+            try repairs.append(self.targeted_repair_plan.items[index]);
+        }
+        self.targeted_repair_next_index =
+            (self.targeted_repair_next_index + limit) % self.targeted_repair_plan.items.len;
+        return limit;
+    }
+
+    fn isTargetedRepairPlanSlot(self: *const Self, slot: Slot) bool {
+        if (self.targeted_repair_plan.items.len == 0) return false;
+        const min_slot = self.targeted_repair_min_slot orelse return false;
+        const max_slot = self.targeted_repair_max_slot orelse return false;
+        return slot >= min_slot and slot <= max_slot;
+    }
+
     fn logStartupRepairReportOnce(
         self: *Self,
         start_slot: Slot,
         report: *const shred_network.shred_tracker.SlotReport,
+        is_continuity_repair_slot: bool,
+        planned_shred_requests_for_slot: usize,
+        first_planned_index: ?usize,
+        last_planned_index: ?usize,
     ) !void {
         const gop = try self.debug_logged_repair_slots.getOrPut(report.slot);
         if (gop.found_existing) return;
@@ -268,13 +543,17 @@ pub const RepairService = struct {
             }
         }
         self.logger.info().logf(
-            "startup repair report slot={} tracker_start_slot={} missing_windows={} bounded_missing_count={} open_ended_windows={} sample={any}",
+            "startup repair report slot={} tracker_start_slot={} continuity_slot={} missing_windows={} bounded_missing_count={} open_ended_windows={} planned_shred_requests={} first_planned_index={?} last_planned_index={?} sample={any}",
             .{
                 report.slot,
                 start_slot,
+                is_continuity_repair_slot,
                 report.missing_shreds.items.len,
                 bounded_missing_count,
                 open_ended_windows,
+                planned_shred_requests_for_slot,
+                first_planned_index,
+                last_planned_index,
                 report.missing_shreds.items[0..sample_len],
             },
         );
@@ -288,8 +567,57 @@ pub const RepairService = struct {
         defer zone.deinit();
 
         var addressed = ArrayList(AddressedRepairRequest).init(self.allocator);
+        const debug_target_slot = self.shred_tracker.current_bottom_slot;
+        self.resetDebugTargetSlotIfChanged(debug_target_slot);
+        var debug_target_shred_requests: usize = 0;
+        var debug_target_addressed_requests: usize = 0;
+        var debug_target_zero_peer_requests: usize = 0;
+        var debug_target_highest_requests: usize = 0;
+        var debug_target_peer_samples: [8]RepairPeer = undefined;
+        var debug_target_peer_sample_count: usize = 0;
+        var debug_target_max_selected_peers: usize = 0;
         for (requests) |request| {
-            if (try self.peer_provider.getRandomPeer(request.slot())) |peer| {
+            const request_slot = request.slot();
+            const is_targeted_repair_plan_slot = self.isTargetedRepairPlanSlot(request_slot);
+            const is_continuity_repair =
+                request_slot >= self.shred_tracker.current_bottom_slot and
+                request_slot < self.shred_tracker.current_bottom_slot +|
+                    if (self.continuity_repair_only_bottom_slot)
+                        1
+                    else
+                        self.continuity_repair_slot_window;
+            const peer_fanout: usize = if (is_targeted_repair_plan_slot)
+                self.targeted_repair_peer_fanout
+            else if (is_continuity_repair)
+                if (request_slot == self.shred_tracker.current_bottom_slot)
+                    self.continuity_repair_bottom_peer_fanout
+                else
+                    self.continuity_repair_peer_fanout
+            else
+                1;
+            var peers_buf: [MAX_CONTINUITY_REPAIR_PEER_FANOUT]RepairPeer = undefined;
+            const selected_peers = try self.peer_provider.getRandomPeers(request.slot(), peer_fanout, &peers_buf);
+            if (request.slot() == debug_target_slot) {
+                switch (request) {
+                    .Shred => {
+                        debug_target_shred_requests += 1;
+                        debug_target_addressed_requests += selected_peers.len;
+                        debug_target_max_selected_peers = @max(
+                            debug_target_max_selected_peers,
+                            selected_peers.len,
+                        );
+                        if (selected_peers.len == 0) debug_target_zero_peer_requests += 1;
+                        for (selected_peers) |peer| {
+                            if (debug_target_peer_sample_count >= debug_target_peer_samples.len) break;
+                            debug_target_peer_samples[debug_target_peer_sample_count] = peer;
+                            debug_target_peer_sample_count += 1;
+                        }
+                    },
+                    .HighestShred => debug_target_highest_requests += 1,
+                    else => {},
+                }
+            }
+            for (selected_peers) |peer| {
                 try addressed.append(.{
                     .request = request,
                     .recipient = peer.pubkey,
@@ -298,7 +626,94 @@ pub const RepairService = struct {
             }
             // TODO do something if a peer is not found?
         }
+        if ((debug_target_shred_requests > 0 or debug_target_highest_requests > 0) and
+            self.debug_target_assignment_log_count < TARGET_REPAIR_DEBUG_LOG_LIMIT)
+        {
+            self.debug_target_assignment_log_count += 1;
+            const peer_stats = self.peer_provider.getPeerStats(debug_target_slot) catch null;
+            const peer_stats_available = peer_stats != null;
+            const peer_total = if (peer_stats) |stats| stats.total_count else 0;
+            const peer_strict = if (peer_stats) |stats| stats.strict_count else 0;
+            const peer_preferred = if (peer_stats) |stats| stats.preferred_count else 0;
+            const peer_unclear = if (peer_stats) |stats| stats.unclear_count else 0;
+            self.logger.info().logf(
+                "startup repair assignment slot={} report_index={} shred_requests={} addressed_requests={} zero_peer_requests={} highest_requests={} max_selected_peers={} peer_stats_available={} peer_total={} peer_strict={} peer_preferred={} peer_unclear={} sample_peer_count={} sample_peers={any}",
+                .{
+                    debug_target_slot,
+                    self.debug_target_assignment_log_count,
+                    debug_target_shred_requests,
+                    debug_target_addressed_requests,
+                    debug_target_zero_peer_requests,
+                    debug_target_highest_requests,
+                    debug_target_max_selected_peers,
+                    peer_stats_available,
+                    peer_total,
+                    peer_strict,
+                    peer_preferred,
+                    peer_unclear,
+                    debug_target_peer_sample_count,
+                    debug_target_peer_samples[0..debug_target_peer_sample_count],
+                },
+            );
+        }
         return addressed;
+    }
+
+    fn resetDebugTargetSlotIfChanged(self: *Self, slot: Slot) void {
+        if (self.debug_target_slot) |current_slot| {
+            if (current_slot == slot) return;
+        }
+
+        self.debug_target_slot = slot;
+        self.debug_target_assignment_log_count = 0;
+        self.debug_target_send_log_count = 0;
+    }
+
+    fn logStartupRepairSendQueuedOnce(
+        self: *Self,
+        target_slot: Slot,
+        addressed_requests: []const AddressedRepairRequest,
+    ) !void {
+        var addressed_shred_requests: usize = 0;
+        var first_index: ?u64 = null;
+        var last_index: ?u64 = null;
+        var sample_addrs: [8]SocketAddr = undefined;
+        var sample_addr_count: usize = 0;
+
+        for (addressed_requests) |addressed| {
+            switch (addressed.request) {
+                .Shred => |repair| {
+                    if (repair[0] != target_slot) continue;
+                    addressed_shred_requests += 1;
+                    const index = repair[1];
+                    if (first_index == null or index < first_index.?) first_index = index;
+                    if (last_index == null or index > last_index.?) last_index = index;
+                    if (sample_addr_count < sample_addrs.len) {
+                        sample_addrs[sample_addr_count] = addressed.recipient_addr;
+                        sample_addr_count += 1;
+                    }
+                },
+                else => {},
+            }
+        }
+
+        if (addressed_shred_requests == 0) return;
+
+        if (self.debug_target_send_log_count >= TARGET_REPAIR_DEBUG_LOG_LIMIT) return;
+        self.debug_target_send_log_count += 1;
+
+        self.logger.info().logf(
+            "startup repair send queued slot={} report_index={} addressed_shred_requests={} first_index={?} last_index={?} sample_addr_count={} sample_addrs={any}",
+            .{
+                target_slot,
+                self.debug_target_send_log_count,
+                addressed_shred_requests,
+                first_index,
+                last_index,
+                sample_addr_count,
+                sample_addrs[0..sample_addr_count],
+            },
+        );
     }
 };
 
@@ -324,6 +739,155 @@ fn maxRequesterThreads() u32 {
     // its channel to grow indefinitely.
 
     return 4;
+}
+
+const TargetedRepairPlanStats = struct {
+    request_count: usize = 0,
+    min_slot: ?Slot = null,
+    max_slot: ?Slot = null,
+};
+
+fn readOptionalEnvOwned(allocator: Allocator, key: []const u8) !?[]u8 {
+    return std.process.getEnvVarOwned(allocator, key) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => err,
+    };
+}
+
+fn openRepairPlanFile(path: []const u8) !std.fs.File {
+    if (std.fs.path.isAbsolute(path)) {
+        return try std.fs.openFileAbsolute(path, .{ .mode = .read_only });
+    }
+    return try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+}
+
+fn parseTargetedRepairPlanLine(line: []const u8) !?RepairRequest {
+    const trimmed = std.mem.trim(u8, line, " \t\r\n");
+    if (trimmed.len == 0 or trimmed[0] == '#') return null;
+
+    var tokens = std.mem.tokenizeAny(u8, trimmed, " \t");
+    const record_type = tokens.next() orelse return null;
+    if (!std.mem.eql(u8, record_type, "repair_data_shred")) return null;
+
+    var slot: ?Slot = null;
+    var index: ?u64 = null;
+    while (tokens.next()) |token| {
+        const sep = std.mem.indexOfScalar(u8, token, '=') orelse continue;
+        const key = token[0..sep];
+        const value = token[sep + 1 ..];
+        if (std.mem.eql(u8, key, "slot")) {
+            slot = try std.fmt.parseUnsigned(Slot, value, 10);
+        } else if (std.mem.eql(u8, key, "index")) {
+            index = try std.fmt.parseUnsigned(u64, value, 10);
+        }
+    }
+
+    return .{ .Shred = .{
+        slot orelse return error.MissingTargetedRepairSlot,
+        index orelse return error.MissingTargetedRepairIndex,
+    } };
+}
+
+fn loadTargetedRepairPlan(
+    allocator: Allocator,
+    path: []const u8,
+    requests: *ArrayList(RepairRequest),
+) !TargetedRepairPlanStats {
+    var file = try openRepairPlanFile(path);
+    defer file.close();
+
+    const contents = try file.readToEndAlloc(allocator, 64 * 1024 * 1024);
+    defer allocator.free(contents);
+
+    var stats: TargetedRepairPlanStats = .{};
+    var lines = std.mem.splitScalar(u8, contents, '\n');
+    while (lines.next()) |line| {
+        const request = (try parseTargetedRepairPlanLine(line)) orelse continue;
+        try requests.append(request);
+        const slot = request.slot();
+        stats.request_count += 1;
+        stats.min_slot = if (stats.min_slot) |current| @min(current, slot) else slot;
+        stats.max_slot = if (stats.max_slot) |current| @max(current, slot) else slot;
+    }
+    return stats;
+}
+
+fn readEnvU64(allocator: Allocator, key: []const u8, default_value: u64) !u64 {
+    const raw = std.process.getEnvVarOwned(allocator, key) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return default_value,
+        else => return err,
+    };
+    defer allocator.free(raw);
+    return try std.fmt.parseUnsigned(u64, raw, 10);
+}
+
+fn readEnvUsize(allocator: Allocator, key: []const u8, default_value: usize) !usize {
+    const raw = std.process.getEnvVarOwned(allocator, key) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return default_value,
+        else => return err,
+    };
+    defer allocator.free(raw);
+    return try std.fmt.parseUnsigned(usize, raw, 10);
+}
+
+fn readEnvBool(allocator: Allocator, key: []const u8, default_value: bool) !bool {
+    const raw = std.process.getEnvVarOwned(allocator, key) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return default_value,
+        else => return err,
+    };
+    defer allocator.free(raw);
+
+    if (std.mem.eql(u8, raw, "1") or
+        std.ascii.eqlIgnoreCase(raw, "true") or
+        std.ascii.eqlIgnoreCase(raw, "yes"))
+    {
+        return true;
+    }
+    if (std.mem.eql(u8, raw, "0") or
+        std.ascii.eqlIgnoreCase(raw, "false") or
+        std.ascii.eqlIgnoreCase(raw, "no"))
+    {
+        return false;
+    }
+    return error.InvalidBooleanEnvironmentVariable;
+}
+
+fn boundedRepairWindowEnd(start: usize, end: usize, limit: usize) usize {
+    return @min(end, start +| limit);
+}
+
+fn appendExactRepairsFromCursor(
+    repairs: *ArrayList(RepairRequest),
+    slot: Slot,
+    windows: []const MissingRange,
+    cursor: usize,
+    limit: usize,
+    individual_count: *usize,
+    planned_shred_requests_for_slot: *usize,
+    first_planned_index: *?usize,
+    last_planned_index: *?usize,
+) !usize {
+    var planned_exact: usize = 0;
+    for (windows) |window| {
+        if (planned_exact >= limit or individual_count.* >= RepairService.MAX_SHRED_REPAIRS) break;
+        const window_end = window.end orelse continue;
+        const repair_start = @max(@as(usize, window.start), cursor);
+        if (repair_start >= window_end) continue;
+        const repair_end = boundedRepairWindowEnd(
+            repair_start,
+            window_end,
+            @min(limit - planned_exact, RepairService.MAX_SHRED_REPAIRS - individual_count.*),
+        );
+        for (repair_start..repair_end) |i| {
+            individual_count.* += 1;
+            planned_exact += 1;
+            planned_shred_requests_for_slot.* += 1;
+            if (first_planned_index.* == null) first_planned_index.* = i;
+            last_planned_index.* = i;
+            try repairs.append(.{ .Shred = .{ slot, i } });
+        }
+    }
+    return planned_exact;
 }
 
 /// Sleeps an appropriate duration after sending some repair requests.
@@ -388,7 +952,7 @@ pub const RepairRequester = struct {
         sent_request_count: *Counter,
         pending_requests: *Gauge(u64),
 
-        const prefix = "repair";
+        pub const prefix = "repair";
     };
 
     pub fn init(
@@ -500,18 +1064,23 @@ pub const RepairPeerProvider = struct {
     allocator: Allocator,
     random: Random,
     gossip_table_rw: *RwMux(GossipTable),
+    epoch_tracker: *sig.core.EpochTracker,
     cache: LruCacheCustom(.non_locking, Slot, RepairPeers, Allocator, RepairPeers.deinit),
     my_pubkey: Pubkey,
     my_shred_version: *const Atomic(u16),
+    min_strict_slot_supported_repair_peers: usize,
+    include_unclear_peers_when_slot_supported: bool,
     metrics: Metrics,
 
     pub const Metrics = struct {
         latest_count_from_gossip: *Gauge(u64),
+        latest_slot_supported_count_from_gossip: *Gauge(u64),
+        latest_slot_support_unavailable_count_from_gossip: *Gauge(u64),
         cache_hit_count: *Counter,
         cache_miss_count: *Counter,
         cache_expired_count: *Counter,
 
-        const prefix = "repair_peers";
+        pub const prefix = "repair_peers";
     };
 
     const Self = @This();
@@ -519,10 +1088,27 @@ pub const RepairPeerProvider = struct {
     const RepairPeers = struct {
         insertion_time_secs: u64,
         peers: []RepairPeer,
+        strict_count: usize,
+        preferred_count: usize,
+        unclear_count: usize,
 
         fn deinit(self: *@This(), allocator: Allocator) void {
             allocator.free(self.peers);
         }
+    };
+
+    const RepairPeersView = struct {
+        peers: []RepairPeer,
+        strict_count: usize,
+        preferred_count: usize,
+        unclear_count: usize,
+    };
+
+    pub const RepairPeerStats = struct {
+        total_count: usize,
+        strict_count: usize,
+        preferred_count: usize,
+        unclear_count: usize,
     };
 
     pub fn init(
@@ -530,16 +1116,30 @@ pub const RepairPeerProvider = struct {
         random: Random,
         registry: *Registry(.{}),
         gossip: *RwMux(GossipTable),
+        epoch_tracker: *sig.core.EpochTracker,
         my_pubkey: Pubkey,
         my_shred_version: *const Atomic(u16),
     ) !RepairPeerProvider {
+        const min_strict_slot_supported_repair_peers = try readEnvUsize(
+            allocator,
+            "SIG_REPAIR_MIN_STRICT_SLOT_SUPPORTED_PEERS",
+            DEFAULT_MIN_STRICT_SLOT_SUPPORTED_REPAIR_PEERS,
+        );
+        const include_unclear_peers_when_slot_supported = try readEnvBool(
+            allocator,
+            "SIG_REPAIR_INCLUDE_UNCLEAR_PEERS",
+            false,
+        );
         return .{
             .allocator = allocator,
             .gossip_table_rw = gossip,
+            .epoch_tracker = epoch_tracker,
             .cache = try LruCacheCustom(.non_locking, Slot, RepairPeers, Allocator, RepairPeers.deinit)
                 .initWithContext(allocator, REPAIR_PEERS_CACHE_CAPACITY, allocator),
             .my_pubkey = my_pubkey,
             .my_shred_version = my_shred_version,
+            .min_strict_slot_supported_repair_peers = min_strict_slot_supported_repair_peers,
+            .include_unclear_peers_when_slot_supported = include_unclear_peers_when_slot_supported,
             .metrics = try registry.initStruct(Metrics),
             .random = random,
         };
@@ -561,14 +1161,100 @@ pub const RepairPeerProvider = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "getRandomPeer" });
         defer zone.deinit();
 
-        const peers = try self.getPeers(slot);
+        const view = try self.getPeers(slot);
+        const strict_count = @min(view.strict_count, view.peers.len);
+        const preferred_count = @min(view.preferred_count, strict_count);
+        if (preferred_count > 0) {
+            return view.peers[self.random.intRangeLessThan(usize, 0, preferred_count)];
+        }
+        const peers = if (strict_count > 0) view.peers[0..strict_count] else view.peers;
         if (peers.len == 0) return null;
         const index = self.random.intRangeLessThan(usize, 0, peers.len);
         return peers[index];
     }
 
+    /// Selects up to `limit` distinct peers for the slot. The returned slice
+    /// points into `out`.
+    pub fn getRandomPeers(
+        self: *Self,
+        slot: Slot,
+        limit: usize,
+        out: []RepairPeer,
+    ) Error![]RepairPeer {
+        const zone = tracy.Zone.init(@src(), .{ .name = "getRandomPeers" });
+        defer zone.deinit();
+
+        std.debug.assert(limit <= out.len);
+        if (limit == 0) return out[0..0];
+        const view = try self.getPeers(slot);
+        const peers = view.peers;
+        if (peers.len == 0) return out[0..0];
+
+        const strict_count = @min(view.strict_count, peers.len);
+        const preferred_count = @min(view.preferred_count, strict_count);
+        if (strict_count == 0) {
+            return self.sampleDistinctPeers(peers, limit, out);
+        }
+
+        const pinned_count = @min(limit, preferred_count);
+        if (pinned_count > 0) {
+            @memcpy(out[0..pinned_count], peers[0..pinned_count]);
+        }
+
+        var selected_count = pinned_count;
+        if (selected_count < limit and preferred_count < strict_count) {
+            const strict_target = @min(limit - selected_count, strict_count - preferred_count);
+            selected_count += self.sampleDistinctPeers(
+                peers[preferred_count..strict_count],
+                strict_target,
+                out[selected_count..],
+            ).len;
+        }
+        if (selected_count < limit and strict_count < peers.len) {
+            selected_count += self.sampleDistinctPeers(
+                peers[strict_count..],
+                limit - selected_count,
+                out[selected_count..],
+            ).len;
+        }
+        return out[0..selected_count];
+    }
+
+    fn sampleDistinctPeers(
+        self: *Self,
+        peers: []const RepairPeer,
+        limit: usize,
+        out: []RepairPeer,
+    ) []RepairPeer {
+        if (limit == 0 or peers.len == 0) return out[0..0];
+
+        const target = @min(limit, peers.len);
+        if (target > peers.len / 4) {
+            const start = self.random.intRangeLessThan(usize, 0, peers.len);
+            for (0..target) |i| {
+                out[i] = peers[(start + i) % peers.len];
+            }
+            return out[0..target];
+        }
+
+        var selected_indexes: [MAX_CONTINUITY_REPAIR_PEER_FANOUT]usize = undefined;
+        for (0..target) |i| {
+            while (true) {
+                const candidate_index = self.random.intRangeLessThan(usize, 0, peers.len);
+                for (selected_indexes[0..i]) |selected_index| {
+                    if (selected_index == candidate_index) break;
+                } else {
+                    selected_indexes[i] = candidate_index;
+                    out[i] = peers[candidate_index];
+                    break;
+                }
+            }
+        }
+        return out[0..target];
+    }
+
     /// Tries to get peers that could have the slot. Checks cache, falling back to gossip.
-    fn getPeers(self: *Self, slot: Slot) Error![]RepairPeer {
+    fn getPeers(self: *Self, slot: Slot) Error!RepairPeersView {
         const zone = tracy.Zone.init(@src(), .{ .name = "getPeers" });
         defer zone.deinit();
 
@@ -577,20 +1263,40 @@ pub const RepairPeerProvider = struct {
         if (self.cache.get(slot)) |peers| {
             if (now - peers.insertion_time_secs <= REPAIR_PEERS_CACHE_TTL_SECONDS) {
                 self.metrics.cache_hit_count.inc();
-                return peers.peers;
+                return .{
+                    .peers = peers.peers,
+                    .strict_count = peers.strict_count,
+                    .preferred_count = peers.preferred_count,
+                    .unclear_count = peers.unclear_count,
+                };
             }
             self.metrics.cache_expired_count.inc();
         } else self.metrics.cache_miss_count.inc();
 
-        const peers = try self.getRepairPeersFromGossip(self.allocator, slot);
-        errdefer self.allocator.free(peers);
+        var peers = try self.getRepairPeersFromGossip(self.allocator, slot);
+        errdefer peers.deinit(self.allocator);
 
-        self.metrics.latest_count_from_gossip.set(peers.len);
-        try self.cache.insert(slot, .{
-            .insertion_time_secs = now,
-            .peers = peers,
-        });
-        return peers;
+        self.metrics.latest_count_from_gossip.set(peers.peers.len);
+        peers.insertion_time_secs = now;
+        try self.cache.insert(slot, peers);
+        return .{
+            .peers = peers.peers,
+            .strict_count = peers.strict_count,
+            .preferred_count = peers.preferred_count,
+            .unclear_count = peers.unclear_count,
+        };
+    }
+
+    pub fn getPeerStats(self: *Self, slot: Slot) Error!RepairPeerStats {
+        const view = try self.getPeers(slot);
+        const strict_count = @min(view.strict_count, view.peers.len);
+        const preferred_count = @min(view.preferred_count, strict_count);
+        return .{
+            .total_count = view.peers.len,
+            .strict_count = strict_count,
+            .preferred_count = preferred_count,
+            .unclear_count = view.unclear_count,
+        };
     }
 
     /// Gets a list of peers from the gossip table that are likely to have the desired slot.
@@ -600,17 +1306,29 @@ pub const RepairPeerProvider = struct {
         self: *Self,
         allocator: Allocator,
         slot: Slot,
-    ) Error![]RepairPeer {
+    ) Error!RepairPeers {
         const zone = tracy.Zone.init(@src(), .{ .name = "getRepairPeersFromGossip" });
         defer zone.deinit();
 
         var gossip_table_lock = self.gossip_table_rw.read();
         defer gossip_table_lock.unlock();
         const gossip_table: *const GossipTable = gossip_table_lock.get();
-        const buf = try allocator.alloc(RepairPeer, gossip_table.contact_infos.count());
-        errdefer allocator.free(buf);
+        const contact_info_count = gossip_table.contact_infos.count();
+        const preferred_buf = try allocator.alloc(RepairPeer, contact_info_count);
+        defer allocator.free(preferred_buf);
+        const strict_buf = try allocator.alloc(RepairPeer, contact_info_count);
+        defer allocator.free(strict_buf);
+        const unclear_buf = try allocator.alloc(RepairPeer, contact_info_count);
+        defer allocator.free(unclear_buf);
+        var slot_supported_pubkeys = AutoHashMap(Pubkey, void).init(allocator);
+        defer slot_supported_pubkeys.deinit();
+        try collectSlotSupportedPubkeys(gossip_table, slot, &slot_supported_pubkeys);
+        const slot_leader = self.getSlotLeader(slot);
+
         var potential_peers: usize = 0; // total count of all repair peers, not just the ones for this slot.
-        var compatible_peers: usize = 0; // number of peers who can handle this slot.
+        var preferred_peers: usize = 0; // slot leaders pinned ahead of random slot-supported peers.
+        var strict_peers: usize = 0; // peers whose EpochSlots prove they have this slot.
+        var unclear_peers: usize = 0; // compatible peers without slot-specific proof.
         var infos = gossip_table.contactInfoIterator(0);
         while (infos.next()) |info| {
             const serve_repair_socket = info.getSocket(.serve_repair);
@@ -626,19 +1344,305 @@ pub const RepairPeerProvider = struct {
                         continue;
                     }
                 }
-                buf[compatible_peers] = .{
+                const peer: RepairPeer = .{
                     .pubkey = info.pubkey,
                     .serve_repair_socket = serve_repair_socket.?,
                 };
-                compatible_peers += 1;
+                // The slot leader generated the shreds, so prefer it for
+                // recent-slot repairs before EpochSlots gossip proves support.
+                if (slot_leader) |leader| {
+                    if (info.pubkey.equals(&leader)) {
+                        _ = appendUniqueRepairPeer(
+                            preferred_buf,
+                            &preferred_peers,
+                            preferred_buf[0..preferred_peers],
+                            strict_buf[0..strict_peers],
+                            unclear_buf[0..unclear_peers],
+                            peer,
+                        );
+                        continue;
+                    }
+                }
+                if (slot_supported_pubkeys.contains(info.pubkey)) {
+                    _ = appendUniqueRepairPeer(
+                        strict_buf,
+                        &strict_peers,
+                        preferred_buf[0..preferred_peers],
+                        strict_buf[0..strict_peers],
+                        unclear_buf[0..unclear_peers],
+                        peer,
+                    );
+                } else {
+                    _ = appendUniqueRepairPeer(
+                        unclear_buf,
+                        &unclear_peers,
+                        preferred_buf[0..preferred_peers],
+                        strict_buf[0..strict_peers],
+                        unclear_buf[0..unclear_peers],
+                        peer,
+                    );
+                }
             }
         }
         if (potential_peers == 0) {
             return error.NoRepairPeers;
         }
-        return try allocator.realloc(buf, compatible_peers);
+        const slot_supported_peers = preferred_peers + strict_peers;
+        self.metrics.latest_slot_supported_count_from_gossip.set(slot_supported_peers);
+        self.metrics.latest_slot_support_unavailable_count_from_gossip.set(unclear_peers);
+        if (slot_supported_peers > 0) {
+            const include_unclear =
+                (self.include_unclear_peers_when_slot_supported or
+                    slot_supported_peers < self.min_strict_slot_supported_repair_peers) and unclear_peers > 0;
+            const total_peers = slot_supported_peers + if (include_unclear) unclear_peers else 0;
+            const peers = try allocator.alloc(RepairPeer, total_peers);
+            @memcpy(peers[0..preferred_peers], preferred_buf[0..preferred_peers]);
+            @memcpy(
+                peers[preferred_peers..slot_supported_peers],
+                strict_buf[0..strict_peers],
+            );
+            if ((self.include_unclear_peers_when_slot_supported or
+                slot_supported_peers < self.min_strict_slot_supported_repair_peers) and unclear_peers > 0)
+            {
+                @memcpy(
+                    peers[slot_supported_peers..total_peers],
+                    unclear_buf[0..unclear_peers],
+                );
+            }
+            return .{
+                .insertion_time_secs = 0,
+                .peers = peers,
+                .strict_count = slot_supported_peers,
+                .preferred_count = preferred_peers,
+                .unclear_count = if (include_unclear) unclear_peers else 0,
+            };
+        }
+        const peers = try allocator.alloc(RepairPeer, unclear_peers);
+        @memcpy(peers[0..unclear_peers], unclear_buf[0..unclear_peers]);
+        return .{
+            .insertion_time_secs = 0,
+            .peers = peers,
+            .strict_count = 0,
+            .preferred_count = 0,
+            .unclear_count = unclear_peers,
+        };
+    }
+
+    fn getSlotLeader(self: *Self, slot: Slot) ?Pubkey {
+        const leader_schedules_with_infos = self.epoch_tracker.getLeaderSchedules() catch return null;
+        defer leader_schedules_with_infos.release();
+        return leader_schedules_with_infos.leader_schedules.getLeaderOrNull(slot);
     }
 };
+
+fn appendUniqueRepairPeer(
+    out: []RepairPeer,
+    count: *usize,
+    preferred_peers: []const RepairPeer,
+    strict_peers: []const RepairPeer,
+    unclear_peers: []const RepairPeer,
+    peer: RepairPeer,
+) bool {
+    if (containsRepairSocket(preferred_peers, &peer.serve_repair_socket) or
+        containsRepairSocket(strict_peers, &peer.serve_repair_socket) or
+        containsRepairSocket(unclear_peers, &peer.serve_repair_socket))
+    {
+        return false;
+    }
+
+    out[count.*] = peer;
+    count.* += 1;
+    return true;
+}
+
+fn containsRepairSocket(peers: []const RepairPeer, socket: *const SocketAddr) bool {
+    for (peers) |peer| {
+        if (peer.serve_repair_socket.eql(socket)) return true;
+    }
+    return false;
+}
+
+fn collectSlotSupportedPubkeys(
+    gossip_table: *const GossipTable,
+    slot: Slot,
+    out: *AutoHashMap(Pubkey, void),
+) Allocator.Error!void {
+    const cursors = gossip_table.epoch_slots.keys();
+    for (cursors) |cursor| {
+        const entry_index = gossip_table.epoch_slots.get(cursor).?;
+        const entry = gossip_table.store.getByIndex(entry_index);
+        switch (entry.data) {
+            .EpochSlots => |epoch_slots_indexed| {
+                const epoch_slots = epoch_slots_indexed[1];
+                if (epochSlotsContainSlot(&epoch_slots, slot)) {
+                    try out.put(epoch_slots.from, {});
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+fn epochSlotsContainSlot(epoch_slots: *const sig.gossip.data.EpochSlots, slot: Slot) bool {
+    for (epoch_slots.slots) |compressed_slots| {
+        switch (compressed_slots) {
+            .Uncompressed => |uncompressed| {
+                if (uncompressedContainsSlot(&uncompressed, slot)) return true;
+            },
+            .Flate2 => |flate2| {
+                if (flate2ContainsSlot(&flate2, slot)) return true;
+            },
+        }
+    }
+    return false;
+}
+
+fn flate2ContainsSlot(flate2: *const sig.gossip.data.Flate2, slot: Slot) bool {
+    if (slot < flate2.first_slot) return false;
+    const offset = slot - flate2.first_slot;
+    if (offset >= flate2.num) return false;
+    if (flate2.num >= sig.gossip.data.MAX_SLOT_PER_ENTRY) return false;
+
+    const byte_index: usize = @intCast(offset / 8);
+    if (byte_index >= EPOCH_SLOTS_DECOMPRESSED_BYTES) return false;
+
+    var decompressed: [EPOCH_SLOTS_DECOMPRESSED_BYTES]u8 = undefined;
+    var input: std.Io.Reader = .fixed(flate2.compressed);
+    var decompress_buf: [std.compress.flate.max_window_len]u8 = undefined;
+    var decompressor: std.compress.flate.Decompress = .init(&input, .raw, &decompress_buf);
+    decompressor.reader.readSliceAll(decompressed[0 .. byte_index + 1]) catch return false;
+
+    const bit_index: u3 = @intCast(offset % 8);
+    return (decompressed[byte_index] & (@as(u8, 1) << bit_index)) != 0;
+}
+
+fn uncompressedContainsSlot(uncompressed: *const sig.gossip.data.Uncompressed, slot: Slot) bool {
+    if (slot < uncompressed.first_slot) return false;
+    const offset = slot - uncompressed.first_slot;
+    if (offset >= uncompressed.num) return false;
+    if (offset >= uncompressed.slots.len) return false;
+    const bits = uncompressed.slots.bits orelse return false;
+    const byte_index: usize = @intCast(offset / 8);
+    if (byte_index >= bits.len) return false;
+    const bit_index: u3 = @intCast(offset % 8);
+    return (bits[byte_index] & (@as(u8, 1) << bit_index)) != 0;
+}
+
+test "epochSlotsContainSlot supports flate2 compressed bitsets" {
+    var compressed = [_]u8{
+        0b0000_0001, 0x02, 0x00, 0xfd, 0xff, // final stored raw-deflate block, len=2
+        0x00, 0x02, // bit 9 is set
+    };
+    const flate2 = sig.gossip.data.Flate2{
+        .first_slot = 1000,
+        .num = 16,
+        .compressed = compressed[0..],
+    };
+
+    try std.testing.expect(flate2ContainsSlot(&flate2, 1009));
+    try std.testing.expect(!flate2ContainsSlot(&flate2, 1008));
+    try std.testing.expect(!flate2ContainsSlot(&flate2, 1016));
+
+    var compressed_slots = [_]sig.gossip.data.CompressedSlots{.{ .Flate2 = flate2 }};
+    const epoch_slots = sig.gossip.data.EpochSlots{
+        .from = Pubkey.ZEROES,
+        .slots = compressed_slots[0..],
+        .wallclock = 0,
+    };
+    try std.testing.expect(epochSlotsContainSlot(&epoch_slots, 1009));
+    try std.testing.expect(!epochSlotsContainSlot(&epoch_slots, 1008));
+}
+
+test "flate2 slot support ignores malformed compressed gossip" {
+    var compressed = [_]u8{0b0000_0110};
+    const flate2 = sig.gossip.data.Flate2{
+        .first_slot = 1000,
+        .num = 16,
+        .compressed = compressed[0..],
+    };
+
+    try std.testing.expect(!flate2ContainsSlot(&flate2, 1009));
+}
+
+test "bounded repair window caps exact shred requests" {
+    try std.testing.expectEqual(512, boundedRepairWindowEnd(0, 671, 512));
+    try std.testing.expectEqual(671, boundedRepairWindowEnd(512, 671, 512));
+    try std.testing.expectEqual(671, boundedRepairWindowEnd(671, 671, 256));
+}
+
+test "targeted repair plan parser accepts fec probe lines" {
+    const request = (try parseTargetedRepairPlanLine(
+        "repair_data_shred slot=427540109 index=64 fec_set_index=64 data_seen=18 code_seen=0 expected_data=null expected_code=null unique_shards=18",
+    )).?;
+    try std.testing.expectEqual(RepairRequest{ .Shred = .{ 427540109, 64 } }, request);
+
+    try std.testing.expectEqual(@as(?RepairRequest, null), try parseTargetedRepairPlanLine("# comment"));
+    try std.testing.expectEqual(@as(?RepairRequest, null), try parseTargetedRepairPlanLine(""));
+}
+
+test "targeted repair plan loader tracks request slot range" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = "repair-plan.txt";
+    {
+        var file = try tmp.dir.createFile(path, .{});
+        defer file.close();
+        try file.writeAll(
+            \\# repair_data_shred lines are Agave-style Shred(slot,index) data-repair candidates
+            \\repair_data_shred slot=10 index=1 fec_set_index=0 data_seen=1 code_seen=0 expected_data=null expected_code=null unique_shards=1
+            \\repair_data_shred slot=12 index=7 fec_set_index=0 data_seen=1 code_seen=0 expected_data=null expected_code=null unique_shards=1
+            \\
+        );
+    }
+
+    const abs_path = try tmp.dir.realpathAlloc(allocator, path);
+    defer allocator.free(abs_path);
+
+    var requests = ArrayList(RepairRequest).init(allocator);
+    defer requests.deinit();
+    const stats = try loadTargetedRepairPlan(allocator, abs_path, &requests);
+
+    try std.testing.expectEqual(@as(usize, 2), requests.items.len);
+    try std.testing.expectEqual(@as(usize, 2), stats.request_count);
+    try std.testing.expectEqual(@as(?Slot, 10), stats.min_slot);
+    try std.testing.expectEqual(@as(?Slot, 12), stats.max_slot);
+    try std.testing.expectEqual(RepairRequest{ .Shred = .{ 10, 1 } }, requests.items[0]);
+    try std.testing.expectEqual(RepairRequest{ .Shred = .{ 12, 7 } }, requests.items[1]);
+}
+
+test "continuity exact repair cursor resumes after the prior chunk" {
+    const allocator = std.testing.allocator;
+
+    var repairs = ArrayList(RepairRequest).init(allocator);
+    defer repairs.deinit();
+
+    const windows = [_]MissingRange{.{ .start = 0, .end = 799 }};
+    var individual_count: usize = 0;
+    var planned_count: usize = 0;
+    var first_planned_index: ?usize = null;
+    var last_planned_index: ?usize = null;
+
+    const planned = try appendExactRepairsFromCursor(
+        &repairs,
+        42,
+        windows[0..],
+        512,
+        512,
+        &individual_count,
+        &planned_count,
+        &first_planned_index,
+        &last_planned_index,
+    );
+
+    try std.testing.expectEqual(287, planned);
+    try std.testing.expectEqual(287, repairs.items.len);
+    try std.testing.expectEqual(@as(?usize, 512), first_planned_index);
+    try std.testing.expectEqual(@as(?usize, 798), last_planned_index);
+    try std.testing.expectEqual(RepairRequest{ .Shred = .{ 42, 512 } }, repairs.items[0]);
+    try std.testing.expectEqual(RepairRequest{ .Shred = .{ 42, 798 } }, repairs.items[repairs.items.len - 1]);
+}
 
 test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
@@ -690,11 +1694,14 @@ test "RepairService sends repair request to gossip peer" {
     // init service
     var exit: Atomic(bool) = .init(false);
     var gossip_mux: RwMux(GossipTable) = .init(gossip);
+    var epoch_tracker = sig.core.EpochTracker.init(.default, 0, sig.core.EpochSchedule.INIT);
+    defer epoch_tracker.deinit();
     const peers: RepairPeerProvider = try .init(
         allocator,
         random,
         &registry,
         &gossip_mux,
+        &epoch_tracker,
         Pubkey.fromPublicKey(&keypair.public_key),
         &my_shred_version,
     );
@@ -731,22 +1738,33 @@ test "RepairService sends repair request to gossip peer" {
     _ = try service.sendNecessaryRepairs();
 
     var buf: [200]u8 = undefined;
-    var slots: [3]Slot = undefined;
+    var highest_slots: [3]Slot = undefined;
+    var num_window_index: usize = 0;
     var num_recv: usize = 0;
     while (peer_socket.receive(&buf) catch null) |size| {
         try std.testing.expectEqual(160, size);
         const msg = try bincode.readFromSlice(allocator, RepairMessage, buf[0..160], .{});
-        try msg.verify(buf[0..160], Pubkey.fromPublicKey(&peer_keypair.public_key), @intCast(std.time.milliTimestamp()));
-        try std.testing.expect(msg.highest_window_index.slot >= 13579);
-        try std.testing.expectEqual(0, msg.highest_window_index.shred_index);
-        slots[num_recv] = msg.highest_window_index.slot;
-        num_recv += 1;
+        switch (msg) {
+            .highest_window_index => |highest_window_index| {
+                try std.testing.expect(highest_window_index.slot >= 13579);
+                try std.testing.expectEqual(0, highest_window_index.shred_index);
+                highest_slots[num_recv] = highest_window_index.slot;
+                num_recv += 1;
+            },
+            .window_index => |window_index| {
+                try std.testing.expectEqual(13579, window_index.slot);
+                try std.testing.expect(window_index.shred_index < RepairService.CONTINUITY_REPAIR_OPEN_ENDED_PREFIX_REPAIRS);
+                num_window_index += 1;
+            },
+            else => return error.TestFailed,
+        }
     }
 
     try std.testing.expectEqual(3, num_recv);
+    try std.testing.expectEqual(RepairService.CONTINUITY_REPAIR_OPEN_ENDED_PREFIX_REPAIRS, num_window_index);
 
     outer: for ([_]Slot{ 13579, 13580 }) |expected_slot| {
-        for (slots[0..num_recv]) |slot| if (slot == expected_slot) continue :outer;
+        for (highest_slots[0..num_recv]) |slot| if (slot == expected_slot) continue :outer;
         std.debug.print("missing expected repair request for slot: {}\n", .{expected_slot});
         return error.TestFailed;
     }
@@ -786,11 +1804,14 @@ test "RepairPeerProvider selects correct peers" {
     var gossip_mux = RwMux(GossipTable).init(gossip);
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
+    var epoch_tracker = sig.core.EpochTracker.init(.default, 0, sig.core.EpochSchedule.INIT);
+    defer epoch_tracker.deinit();
     var peers = try RepairPeerProvider.init(
         allocator,
         random,
         &registry,
         &gossip_mux,
+        &epoch_tracker,
         Pubkey.fromPublicKey(&keypair.public_key),
         &my_shred_version,
     );
@@ -850,7 +1871,10 @@ const TestPeerGenerator = struct {
         const wallclock = 1;
         const keypair: KeyPair = .generate();
         const pubkey: Pubkey = .fromPublicKey(&keypair.public_key);
-        const serve_repair_addr: SocketAddr = .initIpv4(.{ 127, 0, 0, 1 }, 8003);
+        const serve_repair_addr: SocketAddr = .initIpv4(
+            .{ 127, 0, 0, 1 },
+            8003 + @as(u16, @intCast(@intFromEnum(peer_type))),
+        );
         const shred_version = switch (peer_type) {
             .WrongShredVersion => self.shred_version + 1,
             else => self.shred_version,
