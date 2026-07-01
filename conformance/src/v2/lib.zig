@@ -4,6 +4,10 @@
 const std = @import("std");
 const sig_v2 = @import("sig_v2");
 
+comptime {
+    _ = @import("shred_parse.zig");
+}
+
 pub const std_options: std.Options = .{
     .log_level = .warn,
 };
@@ -57,5 +61,7 @@ pub const entrypoints: std.StaticStringMap(*const fn (
     out_sz: *u64,
     input: [*]const u8,
     in_sz: u64,
-) callconv(.c) i32) = .initComptime(.{});
+) callconv(.c) i32) = .initComptime(.{
+    .{ "sol_compat_shred_parse_v1", @import("shred_parse.zig").sol_compat_shred_parse_v1 },
+});
 // sig fmt: on
