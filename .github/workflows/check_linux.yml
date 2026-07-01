@@ -22,6 +22,11 @@ jobs:
   test_kcov_linux:
     runs-on: ubuntu-latest
     steps:
+      - name: "Disk report: initial"
+        run: |
+          df -h /
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /usr/lib/google-cloud-sdk /opt/ghc 2>/dev/null | sort -rh
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -33,11 +38,21 @@ jobs:
           version: 0.15.2
           cache-key: kcov-${{ hashFiles('build.zig', 'build.zig.zon', 'v2/build.zig', 'v2/build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
+      - name: "Disk report: after zig setup"
+        run: |
+          df -h /
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /usr/lib/google-cloud-sdk /opt/ghc 2>/dev/null | sort -rh
+
       - name: Pre-download zig dependencies
         run: |
           ./scripts/fetch-zig-deps.py
           ./scripts/fetch-zig-deps.py v2/build.zig.zon
           zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Denable-tsan=false -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
+
+      - name: "Disk report: after build"
+        run: |
+          df -h /
+          du -sh .zig-cache zig-out 2>/dev/null || true
 
       - name: Set up kcov
         run: |
@@ -69,6 +84,11 @@ jobs:
           echo ""
           echo "--- v2 filename samples ---"
           grep 'filename=' v2/zig-out/kcov/kcov-merged/cobertura.xml | head -3
+
+      - name: "Disk report: after test and collect"
+        run: |
+          df -h /
+          du -sh kcov-merged 2>/dev/null || true
 
       - name: Upload coverage to Codecov
         env:
@@ -105,6 +125,11 @@ jobs:
   gossip_and_fuzz:
     runs-on: ubuntu-latest
     steps:
+      - name: "Disk report: initial"
+        run: |
+          df -h /
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /usr/lib/google-cloud-sdk /opt/ghc 2>/dev/null | sort -rh
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -116,10 +141,20 @@ jobs:
           version: 0.15.2
           cache-key: selfhosted-release-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
+      - name: "Disk report: after zig setup"
+        run: |
+          df -h /
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /usr/lib/google-cloud-sdk /opt/ghc 2>/dev/null | sort -rh
+
       - name: Build
         run: |
           ./scripts/fetch-zig-deps.py
           zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out-release --summary all
+
+      - name: "Disk report: after build"
+        run: |
+          df -h /
+          du -sh .zig-cache workspace/zig-out-release 2>/dev/null || true
 
       - name: Run Gossip
         run: bash scripts/gossip_test.sh 120 workspace/zig-out-release/bin/sig
@@ -139,6 +174,11 @@ jobs:
   build_and_test_linux:
     runs-on: ubuntu-latest
     steps:
+      - name: "Disk report: initial"
+        run: |
+          df -h /
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /usr/lib/google-cloud-sdk /opt/ghc 2>/dev/null | sort -rh
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -150,15 +190,30 @@ jobs:
           version: 0.15.2
           cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
 
+      - name: "Disk report: after zig setup"
+        run: |
+          df -h /
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /usr/lib/google-cloud-sdk /opt/ghc 2>/dev/null | sort -rh
+
       - name: Build
         run: |
           ./scripts/fetch-zig-deps.py
           zig build -Denable-tsan=true -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out --summary all
 
+      - name: "Disk report: after build"
+        run: |
+          df -h /
+          du -sh .zig-cache workspace/zig-out 2>/dev/null || true
+
       - name: Build Tests
         run:
           zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
           -Dallow-no-sha -Dallow-no-avx512 --summary all
+
+      - name: "Disk report: after build tests"
+        run: |
+          df -h /
+          du -sh .zig-cache zig-out 2>/dev/null || true
 
       - name: Run Tests
         run: |
@@ -168,6 +223,11 @@ jobs:
   linux_misc_checks:
     runs-on: ubuntu-latest
     steps:
+      - name: "Disk report: initial"
+        run: |
+          df -h /
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /usr/lib/google-cloud-sdk /opt/ghc 2>/dev/null | sort -rh
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -211,6 +271,11 @@ jobs:
           cd v2/
           zig build ci -Dallow-no-sha -Dallow-no-avx512 --summary all
 
+      - name: "Disk report: after v2 checks"
+        run: |
+          df -h /
+          du -sh .zig-cache v2/.zig-cache 2>/dev/null || true
+
       - name: Build and test hashmap ledger (linux)
         run: |
           set -eo pipefail
@@ -227,6 +292,18 @@ jobs:
   solana_conformance:
     runs-on: ubuntu-latest
     steps:
+      - name: "Disk report: initial"
+        run: |
+          echo "=== df -h / ==="
+          df -h /
+          echo ""
+          echo "=== Top space consumers ==="
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache \
+            /usr/lib/google-cloud-sdk /opt/ghc /usr/share/swift 2>/dev/null | sort -rh
+          echo ""
+          echo "=== Docker images ==="
+          docker image ls --format '{{.Repository}}:{{.Tag}} {{.Size}}'
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -240,11 +317,26 @@ jobs:
             build_conformance-v1-${{ hashFiles('build.zig', 'build.zig.zon',
             'conformance/build.zig', 'conformance/build.zig.zon') }}
 
+      - name: "Disk report: after checkout + zig setup"
+        run: |
+          df -h /
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /usr/lib/google-cloud-sdk /opt/ghc 2>/dev/null | sort -rh
+
       - name: Build Conformance
         run: |
           ./scripts/fetch-zig-deps.py conformance/build.zig.zon
           cd conformance
           zig build -Dallow-no-sha -Dallow-no-avx512 -Ddisable-feature-status-logs --summary all
+
+      - name: "Disk report: after build"
+        run: |
+          df -h /
+          echo "=== Zig cache size ==="
+          du -sh ~/.cache/zig 2>/dev/null || true
+          du -sh conformance/zig-out 2>/dev/null || true
+          du -sh conformance/.zig-cache 2>/dev/null || true
+          du -sh .zig-cache 2>/dev/null || true
+          du -sh zig-out 2>/dev/null || true
 
       - id: test_vectors_cache
         uses: actions/cache@v4
@@ -263,12 +355,23 @@ jobs:
           cd test-vectors
           git checkout $TEST_VECTORS_COMMIT
 
+      - name: "Disk report: after fixtures"
+        run: |
+          df -h /
+          echo "=== test-vectors size ==="
+          du -sh conformance/env/test-vectors 2>/dev/null || true
+
       - name: Run Fixtures
         run: conformance/scripts/ci-run.sh
 
   feature_compat_conformance:
     runs-on: ubuntu-latest
     steps:
+      - name: "Disk report: initial"
+        run: |
+          df -h /
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /usr/lib/google-cloud-sdk /opt/ghc 2>/dev/null | sort -rh
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' &&
@@ -313,6 +416,13 @@ jobs:
           cd env/solfuzz-agave
           git checkout "$SOLFUZZ_AGAVE_COMMIT"
           cargo build --lib --release
+
+      - name: "Disk report: after build"
+        run: |
+          df -h /
+          du -sh conformance/.zig-cache conformance/zig-out 2>/dev/null || true
+          du -sh conformance/env/solfuzz-agave/target 2>/dev/null || true
+          du -sh ~/.cargo 2>/dev/null || true
 
       - name: Check feature compatibility
         run: |
