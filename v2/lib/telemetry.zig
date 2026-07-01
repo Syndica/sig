@@ -277,18 +277,64 @@ pub fn Logger(comptime scope_str: []const u8) type {
         }
 
         pub fn Entry(comptime entry_count: usize) type {
+            const log_zig = @import("telemetry/log.zig");
             return struct {
                 logger: LoggerSelf,
-                level: log.Level,
-                entries: [entry_count]log.EntryField,
+                level: log_zig.Level,
+                entries: [entry_count]log_zig.EntryField,
                 const EntrySelf = @This();
 
+                /// Formats using the default formatter for the type, if it exists. To
+                /// customize the format, use `fromValue` or `fromFmt`.
                 pub fn field(
                     self: *const EntrySelf,
                     name: []const u8,
-                    value: log.EntryValueFmt,
+                    value_ptr: anytype,
                 ) Entry(entry_count + 1) {
-                    const new_entry: log.EntryField = .{
+                    const new_entry: log_zig.EntryField = .{
+                        .name = name,
+                        .value = .fromValue(fieldFmtString(@TypeOf(value_ptr.*)), value_ptr),
+                    };
+                    return .{
+                        .logger = self.logger,
+                        .level = self.level,
+                        .entries = self.entries ++ .{new_entry},
+                    };
+                }
+
+                /// Returns the field format string for common types: strings,
+                /// numbers, and types with `format` functions. Other types are
+                /// not supported, to force callers to think about whether they
+                /// actually want {any} formatting.
+                fn fieldFmtString(comptime Value: type) []const u8 {
+                    return switch (@typeInfo(Value)) {
+                        .int, .comptime_int, .float, .comptime_float => "{}",
+
+                        .pointer => |ptr| if (ptr.size == .one)
+                            fieldFmtString(ptr.child)
+                        else if (ptr.child == u8)
+                            "{s}"
+                        else
+                            @compileError("usefieldFmt"),
+
+                        .array => |arr| if (arr.child == u8)
+                            "{s}"
+                        else
+                            @compileError("usefieldFmt"),
+
+                        else => if (@hasDecl(Value, "format"))
+                            "{f}"
+                        else
+                            @compileError("usefieldFmt"),
+                    };
+                }
+
+                pub fn fieldFmt(
+                    self: *const EntrySelf,
+                    name: []const u8,
+                    value: log_zig.EntryValueFmt,
+                ) Entry(entry_count + 1) {
+                    const new_entry: log_zig.EntryField = .{
                         .name = name,
                         .value = value,
                     };
@@ -297,6 +343,10 @@ pub fn Logger(comptime scope_str: []const u8) type {
                         .level = self.level,
                         .entries = self.entries ++ .{new_entry},
                     };
+                }
+
+                pub fn log(self: *const EntrySelf, comptime fmt_str: []const u8) void {
+                    self.logf(fmt_str, .{});
                 }
 
                 /// If `self.logger.sink == .noop`, this is guaranteed to succeed.
@@ -318,11 +368,11 @@ pub fn Logger(comptime scope_str: []const u8) type {
                         },
                     }
 
-                    const message: log.Message = .{
+                    const message: log_zig.Message = .{
                         .epoch_millis = clock.wallclock(.ms),
                         .scope = scope,
                         .fields = &self.entries,
-                        .msg = .fromFmt(.literal, fmt_str, &args),
+                        .msg = .fromFmt(fmt_str, &args),
                         .level = self.level,
                     };
 
@@ -344,7 +394,7 @@ pub fn Logger(comptime scope_str: []const u8) type {
                             // and subsequently panic.
                             const max_retries = 100;
 
-                            const writable: log.MessageStream.SwapBuffer.Writable =
+                            const writable: log_zig.MessageStream.SwapBuffer.Writable =
                                 for (0..max_retries) |_| {
                                     const writable = sb.getWritable();
                                     if (writable.slice.len >= encoded_len) break writable;
