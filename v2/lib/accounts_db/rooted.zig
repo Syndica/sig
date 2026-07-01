@@ -96,7 +96,7 @@ pub const Rooted = struct {
             };
             defer read_file.close();
 
-            logger.info().logf("loading from existing rooted db", .{});
+            logger.info().log("loading from existing rooted db");
             self.loadExisting(.from(logger), read_file) catch |err| switch (err) {
                 error.InvalidJournal => {
                     self.journal = .empty; // reset any modifications from loadExisting()

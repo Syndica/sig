@@ -105,6 +105,6 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         }
     }
 
-    logger.info().logf("snapshot service finished", .{});
+    logger.info().log("snapshot service finished");
     while (true) std.atomic.spinLoopHint();
 }
