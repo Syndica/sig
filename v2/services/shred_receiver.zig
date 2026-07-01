@@ -134,6 +134,10 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         pub fn reportReceiverPacketResult(self: Self, result: lib.shred.ReceiverPacketResult) void {
             _ = .{ self, result };
         }
+
+        pub fn reportChainConflict(self: Self, slot: lib.solana.Slot) void {
+            _ = .{ self, slot };
+        }
     };
 
     const Receiver = lib.shred.Receiver(Effects);
