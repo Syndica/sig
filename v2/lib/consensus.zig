@@ -33,49 +33,6 @@ const BlockInfo = struct {
 
 pub const SimpleConsensus = struct {
     pool: *const BlockPool,
-    state: [BlockPool.capacity]?BlockInfo,
-    last_finalized: BlockRef,
-
-    pub const init: SimpleConsensus = .{
-        .state = @splat(null),
-        .last_finalized = null,
-    };
-
-    pub fn update(self: *SimpleConsensus, execution_result: struct {
-        passed: bool,
-        block_ref: BlockRef,
-    }) ?BlockRef {
-        if (execution_result.block_ref == .null) return null;
-        const executed = self.state[execution_result.block_ref.index().?];
-        if (executed != null) return error.Overflow;
-        executed.* = .{
-            .slot = lib.replay.getBlockSlot(execution_result.block_ref),
-            .passed = execution_result.passed,
-            .finalized = false,
-        };
-
-        if (self.last_finalized == .null) return;
-
-        self.getBestEnd(self.last_finalized);
-
-        // var checkme = self.last_finalized.constPtr(self.pool).?;
-        // _ = checkme; // autofix
-
-        // return execution_result.block_ref;
-    }
-
-    pub fn getBestEnd(self: *SimpleConsensus, root: BlockRef) !void {
-        var checkme = root.constPtr(self.pool).?;
-        self.state[root.index().?];
-        while (checkme != null) : (checkme = root.constPtr(self.pool).?) {
-            checkme = checkme.sibling.constPtr(self.pool).?;
-            self.state[checkme.index().?];
-        }
-    }
-};
-
-pub const SimpleConsensus2 = struct {
-    pool: *const BlockPool,
     root: BlockRef,
     leaves: [max_forks]BlockRef,
     num_leaves: std.math.IntFittingRange(0, max_forks),
@@ -83,7 +40,7 @@ pub const SimpleConsensus2 = struct {
     const max_forks = 256;
     const finalization_depth: Slot = 32;
 
-    pub fn init(pool: *const BlockPool, root: BlockRef) SimpleConsensus2 {
+    pub fn init(pool: *const BlockPool, root: BlockRef) SimpleConsensus {
         var leaves: [max_forks]BlockRef = @splat(.null);
         leaves[0] = root;
         return .{
@@ -101,7 +58,7 @@ pub const SimpleConsensus2 = struct {
     // happen, and it won't with the current design. but the struct would be
     // more robust if it handled this correctly.
 
-    pub fn update(self: *SimpleConsensus2, execution_result: struct {
+    pub fn update(self: *SimpleConsensus, execution_result: struct {
         passed: bool,
         block_ref: BlockRef,
     }) ?BlockRef {
