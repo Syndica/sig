@@ -70,7 +70,7 @@ pub const SimpleConsensus = struct {
     /// The deepest block we have considered finalized so far. Acts as the
     /// local root of the section of tree we operate on. Supplied at
     /// construction time; never null.
-    last_finalized: BlockRef,
+    root: BlockRef,
 
     pub fn init(pool: *const BlockPool, root: BlockRef) SimpleConsensus {
         var state: [BlockPool.capacity]?BlockInfo = @splat(null);
@@ -82,7 +82,7 @@ pub const SimpleConsensus = struct {
         return .{
             .pool = pool,
             .state = state,
-            .last_finalized = root,
+            .root = root,
         };
     }
 
@@ -94,9 +94,9 @@ pub const SimpleConsensus = struct {
 
         const new_root = self.findFinalizable() orelse return null;
 
-        self.state[self.last_finalized.index()].?.finalized = false;
+        self.state[self.root.index()].?.finalized = false;
         self.state[new_root.index()].?.finalized = true;
-        self.last_finalized = new_root;
+        self.root = new_root;
         return new_root;
     }
 
@@ -104,9 +104,8 @@ pub const SimpleConsensus = struct {
     /// re-evaluated.
     fn record(self: *SimpleConsensus, block_ref: BlockRef, passed: bool) bool {
         const block = block_ref.constPtr(self.pool);
-        const root_slot = self.last_finalized.constPtr(self.pool).slot;
-        if (block.slot < root_slot) return false;
-        if (block_ref == self.last_finalized) return false;
+        const root_slot = self.root.constPtr(self.pool).slot;
+        if (block.slot <= root_slot) return false; // TODO log here, this unexpected
 
         self.state[block_ref.index()] = .{
             .slot = block.slot,
@@ -116,20 +115,20 @@ pub const SimpleConsensus = struct {
         return true;
     }
 
-    /// Descends from `last_finalized` along the unique passed fork and returns
+    /// Descends from `root` along the unique passed fork and returns
     /// the deepest block that can safely become the new local root, or null
     /// if no progress is possible. The block tree is walked directly via
     /// parent/child links - we never iterate the `state` side table.
     ///
     /// A new root is safe when:
-    ///   - There is a fork descended from `last_finalized` whose deepest
+    ///   - There is a fork descended from `root` whose deepest
     ///     passed slot is at least `finalization_depth` slots ahead of it.
-    ///   - At every branch point on the path from `last_finalized` to the new
+    ///   - At every branch point on the path from `root` to the new
     ///     root, only one child subtree contains a passed block in the last
     ///     `finalization_depth` slots before that deepest passed slot; all
     ///     other subtrees are quiet within that window.
     fn findFinalizable(self: *const SimpleConsensus) ?BlockRef {
-        const root_ref = self.last_finalized;
+        const root_ref = self.root;
         const root_slot = root_ref.constPtr(self.pool).slot;
         const tip_slot = self.maxPassedSlot(root_ref);
         if (tip_slot < root_slot + finalization_depth) return null;
@@ -191,7 +190,7 @@ pub const SimpleConsensus = struct {
     fn blockIsPassed(self: *const SimpleConsensus, block_ref: BlockRef) bool {
         const info = self.state[block_ref.index()] orelse return false;
         const slot = block_ref.constPtr(self.pool).slot;
-        if (info.slot != slot) return false;
+        if (info.slot != slot) return false; // TODO: this should be an error or panic
         return info.passed or info.finalized;
     }
 };
@@ -387,5 +386,5 @@ test "simple_consensus update returns the finalized block when ready" {
     try std.testing.expectEqual(@as(?BlockRef, null), consensus.update(b, true));
     // `tip`'s arrival pushes the deepest safe block (`a`) to be finalized.
     try std.testing.expectEqual(a, consensus.update(tip, true).?);
-    try std.testing.expectEqual(a, consensus.last_finalized);
+    try std.testing.expectEqual(a, consensus.root);
 }
