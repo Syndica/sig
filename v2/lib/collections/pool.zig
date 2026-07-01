@@ -143,13 +143,13 @@ pub fn SharedPool(Item: type, cap: usize) type {
 
         pub fn ptrToIndex(self: *const PoolSelf, item: *const Item) ItemId {
             const node: [*]const Node = @ptrCast(item);
-            const base: [*]const Node = self.buf().ptr;
+            const base: [*]const Node = self.constBuf().ptr;
 
             {
                 // range check
                 const item_addr: usize = @intFromPtr(item);
-                std.debug.assert(item_addr >= @intFromPtr(self.buf().ptr));
-                std.debug.assert(item_addr < @intFromPtr(self.buf().ptr + capacity));
+                std.debug.assert(item_addr >= @intFromPtr(base));
+                std.debug.assert(item_addr < @intFromPtr(base + capacity));
             }
 
             return @enumFromInt(node - base);

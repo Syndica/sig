@@ -18,22 +18,11 @@ pub const ReadWrite = services.simple_consensus.ReadWrite;
 const BlockPool = lib.replay.BlockPool;
 const BlockRef = lib.replay.BlockRef;
 
-var Leaves = [1024]BlockRef;
-
-const BlockInfo = struct {
-    /// Slot of the block this entry was recorded for. Used to detect stale
-    /// entries left behind when a pool index is recycled by a new block.
-    slot: Slot,
-    passed: bool,
-    /// Marks the current local root of the tree. Exactly one entry has this
-    /// set: the latest block we have considered finalized. Acts as the sentinel
-    /// that no slot earlier than this block is part of our tree.
-    finalized: bool,
-};
-
 pub const SimpleConsensus = struct {
     pool: *const BlockPool,
     root: BlockRef,
+    /// Sorted descending by slot: `leaves[0]` is the tip of the leading fork.
+    /// Only `leaves[0..num_leaves]` is valid; the tail is undefined.
     leaves: [max_forks]BlockRef,
     num_leaves: std.math.IntFittingRange(0, max_forks),
 
@@ -41,7 +30,7 @@ pub const SimpleConsensus = struct {
     const finalization_depth: Slot = 32;
 
     pub fn init(pool: *const BlockPool, root: BlockRef) SimpleConsensus {
-        var leaves: [max_forks]BlockRef = @splat(.null);
+        var leaves: [max_forks]BlockRef = undefined;
         leaves[0] = root;
         return .{
             .pool = pool,
@@ -62,41 +51,38 @@ pub const SimpleConsensus = struct {
         passed: bool,
         block_ref: BlockRef,
     }) ?BlockRef {
-        if (execution_result.block_ref == .null) return null; // TODO: this is an unexpected bad input, should log error
-        const executed = execution_result.block_ref.constPtr(self.pool).?;
+        const executed = execution_result.block_ref.constPtr(self.pool);
 
-        std.debug.assert(self.root != .null); // impossible if struct is used properly
         if (!execution_result.passed) return null; // TODO: log
 
         // add new result to our state
+        const parent_opt = executed.parent.opt();
         for (self.leaves[0..self.num_leaves]) |*leaf| {
-            if (leaf.* == executed.parent) {
-                leaf.* = execution_result.block_ref;
-                break;
+            if (parent_opt) |parent_id| {
+                if (leaf.* == parent_id) {
+                    leaf.* = execution_result.block_ref;
+                    break;
+                }
             }
         } else {
             // this is a new fork, it doesn't descend from a leaf.
             var node = executed;
-            while (node.slot > self.root.constPtr(self.pool).?.slot) {
-                if (node.parent.constPtr(self.pool)) |parent| {
-                    node = parent;
-                } else @panic("missing unrooted block in block tree");
+            while (node.slot > self.root.constPtr(self.pool).slot) {
+                const parent_id = node.parent.opt() orelse
+                    @panic("missing unrooted block in block tree");
+                node = parent_id.constPtr(self.pool);
             }
             if (self.pool.ptrToIndex(node) == self.root) {
                 // This is a new leaf that is a descendant of the current root,
                 // so we can add it to our leaves
                 if (self.num_leaves == max_forks) @panic("too many forks");
-                const index = std.sort.lowerBound(
-                    BlockRef,
-                    self.leaves[0..self.num_leaves],
-                    self.pool,
-                    struct {
-                        pub fn gt(pool: *const BlockPool, a: BlockRef, b: BlockRef) bool {
-                            // this is greater than to sort descending.
-                            return a.constPtr(pool).?.slot > b.constPtr(pool).?.slot;
-                        }
-                    }.gt,
-                );
+                // Descending by slot, so insert before the first leaf whose
+                // slot is not greater than the new leaf's slot. num_leaves
+                // is bounded (<= max_forks), so a linear scan is fine.
+                var index: usize = 0;
+                while (index < self.num_leaves and
+                    self.leaves[index].constPtr(self.pool).slot > executed.slot) : (index += 1)
+                {}
                 @memmove(
                     self.leaves[index + 1 .. self.num_leaves + 1],
                     self.leaves[index..self.num_leaves],
@@ -117,24 +103,23 @@ pub const SimpleConsensus = struct {
         // starting after this slot, with no other competing forks that had
         // blocks after this slot.
         const must_exceed_slot = if (self.num_leaves > 1)
-            self.leaves[1].constPtr(self.pool).?.slot
+            self.leaves[1].constPtr(self.pool).slot
         else
-            self.root.constPtr(self.pool).?.slot;
-        std.debug.assert(must_exceed_slot >= self.root.constPtr(self.pool).?.slot);
+            self.root.constPtr(self.pool).slot;
+        std.debug.assert(must_exceed_slot >= self.root.constPtr(self.pool).slot);
 
         // walk back 32 blocks from the first leaf
         var node_ref = self.leaves[0];
-        for (0..32) |_| {
-            node_ref = node_ref.constPtr(self.pool).?.parent;
-            if (node_ref == .null) {
+        for (0..finalization_depth) |_| {
+            node_ref = node_ref.constPtr(self.pool).parent.opt() orelse {
                 // TODO log, should only happen on startup
                 return null;
-            }
+            };
         }
 
         // if the slot of this node is greater than the must_exceed_slot, then
         // we have a new root.
-        if (node_ref.constPtr(self.pool).?.slot > must_exceed_slot) {
+        if (node_ref.constPtr(self.pool).slot > must_exceed_slot) {
             // TODO log new root
             self.root = node_ref;
             self.num_leaves = 1;
