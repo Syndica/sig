@@ -41,9 +41,9 @@ pub const AccountLookups = extern struct {
     }
 };
 
-pub const RuntimeMetadata = struct {
+pub const RuntimeMetadata = extern struct {
     slot: std.atomic.Value(u64),
-    blockhash_queue: struct {
+    blockhash_queue: extern struct {
         max_age: u64, // read after consuming all of hashes
         hashes: lib.ipc.Ring(256, Hash),
     },
