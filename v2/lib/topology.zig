@@ -106,7 +106,9 @@ pub fn Region(comptime T: type) type {
             // Without this, the struct body is `{ memfd: Memfd }` regardless of T and Zig
             // collapses every instantiation to the same type, which breaks `countRegionShares`
             // (and any other code that filters topology fields by `Region(X).Initialized`).
-            pub const _ = T;
+            comptime {
+                _ = &T;
+            }
         };
     };
 }
