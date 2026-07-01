@@ -383,12 +383,22 @@ fn executeShredParse(
     st.receiver.updateSlotRange(ctx.root_slot, maxShredSlot(ctx.root_slot));
     st.leader_schedule.base_slot = ctx.root_slot;
 
-    // Map proto bool flags into the Receiver's per-feature activation slot:
-    // `true` -> active at slot 0, `false` -> disabled (maxInt).
+    // Map proto bool flags into the Receiver's per-feature activation slot.
+    // Agave's `check_feature_activation` uses an epoch-delayed semantic:
+    // a feature activated at slot `s` only takes effect for shreds in
+    // epoch > epoch(s). Agave's harness uses `EpochSchedule::default()`,
+    // which sets `warmup = true`: epoch 0 is only `MINIMUM_SLOTS_PER_EPOCH`
+    // (= 32) slots long, and later epochs double in size up to
+    // `DEFAULT_SLOTS_PER_EPOCH`. A feature activated at slot 0 therefore
+    // first applies at the start of epoch 1, i.e. slot 32. The Receiver's
+    // check is a plain `shred.slot >= activation_slot`, so map proto
+    // `true` to slot 32 so sig's gate mirrors agave's epoch-aware check.
+    // `false` -> disabled (maxInt).
+    const MINIMUM_SLOTS_PER_EPOCH: Slot = 32;
     const features = ctx.features orelse pb.ShredFeatures{};
     st.receiver.features = .{
         .discard_unexpected_data_complete_shreds = if (features.discard_unexpected_data_complete_shreds)
-            0
+            MINIMUM_SLOTS_PER_EPOCH
         else
             std.math.maxInt(Slot),
     };
