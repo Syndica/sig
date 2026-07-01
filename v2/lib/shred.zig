@@ -226,8 +226,10 @@ pub const Shred = extern struct {
 
     const min_header_size = @offsetOf(Shred, "code_or_data") +
         @min(@sizeOf(DataHeader), @sizeOf(CodeHeader));
-    const min_size = 1203;
-    const max_size = 1228;
+    /// Wire packet length carrying a data shred.
+    pub const min_size = 1203;
+    /// Wire packet length carrying a code shred.
+    pub const max_size = 1228;
 
     // This might not be possible? But this definitely always works as an upper bound
     pub const data_payload_max = min_size - @sizeOf(DataHeader);
