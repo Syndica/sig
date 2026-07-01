@@ -3,6 +3,7 @@ comptime {
         _ = @import("accounts_db.zig");
         _ = @import("clock.zig");
         _ = @import("collections.zig");
+        _ = @import("consensus.zig");
         _ = @import("crypto.zig");
         _ = @import("exec.zig");
         _ = @import("fio.zig");

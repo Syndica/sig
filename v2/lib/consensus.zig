@@ -1,22 +1,9 @@
 const std = @import("std");
-const start = @import("start_service");
 const lib = @import("lib");
-const services = @import("services");
-const Slot = lib.solana.Slot;
-
-comptime {
-    _ = start;
-}
-
-pub const name = .simple_consensus;
-pub const panic = start.panic;
-pub const std_options = start.options;
-
-pub const ReadOnly = services.simple_consensus.ReadOnly;
-pub const ReadWrite = services.simple_consensus.ReadWrite;
 
 const BlockPool = lib.replay.BlockPool;
 const BlockRef = lib.replay.BlockRef;
+const Slot = lib.solana.Slot;
 
 pub const SimpleConsensus = struct {
     pool: *const BlockPool,
@@ -47,58 +34,63 @@ pub const SimpleConsensus = struct {
     // happen, and it won't with the current design. but the struct would be
     // more robust if it handled this correctly.
 
-    pub fn update(self: *SimpleConsensus, execution_result: struct {
-        passed: bool,
-        block_ref: BlockRef,
-    }) ?BlockRef {
-        const executed = execution_result.block_ref.constPtr(self.pool);
+    pub fn update(self: *SimpleConsensus, block_ref: BlockRef, passed: bool) ?BlockRef {
+        if (!self.record(block_ref, passed)) return null;
+        return self.finalize();
+    }
 
-        if (!execution_result.passed) return null; // TODO: log
+    /// Returns whether an update was made
+    fn record(self: *SimpleConsensus, block_ref: BlockRef, passed: bool) bool {
+        if (!passed) return false; // TODO: log
 
-        // add new result to our state
-        const parent_opt = executed.parent.opt();
+        const executed = block_ref.constPtr(self.pool);
+
+        // Check for common case: new block is a child of a leaf.
+        const parent = executed.parent.opt() orelse @panic("executed block must chain off another");
         for (self.leaves[0..self.num_leaves]) |*leaf| {
-            if (parent_opt) |parent_id| {
-                if (leaf.* == parent_id) {
-                    leaf.* = execution_result.block_ref;
-                    break;
-                }
-            }
-        } else {
-            // this is a new fork, it doesn't descend from a leaf.
-            var node = executed;
-            while (node.slot > self.root.constPtr(self.pool).slot) {
-                const parent_id = node.parent.opt() orelse
-                    @panic("missing unrooted block in block tree");
-                node = parent_id.constPtr(self.pool);
-            }
-            if (self.pool.ptrToIndex(node) == self.root) {
-                // This is a new leaf that is a descendant of the current root,
-                // so we can add it to our leaves
-                if (self.num_leaves == max_forks) @panic("too many forks");
-                // Descending by slot, so insert before the first leaf whose
-                // slot is not greater than the new leaf's slot. num_leaves
-                // is bounded (<= max_forks), so a linear scan is fine.
-                var index: usize = 0;
-                while (index < self.num_leaves and
-                    self.leaves[index].constPtr(self.pool).slot > executed.slot) : (index += 1)
-                {}
-                @memmove(
-                    self.leaves[index + 1 .. self.num_leaves + 1],
-                    self.leaves[index..self.num_leaves],
-                );
-                self.leaves[index] = execution_result.block_ref;
-                self.num_leaves += 1;
-            } else {
-                // This is not a descendant of the root so it is not a legal
-                // fork. TODO: log an error here - this is very unusual. it
-                // indicates either a bug or a misbehaving leader.
-                return null;
+            if (leaf.* == parent) {
+                leaf.* = block_ref;
+                return true;
             }
         }
 
-        // advance root
+        // this is a new fork, it doesn't descend from a leaf.
+        var node = executed;
+        while (node.slot > self.root.constPtr(self.pool).slot) {
+            const parent_id = node.parent.opt() orelse
+                @panic("missing unrooted block in block tree");
+            node = parent_id.constPtr(self.pool);
+        }
 
+        if (self.pool.ptrToIndex(node) != self.root) {
+            // This is not a descendant of the root so it is not a legal
+            // fork. TODO: log an error here - this is very unusual. it
+            // indicates either a bug or a misbehaving leader.
+            return false;
+        }
+        // This is a new leaf that is a descendant of the current root,
+        // so we can add it to our leaves
+
+        if (self.num_leaves == max_forks) @panic("too many forks");
+
+        // Descending by slot, so insert before the first leaf whose
+        // slot is not greater than the new leaf's slot. num_leaves
+        // is bounded (<= max_forks), so a linear scan is fine.
+        var index: usize = 0;
+        while (index < self.num_leaves and
+            self.leaves[index].constPtr(self.pool).slot > executed.slot)
+            index += 1;
+
+        @memmove(
+            self.leaves[index + 1 .. self.num_leaves + 1],
+            self.leaves[index..self.num_leaves],
+        );
+        self.leaves[index] = block_ref;
+        self.num_leaves += 1;
+        return true;
+    }
+
+    fn finalize(self: *SimpleConsensus) ?BlockRef {
         // a new root is not allowed unless there are 32 contiguous blocks,
         // starting after this slot, with no other competing forks that had
         // blocks after this slot.
@@ -130,7 +122,3 @@ pub const SimpleConsensus = struct {
         return null;
     }
 };
-
-// fn lap(ref: BlockRef) ?u8 {
-//     return @truncate(if (ref.index()) |i| i % BlockPool.capacity);
-// }
