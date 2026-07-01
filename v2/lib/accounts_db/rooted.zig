@@ -331,7 +331,7 @@ pub const Rooted = struct {
         logger: tel.Logger("Rooted.loadSnapshot"),
         snapshot_iter: anytype, // lib.solana.snapshot.SnapshotIter(anytype),
     ) !void {
-        try self.beginTransaction(.from(logger), snapshot_iter.manifest.bank_fields.slot);
+        try self.beginTransaction(.from(logger), snapshot_iter.manifest.?.bank_fields.slot);
 
         var timer = try std.time.Timer.start();
         var n_puts: usize = 0;
