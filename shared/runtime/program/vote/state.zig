@@ -700,12 +700,17 @@ pub const CircBufV1 = struct {
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v6.0.0/vote-interface/src/state/vote_state_versions.rs#L18
 /// [SIMD-0185] v4 added with discriminant 3.
 ///
-/// In `solana-vote-interface` >= 6.0 the variant-0 slot was repurposed from the
-/// legacy `V0_23_5` layout into a zero-sized `Uninitialized` marker. Bincode
-/// auto-derived deserialization therefore succeeds on a leading `u32` tag of
-/// 0 (consuming only those 4 bytes), letting callers such as
-/// `initialize_account` continue into the signer check rather than failing
-/// during deserialization of a stale V0_23_5 body.
+/// Variant 0 is a zero-sized `uninitialized` marker, mirroring how
+/// `solana-vote-interface` >= 6.0 repurposed the slot that the legacy
+/// `V0_23_5` layout used to occupy.
+///
+/// This note describes *Sig's* bincode decoding of this union, not agave's
+/// on-disk wire behaviour generally: decoding a leading `u32` tag of 0 here
+/// succeeds as `.uninitialized` (consuming only those 4 bytes), which is what
+/// the `initialize_account` path relies on, it decodes, then checks
+/// `isUninitialized` and proceeds to the signer check. The V4-target read path
+/// does *not* treat tag 0 leniently: see `getVoteStateChecked`, which rejects
+/// it with `InvalidAccountData`, matching agave's `VoteStateV4::deserialize_into_ptr`.
 pub const VoteStateVersions = union(enum(u32)) {
     uninitialized,
     v1_14_11: VoteState1_14_11,
@@ -745,12 +750,15 @@ pub const VoteStateVersions = union(enum(u32)) {
             VoteStateV4.isCorrectSizeAndInitialized(data);
     }
 
-    /// Takes ownership of the contained vote state and will either free it or return it.
+    /// Conversion engine (low level): turn an on-disk `VoteStateVersions` into the concrete
+    /// `VoteStateV4` struct. Callers wanting the unified wrapper go through `convertToVoteState`;
+    /// callers wanting the bare struct (e.g. RPC account parsing in `parse_vote.zig`) call this
+    /// directly. Takes ownership of the contained vote state and will either free it or return it.
     ///
     /// [SIMD-0185] Returns VoteStateV4 with default values for new fields when converting from older versions.
     /// vote_pubkey: when provided, used as inflation_rewards_collector default for old versions.
     ///
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
+    /// [agave] Analogous to [try_convert_to_vote_state_v4](https://github.com/anza-xyz/agave/blob/v4.1/programs/vote/src/vote_state/handler.rs#L624)
     pub fn convertToV4(
         self: VoteStateVersions,
         /// must be the allocator used to allocate self
@@ -793,82 +801,32 @@ pub const VoteStateVersions = union(enum(u32)) {
             },
             .v3 => |state| {
                 defer self.deinit(allocator);
-
-                var authorized_voters = try state.voters.clone(allocator);
-                errdefer authorized_voters.deinit(allocator);
-
-                var votes = try state.votes.clone(allocator);
-                errdefer votes.deinit(allocator);
-
-                var epoch_credits = try state.epoch_credits.clone(allocator);
-                errdefer epoch_credits.deinit(allocator);
-
-                return .{
-                    .node_pubkey = state.node_pubkey,
-                    .withdrawer = state.withdrawer,
-                    .inflation_rewards_collector = default_collector,
-                    .block_revenue_collector = state.node_pubkey,
-                    .inflation_rewards_commission_bps = @as(u16, state.commission) * 100,
-                    .block_revenue_commission_bps = 10_000,
-                    .pending_delegator_rewards = 0,
-                    .bls_pubkey_compressed = null,
-                    .votes = votes,
-                    .root_slot = state.root_slot,
-                    .authorized_voters = authorized_voters,
-                    .epoch_credits = epoch_credits,
-                    .last_timestamp = state.last_timestamp,
-                };
+                // Single-sourced with VoteStateV4.fromVoteStateV3 so the SIMD-0185
+                // V3->V4 default policy (collectors, commission_bps, etc.) lives in
+                // one place. fromVoteStateV3 borrows `state` (clones its owned data);
+                // the deferred deinit frees the original.
+                return try VoteStateV4.fromVoteStateV3(allocator, state, default_collector);
             },
             .v4 => |state| return state,
         }
     }
 
-    /// Convert to the unified VoteState union. Old versions (v0, v1) are upgraded:
-    /// if target is v4, they convert to VoteStateV4; if target is v3, they convert to VoteStateV3.
-    /// The `target_version` determines which union variant the result will be when converting
-    /// from old formats. Already-v3/v4 states map directly to their respective union variant.
+    /// Target constructor (high level): build the unified `VoteState` — the in-memory target,
+    /// always V4 per Agave v4.1 — from an on-disk `VoteStateVersions`. Delegates the actual
+    /// conversion to `convertToV4`, then wraps the result in the single-variant `VoteState`
+    /// union. This is the entry point for the runtime consumers (vote/stake programs, stakes
+    /// cache, bank, replay) that operate through `VoteState`'s version-agnostic accessor/dispatch
+    /// API; code wanting the bare `VoteStateV4` struct calls `convertToV4` instead. Uninitialized
+    /// accounts surface `UninitializedAccount` (via `convertToV4`).
+    ///
+    /// [agave] `try_convert_to_vote_state_v4` + `VoteStateHandler::new_v4`,
+    /// programs/vote/src/vote_state/handler.rs (v4.1)
     pub fn convertToVoteState(
         self: VoteStateVersions,
         allocator: Allocator,
         vote_pubkey: ?Pubkey,
-        target_v4: bool,
     ) !VoteState {
-        if (target_v4) {
-            return .{ .v4 = try self.convertToV4(allocator, vote_pubkey) };
-        }
-        // target is v3: convert old versions to v3, v4 stays v4
-        switch (self) {
-            .v3 => |state| return .{ .v3 = state },
-            .v4 => |state| return .{ .v4 = state },
-            .uninitialized => return InstructionError.UninitializedAccount,
-            .v1_14_11 => |state| {
-                defer self.deinit(allocator);
-
-                const authorized_voters = try state.voters.clone(allocator);
-                errdefer authorized_voters.deinit(allocator);
-
-                const votes_slice = try VoteStateVersions.landedVotesFromLockouts(
-                    allocator,
-                    state.votes.items,
-                );
-                errdefer allocator.free(votes_slice);
-
-                const epoch_credits = try state.epoch_credits.clone(allocator);
-                errdefer epoch_credits.deinit(allocator);
-
-                return .{ .v3 = .{
-                    .node_pubkey = state.node_pubkey,
-                    .withdrawer = state.withdrawer,
-                    .commission = state.commission,
-                    .votes = .fromOwnedSlice(votes_slice),
-                    .root_slot = state.root_slot,
-                    .voters = authorized_voters,
-                    .prior_voters = state.prior_voters,
-                    .epoch_credits = epoch_credits,
-                    .last_timestamp = state.last_timestamp,
-                } };
-            },
-        }
+        return .{ .v4 = try self.convertToV4(allocator, vote_pubkey) };
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v6.0.0/vote-interface/src/state/vote_state_versions.rs#L117
@@ -883,36 +841,31 @@ pub const VoteStateVersions = union(enum(u32)) {
     }
 };
 
-/// Unified vote state that wraps either VoteStateV3 or VoteStateV4, centralizing
-/// version-dependent dispatch so callers don't need to track `use_v4` / `target_version`.
+/// Current target vote state (Agave `TargetVoteState`). Always V4: old on-disk versions are
+/// converted to V4 on load (Agave v4.1). Kept as a single-variant union so version-dependent
+/// dispatch stays centralized and future versions can be added here.
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1/programs/vote/src/vote_state/handler.rs#L42
 pub const VoteState = union(enum(u32)) {
-    v3: VoteStateV3 = 2,
     v4: VoteStateV4 = 3,
 
     // ── Construction / lifecycle ──────────────────────────────────────
 
     pub fn deinit(self: *const VoteState, allocator: Allocator) void {
         switch (self.*) {
-            inline .v3, .v4 => |s| s.deinit(allocator),
+            .v4 => |s| s.deinit(allocator),
         }
     }
 
     pub fn clone(self: VoteState, allocator: Allocator) Allocator.Error!VoteState {
         return switch (self) {
-            .v3 => |s| .{ .v3 = try s.clone(allocator) },
             .v4 => |s| .{ .v4 = try s.clone(allocator) },
         };
     }
 
     pub fn equals(self: *const VoteState, other: *const VoteState) bool {
         return switch (self.*) {
-            .v3 => |*s| switch (other.*) {
-                .v3 => |*o| s.equals(o),
-                .v4 => false,
-            },
             .v4 => |*s| switch (other.*) {
                 .v4 => |*o| s.equals(o),
-                .v3 => false,
             },
         };
     }
@@ -923,100 +876,92 @@ pub const VoteState = union(enum(u32)) {
 
     pub fn nodePubkey(self: *const VoteState) *const Pubkey {
         return switch (self.*) {
-            .v3 => |*s| &s.node_pubkey,
             .v4 => |*s| &s.node_pubkey,
         };
     }
 
     pub fn nodePubkeyMut(self: *VoteState) *Pubkey {
         return switch (self.*) {
-            .v3 => |*s| &s.node_pubkey,
             .v4 => |*s| &s.node_pubkey,
         };
     }
 
     pub fn withdrawerKey(self: *const VoteState) *const Pubkey {
         return switch (self.*) {
-            .v3 => |*s| &s.withdrawer,
             .v4 => |*s| &s.withdrawer,
         };
     }
 
     pub fn withdrawerMut(self: *VoteState) *Pubkey {
         return switch (self.*) {
-            .v3 => |*s| &s.withdrawer,
             .v4 => |*s| &s.withdrawer,
         };
     }
 
     pub fn commission(self: *const VoteState) u8 {
         return switch (self.*) {
-            .v3 => |s| s.commission,
             .v4 => |*s| s.commission(),
         };
     }
 
-    /// Set commission. V3: sets field directly. V4: sets inflation_rewards_commission_bps.
+    /// Set commission, stored as `inflation_rewards_commission_bps` (basis points).
     pub fn setCommission(self: *VoteState, commission_pct: u8) void {
         switch (self.*) {
-            .v3 => |*s| s.commission = commission_pct,
             .v4 => |*s| s.inflation_rewards_commission_bps = @as(u16, commission_pct) * 100,
         }
     }
 
     pub fn votes(self: *const VoteState) []const LandedVote {
         return switch (self.*) {
-            inline .v3, .v4 => |s| s.votes.items,
+            .v4 => |s| s.votes.items,
         };
     }
 
     pub fn votesMut(self: *VoteState) *std.ArrayListUnmanaged(LandedVote) {
         return switch (self.*) {
-            inline .v3, .v4 => |*s| &s.votes,
+            .v4 => |*s| &s.votes,
         };
     }
 
     pub fn rootSlot(self: *const VoteState) ?Slot {
         return switch (self.*) {
-            inline .v3, .v4 => |s| s.root_slot,
+            .v4 => |s| s.root_slot,
         };
     }
 
     pub fn rootSlotMut(self: *VoteState) *?Slot {
         return switch (self.*) {
-            inline .v3, .v4 => |*s| &s.root_slot,
+            .v4 => |*s| &s.root_slot,
         };
     }
 
     pub fn authorizedVoters(self: *const VoteState) *const AuthorizedVoters {
         return switch (self.*) {
-            .v3 => |*s| &s.voters,
             .v4 => |*s| &s.authorized_voters,
         };
     }
 
     pub fn authorizedVotersMut(self: *VoteState) *AuthorizedVoters {
         return switch (self.*) {
-            .v3 => |*s| &s.voters,
             .v4 => |*s| &s.authorized_voters,
         };
     }
 
     pub fn epochCreditsList(self: *const VoteState) []const EpochCredit {
         return switch (self.*) {
-            inline .v3, .v4 => |s| s.epoch_credits.items,
+            .v4 => |s| s.epoch_credits.items,
         };
     }
 
     pub fn epochCreditsListMut(self: *VoteState) *std.ArrayListUnmanaged(EpochCredit) {
         return switch (self.*) {
-            inline .v3, .v4 => |*s| &s.epoch_credits,
+            .v4 => |*s| &s.epoch_credits,
         };
     }
 
     pub fn lastTimestamp(self: *const VoteState) BlockTimestamp {
         return switch (self.*) {
-            inline .v3, .v4 => |s| s.last_timestamp,
+            .v4 => |s| s.last_timestamp,
         };
     }
 
@@ -1024,14 +969,12 @@ pub const VoteState = union(enum(u32)) {
 
     pub fn inflationRewardsCommissionBps(self: *const VoteState) ?u16 {
         return switch (self.*) {
-            .v3 => null,
             .v4 => |s| s.inflation_rewards_commission_bps,
         };
     }
 
     pub fn setInflationRewardsCommissionBps(self: *VoteState, bps: u16) void {
         switch (self.*) {
-            .v3 => {},
             .v4 => |*s| s.inflation_rewards_commission_bps = bps,
         }
     }
@@ -1045,60 +988,51 @@ pub const VoteState = union(enum(u32)) {
 
     pub fn blockRevenueCommissionBps(self: *const VoteState) ?u16 {
         return switch (self.*) {
-            .v3 => null,
             .v4 => |s| s.block_revenue_commission_bps,
         };
     }
 
     pub fn setBlockRevenueCommissionBps(self: *VoteState, bps: u16) void {
         switch (self.*) {
-            .v3 => {},
             .v4 => |*s| s.block_revenue_commission_bps = bps,
         }
     }
 
     pub fn pendingDelegatorRewards(self: *const VoteState) u64 {
         return switch (self.*) {
-            .v3 => 0,
             .v4 => |s| s.pending_delegator_rewards,
         };
     }
 
     pub fn blockRevenueCollector(self: *const VoteState) ?*const Pubkey {
         return switch (self.*) {
-            .v3 => null,
             .v4 => |*s| &s.block_revenue_collector,
         };
     }
 
     pub fn blockRevenueCollectorMut(self: *VoteState) ?*Pubkey {
         return switch (self.*) {
-            .v3 => null,
             .v4 => |*s| &s.block_revenue_collector,
         };
     }
 
     pub fn inflationRewardsCollector(self: *const VoteState) ?*const Pubkey {
         return switch (self.*) {
-            .v3 => null,
             .v4 => |*s| &s.inflation_rewards_collector,
         };
     }
 
     pub fn inflationRewardsCollectorMut(self: *VoteState) ?*Pubkey {
         return switch (self.*) {
-            .v3 => null,
             .v4 => |*s| &s.inflation_rewards_collector,
         };
     }
 
-    /// Compressed BLS pubkey if one is registered on this account, else null.
-    /// V3 accounts never carry a BLS pubkey (SIMD-0387 lives on V4).
+    /// Compressed BLS pubkey if one is registered on this account, else null (SIMD-0387).
     pub fn blsPubkeyCompressed(
         self: *const VoteState,
     ) ?*const [BLS_PUBLIC_KEY_COMPRESSED_SIZE]u8 {
         return switch (self.*) {
-            .v3 => null,
             .v4 => |*s| if (s.bls_pubkey_compressed) |*pk| pk else null,
         };
     }
@@ -1112,38 +1046,37 @@ pub const VoteState = union(enum(u32)) {
 
     pub fn isUninitialized(self: VoteState) bool {
         return switch (self) {
-            .v3 => |s| s.isUninitialized(),
             .v4 => |s| s.isUninitialized(),
         };
     }
 
     pub fn epochCredits(self: *const VoteState) u64 {
         return switch (self.*) {
-            inline .v3, .v4 => |s| s.epochCredits(),
+            .v4 => |s| s.epochCredits(),
         };
     }
 
     pub fn lastLockout(self: *const VoteState) ?Lockout {
         return switch (self.*) {
-            inline .v3, .v4 => |s| s.lastLockout(),
+            .v4 => |s| s.lastLockout(),
         };
     }
 
     pub fn lastVotedSlot(self: *const VoteState) ?Slot {
         return switch (self.*) {
-            inline .v3, .v4 => |s| s.lastVotedSlot(),
+            .v4 => |s| s.lastVotedSlot(),
         };
     }
 
     pub fn creditsForVoteAtIndex(self: *const VoteState, index: usize) u64 {
         return switch (self.*) {
-            inline .v3, .v4 => |s| s.creditsForVoteAtIndex(index),
+            .v4 => |s| s.creditsForVoteAtIndex(index),
         };
     }
 
     pub fn getCredits(self: *const VoteState) u64 {
         return switch (self.*) {
-            inline .v3, .v4 => |s| s.getCredits(),
+            .v4 => |s| s.getCredits(),
         };
     }
 
@@ -1154,31 +1087,31 @@ pub const VoteState = union(enum(u32)) {
         credits: u64,
     ) error{OutOfMemory}!void {
         switch (self.*) {
-            inline .v3, .v4 => |*s| try s.incrementCredits(allocator, epoch, credits),
+            .v4 => |*s| try s.incrementCredits(allocator, epoch, credits),
         }
     }
 
     pub fn containsSlot(self: *const VoteState, candidate_slot: Slot) bool {
         return switch (self.*) {
-            inline .v3, .v4 => |s| s.containsSlot(candidate_slot),
+            .v4 => |s| s.containsSlot(candidate_slot),
         };
     }
 
     pub fn processTimestamp(self: *VoteState, slot: Slot, timestamp: i64) ?VoteError {
         return switch (self.*) {
-            inline .v3, .v4 => |*s| s.processTimestamp(slot, timestamp),
+            .v4 => |*s| s.processTimestamp(slot, timestamp),
         };
     }
 
     pub fn popExpiredVotes(self: *VoteState, next_vote_slot: Slot) void {
         switch (self.*) {
-            inline .v3, .v4 => |s| s.popExpiredVotes(next_vote_slot),
+            .v4 => |s| s.popExpiredVotes(next_vote_slot),
         }
     }
 
     pub fn doubleLockouts(self: *VoteState) !void {
         switch (self.*) {
-            inline .v3, .v4 => |s| try s.doubleLockouts(),
+            .v4 => |s| try s.doubleLockouts(),
         }
     }
 
@@ -1190,7 +1123,7 @@ pub const VoteState = union(enum(u32)) {
         current_slot: Slot,
     ) !void {
         switch (self.*) {
-            inline .v3, .v4 => |s| try s.processNextVoteSlot(
+            .v4 => |s| try s.processNextVoteSlot(
                 allocator,
                 next_vote_slot,
                 epoch,
@@ -1200,9 +1133,7 @@ pub const VoteState = union(enum(u32)) {
     }
 
     /// Dispatch `setNewAuthorizedVoter`. The optional `maybe_bls_pubkey`
-    /// only takes effect on `VoteStateV4` (SIMD-0387); passing it through
-    /// while the underlying state is still V3 is a programming error
-    /// (the BLS variants are only reachable through the V4 path).
+    /// takes effect on `VoteStateV4` (SIMD-0387).
     pub fn setNewAuthorizedVoter(
         self: *VoteState,
         allocator: Allocator,
@@ -1211,14 +1142,6 @@ pub const VoteState = union(enum(u32)) {
         maybe_bls_pubkey: ?*const [48]u8,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            .v3 => |*s| blk: {
-                std.debug.assert(maybe_bls_pubkey == null);
-                break :blk try s.setNewAuthorizedVoter(
-                    allocator,
-                    new_authorized_voter,
-                    target_epoch,
-                );
-            },
             .v4 => |*s| try s.setNewAuthorizedVoter(
                 allocator,
                 new_authorized_voter,
@@ -1228,14 +1151,13 @@ pub const VoteState = union(enum(u32)) {
         };
     }
 
-    /// Dispatch getAndUpdateAuthorizedVoter. V3 always uses V3 purge; V4 always uses V4 purge.
+    /// Dispatch getAndUpdateAuthorizedVoter (V4 purge).
     pub fn getAndUpdateAuthorizedVoter(
         self: *VoteState,
         allocator: Allocator,
         current_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!Pubkey {
         return switch (self.*) {
-            .v3 => |*s| try s.getAndUpdateAuthorizedVoter(allocator, current_epoch),
             .v4 => |*s| try s.getAndUpdateAuthorizedVoter(allocator, current_epoch, true),
         };
     }
@@ -1247,7 +1169,7 @@ pub const VoteState = union(enum(u32)) {
         slot_hashes: *const SlotHashes,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline .v3, .v4 => |s| try s.checkSlotsAreValid(vote, recent_vote_slots, slot_hashes),
+            .v4 => |s| try s.checkSlotsAreValid(vote, recent_vote_slots, slot_hashes),
         };
     }
 
@@ -1260,7 +1182,7 @@ pub const VoteState = union(enum(u32)) {
         current_slot: Slot,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline .v3, .v4 => |*s| try s.processVote(
+            .v4 => |*s| try s.processVote(
                 allocator,
                 vote,
                 slot_hashes,
@@ -1280,7 +1202,7 @@ pub const VoteState = union(enum(u32)) {
         current_slot: Slot,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline .v3, .v4 => |s| try s.processVoteUnfiltered(
+            .v4 => |s| try s.processVoteUnfiltered(
                 allocator,
                 recent_vote_slots,
                 vote,
@@ -1300,7 +1222,7 @@ pub const VoteState = union(enum(u32)) {
         vote_state_update: *VoteStateUpdate,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline .v3, .v4 => |*s| try s.processVoteStateUpdate(
+            .v4 => |*s| try s.processVoteStateUpdate(
                 allocator,
                 slot_hashes,
                 epoch,
@@ -1319,7 +1241,7 @@ pub const VoteState = union(enum(u32)) {
         tower_sync: *TowerSync,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline .v3, .v4 => |*s| try s.processTowerSync(
+            .v4 => |*s| try s.processTowerSync(
                 allocator,
                 slot_hashes,
                 epoch,
@@ -1337,7 +1259,7 @@ pub const VoteState = union(enum(u32)) {
         slot_hashes: *const SlotHashes,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline .v3, .v4 => |s| try s.checkAndFilterProposedVoteState(
+            .v4 => |s| try s.checkAndFilterProposedVoteState(
                 proposed_lockouts,
                 proposed_root,
                 proposed_hash,
@@ -1356,7 +1278,7 @@ pub const VoteState = union(enum(u32)) {
         current_slot: Slot,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         return switch (self.*) {
-            inline .v3, .v4 => |s| try s.processNewVoteState(
+            .v4 => |s| try s.processNewVoteState(
                 allocator,
                 new_state,
                 new_root,
@@ -1550,32 +1472,6 @@ pub const VoteStateV3 = struct {
             .prior_voters = self.prior_voters,
             .epoch_credits = try self.epoch_credits.clone(allocator),
             .last_timestamp = self.last_timestamp,
-        };
-    }
-
-    /// [SIMD-0185] Build VoteStateV3 from VoteStateV4 for serializing as .v3 when feature is off.
-    /// If `prior_voters` is provided, it will be used directly; otherwise an empty CircBuf is used.
-    pub fn fromVoteStateV4(
-        allocator: Allocator,
-        v4: VoteStateV4,
-        prior_voters: ?CircBufV1,
-    ) Allocator.Error!VoteStateV3 {
-        var votes = try v4.votes.clone(allocator);
-        errdefer votes.deinit(allocator);
-
-        const voters = try v4.authorized_voters.clone(allocator);
-        errdefer voters.deinit(allocator);
-
-        return .{
-            .node_pubkey = v4.node_pubkey,
-            .withdrawer = v4.withdrawer,
-            .commission = v4.commission(),
-            .votes = votes,
-            .root_slot = v4.root_slot,
-            .voters = voters,
-            .prior_voters = prior_voters orelse CircBufV1.init(),
-            .epoch_credits = try v4.epoch_credits.clone(allocator),
-            .last_timestamp = v4.last_timestamp,
         };
     }
 
@@ -5954,77 +5850,6 @@ fn recentVotes(
 
 // ── VoteState union tests ──────────────────────────────────────────────
 
-test "state.VoteState v3 field accessors" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-    const random = prng.random();
-
-    const node_pk = Pubkey.initRandom(random);
-    const voter_pk = Pubkey.initRandom(random);
-    const withdrawer_pk = Pubkey.initRandom(random);
-    const commission_val: u8 = 50;
-    const epoch: Epoch = 7;
-
-    var vs: VoteState = .{ .v3 = try VoteStateV3.init(
-        allocator,
-        node_pk,
-        voter_pk,
-        withdrawer_pk,
-        commission_val,
-        epoch,
-    ) };
-    defer vs.deinit(allocator);
-
-    // Version queries
-    try std.testing.expect(vs == .v3);
-    try std.testing.expect(vs != .v4);
-
-    // Field accessors
-    try std.testing.expect(vs.nodePubkey().equals(&node_pk));
-    try std.testing.expect(vs.withdrawerKey().equals(&withdrawer_pk));
-    try std.testing.expectEqual(commission_val, vs.commission());
-
-    // Root slot
-    try std.testing.expectEqual(null, vs.rootSlot());
-    vs.rootSlotMut().* = 42;
-    try std.testing.expectEqual(42, vs.rootSlot());
-
-    // Last timestamp
-    try std.testing.expectEqual(0, vs.lastTimestamp().slot);
-
-    // isUninitialized
-    try std.testing.expect(!vs.isUninitialized());
-
-    // Votes
-    try std.testing.expectEqual(0, vs.votes().len);
-
-    // Epoch credits
-    try std.testing.expectEqual(0, vs.epochCreditsList().len);
-
-    // V4-specific accessors should return null for v3
-    try std.testing.expectEqual(null, vs.inflationRewardsCommissionBps());
-    try std.testing.expectEqual(null, vs.blockRevenueCollector());
-    try std.testing.expectEqual(null, vs.blockRevenueCollectorMut());
-    try std.testing.expectEqual(null, vs.inflationRewardsCollector());
-
-    // setInflationRewardsCommissionBps is a no-op on v3
-    vs.setInflationRewardsCommissionBps(5000);
-    try std.testing.expectEqual(null, vs.inflationRewardsCommissionBps());
-
-    // Mutable accessors
-    vs.nodePubkeyMut().* = Pubkey.ZEROES;
-    try std.testing.expect(vs.nodePubkey().equals(&Pubkey.ZEROES));
-
-    vs.withdrawerMut().* = Pubkey.ZEROES;
-    try std.testing.expect(vs.withdrawerKey().equals(&Pubkey.ZEROES));
-
-    // setCommission on v3
-    vs.setCommission(75);
-    try std.testing.expectEqual(75, vs.commission());
-
-    // Version-specific behavior: v3 should never expose v4-only accessors.
-}
-
 test "state.VoteState v4 field accessors" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -6050,7 +5875,6 @@ test "state.VoteState v4 field accessors" {
 
     // Version queries
     try std.testing.expect(vs == .v4);
-    try std.testing.expect(vs != .v3);
 
     // Field accessors
     try std.testing.expect(vs.nodePubkey().equals(&node_pk));
@@ -6115,25 +5939,6 @@ test "state.VoteState.clone and equals" {
     const withdrawer_pk = Pubkey.initRandom(random);
     const vote_pk = Pubkey.initRandom(random);
 
-    // Test clone and equals for V3
-    {
-        var vs3: VoteState = .{ .v3 = try VoteStateV3.init(
-            allocator,
-            node_pk,
-            voter_pk,
-            withdrawer_pk,
-            10,
-            0,
-        ) };
-        defer vs3.deinit(allocator);
-
-        var clone3 = try vs3.clone(allocator);
-        defer clone3.deinit(allocator);
-
-        try std.testing.expect(vs3.equals(&clone3));
-        try std.testing.expect(clone3.equals(&vs3));
-    }
-
     // Test clone and equals for V4
     {
         var vs4: VoteState = .{ .v4 = try VoteStateV4.init(
@@ -6153,58 +5958,14 @@ test "state.VoteState.clone and equals" {
         try std.testing.expect(vs4.equals(&clone4));
         try std.testing.expect(clone4.equals(&vs4));
     }
-
-    // Test cross-version equals returns false
-    {
-        var vs3: VoteState = .{ .v3 = try VoteStateV3.init(
-            allocator,
-            node_pk,
-            voter_pk,
-            withdrawer_pk,
-            10,
-            0,
-        ) };
-        defer vs3.deinit(allocator);
-
-        var vs4: VoteState = .{ .v4 = try VoteStateV4.init(
-            allocator,
-            node_pk,
-            voter_pk,
-            withdrawer_pk,
-            10,
-            0,
-            vote_pk,
-        ) };
-        defer vs4.deinit(allocator);
-
-        try std.testing.expect(!vs3.equals(&vs4));
-        try std.testing.expect(!vs4.equals(&vs3));
-    }
 }
 
-test "state.VoteState.authorizedVoters v3 vs v4" {
+test "state.VoteState.authorizedVoters" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
     const voter_pk = Pubkey.initRandom(random);
-
-    // V3: authorized_voters stored as `voters`
-    {
-        var vs3: VoteState = .{ .v3 = try VoteStateV3.init(
-            allocator,
-            Pubkey.ZEROES,
-            voter_pk,
-            Pubkey.ZEROES,
-            0,
-            5,
-        ) };
-        defer vs3.deinit(allocator);
-
-        var av = vs3.authorizedVotersMut();
-        try std.testing.expectEqual(1, av.count());
-        try std.testing.expect(av.getAuthorizedVoter(5).?.equals(&voter_pk));
-    }
 
     // V4: authorized_voters stored as `authorized_voters`
     {
@@ -6227,33 +5988,6 @@ test "state.VoteState.authorizedVoters v3 vs v4" {
 
 test "state.VoteState.votesMut and epochCreditsListMut" {
     const allocator = std.testing.allocator;
-
-    // V3
-    {
-        var vs3: VoteState = .{ .v3 = try VoteStateV3.init(
-            allocator,
-            Pubkey.ZEROES,
-            Pubkey.ZEROES,
-            Pubkey.ZEROES,
-            0,
-            0,
-        ) };
-        defer vs3.deinit(allocator);
-
-        try vs3.votesMut().append(allocator, .{
-            .latency = 0,
-            .lockout = .{ .slot = 42, .confirmation_count = 1 },
-        });
-        try std.testing.expectEqual(1, vs3.votes().len);
-        try std.testing.expectEqual(42, vs3.votes()[0].lockout.slot);
-
-        try vs3.epochCreditsListMut().append(allocator, .{
-            .epoch = 1,
-            .credits = 100,
-            .prev_credits = 0,
-        });
-        try std.testing.expectEqual(1, vs3.epochCreditsList().len);
-    }
 
     // V4
     {
@@ -6287,72 +6021,36 @@ test "state.VoteState.votesMut and epochCreditsListMut" {
 test "state.VoteState.delegating methods" {
     const allocator = std.testing.allocator;
 
-    // V3
-    {
-        var vs3: VoteState = .{ .v3 = try VoteStateV3.init(
-            allocator,
-            Pubkey.ZEROES,
-            Pubkey.ZEROES,
-            Pubkey.ZEROES,
-            0,
-            0,
-        ) };
-        defer vs3.deinit(allocator);
-
-        // Empty state
-        try std.testing.expectEqual(null, vs3.lastVotedSlot());
-        try std.testing.expectEqual(null, vs3.lastLockout());
-        try std.testing.expect(!vs3.containsSlot(0));
-        try std.testing.expectEqual(0, vs3.epochCredits());
-        try std.testing.expectEqual(0, vs3.getCredits());
-
-        // Add a vote
-        try vs3.votesMut().append(allocator, .{
-            .latency = 0,
-            .lockout = .{ .slot = 10, .confirmation_count = 1 },
-        });
-        try std.testing.expectEqual(10, vs3.lastVotedSlot());
-        try std.testing.expectEqual(10, vs3.lastLockout().?.slot);
-        try std.testing.expect(vs3.containsSlot(10));
-        try std.testing.expect(!vs3.containsSlot(11));
-
-        // creditsForVoteAtIndex: latency=0 means legacy vote, returns 1 credit
-        try std.testing.expectEqual(1, vs3.creditsForVoteAtIndex(0));
-
-        // incrementCredits
-        try vs3.incrementCredits(allocator, 1, 5);
-        try std.testing.expectEqual(5, vs3.getCredits());
-    }
-
     // Regression: unsorted vote slices must match Rust's `binary_search_by`.
     // See `rustBinarySearchSlot` doc comment. The case `[5, 3, 1]` searching
     // for `3` is the minimal divergence between Rust's algorithm and Zig's
     // `std.sort.binarySearch`; Rust reports miss even though 3 is present.
     {
-        var vs3: VoteState = .{ .v3 = try VoteStateV3.init(
+        var vs: VoteState = .{ .v4 = try VoteStateV4.init(
             allocator,
             Pubkey.ZEROES,
             Pubkey.ZEROES,
             Pubkey.ZEROES,
             0,
             0,
+            Pubkey.ZEROES,
         ) };
-        defer vs3.deinit(allocator);
-        try vs3.votesMut().append(allocator, .{
+        defer vs.deinit(allocator);
+        try vs.votesMut().append(allocator, .{
             .latency = 0,
             .lockout = .{ .slot = 5, .confirmation_count = 1 },
         });
-        try vs3.votesMut().append(allocator, .{
+        try vs.votesMut().append(allocator, .{
             .latency = 0,
             .lockout = .{ .slot = 3, .confirmation_count = 1 },
         });
-        try vs3.votesMut().append(allocator, .{
+        try vs.votesMut().append(allocator, .{
             .latency = 0,
             .lockout = .{ .slot = 1, .confirmation_count = 1 },
         });
-        try std.testing.expect(!vs3.containsSlot(3));
-        try std.testing.expect(!vs3.containsSlot(5));
-        try std.testing.expect(!vs3.containsSlot(1));
+        try std.testing.expect(!vs.containsSlot(3));
+        try std.testing.expect(!vs.containsSlot(5));
+        try std.testing.expect(!vs.containsSlot(1));
     }
 
     // V4
@@ -6389,19 +6087,16 @@ test "state.VoteState.delegating methods" {
 test "state.VoteStateVersions.convertToVoteState: uninitialized errors" {
     const allocator = std.testing.allocator;
 
-    // `Uninitialized` cannot be converted to either V3 or V4 — both targets
-    // must surface `UninitializedAccount` (matches agave's
-    // `try_convert_to_v3` / `try_convert_to_v4`).
-    inline for (.{ true, false }) |target_v4| {
-        const versions: VoteStateVersions = .uninitialized;
-        try std.testing.expectError(
-            InstructionError.UninitializedAccount,
-            versions.convertToVoteState(allocator, null, target_v4),
-        );
-    }
+    // `Uninitialized` cannot be converted to V4 — it surfaces
+    // `UninitializedAccount` (matches agave's `try_convert_to_vote_state_v4`).
+    const versions: VoteStateVersions = .uninitialized;
+    try std.testing.expectError(
+        InstructionError.UninitializedAccount,
+        versions.convertToVoteState(allocator, null),
+    );
 }
 
-test "state.VoteStateVersions.convertToVoteState: v1_14_11 to v3" {
+test "state.VoteStateVersions.convertToVoteState: v1_14_11 to v4" {
     const allocator = std.testing.allocator;
     const node_pk = Pubkey.ZEROES;
     const voter_pk = Pubkey.ZEROES;
@@ -6415,11 +6110,10 @@ test "state.VoteStateVersions.convertToVoteState: v1_14_11 to v3" {
         20,
         5,
     ) };
-    const vs = try versions.convertToVoteState(allocator, null, false);
+    const vs = try versions.convertToVoteState(allocator, null);
     defer vs.deinit(allocator);
 
-    try std.testing.expect(vs == .v3);
-    try std.testing.expect(vs != .v4);
+    try std.testing.expect(vs == .v4);
     try std.testing.expect(vs.nodePubkey().equals(&node_pk));
     try std.testing.expect(vs.withdrawerKey().equals(&withdrawer_pk));
     try std.testing.expectEqual(20, vs.commission());
@@ -6429,7 +6123,7 @@ test "state.VoteStateVersions.convertToVoteState: v1_14_11 to v3" {
     try std.testing.expectEqual(1, vs.authorizedVoters().count());
 }
 
-test "state.VoteStateVersions.convertToVoteState: v3 stays v3" {
+test "state.VoteStateVersions.convertToVoteState: v3 to v4" {
     const allocator = std.testing.allocator;
 
     var versions: VoteStateVersions = .{ .v3 = try VoteStateV3.init(
@@ -6440,14 +6134,14 @@ test "state.VoteStateVersions.convertToVoteState: v3 stays v3" {
         30,
         0,
     ) };
-    const vs = try versions.convertToVoteState(allocator, null, false);
+    const vs = try versions.convertToVoteState(allocator, null);
     defer vs.deinit(allocator);
 
-    try std.testing.expect(vs == .v3);
+    try std.testing.expect(vs == .v4);
     try std.testing.expectEqual(30, vs.commission());
 }
 
-test "state.VoteStateVersions.convertToVoteState: v4 stays v4 even with target_v4=false" {
+test "state.VoteStateVersions.convertToVoteState: v4 stays v4" {
     const allocator = std.testing.allocator;
     const vote_pk = Pubkey.ZEROES;
 
@@ -6460,32 +6154,11 @@ test "state.VoteStateVersions.convertToVoteState: v4 stays v4 even with target_v
         0,
         vote_pk,
     ) };
-    const vs = try versions.convertToVoteState(allocator, vote_pk, false);
+    const vs = try versions.convertToVoteState(allocator, vote_pk);
     defer vs.deinit(allocator);
 
-    // v4 input stays v4 regardless of target_v4 flag
     try std.testing.expect(vs == .v4);
     try std.testing.expectEqual(40, vs.commission());
-}
-
-test "state.VoteStateVersions.convertToVoteState: target_v4=true converts to v4" {
-    const allocator = std.testing.allocator;
-    const vote_pk = Pubkey.ZEROES;
-
-    // v3 -> v4 via target_v4=true
-    var versions: VoteStateVersions = .{ .v3 = try VoteStateV3.init(
-        allocator,
-        Pubkey.ZEROES,
-        Pubkey.ZEROES,
-        Pubkey.ZEROES,
-        50,
-        0,
-    ) };
-    const vs = try versions.convertToVoteState(allocator, vote_pk, true);
-    defer vs.deinit(allocator);
-
-    try std.testing.expect(vs == .v4);
-    try std.testing.expectEqual(50, vs.commission());
 }
 
 test "state.generateBlsPopMessage: layout matches SIMD-0387" {
@@ -6505,21 +6178,6 @@ test "state.generateBlsPopMessage: layout matches SIMD-0387" {
     try std.testing.expectEqualSlices(u8, &vote_pk.data, msg[9..41]);
     try std.testing.expectEqualSlices(u8, &bls_pk, msg[41..89]);
     try std.testing.expectEqual(89, msg.len);
-}
-
-test "state.VoteState.hasBlsPubkey: v3 always false" {
-    const allocator = std.testing.allocator;
-    var vs: VoteState = .{ .v3 = try VoteStateV3.init(
-        allocator,
-        Pubkey.ZEROES,
-        Pubkey.ZEROES,
-        Pubkey.ZEROES,
-        0,
-        0,
-    ) };
-    defer vs.deinit(allocator);
-    try std.testing.expect(!vs.hasBlsPubkey());
-    try std.testing.expectEqual(null, vs.blsPubkeyCompressed());
 }
 
 test "state.VoteState.hasBlsPubkey: v4 reflects bls_pubkey_compressed" {

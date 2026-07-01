@@ -913,7 +913,7 @@ fn loadTower(
         .{},
     ) catch return error.BincodeError;
 
-    const vote_state = try versioned_state.convertToVoteState(allocator, null, false);
+    const vote_state = try versioned_state.convertToVoteState(allocator, null);
     defer vote_state.deinit(allocator);
 
     return try Tower.fromAccount(&vote_state);
@@ -1399,7 +1399,7 @@ fn generateVoteTx(
         logger.err().logf("Failed to deserialize vote state versions: {}", .{err});
         return .failed;
     };
-    var vote_state = vote_state_versions.convertToVoteState(allocator, null, false) catch |err| {
+    var vote_state = vote_state_versions.convertToVoteState(allocator, null) catch |err| {
         logger.err().logf("Failed to convert vote state to current: {}", .{err});
         return .failed;
     };
