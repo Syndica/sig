@@ -141,7 +141,7 @@ pub fn SharedPool(Item: type, cap: usize) type {
             return @ptrCast(&self.constBuf()[item_id.index()]);
         }
 
-        pub fn ptrToIndex(self: *PoolSelf, item: *Item) ItemId {
+        pub fn ptrToIndex(self: *const PoolSelf, item: *const Item) ItemId {
             const node: [*]const Node = @ptrCast(item);
             const base: [*]const Node = self.buf().ptr;
 

@@ -55,6 +55,20 @@ pub const replay: ServiceSpec = .{
     },
 };
 
+pub const simple_consensus: ServiceSpec = .{
+    .ReadOnly = struct {
+        block_pool: *const lib.replay.BlockPool,
+    },
+    .ReadWrite = struct {
+        block_exec_results: *lib.ipc.Ring(1024, extern struct {
+            block_ref: lib.replay.BlockRef,
+            passed: bool,
+        }),
+        block_finality: *lib.ipc.Ring(1024, lib.replay.BlockRef),
+        tel: *lib.telemetry.Region,
+    },
+};
+
 pub const shred_receiver: ServiceSpec = .{
     .ReadOnly = struct {
         config: *const lib.shred.RecvConfig,
