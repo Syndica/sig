@@ -10,15 +10,14 @@ pub const BlockPool = collections.SharedPool(Node, 1024);
 /// our block mem pool. If you want what Agave calls the "Block ID", this is the merkle root of
 ///  the last fec set.
 pub const BlockRef = BlockPool.ItemId;
-pub const OptionalBlockRef = BlockPool.ItemId.Optional;
 
 // TODO: large values (e.g. Hashes) should probably live elsewhere in memory to keep tree
 // traversal fast
 // This could maybe be 24 bytes (u32 idx * 3, slot u64, last merkle root hash u32)
 pub const Node = extern struct {
-    parent: OptionalBlockRef = .null,
-    child: OptionalBlockRef = .null,
-    sibling: OptionalBlockRef = .null,
+    parent: BlockRef.Optional = .null,
+    child: BlockRef.Optional = .null,
+    sibling: BlockRef.Optional = .null,
     slot: solana.Slot,
 };
 

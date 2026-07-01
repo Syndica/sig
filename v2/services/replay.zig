@@ -1085,7 +1085,7 @@ const MerkleNode = extern struct {
 
     // allocated upon insertion of 1st fec set, copied down through children
     // TODO: eviction
-    block_ref: lib.replay.OptionalBlockRef,
+    block_ref: lib.replay.BlockRef.Optional,
 
     payload_len: u16,
 
@@ -1301,7 +1301,7 @@ test "MerkleForest tree put" {
     //       case. In a real environment this would be the last fec set in the rooted slot.
     a_inserted.block_ref = .init(replay.BlockRef.fromInt(8053));
 
-    const expected_block_ref = replay.OptionalBlockRef.init(replay.BlockRef.fromInt(8053));
+    const expected_block_ref: replay.BlockRef.Optional = .init(replay.BlockRef.fromInt(8053));
 
     const d_inserted = (try insertFecSet(logger, &d, &tree, pool)).?;
     try std.testing.expect(d_inserted.parent == .null);
