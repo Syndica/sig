@@ -24,11 +24,15 @@ loki.process "process_log" {
         format = "2006-01-02T15:04:05.000Z"
     }
 
+    // Only level and scope are labels. Loki creates a stream per unique label set,
+    // so labels need to stay low-cardinality. message and the other parsed fields
+    // are unbounded: as a label, message spawns a stream per line and can exceed
+    // max_label_value_length (2048 B), which drops the push. They stay in the log
+    // body instead, still queryable with `| logfmt`.
     stage.labels {
         values = {
             "level" = "",
             "scope" = "",
-            "message" = "",
         }
     }
 
