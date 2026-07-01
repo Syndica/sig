@@ -110,6 +110,7 @@ var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
 const DeserialStates = [lib.replay.BlockPool.capacity]?BlockDeserialState;
 const BlockExecStates = [lib.replay.BlockPool.capacity]?BlockExecState;
+const BlockHashStates = [lib.replay.BlockPool.capacity]?Hash;
 
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
@@ -126,11 +127,34 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const exec_states: *BlockExecStates = try allocator.create(BlockExecStates);
     @memset(exec_states, null);
 
+    const blockhash_states: *BlockHashStates = try allocator.create(BlockHashStates);
+    @memset(blockhash_states, null);
+
     var deshredded_iter = rw.deshredded_in.get(.reader);
     var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
     var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
 
+    { // wait for snapshot metadata from accounts_db
+        var blockhashes_in = rw.snapshot_metadata_in.blockhash_queue.hashes.getView(.reader);
+        defer blockhashes_in.close();
+
+        var start_block: usize = 0;
+        while (true) {
+            const hashes = try blockhashes_in.getBufferBlocking(runner);
+            if (hashes.len == 0) break; // blockhashes_out closed their end
+
+            for (hashes) |*hash| {
+                blockhash_states[start_block] = hash.*;
+                start_block += 1;
+            }
+            blockhashes_in.advance(hashes.len);
+        }
+    }
+
+    // TODO: get this from snapshot metadata
     var first_slot: ?Slot = null; // this is a hack, remove it!
+
+    // After the slot is supposedly populated, start shred recv (eventually Repair service) on it.
 
     task: switch (@as(enum { exec_response, fec_set, idle }, .idle)) {
         .idle => {

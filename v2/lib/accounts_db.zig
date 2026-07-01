@@ -10,6 +10,8 @@ comptime {
 }
 
 const Pubkey = lib.solana.Pubkey;
+const Hash = lib.solana.Hash;
+const Slot = lib.solana.Slot;
 
 pub const AccountPool = @import("accounts_db/pool.zig").AccountPool;
 pub const Rooted = @import("accounts_db/rooted.zig").Rooted;
@@ -36,5 +38,42 @@ pub const AccountLookups = extern struct {
     pub fn init(self: *AccountLookups) void {
         self.in.init();
         self.out.init();
+    }
+};
+
+pub const RuntimeMetadata = extern struct {
+    slot: std.atomic.Value(u64),
+    blockhash_queue: extern struct {
+        max_age: u64, // read after consuming all of hashes
+        hashes: lib.ipc.Ring(256, Hash),
+    },
+
+    // 0 may be a valid slot, so use something that will never be reached.
+    const invalid_slot = std.math.maxInt(Slot);
+
+    pub fn init(self: *RuntimeMetadata) void {
+        self.slot = .init(invalid_slot);
+
+        self.blockhash_queue.max_age = 0;
+        self.blockhash_queue.hashes.init();
+    }
+
+    /// Unblocks all getSlotBlocking() callers with the given slot value.
+    /// Can be called only once.
+    /// Should also only call after all other RuntimeMetadata fields are populated.
+    pub fn populateSlot(self: *RuntimeMetadata, slot: Slot) void {
+        std.debug.assert(slot != invalid_slot);
+        std.debug.assert(self.slot.swap(invalid_slot, .release) == invalid_slot);
+    }
+
+    pub fn getSlotBlocking(self: *RuntimeMetadata, runner: lib.runner.Connection) !Slot {
+        const slot = while (true) {
+            const slot = self.slot.load(.acquire);
+            if (slot != invalid_slot) break slot;
+            try runner.activity.signalIdleSpinning();
+        };
+
+        try runner.activity.signalActive();
+        return slot;
     }
 };
