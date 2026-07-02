@@ -783,6 +783,7 @@ fn batchDecodeFromCachedChunk(
     candidates: []const BatchDecodeCandidate,
     result: *BatchDecodeResult,
 ) !bool {
+    _ = allocator;
     if (candidates.len == 0 or self.chunk_cache.len == 0) return false;
     const chunk_id = candidates[0].record.chunk_id;
 
@@ -804,18 +805,18 @@ fn batchDecodeFromCachedChunk(
     entry.last_used = self.chunk_cache_clock;
     for (candidates) |candidate| {
         var account = try self.decodeAccountRecordFromChunkWithMetrics(
-            allocator,
+            self.allocator,
             candidate.pubkey,
             candidate.record,
             entry.bytes,
         );
         var owns_account = true;
-        errdefer if (owns_account) account.deinit(allocator);
+        errdefer if (owns_account) account.deinit(self.allocator);
         if (try self.decodedAccountCachePutOwned(candidate.pubkey, account)) {
             owns_account = false;
             result.accounts_loaded += 1;
         } else {
-            account.deinit(allocator);
+            account.deinit(self.allocator);
             owns_account = false;
             self.metrics.decoded_account_cache_skip_count.inc();
             result.accounts_skipped += 1;
@@ -831,20 +832,21 @@ fn batchDecodeFromChunkBytes(
     decompressed: []const u8,
     result: *BatchDecodeResult,
 ) !void {
+    _ = allocator;
     for (candidates) |candidate| {
         var account = try self.decodeAccountRecordFromChunkWithMetrics(
-            allocator,
+            self.allocator,
             candidate.pubkey,
             candidate.record,
             decompressed,
         );
         var owns_account = true;
-        errdefer if (owns_account) account.deinit(allocator);
+        errdefer if (owns_account) account.deinit(self.allocator);
         if (try self.decodedAccountCachePutOwned(candidate.pubkey, account)) {
             owns_account = false;
             result.accounts_loaded += 1;
         } else {
-            account.deinit(allocator);
+            account.deinit(self.allocator);
             owns_account = false;
             self.metrics.decoded_account_cache_skip_count.inc();
             result.accounts_skipped += 1;
