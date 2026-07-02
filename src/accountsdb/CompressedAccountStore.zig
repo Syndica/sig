@@ -27,6 +27,7 @@ const DEFAULT_CHUNK_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_LOOKUP_CACHE_ENTRIES: u64 = 1_000_000;
 const DEFAULT_DECODED_ACCOUNT_CACHE_ENTRIES: u64 = 16_384;
 const DEFAULT_DECODED_ACCOUNT_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const DEFAULT_DECODED_ACCOUNT_CACHE_CLEAR_EACH_BATCH = true;
 
 allocator: std.mem.Allocator,
 index_file: std.fs.File,
@@ -48,6 +49,7 @@ decoded_account_cache: sig.utils.collections.PubkeyMap(AccountSharedData),
 decoded_account_cache_mutex: std.Thread.Mutex = .{},
 decoded_account_cache_max_entries: usize,
 decoded_account_cache_max_bytes: u64,
+decoded_account_cache_clear_each_batch: bool,
 decoded_account_cache_bytes: u64 = 0,
 metrics: Metrics,
 shard_prefix_bits: u32,
@@ -353,6 +355,10 @@ pub fn init(
             "SIG_COMPRESSED_ACCOUNT_STORE_DECODED_ACCOUNT_CACHE_BYTES",
             DEFAULT_DECODED_ACCOUNT_CACHE_BYTES,
         ),
+        .decoded_account_cache_clear_each_batch = envBool(
+            "SIG_COMPRESSED_ACCOUNT_STORE_DECODED_ACCOUNT_CACHE_CLEAR_EACH_BATCH",
+            DEFAULT_DECODED_ACCOUNT_CACHE_CLEAR_EACH_BATCH,
+        ),
         .metrics = metrics,
         .shard_prefix_bits = shard_prefix_bits,
         .row_count = row_count,
@@ -557,9 +563,11 @@ pub fn batchDecodeAccountsForPubkeys(
         return result;
     }
 
-    self.decoded_account_cache_mutex.lock();
-    self.decodedAccountCacheClearLocked();
-    self.decoded_account_cache_mutex.unlock();
+    if (self.decoded_account_cache_clear_each_batch) {
+        self.decoded_account_cache_mutex.lock();
+        self.decodedAccountCacheClearLocked();
+        self.decoded_account_cache_mutex.unlock();
+    }
 
     var unique_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
     defer unique_pubkeys.deinit(allocator);
@@ -1306,6 +1314,22 @@ fn envU64(key: []const u8, default_value: u64) u64 {
     const trimmed = std.mem.trim(u8, raw, " \t\r\n");
     if (trimmed.len == 0) return default_value;
     return std.fmt.parseInt(u64, trimmed, 10) catch default_value;
+}
+
+fn envBool(key: []const u8, default_value: bool) bool {
+    const allocator = std.heap.page_allocator;
+    const raw = std.process.getEnvVarOwned(allocator, key) catch return default_value;
+    defer allocator.free(raw);
+
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return default_value;
+    if (std.mem.eql(u8, trimmed, "1")) return true;
+    if (std.mem.eql(u8, trimmed, "0")) return false;
+    if (std.ascii.eqlIgnoreCase(trimmed, "true")) return true;
+    if (std.ascii.eqlIgnoreCase(trimmed, "false")) return false;
+    if (std.ascii.eqlIgnoreCase(trimmed, "yes")) return true;
+    if (std.ascii.eqlIgnoreCase(trimmed, "no")) return false;
+    return default_value;
 }
 
 fn readU32(bytes: []const u8, offset: usize) u32 {

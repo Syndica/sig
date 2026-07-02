@@ -963,12 +963,28 @@ fn batchDecodeCompressedAccountsFromResolved(
     var unique_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
     defer unique_pubkeys.deinit(allocator);
 
+    var writable_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
+    defer writable_pubkeys.deinit(allocator);
+    if (!include_writable_accounts) {
+        for (transactions) |transaction| {
+            for (
+                transaction.accounts.items(.pubkey),
+                transaction.accounts.items(.is_writable),
+            ) |pubkey, is_writable| {
+                if (!is_writable) continue;
+                const gop = try writable_pubkeys.getOrPut(allocator, pubkey);
+                if (!gop.found_existing) gop.value_ptr.* = {};
+            }
+        }
+    }
+
     for (transactions) |transaction| {
         for (
             transaction.accounts.items(.pubkey),
             transaction.accounts.items(.is_writable),
         ) |pubkey, is_writable| {
             if (is_writable and !include_writable_accounts) continue;
+            if (!include_writable_accounts and writable_pubkeys.contains(pubkey)) continue;
             const gop = try unique_pubkeys.getOrPut(allocator, pubkey);
             if (!gop.found_existing) gop.value_ptr.* = {};
         }
