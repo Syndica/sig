@@ -714,7 +714,7 @@ const ReceiverTestEffects = struct {
 
 const TEST_DATA_SHRED_PACKET_LEN = 1203;
 
-fn initTestDataPacket(packet: *Packet, version: u16) *Shred {
+fn initTestDataPacket(packet: *Packet, version: u16) void {
     packet.data = @splat(0);
     packet.len = TEST_DATA_SHRED_PACKET_LEN;
 
@@ -738,7 +738,6 @@ fn initTestDataPacket(packet: *Packet, version: u16) *Shred {
             },
         },
     };
-    return shred;
 }
 
 fn signTestDataPacket(packet: *Packet, keypair: *const lib.gossip.KeyPair) !void {
@@ -796,7 +795,7 @@ test "shred.receiver: shred version mismatch" {
     defer receiver.deinit(allocator);
 
     var packet: Packet = undefined;
-    _ = initTestDataPacket(&packet, 1);
+    initTestDataPacket(&packet, 1);
 
     const leader_schedule: *const lib.solana.LeaderSchedule = undefined;
     var deshred_writer: DeshredRing.Iterator(.writer) = undefined;
