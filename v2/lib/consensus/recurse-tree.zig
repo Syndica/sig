@@ -99,7 +99,9 @@ pub const SimpleConsensus = struct {
 
     pub fn findFinalizable(self: *const SimpleConsensus) ?BlockRef {
         const candidate = self.findDeepest(self.root) orelse return null;
-        return self.beats(candidate.block, self.root.constPtr(self.pool).slot);
+        const new_root = self.beats(candidate.block, self.root.constPtr(self.pool).slot) orelse
+            return null;
+        return if (new_root == self.root) null else new_root;
     }
 
     const RootCandidate = struct {
@@ -137,19 +139,21 @@ pub const SimpleConsensus = struct {
         };
     }
 
+    /// Returns the block `finalization_depth` hops back from `a` (the leading
+    /// tip) if every one of the intervening `finalization_depth - 1` ancestors
+    /// -- together with `a` itself, they form the "last 32 confirmations" --
+    /// has slot strictly greater than `slot_to_beat`. Returns null otherwise.
+    ///
+    /// Note that the returned block itself (the finalize candidate, one hop
+    /// past the last-32-block window) is not required to beat `slot_to_beat`.
     fn beats(self: *const SimpleConsensus, a: BlockRef, slot_to_beat: Slot) ?BlockRef {
-        var depth: u64 = 0;
         var node: BlockRef = a;
-        while (depth < finalization_depth) : (depth += 1) {
-            const parent = node.constPtr(self.pool).parent;
-            if (parent.opt()) |parent_ref| {
-                if (parent_ref.constPtr(self.pool).slot <= slot_to_beat) break;
-                node = parent_ref;
-            } else {
-                break;
-            }
+        for (0..finalization_depth - 1) |_| {
+            const parent = node.constPtr(self.pool).parent.opt() orelse return null;
+            if (parent.constPtr(self.pool).slot <= slot_to_beat) return null;
+            node = parent;
         }
-        return if (depth >= finalization_depth) node else null;
+        return node.constPtr(self.pool).parent.opt();
     }
 
     /// A block is "passed" if we have recorded a passed exec result for it, or

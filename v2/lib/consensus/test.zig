@@ -300,6 +300,215 @@ pub fn consensus_tests(comptime SimpleConsensus: type) type {
                 }
             }
         }
+
+        test "update: null-parent ancestor at exactly root_slot is silently ignored" {
+            var buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
+            const pool = setupPool(&buf);
+
+            // root has slot 5. `x` is an unrooted block whose slot equals
+            // root's slot; its child `y` is above the root slot. Walking
+            // from y: parent is x, x.slot == root.slot so the walk exits
+            // without erroring, but x != self.root, so `y` is silently
+            // dropped. This pins the boundary between "silent drop"
+            // (ancestor.slot <= root_slot) and "error"
+            // (ancestor.slot > root_slot with null parent).
+            const root = try createBlock(pool, 5, .null);
+            const x = try createBlock(pool, 5, .null);
+            const y = try createBlock(pool, 8, .init(x));
+
+            var c: SimpleConsensus = .init(pool, root);
+            try testing.expectEqual(@as(?BlockRef, null), try c.update(y, true));
+            try testing.expectEqual(root, c.root);
+        }
+
+        test "update: two equal-length 33-chains cannot finalize" {
+            var buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
+            const pool = setupPool(&buf);
+            const root = try createBlock(pool, 0, .null);
+
+            // Two independent 33-block chains off root, both at slots 1..33.
+            // Updates are interleaved so that at every step each fork's
+            // most-recent tip acts as a competitor to the other. Neither
+            // fork ever dominates: from either fork's tip, the walk-back-31
+            // lands at slot 2, which does not strictly exceed the other
+            // fork's tip slot (32 or 33). No finalize is possible.
+            var chain_a: [33]BlockRef = undefined;
+            var last_a = root;
+            for (0..33) |i| {
+                chain_a[i] = try createBlock(pool, @intCast(i + 1), .init(last_a));
+                last_a = chain_a[i];
+            }
+            var chain_b: [33]BlockRef = undefined;
+            var last_b = root;
+            for (0..33) |i| {
+                chain_b[i] = try createBlock(pool, @intCast(i + 1), .init(last_b));
+                last_b = chain_b[i];
+            }
+
+            var c: SimpleConsensus = .init(pool, root);
+            for (0..33) |i| {
+                _ = try c.update(chain_a[i], true);
+                _ = try c.update(chain_b[i], true);
+            }
+            try testing.expectEqual(root, c.root);
+        }
+
+        test "update: multiple old competitors all below the window allow finality" {
+            var buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
+            const pool = setupPool(&buf);
+            const root = try createBlock(pool, 0, .null);
+
+            // Three sibling competitors at slots 1, 2, 3. Winning chain at
+            // slots 4..36. Walk-back-31 from tip@36 lands at chain[1]@5,
+            // which strictly exceeds the greatest competitor slot (3).
+            // The finalize candidate is chain[0]@4.
+            const c1 = try createBlock(pool, 1, .init(root));
+            const c2 = try createBlock(pool, 2, .init(root));
+            const c3 = try createBlock(pool, 3, .init(root));
+            var chain: [33]BlockRef = undefined;
+            var last = root;
+            for (0..33) |i| {
+                chain[i] = try createBlock(pool, @intCast(i + 4), .init(last));
+                last = chain[i];
+            }
+
+            var c: SimpleConsensus = .init(pool, root);
+            _ = try c.update(c1, true);
+            _ = try c.update(c2, true);
+            _ = try c.update(c3, true);
+            for (chain, 0..) |b, i| {
+                const result = try c.update(b, true);
+                if (i < 32) {
+                    try testing.expectEqual(@as(?BlockRef, null), result);
+                } else {
+                    try testing.expectEqual(chain[0], result.?);
+                    try testing.expectEqual(chain[0], c.root);
+                }
+            }
+        }
+
+        test "update: competitor's deep grandchild raises the fin threshold" {
+            var buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
+            const pool = setupPool(&buf);
+            const root = try createBlock(pool, 0, .null);
+
+            // Competitor sub-tree:  competitor@1 -> deep_child@5
+            // Winning chain:        chain@2..34
+            // Walk-back-31 from tip@34 lands at chain[1]@3. The competitor's
+            // deepest slot is 5, not 1, so the check is 3 <= 5 -- no
+            // finalize. Exercises tree walks recursing into competitor
+            // subtrees (leaf.zig instead sees deep_child as a leaf directly).
+            const competitor = try createBlock(pool, 1, .init(root));
+            const deep_child = try createBlock(pool, 5, .init(competitor));
+            var chain: [33]BlockRef = undefined;
+            var last = root;
+            for (0..33) |i| {
+                chain[i] = try createBlock(pool, @intCast(i + 2), .init(last));
+                last = chain[i];
+            }
+
+            var c: SimpleConsensus = .init(pool, root);
+            _ = try c.update(competitor, true);
+            _ = try c.update(deep_child, true);
+            for (chain) |b| _ = try c.update(b, true);
+            try testing.expectEqual(root, c.root);
+        }
+
+        test "update: candidate slot exactly equal to competitor slot still finalizes" {
+            var buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
+            const pool = setupPool(&buf);
+            const root = try createBlock(pool, 0, .null);
+
+            // Competitor@3 as a sibling of chain[0]. Winning chain at slots
+            // 3..35 -- chain[0].slot exactly equals competitor.slot. The
+            // "last 32 confirmations" are chain[32..1] (slots 35..4) and all
+            // strictly exceed 3; the finalize candidate itself (chain[0]@3)
+            // is one hop past the window and its slot is NOT required to
+            // exceed the competitor's. Must finalize chain[0].
+            //
+            // This pins the off-by-one boundary between "the last 32
+            // confirmations beat the competitor" (correct: walk-back-31
+            // check) and "the last 33 blocks including the candidate beat
+            // the competitor" (too strict).
+            const competitor = try createBlock(pool, 3, .init(root));
+            var chain: [33]BlockRef = undefined;
+            var last = root;
+            for (0..33) |i| {
+                chain[i] = try createBlock(pool, @intCast(i + 3), .init(last));
+                last = chain[i];
+            }
+
+            var c: SimpleConsensus = .init(pool, root);
+            _ = try c.update(competitor, true);
+            for (chain, 0..) |b, i| {
+                const result = try c.update(b, true);
+                if (i < 32) {
+                    try testing.expectEqual(@as(?BlockRef, null), result);
+                } else {
+                    try testing.expectEqual(chain[0], result.?);
+                    try testing.expectEqual(chain[0], c.root);
+                }
+            }
+        }
+
+        test "update: repeated finalization succeeds despite a permanent old competitor" {
+            var buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
+            const pool = setupPool(&buf);
+            const root = try createBlock(pool, 0, .null);
+
+            // Competitor@1 as a sibling of chain[0]. 65-block winning chain
+            // at slots 2..66. Once the root moves past the competitor's
+            // slot, the competitor's subtree is no longer reachable from
+            // self.root and cannot affect subsequent finalizations. Every
+            // update from i=32 onward advances the root by one.
+            const competitor = try createBlock(pool, 1, .init(root));
+            var chain: [65]BlockRef = undefined;
+            var last = root;
+            for (0..65) |i| {
+                chain[i] = try createBlock(pool, @intCast(i + 2), .init(last));
+                last = chain[i];
+            }
+
+            var c: SimpleConsensus = .init(pool, root);
+            _ = try c.update(competitor, true);
+            for (chain, 0..) |b, i| {
+                const result = try c.update(b, true);
+                if (i < 32) {
+                    try testing.expectEqual(@as(?BlockRef, null), result);
+                } else {
+                    try testing.expectEqual(chain[i - 32], result.?);
+                    try testing.expectEqual(chain[i - 32], c.root);
+                }
+            }
+        }
+
+        test "update: mid-chain fork inside the last-32 window blocks finality" {
+            var buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
+            const pool = setupPool(&buf);
+            const root = try createBlock(pool, 0, .null);
+
+            // Winning chain slots 1..33. A mid-chain sibling `mid_fork`
+            // hangs off chain[4]@5 with slot 10. Walk-back-31 from tip@33
+            // lands at chain[1]@2; the highest non-leading slot in the
+            // subtree is mid_fork@10, so 2 <= 10 -- no finalize. This
+            // exercises tree walkers finding competitors below the root's
+            // direct children.
+            var chain: [33]BlockRef = undefined;
+            var last = root;
+            for (0..33) |i| {
+                chain[i] = try createBlock(pool, @intCast(i + 1), .init(last));
+                last = chain[i];
+            }
+            const mid_fork = try createBlock(pool, 10, .init(chain[4]));
+
+            // Update mid_fork before extending the chain past slot 10 so
+            // the competitor is visible during every subsequent
+            // finalization attempt.
+            var c: SimpleConsensus = .init(pool, root);
+            _ = try c.update(mid_fork, true);
+            for (chain) |b| _ = try c.update(b, true);
+            try testing.expectEqual(root, c.root);
+        }
     };
 }
 
