@@ -152,6 +152,15 @@ pub fn batchDecodeCompressedAccounts(
     return try self.rooted.batchDecodeCompressedAccountsForPubkeys(allocator, pubkeys);
 }
 
+pub fn batchLoadCompressedAccounts(
+    self: *Db,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+) !CompressedAccountStore.BatchDecodeResult {
+    return try self.rooted.batchLoadCompressedAccountsForPubkeys(allocator, pubkeys, accounts);
+}
+
 pub const SlotModifiedIterator = struct {
     slot: *Unrooted.SlotIndex,
     cursor: u64,

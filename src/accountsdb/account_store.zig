@@ -369,6 +369,27 @@ pub const SlotAccountReader = union(enum) {
             else => .{ .pubkeys = @intCast(pubkeys.len), .accounts_skipped = @intCast(pubkeys.len) },
         };
     }
+
+    pub fn batchLoadCompressedAccounts(
+        self: SlotAccountReader,
+        allocator: std.mem.Allocator,
+        pubkeys: []const Pubkey,
+        accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    ) !CompressedAccountBatchDecodeResult {
+        return switch (self) {
+            .accounts_db => |pair| try pair[0].batchLoadCompressedAccounts(allocator, pubkeys, accounts),
+            .cached_accounts_db => |tuple| try tuple[0].batchLoadCompressedAccounts(allocator, pubkeys, accounts),
+            else => .{ .pubkeys = @intCast(pubkeys.len), .accounts_skipped = @intCast(pubkeys.len) },
+        };
+    }
+
+    pub fn hasUnrootedAccount(self: SlotAccountReader, address: Pubkey) bool {
+        return switch (self) {
+            .accounts_db => |pair| pair[0].unrooted.get(address, pair[1]) != null,
+            .cached_accounts_db => |tuple| tuple[0].unrooted.get(address, tuple[1]) != null,
+            else => false,
+        };
+    }
 };
 
 /// Simple implementation of AccountReader and AccountStore, used for tests

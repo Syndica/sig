@@ -641,6 +641,95 @@ pub fn batchDecodeAccountsForPubkeys(
     return result;
 }
 
+pub fn batchLoadAccountsForPubkeys(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+) !BatchDecodeResult {
+    var timer = sig.time.Timer.start();
+    defer self.metrics.batch_decode_time.observe(timer.read().asNanos());
+
+    var result: BatchDecodeResult = .{ .pubkeys = @intCast(pubkeys.len) };
+
+    var unique_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
+    defer unique_pubkeys.deinit(allocator);
+
+    var unique_chunks: std.AutoHashMapUnmanaged(u32, void) = .{};
+    defer unique_chunks.deinit(allocator);
+
+    var candidates: std.ArrayListUnmanaged(BatchDecodeCandidate) = .{};
+    defer candidates.deinit(allocator);
+    try candidates.ensureTotalCapacity(allocator, pubkeys.len);
+
+    for (pubkeys) |pubkey| {
+        const pubkey_gop = try unique_pubkeys.getOrPut(allocator, pubkey);
+        if (pubkey_gop.found_existing) continue;
+        pubkey_gop.value_ptr.* = {};
+
+        const record = try self.lookup(pubkey) orelse {
+            result.missing_pubkeys += 1;
+            continue;
+        };
+        candidates.appendAssumeCapacity(.{ .pubkey = pubkey, .record = record });
+        result.compressed_pubkeys += 1;
+        const chunk_gop = try unique_chunks.getOrPut(allocator, record.chunk_id);
+        if (!chunk_gop.found_existing) chunk_gop.value_ptr.* = {};
+    }
+
+    result.pubkeys = @intCast(unique_pubkeys.count());
+    result.unique_chunks = @intCast(unique_chunks.count());
+
+    std.mem.sort(BatchDecodeCandidate, candidates.items, {}, BatchDecodeCandidate.lessThan);
+
+    var i: usize = 0;
+    while (i < candidates.items.len) {
+        const chunk_id = candidates.items[i].record.chunk_id;
+        var end = i + 1;
+        while (end < candidates.items.len and candidates.items[end].record.chunk_id == chunk_id) : (end += 1) {}
+
+        if (try self.batchLoadFromCachedChunk(
+            allocator,
+            candidates.items[i..end],
+            accounts,
+            &result,
+        )) {
+            result.chunks_cached += 1;
+            i = end;
+            continue;
+        }
+
+        if (chunk_id >= self.chunk_table.len)
+            return error.InvalidCompressedAccountRecord;
+        const chunk = self.chunk_table[chunk_id];
+        if (chunk.uncompressed_len == 0 or chunk.uncompressed_len > self.max_chunk_bytes)
+            return error.InvalidCompressedAccountChunk;
+        if (!self.shouldCacheChunk(chunk.uncompressed_len)) {
+            result.accounts_skipped += @intCast(end - i);
+            i = end;
+            continue;
+        }
+
+        const decompressed = try self.decompressChunk(self.allocator, chunk);
+        var owns_decompressed = true;
+        errdefer if (owns_decompressed) self.allocator.free(decompressed);
+        try self.batchLoadFromChunkBytes(
+            allocator,
+            candidates.items[i..end],
+            decompressed,
+            accounts,
+            &result,
+        );
+        _ = try self.insertPrefetchedChunk(chunk_id, decompressed);
+        owns_decompressed = false;
+        result.chunks_decoded += 1;
+        i = end;
+    }
+
+    self.recordBatchDecodeResult(result);
+    return result;
+}
+
 fn lookup(self: *CompressedAccountStore, address: Pubkey) !?IndexRecord {
     var timer = sig.time.Timer.start();
     defer self.metrics.lookup_time.observe(timer.read().asNanos());
@@ -860,6 +949,79 @@ fn batchDecodeFromChunkBytes(
             result.accounts_skipped += 1;
         }
     }
+}
+
+fn batchLoadFromCachedChunk(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    candidates: []const BatchDecodeCandidate,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    result: *BatchDecodeResult,
+) !bool {
+    if (candidates.len == 0 or self.chunk_cache.len == 0) return false;
+    const chunk_id = candidates[0].record.chunk_id;
+
+    self.chunk_cache_mutex.lock();
+    defer self.chunk_cache_mutex.unlock();
+
+    const entry_index = self.chunk_cache_index.get(chunk_id) orelse return false;
+    if (entry_index >= self.chunk_cache.len) {
+        _ = self.chunk_cache_index.remove(chunk_id);
+        return false;
+    }
+    const entry = &self.chunk_cache[entry_index];
+    if (!entry.occupied or entry.chunk_id != chunk_id) {
+        _ = self.chunk_cache_index.remove(chunk_id);
+        return false;
+    }
+
+    self.chunk_cache_clock +%= 1;
+    entry.last_used = self.chunk_cache_clock;
+    for (candidates) |candidate| {
+        var account = try self.decodeAccountRecordFromChunkWithMetrics(
+            allocator,
+            candidate.pubkey,
+            candidate.record,
+            entry.bytes,
+        );
+        try putLoadedAccount(allocator, accounts, candidate.pubkey, &account);
+        result.accounts_loaded += 1;
+    }
+    return true;
+}
+
+fn batchLoadFromChunkBytes(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    candidates: []const BatchDecodeCandidate,
+    decompressed: []const u8,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    result: *BatchDecodeResult,
+) !void {
+    for (candidates) |candidate| {
+        var account = try self.decodeAccountRecordFromChunkWithMetrics(
+            allocator,
+            candidate.pubkey,
+            candidate.record,
+            decompressed,
+        );
+        try putLoadedAccount(allocator, accounts, candidate.pubkey, &account);
+        result.accounts_loaded += 1;
+    }
+}
+
+fn putLoadedAccount(
+    allocator: std.mem.Allocator,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    pubkey: Pubkey,
+    account: *AccountSharedData,
+) !void {
+    errdefer account.deinit(allocator);
+
+    const gop = try accounts.getOrPut(allocator, pubkey);
+    if (gop.found_existing) gop.value_ptr.deinit(allocator);
+    gop.value_ptr.* = account.*;
+    account.* = undefined;
 }
 
 fn recordBatchDecodeResult(self: *CompressedAccountStore, result: BatchDecodeResult) void {

@@ -641,7 +641,18 @@ fn prepareSlot(
     var slot_account_cache: ?*SlotAccountCache = null;
     errdefer destroySlotAccountCache(state.allocator, slot_account_cache);
 
-    const execution_account_store = if (envBool("SIG_REPLAY_SLOT_ACCOUNT_CACHE", false))
+    const execution_account_store = if (envBool("SIG_REPLAY_SLOT_READ_FRAME", false))
+        try buildSlotReadFrameAccountStore(
+            state.allocator,
+            metrics,
+            slot,
+            state.account_store,
+            &slot_info.constants().ancestors,
+            slot_account_reader,
+            resolved_txns,
+            &slot_account_cache,
+        )
+    else if (envBool("SIG_REPLAY_SLOT_ACCOUNT_CACHE", false))
         try buildCachedSlotAccountStore(
             state.allocator,
             metrics,
@@ -709,6 +720,113 @@ fn destroySlotAccountCache(allocator: Allocator, maybe_cache: ?*SlotAccountCache
         cache.deinit();
         allocator.destroy(cache);
     }
+}
+
+fn buildSlotReadFrameAccountStore(
+    allocator: Allocator,
+    metrics: replay.service.Metrics,
+    slot: Slot,
+    account_store: AccountStore,
+    ancestors: *const Ancestors,
+    account_reader: sig.accounts_db.SlotAccountReader,
+    transactions: []const ResolvedTransaction,
+    slot_account_cache: *?*SlotAccountCache,
+) !sig.accounts_db.SlotAccountStore {
+    const base_slot_account_store = account_store.forSlot(slot, ancestors);
+    const db = switch (account_store) {
+        .accounts_db => |db| db,
+        else => return base_slot_account_store,
+    };
+
+    const cache = try allocator.create(SlotAccountCache);
+    cache.* = SlotAccountCache.init(allocator);
+    errdefer {
+        cache.deinit();
+        allocator.destroy(cache);
+    }
+
+    try populateSlotReadFrame(
+        allocator,
+        metrics,
+        slot,
+        cache,
+        account_reader,
+        transactions,
+    );
+
+    slot_account_cache.* = cache;
+    return .{ .cached_accounts_db = .{
+        db,
+        slot,
+        ancestors,
+        allocator,
+        &cache.accounts,
+    } };
+}
+
+fn populateSlotReadFrame(
+    allocator: Allocator,
+    metrics: replay.service.Metrics,
+    slot: Slot,
+    cache: *SlotAccountCache,
+    account_reader: sig.accounts_db.SlotAccountReader,
+    transactions: []const ResolvedTransaction,
+) !void {
+    var timer = sig.time.Timer.start();
+    defer metrics.slot_account_cache_time.observe(timer.read().asNanos());
+
+    var unique_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
+    defer unique_pubkeys.deinit(allocator);
+
+    var writable_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
+    defer writable_pubkeys.deinit(allocator);
+
+    var account_refs: u64 = 0;
+    for (transactions) |transaction| {
+        for (
+            transaction.accounts.items(.pubkey),
+            transaction.accounts.items(.is_writable),
+        ) |pubkey, is_writable| {
+            account_refs += 1;
+            const pubkey_gop = try unique_pubkeys.getOrPut(allocator, pubkey);
+            if (!pubkey_gop.found_existing) pubkey_gop.value_ptr.* = {};
+            if (is_writable) {
+                const writable_gop = try writable_pubkeys.getOrPut(allocator, pubkey);
+                if (!writable_gop.found_existing) writable_gop.value_ptr.* = {};
+            }
+        }
+    }
+
+    var readonly_pubkeys: std.ArrayListUnmanaged(sig.core.Pubkey) = .{};
+    defer readonly_pubkeys.deinit(allocator);
+    try readonly_pubkeys.ensureTotalCapacity(allocator, unique_pubkeys.count());
+
+    for (unique_pubkeys.keys()) |pubkey| {
+        if (writable_pubkeys.contains(pubkey)) continue;
+        if (account_reader.hasUnrootedAccount(pubkey)) continue;
+        readonly_pubkeys.appendAssumeCapacity(pubkey);
+    }
+
+    std.mem.sort(sig.core.Pubkey, readonly_pubkeys.items, {}, struct {
+        fn lessThan(_: void, a: sig.core.Pubkey, b: sig.core.Pubkey) bool {
+            return comparePubkey(a, b) < 0;
+        }
+    }.lessThan);
+
+    const result = try account_reader.batchLoadCompressedAccounts(
+        allocator,
+        readonly_pubkeys.items,
+        &cache.accounts,
+    );
+
+    metrics.slot_account_cache_slot.set(slot);
+    metrics.slot_account_cache_account_refs.set(account_refs);
+    metrics.slot_account_cache_unique_pubkeys.set(@intCast(unique_pubkeys.count()));
+    metrics.slot_account_cache_loaded_pubkeys.set(result.accounts_loaded);
+    metrics.slot_account_cache_missing_pubkeys.set(result.missing_pubkeys);
+    metrics.slot_account_cache_limited_pubkeys.set(
+        @intCast(unique_pubkeys.count() - readonly_pubkeys.items.len),
+    );
 }
 
 fn buildCachedSlotAccountStore(

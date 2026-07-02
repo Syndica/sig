@@ -312,6 +312,18 @@ pub fn batchDecodeCompressedAccountsForPubkeys(
     return .{ .pubkeys = @intCast(pubkeys.len), .accounts_skipped = @intCast(pubkeys.len) };
 }
 
+pub fn batchLoadCompressedAccountsForPubkeys(
+    self: *Rooted,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+) !CompressedAccountStore.BatchDecodeResult {
+    if (self.compressed_account_store) |*store| {
+        return try store.batchLoadAccountsForPubkeys(allocator, pubkeys, accounts);
+    }
+    return .{ .pubkeys = @intCast(pubkeys.len), .accounts_skipped = @intCast(pubkeys.len) };
+}
+
 fn getColdAccount(
     self: *Rooted,
     allocator: std.mem.Allocator,
