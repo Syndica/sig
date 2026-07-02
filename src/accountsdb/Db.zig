@@ -144,6 +144,14 @@ pub fn prefetchCompressedAccountChunks(
     return try self.rooted.prefetchCompressedChunksForPubkeys(allocator, pubkeys);
 }
 
+pub fn batchDecodeCompressedAccounts(
+    self: *Db,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+) !CompressedAccountStore.BatchDecodeResult {
+    return try self.rooted.batchDecodeCompressedAccountsForPubkeys(allocator, pubkeys);
+}
+
 pub const SlotModifiedIterator = struct {
     slot: *Unrooted.SlotIndex,
     cursor: u64,

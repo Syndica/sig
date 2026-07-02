@@ -301,6 +301,17 @@ pub fn prefetchCompressedChunksForPubkeys(
     return .{ .pubkeys = @intCast(pubkeys.len) };
 }
 
+pub fn batchDecodeCompressedAccountsForPubkeys(
+    self: *Rooted,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+) !CompressedAccountStore.BatchDecodeResult {
+    if (self.compressed_account_store) |*store| {
+        return try store.batchDecodeAccountsForPubkeys(allocator, pubkeys);
+    }
+    return .{ .pubkeys = @intCast(pubkeys.len), .accounts_skipped = @intCast(pubkeys.len) };
+}
+
 fn getColdAccount(
     self: *Rooted,
     allocator: std.mem.Allocator,

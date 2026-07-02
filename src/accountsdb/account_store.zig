@@ -16,6 +16,7 @@ const Slot = sig.core.Slot;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const CompressedAccountPrefetchResult = accounts_db.CompressedAccountStore.PrefetchResult;
+const CompressedAccountBatchDecodeResult = accounts_db.CompressedAccountStore.BatchDecodeResult;
 
 /// Interface for both reading and writing accounts.
 ///
@@ -354,6 +355,18 @@ pub const SlotAccountReader = union(enum) {
             .accounts_db => |pair| try pair[0].prefetchCompressedAccountChunks(allocator, pubkeys),
             .cached_accounts_db => |tuple| try tuple[0].prefetchCompressedAccountChunks(allocator, pubkeys),
             else => .{ .pubkeys = @intCast(pubkeys.len) },
+        };
+    }
+
+    pub fn batchDecodeCompressedAccounts(
+        self: SlotAccountReader,
+        allocator: std.mem.Allocator,
+        pubkeys: []const Pubkey,
+    ) !CompressedAccountBatchDecodeResult {
+        return switch (self) {
+            .accounts_db => |pair| try pair[0].batchDecodeCompressedAccounts(allocator, pubkeys),
+            .cached_accounts_db => |tuple| try tuple[0].batchDecodeCompressedAccounts(allocator, pubkeys),
+            else => .{ .pubkeys = @intCast(pubkeys.len), .accounts_skipped = @intCast(pubkeys.len) },
         };
     }
 };

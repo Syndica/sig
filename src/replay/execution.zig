@@ -563,6 +563,16 @@ fn prepareSlot(
     const slot_account_reader = state.account_store.reader()
         .forSlot(&slot_info.constants().ancestors);
 
+    if (envBool("SIG_REPLAY_BATCH_COMPRESSED_ACCOUNTS", false)) {
+        try batchDecodeCompressedAccountsFromEntries(
+            state.allocator,
+            metrics,
+            slot,
+            slot_account_reader,
+            entries,
+        );
+    }
+
     // TODO: Avoid the need to read this from accountsdb. We could broaden the
     // scope of the sysvar cache, add this to slot constants, or implement
     // additional mechanisms for lookup tables to detect slot age (e.g. block height).
@@ -595,6 +605,15 @@ fn prepareSlot(
     }
     if (envBool("SIG_REPLAY_MEASURE_COMPRESSED_ACCOUNT_FANOUT", false)) {
         try measureCompressedAccountFanout(
+            state.allocator,
+            metrics,
+            slot,
+            slot_account_reader,
+            resolved_txns,
+        );
+    }
+    if (envBool("SIG_REPLAY_BATCH_COMPRESSED_ACCOUNTS", false)) {
+        try batchDecodeCompressedAccountsFromResolved(
             state.allocator,
             metrics,
             slot,
@@ -889,6 +908,87 @@ fn prefetchCompressedAccountChunks(
     metrics.compressed_account_prefetch_chunks_loaded.set(result.chunks_loaded);
     metrics.compressed_account_prefetch_chunks_cached.set(result.chunks_cached);
     metrics.compressed_account_prefetch_chunks_skipped.set(result.chunks_skipped);
+}
+
+fn batchDecodeCompressedAccountsFromEntries(
+    allocator: Allocator,
+    metrics: replay.service.Metrics,
+    slot: Slot,
+    account_reader: sig.accounts_db.SlotAccountReader,
+    entries: []const Entry,
+) !void {
+    var unique_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
+    defer unique_pubkeys.deinit(allocator);
+
+    for (entries) |entry| {
+        for (entry.transactions) |transaction| {
+            for (transaction.msg.account_keys) |pubkey| {
+                const gop = try unique_pubkeys.getOrPut(allocator, pubkey);
+                if (!gop.found_existing) gop.value_ptr.* = {};
+            }
+            for (transaction.msg.address_lookups) |lookup| {
+                const gop = try unique_pubkeys.getOrPut(allocator, lookup.table_address);
+                if (!gop.found_existing) gop.value_ptr.* = {};
+            }
+        }
+    }
+
+    try batchDecodeCompressedAccountPubkeys(
+        allocator,
+        metrics,
+        slot,
+        account_reader,
+        unique_pubkeys.keys(),
+    );
+}
+
+fn batchDecodeCompressedAccountsFromResolved(
+    allocator: Allocator,
+    metrics: replay.service.Metrics,
+    slot: Slot,
+    account_reader: sig.accounts_db.SlotAccountReader,
+    transactions: []const ResolvedTransaction,
+) !void {
+    var unique_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
+    defer unique_pubkeys.deinit(allocator);
+
+    for (transactions) |transaction| {
+        for (transaction.accounts.items(.pubkey)) |pubkey| {
+            const gop = try unique_pubkeys.getOrPut(allocator, pubkey);
+            if (!gop.found_existing) gop.value_ptr.* = {};
+        }
+    }
+
+    try batchDecodeCompressedAccountPubkeys(
+        allocator,
+        metrics,
+        slot,
+        account_reader,
+        unique_pubkeys.keys(),
+    );
+}
+
+fn batchDecodeCompressedAccountPubkeys(
+    allocator: Allocator,
+    metrics: replay.service.Metrics,
+    slot: Slot,
+    account_reader: sig.accounts_db.SlotAccountReader,
+    pubkeys: []const sig.core.Pubkey,
+) !void {
+    var timer = sig.time.Timer.start();
+    defer metrics.compressed_account_batch_decode_time.observe(timer.read().asNanos());
+
+    const result = try account_reader.batchDecodeCompressedAccounts(allocator, pubkeys);
+    metrics.compressed_account_batch_decode_slot.set(slot);
+    metrics.compressed_account_batch_decode_unique_pubkeys.set(result.pubkeys);
+    metrics.compressed_account_batch_decode_compressed_pubkeys.set(result.compressed_pubkeys);
+    metrics.compressed_account_batch_decode_missing_pubkeys.set(result.missing_pubkeys);
+    metrics.compressed_account_batch_decode_unique_chunks.set(result.unique_chunks);
+    metrics.compressed_account_batch_decode_chunks_decoded.set(result.chunks_decoded);
+    metrics.compressed_account_batch_decode_chunks_cached.set(result.chunks_cached);
+    metrics.compressed_account_batch_decode_accounts_loaded.set(result.accounts_loaded);
+    metrics.compressed_account_batch_decode_accounts_cached.set(result.accounts_cached);
+    metrics.compressed_account_batch_decode_accounts_skipped.set(result.accounts_skipped);
 }
 
 fn comparePubkey(a: sig.core.Pubkey, b: sig.core.Pubkey) i8 {
