@@ -773,7 +773,7 @@ fn populateSlotReadFrame(
     transactions: []const ResolvedTransaction,
 ) !void {
     var timer = sig.time.Timer.start();
-    defer metrics.slot_account_cache_time.observe(timer.read().asNanos());
+    defer metrics.slot_read_frame_time.observe(timer.read().asNanos());
 
     var unique_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
     defer unique_pubkeys.deinit(allocator);
@@ -801,9 +801,17 @@ fn populateSlotReadFrame(
     defer readonly_pubkeys.deinit(allocator);
     try readonly_pubkeys.ensureTotalCapacity(allocator, unique_pubkeys.count());
 
+    var writable_skipped: u64 = 0;
+    var unrooted_skipped: u64 = 0;
     for (unique_pubkeys.keys()) |pubkey| {
-        if (writable_pubkeys.contains(pubkey)) continue;
-        if (account_reader.hasUnrootedAccount(pubkey)) continue;
+        if (writable_pubkeys.contains(pubkey)) {
+            writable_skipped += 1;
+            continue;
+        }
+        if (account_reader.hasUnrootedAccount(pubkey)) {
+            unrooted_skipped += 1;
+            continue;
+        }
         readonly_pubkeys.appendAssumeCapacity(pubkey);
     }
 
@@ -819,14 +827,20 @@ fn populateSlotReadFrame(
         &cache.accounts,
     );
 
-    metrics.slot_account_cache_slot.set(slot);
-    metrics.slot_account_cache_account_refs.set(account_refs);
-    metrics.slot_account_cache_unique_pubkeys.set(@intCast(unique_pubkeys.count()));
-    metrics.slot_account_cache_loaded_pubkeys.set(result.accounts_loaded);
-    metrics.slot_account_cache_missing_pubkeys.set(result.missing_pubkeys);
-    metrics.slot_account_cache_limited_pubkeys.set(
-        @intCast(unique_pubkeys.count() - readonly_pubkeys.items.len),
-    );
+    metrics.slot_read_frame_slot.set(slot);
+    metrics.slot_read_frame_account_refs.set(account_refs);
+    metrics.slot_read_frame_unique_pubkeys.set(@intCast(unique_pubkeys.count()));
+    metrics.slot_read_frame_readonly_pubkeys.set(@intCast(readonly_pubkeys.items.len));
+    metrics.slot_read_frame_writable_skipped_pubkeys.set(writable_skipped);
+    metrics.slot_read_frame_unrooted_skipped_pubkeys.set(unrooted_skipped);
+    metrics.slot_read_frame_compressed_pubkeys.set(result.compressed_pubkeys);
+    metrics.slot_read_frame_missing_pubkeys.set(result.missing_pubkeys);
+    metrics.slot_read_frame_unique_chunks.set(result.unique_chunks);
+    metrics.slot_read_frame_chunks_decoded.set(result.chunks_decoded);
+    metrics.slot_read_frame_chunks_cached.set(result.chunks_cached);
+    metrics.slot_read_frame_accounts_loaded.set(result.accounts_loaded);
+    metrics.slot_read_frame_accounts_cached.set(result.accounts_cached);
+    metrics.slot_read_frame_accounts_skipped.set(result.accounts_skipped);
 }
 
 fn buildCachedSlotAccountStore(

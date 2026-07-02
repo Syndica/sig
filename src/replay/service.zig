@@ -85,6 +85,21 @@ pub const Metrics = struct {
     slot_account_cache_loaded_pubkeys: *sig.prometheus.Gauge(u64),
     slot_account_cache_missing_pubkeys: *sig.prometheus.Gauge(u64),
     slot_account_cache_limited_pubkeys: *sig.prometheus.Gauge(u64),
+    slot_read_frame_time: *sig.prometheus.Histogram,
+    slot_read_frame_slot: *sig.prometheus.Gauge(u64),
+    slot_read_frame_account_refs: *sig.prometheus.Gauge(u64),
+    slot_read_frame_unique_pubkeys: *sig.prometheus.Gauge(u64),
+    slot_read_frame_readonly_pubkeys: *sig.prometheus.Gauge(u64),
+    slot_read_frame_writable_skipped_pubkeys: *sig.prometheus.Gauge(u64),
+    slot_read_frame_unrooted_skipped_pubkeys: *sig.prometheus.Gauge(u64),
+    slot_read_frame_compressed_pubkeys: *sig.prometheus.Gauge(u64),
+    slot_read_frame_missing_pubkeys: *sig.prometheus.Gauge(u64),
+    slot_read_frame_unique_chunks: *sig.prometheus.Gauge(u64),
+    slot_read_frame_chunks_decoded: *sig.prometheus.Gauge(u64),
+    slot_read_frame_chunks_cached: *sig.prometheus.Gauge(u64),
+    slot_read_frame_accounts_loaded: *sig.prometheus.Gauge(u64),
+    slot_read_frame_accounts_cached: *sig.prometheus.Gauge(u64),
+    slot_read_frame_accounts_skipped: *sig.prometheus.Gauge(u64),
 
     pub const prefix = "replay";
     pub const histogram_buckets = b: {
