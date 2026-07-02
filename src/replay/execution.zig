@@ -563,13 +563,17 @@ fn prepareSlot(
     const slot_account_reader = state.account_store.reader()
         .forSlot(&slot_info.constants().ancestors);
 
-    if (envBool("SIG_REPLAY_BATCH_COMPRESSED_ACCOUNTS", false)) {
+    const batch_compressed_accounts = envBool("SIG_REPLAY_BATCH_COMPRESSED_ACCOUNTS", false);
+    if (batch_compressed_accounts and
+        envBool("SIG_REPLAY_BATCH_COMPRESSED_ACCOUNTS_PRE_RESOLVE", true))
+    {
         try batchDecodeCompressedAccountsFromEntries(
             state.allocator,
             metrics,
             slot,
             slot_account_reader,
             entries,
+            envBool("SIG_REPLAY_BATCH_COMPRESSED_ACCOUNTS_PRE_RESOLVE_STATIC_KEYS", true),
         );
     }
 
@@ -612,13 +616,16 @@ fn prepareSlot(
             resolved_txns,
         );
     }
-    if (envBool("SIG_REPLAY_BATCH_COMPRESSED_ACCOUNTS", false)) {
+    if (batch_compressed_accounts and
+        envBool("SIG_REPLAY_BATCH_COMPRESSED_ACCOUNTS_POST_RESOLVE", true))
+    {
         try batchDecodeCompressedAccountsFromResolved(
             state.allocator,
             metrics,
             slot,
             slot_account_reader,
             resolved_txns,
+            envBool("SIG_REPLAY_BATCH_COMPRESSED_ACCOUNTS_POST_RESOLVE_WRITABLE", true),
         );
     }
     if (envBool("SIG_REPLAY_PREFETCH_COMPRESSED_CHUNKS", false)) {
@@ -916,15 +923,18 @@ fn batchDecodeCompressedAccountsFromEntries(
     slot: Slot,
     account_reader: sig.accounts_db.SlotAccountReader,
     entries: []const Entry,
+    include_static_keys: bool,
 ) !void {
     var unique_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
     defer unique_pubkeys.deinit(allocator);
 
     for (entries) |entry| {
         for (entry.transactions) |transaction| {
-            for (transaction.msg.account_keys) |pubkey| {
-                const gop = try unique_pubkeys.getOrPut(allocator, pubkey);
-                if (!gop.found_existing) gop.value_ptr.* = {};
+            if (include_static_keys) {
+                for (transaction.msg.account_keys) |pubkey| {
+                    const gop = try unique_pubkeys.getOrPut(allocator, pubkey);
+                    if (!gop.found_existing) gop.value_ptr.* = {};
+                }
             }
             for (transaction.msg.address_lookups) |lookup| {
                 const gop = try unique_pubkeys.getOrPut(allocator, lookup.table_address);
@@ -948,12 +958,17 @@ fn batchDecodeCompressedAccountsFromResolved(
     slot: Slot,
     account_reader: sig.accounts_db.SlotAccountReader,
     transactions: []const ResolvedTransaction,
+    include_writable_accounts: bool,
 ) !void {
     var unique_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
     defer unique_pubkeys.deinit(allocator);
 
     for (transactions) |transaction| {
-        for (transaction.accounts.items(.pubkey)) |pubkey| {
+        for (
+            transaction.accounts.items(.pubkey),
+            transaction.accounts.items(.is_writable),
+        ) |pubkey, is_writable| {
+            if (is_writable and !include_writable_accounts) continue;
             const gop = try unique_pubkeys.getOrPut(allocator, pubkey);
             if (!gop.found_existing) gop.value_ptr.* = {};
         }
