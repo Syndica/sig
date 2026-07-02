@@ -18,6 +18,7 @@ const Hash = core.Hash;
 const Slot = core.Slot;
 
 const AccountStore = sig.accounts_db.AccountStore;
+const AccountSharedData = sig.runtime.AccountSharedData;
 
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
@@ -174,6 +175,7 @@ pub const ReplaySlotParams = struct {
     committer: Committer,
     verify_ticks_params: VerifyTicksParams,
     account_store: AccountStore,
+    slot_account_cache: ?*SlotAccountCache = null,
 
     pub fn deinit(self: ReplaySlotParams, allocator: Allocator) void {
         for (self.entries) |entry| entry.deinit(allocator);
@@ -181,6 +183,25 @@ pub const ReplaySlotParams = struct {
         for (self.transactions) |transaction| transaction.deinit(allocator);
         allocator.free(self.transactions);
         self.svm_gateway.deinit(allocator);
+        if (self.slot_account_cache) |cache| {
+            cache.deinit();
+            allocator.destroy(cache);
+        }
+    }
+};
+
+const SlotAccountCache = struct {
+    allocator: Allocator,
+    accounts: sig.utils.collections.PubkeyMap(AccountSharedData) = .{},
+
+    pub fn init(allocator: Allocator) SlotAccountCache {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *SlotAccountCache) void {
+        for (self.accounts.values()) |*account| account.deinit(self.allocator);
+        self.accounts.deinit(self.allocator);
+        self.* = undefined;
     }
 };
 
@@ -582,12 +603,29 @@ fn prepareSlot(
         );
     }
 
+    var slot_account_cache: ?*SlotAccountCache = null;
+    errdefer destroySlotAccountCache(state.allocator, slot_account_cache);
+
+    const execution_account_store = if (envBool("SIG_REPLAY_SLOT_ACCOUNT_CACHE", false))
+        try buildCachedSlotAccountStore(
+            state.allocator,
+            metrics,
+            slot,
+            state.account_store,
+            &slot_info.constants().ancestors,
+            slot_account_reader,
+            resolved_txns,
+            &slot_account_cache,
+        )
+    else
+        state.account_store.forSlot(slot, &slot_info.constants().ancestors);
+
     var svm_gateway = try SvmGateway.init(state.allocator, .{
         .slot = slot,
         .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
         .lamports_per_signature = slot_info.constants().fee_rate_governor.lamports_per_signature,
         .blockhash_queue = &slot_info.state().blockhash_queue,
-        .account_store = state.account_store.forSlot(slot, &slot_info.constants().ancestors),
+        .account_store = execution_account_store,
         .ancestors = &slot_info.constants().ancestors,
         .feature_set = slot_info.constants().feature_set,
         .rent_collector = &slot_info.constants().rent_collector,
@@ -627,7 +665,146 @@ fn prepareSlot(
         .committer = committer,
         .verify_ticks_params = verify_ticks_params,
         .account_store = state.account_store,
+        .slot_account_cache = slot_account_cache,
     } };
+}
+
+fn destroySlotAccountCache(allocator: Allocator, maybe_cache: ?*SlotAccountCache) void {
+    if (maybe_cache) |cache| {
+        cache.deinit();
+        allocator.destroy(cache);
+    }
+}
+
+fn buildCachedSlotAccountStore(
+    allocator: Allocator,
+    metrics: replay.service.Metrics,
+    slot: Slot,
+    account_store: AccountStore,
+    ancestors: *const Ancestors,
+    account_reader: sig.accounts_db.SlotAccountReader,
+    transactions: []const ResolvedTransaction,
+    slot_account_cache: *?*SlotAccountCache,
+) !sig.accounts_db.SlotAccountStore {
+    const base_slot_account_store = account_store.forSlot(slot, ancestors);
+    const db = switch (account_store) {
+        .accounts_db => |db| db,
+        else => return base_slot_account_store,
+    };
+
+    const cache = try allocator.create(SlotAccountCache);
+    cache.* = SlotAccountCache.init(allocator);
+    errdefer {
+        cache.deinit();
+        allocator.destroy(cache);
+    }
+
+    try populateSlotAccountCache(
+        allocator,
+        metrics,
+        slot,
+        cache,
+        account_reader,
+        transactions,
+    );
+
+    slot_account_cache.* = cache;
+    return .{ .cached_accounts_db = .{
+        db,
+        slot,
+        ancestors,
+        allocator,
+        &cache.accounts,
+    } };
+}
+
+fn populateSlotAccountCache(
+    allocator: Allocator,
+    metrics: replay.service.Metrics,
+    slot: Slot,
+    cache: *SlotAccountCache,
+    account_reader: sig.accounts_db.SlotAccountReader,
+    transactions: []const ResolvedTransaction,
+) !void {
+    var timer = sig.time.Timer.start();
+    defer metrics.slot_account_cache_time.observe(timer.read().asNanos());
+
+    const Candidate = struct {
+        pubkey: sig.core.Pubkey,
+        chunk_id: u32,
+
+        fn lessThan(_: void, a: @This(), b: @This()) bool {
+            if (a.chunk_id == b.chunk_id) {
+                return comparePubkey(a.pubkey, b.pubkey) < 0;
+            }
+            return a.chunk_id < b.chunk_id;
+        }
+    };
+
+    var unique_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
+    defer unique_pubkeys.deinit(allocator);
+
+    var account_refs: u64 = 0;
+    for (transactions) |transaction| {
+        for (transaction.accounts.items(.pubkey)) |pubkey| {
+            account_refs += 1;
+            const gop = try unique_pubkeys.getOrPut(allocator, pubkey);
+            if (!gop.found_existing) gop.value_ptr.* = {};
+        }
+    }
+
+    var candidates: std.ArrayListUnmanaged(Candidate) = .{};
+    defer candidates.deinit(allocator);
+    try candidates.ensureTotalCapacity(allocator, unique_pubkeys.count());
+
+    for (unique_pubkeys.keys()) |pubkey| {
+        const chunk_id = (try account_reader.compressedAccountChunkId(pubkey)) orelse
+            std.math.maxInt(u32);
+        candidates.appendAssumeCapacity(.{
+            .pubkey = pubkey,
+            .chunk_id = chunk_id,
+        });
+    }
+
+    std.mem.sort(Candidate, candidates.items, {}, Candidate.lessThan);
+
+    const max_pubkeys = envU64("SIG_REPLAY_SLOT_ACCOUNT_CACHE_MAX_PUBKEYS", 0);
+    const candidate_count_u64: u64 = @intCast(candidates.items.len);
+    const load_count: usize = if (max_pubkeys == 0 or max_pubkeys > candidate_count_u64)
+        candidates.items.len
+    else
+        @intCast(max_pubkeys);
+
+    var loaded_pubkeys: u64 = 0;
+    var missing_pubkeys: u64 = 0;
+
+    for (candidates.items[0..load_count]) |candidate| {
+        var account = try account_reader.get(allocator, candidate.pubkey) orelse {
+            missing_pubkeys += 1;
+            continue;
+        };
+        var account_shared_data = AccountSharedData.fromAccount(allocator, &account) catch |err| {
+            account.deinit(allocator);
+            return err;
+        };
+        account.deinit(allocator);
+
+        var owns_account = true;
+        errdefer if (owns_account) account_shared_data.deinit(allocator);
+
+        const gop = try cache.accounts.getOrPut(allocator, candidate.pubkey);
+        if (gop.found_existing) gop.value_ptr.deinit(allocator);
+        gop.value_ptr.* = account_shared_data;
+        owns_account = false;
+        loaded_pubkeys += 1;
+    }
+
+    metrics.slot_account_cache_slot.set(slot);
+    metrics.slot_account_cache_account_refs.set(account_refs);
+    metrics.slot_account_cache_unique_pubkeys.set(@intCast(unique_pubkeys.count()));
+    metrics.slot_account_cache_loaded_pubkeys.set(loaded_pubkeys);
+    metrics.slot_account_cache_missing_pubkeys.set(missing_pubkeys);
+    metrics.slot_account_cache_limited_pubkeys.set(@intCast(candidates.items.len - load_count));
 }
 
 fn measureCompressedAccountFanout(
@@ -674,6 +851,14 @@ fn measureCompressedAccountFanout(
     metrics.compressed_account_fanout_missing_pubkeys.set(missing_pubkeys);
 }
 
+fn comparePubkey(a: sig.core.Pubkey, b: sig.core.Pubkey) i8 {
+    for (a.data, b.data) |x, y| {
+        if (x < y) return -1;
+        if (x > y) return 1;
+    }
+    return 0;
+}
+
 fn envBool(key: []const u8, default_value: bool) bool {
     const allocator = std.heap.page_allocator;
     const raw = std.process.getEnvVarOwned(allocator, key) catch return default_value;
@@ -696,6 +881,16 @@ fn envBool(key: []const u8, default_value: bool) bool {
         return false;
     }
     return default_value;
+}
+
+fn envU64(key: []const u8, default_value: u64) u64 {
+    const allocator = std.heap.page_allocator;
+    const raw = std.process.getEnvVarOwned(allocator, key) catch return default_value;
+    defer allocator.free(raw);
+
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return default_value;
+    return std.fmt.parseUnsigned(u64, trimmed, 10) catch default_value;
 }
 
 pub const VerifyTicksParams = struct {

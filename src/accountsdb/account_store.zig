@@ -213,6 +213,13 @@ pub const SlotModifiedIterator = union(enum) {
 /// then you'll get the version of the account from slot 6.
 pub const SlotAccountStore = union(enum) {
     accounts_db: struct { *accounts_db.Db, Slot, *const Ancestors },
+    cached_accounts_db: struct {
+        *accounts_db.Db,
+        Slot,
+        *const Ancestors,
+        Allocator,
+        *sig.utils.collections.PubkeyMap(AccountSharedData),
+    },
     /// Contains many versions of accounts and becomes fork-aware using
     /// ancestors, like accountsdb.
     thread_safe_map: struct { *ThreadSafeAccountMap, Slot, *const Ancestors },
@@ -231,6 +238,17 @@ pub const SlotAccountStore = union(enum) {
                 const db, const slot, _ = tuple;
                 try db.put(slot, address, account);
             },
+            .cached_accounts_db => |tuple| {
+                const db, const slot, _, const allocator, const cache = tuple;
+                const cloned = try account.clone(allocator);
+                errdefer cloned.deinit(allocator);
+
+                try db.put(slot, address, account);
+
+                const gop = try cache.getOrPut(allocator, address);
+                if (gop.found_existing) gop.value_ptr.deinit(allocator);
+                gop.value_ptr.* = cloned;
+            },
             .thread_safe_map => |tuple| {
                 const map, const slot, _ = tuple;
                 try map.put(slot, address, account);
@@ -248,6 +266,9 @@ pub const SlotAccountStore = union(enum) {
     pub fn reader(self: SlotAccountStore) SlotAccountReader {
         return switch (self) {
             .accounts_db => |tuple| .{ .accounts_db = .{ tuple[0], tuple[2] } },
+            .cached_accounts_db => |tuple| .{
+                .cached_accounts_db = .{ tuple[0], tuple[2], tuple[4] },
+            },
             .thread_safe_map => |tuple| .{ .thread_safe_map = .{ tuple[0], tuple[2] } },
             .account_shared_data_map => |tuple| .{ .account_shared_data_map = tuple[1] },
             .noop => .noop,
@@ -257,6 +278,11 @@ pub const SlotAccountStore = union(enum) {
 
 pub const SlotAccountReader = union(enum) {
     accounts_db: struct { *accounts_db.Db, *const Ancestors },
+    cached_accounts_db: struct {
+        *accounts_db.Db,
+        *const Ancestors,
+        *const sig.utils.collections.PubkeyMap(AccountSharedData),
+    },
     /// Contains many versions of accounts and becomes fork-aware using
     /// ancestors, like accountsdb.
     thread_safe_map: struct { *ThreadSafeAccountMap, *const Ancestors },
@@ -275,6 +301,19 @@ pub const SlotAccountReader = union(enum) {
                     address,
                     pair[1],
                 ) orelse return null;
+                if (account.lamports == 0) {
+                    account.deinit(alloc);
+                    return null;
+                }
+                return account;
+            },
+            .cached_accounts_db => |tuple| {
+                const db, const ancestors, const cache = tuple;
+                if (cache.get(address)) |asd| {
+                    if (asd.lamports == 0) return null;
+                    return asd.asAccount();
+                }
+                const account = try db.get(alloc, address, ancestors) orelse return null;
                 if (account.lamports == 0) {
                     account.deinit(alloc);
                     return null;
@@ -300,6 +339,7 @@ pub const SlotAccountReader = union(enum) {
     pub fn compressedAccountChunkId(self: SlotAccountReader, address: Pubkey) !?u32 {
         return switch (self) {
             .accounts_db => |pair| try pair[0].compressedAccountChunkId(address),
+            .cached_accounts_db => |tuple| try tuple[0].compressedAccountChunkId(address),
             else => null,
         };
     }
