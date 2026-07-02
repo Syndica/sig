@@ -44,7 +44,8 @@ pub const AccountLookups = extern struct {
 pub const RuntimeMetadata = extern struct {
     slot: std.atomic.Value(u64),
     blockhash_queue: extern struct {
-        max_age: u64, // read after consuming all of hashes
+        /// read after consuming all of hashes
+        max_age: u64,
         hashes: lib.ipc.Ring(256, Hash),
     },
 
@@ -63,17 +64,17 @@ pub const RuntimeMetadata = extern struct {
     /// Should also only call after all other RuntimeMetadata fields are populated.
     pub fn populateSlot(self: *RuntimeMetadata, slot: Slot) void {
         std.debug.assert(slot != invalid_slot);
-        std.debug.assert(self.slot.swap(invalid_slot, .release) == invalid_slot);
+        std.debug.assert(self.slot.swap(slot, .release) == invalid_slot);
     }
 
     pub fn getSlotBlocking(self: *RuntimeMetadata, runner: lib.runner.Connection) !Slot {
-        const slot = while (true) {
+        while (true) {
             const slot = self.slot.load(.acquire);
-            if (slot != invalid_slot) break slot;
+            if (slot != invalid_slot) {
+                try runner.activity.signalActive();
+                return slot;
+            }
             try runner.activity.signalIdleSpinning();
-        };
-
-        try runner.activity.signalActive();
-        return slot;
+        }
     }
 };
