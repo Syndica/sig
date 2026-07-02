@@ -103,10 +103,6 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
 
         const Self = @This();
 
-        pub fn reportShredParseResult(self: Self, parses_as_chained: bool) void {
-            _ = .{ self, parses_as_chained };
-        }
-
         /// NOTE: Pointers passed to this hook are only valid for the duration of this callback.
         pub fn reportFecSetCompleted(
             self: Self,
@@ -129,10 +125,6 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
 
         pub fn flushCompletedFecSet(self: Self) void {
             self.deshred_writer.markUsed();
-        }
-
-        pub fn reportReceiverPacketResult(self: Self, result: lib.shred.ReceiverPacketResult) void {
-            _ = .{ self, result };
         }
     };
 
@@ -160,7 +152,10 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                 logger.withScope("processPacket"),
             ) catch |err| switch (err) {
                 error.NoSpaceLeft => return err,
-                else => continue,
+                else => {
+                    logger.warn().logf("packet failed with {}", .{err});
+                    continue;
+                },
             };
             _ = result;
         }

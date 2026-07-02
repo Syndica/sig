@@ -14,7 +14,6 @@ comptime {
 pub const Receiver = @import("shred/receiver.zig").Receiver;
 pub const PacketError = @import("shred/receiver.zig").PacketError;
 pub const ReceiverPacketSuccess = @import("shred/receiver.zig").PacketSuccess;
-pub const ReceiverPacketResult = @import("shred/receiver.zig").PacketResult;
 pub const FecSetCtx = @import("shred/receiver.zig").FecSetCtx;
 
 const Hash = solana.Hash;

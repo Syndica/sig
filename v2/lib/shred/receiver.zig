@@ -21,10 +21,6 @@ const Shred = lib.shred.Shred;
 /// For full docs see `services/shred_receiver.zig`.
 pub fn Receiver(comptime Effects: type) type {
     lib.util.assertInterface(Effects, struct {
-        pub fn reportShredParseResult(self: Effects, parses_as_chained: bool) void {
-            _ = .{ self, parses_as_chained };
-        }
-
         pub fn reportFecSetCompleted(
             self: Effects,
             completed: *const DeshreddedFecSet,
@@ -40,10 +36,6 @@ pub fn Receiver(comptime Effects: type) type {
 
         pub fn flushCompletedFecSet(self: Effects) void {
             _ = self;
-        }
-
-        pub fn reportReceiverPacketResult(self: Effects, result: PacketResult) void {
-            _ = .{ self, result };
         }
     });
 
@@ -102,44 +94,11 @@ pub fn Receiver(comptime Effects: type) type {
             packet: *const Packet,
             logger: lib.telemetry.Logger("processPacket"),
         ) ProcessPacketError!PacketSuccess {
-            const result = self.processPacketInner(
-                leader_schedule,
-                network_shred_version,
-                packet,
-                logger,
-            ) catch |err| {
-                switch (err) {
-                    error.NoSpaceLeft => {
-                        logger.fatal().logf("no space left while processing shred packet", .{});
-                        return err;
-                    },
-                    else => |packet_err| {
-                        logger.warn().logf("packet failed with {}", .{packet_err});
-                        self.effects.reportReceiverPacketResult(.{ .failed = packet_err });
-                        return packet_err;
-                    },
-                }
-            };
-            self.effects.reportReceiverPacketResult(.{ .success = result });
-            return result;
-        }
-
-        fn processPacketInner(
-            self: *Self,
-            leader_schedule: *const lib.solana.LeaderSchedule,
-            network_shred_version: u16,
-            packet: *const Packet,
-            logger: lib.telemetry.Logger("processPacket"),
-        ) ProcessPacketError!PacketSuccess {
             const zone = tracy.Zone.init(@src(), .{ .name = "processPacket" });
             defer zone.deinit();
 
             // check that the shred variant is supported and the header is valid
-            const shred = Shred.fromPacketChecked(packet) catch |err| {
-                self.effects.reportShredParseResult(false);
-                return err;
-            };
-            self.effects.reportShredParseResult(true);
+            const shred = try Shred.fromPacketChecked(packet);
 
             const in_type_idx = if (shred.variant.isData())
                 shred.slot_idx - shred.fec_set_idx
@@ -475,11 +434,6 @@ pub const PacketSuccess = union(enum) {
     fec_set_finished,
     fec_set_already_finished,
     shred_already_seen,
-};
-
-pub const PacketResult = union(enum) {
-    success: PacketSuccess,
-    failed: PacketError,
 };
 
 const ProcessPacketError = PacketError || error{NoSpaceLeft};
