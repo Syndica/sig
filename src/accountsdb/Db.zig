@@ -131,25 +131,6 @@ pub fn get(
     return null;
 }
 
-pub fn prewarmColdAccounts(
-    self: *Db,
-    addresses: []const Pubkey,
-    ancestors: *const Ancestors,
-) !void {
-    if (!self.rooted.hasCompressedAccountStore()) return;
-
-    var cold_addresses = std.ArrayListUnmanaged(Pubkey){};
-    defer cold_addresses.deinit(self.allocator);
-
-    try cold_addresses.ensureTotalCapacity(self.allocator, addresses.len);
-    for (addresses) |address| {
-        if (self.unrooted.get(address, ancestors) != null) continue;
-        cold_addresses.appendAssumeCapacity(address);
-    }
-
-    try self.rooted.prewarmCompressedAccounts(cold_addresses.items);
-}
-
 pub const SlotModifiedIterator = struct {
     slot: *Unrooted.SlotIndex,
     cursor: u64,

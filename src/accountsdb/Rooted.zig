@@ -283,13 +283,6 @@ pub fn compressedStoreSamplePubkeys(
     return error.MissingCompressedAccountStore;
 }
 
-pub fn prewarmCompressedAccounts(
-    self: *Rooted,
-    addresses: []const Pubkey,
-) !void {
-    if (self.compressed_account_store) |*store| try store.prewarm(addresses);
-}
-
 fn getColdAccount(
     self: *Rooted,
     allocator: std.mem.Allocator,

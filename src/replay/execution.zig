@@ -39,7 +39,6 @@ const preprocessTransaction = replay.preprocess_transaction.preprocessTransactio
 const verifyPoh = core.entry.verifyPoh;
 
 const Logger = sig.trace.Logger("replay.execution");
-const DEFAULT_PREWARM_MAX_PUBKEYS_PER_SLOT: u64 = 8192;
 
 /// The result of replaying an individual slot.
 pub const ReplayResult = struct {
@@ -523,15 +522,6 @@ fn prepareSlot(
     const slot_account_reader = state.account_store.reader()
         .forSlot(&slot_info.constants().ancestors);
 
-    if (replayPrewarmCompressedAccountsEnabled()) {
-        try prewarmStaticSlotAccounts(
-            state.allocator,
-            entries,
-            slot_account_reader,
-            state.logger,
-        );
-    }
-
     // TODO: Avoid the need to read this from accountsdb. We could broaden the
     // scope of the sysvar cache, add this to slot constants, or implement
     // additional mechanisms for lookup tables to detect slot age (e.g. block height).
@@ -551,15 +541,6 @@ fn prepareSlot(
     errdefer {
         for (resolved_txns) |transaction| transaction.deinit(state.allocator);
         state.allocator.free(resolved_txns);
-    }
-
-    if (replayPrewarmCompressedAccountsEnabled()) {
-        try prewarmResolvedSlotAccounts(
-            state.allocator,
-            resolved_txns,
-            slot_account_reader,
-            state.logger,
-        );
     }
 
     var svm_gateway = try SvmGateway.init(state.allocator, .{
@@ -608,107 +589,6 @@ fn prepareSlot(
         .verify_ticks_params = verify_ticks_params,
         .account_store = state.account_store,
     } };
-}
-
-fn prewarmStaticSlotAccounts(
-    allocator: Allocator,
-    entries: []const Entry,
-    slot_account_reader: sig.accounts_db.SlotAccountReader,
-    logger: anytype,
-) !void {
-    var pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
-    defer pubkeys.deinit(allocator);
-
-    const max_pubkeys = replayPrewarmMaxPubkeysPerSlot();
-    try appendPrewarmPubkey(allocator, &pubkeys, sig.runtime.sysvar.SlotHashes.ID, max_pubkeys);
-
-    for (entries) |entry| {
-        if (entry.isTick()) continue;
-        for (entry.transactions) |transaction| {
-            for (transaction.msg.account_keys) |pubkey| {
-                try appendPrewarmPubkey(allocator, &pubkeys, pubkey, max_pubkeys);
-            }
-            for (transaction.msg.address_lookups) |lookup| {
-                try appendPrewarmPubkey(allocator, &pubkeys, lookup.table_address, max_pubkeys);
-            }
-        }
-    }
-
-    try slot_account_reader.prewarmColdAccounts(pubkeys.keys());
-    logger.debug().logf("prewarmed static compressed slot accounts count={}", .{pubkeys.count()});
-}
-
-fn prewarmResolvedSlotAccounts(
-    allocator: Allocator,
-    transactions: []const ResolvedTransaction,
-    slot_account_reader: sig.accounts_db.SlotAccountReader,
-    logger: anytype,
-) !void {
-    var pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
-    defer pubkeys.deinit(allocator);
-
-    const max_pubkeys = replayPrewarmMaxPubkeysPerSlot();
-    for (transactions) |transaction| {
-        for (transaction.accounts.items(.pubkey)) |pubkey| {
-            try appendPrewarmPubkey(allocator, &pubkeys, pubkey, max_pubkeys);
-        }
-    }
-
-    try slot_account_reader.prewarmColdAccounts(pubkeys.keys());
-    logger.debug().logf("prewarmed resolved compressed slot accounts count={}", .{pubkeys.count()});
-}
-
-fn appendPrewarmPubkey(
-    allocator: Allocator,
-    pubkeys: *sig.utils.collections.PubkeyMap(void),
-    pubkey: sig.core.Pubkey,
-    max_pubkeys: usize,
-) !void {
-    if (max_pubkeys != 0 and pubkeys.count() >= max_pubkeys) return;
-    if (pubkeys.contains(pubkey)) return;
-    try pubkeys.put(allocator, pubkey, {});
-}
-
-fn replayPrewarmCompressedAccountsEnabled() bool {
-    return envFlag("SIG_REPLAY_PREWARM_COMPRESSED_ACCOUNTS", false);
-}
-
-fn replayPrewarmMaxPubkeysPerSlot() usize {
-    const value = envU64(
-        "SIG_REPLAY_PREWARM_MAX_PUBKEYS_PER_SLOT",
-        DEFAULT_PREWARM_MAX_PUBKEYS_PER_SLOT,
-    );
-    return @intCast(@min(value, std.math.maxInt(usize)));
-}
-
-fn envFlag(key: []const u8, default_value: bool) bool {
-    const allocator = std.heap.page_allocator;
-    const raw = std.process.getEnvVarOwned(allocator, key) catch return default_value;
-    defer allocator.free(raw);
-
-    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
-    if (trimmed.len == 0) return default_value;
-    if (std.mem.eql(u8, trimmed, "1") or
-        std.ascii.eqlIgnoreCase(trimmed, "true") or
-        std.ascii.eqlIgnoreCase(trimmed, "yes") or
-        std.ascii.eqlIgnoreCase(trimmed, "on"))
-        return true;
-    if (std.mem.eql(u8, trimmed, "0") or
-        std.ascii.eqlIgnoreCase(trimmed, "false") or
-        std.ascii.eqlIgnoreCase(trimmed, "no") or
-        std.ascii.eqlIgnoreCase(trimmed, "off"))
-        return false;
-    return default_value;
-}
-
-fn envU64(key: []const u8, default_value: u64) u64 {
-    const allocator = std.heap.page_allocator;
-    const raw = std.process.getEnvVarOwned(allocator, key) catch return default_value;
-    defer allocator.free(raw);
-
-    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
-    if (trimmed.len == 0) return default_value;
-    return std.fmt.parseInt(u64, trimmed, 10) catch default_value;
 }
 
 pub const VerifyTicksParams = struct {

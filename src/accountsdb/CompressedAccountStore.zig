@@ -71,13 +71,6 @@ const Metrics = struct {
     get_count: *sig.prometheus.Counter,
     lookup_miss_count: *sig.prometheus.Counter,
     overlay_hit_count: *sig.prometheus.Counter,
-    prewarm_call_count: *sig.prometheus.Counter,
-    prewarm_address_count: *sig.prometheus.Counter,
-    prewarm_lookup_found_count: *sig.prometheus.Counter,
-    prewarm_lookup_miss_count: *sig.prometheus.Counter,
-    prewarm_chunk_hit_count: *sig.prometheus.Counter,
-    prewarm_chunk_insert_count: *sig.prometheus.Counter,
-    prewarm_chunk_skip_count: *sig.prometheus.Counter,
     cache_hit_count: *sig.prometheus.Counter,
     cache_miss_count: *sig.prometheus.Counter,
     cache_insert_count: *sig.prometheus.Counter,
@@ -358,25 +351,6 @@ pub fn get(
     return try self.readAccountRecord(allocator, address, record);
 }
 
-pub fn prewarm(
-    self: *CompressedAccountStore,
-    addresses: []const Pubkey,
-) !void {
-    self.metrics.prewarm_call_count.inc();
-    self.metrics.prewarm_address_count.add(addresses.len);
-
-    if (self.overlay_store) |overlay| try overlay.prewarm(addresses);
-
-    for (addresses) |address| {
-        const record = try self.lookup(address) orelse {
-            self.metrics.prewarm_lookup_miss_count.inc();
-            continue;
-        };
-        self.metrics.prewarm_lookup_found_count.inc();
-        try self.prewarmAccountRecord(record);
-    }
-}
-
 pub fn samplePubkeys(
     self: *CompressedAccountStore,
     allocator: std.mem.Allocator,
@@ -510,39 +484,6 @@ fn readAccountRecord(
     return try decodeAccountRecordFromChunk(allocator, address, record, decompressed);
 }
 
-fn prewarmAccountRecord(
-    self: *CompressedAccountStore,
-    record: IndexRecord,
-) !void {
-    if (record.chunk_id >= self.chunk_table.len) {
-        self.metrics.prewarm_chunk_skip_count.inc();
-        return;
-    }
-    const chunk = self.chunk_table[record.chunk_id];
-    if (chunk.uncompressed_len == 0 or chunk.uncompressed_len > self.max_chunk_bytes) {
-        self.metrics.prewarm_chunk_skip_count.inc();
-        return;
-    }
-    if (record.uncompressed_offset > chunk.uncompressed_len or
-        record.record_len > chunk.uncompressed_len - record.uncompressed_offset)
-    {
-        self.metrics.prewarm_chunk_skip_count.inc();
-        return;
-    }
-    if (!self.shouldCacheChunk(chunk.uncompressed_len)) {
-        self.metrics.prewarm_chunk_skip_count.inc();
-        return;
-    }
-
-    if (self.cacheContainsChunk(record.chunk_id)) {
-        self.metrics.prewarm_chunk_hit_count.inc();
-        return;
-    }
-
-    const decompressed = try self.decompressChunk(self.allocator, chunk);
-    try self.insertPrewarmedChunk(record.chunk_id, decompressed);
-}
-
 fn readAccountRecordFromCache(
     self: *CompressedAccountStore,
     allocator: std.mem.Allocator,
@@ -568,30 +509,6 @@ fn readAccountRecordFromCache(
     }
     self.metrics.cache_miss_count.inc();
     return null;
-}
-
-fn cacheContainsChunk(self: *CompressedAccountStore, chunk_id: u32) bool {
-    if (self.chunk_cache.len == 0) return false;
-
-    self.chunk_cache_mutex.lock();
-    defer self.chunk_cache_mutex.unlock();
-
-    return self.cacheContainsChunkLocked(chunk_id);
-}
-
-fn cacheContainsChunkLocked(self: *CompressedAccountStore, chunk_id: u32) bool {
-    if (self.chunk_cache_index.get(chunk_id)) |entry_index| {
-        if (entry_index < self.chunk_cache.len) {
-            const entry = &self.chunk_cache[entry_index];
-            if (entry.occupied and entry.chunk_id == chunk_id) {
-                self.chunk_cache_clock +%= 1;
-                entry.last_used = self.chunk_cache_clock;
-                return true;
-            }
-        }
-        _ = self.chunk_cache_index.remove(chunk_id);
-    }
-    return false;
 }
 
 fn cacheRemoveEntry(self: *CompressedAccountStore, index: usize) void {
@@ -633,36 +550,6 @@ fn cacheAdoptEntry(
     self.metrics.cache_bytes.set(self.chunk_cache_bytes);
     self.metrics.cache_entries.set(@intCast(self.chunk_cache_index.count()));
     self.metrics.cache_insert_count.inc();
-}
-
-fn insertPrewarmedChunk(
-    self: *CompressedAccountStore,
-    chunk_id: u32,
-    decompressed: []u8,
-) !void {
-    errdefer self.allocator.free(decompressed);
-
-    self.chunk_cache_mutex.lock();
-    defer self.chunk_cache_mutex.unlock();
-
-    if (self.cacheContainsChunkLocked(chunk_id)) {
-        self.allocator.free(decompressed);
-        self.metrics.prewarm_chunk_hit_count.inc();
-        return;
-    }
-
-    while (self.chunk_cache_bytes + decompressed.len > self.chunk_cache_max_bytes) {
-        const victim = self.oldestCacheEntry() orelse break;
-        self.cacheRemoveEntry(victim);
-    }
-
-    const target = self.emptyCacheEntry() orelse self.oldestCacheEntry() orelse {
-        self.allocator.free(decompressed);
-        self.metrics.prewarm_chunk_skip_count.inc();
-        return;
-    };
-    try self.cacheAdoptEntry(target, chunk_id, decompressed);
-    self.metrics.prewarm_chunk_insert_count.inc();
 }
 
 fn cacheRefreshExisting(

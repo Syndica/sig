@@ -296,16 +296,6 @@ pub const SlotAccountReader = union(enum) {
             .noop => null,
         };
     }
-
-    pub fn prewarmColdAccounts(
-        self: SlotAccountReader,
-        addresses: []const Pubkey,
-    ) !void {
-        return switch (self) {
-            .accounts_db => |pair| try pair[0].prewarmColdAccounts(addresses, pair[1]),
-            .thread_safe_map, .account_map, .account_shared_data_map, .noop => {},
-        };
-    }
 };
 
 /// Simple implementation of AccountReader and AccountStore, used for tests
