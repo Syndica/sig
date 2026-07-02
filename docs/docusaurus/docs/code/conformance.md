@@ -61,8 +61,11 @@ For customization, try `--help`.
 **Run the conformance CI job**
 
 ```bash
-scripts/ci-run.sh
+scripts/ci-run.sh v1   # or: scripts/ci-run.sh v2
 ```
+
+The version arg must match the `-Dversion` you used to build `libsolfuzz_sig`
+(default: `v1`).
 
 **Run solana-conformance directly**
 
@@ -247,19 +250,29 @@ If the error code matches but `instruction_error_index` differs (or one is missi
 
 After fixing a bug, follow these steps before committing:
 
-1. **Run the full test suite**:
+1. **Run the full test suite** (defaults to the v1 backend; pass `--version v2`
+   when working on the v2 backend):
    ```bash
    run
    ```
 
-2. **Update `scripts/misc_failures.txt`** with the new results:
+2. **Update the version-specific `misc_failures` list** with the new results.
+   `run` writes `env/test-outputs/misc_failures.<version>.txt`; copy it over
+   the matching checked-in file:
    ```bash
-   cp env/test-outputs/misc_failures.txt scripts/misc_failures.txt
+   cp env/test-outputs/misc_failures.v1.txt scripts/misc_failures.v1.txt
+   # or, when working on v2:
+   # cp env/test-outputs/misc_failures.v2.txt scripts/misc_failures.v2.txt
    ```
 
-3. **Check for regressions.** Any lines that were added to `misc_failures.txt` (tests that were previously passing but now fail) mean you introduced a regression. Do not commit if there are any regressions.
+3. **Check for regressions.** Any lines that were added to
+   `misc_failures.<version>.txt` (tests that were previously passing but now
+   fail) mean you introduced a regression. Do not commit if there are any
+   regressions.
 
-4. **Run the CI script** to confirm it passes with the new failing list:
+4. **Run the CI script** for the backend you changed to confirm it passes with
+   the new failing list:
    ```bash
-   scripts/ci-run.sh
+   scripts/ci-run.sh v1
+   # or: scripts/ci-run.sh v2
    ```
