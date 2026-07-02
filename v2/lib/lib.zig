@@ -27,6 +27,7 @@ pub const topology = @import("topology.zig");
 pub const net = @import("net.zig");
 pub const clock = @import("clock.zig");
 pub const crypto = @import("crypto.zig");
+pub const consensus = @import("consensus.zig");
 pub const solana = @import("solana.zig");
 pub const shred = @import("shred.zig");
 pub const gossip = @import("gossip.zig");
