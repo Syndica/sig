@@ -307,12 +307,13 @@ const Unrooted = extern struct {
 
     const max_blocks = lib.replay.BlockPool.capacity;
 
-    // 2MiB entries + 4B len
     const Map = extern struct {
+        seed: u64,
         len: u32 = 0, // only used to assert `max_mutations_per_block` holds true
-        data: [N]AccountRef = @splat(.invalid), // 2MiB
+        data: [N]AccountRef = @splat(.invalid), // ~1.4MiB
 
-        const N = std.math.ceilPowerOfTwo(usize, max_mutations_per_block) catch unreachable;
+        // NOTE: might be a good idea to oversize this for performance reasons
+        const N = max_mutations_per_block;
 
         fn EntryPtr(comptime SelfPtr: type) type {
             return switch (SelfPtr) {
@@ -324,11 +325,10 @@ const Unrooted = extern struct {
 
         fn entry(
             self: anytype,
-            seed: u64,
             account_pool: *lib.accounts_db.AccountPool,
             pubkey: *const Pubkey,
         ) EntryPtr(@TypeOf(self)) {
-            var i: usize = @intCast(pubkey.hash(seed) & (N - 1));
+            var i: usize = @intCast(pubkey.hash(self.seed) % N);
 
             while (true) : (i = (i + 1) % N) {
                 if (self.data[i] == .invalid)
@@ -340,19 +340,18 @@ const Unrooted = extern struct {
 
         fn get(
             self: *const Map,
-            seed: u64, // see `Unrooted.fetch` for how to use the correct seed
             account_pool: *lib.accounts_db.AccountPool,
             pubkey: *const Pubkey,
         ) AccountRef {
-            return self.entry(seed, account_pool, pubkey).*;
+            return self.entry(account_pool, pubkey).*;
         }
 
         // The map takes a ref to the new account.
         // Returns the replaced entry, which the caller is expected to unref/free.
+        // Entries are replaced when an account of the inserted pubkey already exists in the map.
         // lint: allow_unused
         fn put(
             self: *Map,
-            seed: u64, // see `Unrooted.fetch` for how to use the correct seed
             account_pool: *lib.accounts_db.AccountPool,
             new_account_ref: AccountRef,
         ) AccountRef {
@@ -363,7 +362,7 @@ const Unrooted = extern struct {
             const new_account = account_pool.getAccount(new_account_ref);
             const pubkey: *const Pubkey = &new_account.pubkey;
 
-            const found_entry: *u32 = self.entry(seed, account_pool, pubkey);
+            const found_entry: *AccountRef = self.entry(account_pool, pubkey);
 
             // don't "replace" an accountref with itself!
             std.debug.assert(found_entry.* != new_account_ref);
@@ -388,7 +387,13 @@ const Unrooted = extern struct {
     };
 
     fn init(self: *Unrooted) void {
-        for (&self.maps) |*map| map.* = .{};
+        for (&self.maps) |*map| map.* = .{
+            // TODO:
+            // 1) create randomly + secretly at startup, to avoid performance degradation from attackers
+            //    using pre-made keys to cause bad clustering
+            // 2) change the seed used per block to avoid possibility of worst-case clustering
+            .seed = 123,
+        };
     }
 
     /// Get an account purely from the unrooted store.
@@ -408,18 +413,12 @@ const Unrooted = extern struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.fetch" });
         defer zone.deinit();
 
-        // TODO:
-        // 1) create randomly + secretly at startup, to avoid performance degradation from attackers
-        //    using pre-made keys to cause bad clustering
-        // 2) change the seed used per block to avoid possibility of worst-case clustering
-        const seed = 123;
-
         var current = block.ptr(block_pool);
         while (current) |ancestor_block| : (current = ancestor_block.parent.ptr(block_pool)) {
             const current_map: *const Map =
                 &self.maps[block_pool.ptrToIndex(ancestor_block).index().?];
 
-            const account_ref = current_map.get(seed, account_pool, key);
+            const account_ref = current_map.get(account_pool, key);
             if (account_ref != .invalid) {
                 const account = account_pool.getAccount(account_ref);
                 account.ref();
