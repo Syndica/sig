@@ -95,6 +95,8 @@ pub const Metrics = struct {
     slot_read_frame_compressed_pubkeys: *sig.prometheus.Gauge(u64),
     slot_read_frame_missing_pubkeys: *sig.prometheus.Gauge(u64),
     slot_read_frame_unique_chunks: *sig.prometheus.Gauge(u64),
+    slot_read_frame_chunks_hot_before_load: *sig.prometheus.Gauge(u64),
+    slot_read_frame_chunks_cold_before_load: *sig.prometheus.Gauge(u64),
     slot_read_frame_chunks_decoded: *sig.prometheus.Gauge(u64),
     slot_read_frame_chunks_cached: *sig.prometheus.Gauge(u64),
     slot_read_frame_accounts_loaded: *sig.prometheus.Gauge(u64),

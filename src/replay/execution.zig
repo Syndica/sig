@@ -821,6 +821,11 @@ fn populateSlotReadFrame(
         }
     }.lessThan);
 
+    const chunk_hotness = if (envBool("SIG_REPLAY_SLOT_READ_FRAME_MEASURE_CHUNK_HOTNESS", false))
+        try measureSlotReadFrameChunkHotness(allocator, account_reader, readonly_pubkeys.items)
+    else
+        SlotReadFrameChunkHotness{};
+
     const result = try account_reader.batchLoadCompressedAccounts(
         allocator,
         readonly_pubkeys.items,
@@ -836,11 +841,53 @@ fn populateSlotReadFrame(
     metrics.slot_read_frame_compressed_pubkeys.set(result.compressed_pubkeys);
     metrics.slot_read_frame_missing_pubkeys.set(result.missing_pubkeys);
     metrics.slot_read_frame_unique_chunks.set(result.unique_chunks);
+    metrics.slot_read_frame_chunks_hot_before_load.set(chunk_hotness.hot_chunks);
+    metrics.slot_read_frame_chunks_cold_before_load.set(chunk_hotness.cold_chunks);
     metrics.slot_read_frame_chunks_decoded.set(result.chunks_decoded);
     metrics.slot_read_frame_chunks_cached.set(result.chunks_cached);
     metrics.slot_read_frame_accounts_loaded.set(result.accounts_loaded);
     metrics.slot_read_frame_accounts_cached.set(result.accounts_cached);
     metrics.slot_read_frame_accounts_skipped.set(result.accounts_skipped);
+}
+
+const SlotReadFrameChunkHotness = struct {
+    compressed_pubkeys: u64 = 0,
+    missing_pubkeys: u64 = 0,
+    unique_chunks: u64 = 0,
+    hot_chunks: u64 = 0,
+    cold_chunks: u64 = 0,
+};
+
+fn measureSlotReadFrameChunkHotness(
+    allocator: Allocator,
+    account_reader: sig.accounts_db.SlotAccountReader,
+    readonly_pubkeys: []const sig.core.Pubkey,
+) !SlotReadFrameChunkHotness {
+    var result: SlotReadFrameChunkHotness = .{};
+
+    var unique_chunks: std.AutoHashMapUnmanaged(u32, void) = .{};
+    defer unique_chunks.deinit(allocator);
+
+    for (readonly_pubkeys) |pubkey| {
+        const chunk_id = try account_reader.compressedAccountChunkId(pubkey) orelse {
+            result.missing_pubkeys += 1;
+            continue;
+        };
+        result.compressed_pubkeys += 1;
+
+        const gop = try unique_chunks.getOrPut(allocator, chunk_id);
+        if (gop.found_existing) continue;
+        gop.value_ptr.* = {};
+
+        if (account_reader.compressedAccountChunkCached(chunk_id)) {
+            result.hot_chunks += 1;
+        } else {
+            result.cold_chunks += 1;
+        }
+    }
+
+    result.unique_chunks = @intCast(unique_chunks.count());
+    return result;
 }
 
 fn buildCachedSlotAccountStore(

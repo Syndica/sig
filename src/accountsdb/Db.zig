@@ -136,6 +136,10 @@ pub fn compressedAccountChunkId(self: *Db, address: Pubkey) !?u32 {
     return try self.rooted.compressedAccountChunkId(address);
 }
 
+pub fn compressedAccountChunkCached(self: *Db, chunk_id: u32) bool {
+    return self.rooted.compressedAccountChunkCached(chunk_id);
+}
+
 pub fn prefetchCompressedAccountChunks(
     self: *Db,
     allocator: std.mem.Allocator,

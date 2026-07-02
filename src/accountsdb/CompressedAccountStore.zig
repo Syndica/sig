@@ -625,6 +625,12 @@ pub fn lookupChunkId(self: *CompressedAccountStore, address: Pubkey) !?u32 {
     return record.chunk_id;
 }
 
+pub fn chunkCached(self: *CompressedAccountStore, chunk_id: u32) bool {
+    if (self.chunkCachedLocal(chunk_id)) return true;
+    if (self.overlay_store) |overlay| return overlay.chunkCached(chunk_id);
+    return false;
+}
+
 pub fn prefetchChunksForPubkeys(
     self: *CompressedAccountStore,
     allocator: std.mem.Allocator,
@@ -1372,6 +1378,22 @@ fn readAccountRecordFromCache(
     }
     self.metrics.cache_miss_count.inc();
     return null;
+}
+
+fn chunkCachedLocal(self: *CompressedAccountStore, chunk_id: u32) bool {
+    if (self.chunk_cache.len == 0) return false;
+
+    self.chunk_cache_mutex.lock();
+    defer self.chunk_cache_mutex.unlock();
+
+    if (self.chunk_cache_index.get(chunk_id)) |entry_index| {
+        if (entry_index < self.chunk_cache.len) {
+            const entry = &self.chunk_cache[entry_index];
+            if (entry.occupied and entry.chunk_id == chunk_id) return true;
+        }
+        _ = self.chunk_cache_index.remove(chunk_id);
+    }
+    return false;
 }
 
 fn cacheRemoveEntry(self: *CompressedAccountStore, index: usize) void {

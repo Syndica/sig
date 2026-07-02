@@ -346,6 +346,14 @@ pub const SlotAccountReader = union(enum) {
         };
     }
 
+    pub fn compressedAccountChunkCached(self: SlotAccountReader, chunk_id: u32) bool {
+        return switch (self) {
+            .accounts_db => |pair| pair[0].compressedAccountChunkCached(chunk_id),
+            .cached_accounts_db => |tuple| tuple[0].compressedAccountChunkCached(chunk_id),
+            else => false,
+        };
+    }
+
     pub fn prefetchCompressedChunks(
         self: SlotAccountReader,
         allocator: std.mem.Allocator,
