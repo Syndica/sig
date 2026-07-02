@@ -283,6 +283,18 @@ pub fn compressedStoreSamplePubkeys(
     return error.MissingCompressedAccountStore;
 }
 
+pub fn compressedStoreSamplePubkeysFromChunks(
+    self: *Rooted,
+    allocator: std.mem.Allocator,
+    max_samples: usize,
+    accounts_per_chunk: usize,
+) ![]CompressedAccountStore.Sample {
+    if (self.compressed_account_store) |*store| {
+        return try store.samplePubkeysFromChunks(allocator, max_samples, accounts_per_chunk);
+    }
+    return error.MissingCompressedAccountStore;
+}
+
 pub fn compressedAccountChunkId(self: *Rooted, address: Pubkey) !?u32 {
     if (self.compressed_account_store) |*store| {
         return try store.lookupChunkId(address);

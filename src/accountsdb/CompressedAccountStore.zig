@@ -184,6 +184,39 @@ const PrefetchChunkStatus = enum {
     skipped,
 };
 
+const DecompressScratch = struct {
+    compressed_buf: []u8,
+    zstd_buf: []u8,
+
+    fn init(allocator: std.mem.Allocator) !DecompressScratch {
+        return .{
+            .compressed_buf = &.{},
+            .zstd_buf = try allocator.alloc(
+                u8,
+                std.compress.zstd.default_window_len + std.compress.zstd.block_size_max,
+            ),
+        };
+    }
+
+    fn deinit(self: *DecompressScratch, allocator: std.mem.Allocator) void {
+        if (self.compressed_buf.len != 0) allocator.free(self.compressed_buf);
+        allocator.free(self.zstd_buf);
+        self.* = undefined;
+    }
+
+    fn compressedSlice(
+        self: *DecompressScratch,
+        allocator: std.mem.Allocator,
+        len: usize,
+    ) ![]u8 {
+        if (self.compressed_buf.len < len) {
+            if (self.compressed_buf.len != 0) allocator.free(self.compressed_buf);
+            self.compressed_buf = try allocator.alloc(u8, len);
+        }
+        return self.compressed_buf[0..len];
+    }
+};
+
 pub const Sample = struct {
     pubkey: Pubkey,
     data_len: u32,
@@ -493,6 +526,77 @@ pub fn samplePubkeys(
     return samples;
 }
 
+pub fn samplePubkeysFromChunks(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    max_samples: usize,
+    accounts_per_chunk: usize,
+) ![]Sample {
+    if (self.overlay_store) |overlay| {
+        const overlay_samples = try overlay.samplePubkeysFromChunks(allocator, max_samples, accounts_per_chunk);
+        if (overlay_samples.len > 0 or max_samples == 0) return overlay_samples;
+        allocator.free(overlay_samples);
+    }
+
+    if (max_samples == 0 or self.chunk_table.len == 0) return try allocator.alloc(Sample, 0);
+    if (accounts_per_chunk == 0) return error.InvalidArgument;
+
+    const samples = try allocator.alloc(Sample, max_samples);
+    errdefer allocator.free(samples);
+
+    const target_chunks = (max_samples + accounts_per_chunk - 1) / accounts_per_chunk;
+    const stride = @max(@as(usize, 1), self.chunk_table.len / @max(@as(usize, 1), target_chunks));
+    var scratch = try DecompressScratch.init(allocator);
+    defer scratch.deinit(allocator);
+
+    var sample_count: usize = 0;
+    var chunk_index: usize = 0;
+    while (sample_count < max_samples and chunk_index < self.chunk_table.len) : (chunk_index += stride) {
+        const chunk = self.chunk_table[chunk_index];
+        if (chunk.account_records == 0 or chunk.uncompressed_len == 0 or chunk.uncompressed_len > self.max_chunk_bytes)
+            continue;
+
+        const decompressed = try self.decompressChunkWithScratch(allocator, chunk, &scratch);
+        defer allocator.free(decompressed);
+
+        var offset: usize = 0;
+        var chunk_samples: usize = 0;
+        var records_seen: u32 = 0;
+        while (offset < decompressed.len and records_seen < chunk.account_records and chunk_samples < accounts_per_chunk and sample_count < max_samples) {
+            if (decompressed.len - offset < @sizeOf(SnapshotAccountHeader))
+                return error.InvalidCompressedAccountRecord;
+            const header = decodeSnapshotAccountHeader(decompressed[offset..][0..@sizeOf(SnapshotAccountHeader)]);
+            if (header.executable > 1)
+                return error.InvalidCompressedAccountRecord;
+            if (header.data_len > sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH)
+                return error.InvalidCompressedAccountRecord;
+            if (header.data_len > std.math.maxInt(u32))
+                return error.InvalidCompressedAccountRecord;
+
+            const record_len_u64 = @as(u64, @intCast(@sizeOf(SnapshotAccountHeader))) + header.data_len;
+            if (record_len_u64 > std.math.maxInt(u32) or record_len_u64 > std.math.maxInt(usize))
+                return error.InvalidCompressedAccountRecord;
+            const record_len: usize = @intCast(record_len_u64);
+            if (record_len > decompressed.len - offset)
+                return error.InvalidCompressedAccountRecord;
+
+            samples[sample_count] = .{
+                .pubkey = header.pubkey,
+                .data_len = @intCast(header.data_len),
+                .record_len = @intCast(record_len),
+                .chunk_id = @intCast(chunk_index),
+            };
+            sample_count += 1;
+            chunk_samples += 1;
+            records_seen += 1;
+            offset += record_len;
+        }
+    }
+
+    if (sample_count == samples.len) return samples;
+    return try allocator.realloc(samples, sample_count);
+}
+
 pub fn lookupChunkId(self: *CompressedAccountStore, address: Pubkey) !?u32 {
     if (self.overlay_store) |overlay| {
         if (try overlay.lookupChunkId(address)) |chunk_id| return chunk_id;
@@ -603,6 +707,8 @@ pub fn batchDecodeAccountsForPubkeys(
     result.unique_chunks = @intCast(unique_chunks.count());
 
     std.mem.sort(BatchDecodeCandidate, candidates.items, {}, BatchDecodeCandidate.lessThan);
+    var scratch = try DecompressScratch.init(self.allocator);
+    defer scratch.deinit(self.allocator);
 
     var i: usize = 0;
     while (i < candidates.items.len) {
@@ -627,7 +733,7 @@ pub fn batchDecodeAccountsForPubkeys(
             continue;
         }
 
-        const decompressed = try self.decompressChunk(self.allocator, chunk);
+        const decompressed = try self.decompressChunkWithScratch(self.allocator, chunk, &scratch);
         var owns_decompressed = true;
         errdefer if (owns_decompressed) self.allocator.free(decompressed);
         try self.batchDecodeFromChunkBytes(allocator, candidates.items[i..end], decompressed, &result);
@@ -681,6 +787,8 @@ pub fn batchLoadAccountsForPubkeys(
     result.unique_chunks = @intCast(unique_chunks.count());
 
     std.mem.sort(BatchDecodeCandidate, candidates.items, {}, BatchDecodeCandidate.lessThan);
+    var scratch = try DecompressScratch.init(self.allocator);
+    defer scratch.deinit(self.allocator);
 
     var i: usize = 0;
     while (i < candidates.items.len) {
@@ -710,7 +818,7 @@ pub fn batchLoadAccountsForPubkeys(
             continue;
         }
 
-        const decompressed = try self.decompressChunk(self.allocator, chunk);
+        const decompressed = try self.decompressChunkWithScratch(self.allocator, chunk, &scratch);
         var owns_decompressed = true;
         errdefer if (owns_decompressed) self.allocator.free(decompressed);
         try self.batchLoadFromChunkBytes(
@@ -1327,6 +1435,37 @@ fn decompressChunk(
     return decompressed;
 }
 
+fn decompressChunkWithScratch(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    chunk: ChunkEntry,
+    scratch: *DecompressScratch,
+) ![]u8 {
+    var timer = sig.time.Timer.start();
+    defer self.metrics.decompress_chunk_time.observe(timer.read().asNanos());
+
+    self.metrics.decompress_count.inc();
+    self.metrics.decompress_compressed_bytes.add(chunk.compressed_len);
+    self.metrics.decompress_uncompressed_bytes.add(chunk.uncompressed_len);
+
+    const compressed = try scratch.compressedSlice(allocator, chunk.compressed_len);
+    {
+        var pread_timer = sig.time.Timer.start();
+        defer self.metrics.segments_pread_time.observe(pread_timer.read().asNanos());
+        if (try self.segments_file.preadAll(compressed, chunk.compressed_offset) != compressed.len)
+            return error.InvalidCompressedAccountChunk;
+    }
+
+    const decompressed = try allocator.alloc(u8, chunk.uncompressed_len);
+    errdefer allocator.free(decompressed);
+    {
+        var zstd_timer = sig.time.Timer.start();
+        defer self.metrics.zstd_decode_time.observe(zstd_timer.read().asNanos());
+        try decompressZstdFrameWithBuffer(compressed, decompressed, scratch.zstd_buf);
+    }
+    return decompressed;
+}
+
 fn decodeAccountRecordFromChunkWithMetrics(
     self: *CompressedAccountStore,
     allocator: std.mem.Allocator,
@@ -1382,13 +1521,21 @@ fn decompressZstdFrame(
     compressed: []const u8,
     decompressed: []u8,
 ) !void {
-    var input = std.io.Reader.fixed(compressed);
     const zstd_buf = try allocator.alloc(
         u8,
         std.compress.zstd.default_window_len + std.compress.zstd.block_size_max,
     );
     defer allocator.free(zstd_buf);
 
+    try decompressZstdFrameWithBuffer(compressed, decompressed, zstd_buf);
+}
+
+fn decompressZstdFrameWithBuffer(
+    compressed: []const u8,
+    decompressed: []u8,
+    zstd_buf: []u8,
+) !void {
+    var input = std.io.Reader.fixed(compressed);
     var stream: std.compress.zstd.Decompress = .init(&input, zstd_buf, .{});
     try stream.reader.readSliceAll(decompressed);
 }
