@@ -602,6 +602,15 @@ fn prepareSlot(
             resolved_txns,
         );
     }
+    if (envBool("SIG_REPLAY_PREFETCH_COMPRESSED_CHUNKS", false)) {
+        try prefetchCompressedAccountChunks(
+            state.allocator,
+            metrics,
+            slot,
+            slot_account_reader,
+            resolved_txns,
+        );
+    }
 
     var slot_account_cache: ?*SlotAccountCache = null;
     errdefer destroySlotAccountCache(state.allocator, slot_account_cache);
@@ -849,6 +858,37 @@ fn measureCompressedAccountFanout(
     metrics.compressed_account_fanout_compressed_pubkeys.set(compressed_pubkeys);
     metrics.compressed_account_fanout_unique_chunks.set(@intCast(unique_chunks.count()));
     metrics.compressed_account_fanout_missing_pubkeys.set(missing_pubkeys);
+}
+
+fn prefetchCompressedAccountChunks(
+    allocator: Allocator,
+    metrics: replay.service.Metrics,
+    slot: Slot,
+    account_reader: sig.accounts_db.SlotAccountReader,
+    transactions: []const ResolvedTransaction,
+) !void {
+    var timer = sig.time.Timer.start();
+    defer metrics.compressed_account_prefetch_time.observe(timer.read().asNanos());
+
+    var unique_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
+    defer unique_pubkeys.deinit(allocator);
+
+    for (transactions) |transaction| {
+        for (transaction.accounts.items(.pubkey)) |pubkey| {
+            const gop = try unique_pubkeys.getOrPut(allocator, pubkey);
+            if (!gop.found_existing) gop.value_ptr.* = {};
+        }
+    }
+
+    const result = try account_reader.prefetchCompressedChunks(allocator, unique_pubkeys.keys());
+    metrics.compressed_account_prefetch_slot.set(slot);
+    metrics.compressed_account_prefetch_unique_pubkeys.set(@intCast(unique_pubkeys.count()));
+    metrics.compressed_account_prefetch_compressed_pubkeys.set(result.compressed_pubkeys);
+    metrics.compressed_account_prefetch_missing_pubkeys.set(result.missing_pubkeys);
+    metrics.compressed_account_prefetch_unique_chunks.set(result.unique_chunks);
+    metrics.compressed_account_prefetch_chunks_loaded.set(result.chunks_loaded);
+    metrics.compressed_account_prefetch_chunks_cached.set(result.chunks_cached);
+    metrics.compressed_account_prefetch_chunks_skipped.set(result.chunks_skipped);
 }
 
 fn comparePubkey(a: sig.core.Pubkey, b: sig.core.Pubkey) i8 {

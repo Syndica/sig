@@ -15,6 +15,7 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
+const CompressedAccountPrefetchResult = accounts_db.CompressedAccountStore.PrefetchResult;
 
 /// Interface for both reading and writing accounts.
 ///
@@ -341,6 +342,18 @@ pub const SlotAccountReader = union(enum) {
             .accounts_db => |pair| try pair[0].compressedAccountChunkId(address),
             .cached_accounts_db => |tuple| try tuple[0].compressedAccountChunkId(address),
             else => null,
+        };
+    }
+
+    pub fn prefetchCompressedChunks(
+        self: SlotAccountReader,
+        allocator: std.mem.Allocator,
+        pubkeys: []const Pubkey,
+    ) !CompressedAccountPrefetchResult {
+        return switch (self) {
+            .accounts_db => |pair| try pair[0].prefetchCompressedAccountChunks(allocator, pubkeys),
+            .cached_accounts_db => |tuple| try tuple[0].prefetchCompressedAccountChunks(allocator, pubkeys),
+            else => .{ .pubkeys = @intCast(pubkeys.len) },
         };
     }
 };

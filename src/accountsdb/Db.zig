@@ -4,6 +4,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 pub const Rooted = @import("Rooted.zig");
 pub const Unrooted = @import("Unrooted.zig");
+const CompressedAccountStore = @import("CompressedAccountStore.zig");
 
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
@@ -133,6 +134,14 @@ pub fn get(
 
 pub fn compressedAccountChunkId(self: *Db, address: Pubkey) !?u32 {
     return try self.rooted.compressedAccountChunkId(address);
+}
+
+pub fn prefetchCompressedAccountChunks(
+    self: *Db,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+) !CompressedAccountStore.PrefetchResult {
+    return try self.rooted.prefetchCompressedChunksForPubkeys(allocator, pubkeys);
 }
 
 pub const SlotModifiedIterator = struct {

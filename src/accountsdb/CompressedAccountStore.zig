@@ -117,6 +117,22 @@ const LookupCacheEntry = struct {
     record: IndexRecord = undefined,
 };
 
+pub const PrefetchResult = struct {
+    pubkeys: u64 = 0,
+    compressed_pubkeys: u64 = 0,
+    missing_pubkeys: u64 = 0,
+    unique_chunks: u64 = 0,
+    chunks_loaded: u64 = 0,
+    chunks_cached: u64 = 0,
+    chunks_skipped: u64 = 0,
+};
+
+const PrefetchChunkStatus = enum {
+    loaded,
+    cached,
+    skipped,
+};
+
 pub const Sample = struct {
     pubkey: Pubkey,
     data_len: u32,
@@ -411,6 +427,52 @@ pub fn lookupChunkId(self: *CompressedAccountStore, address: Pubkey) !?u32 {
     return record.chunk_id;
 }
 
+pub fn prefetchChunksForPubkeys(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+) !PrefetchResult {
+    var result: PrefetchResult = .{ .pubkeys = @intCast(pubkeys.len) };
+    if (self.chunk_cache.len == 0 or self.chunk_cache_max_bytes == 0) return result;
+
+    var unique_chunks: std.AutoHashMapUnmanaged(u32, void) = .{};
+    defer unique_chunks.deinit(allocator);
+
+    var chunk_ids: std.ArrayListUnmanaged(u32) = .{};
+    defer chunk_ids.deinit(allocator);
+    try chunk_ids.ensureTotalCapacity(allocator, pubkeys.len);
+
+    for (pubkeys) |pubkey| {
+        const record = try self.lookup(pubkey) orelse {
+            result.missing_pubkeys += 1;
+            continue;
+        };
+        const gop = try unique_chunks.getOrPut(allocator, record.chunk_id);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = {};
+            chunk_ids.appendAssumeCapacity(record.chunk_id);
+        }
+        result.compressed_pubkeys += 1;
+    }
+
+    result.unique_chunks = @intCast(chunk_ids.items.len);
+    std.mem.sort(u32, chunk_ids.items, {}, struct {
+        fn lessThan(_: void, a: u32, b: u32) bool {
+            return a < b;
+        }
+    }.lessThan);
+
+    for (chunk_ids.items) |chunk_id| {
+        switch (try self.prefetchChunkById(chunk_id)) {
+            .loaded => result.chunks_loaded += 1,
+            .cached => result.chunks_cached += 1,
+            .skipped => result.chunks_skipped += 1,
+        }
+    }
+
+    return result;
+}
+
 fn lookup(self: *CompressedAccountStore, address: Pubkey) !?IndexRecord {
     var timer = sig.time.Timer.start();
     defer self.metrics.lookup_time.observe(timer.read().asNanos());
@@ -666,6 +728,71 @@ fn oldestCacheEntry(self: *CompressedAccountStore) ?usize {
         }
     }
     return victim;
+}
+
+fn prefetchChunkById(self: *CompressedAccountStore, chunk_id: u32) !PrefetchChunkStatus {
+    if (chunk_id >= self.chunk_table.len)
+        return error.InvalidCompressedAccountRecord;
+    const chunk = self.chunk_table[chunk_id];
+    if (chunk.uncompressed_len == 0 or chunk.uncompressed_len > self.max_chunk_bytes)
+        return error.InvalidCompressedAccountChunk;
+    if (!self.shouldCacheChunk(chunk.uncompressed_len)) return .skipped;
+    if (self.touchCachedChunk(chunk_id)) return .cached;
+
+    const decompressed = try self.decompressChunk(self.allocator, chunk);
+    return try self.insertPrefetchedChunk(chunk_id, decompressed);
+}
+
+fn touchCachedChunk(self: *CompressedAccountStore, chunk_id: u32) bool {
+    self.chunk_cache_mutex.lock();
+    defer self.chunk_cache_mutex.unlock();
+
+    if (self.chunk_cache_index.get(chunk_id)) |entry_index| {
+        if (entry_index < self.chunk_cache.len) {
+            const entry = &self.chunk_cache[entry_index];
+            if (entry.occupied and entry.chunk_id == chunk_id) {
+                self.chunk_cache_clock +%= 1;
+                entry.last_used = self.chunk_cache_clock;
+                return true;
+            }
+        }
+        _ = self.chunk_cache_index.remove(chunk_id);
+    }
+    return false;
+}
+
+fn insertPrefetchedChunk(
+    self: *CompressedAccountStore,
+    chunk_id: u32,
+    decompressed: []u8,
+) !PrefetchChunkStatus {
+    self.chunk_cache_mutex.lock();
+    defer self.chunk_cache_mutex.unlock();
+
+    if (self.chunk_cache_index.get(chunk_id)) |entry_index| {
+        if (entry_index < self.chunk_cache.len) {
+            const entry = &self.chunk_cache[entry_index];
+            if (entry.occupied and entry.chunk_id == chunk_id) {
+                self.chunk_cache_clock +%= 1;
+                entry.last_used = self.chunk_cache_clock;
+                self.allocator.free(decompressed);
+                return .cached;
+            }
+        }
+        _ = self.chunk_cache_index.remove(chunk_id);
+    }
+
+    while (self.chunk_cache_bytes + decompressed.len > self.chunk_cache_max_bytes) {
+        const victim = self.oldestCacheEntry() orelse break;
+        self.cacheRemoveEntry(victim);
+    }
+
+    const target = self.emptyCacheEntry() orelse self.oldestCacheEntry() orelse {
+        self.allocator.free(decompressed);
+        return .skipped;
+    };
+    try self.cacheAdoptEntry(target, chunk_id, decompressed);
+    return .loaded;
 }
 
 fn decompressChunk(

@@ -290,6 +290,17 @@ pub fn compressedAccountChunkId(self: *Rooted, address: Pubkey) !?u32 {
     return null;
 }
 
+pub fn prefetchCompressedChunksForPubkeys(
+    self: *Rooted,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+) !CompressedAccountStore.PrefetchResult {
+    if (self.compressed_account_store) |*store| {
+        return try store.prefetchChunksForPubkeys(allocator, pubkeys);
+    }
+    return .{ .pubkeys = @intCast(pubkeys.len) };
+}
+
 fn getColdAccount(
     self: *Rooted,
     allocator: std.mem.Allocator,
