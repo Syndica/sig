@@ -1,0 +1,18 @@
+# Test-vector directories to skip when running conformance fixtures against
+# the v1 sig backend (`zig build -Dversion=v1`, the default).
+#
+# Used by both scripts/ci-run.sh and run.py as the single source of truth for
+# which fixture categories are NOT supported by the v1 sig runner. Paths are
+# relative to env/test-vectors/. Any fixture whose path equals an entry below
+# or lives under one (matched at a directory boundary) is skipped.
+#
+# scripts/misc_failures.v1.txt is a separate, file-level CI denylist for
+# individual `.fix` files that are known to fail against v1.
+#
+# See scripts/unimplemented_harnesses.v2.txt for the v2 counterpart.
+
+# Top-level categories not implemented by the v1 sig runner.
+block
+cost
+shred
+vm_serialization

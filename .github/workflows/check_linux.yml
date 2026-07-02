@@ -226,6 +226,10 @@ jobs:
 
   solana_conformance:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [v1, v2]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -237,14 +241,15 @@ jobs:
         with:
           version: 0.15.2
           cache-key:
-            build_conformance-v1-${{ hashFiles('build.zig', 'build.zig.zon',
-            'conformance/build.zig', 'conformance/build.zig.zon') }}
+            build_conformance-${{ matrix.version }}-${{ hashFiles('build.zig',
+            'build.zig.zon', 'conformance/build.zig',
+            'conformance/build.zig.zon') }}
 
       - name: Build Conformance
         run: |
           ./scripts/fetch-zig-deps.py conformance/build.zig.zon
           cd conformance
-          zig build -Dallow-no-sha -Dallow-no-avx512 -Ddisable-feature-status-logs --summary all
+          zig build -Dversion=${{ matrix.version }} -Dallow-no-sha -Dallow-no-avx512 -Ddisable-feature-status-logs --summary all
 
       - id: test_vectors_cache
         uses: actions/cache@v4
@@ -264,7 +269,7 @@ jobs:
           git checkout $TEST_VECTORS_COMMIT
 
       - name: Run Fixtures
-        run: conformance/scripts/ci-run.sh
+        run: conformance/scripts/ci-run.sh ${{ matrix.version }}
 
   feature_compat_conformance:
     runs-on: ubuntu-latest
