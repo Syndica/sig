@@ -28,6 +28,7 @@ const DEFAULT_LOOKUP_CACHE_ENTRIES: u64 = 1_000_000;
 const DEFAULT_DECODED_ACCOUNT_CACHE_ENTRIES: u64 = 16_384;
 const DEFAULT_DECODED_ACCOUNT_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const DEFAULT_DECODED_ACCOUNT_CACHE_CLEAR_EACH_BATCH = true;
+const MAX_BATCH_DECODE_THREADS: u64 = 64;
 
 allocator: std.mem.Allocator,
 index_file: std.fs.File,
@@ -176,6 +177,24 @@ const BatchDecodeCandidate = struct {
         }
         return a.record.chunk_id < b.record.chunk_id;
     }
+};
+
+const BatchChunkGroup = struct {
+    chunk_id: u32,
+    chunk: ChunkEntry,
+    candidates: []const BatchDecodeCandidate,
+};
+
+const ParallelChunkDecodeResult = struct {
+    decompressed: ?[]u8 = null,
+    err: ?anyerror = null,
+};
+
+const ParallelChunkDecodeContext = struct {
+    store: *CompressedAccountStore,
+    groups: []const BatchChunkGroup,
+    results: []ParallelChunkDecodeResult,
+    next_index: std.atomic.Value(usize) = .init(0),
 };
 
 const PrefetchChunkStatus = enum {
@@ -787,8 +806,9 @@ pub fn batchLoadAccountsForPubkeys(
     result.unique_chunks = @intCast(unique_chunks.count());
 
     std.mem.sort(BatchDecodeCandidate, candidates.items, {}, BatchDecodeCandidate.lessThan);
-    var scratch = try DecompressScratch.init(self.allocator);
-    defer scratch.deinit(self.allocator);
+    var cold_groups: std.ArrayListUnmanaged(BatchChunkGroup) = .{};
+    defer cold_groups.deinit(allocator);
+    try cold_groups.ensureTotalCapacity(allocator, result.unique_chunks);
 
     var i: usize = 0;
     while (i < candidates.items.len) {
@@ -818,21 +838,20 @@ pub fn batchLoadAccountsForPubkeys(
             continue;
         }
 
-        const decompressed = try self.decompressChunkWithScratch(self.allocator, chunk, &scratch);
-        var owns_decompressed = true;
-        errdefer if (owns_decompressed) self.allocator.free(decompressed);
-        try self.batchLoadFromChunkBytes(
-            allocator,
-            candidates.items[i..end],
-            decompressed,
-            accounts,
-            &result,
-        );
-        _ = try self.insertPrefetchedChunk(chunk_id, decompressed);
-        owns_decompressed = false;
-        result.chunks_decoded += 1;
+        cold_groups.appendAssumeCapacity(.{
+            .chunk_id = chunk_id,
+            .chunk = chunk,
+            .candidates = candidates.items[i..end],
+        });
         i = end;
     }
+
+    try self.batchLoadColdChunkGroups(
+        allocator,
+        cold_groups.items,
+        accounts,
+        &result,
+    );
 
     self.recordBatchDecodeResult(result);
     return result;
@@ -1115,6 +1134,140 @@ fn batchLoadFromChunkBytes(
         );
         try putLoadedAccount(allocator, accounts, candidate.pubkey, &account);
         result.accounts_loaded += 1;
+    }
+}
+
+fn batchLoadColdChunkGroups(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    groups: []const BatchChunkGroup,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    result: *BatchDecodeResult,
+) !void {
+    if (groups.len == 0) return;
+
+    const configured_threads = envU64("SIG_COMPRESSED_ACCOUNT_STORE_BATCH_DECODE_THREADS", 1);
+    const max_threads_u64 = @min(configured_threads, MAX_BATCH_DECODE_THREADS);
+    const max_threads: usize = @intCast(max_threads_u64);
+    if (max_threads <= 1 or groups.len == 1) {
+        return try self.batchLoadColdChunkGroupsSerial(allocator, groups, accounts, result);
+    }
+
+    return try self.batchLoadColdChunkGroupsParallel(
+        allocator,
+        groups,
+        accounts,
+        result,
+        @min(max_threads, groups.len),
+    );
+}
+
+fn batchLoadColdChunkGroupsSerial(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    groups: []const BatchChunkGroup,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    result: *BatchDecodeResult,
+) !void {
+    var scratch = try DecompressScratch.init(self.allocator);
+    defer scratch.deinit(self.allocator);
+
+    for (groups) |group| {
+        const decompressed = try self.decompressChunkWithScratch(self.allocator, group.chunk, &scratch);
+        var owns_decompressed = true;
+        errdefer if (owns_decompressed) self.allocator.free(decompressed);
+        try self.batchLoadFromChunkBytes(
+            allocator,
+            group.candidates,
+            decompressed,
+            accounts,
+            result,
+        );
+        _ = try self.insertPrefetchedChunk(group.chunk_id, decompressed);
+        owns_decompressed = false;
+        result.chunks_decoded += 1;
+    }
+}
+
+fn batchLoadColdChunkGroupsParallel(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    groups: []const BatchChunkGroup,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    result: *BatchDecodeResult,
+    worker_count: usize,
+) !void {
+    std.debug.assert(worker_count > 1);
+    std.debug.assert(worker_count <= groups.len);
+
+    const parallel_results = try allocator.alloc(ParallelChunkDecodeResult, groups.len);
+    defer {
+        for (parallel_results) |*parallel_result| {
+            if (parallel_result.decompressed) |decompressed| self.allocator.free(decompressed);
+        }
+        allocator.free(parallel_results);
+    }
+    @memset(parallel_results, .{});
+
+    var context: ParallelChunkDecodeContext = .{
+        .store = self,
+        .groups = groups,
+        .results = parallel_results,
+    };
+
+    const threads = try allocator.alloc(std.Thread, worker_count);
+    defer allocator.free(threads);
+
+    var spawned: usize = 0;
+    errdefer {
+        for (threads[0..spawned]) |*thread| thread.join();
+    }
+    while (spawned < worker_count) : (spawned += 1) {
+        threads[spawned] = try std.Thread.spawn(.{}, parallelChunkDecodeWorker, .{&context});
+    }
+    for (threads[0..spawned]) |*thread| thread.join();
+
+    for (groups, parallel_results) |group, *parallel_result| {
+        if (parallel_result.err) |err| return err;
+        const decompressed = parallel_result.decompressed orelse return error.InvalidCompressedAccountChunk;
+        var owns_decompressed = true;
+        errdefer if (owns_decompressed) self.allocator.free(decompressed);
+        try self.batchLoadFromChunkBytes(
+            allocator,
+            group.candidates,
+            decompressed,
+            accounts,
+            result,
+        );
+        _ = try self.insertPrefetchedChunk(group.chunk_id, decompressed);
+        parallel_result.decompressed = null;
+        owns_decompressed = false;
+        result.chunks_decoded += 1;
+    }
+}
+
+fn parallelChunkDecodeWorker(context: *ParallelChunkDecodeContext) void {
+    var scratch = DecompressScratch.init(context.store.allocator) catch |err| {
+        while (true) {
+            const index = context.next_index.fetchAdd(1, .monotonic);
+            if (index >= context.groups.len) return;
+            context.results[index].err = err;
+        }
+    };
+    defer scratch.deinit(context.store.allocator);
+
+    while (true) {
+        const index = context.next_index.fetchAdd(1, .monotonic);
+        if (index >= context.groups.len) return;
+        const decompressed = context.store.decompressChunkWithScratch(
+            context.store.allocator,
+            context.groups[index].chunk,
+            &scratch,
+        ) catch |err| {
+            context.results[index].err = err;
+            continue;
+        };
+        context.results[index].decompressed = decompressed;
     }
 }
 
