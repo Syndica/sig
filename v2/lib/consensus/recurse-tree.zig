@@ -73,7 +73,7 @@ pub const SimpleConsensus = struct {
         return true;
     }
 
-    fn findFinalizable(self: *const SimpleConsensus) ?BlockRef {
+    pub fn findFinalizable(self: *const SimpleConsensus) ?BlockRef {
         const candidate = self.findDeepest(self.root) orelse return null;
         return self.beats(candidate.block, self.root.constPtr(self.pool).slot);
     }
@@ -138,6 +138,10 @@ pub const SimpleConsensus = struct {
     }
 };
 
+comptime {
+    _ = @import("test.zig").consensus_tests(SimpleConsensus);
+}
+
 fn createTestBlock(block_pool: *BlockPool, slot: Slot, parent_ref: BlockRef.Optional) !BlockRef {
     const block_ref = try block_pool.createId();
     block_ref.ptr(block_pool).* = .{ .slot = slot, .parent = parent_ref };
@@ -172,8 +176,6 @@ test "simple_consensus finalizes 32 confirmations back from the tip" {
     var pool_buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
     const block_pool: *BlockPool = @ptrCast(&pool_buf);
     block_pool.init();
-
-    if (true) @panic("message: []const u8");
 
     // A straight chain of 33 blocks off root, no competing branch.
     const root = try createTestBlock(block_pool, 0, .null);

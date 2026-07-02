@@ -84,7 +84,7 @@ pub const SimpleConsensus = struct {
     /// Returns null if no progress is possible: too few confirmations on the
     /// leading fork, a competitor with a block inside the last-32 window, or
     /// the candidate would land at `self.root`.
-    fn findFinalizable(self: *const SimpleConsensus) ?BlockRef {
+    pub fn findFinalizable(self: *const SimpleConsensus) ?BlockRef {
         // Descend from root, at each branch picking the child whose subtree
         // has the deepest continuously-passed block. Every child we skip
         // contributes its subtree's `maxPassedSlot` to `other_max_slot`,
@@ -153,6 +153,10 @@ pub const SimpleConsensus = struct {
         return info.passed or info.finalized;
     }
 };
+
+comptime {
+    _ = @import("test.zig").consensus_tests(SimpleConsensus);
+}
 
 fn createTestBlock(block_pool: *BlockPool, slot: Slot, parent_ref: BlockRef.Optional) !BlockRef {
     const block_ref = try block_pool.createId();

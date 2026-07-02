@@ -115,6 +115,14 @@ pub const SimpleConsensus = struct {
     }
 
     fn finalize(self: *SimpleConsensus) ?BlockRef {
+        if (self.findFinalizable()) |candidate| {
+            self.root = candidate;
+            self.num_leaves = 1;
+            return candidate;
+        } else return null;
+    }
+
+    pub fn findFinalizable(self: *const SimpleConsensus) ?BlockRef {
         // Confirmation-based finality: the last 32 blocks on the leading fork
         // must all sit at slots strictly greater than the most recent block
         // on any competing branch. The finalize candidate is the 33rd-most-
@@ -139,11 +147,13 @@ pub const SimpleConsensus = struct {
         const candidate = node_ref.constPtr(self.pool).parent.opt() orelse return null;
         if (candidate == self.root) return null;
 
-        self.root = candidate;
-        self.num_leaves = 1;
         return candidate;
     }
 };
+
+comptime {
+    _ = @import("test.zig").consensus_tests(SimpleConsensus);
+}
 
 //
 // Tests

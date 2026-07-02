@@ -7,5 +7,6 @@ comptime {
         _ = @import("consensus/leaf.zig");
         _ = @import("consensus/loop-tree.zig");
         _ = @import("consensus/recurse-tree.zig");
+        _ = @import("consensus/test.zig");
     }
 }
