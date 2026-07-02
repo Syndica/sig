@@ -30,7 +30,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         defer exec_results.markUsed();
         try runner.activity.signalActive();
 
-        const new_root = consensus.update(result.block_ref, result.passed) orelse continue;
+        const new_root = try consensus.update(result.block_ref, result.passed) orelse continue;
 
         const finality = finality_writer.next() orelse {
             try runner.activity.signalIdleSpinning();

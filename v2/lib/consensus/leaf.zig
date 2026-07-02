@@ -156,7 +156,7 @@ comptime {
 }
 
 //
-// Tests
+// Tests (leaf-array specific; behavioural tests live in test.zig)
 //
 
 const testing = std.testing;
@@ -181,19 +181,6 @@ test "SimpleConsensus init seeds root and single leaf" {
     const c: SimpleConsensus = .init(pool, root);
 
     try testing.expectEqual(root, c.root);
-    try testing.expectEqual(@as(usize, 1), @as(usize, c.num_leaves));
-    try testing.expectEqual(root, c.leaves[0]);
-}
-
-test "SimpleConsensus update returns null and preserves state when passed=false" {
-    var buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
-    const pool = setupPool(&buf);
-
-    const root = try addBlock(pool, 0, .null);
-    const a = try addBlock(pool, 1, .init(root));
-    var c: SimpleConsensus = .init(pool, root);
-
-    try testing.expectEqual(@as(?BlockRef, null), try c.update(a, false));
     try testing.expectEqual(@as(usize, 1), @as(usize, c.num_leaves));
     try testing.expectEqual(root, c.leaves[0]);
 }
@@ -243,130 +230,6 @@ test "SimpleConsensus update inserts sibling before leader when arriving with la
     try testing.expectEqual(@as(usize, 2), @as(usize, c.num_leaves));
     try testing.expectEqual(b, c.leaves[0]);
     try testing.expectEqual(a, c.leaves[1]);
-}
-
-test "SimpleConsensus update rejects block whose parent chain does not reach root" {
-    var buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
-    const pool = setupPool(&buf);
-
-    const root = try addBlock(pool, 5, .null);
-    // Independent chain that terminates at slot 5 but is not the root.
-    const x = try addBlock(pool, 5, .null);
-    const y = try addBlock(pool, 8, .init(x));
-    var c: SimpleConsensus = .init(pool, root);
-
-    try testing.expectEqual(@as(?BlockRef, null), try c.update(y, true));
-    try testing.expectEqual(@as(usize, 1), @as(usize, c.num_leaves));
-    try testing.expectEqual(root, c.leaves[0]);
-}
-
-test "SimpleConsensus update errors when executed block has no parent" {
-    var buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
-    const pool = setupPool(&buf);
-
-    const root = try addBlock(pool, 0, .null);
-    const orphan = try addBlock(pool, 1, .null);
-    var c: SimpleConsensus = .init(pool, root);
-
-    try testing.expectError(error.MissingUnrootedAncestor, c.update(orphan, true));
-}
-
-test "SimpleConsensus update errors when parent chain terminates above root" {
-    var buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
-    const pool = setupPool(&buf);
-
-    const root = try addBlock(pool, 0, .null);
-    // Chain y -> x -> null, all with slots strictly above root's slot.
-    const x = try addBlock(pool, 5, .null);
-    const y = try addBlock(pool, 6, .init(x));
-    var c: SimpleConsensus = .init(pool, root);
-
-    try testing.expectError(error.MissingUnrootedAncestor, c.update(y, true));
-}
-
-test "SimpleConsensus update finalizes at 32-deep fork with no competition" {
-    var buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
-    const pool = setupPool(&buf);
-
-    const root = try addBlock(pool, 0, .null);
-    var c: SimpleConsensus = .init(pool, root);
-
-    var last = root;
-    var slot_1_ref: BlockRef = undefined;
-    for (1..34) |i| {
-        const b = try addBlock(pool, @intCast(i), .init(last));
-        if (i == 1) slot_1_ref = b;
-        const result = try c.update(b, true);
-        if (i < 33) {
-            try testing.expectEqual(@as(?BlockRef, null), result);
-        } else {
-            // Walk-back-31 from leaves[0] lands at slot 2, which exceeds
-            // root.slot (0); one more hop gives slot_1_ref as the candidate.
-            try testing.expectEqual(slot_1_ref, result.?);
-            try testing.expectEqual(slot_1_ref, c.root);
-            try testing.expectEqual(@as(usize, 1), @as(usize, c.num_leaves));
-            try testing.expectEqual(b, c.leaves[0]);
-        }
-        last = b;
-    }
-}
-
-test "SimpleConsensus update does not finalize while competitor sits in the last-32 window" {
-    var buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
-    const pool = setupPool(&buf);
-
-    const root = try addBlock(pool, 0, .null);
-    var c: SimpleConsensus = .init(pool, root);
-
-    // Winning fork of 33 blocks (slots 1..33) alongside a competitor at
-    // slot 2. Walk-back-31 from the tip (slot 33) lands at the winning
-    // fork's slot 2 block, which does not exceed the competitor's slot, so
-    // no finalization is possible.
-    const first_a = try addBlock(pool, 1, .init(root));
-    const competitor = try addBlock(pool, 2, .init(root));
-    _ = try c.update(first_a, true);
-    _ = try c.update(competitor, true);
-
-    var last = first_a;
-    for (2..34) |i| {
-        const b = try addBlock(pool, @intCast(i), .init(last));
-        const result = try c.update(b, true);
-        try testing.expectEqual(@as(?BlockRef, null), result);
-        last = b;
-    }
-    try testing.expectEqual(root, c.root);
-    try testing.expectEqual(@as(usize, 2), @as(usize, c.num_leaves));
-}
-
-test "SimpleConsensus update finalizes when competitor is below the finalization window" {
-    var buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
-    const pool = setupPool(&buf);
-
-    const root = try addBlock(pool, 0, .null);
-    var c: SimpleConsensus = .init(pool, root);
-
-    // Old competitor at slot 1, then a winning chain of 33 blocks at slots
-    // 2..34. Walk-back-31 from the tip (slot 34) lands at slot 3, which
-    // exceeds the competitor's slot (1); the finalize candidate is chain[0]
-    // at slot 2.
-    const competitor = try addBlock(pool, 1, .init(root));
-    _ = try c.update(competitor, true);
-
-    var last = root;
-    var chain: [33]BlockRef = undefined;
-    for (0..33) |i| {
-        chain[i] = try addBlock(pool, @intCast(i + 2), .init(last));
-        const result = try c.update(chain[i], true);
-        if (i < 32) {
-            try testing.expectEqual(@as(?BlockRef, null), result);
-        } else {
-            try testing.expectEqual(chain[0], result.?);
-            try testing.expectEqual(chain[0], c.root);
-            try testing.expectEqual(@as(usize, 1), @as(usize, c.num_leaves));
-            try testing.expectEqual(chain[32], c.leaves[0]);
-        }
-        last = chain[i];
-    }
 }
 
 test "SimpleConsensus update keeps leaves sorted after extending non-leading fork" {

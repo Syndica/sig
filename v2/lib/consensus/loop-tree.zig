@@ -45,11 +45,22 @@ pub const SimpleConsensus = struct {
         };
     }
 
+    /// Each of these errors indicates an invalid input. You should likely panic
+    /// if any of these occur, unless there is a way to repair the state and recover.
+    pub const Error = error{
+        /// One of the block's ancestors is missing from the block pool, which
+        /// means we can't figure out how this block fits into the block tree
+        /// relative to other blocks. This means blocks are being pruned from
+        /// the block pool before consensus finalizes them, which is nonsensical
+        /// and prevents consensus from functioning properly.
+        MissingUnrootedAncestor,
+    };
+
     /// Records an exec result and returns the newly finalized block, or null
     /// if nothing finalized this round. Blocks below `last_finalized` are
     /// silently ignored.
-    pub fn update(self: *SimpleConsensus, block_ref: BlockRef, passed: bool) ?BlockRef {
-        if (!self.record(block_ref, passed)) return null;
+    pub fn update(self: *SimpleConsensus, block_ref: BlockRef, passed: bool) Error!?BlockRef {
+        if (!try self.record(block_ref, passed)) return null;
 
         const new_root = self.findFinalizable() orelse return null;
 
@@ -60,11 +71,24 @@ pub const SimpleConsensus = struct {
     }
 
     /// Returns true if the local state was updated and finality should be
-    /// re-evaluated.
-    fn record(self: *SimpleConsensus, block_ref: BlockRef, passed: bool) bool {
+    /// re-evaluated. Errors if the block's parent chain is broken (contains a
+    /// null pointer before reaching a slot at or below the local root).
+    fn record(self: *SimpleConsensus, block_ref: BlockRef, passed: bool) Error!bool {
         const block = block_ref.constPtr(self.pool);
         const root_slot = self.root.constPtr(self.pool).slot;
-        if (block.slot <= root_slot) return false; // TODO log here, this unexpected
+
+        // Every non-root update block must have a linked parent, and its
+        // parent chain must reach a slot at or below the local root without
+        // terminating at a null pointer. This mirrors leaf.zig's validation.
+        var ancestor = block.parent.opt() orelse return error.MissingUnrootedAncestor;
+        while (ancestor.constPtr(self.pool).slot > root_slot) {
+            ancestor = ancestor.constPtr(self.pool).parent.opt() orelse
+                return error.MissingUnrootedAncestor;
+        }
+
+        // Silently drop stale/off-tree well-formed blocks.
+        if (block.slot <= root_slot) return false;
+        if (ancestor != self.root) return false;
 
         self.state[block_ref.index()] = .{
             .slot = block.slot,
@@ -158,6 +182,10 @@ comptime {
     _ = @import("test.zig").consensus_tests(SimpleConsensus);
 }
 
+//
+// Tests (implementation-specific; behavioural tests live in test.zig)
+//
+
 fn createTestBlock(block_pool: *BlockPool, slot: Slot, parent_ref: BlockRef.Optional) !BlockRef {
     const block_ref = try block_pool.createId();
     block_ref.ptr(block_pool).* = .{ .slot = slot, .parent = parent_ref };
@@ -183,133 +211,6 @@ fn createTestBlock(block_pool: *BlockPool, slot: Slot, parent_ref: BlockRef.Opti
     return block_ref;
 }
 
-fn markPassed(consensus: *SimpleConsensus, block_ref: BlockRef) void {
-    const slot = block_ref.constPtr(consensus.pool).slot;
-    consensus.state[block_ref.index()] = .{ .slot = slot, .passed = true, .finalized = false };
-}
-
-test "simple_consensus finalizes 32 confirmations back from the tip" {
-    var pool_buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
-    const block_pool: *BlockPool = @ptrCast(&pool_buf);
-    block_pool.init();
-
-    // A straight chain of 33 blocks off root, no competing branch.
-    const root = try createTestBlock(block_pool, 0, .null);
-    var last = root;
-    var chain: [33]BlockRef = undefined;
-    for (0..33) |i| {
-        chain[i] = try createTestBlock(block_pool, @intCast(i + 1), .init(last));
-        last = chain[i];
-    }
-
-    var consensus: SimpleConsensus = .init(block_pool, root);
-    for (chain) |b| markPassed(&consensus, b);
-
-    // 33 confirmations past root and no competitor. Finalize chain[0], which
-    // sits 32 hops behind the tip.
-    try std.testing.expectEqual(chain[0], consensus.findFinalizable().?);
-}
-
-test "simple_consensus exactly 32 slot fork cannot finalize past the root" {
-    var pool_buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
-    const block_pool: *BlockPool = @ptrCast(&pool_buf);
-    block_pool.init();
-
-    // root -> tip, exactly finalization_depth slots ahead.
-    const root = try createTestBlock(block_pool, 0, .null);
-    const tip = try createTestBlock(block_pool, finalization_depth, .init(root));
-
-    var consensus: SimpleConsensus = .init(block_pool, root);
-    markPassed(&consensus, tip);
-
-    // tip is itself inside the last 32 slots, so there is no new safe block.
-    try std.testing.expectEqual(@as(?BlockRef, null), consensus.findFinalizable());
-}
-
-test "simple_consensus recent competing fork prevents finality" {
-    var pool_buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
-    const block_pool: *BlockPool = @ptrCast(&pool_buf);
-    block_pool.init();
-
-    // Winning fork of 33 blocks (slots 1..33), plus a competitor sibling of
-    // chain[0] at slot 2. Walk-back-31 from chain[32] lands at chain[1]@2,
-    // whose slot does not exceed the competitor's slot, so no finalization.
-    const root = try createTestBlock(block_pool, 0, .null);
-    var last = root;
-    var chain: [33]BlockRef = undefined;
-    for (0..33) |i| {
-        chain[i] = try createTestBlock(block_pool, @intCast(i + 1), .init(last));
-        last = chain[i];
-    }
-    const competitor = try createTestBlock(block_pool, 2, .init(root));
-
-    var consensus: SimpleConsensus = .init(block_pool, root);
-    for (chain) |b| markPassed(&consensus, b);
-    markPassed(&consensus, competitor);
-
-    try std.testing.expectEqual(@as(?BlockRef, null), consensus.findFinalizable());
-}
-
-test "simple_consensus old competing fork does not prevent finality" {
-    var pool_buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
-    const block_pool: *BlockPool = @ptrCast(&pool_buf);
-    block_pool.init();
-
-    // Old competitor at slot 1, followed by a winning fork of 33 blocks at
-    // slots 2..34. Walk-back-31 from chain[32]@34 lands at chain[1]@3, which
-    // exceeds the competitor's slot, so we finalize chain[0]@2.
-    const root = try createTestBlock(block_pool, 0, .null);
-    const old_competitor = try createTestBlock(block_pool, 1, .init(root));
-    var last = root;
-    var chain: [33]BlockRef = undefined;
-    for (0..33) |i| {
-        chain[i] = try createTestBlock(block_pool, @intCast(i + 2), .init(last));
-        last = chain[i];
-    }
-
-    var consensus: SimpleConsensus = .init(block_pool, root);
-    markPassed(&consensus, old_competitor);
-    for (chain) |b| markPassed(&consensus, b);
-
-    try std.testing.expectEqual(chain[0], consensus.findFinalizable().?);
-}
-
-test "simple_consensus only descends from the local root" {
-    var pool_buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
-    const block_pool: *BlockPool = @ptrCast(&pool_buf);
-    block_pool.init();
-
-    // The full tree has a long fork through `other_fork`, but the local root
-    // is `finalized` (which has no descendants), so no progress is possible.
-    const tree_root = try createTestBlock(block_pool, 0, .null);
-    const finalized = try createTestBlock(block_pool, 1, .init(tree_root));
-    const other_fork = try createTestBlock(block_pool, 2, .init(tree_root));
-    const other_tip = try createTestBlock(block_pool, finalization_depth + 2, .init(other_fork));
-
-    var consensus: SimpleConsensus = .init(block_pool, finalized);
-    markPassed(&consensus, tree_root);
-    markPassed(&consensus, other_fork);
-    markPassed(&consensus, other_tip);
-
-    try std.testing.expectEqual(@as(?BlockRef, null), consensus.findFinalizable());
-}
-
-test "simple_consensus unpassed block breaks the chain" {
-    var pool_buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
-    const block_pool: *BlockPool = @ptrCast(&pool_buf);
-    block_pool.init();
-
-    // `a` is never reported as passed, so the chain root -> a -> tip is broken.
-    const root = try createTestBlock(block_pool, 0, .null);
-    const a = try createTestBlock(block_pool, 1, .init(root));
-    const tip = try createTestBlock(block_pool, finalization_depth + 1, .init(a));
-
-    var consensus: SimpleConsensus = .init(block_pool, root);
-    markPassed(&consensus, tip);
-
-    try std.testing.expectEqual(@as(?BlockRef, null), consensus.findFinalizable());
-}
-
 test "simple_consensus stale block info from a recycled pool index is ignored" {
     var pool_buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
     const block_pool: *BlockPool = @ptrCast(&pool_buf);
@@ -326,44 +227,4 @@ test "simple_consensus stale block info from a recycled pool index is ignored" {
     try std.testing.expectEqual(a, b);
 
     try std.testing.expect(!consensus.blockIsPassed(b));
-}
-
-test "simple_consensus update ignores blocks below the local root" {
-    var pool_buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
-    const block_pool: *BlockPool = @ptrCast(&pool_buf);
-    block_pool.init();
-
-    const tree_root = try createTestBlock(block_pool, 10, .null);
-    var consensus: SimpleConsensus = .init(block_pool, tree_root);
-
-    // A second, older block with no parent acts as a stale notification.
-    const old = try createTestBlock(block_pool, 5, .null);
-    try std.testing.expectEqual(@as(?BlockRef, null), consensus.update(old, true));
-    try std.testing.expect(!consensus.blockIsPassed(old));
-}
-
-test "simple_consensus update returns the finalized block when ready" {
-    var pool_buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
-    const block_pool: *BlockPool = @ptrCast(&pool_buf);
-    block_pool.init();
-
-    // Straight chain of 33 blocks. The 33rd update should finalize chain[0].
-    const root = try createTestBlock(block_pool, 0, .null);
-    var chain: [33]BlockRef = undefined;
-    var last = root;
-    for (0..33) |i| {
-        chain[i] = try createTestBlock(block_pool, @intCast(i + 1), .init(last));
-        last = chain[i];
-    }
-
-    var consensus: SimpleConsensus = .init(block_pool, root);
-    for (chain, 0..) |b, i| {
-        const result = consensus.update(b, true);
-        if (i < 32) {
-            try std.testing.expectEqual(@as(?BlockRef, null), result);
-        } else {
-            try std.testing.expectEqual(chain[0], result.?);
-            try std.testing.expectEqual(chain[0], consensus.root);
-        }
-    }
 }
