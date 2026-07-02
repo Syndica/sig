@@ -131,6 +131,10 @@ pub fn get(
     return null;
 }
 
+pub fn compressedAccountChunkId(self: *Db, address: Pubkey) !?u32 {
+    return try self.rooted.compressedAccountChunkId(address);
+}
+
 pub const SlotModifiedIterator = struct {
     slot: *Unrooted.SlotIndex,
     cursor: u64,

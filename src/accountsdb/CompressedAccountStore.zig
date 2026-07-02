@@ -402,6 +402,15 @@ pub fn samplePubkeys(
     return samples;
 }
 
+pub fn lookupChunkId(self: *CompressedAccountStore, address: Pubkey) !?u32 {
+    if (self.overlay_store) |overlay| {
+        if (try overlay.lookupChunkId(address)) |chunk_id| return chunk_id;
+    }
+
+    const record = try self.lookup(address) orelse return null;
+    return record.chunk_id;
+}
+
 fn lookup(self: *CompressedAccountStore, address: Pubkey) !?IndexRecord {
     var timer = sig.time.Timer.start();
     defer self.metrics.lookup_time.observe(timer.read().asNanos());

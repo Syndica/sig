@@ -51,6 +51,13 @@ pub const Metrics = struct {
     freeze_slot_time: *sig.prometheus.Histogram,
     consensus_time: *sig.prometheus.Histogram,
     bypass_consensus_time: *sig.prometheus.Histogram,
+    compressed_account_fanout_time: *sig.prometheus.Histogram,
+    compressed_account_fanout_slot: *sig.prometheus.Gauge(u64),
+    compressed_account_fanout_account_refs: *sig.prometheus.Gauge(u64),
+    compressed_account_fanout_unique_pubkeys: *sig.prometheus.Gauge(u64),
+    compressed_account_fanout_compressed_pubkeys: *sig.prometheus.Gauge(u64),
+    compressed_account_fanout_unique_chunks: *sig.prometheus.Gauge(u64),
+    compressed_account_fanout_missing_pubkeys: *sig.prometheus.Gauge(u64),
 
     pub const prefix = "replay";
     pub const histogram_buckets = b: {

@@ -572,6 +572,15 @@ fn prepareSlot(
         for (resolved_txns) |transaction| transaction.deinit(state.allocator);
         state.allocator.free(resolved_txns);
     }
+    if (envBool("SIG_REPLAY_MEASURE_COMPRESSED_ACCOUNT_FANOUT", false)) {
+        try measureCompressedAccountFanout(
+            state.allocator,
+            metrics,
+            slot,
+            slot_account_reader,
+            resolved_txns,
+        );
+    }
 
     var svm_gateway = try SvmGateway.init(state.allocator, .{
         .slot = slot,
@@ -619,6 +628,74 @@ fn prepareSlot(
         .verify_ticks_params = verify_ticks_params,
         .account_store = state.account_store,
     } };
+}
+
+fn measureCompressedAccountFanout(
+    allocator: Allocator,
+    metrics: replay.service.Metrics,
+    slot: Slot,
+    account_reader: sig.accounts_db.SlotAccountReader,
+    transactions: []const ResolvedTransaction,
+) !void {
+    var timer = sig.time.Timer.start();
+    defer metrics.compressed_account_fanout_time.observe(timer.read().asNanos());
+
+    var unique_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
+    defer unique_pubkeys.deinit(allocator);
+
+    var unique_chunks: std.AutoHashMapUnmanaged(u32, void) = .{};
+    defer unique_chunks.deinit(allocator);
+
+    var account_refs: u64 = 0;
+    var compressed_pubkeys: u64 = 0;
+    var missing_pubkeys: u64 = 0;
+
+    for (transactions) |transaction| {
+        for (transaction.accounts.items(.pubkey)) |pubkey| {
+            account_refs += 1;
+            const pubkey_gop = try unique_pubkeys.getOrPut(allocator, pubkey);
+            if (pubkey_gop.found_existing) continue;
+            pubkey_gop.value_ptr.* = {};
+
+            if (try account_reader.compressedAccountChunkId(pubkey)) |chunk_id| {
+                compressed_pubkeys += 1;
+                try unique_chunks.put(allocator, chunk_id, {});
+            } else {
+                missing_pubkeys += 1;
+            }
+        }
+    }
+
+    metrics.compressed_account_fanout_slot.set(slot);
+    metrics.compressed_account_fanout_account_refs.set(account_refs);
+    metrics.compressed_account_fanout_unique_pubkeys.set(@intCast(unique_pubkeys.count()));
+    metrics.compressed_account_fanout_compressed_pubkeys.set(compressed_pubkeys);
+    metrics.compressed_account_fanout_unique_chunks.set(@intCast(unique_chunks.count()));
+    metrics.compressed_account_fanout_missing_pubkeys.set(missing_pubkeys);
+}
+
+fn envBool(key: []const u8, default_value: bool) bool {
+    const allocator = std.heap.page_allocator;
+    const raw = std.process.getEnvVarOwned(allocator, key) catch return default_value;
+    defer allocator.free(raw);
+
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return default_value;
+    if (std.ascii.eqlIgnoreCase(trimmed, "1") or
+        std.ascii.eqlIgnoreCase(trimmed, "true") or
+        std.ascii.eqlIgnoreCase(trimmed, "yes") or
+        std.ascii.eqlIgnoreCase(trimmed, "on"))
+    {
+        return true;
+    }
+    if (std.ascii.eqlIgnoreCase(trimmed, "0") or
+        std.ascii.eqlIgnoreCase(trimmed, "false") or
+        std.ascii.eqlIgnoreCase(trimmed, "no") or
+        std.ascii.eqlIgnoreCase(trimmed, "off"))
+    {
+        return false;
+    }
+    return default_value;
 }
 
 pub const VerifyTicksParams = struct {

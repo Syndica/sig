@@ -296,6 +296,13 @@ pub const SlotAccountReader = union(enum) {
             .noop => null,
         };
     }
+
+    pub fn compressedAccountChunkId(self: SlotAccountReader, address: Pubkey) !?u32 {
+        return switch (self) {
+            .accounts_db => |pair| try pair[0].compressedAccountChunkId(address),
+            else => null,
+        };
+    }
 };
 
 /// Simple implementation of AccountReader and AccountStore, used for tests

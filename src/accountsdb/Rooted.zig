@@ -283,6 +283,13 @@ pub fn compressedStoreSamplePubkeys(
     return error.MissingCompressedAccountStore;
 }
 
+pub fn compressedAccountChunkId(self: *Rooted, address: Pubkey) !?u32 {
+    if (self.compressed_account_store) |*store| {
+        return try store.lookupChunkId(address);
+    }
+    return null;
+}
+
 fn getColdAccount(
     self: *Rooted,
     allocator: std.mem.Allocator,
