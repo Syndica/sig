@@ -25,6 +25,8 @@ const DEFAULT_MAX_CHUNK_BYTES: u64 = 64 * 1024 * 1024;
 const DEFAULT_CHUNK_CACHE_SLOTS: u64 = 128;
 const DEFAULT_CHUNK_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_LOOKUP_CACHE_ENTRIES: u64 = 1_000_000;
+const DEFAULT_INDEX_PAGE_CACHE_PAGES: u64 = 4096;
+const DEFAULT_INDEX_PAGE_CACHE_PAGE_BYTES: u64 = 64 * 1024;
 
 allocator: std.mem.Allocator,
 index_file: std.fs.File,
@@ -33,6 +35,13 @@ segments_file: std.fs.File,
 directory: []DirectoryEntry,
 chunk_table: []ChunkEntry,
 overlay_store: ?*CompressedAccountStore = null,
+index_file_len: u64,
+index_page_cache: []IndexPageCacheEntry,
+index_page_cache_index: std.AutoHashMapUnmanaged(u64, usize),
+index_page_cache_mutex: std.Thread.Mutex = .{},
+index_page_cache_clock: u64 = 0,
+index_page_cache_bytes: u64 = 0,
+index_page_cache_page_bytes: usize,
 chunk_cache: []ChunkCacheEntry,
 chunk_cache_index: std.AutoHashMapUnmanaged(u32, usize),
 chunk_cache_mutex: std.Thread.Mutex = .{},
@@ -67,10 +76,21 @@ const ChunkCacheEntry = struct {
     last_used: u64 = 0,
 };
 
+const IndexPageCacheEntry = struct {
+    occupied: bool = false,
+    page_start: u64 = 0,
+    bytes: []u8 = undefined,
+    last_used: u64 = 0,
+};
+
 const Metrics = struct {
     get_count: *sig.prometheus.Counter,
     lookup_miss_count: *sig.prometheus.Counter,
     overlay_hit_count: *sig.prometheus.Counter,
+    index_page_cache_hit_count: *sig.prometheus.Counter,
+    index_page_cache_miss_count: *sig.prometheus.Counter,
+    index_page_cache_insert_count: *sig.prometheus.Counter,
+    index_page_cache_eviction_count: *sig.prometheus.Counter,
     cache_hit_count: *sig.prometheus.Counter,
     cache_miss_count: *sig.prometheus.Counter,
     cache_insert_count: *sig.prometheus.Counter,
@@ -83,6 +103,8 @@ const Metrics = struct {
     lookup_cache_insert_count: *sig.prometheus.Counter,
     cache_bytes: *sig.prometheus.Gauge(u64),
     cache_entries: *sig.prometheus.Gauge(u64),
+    index_page_cache_bytes: *sig.prometheus.Gauge(u64),
+    index_page_cache_entries: *sig.prometheus.Gauge(u64),
     lookup_cache_entries: *sig.prometheus.Gauge(u64),
 
     pub const prefix = "accountsdb_compressed_store";
@@ -129,6 +151,7 @@ pub fn init(
 ) !CompressedAccountStore {
     var index_file = try std.fs.cwd().openFile(index_path, .{ .mode = .read_only });
     errdefer index_file.close();
+    const index_file_len = try index_file.getEndPos();
 
     var chunks_file = try std.fs.cwd().openFile(chunks_path, .{ .mode = .read_only });
     errdefer chunks_file.close();
@@ -238,9 +261,30 @@ pub fn init(
     var lookup_cache: sig.utils.collections.PubkeyMap(LookupCacheEntry) = .{};
     errdefer lookup_cache.deinit(allocator);
 
+    const index_page_cache_page_bytes_u64 = envU64(
+        "SIG_COMPRESSED_ACCOUNT_STORE_INDEX_PAGE_CACHE_PAGE_BYTES",
+        DEFAULT_INDEX_PAGE_CACHE_PAGE_BYTES,
+    );
+    if (index_page_cache_page_bytes_u64 < INDEX_RECORD_LEN or
+        index_page_cache_page_bytes_u64 > std.math.maxInt(usize))
+        return error.InvalidCompressedAccountIndex;
+    const index_page_cache_pages_u64 = envU64(
+        "SIG_COMPRESSED_ACCOUNT_STORE_INDEX_PAGE_CACHE_PAGES",
+        DEFAULT_INDEX_PAGE_CACHE_PAGES,
+    );
+    if (index_page_cache_pages_u64 > std.math.maxInt(usize))
+        return error.InvalidCompressedAccountIndex;
+    const index_page_cache = try allocator.alloc(IndexPageCacheEntry, @intCast(index_page_cache_pages_u64));
+    errdefer allocator.free(index_page_cache);
+    @memset(index_page_cache, .{});
+    var index_page_cache_index: std.AutoHashMapUnmanaged(u64, usize) = .{};
+    errdefer index_page_cache_index.deinit(allocator);
+
     const metrics = try sig.prometheus.globalRegistry().initStruct(Metrics);
     metrics.cache_bytes.set(0);
     metrics.cache_entries.set(0);
+    metrics.index_page_cache_bytes.set(0);
+    metrics.index_page_cache_entries.set(0);
     metrics.lookup_cache_entries.set(0);
 
     return .{
@@ -251,6 +295,10 @@ pub fn init(
         .directory = directory,
         .chunk_table = chunk_table,
         .overlay_store = null,
+        .index_file_len = index_file_len,
+        .index_page_cache = index_page_cache,
+        .index_page_cache_index = index_page_cache_index,
+        .index_page_cache_page_bytes = @intCast(index_page_cache_page_bytes_u64),
         .chunk_cache = chunk_cache,
         .chunk_cache_index = chunk_cache_index,
         .chunk_cache_max_bytes = chunk_cache_max_bytes,
@@ -321,11 +369,16 @@ pub fn deinit(self: *CompressedAccountStore) void {
     self.index_file.close();
     self.chunks_file.close();
     self.segments_file.close();
+    for (self.index_page_cache) |*entry| {
+        if (entry.occupied) self.allocator.free(entry.bytes);
+    }
+    self.index_page_cache_index.deinit(self.allocator);
     for (self.chunk_cache) |*entry| {
         if (entry.occupied) self.allocator.free(entry.bytes);
     }
     self.chunk_cache_index.deinit(self.allocator);
     self.lookup_cache.deinit(self.allocator);
+    self.allocator.free(self.index_page_cache);
     self.allocator.free(self.chunk_cache);
     self.allocator.free(self.directory);
     self.allocator.free(self.chunk_table);
@@ -444,17 +497,138 @@ fn lookupCachePut(self: *CompressedAccountStore, address: Pubkey, entry: LookupC
 }
 
 fn readIndexRecordAt(self: *CompressedAccountStore, offset: u64) !IndexRecord {
+    if (try self.readIndexRecordAtFromPageCache(offset)) |record| return record;
+
     var bytes: [INDEX_RECORD_LEN]u8 = undefined;
     if (try self.index_file.preadAll(&bytes, offset) != bytes.len)
         return error.InvalidCompressedAccountIndex;
 
+    return decodeIndexRecord(&bytes);
+}
+
+fn readIndexRecordAtFromPageCache(self: *CompressedAccountStore, offset: u64) !?IndexRecord {
+    if (self.index_page_cache.len == 0) return null;
+    if (offset > self.index_file_len or self.index_file_len - offset < INDEX_RECORD_LEN)
+        return error.InvalidCompressedAccountIndex;
+
+    const page_bytes_u64: u64 = @intCast(self.index_page_cache_page_bytes);
+    const page_start = (offset / page_bytes_u64) * page_bytes_u64;
+    const page_offset: usize = @intCast(offset - page_start);
+
+    self.index_page_cache_mutex.lock();
+    defer self.index_page_cache_mutex.unlock();
+
+    if (self.index_page_cache_index.get(page_start)) |entry_index| {
+        if (entry_index < self.index_page_cache.len) {
+            const entry = &self.index_page_cache[entry_index];
+            if (entry.occupied and entry.page_start == page_start and
+                page_offset + INDEX_RECORD_LEN <= entry.bytes.len)
+            {
+                self.index_page_cache_clock +%= 1;
+                entry.last_used = self.index_page_cache_clock;
+                self.metrics.index_page_cache_hit_count.inc();
+                return decodeIndexRecordFromBytes(entry.bytes[page_offset..][0..INDEX_RECORD_LEN]);
+            }
+        }
+        _ = self.index_page_cache_index.remove(page_start);
+    }
+
+    self.metrics.index_page_cache_miss_count.inc();
+    return try self.insertIndexPageAndReadRecord(page_start, page_offset);
+}
+
+fn insertIndexPageAndReadRecord(
+    self: *CompressedAccountStore,
+    page_start: u64,
+    page_offset: usize,
+) !IndexRecord {
+    const remaining = self.index_file_len - page_start;
+    const read_len_u64 = @min(@as(u64, @intCast(self.index_page_cache_page_bytes)), remaining);
+    if (read_len_u64 > std.math.maxInt(usize))
+        return error.InvalidCompressedAccountIndex;
+    const read_len: usize = @intCast(read_len_u64);
+    if (page_offset + INDEX_RECORD_LEN > read_len)
+        return error.InvalidCompressedAccountIndex;
+
+    const bytes = try self.allocator.alloc(u8, read_len);
+    errdefer self.allocator.free(bytes);
+    if (try self.index_file.preadAll(bytes, page_start) != bytes.len)
+        return error.InvalidCompressedAccountIndex;
+
+    const target = self.emptyIndexPageCacheEntry() orelse self.oldestIndexPageCacheEntry() orelse {
+        return decodeIndexRecordFromBytes(bytes[page_offset..][0..INDEX_RECORD_LEN]);
+    };
+    if (self.index_page_cache[target].occupied) self.removeIndexPageCacheEntry(target);
+
+    self.index_page_cache_clock +%= 1;
+    self.index_page_cache[target] = .{
+        .occupied = true,
+        .page_start = page_start,
+        .bytes = bytes,
+        .last_used = self.index_page_cache_clock,
+    };
+    self.index_page_cache_bytes += bytes.len;
+    errdefer {
+        self.index_page_cache_bytes -= self.index_page_cache[target].bytes.len;
+        self.allocator.free(self.index_page_cache[target].bytes);
+        self.index_page_cache[target] = .{};
+        self.metrics.index_page_cache_bytes.set(self.index_page_cache_bytes);
+        self.metrics.index_page_cache_entries.set(@intCast(self.index_page_cache_index.count()));
+    }
+    try self.index_page_cache_index.put(self.allocator, page_start, target);
+    self.metrics.index_page_cache_insert_count.inc();
+    self.metrics.index_page_cache_bytes.set(self.index_page_cache_bytes);
+    self.metrics.index_page_cache_entries.set(@intCast(self.index_page_cache_index.count()));
+
+    return decodeIndexRecordFromBytes(bytes[page_offset..][0..INDEX_RECORD_LEN]);
+}
+
+fn removeIndexPageCacheEntry(self: *CompressedAccountStore, index: usize) void {
+    const entry = &self.index_page_cache[index];
+    if (!entry.occupied) return;
+    _ = self.index_page_cache_index.remove(entry.page_start);
+    self.index_page_cache_bytes -= entry.bytes.len;
+    self.allocator.free(entry.bytes);
+    entry.* = .{};
+    self.metrics.index_page_cache_eviction_count.inc();
+    self.metrics.index_page_cache_bytes.set(self.index_page_cache_bytes);
+    self.metrics.index_page_cache_entries.set(@intCast(self.index_page_cache_index.count()));
+}
+
+fn emptyIndexPageCacheEntry(self: *CompressedAccountStore) ?usize {
+    for (self.index_page_cache, 0..) |entry, i| {
+        if (!entry.occupied) return i;
+    }
+    return null;
+}
+
+fn oldestIndexPageCacheEntry(self: *CompressedAccountStore) ?usize {
+    var victim: ?usize = null;
+    var oldest: u64 = std.math.maxInt(u64);
+    for (self.index_page_cache, 0..) |entry, i| {
+        if (!entry.occupied) continue;
+        if (victim == null or entry.last_used < oldest) {
+            victim = i;
+            oldest = entry.last_used;
+        }
+    }
+    return victim;
+}
+
+fn decodeIndexRecordFromBytes(bytes: []const u8) IndexRecord {
+    var record_bytes: [INDEX_RECORD_LEN]u8 = undefined;
+    @memcpy(record_bytes[0..], bytes[0..INDEX_RECORD_LEN]);
+    return decodeIndexRecord(&record_bytes);
+}
+
+fn decodeIndexRecord(bytes: *const [INDEX_RECORD_LEN]u8) IndexRecord {
     return .{
         .pubkey = .{ .data = bytes[0..Pubkey.SIZE].* },
-        .chunk_id = readU32(&bytes, 32),
-        .uncompressed_offset = readU32(&bytes, 36),
-        .record_len = readU32(&bytes, 40),
-        .data_len = readU32(&bytes, 44),
-        .slot = readU64(&bytes, 48),
+        .chunk_id = readU32(bytes, 32),
+        .uncompressed_offset = readU32(bytes, 36),
+        .record_len = readU32(bytes, 40),
+        .data_len = readU32(bytes, 44),
+        .slot = readU64(bytes, 48),
     };
 }
 
