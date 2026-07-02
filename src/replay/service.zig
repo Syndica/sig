@@ -39,6 +39,18 @@ pub const Logger = sig.trace.Logger("replay");
 
 pub const Metrics = struct {
     slot_execution_time: *sig.prometheus.Histogram,
+    track_new_slots_time: *sig.prometheus.Histogram,
+    replay_active_slots_time: *sig.prometheus.Histogram,
+    prepare_slot_time: *sig.prometheus.Histogram,
+    load_slot_hashes_time: *sig.prometheus.Histogram,
+    resolve_block_time: *sig.prometheus.Histogram,
+    replay_batch_time: *sig.prometheus.Histogram,
+    execute_transaction_time: *sig.prometheus.Histogram,
+    commit_transactions_time: *sig.prometheus.Histogram,
+    freeze_completed_slots_time: *sig.prometheus.Histogram,
+    freeze_slot_time: *sig.prometheus.Histogram,
+    consensus_time: *sig.prometheus.Histogram,
+    bypass_consensus_time: *sig.prometheus.Histogram,
 
     pub const prefix = "replay";
     pub const histogram_buckets = b: {
@@ -83,28 +95,43 @@ pub fn advanceReplay(
     );
 
     // find slots in the ledger
-    try trackNewSlots(
-        allocator,
-        replay_state.logger,
-        replay_state.account_store,
-        replay_state.ledger,
-        &replay_state.slot_tracker,
-        replay_state.epoch_tracker,
-        &replay_state.slot_tree,
-        slot_leaders,
-        &replay_state.hard_forks,
-        &replay_state.progress_map,
-    );
+    {
+        var phase_timer = sig.time.Timer.start();
+        try trackNewSlots(
+            allocator,
+            replay_state.logger,
+            replay_state.account_store,
+            replay_state.ledger,
+            &replay_state.slot_tracker,
+            replay_state.epoch_tracker,
+            &replay_state.slot_tree,
+            slot_leaders,
+            &replay_state.hard_forks,
+            &replay_state.progress_map,
+        );
+        metrics.track_new_slots_time.observe(phase_timer.read().asNanos());
+    }
 
     // replay slots
-    const slot_results = try replay.execution.replayActiveSlots(replay_state);
+    const slot_results = blk: {
+        var phase_timer = sig.time.Timer.start();
+        const results = try replay.execution.replayActiveSlots(replay_state, metrics);
+        metrics.replay_active_slots_time.observe(phase_timer.read().asNanos());
+        break :blk results;
+    };
     defer allocator.free(slot_results);
 
     // freeze slots
-    const processed_a_slot: bool = try freezeCompletedSlots(replay_state, slot_results);
+    const processed_a_slot: bool = blk: {
+        var phase_timer = sig.time.Timer.start();
+        const processed = try freezeCompletedSlots(replay_state, metrics, slot_results);
+        metrics.freeze_completed_slots_time.observe(phase_timer.read().asNanos());
+        break :blk processed;
+    };
 
     // run consensus
     if (consensus_params) |consensus| {
+        var phase_timer = sig.time.Timer.start();
         var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
         defer gossip_verified_vote_hashes.deinit(allocator);
 
@@ -129,7 +156,12 @@ pub fn advanceReplay(
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
             .results = slot_results,
         });
-    } else try bypassConsensus(replay_state);
+        metrics.consensus_time.observe(phase_timer.read().asNanos());
+    } else {
+        var phase_timer = sig.time.Timer.start();
+        try bypassConsensus(replay_state);
+        metrics.bypass_consensus_time.observe(phase_timer.read().asNanos());
+    }
 
     if (slot_results.len != 0) {
         const elapsed = start_time.read().asNanos();
@@ -562,7 +594,11 @@ pub fn getActiveFeatures(
 }
 
 /// freezes any slots that were completed according to these replay results
-fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !bool {
+fn freezeCompletedSlots(
+    state: *ReplayState,
+    metrics: Metrics,
+    results: []const ReplayResult,
+) !bool {
     const slot_tracker = &state.slot_tracker;
 
     var processed_a_slot = false;
@@ -592,6 +628,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
             defer slot_info.release();
             if (slot_info.state().tickHeight() == slot_info.constants().max_tick_height) {
                 state.logger.info().logf("finished replaying slot: {}", .{slot});
+                var freeze_timer = sig.time.Timer.start();
                 try replay.freeze.freezeSlot(state.allocator, .init(
                     .from(state.logger),
                     state.account_store,
@@ -602,6 +639,7 @@ fn freezeCompletedSlots(state: *ReplayState, results: []const ReplayResult) !boo
                     last_entry_hash,
                     state.ledger,
                 ));
+                metrics.freeze_slot_time.observe(freeze_timer.read().asNanos());
                 processed_a_slot = true;
             } else {
                 state.logger.info().logf("partially replayed slot: {}", .{slot});
@@ -1026,7 +1064,11 @@ test "freezeCompletedSlots handles errors correctly" {
         allocator.destroy(replay_state.epoch_tracker);
     }
 
-    const processed_a_slot = try freezeCompletedSlots(&replay_state, &.{
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+    const metrics = try registry.initStruct(Metrics);
+
+    const processed_a_slot = try freezeCompletedSlots(&replay_state, metrics, &.{
         .{ .slot = 1, .output = .{ .err = .{ .invalid_block = .TooFewTicks } } },
         .{ .slot = 2, .output = .{ .err = .failed_to_load_meta } },
     });

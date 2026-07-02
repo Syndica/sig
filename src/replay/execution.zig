@@ -55,15 +55,15 @@ pub const ReplayResult = struct {
 /// 2. Store the replay results into the relevant data structures.
 ///
 /// Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
-pub fn replayActiveSlots(state: *ReplayState) ![]const ReplayResult {
+pub fn replayActiveSlots(state: *ReplayState, metrics: replay.service.Metrics) ![]const ReplayResult {
     const can_multi_thread = state.thread_pool.max_threads > 1;
     return if (can_multi_thread)
-        try replayActiveSlotsAsync(state)
+        try replayActiveSlotsAsync(state, metrics)
     else
-        try replayActiveSlotsSync(state);
+        try replayActiveSlotsSync(state, metrics);
 }
 
-fn replayActiveSlotsAsync(state: *ReplayState) ![]const ReplayResult {
+fn replayActiveSlotsAsync(state: *ReplayState, metrics: replay.service.Metrics) ![]const ReplayResult {
     const zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsAsync" });
     defer zone.deinit();
 
@@ -89,7 +89,7 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]const ReplayResult {
         for (active_slots) |slot| {
             state.logger.debug().logf("replaying slot: {}", .{slot});
 
-            const params = switch (try prepareSlot(state, slot_tracker, epoch_tracker, slot)) {
+            const params = switch (try prepareSlot(state, metrics, slot_tracker, epoch_tracker, slot)) {
                 .confirm => |params| params,
                 .empty, .dead, .leader => continue,
             };
@@ -100,6 +100,7 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]const ReplayResult {
                 .from(state.logger),
                 &state.thread_pool,
                 &wait_group,
+                metrics,
                 params,
                 result_ptr,
             );
@@ -118,7 +119,7 @@ fn replayActiveSlotsAsync(state: *ReplayState) ![]const ReplayResult {
 
 /// Fully synchronous version of replayActiveSlotsAsync that does not use
 /// multithreading or async execution in any way.
-fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
+fn replayActiveSlotsSync(state: *ReplayState, metrics: replay.service.Metrics) ![]const ReplayResult {
     const allocator = state.allocator;
     var zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsSync" });
     defer zone.deinit();
@@ -141,13 +142,13 @@ fn replayActiveSlotsSync(state: *ReplayState) ![]const ReplayResult {
     for (active_slots) |slot| {
         state.logger.debug().logf("replaying slot: {}", .{slot});
 
-        const params = switch (try prepareSlot(state, slot_tracker, epoch_tracker, slot)) {
+        const params = switch (try prepareSlot(state, metrics, slot_tracker, epoch_tracker, slot)) {
             .confirm => |params| params,
             .empty, .dead, .leader => continue,
         };
         const last_entry_hash = params.entries[params.entries.len - 1].hash;
 
-        const maybe_err = try replaySlotSync(allocator, .from(state.logger), params);
+        const maybe_err = try replaySlotSync(allocator, .from(state.logger), metrics, params);
         results.appendAssumeCapacity(.{
             .slot = slot,
             .output = if (maybe_err) |err|
@@ -201,6 +202,7 @@ pub const ReplaySlotParams = struct {
 pub fn replaySlotSync(
     allocator: Allocator,
     logger: Logger,
+    metrics: replay.service.Metrics,
     params: ReplaySlotParams,
 ) !?ReplaySlotError {
     var zone = tracy.Zone.init(@src(), .{ .name = "replaySlotSync" });
@@ -262,6 +264,7 @@ pub fn replaySlotSync(
 
         switch (try replayBatch(
             allocator,
+            metrics,
             &svm_gateway,
             params.committer,
             &.{transaction},
@@ -290,6 +293,7 @@ pub const BatchResult = union(enum) {
 /// executing them with the SVM.
 pub fn replayBatch(
     persistent_allocator: Allocator,
+    metrics: replay.service.Metrics,
     svm_gateway: *SvmGateway,
     committer: Committer,
     transactions: []const ResolvedTransaction,
@@ -299,6 +303,8 @@ pub fn replayBatch(
     zone.value(transactions.len);
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
+    var batch_timer = sig.time.Timer.start();
+    defer metrics.replay_batch_time.observe(batch_timer.read().asNanos());
 
     // `gpa` allocations may be persisted to data structures, e.g.
     // - votes
@@ -360,12 +366,19 @@ pub fn replayBatch(
             committer.geyser_writer,
         );
 
-        switch (try executeTransaction(
-            persistent_allocator,
-            tmp_allocator,
-            svm_gateway,
-            &runtime_transaction,
-        )) {
+        const transaction_result = blk: {
+            var phase_timer = sig.time.Timer.start();
+            const result = try executeTransaction(
+                persistent_allocator,
+                tmp_allocator,
+                svm_gateway,
+                &runtime_transaction,
+            );
+            metrics.execute_transaction_time.observe(phase_timer.read().asNanos());
+            break :blk result;
+        };
+
+        switch (transaction_result) {
             .ok => |result| {
                 successful_txs[populated_count] = transaction;
                 results[populated_count] = .{ hash, result };
@@ -374,13 +387,17 @@ pub fn replayBatch(
             .err => continue, // spy node: skip failed tx, let slot complete
         }
     }
-    try committer.commitTransactions(
-        persistent_allocator,
-        tmp_allocator,
-        svm_gateway.params.slot,
-        successful_txs[0..populated_count],
-        results[0..populated_count],
-    );
+    {
+        var phase_timer = sig.time.Timer.start();
+        try committer.commitTransactions(
+            persistent_allocator,
+            tmp_allocator,
+            svm_gateway.params.slot,
+            successful_txs[0..populated_count],
+            results[0..populated_count],
+        );
+        metrics.commit_transactions_time.observe(phase_timer.read().asNanos());
+    }
 
     return .success;
 }
@@ -423,6 +440,7 @@ const PreparedSlot = union(enum) {
 /// - [confirm_slot](https://github.com/anza-xyz/agave/blob/d79257e5f4afca4d092793f7a1e854cd5ccd6be9/ledger/src/blockstore_processor.rs#L1486)
 fn prepareSlot(
     state: *ReplayState,
+    metrics: replay.service.Metrics,
     slot_tracker: *SlotTracker,
     epoch_tracker: *sig.core.EpochTracker,
     slot: Slot,
@@ -431,6 +449,8 @@ fn prepareSlot(
     zone.value(slot);
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
+    var prepare_timer = sig.time.Timer.start();
+    defer metrics.prepare_slot_time.observe(prepare_timer.read().asNanos());
 
     const progress_get_or_put = try state.progress_map.map.getOrPut(state.allocator, slot);
     if (progress_get_or_put.found_existing and progress_get_or_put.value_ptr.is_dead) {
@@ -525,19 +545,29 @@ fn prepareSlot(
     // TODO: Avoid the need to read this from accountsdb. We could broaden the
     // scope of the sysvar cache, add this to slot constants, or implement
     // additional mechanisms for lookup tables to detect slot age (e.g. block height).
-    const slot_hashes = try replay.update_sysvar.getSysvarFromAccount(
-        SlotHashes,
-        state.allocator,
-        slot_account_reader,
-    ) orelse return error.MissingSlotHashesSysvar;
+    const slot_hashes = blk: {
+        var phase_timer = sig.time.Timer.start();
+        const hashes = try replay.update_sysvar.getSysvarFromAccount(
+            SlotHashes,
+            state.allocator,
+            slot_account_reader,
+        ) orelse return error.MissingSlotHashesSysvar;
+        metrics.load_slot_hashes_time.observe(phase_timer.read().asNanos());
+        break :blk hashes;
+    };
 
-    const resolved_txns = try replay.resolve_lookup.resolveBlock(state.allocator, entries, .{
-        .slot = slot,
-        .account_reader = slot_account_reader,
-        .reserved_accounts = &slot_info.constants().reserved_accounts,
-        .slot_hashes = slot_hashes,
-        .logger = state.logger.withScope("replay-resolve"),
-    });
+    const resolved_txns = blk: {
+        var phase_timer = sig.time.Timer.start();
+        const txns = try replay.resolve_lookup.resolveBlock(state.allocator, entries, .{
+            .slot = slot,
+            .account_reader = slot_account_reader,
+            .reserved_accounts = &slot_info.constants().reserved_accounts,
+            .slot_hashes = slot_hashes,
+            .logger = state.logger.withScope("replay-resolve"),
+        });
+        metrics.resolve_block_time.observe(phase_timer.read().asNanos());
+        break :blk txns;
+    };
     errdefer {
         for (resolved_txns) |transaction| transaction.deinit(state.allocator);
         state.allocator.free(resolved_txns);
@@ -961,16 +991,20 @@ test "prepareSlot: empty and dead slots are handled correctly" {
         .allocator = allocator,
     });
 
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+    const metrics = try registry.initStruct(replay.service.Metrics);
+
     try std.testing.expectEqual(
         .empty,
-        try prepareSlot(&state, &state.slot_tracker, state.epoch_tracker, 1),
+        try prepareSlot(&state, metrics, &state.slot_tracker, state.epoch_tracker, 1),
     );
 
     try dep_stubs.ledger.resultWriter().setDeadSlot(1);
 
     try std.testing.expectEqual(
         .dead,
-        try prepareSlot(&state, &state.slot_tracker, state.epoch_tracker, 1),
+        try prepareSlot(&state, metrics, &state.slot_tracker, state.epoch_tracker, 1),
     );
 }
 
@@ -982,6 +1016,9 @@ fn testReplaySlot(
     feature_set: sig.core.FeatureSet,
 ) !void {
     const logger: Logger = if (expected == null) .FOR_TESTS else .noop;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+    const metrics = try registry.initStruct(replay.service.Metrics);
 
     const sync_result = result: {
         var state = try TestState.init(allocator);
@@ -989,7 +1026,7 @@ fn testReplaySlot(
         state.feature_set = feature_set;
 
         const params = try state.prepareSlotParams(allocator, entries, verify_ticks_params);
-        break :result try replaySlotSync(allocator, logger, params);
+        break :result try replaySlotSync(allocator, logger, metrics, params);
     };
 
     verify_ticks_params.tick_hash_count.* = 0;
@@ -1017,6 +1054,7 @@ fn testReplaySlot(
                 .from(logger),
                 &thread_pool,
                 &wg,
+                metrics,
                 params,
                 &result,
             );

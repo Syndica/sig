@@ -45,6 +45,7 @@ pub const ReplaySlotFuture = struct {
     // Worker schedulers.
     poh_verifier: PohVerifier,
     txn_scheduler: TransactionScheduler,
+    metrics: replay.service.Metrics,
 
     // Threading state.
     pending: Atomic(usize),
@@ -63,6 +64,7 @@ pub const ReplaySlotFuture = struct {
         logger: Logger,
         thread_pool: *ThreadPool,
         wait_group: *std.Thread.WaitGroup,
+        metrics: replay.service.Metrics,
         params: replay.execution.ReplaySlotParams,
         result_ptr: *Result,
     ) void {
@@ -91,6 +93,7 @@ pub const ReplaySlotFuture = struct {
                 .future = self,
                 .initial_hash = params.last_entry,
             },
+            .metrics = metrics,
             .txn_scheduler = .{
                 .future = self,
                 .transactions = params.transactions,
@@ -401,6 +404,7 @@ const TransactionScheduler = struct {
             const future = self.scheduler.future;
             const result = replayBatch(
                 future.allocator, // cant use future's arena here as its multi-threaded
+                future.metrics,
                 &self.scheduler.svm_gateway,
                 self.scheduler.committer,
                 &.{self.transaction},
@@ -468,6 +472,9 @@ fn testSchedulerForBatches(
         thread_pool.shutdown();
         thread_pool.deinit();
     }
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+    const metrics = try registry.initStruct(replay.service.Metrics);
 
     var result: ReplaySlotFuture.Result = undefined;
     {
@@ -512,6 +519,7 @@ fn testSchedulerForBatches(
                 .future = future,
                 .initial_hash = .ZEROES, // poh_verifier not used.
             },
+            .metrics = metrics,
             .txn_scheduler = .{
                 .future = future,
                 .transactions = resolved_transactions,
