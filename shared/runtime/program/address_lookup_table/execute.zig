@@ -341,7 +341,7 @@ fn extendLookupTable(
         }
 
         const new_table_addresses_len = lookup_table.addresses.len +| new_addresses.len;
-        if (new_table_addresses_len >= state.LOOKUP_TABLE_MAX_ADDRESSES) {
+        if (new_table_addresses_len > state.LOOKUP_TABLE_MAX_ADDRESSES) {
             try ic.tc.log(
                 "Extended lookup table length {} would exceed max capacity of {}",
                 .{ new_table_addresses_len, state.LOOKUP_TABLE_MAX_ADDRESSES },
@@ -383,7 +383,7 @@ fn extendLookupTable(
         for (new_addresses, 0..) |new_address, i| {
             const lookup_mem = lookup_table_account.account.data[LOOKUP_TABLE_META_SIZE..];
             @memcpy(
-                lookup_mem[i *| Pubkey.SIZE..][0..Pubkey.SIZE],
+                lookup_mem[(lookup_table.addresses.len +| i) *| Pubkey.SIZE..][0..Pubkey.SIZE],
                 std.mem.asBytes(&new_address),
             );
         }
@@ -1220,4 +1220,150 @@ test "address-lookup-table extend" {
             .{},
         );
     }
+}
+
+test "address-lookup-table extend appends after an existing address" {
+    const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
+    const InstructionInfoAccountMetaParams = sig.runtime.testing.InstructionInfoAccountMetaParams;
+    const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
+    const allocator = std.testing.allocator;
+
+    const authority: Pubkey = .{ .data = [_]u8{0xA1} ** Pubkey.SIZE };
+    const payer: Pubkey = .{ .data = [_]u8{0xA2} ** Pubkey.SIZE };
+    const lookup_table_address: Pubkey = .{ .data = [_]u8{0xA3} ** Pubkey.SIZE };
+    const first_address: Pubkey = .{ .data = [_]u8{0x11} ** Pubkey.SIZE }; // already stored
+    const second_address: Pubkey = .{ .data = [_]u8{0x22} ** Pubkey.SIZE }; // appended
+
+    const meta_state: state.ProgramState = .{ .LookupTable = state.LookupTableMeta.new(authority) };
+
+    // the table already holds one address: first_address.
+    const before_lookup_table = try allocator.alloc(u8, LOOKUP_TABLE_META_SIZE + @sizeOf(Pubkey));
+    defer allocator.free(before_lookup_table);
+    _ = try sig.bincode.writeToSlice(before_lookup_table[0..LOOKUP_TABLE_META_SIZE], meta_state, .{});
+    @memcpy(before_lookup_table[LOOKUP_TABLE_META_SIZE..], &first_address.data);
+
+    // after extend the table must hold [first, second].
+    const after_lookup_table = try allocator.alloc(u8, LOOKUP_TABLE_META_SIZE + 2 * @sizeOf(Pubkey));
+    defer allocator.free(after_lookup_table);
+    @memcpy(after_lookup_table[0..LOOKUP_TABLE_META_SIZE], before_lookup_table[0..LOOKUP_TABLE_META_SIZE]);
+    const after_addresses = after_lookup_table[LOOKUP_TABLE_META_SIZE..];
+    @memcpy(after_addresses[0..@sizeOf(Pubkey)], &first_address.data);
+    @memcpy(after_addresses[@sizeOf(Pubkey)..], &second_address.data);
+
+    const table_lamports: u64 = 1_000_000_000; // pre-funded -> no rent transfer
+
+    const accounts: []const ExecuteContextsParams.AccountParams = &.{
+        .{ .pubkey = lookup_table_address, .owner = program.ID, .lamports = table_lamports, .data = before_lookup_table },
+        .{ .pubkey = authority },
+        .{ .pubkey = payer, .lamports = table_lamports, .owner = system_program.ID },
+        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = system_program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+    };
+    const expected_accounts: []const ExecuteContextsParams.AccountParams = &.{
+        .{ .pubkey = lookup_table_address, .owner = program.ID, .lamports = table_lamports, .data = after_lookup_table },
+        .{ .pubkey = authority },
+        .{ .pubkey = payer, .lamports = table_lamports, .owner = system_program.ID },
+        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = system_program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+    };
+    const meta: []const InstructionInfoAccountMetaParams = &.{
+        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+        .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        .{ .is_signer = true, .is_writable = true, .index_in_transaction = 2 },
+        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
+        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
+    };
+
+    try expectProgramExecuteResult(
+        allocator,
+        @This().ID,
+        Instruction{ .ExtendLookupTable = .{ .new_addresses = &.{second_address} } },
+        meta,
+        .{
+            .accounts = accounts,
+            .compute_meter = 9_999_999,
+            .sysvar_cache = .{ .clock = runtime.sysvar.Clock.INIT, .rent = runtime.sysvar.Rent.INIT },
+        },
+        .{
+            .accounts = expected_accounts,
+            .accounts_resize_delta = @as(i64, @sizeOf(Pubkey)),
+            .compute_meter = 9_999_999 - program.COMPUTE_UNITS,
+        },
+        .{},
+    );
+}
+
+test "address-lookup-table extend allows exactly 256 addresses" {
+    const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
+    const InstructionInfoAccountMetaParams = sig.runtime.testing.InstructionInfoAccountMetaParams;
+    const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
+    const allocator = std.testing.allocator;
+
+    const authority: Pubkey = .{ .data = [_]u8{0xA1} ** Pubkey.SIZE };
+    const payer: Pubkey = .{ .data = [_]u8{0xA2} ** Pubkey.SIZE };
+    const lookup_table_address: Pubkey = .{ .data = [_]u8{0xA3} ** Pubkey.SIZE };
+    const new_address: Pubkey = .{ .data = [_]u8{0xEE} ** Pubkey.SIZE };
+
+    const meta_state: state.ProgramState = .{ .LookupTable = state.LookupTableMeta.new(authority) };
+
+    // 255 addresses - extending by one reaches exactly LOOKUP_TABLE_MAX_ADDRESSES (256)
+    const before_lookup_table = try allocator.alloc(u8, LOOKUP_TABLE_META_SIZE + 255 * @sizeOf(Pubkey));
+    defer allocator.free(before_lookup_table);
+    _ = try sig.bincode.writeToSlice(before_lookup_table[0..LOOKUP_TABLE_META_SIZE], meta_state, .{});
+    var addr = before_lookup_table[LOOKUP_TABLE_META_SIZE..];
+    var b: u8 = 1;
+    for (0..255) |_| {
+        const pk: Pubkey = .{ .data = [_]u8{b} ** Pubkey.SIZE };
+        @memcpy(addr[0..@sizeOf(Pubkey)], &pk.data);
+        addr = addr[@sizeOf(Pubkey)..];
+        b +%= 1;
+    }
+
+    // after extend the table holds all 255 original addresses plus new_address appended
+    const after_lookup_table = try allocator.alloc(u8, LOOKUP_TABLE_META_SIZE + 256 * @sizeOf(Pubkey));
+    defer allocator.free(after_lookup_table);
+    @memcpy(after_lookup_table[0..before_lookup_table.len], before_lookup_table);
+    @memcpy(after_lookup_table[before_lookup_table.len..], &new_address.data);
+
+    const table_lamports: u64 = 1_000_000_000; // pre-funded -> no rent transfer
+
+    const accounts: []const ExecuteContextsParams.AccountParams = &.{
+        .{ .pubkey = lookup_table_address, .owner = program.ID, .lamports = table_lamports, .data = before_lookup_table },
+        .{ .pubkey = authority },
+        .{ .pubkey = payer, .lamports = table_lamports, .owner = system_program.ID },
+        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = system_program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+    };
+    const expected_accounts: []const ExecuteContextsParams.AccountParams = &.{
+        .{ .pubkey = lookup_table_address, .owner = program.ID, .lamports = table_lamports, .data = after_lookup_table },
+        .{ .pubkey = authority },
+        .{ .pubkey = payer, .lamports = table_lamports, .owner = system_program.ID },
+        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = system_program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+    };
+    const meta: []const InstructionInfoAccountMetaParams = &.{
+        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+        .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        .{ .is_signer = true, .is_writable = true, .index_in_transaction = 2 },
+        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
+        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
+    };
+
+    try expectProgramExecuteResult(
+        allocator,
+        @This().ID,
+        Instruction{ .ExtendLookupTable = .{ .new_addresses = &.{new_address} } },
+        meta,
+        .{
+            .accounts = accounts,
+            .compute_meter = 9_999_999,
+            .sysvar_cache = .{ .clock = runtime.sysvar.Clock.INIT, .rent = runtime.sysvar.Rent.INIT },
+        },
+        .{
+            .accounts = expected_accounts,
+            .accounts_resize_delta = @as(i64, @sizeOf(Pubkey)),
+            .compute_meter = 9_999_999 - program.COMPUTE_UNITS,
+        },
+        .{},
+    );
 }
