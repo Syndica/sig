@@ -96,13 +96,13 @@ pub fn Receiver(comptime Effects: type) type {
         // TODO: report return values to observability
         // TODO: report back equivocating shreds, so that we can construct and send out duplicate proofs
         pub fn processPacket(
-            state: *Self,
+            self: *Self,
             leader_schedule: *const lib.solana.LeaderSchedule,
             network_shred_version: u16,
             packet: *const Packet,
             logger: lib.telemetry.Logger("processPacket"),
         ) ProcessPacketError!PacketSuccess {
-            const result = state.processPacketInner(
+            const result = self.processPacketInner(
                 leader_schedule,
                 network_shred_version,
                 packet,
@@ -115,17 +115,17 @@ pub fn Receiver(comptime Effects: type) type {
                     },
                     else => |packet_err| {
                         logger.warn().logf("packet failed with {}", .{packet_err});
-                        state.effects.reportReceiverPacketResult(.{ .failed = packet_err });
+                        self.effects.reportReceiverPacketResult(.{ .failed = packet_err });
                         return packet_err;
                     },
                 }
             };
-            state.effects.reportReceiverPacketResult(.{ .success = result });
+            self.effects.reportReceiverPacketResult(.{ .success = result });
             return result;
         }
 
         fn processPacketInner(
-            state: *Self,
+            self: *Self,
             leader_schedule: *const lib.solana.LeaderSchedule,
             network_shred_version: u16,
             packet: *const Packet,
@@ -136,10 +136,10 @@ pub fn Receiver(comptime Effects: type) type {
 
             // check that the shred variant is supported and the header is valid
             const shred = Shred.fromPacketChecked(packet) catch |err| {
-                state.effects.reportShredParseResult(false);
+                self.effects.reportShredParseResult(false);
                 return err;
             };
-            state.effects.reportShredParseResult(true);
+            self.effects.reportShredParseResult(true);
 
             const in_type_idx = if (shred.variant.isData())
                 shred.slot_idx - shred.fec_set_idx
@@ -149,8 +149,8 @@ pub fn Receiver(comptime Effects: type) type {
             // some additional "free" filtering + sanity checks
             {
                 // ignore shred from a slot that's too old or too new
-                if (shred.slot < state.root_slot) return error.ShredOlderThanRoot;
-                if (shred.slot > state.max_slot) return error.ShredTooNew;
+                if (shred.slot < self.root_slot) return error.ShredOlderThanRoot;
+                if (shred.slot > self.max_slot) return error.ShredTooNew;
 
                 // ignore shred with wrong version
                 if (shred.version != network_shred_version) {
@@ -197,7 +197,7 @@ pub fn Receiver(comptime Effects: type) type {
             );
             zone.text(str);
 
-            const fec_set_ctx = if (state.in_progress.getFecSetCtx(
+            const fec_set_ctx = if (self.in_progress.getFecSetCtx(
                 &shred.signature,
             )) |fec_set_ctx| existing_set: {
                 // fec set is already being built. This branch will be taken for 31/64 shreds (assuming
@@ -230,7 +230,7 @@ pub fn Receiver(comptime Effects: type) type {
             } else new_set: {
                 // fec set is not currently being built (likely finished already)
 
-                switch (state.done.lookupStatus(fec_set_id, &shred.signature)) {
+                switch (self.done.lookupStatus(fec_set_id, &shred.signature)) {
                     // fec set isn't finished, this is a new set
                     .missing => {},
                     // fec set was finished already, let's ignore it
@@ -253,7 +253,7 @@ pub fn Receiver(comptime Effects: type) type {
                 }
 
                 // if we have this FecSetId with a different signature, this means equivocation has occured
-                if (state.in_progress.containsId(fec_set_id)) {
+                if (self.in_progress.containsId(fec_set_id)) {
                     // NOTE: see above note.
                     return error.EquivocationFecSetIdAlreadyInProgress;
                 }
@@ -284,7 +284,7 @@ pub fn Receiver(comptime Effects: type) type {
                     break :blk shred_merkle_root;
                 };
 
-                const fec_set_ctx = state.in_progress.createFecSetCtx(
+                const fec_set_ctx = self.in_progress.createFecSetCtx(
                     fec_set_id,
                     &shred.signature,
                 );
@@ -396,8 +396,8 @@ pub fn Receiver(comptime Effects: type) type {
                     break :blk .{ len, data_complete, slot_complete };
                 };
 
-                const finished: *DeshreddedFecSet = state.effects.writeCompletedFecSet();
-                defer state.effects.flushCompletedFecSet();
+                const finished: *DeshreddedFecSet = self.effects.writeCompletedFecSet();
+                defer self.effects.flushCompletedFecSet();
 
                 finished.* = .{
                     .merkle_root = fec_set_ctx.merkle_root,
@@ -422,11 +422,11 @@ pub fn Receiver(comptime Effects: type) type {
                 }
 
                 std.debug.assert(bytes_written == total_payload_len);
-                state.effects.reportFecSetCompleted(finished, fec_set_ctx);
+                self.effects.reportFecSetCompleted(finished, fec_set_ctx);
             }
 
-            state.done.setDone(&shred.signature, fec_set_id);
-            state.in_progress.removeFinishedSet(fec_set_ctx);
+            self.done.setDone(&shred.signature, fec_set_id);
+            self.in_progress.removeFinishedSet(fec_set_ctx);
 
             tracy.frameMarkNamed("finished FEC sets");
 
