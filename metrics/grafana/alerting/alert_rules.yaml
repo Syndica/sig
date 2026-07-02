@@ -73,7 +73,10 @@ groups:
                 type: loki
                 uid: P8E80F9AEF21F6940
               editorMode: code
-              expr: count_over_time({level="error"}[5m]) > 0
+              # Error count per scope. scope is already a stream label, so no logfmt
+              # parse is needed. The count doesn't carry the message text; the alert
+              # links to the Error Service Logs panel (panelId 26) for that.
+              expr: sum by (scope) (count_over_time({source="sig", level="error"}[5m]))
               intervalMs: 1000
               maxDataPoints: 43200
               queryType: range
@@ -103,7 +106,7 @@ groups:
               expression: A
               intervalMs: 1000
               maxDataPoints: 43200
-              reducer: count
+              reducer: last
               refId: B
               type: reduce
           - refId: C
@@ -145,7 +148,7 @@ groups:
         annotations:
           __dashboardUid__: jBuN47BVz
           __panelId__: "26"
-          summary: "error: [{{ $labels.scope }}]: {{ $labels.message }}"
+          summary: "sig error logs in {{ $labels.scope }}: {{ $values.B.Value }} in the last 5m"
         labels: {}
         isPaused: false
         notification_settings:
