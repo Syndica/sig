@@ -84,8 +84,23 @@ const Metrics = struct {
     cache_bytes: *sig.prometheus.Gauge(u64),
     cache_entries: *sig.prometheus.Gauge(u64),
     lookup_cache_entries: *sig.prometheus.Gauge(u64),
+    get_time: *sig.prometheus.Histogram,
+    lookup_time: *sig.prometheus.Histogram,
+    read_index_record_time: *sig.prometheus.Histogram,
+    read_account_record_time: *sig.prometheus.Histogram,
+    read_account_record_cache_time: *sig.prometheus.Histogram,
+    read_account_record_decode_time: *sig.prometheus.Histogram,
+    decompress_chunk_time: *sig.prometheus.Histogram,
+    segments_pread_time: *sig.prometheus.Histogram,
+    zstd_decode_time: *sig.prometheus.Histogram,
 
     pub const prefix = "accountsdb_compressed_store";
+    pub const histogram_buckets = b: {
+        const base = 100 * std.time.ns_per_ms;
+        var buckets: [20]f64 = undefined;
+        for (&buckets, 0..) |*bucket, i| bucket.* = i * base;
+        break :b buckets;
+    };
 };
 
 const IndexRecord = struct {
@@ -337,6 +352,9 @@ pub fn get(
     allocator: std.mem.Allocator,
     address: Pubkey,
 ) !?AccountSharedData {
+    var timer = sig.time.Timer.start();
+    defer self.metrics.get_time.observe(timer.read().asNanos());
+
     self.metrics.get_count.inc();
     if (self.overlay_store) |overlay| {
         if (try overlay.get(allocator, address)) |account| {
@@ -385,6 +403,9 @@ pub fn samplePubkeys(
 }
 
 fn lookup(self: *CompressedAccountStore, address: Pubkey) !?IndexRecord {
+    var timer = sig.time.Timer.start();
+    defer self.metrics.lookup_time.observe(timer.read().asNanos());
+
     if (self.lookupCacheGet(address)) |cached| {
         if (cached.found) return cached.record;
         return null;
@@ -444,6 +465,9 @@ fn lookupCachePut(self: *CompressedAccountStore, address: Pubkey, entry: LookupC
 }
 
 fn readIndexRecordAt(self: *CompressedAccountStore, offset: u64) !IndexRecord {
+    var timer = sig.time.Timer.start();
+    defer self.metrics.read_index_record_time.observe(timer.read().asNanos());
+
     var bytes: [INDEX_RECORD_LEN]u8 = undefined;
     if (try self.index_file.preadAll(&bytes, offset) != bytes.len)
         return error.InvalidCompressedAccountIndex;
@@ -464,6 +488,9 @@ fn readAccountRecord(
     address: Pubkey,
     record: IndexRecord,
 ) !AccountSharedData {
+    var timer = sig.time.Timer.start();
+    defer self.metrics.read_account_record_time.observe(timer.read().asNanos());
+
     if (record.chunk_id >= self.chunk_table.len)
         return error.InvalidCompressedAccountRecord;
     const chunk = self.chunk_table[record.chunk_id];
@@ -481,7 +508,7 @@ fn readAccountRecord(
         return try self.insertChunkAndReadAccountRecord(allocator, address, record, decompressed);
     }
     defer self.allocator.free(decompressed);
-    return try decodeAccountRecordFromChunk(allocator, address, record, decompressed);
+    return try self.decodeAccountRecordFromChunkWithMetrics(allocator, address, record, decompressed);
 }
 
 fn readAccountRecordFromCache(
@@ -490,6 +517,9 @@ fn readAccountRecordFromCache(
     address: Pubkey,
     record: IndexRecord,
 ) !?AccountSharedData {
+    var timer = sig.time.Timer.start();
+    defer self.metrics.read_account_record_cache_time.observe(timer.read().asNanos());
+
     if (self.chunk_cache.len == 0) return null;
 
     self.chunk_cache_mutex.lock();
@@ -502,7 +532,7 @@ fn readAccountRecordFromCache(
                 self.chunk_cache_clock +%= 1;
                 entry.last_used = self.chunk_cache_clock;
                 self.metrics.cache_hit_count.inc();
-                return try decodeAccountRecordFromChunk(allocator, address, record, entry.bytes);
+                return try self.decodeAccountRecordFromChunkWithMetrics(allocator, address, record, entry.bytes);
             }
         }
         _ = self.chunk_cache_index.remove(record.chunk_id);
@@ -596,13 +626,13 @@ fn insertChunkAndReadAccountRecord(
     }
 
     const target = self.emptyCacheEntry() orelse self.oldestCacheEntry() orelse {
-        const account = try decodeAccountRecordFromChunk(allocator, address, record, decompressed);
+        const account = try self.decodeAccountRecordFromChunkWithMetrics(allocator, address, record, decompressed);
         self.allocator.free(decompressed);
         return account;
     };
     try self.cacheAdoptEntry(target, record.chunk_id, decompressed);
     errdefer self.cacheRemoveEntry(target);
-    return try decodeAccountRecordFromChunk(allocator, address, record, self.chunk_cache[target].bytes);
+    return try self.decodeAccountRecordFromChunkWithMetrics(allocator, address, record, self.chunk_cache[target].bytes);
 }
 
 fn shouldCacheChunk(self: *const CompressedAccountStore, len: usize) bool {
@@ -634,19 +664,42 @@ fn decompressChunk(
     allocator: std.mem.Allocator,
     chunk: ChunkEntry,
 ) ![]u8 {
+    var timer = sig.time.Timer.start();
+    defer self.metrics.decompress_chunk_time.observe(timer.read().asNanos());
+
     self.metrics.decompress_count.inc();
     self.metrics.decompress_compressed_bytes.add(chunk.compressed_len);
     self.metrics.decompress_uncompressed_bytes.add(chunk.uncompressed_len);
 
     const compressed = try allocator.alloc(u8, chunk.compressed_len);
     defer allocator.free(compressed);
-    if (try self.segments_file.preadAll(compressed, chunk.compressed_offset) != compressed.len)
-        return error.InvalidCompressedAccountChunk;
+    {
+        var pread_timer = sig.time.Timer.start();
+        defer self.metrics.segments_pread_time.observe(pread_timer.read().asNanos());
+        if (try self.segments_file.preadAll(compressed, chunk.compressed_offset) != compressed.len)
+            return error.InvalidCompressedAccountChunk;
+    }
 
     const decompressed = try allocator.alloc(u8, chunk.uncompressed_len);
     errdefer allocator.free(decompressed);
-    try decompressZstdFrame(allocator, compressed, decompressed);
+    {
+        var zstd_timer = sig.time.Timer.start();
+        defer self.metrics.zstd_decode_time.observe(zstd_timer.read().asNanos());
+        try decompressZstdFrame(allocator, compressed, decompressed);
+    }
     return decompressed;
+}
+
+fn decodeAccountRecordFromChunkWithMetrics(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    address: Pubkey,
+    record: IndexRecord,
+    decompressed: []const u8,
+) !AccountSharedData {
+    var timer = sig.time.Timer.start();
+    defer self.metrics.read_account_record_decode_time.observe(timer.read().asNanos());
+    return try decodeAccountRecordFromChunk(allocator, address, record, decompressed);
 }
 
 fn decodeAccountRecordFromChunk(
