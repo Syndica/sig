@@ -145,7 +145,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
             for (hashes) |*hash| {
                 latest_block = try rw.block_pool.createId();
-                blockhash_states[latest_block.?.index().?] = hash.*;
+                blockhash_states[latest_block.?.index()] = hash.*;
             }
             blockhashes_in.advance(hashes.len);
         }
