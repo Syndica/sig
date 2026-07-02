@@ -84,6 +84,7 @@ pub const RepairService = struct {
     targeted_repair_next_index: usize,
     targeted_repair_max_per_loop: usize,
     targeted_repair_peer_fanout: usize,
+    targeted_repair_plan_only: bool,
     targeted_repair_min_slot: ?Slot,
     targeted_repair_max_slot: ?Slot,
     max_addressed_requests_per_loop: usize,
@@ -194,6 +195,11 @@ pub const RepairService = struct {
             ),
             MAX_CONTINUITY_REPAIR_PEER_FANOUT,
         );
+        const targeted_repair_plan_only = try readEnvBool(
+            allocator,
+            "SIG_TARGETED_REPAIR_PLAN_ONLY",
+            false,
+        );
         const max_addressed_requests_per_loop = try readEnvUsize(
             allocator,
             "SIG_REPAIR_MAX_ADDRESSED_REQUESTS_PER_LOOP",
@@ -215,7 +221,7 @@ pub const RepairService = struct {
             targeted_repair_min_slot = plan_stats.min_slot;
             targeted_repair_max_slot = plan_stats.max_slot;
             logger.info().logf(
-                "targeted repair plan loaded path={s} request_count={} min_slot={?} max_slot={?} max_per_loop={} peer_fanout={}",
+                "targeted repair plan loaded path={s} request_count={} min_slot={?} max_slot={?} max_per_loop={} peer_fanout={} plan_only={}",
                 .{
                     path,
                     plan_stats.request_count,
@@ -223,6 +229,7 @@ pub const RepairService = struct {
                     plan_stats.max_slot,
                     targeted_repair_max_per_loop,
                     targeted_repair_peer_fanout,
+                    targeted_repair_plan_only,
                 },
             );
         }
@@ -278,6 +285,7 @@ pub const RepairService = struct {
             .targeted_repair_next_index = 0,
             .targeted_repair_max_per_loop = targeted_repair_max_per_loop,
             .targeted_repair_peer_fanout = targeted_repair_peer_fanout,
+            .targeted_repair_plan_only = targeted_repair_plan_only,
             .targeted_repair_min_slot = targeted_repair_min_slot,
             .targeted_repair_max_slot = targeted_repair_max_slot,
             .max_addressed_requests_per_loop = max_addressed_requests_per_loop,
@@ -388,6 +396,10 @@ pub const RepairService = struct {
         var oldest_slot_needing_repair: u64 = 0;
         var newest_slot_needing_repair: u64 = 0;
         var repairs = ArrayList(RepairRequest).init(self.allocator);
+        if (self.targeted_repair_plan_only) {
+            _ = try self.appendTargetedRepairPlanRequests(&repairs);
+            return repairs;
+        }
         if (!try self.shred_tracker.identifyMissing(&self.report, sig.time.Instant.now())) {
             _ = try self.appendTargetedRepairPlanRequests(&repairs);
             return repairs;
