@@ -694,7 +694,7 @@ test "address-lookup-table create" {
         },
         .{ .pubkey = unsigned_authority_address },
         .{ .pubkey = payer, .lamports = before_lamports, .owner = system_program.ID },
-        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
             .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
@@ -711,7 +711,7 @@ test "address-lookup-table create" {
         },
         .{ .pubkey = unsigned_authority_address },
         .{ .pubkey = payer, .lamports = after_lamports, .owner = system_program.ID },
-        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
             .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
@@ -803,7 +803,7 @@ test "address-lookup-table freeze" {
             .data = before_lookup_table,
         },
         .{ .pubkey = unsigned_authority_address },
-        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
             .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
@@ -819,7 +819,7 @@ test "address-lookup-table freeze" {
             .data = after_lookup_table,
         },
         .{ .pubkey = unsigned_authority_address },
-        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
             .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
@@ -912,7 +912,7 @@ test "address-lookup-table close" {
         },
         .{ .pubkey = unsigned_authority_address },
         .{ .pubkey = payer, .lamports = 0 },
-        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
             .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
@@ -929,7 +929,7 @@ test "address-lookup-table close" {
         },
         .{ .pubkey = unsigned_authority_address },
         .{ .pubkey = payer, .lamports = 100 },
-        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
             .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
@@ -1023,7 +1023,7 @@ test "address-lookup-table deactivate" {
             .data = before_lookup_table,
         },
         .{ .pubkey = unsigned_authority_address },
-        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
             .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
@@ -1039,7 +1039,7 @@ test "address-lookup-table deactivate" {
             .data = after_lookup_table,
         },
         .{ .pubkey = unsigned_authority_address },
-        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
             .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
@@ -1237,33 +1237,50 @@ test "address-lookup-table extend appends after an existing address" {
     const meta_state: state.ProgramState = .{ .LookupTable = state.LookupTableMeta.new(authority) };
 
     // the table already holds one address: first_address.
-    const before_lookup_table = try allocator.alloc(u8, LOOKUP_TABLE_META_SIZE + @sizeOf(Pubkey));
+    const before_lookup_table = try allocator.alloc(u8, LOOKUP_TABLE_META_SIZE + Pubkey.SIZE);
     defer allocator.free(before_lookup_table);
-    _ = try sig.bincode.writeToSlice(before_lookup_table[0..LOOKUP_TABLE_META_SIZE], meta_state, .{});
+    _ = try sig.bincode.writeToSlice(
+        before_lookup_table[0..LOOKUP_TABLE_META_SIZE],
+        meta_state,
+        .{},
+    );
     @memcpy(before_lookup_table[LOOKUP_TABLE_META_SIZE..], &first_address.data);
 
     // after extend the table must hold [first, second].
-    const after_lookup_table = try allocator.alloc(u8, LOOKUP_TABLE_META_SIZE + 2 * @sizeOf(Pubkey));
+    const after_lookup_table = try allocator.alloc(u8, LOOKUP_TABLE_META_SIZE + 2 * Pubkey.SIZE);
     defer allocator.free(after_lookup_table);
-    @memcpy(after_lookup_table[0..LOOKUP_TABLE_META_SIZE], before_lookup_table[0..LOOKUP_TABLE_META_SIZE]);
+    @memcpy(
+        after_lookup_table[0..LOOKUP_TABLE_META_SIZE],
+        before_lookup_table[0..LOOKUP_TABLE_META_SIZE],
+    );
     const after_addresses = after_lookup_table[LOOKUP_TABLE_META_SIZE..];
-    @memcpy(after_addresses[0..@sizeOf(Pubkey)], &first_address.data);
-    @memcpy(after_addresses[@sizeOf(Pubkey)..], &second_address.data);
+    @memcpy(after_addresses[0..Pubkey.SIZE], &first_address.data);
+    @memcpy(after_addresses[Pubkey.SIZE..], &second_address.data);
 
     const table_lamports: u64 = 1_000_000_000; // pre-funded -> no rent transfer
 
     const accounts: []const ExecuteContextsParams.AccountParams = &.{
-        .{ .pubkey = lookup_table_address, .owner = program.ID, .lamports = table_lamports, .data = before_lookup_table },
+        .{
+            .pubkey = lookup_table_address,
+            .owner = ID,
+            .lamports = table_lamports,
+            .data = before_lookup_table,
+        },
         .{ .pubkey = authority },
         .{ .pubkey = payer, .lamports = table_lamports, .owner = system_program.ID },
-        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{ .pubkey = system_program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
     };
     const expected_accounts: []const ExecuteContextsParams.AccountParams = &.{
-        .{ .pubkey = lookup_table_address, .owner = program.ID, .lamports = table_lamports, .data = after_lookup_table },
+        .{
+            .pubkey = lookup_table_address,
+            .owner = ID,
+            .lamports = table_lamports,
+            .data = after_lookup_table,
+        },
         .{ .pubkey = authority },
         .{ .pubkey = payer, .lamports = table_lamports, .owner = system_program.ID },
-        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{ .pubkey = system_program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
     };
     const meta: []const InstructionInfoAccountMetaParams = &.{
@@ -1276,17 +1293,20 @@ test "address-lookup-table extend appends after an existing address" {
 
     try expectProgramExecuteResult(
         allocator,
-        @This().ID,
+        ID,
         Instruction{ .ExtendLookupTable = .{ .new_addresses = &.{second_address} } },
         meta,
         .{
             .accounts = accounts,
             .compute_meter = 9_999_999,
-            .sysvar_cache = .{ .clock = runtime.sysvar.Clock.INIT, .rent = runtime.sysvar.Rent.INIT },
+            .sysvar_cache = .{
+                .clock = runtime.sysvar.Clock.INIT,
+                .rent = runtime.sysvar.Rent.INIT,
+            },
         },
         .{
             .accounts = expected_accounts,
-            .accounts_resize_delta = @as(i64, @sizeOf(Pubkey)),
+            .accounts_resize_delta = @as(i64, Pubkey.SIZE),
             .compute_meter = 9_999_999 - program.COMPUTE_UNITS,
         },
         .{},
@@ -1306,21 +1326,33 @@ test "address-lookup-table extend allows exactly 256 addresses" {
 
     const meta_state: state.ProgramState = .{ .LookupTable = state.LookupTableMeta.new(authority) };
 
-    // 255 addresses - extending by one reaches exactly LOOKUP_TABLE_MAX_ADDRESSES (256)
-    const before_lookup_table = try allocator.alloc(u8, LOOKUP_TABLE_META_SIZE + 255 * @sizeOf(Pubkey));
+    // fill the table to one below the cap so that extending by a single address
+    // lands exactly on state.LOOKUP_TABLE_MAX_ADDRESSES
+    const max_addresses = state.LOOKUP_TABLE_MAX_ADDRESSES;
+    const before_lookup_table = try allocator.alloc(
+        u8,
+        LOOKUP_TABLE_META_SIZE + (max_addresses - 1) * Pubkey.SIZE,
+    );
     defer allocator.free(before_lookup_table);
-    _ = try sig.bincode.writeToSlice(before_lookup_table[0..LOOKUP_TABLE_META_SIZE], meta_state, .{});
+    _ = try sig.bincode.writeToSlice(
+        before_lookup_table[0..LOOKUP_TABLE_META_SIZE],
+        meta_state,
+        .{},
+    );
     var addr = before_lookup_table[LOOKUP_TABLE_META_SIZE..];
     var b: u8 = 1;
-    for (0..255) |_| {
+    for (0..max_addresses - 1) |_| {
         const pk: Pubkey = .{ .data = [_]u8{b} ** Pubkey.SIZE };
-        @memcpy(addr[0..@sizeOf(Pubkey)], &pk.data);
-        addr = addr[@sizeOf(Pubkey)..];
+        @memcpy(addr[0..Pubkey.SIZE], &pk.data);
+        addr = addr[Pubkey.SIZE..];
         b +%= 1;
     }
 
-    // after extend the table holds all 255 original addresses plus new_address appended
-    const after_lookup_table = try allocator.alloc(u8, LOOKUP_TABLE_META_SIZE + 256 * @sizeOf(Pubkey));
+    // after extend the table holds all original addresses plus new_address appended
+    const after_lookup_table = try allocator.alloc(
+        u8,
+        LOOKUP_TABLE_META_SIZE + max_addresses * Pubkey.SIZE,
+    );
     defer allocator.free(after_lookup_table);
     @memcpy(after_lookup_table[0..before_lookup_table.len], before_lookup_table);
     @memcpy(after_lookup_table[before_lookup_table.len..], &new_address.data);
@@ -1328,17 +1360,27 @@ test "address-lookup-table extend allows exactly 256 addresses" {
     const table_lamports: u64 = 1_000_000_000; // pre-funded -> no rent transfer
 
     const accounts: []const ExecuteContextsParams.AccountParams = &.{
-        .{ .pubkey = lookup_table_address, .owner = program.ID, .lamports = table_lamports, .data = before_lookup_table },
+        .{
+            .pubkey = lookup_table_address,
+            .owner = ID,
+            .lamports = table_lamports,
+            .data = before_lookup_table,
+        },
         .{ .pubkey = authority },
         .{ .pubkey = payer, .lamports = table_lamports, .owner = system_program.ID },
-        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{ .pubkey = system_program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
     };
     const expected_accounts: []const ExecuteContextsParams.AccountParams = &.{
-        .{ .pubkey = lookup_table_address, .owner = program.ID, .lamports = table_lamports, .data = after_lookup_table },
+        .{
+            .pubkey = lookup_table_address,
+            .owner = ID,
+            .lamports = table_lamports,
+            .data = after_lookup_table,
+        },
         .{ .pubkey = authority },
         .{ .pubkey = payer, .lamports = table_lamports, .owner = system_program.ID },
-        .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{ .pubkey = system_program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
     };
     const meta: []const InstructionInfoAccountMetaParams = &.{
@@ -1351,17 +1393,20 @@ test "address-lookup-table extend allows exactly 256 addresses" {
 
     try expectProgramExecuteResult(
         allocator,
-        @This().ID,
+        ID,
         Instruction{ .ExtendLookupTable = .{ .new_addresses = &.{new_address} } },
         meta,
         .{
             .accounts = accounts,
             .compute_meter = 9_999_999,
-            .sysvar_cache = .{ .clock = runtime.sysvar.Clock.INIT, .rent = runtime.sysvar.Rent.INIT },
+            .sysvar_cache = .{
+                .clock = runtime.sysvar.Clock.INIT,
+                .rent = runtime.sysvar.Rent.INIT,
+            },
         },
         .{
             .accounts = expected_accounts,
-            .accounts_resize_delta = @as(i64, @sizeOf(Pubkey)),
+            .accounts_resize_delta = @as(i64, Pubkey.SIZE),
             .compute_meter = 9_999_999 - program.COMPUTE_UNITS,
         },
         .{},
