@@ -14,7 +14,7 @@ pub fn SharedPool(Item: type, cap: usize) type {
     const IdInt: type = @Type(.{ .int = .{ .bits = int_bits, .signedness = .unsigned } });
 
     return extern struct {
-        free_list: ItemId,
+        free_list: ItemId.Optional,
 
         // This is effectively a [capacity]Node, however Zig doesn't let us make structs over 4GiB,
         // which some pools may be.
@@ -27,7 +27,10 @@ pub fn SharedPool(Item: type, cap: usize) type {
         pub const capacity = cap;
 
         // We know when next_free is active when we walk the free_list
-        const Node = extern union { next_free: ItemId align(@alignOf(Item)), item: Item };
+        const Node = extern union {
+            next_free: ItemId.Optional align(@alignOf(Item)),
+            item: Item,
+        };
 
         comptime {
             if (@sizeOf(Node) != @sizeOf(Item)) unreachable;
@@ -35,7 +38,6 @@ pub fn SharedPool(Item: type, cap: usize) type {
         }
 
         pub const ItemId = enum(IdInt) {
-            null = std.math.maxInt(IdInt),
             _,
 
             comptime {
@@ -43,8 +45,7 @@ pub fn SharedPool(Item: type, cap: usize) type {
                 _ = PoolSelf;
             }
 
-            pub fn index(self: ItemId) ?IdInt {
-                if (self == .null) return null;
+            pub fn index(self: ItemId) IdInt {
                 return @intFromEnum(self);
             }
 
@@ -52,15 +53,27 @@ pub fn SharedPool(Item: type, cap: usize) type {
                 return @enumFromInt(int);
             }
 
-            pub fn ptr(self: ItemId, pool: *PoolSelf) ?*Item {
-                if (self == .null) return null;
+            pub fn ptr(self: ItemId, pool: *PoolSelf) *Item {
                 return pool.indexToPtr(self);
             }
 
-            pub fn constPtr(self: ItemId, pool: *const PoolSelf) ?*const Item {
-                if (self == .null) return null;
+            pub fn constPtr(self: ItemId, pool: *const PoolSelf) *const Item {
                 return pool.indexToConstPtr(self);
             }
+
+            pub const Optional = enum(IdInt) {
+                null = std.math.maxInt(IdInt),
+                _,
+
+                pub fn init(non_optional: ItemId) Optional {
+                    return @enumFromInt(@intFromEnum(non_optional));
+                }
+
+                pub fn opt(self: Optional) ?ItemId {
+                    if (self == .null) return null;
+                    return @enumFromInt(@intFromEnum(self));
+                }
+            };
         };
 
         pub fn size() usize {
@@ -93,10 +106,9 @@ pub fn SharedPool(Item: type, cap: usize) type {
 
         // take head off free_list
         pub fn create(self: *PoolSelf) !*Item {
-            const head = self.free_list;
-            if (head == .null) return error.OutOfSpace;
+            const head = self.free_list.opt() orelse return error.OutOfSpace;
 
-            const new_node: *Node = &self.buf()[head.index().?];
+            const new_node: *Node = &self.buf()[head.index()];
             self.free_list = new_node.next_free;
             return @ptrCast(new_node);
         }
@@ -112,25 +124,21 @@ pub fn SharedPool(Item: type, cap: usize) type {
             const node: *Node = @ptrCast(item);
             const id = self.ptrToIndex(item);
 
-            const head = self.free_list;
-            node.* = .{ .next_free = head };
-            self.free_list = id;
+            node.* = .{ .next_free = self.free_list };
+            self.free_list = .init(id);
         }
 
         pub fn destroyId(self: *PoolSelf, item_id: ItemId) void {
-            std.debug.assert(item_id != .null);
-            const item: *Item = @ptrCast(&self.buf()[item_id.index().?]);
+            const item: *Item = @ptrCast(&self.buf()[item_id.index()]);
             self.destroy(item);
         }
 
         pub fn indexToPtr(self: *PoolSelf, item_id: ItemId) *Item {
-            std.debug.assert(item_id != .null);
-            return @ptrCast(&self.buf()[item_id.index().?]);
+            return @ptrCast(&self.buf()[item_id.index()]);
         }
 
         pub fn indexToConstPtr(self: *const PoolSelf, item_id: ItemId) *const Item {
-            std.debug.assert(item_id != .null);
-            return @ptrCast(&self.constBuf()[item_id.index().?]);
+            return @ptrCast(&self.constBuf()[item_id.index()]);
         }
 
         pub fn ptrToIndex(self: *PoolSelf, item: *Item) ItemId {
@@ -159,14 +167,14 @@ pub fn Pool(Item: type, IdInt: type) type {
     }
 
     return extern struct {
-        free_list: ItemId,
+        free_list: ItemId.Optional,
         len: IdInt,
         buf: [*]Node,
 
         const PoolSelf = @This();
 
         // We know when next_free is active when we walk the free_list
-        const Node = extern union { next_free: ItemId, item: Item };
+        const Node = extern union { next_free: ItemId.Optional, item: Item };
 
         comptime {
             if (@sizeOf(Item) < @sizeOf(ItemId)) unreachable;
@@ -176,15 +184,13 @@ pub fn Pool(Item: type, IdInt: type) type {
         }
 
         pub const ItemId = enum(IdInt) {
-            null = std.math.maxInt(IdInt),
             _,
 
             comptime {
                 _ = PoolSelf;
             }
 
-            pub fn index(self: ItemId) ?IdInt {
-                if (self == .null) return null;
+            pub fn index(self: ItemId) IdInt {
                 return @intFromEnum(self);
             }
 
@@ -192,15 +198,27 @@ pub fn Pool(Item: type, IdInt: type) type {
                 return @enumFromInt(int);
             }
 
-            pub fn ptr(self: ItemId, pool: *PoolSelf) ?*Item {
-                if (self == .null) return null;
+            pub fn ptr(self: ItemId, pool: *PoolSelf) *Item {
                 return pool.indexToPtr(self);
             }
 
-            pub fn constPtr(self: ItemId, pool: *const PoolSelf) ?*const Item {
-                if (self == .null) return null;
+            pub fn constPtr(self: ItemId, pool: *const PoolSelf) *const Item {
                 return pool.indexToPtr(self);
             }
+
+            pub const Optional = enum(IdInt) {
+                null = std.math.maxInt(IdInt),
+                _,
+
+                pub fn init(non_optional: ItemId) Optional {
+                    return @enumFromInt(@intFromEnum(non_optional));
+                }
+
+                pub fn opt(self: Optional) ?ItemId {
+                    if (self == .null) return null;
+                    return @enumFromInt(@intFromEnum(self));
+                }
+            };
         };
 
         pub fn init(item_buf: []Item) PoolSelf {
@@ -224,9 +242,9 @@ pub fn Pool(Item: type, IdInt: type) type {
 
         // take head off free_list
         pub fn create(self: *PoolSelf) !*Item {
-            if (self.free_list == .null) return error.OutOfSpace;
+            const head = self.free_list.opt() orelse return error.OutOfSpace;
 
-            const new_node: *Node = &self.buf[self.free_list.index().?];
+            const new_node: *Node = &self.buf[head.index()];
             self.free_list = new_node.next_free;
 
             return @ptrCast(new_node);
@@ -243,23 +261,16 @@ pub fn Pool(Item: type, IdInt: type) type {
 
             const node: *Node = @ptrCast(item);
             node.* = .{ .next_free = self.free_list };
-            self.free_list = self.ptrToIndex(item);
+            self.free_list = .init(self.ptrToIndex(item));
         }
 
         pub fn destroyId(self: *PoolSelf, item_id: ItemId) void {
-            std.debug.assert(item_id != .null);
-            const item: *Item = @ptrCast(&self.buf[item_id.index().?]);
+            const item: *Item = @ptrCast(&self.buf[item_id.index()]);
             self.destroy(item);
         }
 
         pub fn indexToPtr(self: *const PoolSelf, item_id: ItemId) *Item {
-            std.debug.assert(item_id != .null);
-            return @ptrCast(&self.buf[item_id.index().?]);
-        }
-
-        pub fn indexToOptPtr(self: *const PoolSelf, item_id: ItemId) ?*Item {
-            if (item_id == .null) return null;
-            return @ptrCast(&self.buf[item_id.index().?]);
+            return @ptrCast(&self.buf[item_id.index()]);
         }
 
         pub fn ptrToIndex(self: *const PoolSelf, item: *Item) ItemId {
