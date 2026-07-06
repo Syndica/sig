@@ -4,10 +4,6 @@ const sig = @import("../../../lib.zig");
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 const sysvar = sig.runtime.sysvar;
-const InstructionError = sig.core.instruction.InstructionError;
-
-const program = @import("lib.zig");
-const instruction = @import("instruction.zig");
 
 pub const DEFAULT_WARMUP_COOLDOWN_RATE: f64 = 0.25;
 const NEW_WARMUP_COOLDOWN_RATE: f64 = 0.09;
@@ -32,62 +28,11 @@ pub const StakeStateV2 = union(enum) {
         rent_exempt_reserve: u64,
         authorized: Authorized,
         lockup: Lockup,
-
-        pub fn setLockup(
-            self: *Meta,
-            lockup: *const instruction.LockupArgs,
-            signers: []const Pubkey,
-            clock: *const sysvar.Clock,
-        ) InstructionError!void {
-            if (self.lockup.isInForce(clock, null)) {
-                const custodian_signed = for (signers) |signer| {
-                    if (signer.equals(&self.lockup.custodian)) break true;
-                } else false;
-
-                if (!custodian_signed) return error.MissingRequiredSignature;
-            } else {
-                const withdrawer_signed = for (signers) |signer| {
-                    if (signer.equals(&self.authorized.withdrawer)) break true;
-                } else false;
-
-                if (!withdrawer_signed) return error.MissingRequiredSignature;
-            }
-
-            if (lockup.unix_timestamp) |unix_timestamp| self.lockup.unix_timestamp = unix_timestamp;
-            if (lockup.epoch) |epoch| self.lockup.epoch = epoch;
-            if (lockup.custodian) |custodian| self.lockup.custodian = custodian;
-        }
     };
 
     pub const Stake = struct {
         delegation: Delegation,
         credits_observed: u64,
-
-        pub fn split(
-            self: *Stake,
-            ic: *sig.runtime.InstructionContext,
-            remaining_stake_delta: u64,
-            split_stake_amount: u64,
-        ) InstructionError!Stake {
-            if (remaining_stake_delta > self.delegation.stake) return {
-                ic.tc.custom_error = @intFromEnum(program.StakeError.insufficient_stake);
-                return error.Custom;
-            };
-
-            self.delegation.stake -= remaining_stake_delta;
-
-            var new: Stake = self.*;
-            new.delegation.stake = split_stake_amount;
-
-            return new;
-        }
-
-        pub fn deactivate(self: *Stake, epoch: Epoch) ?program.StakeError {
-            if (self.delegation.deactivation_epoch != std.math.maxInt(u64))
-                return .already_deactivated;
-            self.delegation.deactivation_epoch = epoch;
-            return null;
-        }
 
         pub fn getDelegation(self: *const Stake) Delegation {
             return self.delegation;
@@ -105,10 +50,6 @@ pub const StakeStateV2 = union(enum) {
         bits: u8,
 
         pub const EMPTY: StakeFlags = .{ .bits = 0 };
-
-        pub fn combine(self: StakeFlags, other: StakeFlags) StakeFlags {
-            return .{ .bits = self.bits | other.bits };
-        }
     };
 
     pub const Authorized = struct {
@@ -116,71 +57,6 @@ pub const StakeStateV2 = union(enum) {
         withdrawer: Pubkey,
 
         pub const DEFAULT: Authorized = .{ .staker = Pubkey.ZEROES, .withdrawer = Pubkey.ZEROES };
-
-        pub fn check(
-            self: *const Authorized,
-            signers: []const Pubkey,
-            stake_authorize: StakeAuthorize,
-        ) error{MissingRequiredSignature}!void {
-            const authorized_signer = switch (stake_authorize) {
-                .staker => &self.staker,
-                .withdrawer => &self.withdrawer,
-            };
-
-            const has_signature = for (signers) |signer| {
-                if (signer.equals(authorized_signer)) break true;
-            } else false;
-
-            if (!has_signature) return error.MissingRequiredSignature;
-        }
-
-        // [agave] https://github.com/solana-program/stake/blob/69620421bf76ecddb62357e1e1cd5c0961f7794d/interface/src/state.rs#L410
-        pub fn authorize(
-            self: *Authorized,
-            signers: []const Pubkey,
-            new_authorized: *const Pubkey,
-            stake_authorize: StakeAuthorize,
-            lockup_custodian_args: ?struct { *const Lockup, *const sysvar.Clock, ?*const Pubkey },
-        ) ?struct { ?program.StakeError, InstructionError } {
-            switch (stake_authorize) {
-                .staker => {
-                    const has_required_signer = for (signers) |signer| {
-                        if (signer.equals(&self.staker) or signer.equals(&self.withdrawer))
-                            break true;
-                    } else false;
-
-                    if (!has_required_signer) return .{ null, error.MissingRequiredSignature };
-                    self.staker = new_authorized.*;
-                },
-                .withdrawer => {
-                    if (lockup_custodian_args) |args| {
-                        const lockup, const clock, const maybe_custodian = args;
-
-                        if (lockup.isInForce(clock, null)) {
-                            const custodian = maybe_custodian orelse
-                                return .{ .custodian_missing, error.Custom };
-
-                            const has_custodian_signer = for (signers) |signer| {
-                                if (signer.equals(custodian)) break true;
-                            } else false;
-
-                            if (!has_custodian_signer)
-                                return .{ .custodian_signature_missing, error.Custom };
-                            if (lockup.isInForce(clock, custodian))
-                                return .{ .lockup_in_force, error.Custom };
-                        }
-                    }
-                    self.check(signers, stake_authorize) catch |err| return .{ null, err };
-                    self.withdrawer = new_authorized.*;
-                },
-            }
-            return null;
-        }
-
-        pub fn equals(self: *const Authorized, other: *const Authorized) bool {
-            if (!self.staker.equals(&other.staker)) return false;
-            return self.withdrawer.equals(&other.withdrawer);
-        }
     };
 
     pub const Lockup = struct {
@@ -203,12 +79,6 @@ pub const StakeStateV2 = union(enum) {
                 if (custodian.equals(&self.custodian)) return false;
             }
             return self.unix_timestamp > clock.unix_timestamp or self.epoch > clock.epoch;
-        }
-
-        pub fn equals(self: *const Lockup, other: *const Lockup) bool {
-            if (self.unix_timestamp != other.unix_timestamp) return false;
-            if (self.epoch != other.epoch) return false;
-            return self.custodian.equals(&other.custodian);
         }
     };
 
