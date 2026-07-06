@@ -165,9 +165,11 @@ fn loadTransactionAccountsInner(
     std.debug.assert(compute_budget_limits.loaded_accounts_bytes != 0);
 
     var loaded = LoadedTransactionAccounts.DEFAULT;
-    errdefer for (loaded.accounts.slice()) |account| account.deinit(allocator);
-    // Expose the partial tally to the fees-only path on error.
-    errdefer running_data_size_out.* = loaded.loaded_accounts_data_size;
+    errdefer {
+        for (loaded.accounts.slice()) |account| account.deinit(allocator);
+        // Expose the partial tally to the fees-only path on error.
+        running_data_size_out.* = loaded.loaded_accounts_data_size;
+    }
 
     try loaded.increase(
         transaction.num_lookup_tables *| ADDRESS_LOOKUP_TABLE_BASE_SIZE,
