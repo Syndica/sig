@@ -42,9 +42,7 @@ pub const VersionedTransaction = struct {
     ///
     /// Computed analytically (compact-u16 length prefixes + fixed-size
     /// fields + variable-size payloads) rather than by round-tripping the
-    /// structure through `bincode.write`. This also sidesteps the latent
-    /// `VersionedMessage.bincodeWrite` path (a `switch (self)` over a
-    /// pointer rather than the tag) which has never been exercised.
+    /// structure through `bincode.write`.
     pub fn serializedSize(self: VersionedTransaction) usize {
         var n: usize = 0;
         n += compactU16Len(self.signatures.items.len);
@@ -272,7 +270,7 @@ pub const VersionedMessage = union(enum) {
     }
 
     pub fn bincodeWrite(self: *const VersionedMessage, writer: *std.Io.Writer) !void {
-        switch (self) {
+        switch (self.*) {
             .legacy => |msg| try bincode.write(writer, msg),
             .v0 => |msg| {
                 try writer.writeByte(1 << 7);
@@ -672,4 +670,35 @@ test "sanitize: duplicate account keys are NOT rejected (validateAccountLocks ow
     defer b.deinit();
     b.account_keys.items[1] = b.account_keys.items[0]; // duplicate
     try testing.expect(b.build().sanitize());
+}
+
+test "VersionedTransaction: bincode round trip" {
+    var b = try Builder.baselineLegacy(testing.allocator);
+    defer b.deinit();
+    const original = b.build();
+
+    const original_serialized = blk: {
+        var buf: [1024]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(&buf);
+        try bincode.write(&writer, original);
+        break :blk writer.buffered();
+    };
+
+    try testing.expectEqual(original.serializedSize(), original_serialized.len);
+
+    const decoded = blk: {
+        var fba_buf: [4096]u8 = undefined;
+        var fba: std.heap.FixedBufferAllocator = .init(&fba_buf);
+        var reader: std.Io.Reader = .fixed(original_serialized);
+        break :blk try bincode.read(&fba, &reader, VersionedTransaction);
+    };
+
+    const decoded_serialized = blk: {
+        var buf: [1024]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(&buf);
+        try bincode.write(&writer, decoded);
+        break :blk writer.buffered();
+    };
+
+    try testing.expectEqualSlices(u8, original_serialized, decoded_serialized);
 }
