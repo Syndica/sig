@@ -67,10 +67,8 @@ pub const VersionedTransaction = struct {
             .legacy => |m| m.account_keys.items,
             .v0 => |m| m.account_keys.items,
         };
-        var i: usize = 0;
-        while (i < keys.len) : (i += 1) {
-            var j: usize = i + 1;
-            while (j < keys.len) : (j += 1) {
+        for (0..keys.len - 1) |i| {
+            for (i + 1..keys.len) |j| {
                 if (std.mem.eql(u8, &keys[i].data, &keys[j].data)) return false;
             }
         }
@@ -166,12 +164,12 @@ pub const VersionedTransaction = struct {
         // (8) per-instruction: program_id_index is a static account, but
         // not the fee payer. Also collect the max account index referenced
         // for check 13.
-        var max_acct_idx: usize = 0;
+        var max_acct_idx: u8 = 0;
         for (instructions) |ix| {
             const pid: usize = ix.program_id_index;
             if (pid == 0 or pid >= acct_cnt) return false;
             for (ix.accounts.items) |a| {
-                if (@as(usize, a) > max_acct_idx) max_acct_idx = a;
+                max_acct_idx = @max(max_acct_idx, a);
             }
         }
 
@@ -384,15 +382,15 @@ const testing = std.testing;
 /// allocator so leaks surface via `testing.allocator`'s assertions.
 const Builder = struct {
     allocator: std.mem.Allocator,
-    signatures: std.ArrayList(Signature) = .{},
+    signatures: std.ArrayList(Signature) = .empty,
     header: MessageHeader = .{
         .num_required_signatures = 1,
         .num_readonly_signed_accounts = 0,
         .num_readonly_unsigned_accounts = 1,
     },
-    account_keys: std.ArrayList(Pubkey) = .{},
-    instructions: std.ArrayList(CompiledInstruction) = .{},
-    alts: std.ArrayList(AddressLookup) = .{},
+    account_keys: std.ArrayList(Pubkey) = .empty,
+    instructions: std.ArrayList(CompiledInstruction) = .empty,
+    alts: std.ArrayList(AddressLookup) = .empty,
     is_v0: bool = false,
 
     fn deinit(self: *Builder) void {
@@ -430,17 +428,19 @@ const Builder = struct {
 
     fn pushInstr(self: *Builder, program_id_index: u8, accounts: []const u8) !void {
         const accounts_copy = try self.allocator.dupe(u8, accounts);
-        const data_copy = try self.allocator.alloc(u8, 0);
+        errdefer self.allocator.free(accounts_copy);
         try self.instructions.append(self.allocator, .{
             .program_id_index = program_id_index,
             .accounts = .{ .items = accounts_copy },
-            .data = .{ .items = data_copy },
+            .data = .{ .items = &.{} },
         });
     }
 
     fn pushAlt(self: *Builder, writable: []const u8, readonly: []const u8) !void {
         const w = try self.allocator.dupe(u8, writable);
+        errdefer self.allocator.free(w);
         const r = try self.allocator.dupe(u8, readonly);
+        errdefer self.allocator.free(r);
         try self.alts.append(self.allocator, .{
             .account_key = pubkey(0xff),
             .writable_indexes = .{ .items = w },
