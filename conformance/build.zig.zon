@@ -12,8 +12,8 @@
         },
         // Keep in sync with SOLFUZZ_AGAVE_PROTOSOL_COMMIT in commits.env (used by flake.nix).
         .protosol = .{
-            .url = "git+https://github.com/firedancer-io/protosol#f02b26681aa9427ada58b6c06ea1e7e599a4121e",
-            .hash = "N-V-__8AAAv-AgDJSqjkV7Rl51wUu4WncDnL4LtWyPmep-3g",
+            .url = "git+https://github.com/firedancer-io/protosol#2e25401cd4d0d6b01f97153ff209b4fd4c325c83",
+            .hash = "N-V-__8AABH8AgCI5LM1_DPZ98ro62WeMbqLLU4NxsMc0dtV",
         },
     },
 }

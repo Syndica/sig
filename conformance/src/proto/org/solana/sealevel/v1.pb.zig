@@ -2150,9 +2150,7 @@ pub const FeeDetails = struct {
 /// The execution results for a transaction
 pub const TxnResult = struct {
     executed: bool = false,
-    sanitization_error: bool = false,
-    is_ok: bool = false,
-    status: u32 = 0,
+    txn_error: u32 = 0,
     instruction_error: u32 = 0,
     instruction_error_index: u32 = 0,
     custom_error: u32 = 0,
@@ -2165,9 +2163,7 @@ pub const TxnResult = struct {
 
     pub const _desc_table = .{
         .executed = fd(1, .{ .scalar = .bool }),
-        .sanitization_error = fd(2, .{ .scalar = .bool }),
-        .is_ok = fd(5, .{ .scalar = .bool }),
-        .status = fd(6, .{ .scalar = .uint32 }),
+        .txn_error = fd(6, .{ .scalar = .uint32 }),
         .instruction_error = fd(7, .{ .scalar = .uint32 }),
         .instruction_error_index = fd(8, .{ .scalar = .uint32 }),
         .custom_error = fd(9, .{ .scalar = .uint32 }),
