@@ -262,8 +262,7 @@ pub const AccountsDbFields = struct {
         // serialized as u64 len + n * { slot: u64, small_vec_size: u64, id: u64, length: u64 }
         {
             const len = try readInt(u64, r);
-            try r.discardAll(len * (
-                8 + // slot: u64
+            try r.discardAll(len * (8 + // slot: u64
                 8 + // small_vec.len: u64 == 1
                 16 // small_vec.data[{id: u64, file_len: u64}]
             ));
