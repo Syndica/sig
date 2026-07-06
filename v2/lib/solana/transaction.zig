@@ -391,7 +391,6 @@ const Builder = struct {
     account_keys: std.ArrayList(Pubkey) = .empty,
     instructions: std.ArrayList(CompiledInstruction) = .empty,
     alts: std.ArrayList(AddressLookup) = .empty,
-    is_v0: bool = false,
 
     fn deinit(self: *Builder) void {
         self.signatures.deinit(self.allocator);
@@ -448,19 +447,24 @@ const Builder = struct {
         });
     }
 
-    fn build(self: *Builder) VersionedTransaction {
-        const msg: VersionedMessage = if (self.is_v0) .{ .v0 = .{
-            .header = self.header,
-            .account_keys = .{ .items = self.account_keys.items },
-            .recent_blockhash = Hash.ZEROES,
-            .instructions = .{ .items = self.instructions.items },
-            .address_table_lookups = .{ .items = self.alts.items },
-        } } else .{ .legacy = .{
-            .header = self.header,
-            .account_keys = .{ .items = self.account_keys.items },
-            .recent_blockhash = Hash.ZEROES,
-            .instructions = .{ .items = self.instructions.items },
-        } };
+    fn build(self: *Builder, kind: std.meta.Tag(VersionedMessage)) VersionedTransaction {
+        if (kind == .legacy and self.alts.items.len > 0)
+            @panic("legacy transaction can't have ALTs");
+        const msg: VersionedMessage = switch (kind) {
+            .legacy => .{ .legacy = .{
+                .header = self.header,
+                .account_keys = .{ .items = self.account_keys.items },
+                .recent_blockhash = Hash.ZEROES,
+                .instructions = .{ .items = self.instructions.items },
+            } },
+            .v0 => .{ .v0 = .{
+                .header = self.header,
+                .account_keys = .{ .items = self.account_keys.items },
+                .recent_blockhash = Hash.ZEROES,
+                .instructions = .{ .items = self.instructions.items },
+                .address_table_lookups = .{ .items = self.alts.items },
+            } },
+        };
         return .{
             .signatures = .{ .items = self.signatures.items },
             .message = msg,
@@ -483,7 +487,7 @@ const Builder = struct {
 test "sanitize: baseline legacy txn passes" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
-    try testing.expect(b.build().sanitize());
+    try testing.expect(b.build(.legacy).sanitize());
 }
 
 test "sanitize (1): empty signatures rejected" {
@@ -491,7 +495,7 @@ test "sanitize (1): empty signatures rejected" {
     defer b.deinit();
     try b.pushKeys(1);
     b.header.num_required_signatures = 0;
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.legacy).sanitize());
 }
 
 test "sanitize (1): >MAX_SIGNATURES rejected" {
@@ -500,21 +504,21 @@ test "sanitize (1): >MAX_SIGNATURES rejected" {
     try b.pushSigs(VersionedTransaction.MAX_SIGNATURES + 1);
     try b.pushKeys(VersionedTransaction.MAX_ACCOUNT_ADDRESSES);
     b.header.num_required_signatures = @intCast(VersionedTransaction.MAX_SIGNATURES + 1);
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.legacy).sanitize());
 }
 
 test "sanitize (2): sig count != header.num_required_signatures rejected" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     try b.pushSigs(1); // now 2 signatures, header still says 1
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.legacy).sanitize());
 }
 
 test "sanitize (3): fee payer must be writable" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     b.header.num_readonly_signed_accounts = 1; // == num_required_signatures
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.legacy).sanitize());
 }
 
 test "sanitize (4): account_keys < num_required_signatures rejected" {
@@ -531,7 +535,7 @@ test "sanitize (4): account_keys < num_required_signatures rejected" {
     b.allocator.free(b.instructions.items[0].accounts.items);
     b.allocator.free(b.instructions.items[0].data.items);
     b.instructions.shrinkRetainingCapacity(0);
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.legacy).sanitize());
 }
 
 test "sanitize (4): account_keys > MAX_ACCOUNT_ADDRESSES rejected" {
@@ -546,14 +550,14 @@ test "sanitize (4): account_keys > MAX_ACCOUNT_ADDRESSES rejected" {
         p.data[31] = i % 255;
         try b.account_keys.append(b.allocator, p);
     }
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.legacy).sanitize());
 }
 
 test "sanitize (5): num_required_signatures + ro_unsigned > account_keys rejected" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     b.header.num_readonly_unsigned_accounts = 2; // 1 + 2 = 3 > 2
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.legacy).sanitize());
 }
 
 test "sanitize (6): >MAX_INSTRUCTIONS rejected" {
@@ -561,7 +565,7 @@ test "sanitize (6): >MAX_INSTRUCTIONS rejected" {
     defer b.deinit();
     var i: usize = 0;
     while (i < VersionedTransaction.MAX_INSTRUCTIONS) : (i += 1) try b.pushInstr(1, &.{}); // total: 1 baseline + MAX
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.legacy).sanitize());
 }
 
 test "sanitize (7): instructions present but only 1 account_key rejected" {
@@ -571,50 +575,47 @@ test "sanitize (7): instructions present but only 1 account_key rejected" {
     try b.pushKeys(1);
     b.header.num_readonly_unsigned_accounts = 0;
     try b.pushInstr(0, &.{}); // any pid is invalid here; will trip check 7 first
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.legacy).sanitize());
 }
 
 test "sanitize (8): program_id_index == 0 rejected" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     b.instructions.items[0].program_id_index = 0;
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.legacy).sanitize());
 }
 
 test "sanitize (8): program_id_index >= account_keys.len rejected" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     b.instructions.items[0].program_id_index = 2; // account_keys.len == 2
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.legacy).sanitize());
 }
 
 test "sanitize (9): too many address_table_lookups rejected" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
-    b.is_v0 = true;
     try b.pushSigs(1);
     try b.pushKeys(2);
     try b.pushInstr(1, &.{});
     var i: usize = 0;
     while (i < V0Message.MAX_ADDR_TABLE_LOOKUPS + 1) : (i += 1) try b.pushAlt(&.{0}, &.{});
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.v0).sanitize());
 }
 
 test "sanitize (10): empty ALT (no writable & no readonly) rejected" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
-    b.is_v0 = true;
     try b.pushSigs(1);
     try b.pushKeys(2);
     try b.pushInstr(1, &.{});
     try b.pushAlt(&.{}, &.{});
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.v0).sanitize());
 }
 
 test "sanitize (11): per-ALT writable exceeds headroom rejected" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
-    b.is_v0 = true;
     try b.pushSigs(1);
     try b.pushKeys(2);
     try b.pushInstr(1, &.{});
@@ -622,13 +623,12 @@ test "sanitize (11): per-ALT writable exceeds headroom rejected" {
     var writable: [127]u8 = undefined;
     @memset(&writable, 0);
     try b.pushAlt(&writable, &.{});
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.v0).sanitize());
 }
 
 test "sanitize (12): total addressable accounts > MAX_ACCOUNT_ADDRESSES rejected" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
-    b.is_v0 = true;
     try b.pushSigs(1);
     try b.pushKeys(64);
     b.header.num_readonly_unsigned_accounts = 63;
@@ -638,7 +638,7 @@ test "sanitize (12): total addressable accounts > MAX_ACCOUNT_ADDRESSES rejected
     @memset(&slot, 0);
     try b.pushAlt(&slot, &.{});
     try b.pushAlt(&slot, &.{});
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.v0).sanitize());
 }
 
 test "sanitize (13): instr account index out of range (no ALT) rejected" {
@@ -649,33 +649,32 @@ test "sanitize (13): instr account index out of range (no ALT) rejected" {
     b.allocator.free(b.instructions.items[0].accounts.items);
     const accts = try b.allocator.dupe(u8, &.{2});
     b.instructions.items[0].accounts = .{ .items = accts };
-    try testing.expect(!b.build().sanitize());
+    try testing.expect(!b.build(.legacy).sanitize());
 }
 
 test "sanitize (13): instr account index reachable via ALT accepted" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
-    b.is_v0 = true;
     try b.pushSigs(1);
     try b.pushKeys(2);
     // Instruction references index 2 (one past the static keys); ALT adds
     // exactly one writable account, expanding the addressable range to 3.
     try b.pushInstr(1, &.{2});
     try b.pushAlt(&.{0}, &.{});
-    try testing.expect(b.build().sanitize());
+    try testing.expect(b.build(.v0).sanitize());
 }
 
 test "sanitize: duplicate account keys are NOT rejected (validateAccountLocks owns that)" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     b.account_keys.items[1] = b.account_keys.items[0]; // duplicate
-    try testing.expect(b.build().sanitize());
+    try testing.expect(b.build(.legacy).sanitize());
 }
 
 test "VersionedTransaction: bincode round trip" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
-    const original = b.build();
+    const original = b.build(.legacy);
 
     const original_serialized = blk: {
         var buf: [1024]u8 = undefined;
