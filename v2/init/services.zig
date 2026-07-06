@@ -7,7 +7,7 @@ pub const accounts_db: ServiceSpec = .{
     .ReadOnly = struct {},
     .ReadWrite = struct {
         config: *lib.accounts_db.RootedConfig,
-        ready_snapshot_in: *lib.snapshot.SnapshotDataRing,
+        ready_snapshot_in: *lib.snapshot.SnapshotData,
         account_pool: *lib.accounts_db.AccountPool,
         replay_lookups: *lib.accounts_db.AccountLookups,
         tel: *lib.telemetry.Region,
@@ -83,7 +83,7 @@ pub const snapshot: ServiceSpec = .{
     },
     .ReadWrite = struct {
         source_from_gossip: *lib.snapshot.SnapshotSourceRing,
-        ready_snapshot_out: *lib.snapshot.SnapshotDataRing,
+        ready_snapshot_out: *lib.snapshot.SnapshotData,
         tel: *lib.telemetry.Region,
     },
 };

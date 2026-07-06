@@ -347,7 +347,7 @@ pub const bpf = struct {
     }
 
     /// Only allows writing to stderr, sleeping, and exiting.
-    pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [66]sock_filter {
+    pub fn printSleepExit(maybe_stderr: ?std.os.linux.fd_t) [68]sock_filter {
         // load syscall number
         const preamble = .{stmt(LD + W + ABS, @offsetOf(SECCOMP.data, "nr"))};
 
@@ -393,6 +393,7 @@ pub const bpf = struct {
             allowSyscall(@intFromEnum(syscalls.pipe2)) ++
             allowSyscall(@intFromEnum(syscalls.renameat)) ++
             allowSyscall(@intFromEnum(syscalls.unlinkat)) ++
+            allowSyscall(@intFromEnum(syscalls.statx)) ++
             // accounts_db
             allowSyscall(@intFromEnum(syscalls.fsync)) ++
             //

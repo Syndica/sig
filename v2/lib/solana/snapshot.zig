@@ -253,15 +253,21 @@ pub const BankFields = struct {
 
 pub const AccountsDbFields = struct {
     slot: u64,
-    account_file_map: AccountFileMap,
 
-    pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !AccountsDbFields {
+    pub fn read(_: *std.heap.FixedBufferAllocator, r: anytype) !AccountsDbFields {
         const zone = tracy.Zone.init(@src(), .{ .name = "AccountsDbFields.read" });
         defer zone.deinit();
 
         // account_file_map: HashMap(Slot, Vec(StorageEntry))
         // serialized as u64 len + n * { slot: u64, small_vec_size: u64, id: u64, length: u64 }
-        const account_file_map = try AccountFileMap.read(fba, r);
+        {
+            const len = try readInt(u64, r);
+            try r.discardAll(len * (
+                8 + // slot: u64
+                8 + // small_vec.len: u64 == 1
+                16 // small_vec.data[{id: u64, file_len: u64}]
+            ));
+        }
 
         try r.discardAll(8); // _unused_write_version: u64
         const slot = try readInt(u64, r);
@@ -299,80 +305,9 @@ pub const AccountsDbFields = struct {
         }
 
         return .{
-            .account_file_map = account_file_map,
             .slot = slot,
         };
     }
-
-    /// Deserialize into custom HashMap that uses minimal memory with fast lookups.
-    /// Fast lookups is beneficial as its used to figure out account file lengths in SnapshotReader.
-    pub const AccountFileMap = struct {
-        entries: []Entry,
-        count: usize,
-
-        const HASH_MULT = 0x9E3779B97F4A7C15;
-        const Entry = packed struct(u128) {
-            id: u64,
-            length: u34, // 16GB max
-            slot: u30, // another 8yrs of 400ms slots after current mainnet
-            const empty: Entry = .{ .id = 0, .length = 0, .slot = 0 };
-        };
-
-        pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !AccountFileMap {
-            const zone = tracy.Zone.init(@src(), .{ .name = "AccountFileMap.read" });
-            defer zone.deinit();
-
-            // Consumes the equivalent:
-            //
-            // const file_map_len = try readInt(u64, r);
-            // try r.discardAll(file_map_len * (8 + // slot: Slot(u64)
-            //     8 + // small_vec_size: u64
-            //     8 + // id: u64
-            //     8 // length: u64
-            // ));
-
-            const n = std.math.cast(u32, try readInt(u64, r)) orelse return error.Overflow;
-            const cap = try std.math.ceilPowerOfTwo(u32, (n * 100) / 75); // .75 load factor
-            const entries = try fba.allocator().alloc(Entry, cap);
-            @memset(entries, .empty);
-
-            var bc_entry: extern struct {
-                slot: u64,
-                small_vec_len: u64,
-                id: u64,
-                length: u64,
-            } = undefined;
-            for (0..n) |_| {
-                try r.readSliceAll(std.mem.asBytes(&bc_entry));
-                if (bc_entry.small_vec_len != 1) return error.InvalidBincodeEntry;
-
-                var idx = (bc_entry.slot *% HASH_MULT) >> @intCast(@as(u7, 64) - @ctz(entries.len));
-                const e = while (true) {
-                    const e = &entries[idx];
-                    idx = (idx +% 1) & (entries.len - 1);
-                    if (@as(u128, @bitCast(e.*)) == @as(u128, @bitCast(Entry.empty))) break e;
-                };
-                e.* = .{
-                    .id = bc_entry.id,
-                    .length = std.math.cast(u34, bc_entry.length) orelse return error.Overflow,
-                    .slot = std.math.cast(u30, bc_entry.slot) orelse return error.Overflow,
-                };
-            }
-
-            return .{ .entries = entries, .count = n };
-        }
-
-        pub fn getPtr(self: *const AccountFileMap, slot: u64) ?*Entry {
-            const entries = self.entries;
-            var idx = (slot *% HASH_MULT) >> @intCast(@as(u7, 64) - @ctz(entries.len));
-            while (true) {
-                const e = &entries[idx];
-                idx = (idx +% 1) & (entries.len - 1);
-                if (e.slot == slot) return e;
-                if (@as(u128, @bitCast(e.*)) == @as(u128, @bitCast(Entry.empty))) return null;
-            }
-        }
-    };
 };
 
 pub const ExtraFields = struct {
@@ -589,20 +524,11 @@ pub fn SnapshotIter(comptime BufReader: type) type {
 
                 const slot = std.fmt.parseInt(u64, tar_file.name["accounts/".len..split], 10) catch
                     return error.InvalidAccountFileSlot;
-                const id = std.fmt.parseInt(u32, tar_file.name[split + 1 ..], 10) catch
-                    return error.InvalidAccountFileId;
                 if (slot > self.manifest.accounts_db_fields.slot)
                     return error.InvalidAccountFileSlot;
 
-                const info = self.manifest.accounts_db_fields.account_file_map.getPtr(slot) orelse
-                    return error.InvalidAccountFileSlot;
-                if (info.id != id)
-                    return error.InvalidAccountFileId;
-                if (info.length > tar_file.size)
-                    return error.InvalidAccountFileLength;
-
                 self.account_file_slot = slot;
-                self.account_file_len = info.length;
+                self.account_file_len = tar_file.size;
             }
 
             var header: extern struct { // little-endian
@@ -728,9 +654,9 @@ pub fn TarZstIter(comptime BufReader: type) type {
 
         fn read(self: *Self, maybe_buf: ?[*]u8, len: usize) usize {
             var n: usize = 0;
-            while (n < len) : (std.atomic.spinLoopHint()) {
-                const buf: []const u8 = self.buf_reader.getBuffer() orelse continue;
-                if (buf.len == 0) break;
+            while (n < len) {
+                const buf: []const u8 = self.buf_reader.getBuffer();
+                if (buf.len == 0) break; // EOF
 
                 const take = @min(buf.len, len - n);
                 if (maybe_buf) |b| @memcpy(b[n..][0..take], buf[0..take]);
@@ -745,6 +671,7 @@ pub fn TarZstIter(comptime BufReader: type) type {
 
 pub const ZstReader = struct {
     decompressor: Decompressor,
+    file_size: u64,
     file_reader: lib.fio.FileReader(.{
         .buffer_size = 64 * 1024 * 1024,
         .block_size = 1 * 1024 * 1024,
@@ -762,6 +689,8 @@ pub const ZstReader = struct {
 
         const file = try lib.fio.openDirect(dir, path, .read_only);
         errdefer file.close();
+
+        self.file_size = (try file.stat()).size;
 
         try self.file_reader.init(file);
         errdefer self.file_reader.deinit();
