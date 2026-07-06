@@ -1229,6 +1229,7 @@ test "MerkleForest tree put" {
         .merkle_root = a_hash,
 
         .id = .{ .slot = 409284941, .fec_set_idx = 0 },
+        .parent_offset = 1,
 
         .data_complete = true,
         .slot_complete = false,
@@ -1242,6 +1243,7 @@ test "MerkleForest tree put" {
         .merkle_root = b_hash,
 
         .id = .{ .slot = 409284941, .fec_set_idx = 32 },
+        .parent_offset = 1,
 
         .data_complete = true,
         .slot_complete = false,
@@ -1255,6 +1257,7 @@ test "MerkleForest tree put" {
         .merkle_root = c_hash,
 
         .id = .{ .slot = 409284941, .fec_set_idx = 64 },
+        .parent_offset = 1,
 
         .data_complete = true,
         .slot_complete = false,
@@ -1268,6 +1271,7 @@ test "MerkleForest tree put" {
         .merkle_root = d_hash,
 
         .id = .{ .slot = 409284941, .fec_set_idx = 96 },
+        .parent_offset = 1,
 
         .data_complete = true,
         .slot_complete = true,
@@ -1282,6 +1286,7 @@ test "MerkleForest tree put" {
         .merkle_root = e_hash,
 
         .id = .{ .slot = 409284942, .fec_set_idx = 0 },
+        .parent_offset = 1,
 
         .data_complete = true,
         .slot_complete = true,

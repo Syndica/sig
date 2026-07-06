@@ -14,7 +14,6 @@ comptime {
 pub const Receiver = @import("shred/receiver.zig").Receiver;
 pub const PacketError = @import("shred/receiver.zig").PacketError;
 pub const ReceiverPacketSuccess = @import("shred/receiver.zig").PacketSuccess;
-pub const ReceiverPacketResult = @import("shred/receiver.zig").PacketResult;
 pub const FecSetCtx = @import("shred/receiver.zig").FecSetCtx;
 
 const Hash = solana.Hash;
@@ -104,6 +103,7 @@ pub const DeshreddedFecSet = extern struct {
     merkle_root: Hash,
     chained_merkle_root: Hash,
     id: FecSetId,
+    parent_offset: u16,
     data_complete: bool,
     slot_complete: bool,
     payload_len: u16,
@@ -312,6 +312,10 @@ pub const Shred = extern struct {
         if (shred.slot_idx >= max_shreds_per_slot) return error.SlotIndexTooHigh;
 
         return shred;
+    }
+
+    pub fn fecSetId(self: *const Shred) FecSetId {
+        return .{ .fec_set_idx = self.fec_set_idx, .slot = self.slot };
     }
 
     // [firedancer] https://github.com/firedancer-io/firedancer/blob/9f7770af997a1443e7903113fc03ca1ce3b0ad73/src/ballet/shred/fd_shred.c#L16

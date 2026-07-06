@@ -14,456 +14,397 @@ const Signature = solana.Signature;
 const Packet = net.Packet;
 
 const DeshreddedFecSet = lib.shred.DeshreddedFecSet;
+const DeshredRing = lib.shred.DeshredRing;
 const FecSetId = lib.shred.FecSetId;
 const Shred = lib.shred.Shred;
 
-/// Takes in shreds, and writes out deshredded fec sets.
-/// For full docs see `services/shred_receiver.zig`.
-pub fn Receiver(comptime Effects: type) type {
-    lib.util.assertInterface(Effects, struct {
-        pub fn reportShredParseResult(self: Effects, parses_as_chained: bool) void {
-            _ = .{ self, parses_as_chained };
+/// Takes in shreds, and writes out deshredded fec sets to a caller-provided
+/// ring buffer. For full docs see `services/shred_receiver.zig`.
+pub const Receiver = struct {
+    const Self = @This();
+
+    /// Per-feature activation slots. A feature is enforced for shreds
+    /// whose slot is `>= activation_slot`; the default `maxInt(Slot)`
+    /// keeps every feature inactive.
+    pub const Features = struct {
+        discard_unexpected_data_complete_shreds: Slot = std.math.maxInt(Slot),
+    };
+
+    // We will ignore shreds outside of this range, as they're not useful to us
+    root_slot: Slot,
+    max_slot: Slot,
+
+    features: Features,
+
+    in_progress: InProgressSets,
+    done: DoneSets,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        in_progress_capacity: u32,
+        done_capacity: u32,
+    ) !Self {
+        var in_progress: InProgressSets = try .init(allocator, in_progress_capacity);
+        errdefer in_progress.deinit(allocator);
+
+        var done: DoneSets = try .init(allocator, done_capacity);
+        errdefer done.deinit(allocator);
+
+        return .{
+            .in_progress = in_progress,
+            .done = done,
+
+            .root_slot = 0,
+            .max_slot = std.math.maxInt(Slot),
+            .features = .{},
+        };
+    }
+
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        self.in_progress.deinit(allocator);
+        self.done.deinit(allocator);
+    }
+
+    /// Reset to the post-init state without freeing any heap memory. Intended
+    /// for callers that reuse a single Receiver across many independent
+    /// inputs (e.g. the conformance shred-parse harness, which runs one
+    /// fixture per invocation and must not leak state between them).
+    pub fn reset(self: *Self) void {
+        self.in_progress.reset();
+        self.done.reset();
+        self.root_slot = 0;
+        self.max_slot = std.math.maxInt(Slot);
+        self.features = .{};
+    }
+
+    pub fn updateSlotRange(self: *Self, root_slot: Slot, max_slot: Slot) void {
+        self.root_slot = root_slot;
+        self.max_slot = max_slot;
+
+        // TODO: this is where we would add code to prune entries outside of the new range.
+    }
+
+    // TODO: report return values to observability
+    // TODO: report back equivocating shreds, so that we can construct and send out duplicate proofs
+    pub fn processPacket(
+        state: *Self,
+        leader_schedule: *const lib.solana.LeaderSchedule,
+        network_shred_version: u16,
+        packet: *const Packet,
+        deshred_writer: *DeshredRing.Iterator(.writer),
+        logger: lib.telemetry.Logger("processPacket"),
+    ) ProcessPacketError!PacketSuccess {
+        const zone = tracy.Zone.init(@src(), .{ .name = "processPacket" });
+        defer zone.deinit();
+
+        // check that the shred variant is supported and the header is valid
+        const shred = try Shred.fromPacketChecked(packet);
+
+        const in_type_idx = if (shred.variant.isData())
+            shred.slot_idx - shred.fec_set_idx
+        else
+            shred.code_or_data.code.code_shred_idx;
+
+        // some additional "free" filtering + sanity checks
+        {
+            // ignore shred from a slot that's too old or too new
+            if (shred.slot < state.root_slot) return error.ShredOlderThanRoot;
+            if (shred.slot > state.max_slot) return error.ShredTooNew;
+
+            // ignore shred with wrong version
+            if (shred.version != network_shred_version and
+                !build_options.debug_skip_shred_version_check)
+                return error.ShredVersionMismatch;
+
+            // reject shreds greater than the max per slot
+            if (shred.fec_set_idx > lib.shred.max_shreds_per_slot - FecSetCtx.fec_shred_count)
+                return error.FecSetIndexTooHigh;
+            if (shred.slot_idx >= lib.shred.max_shreds_per_slot)
+                return error.SlotIndexTooHigh;
+
+            // ignore any with bad counts or indices (SIMD 0317 enforces this)
+            if (shred.variant.isCode()) {
+                if (shred.code_or_data.code.data_count != FecSetCtx.fec_shred_count)
+                    return error.BadDataShredCount;
+                if (shred.code_or_data.code.code_count != FecSetCtx.fec_shred_count)
+                    return error.BadCodeShredCount;
+                if (shred.code_or_data.code.code_shred_idx >= FecSetCtx.fec_shred_count)
+                    return error.BadCodeShredIdx;
+            } else {
+                // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred/filter.rs#L327-L342
+                if (shred.slot >= state.features.discard_unexpected_data_complete_shreds and
+                    shred.code_or_data.data.flags.data_complete and
+                    shred.slot_idx != shred.fec_set_idx + FecSetCtx.fec_shred_count - 1)
+                {
+                    return error.UnexpectedDataCompleteShred;
+                }
+            }
+
+            if (shred.fec_set_idx % FecSetCtx.fec_shred_count != 0) {
+                return error.InvalidFecSetIdx;
+            }
+            if (in_type_idx >= FecSetCtx.fec_shred_count) return error.ShredIdxTooLarge;
+
+            const merkle_layer_count = 7;
+            if (shred.variant.merkle_count > merkle_layer_count - 1) {
+                return error.MerkleCountTooLarge;
+            }
         }
 
-        pub fn reportFecSetCompleted(
-            self: Effects,
-            completed: *const DeshreddedFecSet,
-            ctx: *const FecSetCtx,
-        ) void {
-            _ = .{ self, completed, ctx };
-        }
+        const fec_set_id: FecSetId = .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot };
 
-        pub fn writeCompletedFecSet(self: Effects) *DeshreddedFecSet {
-            _ = self;
-            return undefined;
-        }
+        var buf: [128]u8 = undefined;
+        const str = try std.fmt.bufPrint(
+            &buf,
+            "slot: {}, idx: {}",
+            .{ fec_set_id.slot, fec_set_id.fec_set_idx },
+        );
+        zone.text(str);
 
-        pub fn flushCompletedFecSet(self: Effects) void {
-            _ = self;
-        }
+        const fec_set_ctx = if (state.in_progress.getFecSetCtx(
+            &shred.signature,
+        )) |fec_set_ctx| existing_set: {
+            // fec set is already being built. This branch will be taken for 31/64 shreds (assuming
+            // zero packet loss).
 
-        pub fn reportReceiverPacketResult(self: Effects, result: PacketResult) void {
-            _ = .{ self, result };
-        }
-    });
+            // variant should match that of the first recorded shred in the fec set
+            if ((shred.variant.isData() and !shred.variant.eql(fec_set_ctx.data_variant)) or
+                (shred.variant.isCode() and !shred.variant.eql(fec_set_ctx.code_variant)))
+            {
+                return error.VariantMismatchFromFecSet;
+            }
 
-    return struct {
-        const Self = @This();
+            // The signature of a shred protects its merkle root. We now have a shred that matches a
+            // signature that we verified against a merkle root earlier - we just need to check if
+            // the merkle root is the same.
+            //
+            // Checking the signature again requires calculating the merkle root anyway, and is much
+            // more expensive (37us vs 1us on my CPU, as of writing).
+            //
+            // NOTE: firedancer optimises "inserting" shreds into fec sets using
+            // fd_bmtree_commitp_insert_with_proof, which may be of interest.
+            var shred_merkle_root: Hash = undefined;
+            try shred.merkleRoot(&shred_merkle_root);
+            if (!shred_merkle_root.eql(&fec_set_ctx.merkle_root))
+                // This failing implies that signature verification would fail, i.e. it isn't an
+                // equivocation problem.
+                return error.MismatchedMerkleRoot;
 
-        /// Per-feature activation slots. A feature is enforced for shreds
-        /// whose slot is `>= activation_slot`; the default `maxInt(Slot)`
-        /// keeps every feature inactive.
-        pub const Features = struct {
-            discard_unexpected_data_complete_shreds: Slot = std.math.maxInt(Slot),
+            break :existing_set fec_set_ctx;
+        } else new_set: {
+            // fec set is not currently being built (likely finished already)
+
+            switch (state.done.lookupStatus(fec_set_id, &shred.signature)) {
+                // fec set isn't finished, this is a new set
+                .missing => {},
+                // fec set was finished already, let's ignore it
+                .matching_signature => return .fec_set_already_finished,
+
+                // NOTE: when we detect equivocation at the shred level, we just drop the incoming
+                // shred. i.e. the first shred in a fet set "wins", and until it is fully built,
+                // all other conflicting shreds are dropped until the in-progress fec set is built.
+                //
+                // This is intention as it stops the leader from producing many equivocating shreds
+                // that would a) fill up our in-progress map, and b) starve our CPU from shred
+                // verification.
+                //
+                // TODO: once repair is implemented, repaired shreds should skip these checks to
+                // allow conflicting fec sets to be inside the in-progress map. We will need to do
+                // this to reliably repair when equivocation is detected.
+                .mismatching_signature => {
+                    return error.EquivocationDifferentHashForSameFecSetId;
+                },
+            }
+
+            // if we have this FecSetId with a different signature, this means equivocation has occured
+            if (state.in_progress.containsId(fec_set_id)) {
+                // NOTE: see above note.
+                return error.EquivocationFecSetIdAlreadyInProgress;
+            }
+
+            // This is the first shred of a new in-progress fec set.
+
+            // The shred's merkle root must be calculated unconditionally.
+            const shred_merkle_root: Hash = blk: {
+                var shred_merkle_root: Hash = undefined;
+
+                if (!build_options.debug_skip_shred_sig_verify) {
+                    const slot_leader = leader_schedule.get(shred.slot) orelse {
+                        logger.warn().logf("slot {} missing?\n", .{shred.slot});
+                        return error.UnknownLeader;
+                    };
+
+                    try shred.merkleRoot(&shred_merkle_root);
+
+                    shred.signature.verify(
+                        slot_leader,
+                        &shred_merkle_root.data,
+                    ) catch return error.SignatureVerificationFailed;
+                } else {
+                    // debug purposes only
+                    try shred.merkleRoot(&shred_merkle_root);
+                }
+
+                break :blk shred_merkle_root;
+            };
+
+            const fec_set_ctx = state.in_progress.createFecSetCtx(
+                fec_set_id,
+                &shred.signature,
+            );
+
+            fec_set_ctx.* = .{
+                // we will check against these for equality in later received shreds
+                .data_variant = if (shred.variant.isData())
+                    shred.variant
+                else
+                    shred.variant.swapType(),
+
+                .code_variant = if (shred.variant.isCode())
+                    shred.variant
+                else
+                    shred.variant.swapType(),
+
+                .merkle_root = shred_merkle_root,
+
+                .data_shreds_received = .initEmpty(),
+                .code_shreds_received = .initEmpty(),
+
+                .data_shreds_buf = undefined,
+                .code_shreds_buf = undefined,
+            };
+
+            break :new_set fec_set_ctx;
         };
 
-        effects: Effects,
+        zone.value(fec_set_ctx.totalShredsReceived());
 
-        // We will ignore shreds outside of this range, as they're not useful to us
-        root_slot: Slot,
-        max_slot: Slot,
+        tracy.plot(u8, "totalShredsReceived", fec_set_ctx.totalShredsReceived());
 
-        features: Features,
+        // We now have a new shred that has passed validation, time to add it to our in-progress fec set
 
-        in_progress: InProgressSets,
-        done: DoneSets,
+        if (shred.variant.isCode()) {
+            if (fec_set_ctx.code_shreds_received.isSet(in_type_idx)) return .shred_already_seen;
 
-        pub fn init(
-            allocator: std.mem.Allocator,
-            in_progress_capacity: u32,
-            done_capacity: u32,
-            effects: Effects,
-        ) !Self {
-            var in_progress: InProgressSets = try .init(allocator, in_progress_capacity);
-            errdefer in_progress.deinit(allocator);
+            fec_set_ctx.code_shreds_received.set(in_type_idx); // track shred as received
+            fec_set_ctx.code_shreds_buf[in_type_idx] = packet.data; // persist packet to our state
+        }
+        if (shred.variant.isData()) {
+            if (fec_set_ctx.data_shreds_received.isSet(in_type_idx)) return .shred_already_seen;
 
-            var done: DoneSets = try .init(allocator, done_capacity);
-            errdefer done.deinit(allocator);
+            fec_set_ctx.data_shreds_received.set(in_type_idx); // track shred as received
+            fec_set_ctx.data_shreds_buf[in_type_idx] = packet.data; // persist packet to our state
+        }
 
+        tracy.plot(u8, "totalShredsReceived", fec_set_ctx.totalShredsReceived());
+
+        // we just received one
+        std.debug.assert(fec_set_ctx.totalShredsReceived() >= 1);
+        // this fec set should have completed last iteration
+        std.debug.assert(fec_set_ctx.totalShredsReceived() <= FecSetCtx.fec_shred_count);
+
+        if (fec_set_ctx.totalShredsReceived() < FecSetCtx.fec_shred_count) {
+            // we're all good, but we haven't received enough to reconstruct the fec set yet
+            @branchHint(.likely);
             return .{
-                .effects = effects,
-                .in_progress = in_progress,
-                .done = done,
-
-                .root_slot = 0,
-                .max_slot = std.math.maxInt(Slot),
-                .features = .{},
+                .unfinished_fec_set = .{
+                    .total_shreds_received = @intCast(fec_set_ctx.totalShredsReceived()),
+                },
             };
         }
 
-        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            self.in_progress.deinit(allocator);
-            self.done.deinit(allocator);
+        // starting fec set reconstruction now
+        // NOTE: as an optimisation we should reconstruct directly into the out buffer
+        {
+            const shreds_bitset, const shreds_reedsol_bufs = fec_set_ctx.erasureEncoded();
+
+            const recover_zone = tracy.Zone.init(@src(), .{ .name = "reconstructFecSet" });
+            defer recover_zone.deinit();
+
+            reed_sol.recover64(
+                shred.erasureFragment().?.len,
+                &shreds_reedsol_bufs,
+                32,
+                32,
+                shreds_bitset.mask,
+            ) catch @panic("todo: handle bad recovery");
+
+            fec_set_ctx.data_shreds_received = .initFull();
         }
 
-        /// Reset to the post-init state without freeing any heap memory. Intended
-        /// for callers that reuse a single Receiver across many independent
-        /// inputs (e.g. the conformance shred-parse harness, which runs one
-        /// fixture per invocation and must not leak state between them).
-        ///
-        /// Does not touch `effects` — the caller is responsible for resetting
-        /// any Effects state it owns.
-        pub fn reset(self: *Self) void {
-            self.in_progress.reset();
-            self.done.reset();
-            self.root_slot = 0;
-            self.max_slot = std.math.maxInt(Slot);
-            self.features = .{};
-        }
+        std.debug.assert(fec_set_ctx.data_shreds_received.count() == FecSetCtx.data_shreds_max);
 
-        pub fn updateSlotRange(self: *Self, root_slot: Slot, max_slot: Slot) void {
-            self.root_slot = root_slot;
-            self.max_slot = max_slot;
+        // writing out deshredded fec set directly to the caller-provided ring buffer
+        {
+            const sending_zone = tracy.Zone.init(@src(), .{ .name = "writing deshredded" });
+            defer sending_zone.deinit();
 
-            // TODO: this is where we would add code to prune entries outside of the new range.
-        }
+            const total_payload_len, const data_complete, const slot_complete = blk: {
+                var len: u16 = 0;
+                var data_complete: bool = false;
+                var slot_complete: bool = false;
 
-        // TODO: report return values to observability
-        // TODO: report back equivocating shreds, so that we can construct and send out duplicate proofs
-        pub fn processPacket(
-            state: *Self,
-            leader_schedule: *const lib.solana.LeaderSchedule,
-            network_shred_version: u16,
-            packet: *const Packet,
-            logger: lib.telemetry.Logger("processPacket"),
-        ) ProcessPacketError!PacketSuccess {
-            const result = state.processPacketInner(
-                leader_schedule,
-                network_shred_version,
-                packet,
-                logger,
-            ) catch |err| {
-                switch (err) {
-                    error.NoSpaceLeft => {
-                        logger.fatal().logf("no space left while processing shred packet", .{});
-                        return err;
-                    },
-                    else => |packet_err| {
-                        logger.warn().logf("packet failed with {}", .{packet_err});
-                        state.effects.reportReceiverPacketResult(.{ .failed = packet_err });
-                        return packet_err;
-                    },
-                }
-            };
-            state.effects.reportReceiverPacketResult(.{ .success = result });
-            return result;
-        }
-
-        fn processPacketInner(
-            state: *Self,
-            leader_schedule: *const lib.solana.LeaderSchedule,
-            network_shred_version: u16,
-            packet: *const Packet,
-            logger: lib.telemetry.Logger("processPacket"),
-        ) ProcessPacketError!PacketSuccess {
-            const zone = tracy.Zone.init(@src(), .{ .name = "processPacket" });
-            defer zone.deinit();
-
-            // check that the shred variant is supported and the header is valid
-            const shred = Shred.fromPacketChecked(packet) catch |err| {
-                state.effects.reportShredParseResult(false);
-                return err;
-            };
-            state.effects.reportShredParseResult(true);
-
-            const in_type_idx = if (shred.variant.isData())
-                shred.slot_idx - shred.fec_set_idx
-            else
-                shred.code_or_data.code.code_shred_idx;
-
-            // some additional "free" filtering + sanity checks
-            {
-                // ignore shred from a slot that's too old or too new
-                if (shred.slot < state.root_slot) return error.ShredOlderThanRoot;
-                if (shred.slot > state.max_slot) return error.ShredTooNew;
-
-                // ignore shred with wrong version
-                if (shred.version != network_shred_version and
-                    !build_options.debug_skip_shred_version_check)
-                    return error.ShredVersionMismatch;
-
-                // reject shreds greater than the max per slot
-                if (shred.fec_set_idx > lib.shred.max_shreds_per_slot - FecSetCtx.fec_shred_count)
-                    return error.FecSetIndexTooHigh;
-                if (shred.slot_idx >= lib.shred.max_shreds_per_slot)
-                    return error.SlotIndexTooHigh;
-
-                // ignore any with bad counts or indices (SIMD 0317 enforces this)
-                if (shred.variant.isCode()) {
-                    if (shred.code_or_data.code.data_count != FecSetCtx.fec_shred_count)
-                        return error.BadDataShredCount;
-                    if (shred.code_or_data.code.code_count != FecSetCtx.fec_shred_count)
-                        return error.BadCodeShredCount;
-                    if (shred.code_or_data.code.code_shred_idx >= FecSetCtx.fec_shred_count)
-                        return error.BadCodeShredIdx;
-                } else {
-                    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred/filter.rs#L327-L342
-                    if (shred.slot >= state.features.discard_unexpected_data_complete_shreds and
-                        shred.code_or_data.data.flags.data_complete and
-                        shred.slot_idx != shred.fec_set_idx + FecSetCtx.fec_shred_count - 1)
-                    {
-                        return error.UnexpectedDataCompleteShred;
-                    }
-                }
-
-                if (shred.fec_set_idx % FecSetCtx.fec_shred_count != 0) {
-                    return error.InvalidFecSetIdx;
-                }
-                if (in_type_idx >= FecSetCtx.fec_shred_count) return error.ShredIdxTooLarge;
-
-                const merkle_layer_count = 7;
-                if (shred.variant.merkle_count > merkle_layer_count - 1) {
-                    return error.MerkleCountTooLarge;
-                }
-            }
-
-            const fec_set_id: FecSetId = .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot };
-
-            var buf: [128]u8 = undefined;
-            const str = try std.fmt.bufPrint(
-                &buf,
-                "slot: {}, idx: {}",
-                .{ fec_set_id.slot, fec_set_id.fec_set_idx },
-            );
-            zone.text(str);
-
-            const fec_set_ctx = if (state.in_progress.getFecSetCtx(
-                &shred.signature,
-            )) |fec_set_ctx| existing_set: {
-                // fec set is already being built. This branch will be taken for 31/64 shreds (assuming
-                // zero packet loss).
-
-                // variant should match that of the first recorded shred in the fec set
-                if ((shred.variant.isData() and !shred.variant.eql(fec_set_ctx.data_variant)) or
-                    (shred.variant.isCode() and !shred.variant.eql(fec_set_ctx.code_variant)))
-                {
-                    return error.VariantMismatchFromFecSet;
-                }
-
-                // The signature of a shred protects its merkle root. We now have a shred that matches a
-                // signature that we verified against a merkle root earlier - we just need to check if
-                // the merkle root is the same.
-                //
-                // Checking the signature again requires calculating the merkle root anyway, and is much
-                // more expensive (37us vs 1us on my CPU, as of writing).
-                //
-                // NOTE: firedancer optimises "inserting" shreds into fec sets using
-                // fd_bmtree_commitp_insert_with_proof, which may be of interest.
-                var shred_merkle_root: Hash = undefined;
-                try shred.merkleRoot(&shred_merkle_root);
-                if (!shred_merkle_root.eql(&fec_set_ctx.merkle_root))
-                    // This failing implies that signature verification would fail, i.e. it isn't an
-                    // equivocation problem.
-                    return error.MismatchedMerkleRoot;
-
-                break :existing_set fec_set_ctx;
-            } else new_set: {
-                // fec set is not currently being built (likely finished already)
-
-                switch (state.done.lookupStatus(fec_set_id, &shred.signature)) {
-                    // fec set isn't finished, this is a new set
-                    .missing => {},
-                    // fec set was finished already, let's ignore it
-                    .matching_signature => return .fec_set_already_finished,
-
-                    // NOTE: when we detect equivocation at the shred level, we just drop the incoming
-                    // shred. i.e. the first shred in a fet set "wins", and until it is fully built,
-                    // all other conflicting shreds are dropped until the in-progress fec set is built.
-                    //
-                    // This is intention as it stops the leader from producing many equivocating shreds
-                    // that would a) fill up our in-progress map, and b) starve our CPU from shred
-                    // verification.
-                    //
-                    // TODO: once repair is implemented, repaired shreds should skip these checks to
-                    // allow conflicting fec sets to be inside the in-progress map. We will need to do
-                    // this to reliably repair when equivocation is detected.
-                    .mismatching_signature => {
-                        return error.EquivocationDifferentHashForSameFecSetId;
-                    },
-                }
-
-                // if we have this FecSetId with a different signature, this means equivocation has occured
-                if (state.in_progress.containsId(fec_set_id)) {
-                    // NOTE: see above note.
-                    return error.EquivocationFecSetIdAlreadyInProgress;
-                }
-
-                // This is the first shred of a new in-progress fec set.
-
-                // The shred's merkle root must be calculated unconditionally.
-                const shred_merkle_root: Hash = blk: {
-                    var shred_merkle_root: Hash = undefined;
-
-                    if (!build_options.debug_skip_shred_sig_verify) {
-                        const slot_leader = leader_schedule.get(shred.slot) orelse {
-                            logger.warn().logf("slot {} missing?\n", .{shred.slot});
-                            return error.UnknownLeader;
-                        };
-
-                        try shred.merkleRoot(&shred_merkle_root);
-
-                        shred.signature.verify(
-                            slot_leader,
-                            &shred_merkle_root.data,
-                        ) catch return error.SignatureVerificationFailed;
-                    } else {
-                        // debug purposes only
-                        try shred.merkleRoot(&shred_merkle_root);
-                    }
-
-                    break :blk shred_merkle_root;
-                };
-
-                const fec_set_ctx = state.in_progress.createFecSetCtx(
-                    fec_set_id,
-                    &shred.signature,
-                );
-
-                fec_set_ctx.* = .{
-                    // we will check against these for equality in later received shreds
-                    .data_variant = if (shred.variant.isData())
-                        shred.variant
-                    else
-                        shred.variant.swapType(),
-
-                    .code_variant = if (shred.variant.isCode())
-                        shred.variant
-                    else
-                        shred.variant.swapType(),
-
-                    .merkle_root = shred_merkle_root,
-
-                    .data_shreds_received = .initEmpty(),
-                    .code_shreds_received = .initEmpty(),
-
-                    .data_shreds_buf = undefined,
-                    .code_shreds_buf = undefined,
-                };
-
-                break :new_set fec_set_ctx;
-            };
-
-            zone.value(fec_set_ctx.totalShredsReceived());
-
-            tracy.plot(u8, "totalShredsReceived", fec_set_ctx.totalShredsReceived());
-
-            // We now have a new shred that has passed validation, time to add it to our in-progress fec set
-
-            if (shred.variant.isCode()) {
-                if (fec_set_ctx.code_shreds_received.isSet(in_type_idx)) return .shred_already_seen;
-
-                fec_set_ctx.code_shreds_received.set(in_type_idx); // track shred as received
-                fec_set_ctx.code_shreds_buf[in_type_idx] = packet.data; // persist packet to our state
-            }
-            if (shred.variant.isData()) {
-                if (fec_set_ctx.data_shreds_received.isSet(in_type_idx)) return .shred_already_seen;
-
-                fec_set_ctx.data_shreds_received.set(in_type_idx); // track shred as received
-                fec_set_ctx.data_shreds_buf[in_type_idx] = packet.data; // persist packet to our state
-            }
-
-            tracy.plot(u8, "totalShredsReceived", fec_set_ctx.totalShredsReceived());
-
-            // we just received one
-            std.debug.assert(fec_set_ctx.totalShredsReceived() >= 1);
-            // this fec set should have completed last iteration
-            std.debug.assert(fec_set_ctx.totalShredsReceived() <= FecSetCtx.fec_shred_count);
-
-            if (fec_set_ctx.totalShredsReceived() < FecSetCtx.fec_shred_count) {
-                // we're all good, but we haven't received enough to reconstruct the fec set yet
-                @branchHint(.likely);
-                return .{
-                    .unfinished_fec_set = .{
-                        .total_shreds_received = @intCast(fec_set_ctx.totalShredsReceived()),
-                    },
-                };
-            }
-
-            // starting fec set reconstruction now
-            // NOTE: as an optimisation we should reconstruct directly into the out buffer
-            {
-                const shreds_bitset, const shreds_reedsol_bufs = fec_set_ctx.erasureEncoded();
-
-                const recover_zone = tracy.Zone.init(@src(), .{ .name = "reconstructFecSet" });
-                defer recover_zone.deinit();
-
-                reed_sol.recover64(
-                    shred.erasureFragment().?.len,
-                    &shreds_reedsol_bufs,
-                    32,
-                    32,
-                    shreds_bitset.mask,
-                ) catch @panic("todo: handle bad recovery");
-
-                fec_set_ctx.data_shreds_received = .initFull();
-            }
-
-            std.debug.assert(fec_set_ctx.data_shreds_received.count() == FecSetCtx.data_shreds_max);
-
-            // writing out deshredded fec set
-            {
-                const sending_zone = tracy.Zone.init(@src(), .{ .name = "writing deshredded" });
-                defer sending_zone.deinit();
-
-                const total_payload_len, const data_complete, const slot_complete = blk: {
-                    var len: u16 = 0;
-                    var data_complete: bool = false;
-                    var slot_complete: bool = false;
-
-                    for (&fec_set_ctx.data_shreds_buf) |*buffer| {
-                        const data_shred: *const Shred = Shred.fromBufferUnchecked(buffer);
-                        const flags = data_shred.code_or_data.data.flags;
-
-                        len += @intCast(data_shred.dataPayload().len);
-
-                        slot_complete = slot_complete or flags.last_shred_in_slot;
-
-                        if (flags.data_complete) {
-                            data_complete = true;
-                            break;
-                        }
-                    }
-                    break :blk .{ len, data_complete, slot_complete };
-                };
-
-                const finished: *DeshreddedFecSet = state.effects.writeCompletedFecSet();
-                defer state.effects.flushCompletedFecSet();
-
-                finished.* = .{
-                    .merkle_root = fec_set_ctx.merkle_root,
-                    .chained_merkle_root = shred.chainedMerkleRoot().*,
-                    .id = fec_set_id,
-                    .data_complete = data_complete,
-                    .slot_complete = slot_complete,
-                    .payload_len = total_payload_len,
-                    .payload_buf = undefined, //set below
-                };
-
-                var bytes_written: u16 = 0;
                 for (&fec_set_ctx.data_shreds_buf) |*buffer| {
-                    // TODO: I think we need to re-validate the data shreds that we recovered
                     const data_shred: *const Shred = Shred.fromBufferUnchecked(buffer);
-                    const payload = data_shred.dataPayload();
-                    @memcpy(finished.payload_buf[bytes_written..][0..payload.len], payload);
-                    bytes_written += @intCast(payload.len);
+                    const flags = data_shred.code_or_data.data.flags;
 
-                    if (Shred.fromBufferUnchecked(buffer)
-                        .code_or_data.data.flags.data_complete) break;
+                    len += @intCast(data_shred.dataPayload().len);
+
+                    slot_complete = slot_complete or flags.last_shred_in_slot;
+
+                    if (flags.data_complete) {
+                        data_complete = true;
+                        break;
+                    }
                 }
+                break :blk .{ len, data_complete, slot_complete };
+            };
 
-                std.debug.assert(bytes_written == total_payload_len);
-                state.effects.reportFecSetCompleted(finished, fec_set_ctx);
+            const finished: *DeshreddedFecSet = deshred_writer.next() orelse
+                // If there's nowhere to write to, then this means that services downstream haven't
+                // been keeping up for a while.
+                // For now let's just exit if this happens, however this might leave us vulnerable
+                // to denial of service.
+                //
+                // TODO: consider handling this case by pausing writing to this ring.
+                @panic("Can't send deshredded fec sets to replay, is it alive?");
+            defer deshred_writer.markUsed();
+
+            finished.* = .{
+                .merkle_root = fec_set_ctx.merkle_root,
+                .chained_merkle_root = shred.chainedMerkleRoot().*,
+                .id = fec_set_id,
+                .parent_offset = Shred.fromBufferUnchecked(&fec_set_ctx.data_shreds_buf[0])
+                    .code_or_data.data.parent_offset,
+                .data_complete = data_complete,
+                .slot_complete = slot_complete,
+                .payload_len = total_payload_len,
+                .payload_buf = undefined, //set below
+            };
+
+            var bytes_written: u16 = 0;
+            for (&fec_set_ctx.data_shreds_buf) |*buffer| {
+                // TODO: I think we need to re-validate the data shreds that we recovered
+                const data_shred: *const Shred = Shred.fromBufferUnchecked(buffer);
+                const payload = data_shred.dataPayload();
+                @memcpy(finished.payload_buf[bytes_written..][0..payload.len], payload);
+                bytes_written += @intCast(payload.len);
+
+                if (Shred.fromBufferUnchecked(buffer)
+                    .code_or_data.data.flags.data_complete) break;
             }
 
-            state.done.setDone(&shred.signature, fec_set_id);
-            state.in_progress.removeFinishedSet(fec_set_ctx);
-
-            tracy.frameMarkNamed("finished FEC sets");
-
-            return .fec_set_finished;
+            std.debug.assert(bytes_written == total_payload_len);
         }
-    };
-}
+
+        tracy.frameMarkNamed("finished FEC sets");
+
+        state.done.setDone(&shred.signature, fec_set_id);
+        state.in_progress.removeFinishedSet(fec_set_ctx);
+
+        return .fec_set_finished;
+    }
+};
 
 pub const PacketError = error{
     PacketUnderMinHeaderSize,
@@ -503,14 +444,12 @@ pub const PacketError = error{
 
 pub const PacketSuccess = union(enum) {
     unfinished_fec_set: struct { total_shreds_received: u8 },
+    /// A FEC set was reconstructed and written to the ring buffer. The
+    /// completed set has been moved to `done` and its ctx destroyed; downstream
+    /// consumers should read the ring buffer for the reconstructed payload.
     fec_set_finished,
     fec_set_already_finished,
     shred_already_seen,
-};
-
-pub const PacketResult = union(enum) {
-    success: PacketSuccess,
-    failed: PacketError,
 };
 
 const ProcessPacketError = PacketError || error{NoSpaceLeft};
