@@ -677,41 +677,6 @@ const InProgressSets = struct {
     };
 };
 
-const ReceiverTestEffects = struct {
-    parse_results: [8]bool = undefined,
-    parse_result_count: usize = 0,
-
-    packet_results: [8]PacketResult = undefined,
-    packet_result_count: usize = 0,
-
-    fec_completed_count: usize = 0,
-
-    pub fn reportShredParseResult(
-        self: *ReceiverTestEffects,
-        parses_as_chained: bool,
-    ) void {
-        self.parse_results[self.parse_result_count] = parses_as_chained;
-        self.parse_result_count += 1;
-    }
-
-    pub fn reportFecSetCompleted(
-        self: *ReceiverTestEffects,
-        completed: *const DeshreddedFecSet,
-        ctx: *const FecSetCtx,
-    ) void {
-        _ = .{ completed, ctx };
-        self.fec_completed_count += 1;
-    }
-
-    pub fn reportReceiverPacketResult(
-        self: *ReceiverTestEffects,
-        result: PacketResult,
-    ) void {
-        self.packet_results[self.packet_result_count] = result;
-        self.packet_result_count += 1;
-    }
-};
-
 const TEST_DATA_SHRED_PACKET_LEN = 1203;
 
 fn initTestDataPacket(packet: *Packet, version: u16) void {
@@ -750,10 +715,7 @@ fn signTestDataPacket(packet: *Packet, keypair: *const lib.gossip.KeyPair) !void
 test "shred.receiver: empty packet" {
     const allocator = std.testing.allocator;
 
-    var effects: ReceiverTestEffects = .{};
-
-    const TestReceiver = Receiver(*ReceiverTestEffects);
-    var receiver: TestReceiver = try .init(allocator, 1, 1, &effects);
+    var receiver: Receiver = try .init(allocator, 1, 1);
     defer receiver.deinit(allocator);
 
     var packet: Packet = undefined;
@@ -772,26 +734,12 @@ test "shred.receiver: empty packet" {
             .noop,
         ),
     );
-
-    try std.testing.expectEqual(1, effects.parse_result_count);
-    try std.testing.expectEqual(false, effects.parse_results[0]);
-
-    try std.testing.expectEqual(1, effects.packet_result_count);
-    switch (effects.packet_results[0]) {
-        .failed => |err| try std.testing.expectEqual(error.PacketUnderMinHeaderSize, err),
-        .success => try std.testing.expect(false),
-    }
-
-    try std.testing.expectEqual(0, effects.fec_completed_count);
 }
 
 test "shred.receiver: shred version mismatch" {
     const allocator = std.testing.allocator;
 
-    var effects: ReceiverTestEffects = .{};
-
-    const TestReceiver = Receiver(*ReceiverTestEffects);
-    var receiver: TestReceiver = try .init(allocator, 1, 1, &effects);
+    var receiver: Receiver = try .init(allocator, 1, 1);
     defer receiver.deinit(allocator);
 
     var packet: Packet = undefined;
@@ -810,26 +758,12 @@ test "shred.receiver: shred version mismatch" {
             .noop,
         ),
     );
-
-    try std.testing.expectEqual(1, effects.parse_result_count);
-    try std.testing.expectEqual(true, effects.parse_results[0]);
-
-    try std.testing.expectEqual(1, effects.packet_result_count);
-    switch (effects.packet_results[0]) {
-        .failed => |err| try std.testing.expectEqual(error.ShredVersionMismatch, err),
-        .success => try std.testing.expect(false),
-    }
-
-    try std.testing.expectEqual(0, effects.fec_completed_count);
 }
 
 test "shred.receiver: one shred (unfinished fec set)" {
     const allocator = std.testing.allocator;
 
-    var effects: ReceiverTestEffects = .{};
-
-    const TestReceiver = Receiver(*ReceiverTestEffects);
-    var receiver: TestReceiver = try .init(allocator, 1, 1, &effects);
+    var receiver: Receiver = try .init(allocator, 1, 1);
     defer receiver.deinit(allocator);
 
     const std_keypair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(@splat(1));
@@ -859,31 +793,12 @@ test "shred.receiver: one shred (unfinished fec set)" {
         },
         else => try std.testing.expect(false),
     }
-
-    try std.testing.expectEqual(1, effects.parse_result_count);
-    try std.testing.expectEqual(true, effects.parse_results[0]);
-
-    try std.testing.expectEqual(1, effects.packet_result_count);
-    switch (effects.packet_results[0]) {
-        .success => |success| switch (success) {
-            .unfinished_fec_set => |unfinished| {
-                try std.testing.expectEqual(1, unfinished.total_shreds_received);
-            },
-            else => try std.testing.expect(false),
-        },
-        .failed => try std.testing.expect(false),
-    }
-
-    try std.testing.expectEqual(0, effects.fec_completed_count);
 }
 
 test "shred.receiver: duplicate shred" {
     const allocator = std.testing.allocator;
 
-    var effects: ReceiverTestEffects = .{};
-
-    const TestReceiver = Receiver(*ReceiverTestEffects);
-    var receiver: TestReceiver = try .init(allocator, 1, 1, &effects);
+    var receiver: Receiver = try .init(allocator, 1, 1);
     defer receiver.deinit(allocator);
 
     const std_keypair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(@splat(1));
@@ -921,28 +836,7 @@ test "shred.receiver: duplicate shred" {
         &deshred_writer,
         .noop,
     );
-    try std.testing.expectEqual(PacketSuccess.shred_already_seen, second_result);
-
-    try std.testing.expectEqual(2, effects.parse_result_count);
-    try std.testing.expectEqual(true, effects.parse_results[0]);
-    try std.testing.expectEqual(true, effects.parse_results[1]);
-
-    try std.testing.expectEqual(2, effects.packet_result_count);
-    switch (effects.packet_results[0]) {
-        .success => |success| switch (success) {
-            .unfinished_fec_set => |unfinished| {
-                try std.testing.expectEqual(1, unfinished.total_shreds_received);
-            },
-            else => try std.testing.expect(false),
-        },
-        .failed => try std.testing.expect(false),
-    }
-    try std.testing.expectEqual(
-        PacketResult{ .success = .shred_already_seen },
-        effects.packet_results[1],
-    );
-
-    try std.testing.expectEqual(0, effects.fec_completed_count);
+    try std.testing.expectEqual(.shred_already_seen, std.meta.activeTag(second_result));
 }
 
 test "InProgressSets basic usage" {
