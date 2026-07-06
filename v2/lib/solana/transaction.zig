@@ -75,10 +75,65 @@ pub const VersionedTransaction = struct {
         return true;
     }
 
-    /// Returns `true` iff the message and signature vector are well-formed
-    /// at the parse layer.
+    /// Enumerates the parse-layer structural failures returned by
+    /// `sanitize`. Each variant names exactly one invariant that a
+    /// well-formed transaction must satisfy; see the doc comment on
+    /// `sanitize` for the framing and the checks that are intentionally
+    /// left out.
+    pub const SanitizeError = error{
+        /// `signatures.len == 0` — every transaction must carry at least
+        /// the fee payer's signature.
+        NoSignatures,
+        /// `signatures.len > MAX_SIGNATURES`.
+        TooManySignatures,
+        /// `signatures.len != header.num_required_signatures` — the outer
+        /// signature vector must exactly match the message header.
+        SignatureCountMismatch,
+        /// `header.num_readonly_signed_accounts >= header.num_required_signatures`
+        /// — the fee payer (signer at index 0) must be writable.
+        FeePayerNotWritable,
+        /// `account_keys.len < header.num_required_signatures` — the
+        /// signing region of the account vector is truncated.
+        NotEnoughAccountKeys,
+        /// `account_keys.len > MAX_ACCOUNT_ADDRESSES`.
+        TooManyAccountKeys,
+        /// `num_required_signatures + num_readonly_unsigned_accounts > account_keys.len`
+        /// — the signing + readonly-unsigned regions overflow the static
+        /// account vector.
+        ReadonlyRegionOverflowsAccountKeys,
+        /// `instructions.len > MAX_INSTRUCTIONS`.
+        TooManyInstructions,
+        /// `instructions.len > 0` but `account_keys.len < 2` — any
+        /// instruction needs both a fee payer and a distinct program
+        /// account.
+        MissingProgramAccount,
+        /// An instruction's `program_id_index` is `0` (would be the fee
+        /// payer) or `>= account_keys.len`. Programs cannot come from
+        /// address lookup tables, so the check is against the static
+        /// account count only.
+        InvalidProgramIdIndex,
+        /// v0 only: `address_table_lookups.len > V0Message.MAX_ADDR_TABLE_LOOKUPS`.
+        TooManyAddressTableLookups,
+        /// An address-table-lookup entry has zero writable and zero
+        /// readonly indexes — it loads nothing.
+        EmptyAddressTableLookup,
+        /// An address-table-lookup entry's `writable_indexes.len` or
+        /// `readonly_indexes.len` alone exceeds the remaining headroom
+        /// `MAX_ACCOUNT_ADDRESSES - account_keys.len`.
+        AddressTableLookupOverflow,
+        /// `account_keys.len + Σ ALT-loaded > MAX_ACCOUNT_ADDRESSES` — the
+        /// combined static + ALT address count exceeds the transaction cap.
+        TooManyTotalAddresses,
+        /// An instruction references an account index that is beyond the
+        /// combined `account_keys.len + Σ ALT-loaded` range.
+        AccountIndexOutOfBounds,
+    };
+
+    /// Returns success iff the message and signature vector are well-formed
+    /// at the parse layer; otherwise returns the specific `SanitizeError`
+    /// variant naming the violated invariant.
     ///
-    /// Each invariant below is a structural constraint of the Solana wire
+    /// Each invariant is a structural constraint of the Solana wire
     /// format: violating it means the bytes can't represent a transaction
     /// the runtime would ever accept — the signature count disagrees with
     /// the header, an instruction's program index points at the fee payer
@@ -97,28 +152,11 @@ pub const VersionedTransaction = struct {
     ///     the protocol treats `AccountLoadedTwice` as an account-locking
     ///     concern, not a parse error.
     ///
-    /// Invariants enforced (numbered for cross-reference with the inline
-    /// comments and the tests below):
-    ///
-    /// | #  | Invariant |
-    /// |----|-----------|
-    /// |  1 | `1 ≤ signatures.len ≤ MAX_SIGNATURES` |
-    /// |  2 | `signatures.len == header.num_required_signatures` |
-    /// |  3 | `header.num_readonly_signed < header.num_required_signatures` (the fee payer is writable) |
-    /// |  4 | `header.num_required_signatures ≤ account_keys.len ≤ MAX_ACCOUNT_ADDRESSES` |
-    /// |  5 | `num_required_signatures + num_readonly_unsigned ≤ account_keys.len` |
-    /// |  6 | `instructions.len ≤ MAX_INSTRUCTIONS` |
-    /// |  7 | `instructions.len > 0  ⇒  account_keys.len ≥ 2` |
-    /// |  8 | per instruction: `0 < program_id_index < account_keys.len` |
-    /// |  9 | `address_table_lookups.len ≤ V0Message.MAX_ADDR_TABLE_LOOKUPS` (v0 only) |
-    /// | 10 | per ALT: `writable_indexes.len + readonly_indexes.len ≥ 1` |
-    /// | 11 | per ALT: each of `writable_indexes.len`, `readonly_indexes.len ≤ MAX_ACCOUNT_ADDRESSES - account_keys.len` |
-    /// | 12 | `account_keys.len + Σ ALT-loaded ≤ MAX_ACCOUNT_ADDRESSES` |
-    /// | 13 | max account index used by any instruction `< account_keys.len + Σ ALT-loaded` |
+    /// See `SanitizeError` for the individual failure modes.
     ///
     /// [firedancer] https://github.com/firedancer-io/firedancer/blob/main/src/ballet/txn/fd_txn_parse.c
     /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/transaction-view/src/sanitize.rs
-    pub fn sanitize(self: VersionedTransaction) bool {
+    pub fn sanitize(self: VersionedTransaction) SanitizeError!void {
         // `header`, `account_keys`, and `instructions` are field-identical
         // across both message variants; only ALTs are v0-only.
         const header: MessageHeader, //
@@ -138,69 +176,57 @@ pub const VersionedTransaction = struct {
         const ro_signed: usize = header.num_readonly_signed_accounts;
         const ro_unsigned: usize = header.num_readonly_unsigned_accounts;
 
-        // (1) signatures.len in [1, MAX_SIGNATURES]
-        if (sig_cnt < 1 or sig_cnt > MAX_SIGNATURES) return false;
+        if (sig_cnt < 1) return error.NoSignatures;
+        if (sig_cnt > MAX_SIGNATURES) return error.TooManySignatures;
+        if (sig_cnt != req_sigs) return error.SignatureCountMismatch;
+        if (ro_signed >= req_sigs) return error.FeePayerNotWritable;
+        if (acct_cnt < req_sigs) return error.NotEnoughAccountKeys;
+        if (acct_cnt > MAX_ACCOUNT_ADDRESSES) return error.TooManyAccountKeys;
+        if (req_sigs + ro_unsigned > acct_cnt) return error.ReadonlyRegionOverflowsAccountKeys;
+        if (instructions.len > MAX_INSTRUCTIONS) return error.TooManyInstructions;
 
-        // (2) outer signatures vector length must match the message header.
-        if (sig_cnt != req_sigs) return false;
+        // Any instruction needs both a fee payer and a program (which
+        // can't be the fee payer per `InvalidProgramIdIndex`), so
+        // `account_keys` must have at least 2.
+        if (instructions.len > 0 and acct_cnt < 2) return error.MissingProgramAccount;
 
-        // (3) at least one writable signer (the fee payer).
-        if (ro_signed >= req_sigs) return false;
-
-        // (4) account_keys.len in [req_sigs, MAX_ACCOUNT_ADDRESSES].
-        if (acct_cnt < req_sigs or acct_cnt > MAX_ACCOUNT_ADDRESSES) return false;
-
-        // (5) signing + readonly-unsigned regions must fit inside account_keys.
-        if (req_sigs + ro_unsigned > acct_cnt) return false;
-
-        // (6) instruction count bound.
-        if (instructions.len > MAX_INSTRUCTIONS) return false;
-
-        // (7) any instruction needs both a fee payer and a program (which
-        // can't be the fee payer per check 8), so account_keys must have at
-        // least 2.
-        if (instructions.len > 0 and acct_cnt < 2) return false;
-
-        // (8) per-instruction: program_id_index is a static account, but
-        // not the fee payer. Also collect the max account index referenced
-        // for check 13.
+        // Per-instruction: `program_id_index` is a static account but not
+        // the fee payer. Also collect the max account index referenced,
+        // used for `AccountIndexOutOfBounds` below.
         var max_acct_idx: u8 = 0;
         for (instructions) |ix| {
             const pid: usize = ix.program_id_index;
-            if (pid == 0 or pid >= acct_cnt) return false;
+            if (pid == 0 or pid >= acct_cnt) return error.InvalidProgramIdIndex;
             for (ix.accounts.items) |a| {
                 max_acct_idx = @max(max_acct_idx, a);
             }
         }
 
-        // (9) ALT count bound.
-        if (address_table_lookups.len > V0Message.MAX_ADDR_TABLE_LOOKUPS) return false;
+        if (address_table_lookups.len > V0Message.MAX_ADDR_TABLE_LOOKUPS)
+            return error.TooManyAddressTableLookups;
 
-        // (10) + (11) + accumulate total ALT-loaded address count for
-        // checks 12 and 13. Subtraction `MAX_ACCOUNT_ADDRESSES - acct_cnt`
-        // is safe since check 4 bounded `acct_cnt`.
+        // Per-ALT bounds + accumulate total ALT-loaded address count for
+        // the total-addresses and index-range checks below. Subtraction
+        // `MAX_ACCOUNT_ADDRESSES - acct_cnt` is safe since `acct_cnt` was
+        // bounded above.
         const alt_headroom: usize = MAX_ACCOUNT_ADDRESSES - acct_cnt;
         var alt_loaded: usize = 0;
         for (address_table_lookups) |alt| {
             const w = alt.writable_indexes.items.len;
             const r = alt.readonly_indexes.items.len;
-            if (w + r < 1) return false;
-            if (w > alt_headroom or r > alt_headroom) return false;
+            if (w + r < 1) return error.EmptyAddressTableLookup;
+            if (w > alt_headroom or r > alt_headroom) return error.AddressTableLookupOverflow;
             alt_loaded += w + r;
         }
 
-        // (12) total addressable account count must fit in
-        // MAX_ACCOUNT_ADDRESSES.
-        if (acct_cnt + alt_loaded > MAX_ACCOUNT_ADDRESSES) return false;
+        if (acct_cnt + alt_loaded > MAX_ACCOUNT_ADDRESSES) return error.TooManyTotalAddresses;
 
-        // (13) every instruction account index must reference either a
-        // static account or one of the ALT-loaded accounts. Program indices
-        // are not included here because they were already checked against
-        // `acct_cnt` in check 8 (programs can never come from a lookup
-        // table; see https://github.com/solana-labs/solana/issues/25034).
-        if (max_acct_idx >= acct_cnt + alt_loaded) return false;
-
-        return true;
+        // Every instruction account index must reference either a static
+        // account or one of the ALT-loaded accounts. Program indices are
+        // not included here because they were already checked against
+        // `acct_cnt` above (programs can never come from a lookup table;
+        // see https://github.com/solana-labs/solana/issues/25034).
+        if (max_acct_idx >= acct_cnt + alt_loaded) return error.AccountIndexOutOfBounds;
     }
 };
 
@@ -370,9 +396,9 @@ fn compactU16Len(n: usize) usize {
 // ---------------------------------------------------------------------------
 // Tests for `VersionedTransaction.sanitize`.
 //
-// Each case maps to one of the 13 numbered invariants in the doc-comment
-// table on `sanitize`. The shared `Builder` keeps test bodies focused on the
-// single field they are exercising.
+// Each case names the `SanitizeError` variant it exercises and asserts that
+// exact error is returned. The shared `Builder` keeps test bodies focused on
+// the single field they are exercising.
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -487,58 +513,60 @@ const Builder = struct {
 test "sanitize: baseline legacy txn passes" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
-    try testing.expect(b.build(.legacy).sanitize());
+    try b.build(.legacy).sanitize();
 }
 
-test "sanitize (1): empty signatures rejected" {
+test "sanitize: NoSignatures" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushKeys(1);
     b.header.num_required_signatures = 0;
-    try testing.expect(!b.build(.legacy).sanitize());
+    try testing.expectError(error.NoSignatures, b.build(.legacy).sanitize());
 }
 
-test "sanitize (1): >MAX_SIGNATURES rejected" {
+test "sanitize: TooManySignatures" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(VersionedTransaction.MAX_SIGNATURES + 1);
     try b.pushKeys(VersionedTransaction.MAX_ACCOUNT_ADDRESSES);
     b.header.num_required_signatures = @intCast(VersionedTransaction.MAX_SIGNATURES + 1);
-    try testing.expect(!b.build(.legacy).sanitize());
+    try testing.expectError(error.TooManySignatures, b.build(.legacy).sanitize());
 }
 
-test "sanitize (2): sig count != header.num_required_signatures rejected" {
+test "sanitize: SignatureCountMismatch" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     try b.pushSigs(1); // now 2 signatures, header still says 1
-    try testing.expect(!b.build(.legacy).sanitize());
+    try testing.expectError(error.SignatureCountMismatch, b.build(.legacy).sanitize());
 }
 
-test "sanitize (3): fee payer must be writable" {
+test "sanitize: FeePayerNotWritable" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     b.header.num_readonly_signed_accounts = 1; // == num_required_signatures
-    try testing.expect(!b.build(.legacy).sanitize());
+    try testing.expectError(error.FeePayerNotWritable, b.build(.legacy).sanitize());
 }
 
-test "sanitize (4): account_keys < num_required_signatures rejected" {
+test "sanitize: NotEnoughAccountKeys" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     try b.pushSigs(1);
     b.header.num_required_signatures = 2;
-    // account_keys still 2, but num_readonly_unsigned=1 means signing+ro_unsigned=3>2 → check 5
-    // To isolate check 4, also drop ro_unsigned and shrink keys.
+    // account_keys still 2, but num_readonly_unsigned=1 means signing+ro_unsigned=3>2
+    // would trip `ReadonlyRegionOverflowsAccountKeys`. To isolate this variant, also
+    // drop ro_unsigned and shrink keys.
     b.header.num_readonly_unsigned_accounts = 0;
     b.account_keys.items[0] = Builder.pubkey(0);
     b.account_keys.shrinkRetainingCapacity(1);
-    // Drop the instruction too (program_id_index=1 would otherwise fail check 8).
+    // Drop the instruction too (program_id_index=1 would otherwise fail
+    // `InvalidProgramIdIndex`).
     b.allocator.free(b.instructions.items[0].accounts.items);
     b.allocator.free(b.instructions.items[0].data.items);
     b.instructions.shrinkRetainingCapacity(0);
-    try testing.expect(!b.build(.legacy).sanitize());
+    try testing.expectError(error.NotEnoughAccountKeys, b.build(.legacy).sanitize());
 }
 
-test "sanitize (4): account_keys > MAX_ACCOUNT_ADDRESSES rejected" {
+test "sanitize: TooManyAccountKeys" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(1);
@@ -550,49 +578,49 @@ test "sanitize (4): account_keys > MAX_ACCOUNT_ADDRESSES rejected" {
         p.data[31] = i % 255;
         try b.account_keys.append(b.allocator, p);
     }
-    try testing.expect(!b.build(.legacy).sanitize());
+    try testing.expectError(error.TooManyAccountKeys, b.build(.legacy).sanitize());
 }
 
-test "sanitize (5): num_required_signatures + ro_unsigned > account_keys rejected" {
+test "sanitize: ReadonlyRegionOverflowsAccountKeys" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     b.header.num_readonly_unsigned_accounts = 2; // 1 + 2 = 3 > 2
-    try testing.expect(!b.build(.legacy).sanitize());
+    try testing.expectError(error.ReadonlyRegionOverflowsAccountKeys, b.build(.legacy).sanitize());
 }
 
-test "sanitize (6): >MAX_INSTRUCTIONS rejected" {
+test "sanitize: TooManyInstructions" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     var i: usize = 0;
     while (i < VersionedTransaction.MAX_INSTRUCTIONS) : (i += 1) try b.pushInstr(1, &.{}); // total: 1 baseline + MAX
-    try testing.expect(!b.build(.legacy).sanitize());
+    try testing.expectError(error.TooManyInstructions, b.build(.legacy).sanitize());
 }
 
-test "sanitize (7): instructions present but only 1 account_key rejected" {
+test "sanitize: MissingProgramAccount" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(1);
     try b.pushKeys(1);
     b.header.num_readonly_unsigned_accounts = 0;
-    try b.pushInstr(0, &.{}); // any pid is invalid here; will trip check 7 first
-    try testing.expect(!b.build(.legacy).sanitize());
+    try b.pushInstr(0, &.{}); // any pid is invalid here; MissingProgramAccount fires first
+    try testing.expectError(error.MissingProgramAccount, b.build(.legacy).sanitize());
 }
 
-test "sanitize (8): program_id_index == 0 rejected" {
+test "sanitize: InvalidProgramIdIndex (pid == 0)" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     b.instructions.items[0].program_id_index = 0;
-    try testing.expect(!b.build(.legacy).sanitize());
+    try testing.expectError(error.InvalidProgramIdIndex, b.build(.legacy).sanitize());
 }
 
-test "sanitize (8): program_id_index >= account_keys.len rejected" {
+test "sanitize: InvalidProgramIdIndex (pid >= account_keys.len)" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     b.instructions.items[0].program_id_index = 2; // account_keys.len == 2
-    try testing.expect(!b.build(.legacy).sanitize());
+    try testing.expectError(error.InvalidProgramIdIndex, b.build(.legacy).sanitize());
 }
 
-test "sanitize (9): too many address_table_lookups rejected" {
+test "sanitize: TooManyAddressTableLookups" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(1);
@@ -600,33 +628,33 @@ test "sanitize (9): too many address_table_lookups rejected" {
     try b.pushInstr(1, &.{});
     var i: usize = 0;
     while (i < V0Message.MAX_ADDR_TABLE_LOOKUPS + 1) : (i += 1) try b.pushAlt(&.{0}, &.{});
-    try testing.expect(!b.build(.v0).sanitize());
+    try testing.expectError(error.TooManyAddressTableLookups, b.build(.v0).sanitize());
 }
 
-test "sanitize (10): empty ALT (no writable & no readonly) rejected" {
+test "sanitize: EmptyAddressTableLookup" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(1);
     try b.pushKeys(2);
     try b.pushInstr(1, &.{});
     try b.pushAlt(&.{}, &.{});
-    try testing.expect(!b.build(.v0).sanitize());
+    try testing.expectError(error.EmptyAddressTableLookup, b.build(.v0).sanitize());
 }
 
-test "sanitize (11): per-ALT writable exceeds headroom rejected" {
+test "sanitize: AddressTableLookupOverflow" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(1);
     try b.pushKeys(2);
     try b.pushInstr(1, &.{});
-    // headroom = 128 - 2 = 126; writable.len = 127 trips check 11.
+    // headroom = 128 - 2 = 126; writable.len = 127 trips the per-ALT bound.
     var writable: [127]u8 = undefined;
     @memset(&writable, 0);
     try b.pushAlt(&writable, &.{});
-    try testing.expect(!b.build(.v0).sanitize());
+    try testing.expectError(error.AddressTableLookupOverflow, b.build(.v0).sanitize());
 }
 
-test "sanitize (12): total addressable accounts > MAX_ACCOUNT_ADDRESSES rejected" {
+test "sanitize: TooManyTotalAddresses" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(1);
@@ -638,10 +666,10 @@ test "sanitize (12): total addressable accounts > MAX_ACCOUNT_ADDRESSES rejected
     @memset(&slot, 0);
     try b.pushAlt(&slot, &.{});
     try b.pushAlt(&slot, &.{});
-    try testing.expect(!b.build(.v0).sanitize());
+    try testing.expectError(error.TooManyTotalAddresses, b.build(.v0).sanitize());
 }
 
-test "sanitize (13): instr account index out of range (no ALT) rejected" {
+test "sanitize: AccountIndexOutOfBounds (no ALT)" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     // Replace the empty accounts slice with one that references index 2
@@ -649,10 +677,10 @@ test "sanitize (13): instr account index out of range (no ALT) rejected" {
     b.allocator.free(b.instructions.items[0].accounts.items);
     const accts = try b.allocator.dupe(u8, &.{2});
     b.instructions.items[0].accounts = .{ .items = accts };
-    try testing.expect(!b.build(.legacy).sanitize());
+    try testing.expectError(error.AccountIndexOutOfBounds, b.build(.legacy).sanitize());
 }
 
-test "sanitize (13): instr account index reachable via ALT accepted" {
+test "sanitize: instr account index reachable via ALT accepted" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(1);
@@ -661,14 +689,14 @@ test "sanitize (13): instr account index reachable via ALT accepted" {
     // exactly one writable account, expanding the addressable range to 3.
     try b.pushInstr(1, &.{2});
     try b.pushAlt(&.{0}, &.{});
-    try testing.expect(b.build(.v0).sanitize());
+    try b.build(.v0).sanitize();
 }
 
 test "sanitize: duplicate account keys are NOT rejected (validateAccountLocks owns that)" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     b.account_keys.items[1] = b.account_keys.items[0]; // duplicate
-    try testing.expect(b.build(.legacy).sanitize());
+    try b.build(.legacy).sanitize();
 }
 
 test "VersionedTransaction: bincode round trip" {
