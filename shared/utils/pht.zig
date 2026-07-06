@@ -60,9 +60,6 @@ pub fn pht(V: type, entries: []const struct { Pubkey, V }) type {
 
         fn hash(x: *const Pubkey, key: u32) Hash {
             const int: u32 = @bitCast(x.data[unique..][0..window].*);
-            // SplitMix64 finalizer over (key, int) — `key *% int` alone has
-            // too little mixing to reliably produce a perfect hash for
-            // small entry sets.
             var result = (@as(u64, key) << 32) | @as(u64, int);
             result ^= result >> 33;
             result *%= 0xFF51AFD7ED558CCD;
