@@ -49,17 +49,6 @@ pub const Instruction = union(enum) {
     CloseLookupTable: CloseLookupTable,
 };
 
-const AccountIndexWithPayer = enum(u8) {
-    lookup_table_account = 0,
-    authority_account = 1,
-    payer_account = 2,
-};
-
-const AccountIndexNoPayer = enum(u8) {
-    lookup_table_account = 0,
-    authority_account = 1,
-};
-
 // https://github.com/anza-xyz/agave/blob/7e8a1ddf86fa84b0ca4b64360af89399afd9de44/sdk/program/src/address_lookup_table/instruction.rs#L21
 pub const CreateLookupTable = struct {
     /// A recent slot must be used in the derivation path
@@ -72,25 +61,15 @@ pub const CreateLookupTable = struct {
     /// addresses using the funding address, recent blockhash, and
     /// the user-passed `bump_seed`.
     bump_seed: u8,
-
-    pub const AccountIndex = AccountIndexWithPayer;
 };
 
-pub const FreezeLookupTable = struct {
-    pub const AccountIndex = AccountIndexNoPayer;
-};
+pub const FreezeLookupTable = struct {};
 
 // https://github.com/anza-xyz/agave/blob/7e8a1ddf86fa84b0ca4b64360af89399afd9de44/sdk/program/src/address_lookup_table/instruction.rs#L51
 pub const ExtendLookupTable = struct {
     new_addresses: []const Pubkey,
-
-    pub const AccountIndex = AccountIndexWithPayer;
 };
 
-pub const DeactivateLookupTable = struct {
-    pub const AccountIndex = AccountIndexNoPayer;
-};
+pub const DeactivateLookupTable = struct {};
 
-pub const CloseLookupTable = struct {
-    pub const AccountIndex = AccountIndexWithPayer;
-};
+pub const CloseLookupTable = struct {};

@@ -57,12 +57,6 @@ pub const LookupTableMeta = struct {
     // Raw list of addresses follows this serialized structure in
     // the account's data, starting from `LOOKUP_TABLE_META_SIZE`.
 
-    pub fn new(authority: Pubkey) LookupTableMeta {
-        return .{
-            .authority = authority,
-        };
-    }
-
     pub fn status(
         self: *const LookupTableMeta,
         current_slot: Slot,
