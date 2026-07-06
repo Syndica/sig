@@ -24,6 +24,7 @@ pub const SigVerifyOption = enum {
 };
 
 const MAX_ACCOUNTS_PER_INSTRUCTION = sig.runtime.transaction_context.MAX_ACCOUNTS_PER_INSTRUCTION;
+const MAX_INSTRUCTION_TRACE_LENGTH = sig.runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH;
 
 /// Checks that a transaction is valid for execution.
 ///     1. Ensure the transaction is valid i.e. signature counts make sense, there are enough accounts, etc.
@@ -72,7 +73,7 @@ pub fn preprocessTransaction(
     }
 
     if (sig_verify == .run_sig_verify) {
-        if (txn.msg.instructions.len > sig.runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH) {
+        if (txn.msg.instructions.len > MAX_INSTRUCTION_TRACE_LENGTH) {
             return .{ .err = .SanitizeFailure };
         }
 
