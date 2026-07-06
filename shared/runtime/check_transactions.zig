@@ -58,6 +58,8 @@ pub fn checkFeePayer(
     PreparedAccount,
 }) {
     _ = lamports_per_signature; // ignored here - see comment below
+    _ = feature_set; // enable_secp256r1_precompile hardcoded
+    _ = slot; // enable_secp256r1_precompile hardcoded
 
     var zone = tracy.Zone.init(@src(), .{ .name = "checkFeePayer" });
     defer zone.deinit();
@@ -65,7 +67,6 @@ pub fn checkFeePayer(
     var maybe_nonce_to_free = maybe_nonce;
     defer if (maybe_nonce_to_free) |na| na.deinit(allocator);
 
-    const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
     const fee_payer_key = transaction.accounts.items(.pubkey)[0];
     var payer_account = try accounts.get(allocator, fee_payer_key) orelse
         return .{ .err = .AccountNotFound };
@@ -102,7 +103,6 @@ pub fn checkFeePayer(
     const fee_details = FeeDetails.init(
         SignatureCounts.fromTransaction(transaction),
         5_000,
-        enable_secp256r1,
         fee_budget_limits.prioritization_fee,
         compute_budget_limits.compute_unit_price,
     );
@@ -202,7 +202,6 @@ pub const FeeDetails = struct {
     pub fn init(
         sig_counts: SignatureCounts,
         lamports_per_signature: u64,
-        enable_secp256r1: bool,
         prioritization_fee: u64,
         compute_unit_price: u64,
     ) FeeDetails {
@@ -210,7 +209,6 @@ pub const FeeDetails = struct {
             .transaction_fee = calculateSignatureFee(
                 sig_counts,
                 lamports_per_signature,
-                enable_secp256r1,
             ),
             .prioritization_fee = prioritization_fee,
             .compute_unit_price = compute_unit_price,
@@ -221,12 +219,11 @@ pub const FeeDetails = struct {
     fn calculateSignatureFee(
         sig_counts: SignatureCounts,
         lamports_per_signature: u64,
-        enable_secp256r1: bool,
     ) u64 {
         const sig_count = sig_counts.num_transaction_signatures +|
             sig_counts.num_ed25519_signatures +|
             sig_counts.num_secp256k1_signatures +|
-            if (enable_secp256r1) sig_counts.num_secp256r1_signatures else 0;
+            sig_counts.num_secp256r1_signatures;
 
         return sig_count *| lamports_per_signature;
     }

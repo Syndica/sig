@@ -1255,7 +1255,7 @@
         .name = "enable_secp256r1_precompile",
         .pubkey = "srremy31J5Y25FrAApwVb9kZcfXbusYMMsvTK9aWv5q",
         .description = "SIMD-0075: Enable secp256r1 precompile",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "get_sysvar_syscall_enabled",

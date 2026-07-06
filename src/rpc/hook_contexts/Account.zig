@@ -416,7 +416,6 @@ pub fn getFeeForMessage(
     var fee_details: FeeDetails = FeeDetails.DEFAULT;
     if (bq_lps != 0) {
         const feature_set = &slot_ref.constants().feature_set;
-        const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
 
         // [agave] process_compute_budget_instructions(message.program_instructions_iter(), &self.feature_set).unwrap_or_default()
         // In Agave, execute+sanitize is a single call; on ANY error, ComputeBudgetLimits::default() is used.
@@ -430,7 +429,6 @@ pub fn getFeeForMessage(
         fee_details = FeeDetails.init(
             SignatureCounts.fromTransaction(&runtime_txn),
             5_000,
-            enable_secp256r1,
             fee_budget_limits.prioritization_fee,
             budget_limits.compute_unit_price,
         );
