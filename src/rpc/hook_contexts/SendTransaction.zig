@@ -92,12 +92,8 @@ pub fn sendTransaction(
         self.account_store.reader().forSlot(&preflight_slot_ref.constants().ancestors),
     );
 
-    const require_static_nonce_account = preflight_slot_ref.constants().feature_set.active(
-        .require_static_nonce_account,
-        preflight_slot,
-    );
     const durable_nonce_info: ?struct { Pubkey, Hash } =
-        if (getDurableNonce(&transaction, require_static_nonce_account)) |nonce|
+        if (getDurableNonce(&transaction)) |nonce|
             .{ nonce, transaction.recent_blockhash }
         else
             null;

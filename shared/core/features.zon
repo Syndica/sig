@@ -1502,7 +1502,7 @@
         .name = "require_static_nonce_account",
         .pubkey = "7VVhpg5oAjAmnmz1zCcSHb2Z9ecZB2FQqpnEwReka9Zm",
         .description = "SIMD-0242: Static Nonce Account Only",
-        .status = .supported,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_vote_address_leader_schedule",

@@ -229,7 +229,6 @@ pub fn loadAndExecuteTransaction(
             &env.next_durable_nonce,
             env.next_lamports_per_signature,
             account_reader,
-            env.feature_set.active(.require_static_nonce_account, env.slot),
         )) |nonce| nonce[0] else return .{ .err = .BlockhashNotFound },
     };
 
