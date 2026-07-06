@@ -69,7 +69,7 @@
         .name = "warp_timestamp_again",
         .pubkey = "GvDsGDkH5gyzwpDhxNixx8vtx1kwYHH13RiNAPw27zXb",
         .description = "warp timestamp again, adjust bounding to 25% fast 80% slow #15204",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "check_init_vote_data",
