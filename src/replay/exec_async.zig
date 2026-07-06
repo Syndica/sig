@@ -569,7 +569,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
     );
 }
 
-test "TransactionScheduler: failed account locks" {
+test "TransactionScheduler: duplicate tx in same batch" {
     const allocator = std.testing.allocator;
     var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -579,8 +579,10 @@ test "TransactionScheduler: failed account locks" {
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
 
+    // With relax_intrabatch_account_locks hardcoded, duplicate txs in the same
+    // batch are caught by signature dedup rather than account lock checks.
     try std.testing.expectEqual(
-        ReplaySlotError{ .invalid_transaction = .AccountInUse },
+        ReplaySlotError{ .invalid_transaction = .AlreadyProcessed },
         try testSchedulerForBatches(allocator, &state, &.{
             &.{ tx, tx }, // same txn in same batch
         }),
