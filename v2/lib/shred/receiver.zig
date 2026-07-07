@@ -53,6 +53,17 @@ pub const Receiver = struct {
         self.done.deinit(allocator);
     }
 
+    /// Reset to the post-init state without freeing any heap memory. Intended
+    /// for callers that reuse a single Receiver across many independent inputs
+    /// (e.g. the conformance shred-parse harness, which runs one fixture per
+    /// invocation and must not leak state between them).
+    pub fn reset(self: *Receiver) void {
+        self.in_progress.reset();
+        self.done.reset();
+        self.root_slot = 0;
+        self.max_slot = std.math.maxInt(Slot);
+    }
+
     pub fn updateSlotRange(self: *Receiver, root_slot: Slot, max_slot: Slot) void {
         self.root_slot = root_slot;
         self.max_slot = max_slot;
@@ -535,6 +546,15 @@ const InProgressSets = struct {
         self.eviction.deinit();
     }
 
+    /// Returns the set to its post-init state without freeing any heap memory.
+    /// Preserves the existing capacities of `ctx_pool`, `signature_map`, and
+    /// `eviction`.
+    fn reset(self: *InProgressSets) void {
+        self.ctx_pool.reset();
+        self.signature_map.clearRetainingCapacity();
+        self.eviction.items.len = 0;
+    }
+
     fn getFecSetCtx(self: *const InProgressSets, signature: *const Signature) ?*FecSetCtx {
         const map_ctx = self.mapContext();
         return self.signature_map.getAdapted(signature, map_ctx);
@@ -744,6 +764,15 @@ const DoneSets = struct {
         self.eviction.deinit();
     }
 
+    /// Returns the set to its post-init state without freeing any heap memory.
+    /// Preserves the existing capacities of `done_pool`, `done_map`, and
+    /// `eviction`.
+    fn reset(self: *DoneSets) void {
+        self.done_pool.reset();
+        self.done_map.clearRetainingCapacity();
+        self.eviction.items.len = 0;
+    }
+
     // This signature+id must not be inside DoneSet already - any shred inside DoneSets should be
     // dropped early, so setDone should be unreachable in this case.
     fn setDone(self: *DoneSets, signature: *const Signature, id: FecSetId) void {
@@ -861,4 +890,39 @@ test "DoneSets basic usage" {
     try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_1, &sig_1)); // 1 was evicted
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_3, &sig_3));
+}
+
+test "DoneSets reset clears state without freeing" {
+    const allocator = std.testing.allocator;
+
+    var done_sets: DoneSets = try .init(allocator, 2);
+    defer done_sets.deinit(allocator);
+
+    const sig_1: Signature = .parse(
+        \\3NyXqg7XjPBX5eW2zpExpAJTdXCHpVt4RR2uPPc6XUzTCVeAphwzpNBxHtYPpipE1gne2NW6ELW6HVdaB7oV9DEn
+    );
+    const sig_2: Signature = .parse(
+        \\2RUa9Sv3T2vwxeubSwJUS63W7N2wT9RaMcaoGJS6a28zGmSvpdArZMcDe7n3JTeBtuh1BkSgaJ8eN3WF7TBMjkG6
+    );
+
+    const id_1: FecSetId = .{ .slot = 1, .fec_set_idx = 0 };
+    const id_2: FecSetId = .{ .slot = 2, .fec_set_idx = 0 };
+
+    done_sets.setDone(&sig_1, id_1);
+    done_sets.setDone(&sig_2, id_2);
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
+
+    done_sets.reset();
+
+    // After reset both lookups must miss.
+    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_1, &sig_1));
+    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_2, &sig_2));
+
+    // Capacity is retained — refilling to the original size must not allocate
+    // (eviction.allocator is the testing failing allocator after init).
+    done_sets.setDone(&sig_1, id_1);
+    done_sets.setDone(&sig_2, id_2);
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
 }
