@@ -1496,7 +1496,7 @@
         .name = "enable_extend_program_checked",
         .pubkey = "2oMRZEDWT2tqtYMofhmmfQ8SsjqUFzT6sYXppQDavxwz",
         .description = "Enable ExtendProgramChecked instruction",
-        .status = .supported,
+        .status = .reverted,
     },
     .{
         .name = "require_static_nonce_account",

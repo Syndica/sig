@@ -500,11 +500,6 @@ pub fn executeBpfLoaderV3ProgramInstruction(
             ic,
             args.additional_bytes,
         ),
-        .extend_program_checked => |args| executeV3ExtendProgramChecked(
-            allocator,
-            ic,
-            args.additional_bytes,
-        ),
         .migrate => executeV3Migrate(
             allocator,
             ic,
@@ -1432,35 +1427,15 @@ pub fn executeV3ExtendProgram(
     ic: *InstructionContext,
     additional_bytes: u32,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (ic.tc.feature_set.active(.enable_extend_program_checked, ic.tc.slot)) {
-        try ic.tc.log("ExtendProgram was superseded by ExtendProgramChecked", .{});
-        return InstructionError.InvalidInstructionData;
-    }
-    try commonExtendProgram(allocator, ic, additional_bytes, false);
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L1171
-pub fn executeV3ExtendProgramChecked(
-    allocator: std.mem.Allocator,
-    ic: *InstructionContext,
-    additional_bytes: u32,
-) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.tc.feature_set.active(.enable_extend_program_checked, ic.tc.slot)) {
-        return InstructionError.InvalidInstructionData;
-    }
-    try commonExtendProgram(allocator, ic, additional_bytes, true);
+    try commonExtendProgram(allocator, ic, additional_bytes);
 }
 
 fn commonExtendProgram(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     additional_bytes: u32,
-    comptime check_authority: bool,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const AccountIndex = switch (check_authority) {
-        true => bpf_loader_program.v3.instruction.ExtendProgramChecked.AccountIndex,
-        else => bpf_loader_program.v3.instruction.ExtendProgram.AccountIndex,
-    };
+    const AccountIndex = bpf_loader_program.v3.instruction.ExtendProgram.AccountIndex;
 
     if (additional_bytes == 0) {
         try ic.tc.log("Additional bytes must be greater than 0", .{});
@@ -1564,20 +1539,6 @@ fn commonExtendProgram(
                 return InstructionError.Immutable;
             };
 
-            if (check_authority) {
-                const authority = ic.ixn_info.getAccountMetaAtIndex(
-                    @intFromEnum(AccountIndex.authority),
-                ) orelse return InstructionError.MissingAccount;
-
-                if (!upgrade_authority_address.equals(&authority.pubkey)) {
-                    try ic.tc.log("Incorrect upgrade authority provided", .{});
-                    return InstructionError.IncorrectAuthority;
-                }
-                if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
-                    try ic.tc.log("Upgrade authority did not sign", .{});
-                    return InstructionError.MissingRequiredSignature;
-                }
-            }
             break :blk upgrade_authority_address;
         },
         else => {
@@ -3182,232 +3143,110 @@ test executeV3ExtendProgram {
 
     // Test with and without the payer helping out to pay for extend.
     for ([_]u32{ 0, 100 }) |help_pay| {
-        inline for ([_]bool{ false, true }) |check_authority| {
-            std.debug.assert(help_pay < additional_bytes);
+        std.debug.assert(help_pay < additional_bytes);
 
-            const payer_balance = prng.random().uintAtMost(u32, 1024) + help_pay;
-            const program_data_lamports =
-                sysvar.Rent.INIT.minimumBalance(initial_program_data.len + additional_bytes) -
-                help_pay;
+        const payer_balance = prng.random().uintAtMost(u32, 1024) + help_pay;
+        const program_data_lamports =
+            sysvar.Rent.INIT.minimumBalance(initial_program_data.len + additional_bytes) -
+            help_pay;
 
-            var compute_units: u64 = bpf_loader_program.v3.COMPUTE_UNITS;
-            if (help_pay > 0) { // triggers native cpi transfer call
-                compute_units += system_program.COMPUTE_UNITS;
-            }
-
-            try testing.expectProgramExecuteResult(
-                allocator,
-                bpf_loader_program.v3.ID,
-                if (check_authority)
-                    bpf_loader_program.v3.Instruction{
-                        .extend_program_checked = .{ .additional_bytes = additional_bytes },
-                    }
-                else
-                    bpf_loader_program.v3.Instruction{
-                        .extend_program = .{ .additional_bytes = additional_bytes },
-                    },
-                if (check_authority)
-                    &.{
-                        // program_data
-                        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-                        // program
-                        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
-                        // authority
-                        .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
-                        // system_program
-                        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
-                        // payer
-                        .{ .is_signer = true, .is_writable = true, .index_in_transaction = 4 },
-                        // bpf program_id (for instruction)
-                        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 5 },
-                    }
-                else
-                    &.{
-                        // program_data
-                        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-                        // program
-                        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
-                        // system_program
-                        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
-                        // payer
-                        .{ .is_signer = true, .is_writable = true, .index_in_transaction = 4 },
-                        // bpf program_id (for instruction)
-                        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 5 },
-                    },
-                .{
-                    .accounts = &.{
-                        .{
-                            .pubkey = program_data_account_key,
-                            .data = initial_program_data,
-                            .owner = bpf_loader_program.v3.ID,
-                            .lamports = program_data_lamports,
-                        },
-                        .{
-                            .pubkey = program_account_key,
-                            .data = program_account,
-                            .owner = bpf_loader_program.v3.ID,
-                        },
-                        .{
-                            .pubkey = upgrade_authority_key,
-                            .owner = system_program.ID,
-                        },
-                        .{
-                            .pubkey = system_program.ID,
-                            .owner = ids.NATIVE_LOADER_ID,
-                            .executable = true,
-                        },
-                        .{
-                            .pubkey = payer_account_key,
-                            .lamports = payer_balance,
-                            .owner = system_program.ID,
-                        },
-                        .{
-                            .pubkey = bpf_loader_program.v3.ID,
-                            .owner = ids.NATIVE_LOADER_ID,
-                        },
-                    },
-                    .compute_meter = compute_units,
-                    .sysvar_cache = .{
-                        .rent = sysvar.Rent.INIT,
-                        .clock = clock,
-                    },
-                    .feature_set = if (check_authority)
-                        &.{
-                            .{
-                                .feature = .enable_extend_program_checked,
-                                .slot = 0,
-                            },
-                        }
-                    else
-                        &.{},
-                },
-                .{
-                    .accounts = &.{
-                        .{
-                            .pubkey = program_data_account_key,
-                            .data = final_program_data,
-                            .owner = bpf_loader_program.v3.ID,
-                            .lamports = program_data_lamports + help_pay,
-                        },
-                        .{
-                            .pubkey = program_account_key,
-                            .data = program_account,
-                            .owner = bpf_loader_program.v3.ID,
-                        },
-                        .{
-                            .pubkey = upgrade_authority_key,
-                            .owner = system_program.ID,
-                        },
-                        .{
-                            .pubkey = system_program.ID,
-                            .owner = ids.NATIVE_LOADER_ID,
-                            .executable = true,
-                        },
-                        .{
-                            .pubkey = payer_account_key,
-                            .lamports = payer_balance - help_pay,
-                            .owner = system_program.ID,
-                        },
-                        .{
-                            .pubkey = bpf_loader_program.v3.ID,
-                            .owner = ids.NATIVE_LOADER_ID,
-                        },
-                    },
-                    .accounts_resize_delta = additional_bytes,
-                },
-                .{},
-            );
+        var compute_units: u64 = bpf_loader_program.v3.COMPUTE_UNITS;
+        if (help_pay > 0) { // triggers native cpi transfer call
+            compute_units += system_program.COMPUTE_UNITS;
         }
-    }
 
-    // Test extend_program disabled when ENABLE_EXTEND_PROGRAM_CHECKED is enabled
-    {
-        var tx = try sig.runtime.testing.createTransactionContext(
+        try testing.expectProgramExecuteResult(
             allocator,
-            prng.random(),
+            bpf_loader_program.v3.ID,
+            bpf_loader_program.v3.Instruction{
+                .extend_program = .{ .additional_bytes = additional_bytes },
+            },
+            &.{
+                // program_data
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                // program
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+                // system_program
+                .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
+                // payer
+                .{ .is_signer = true, .is_writable = true, .index_in_transaction = 4 },
+                // bpf program_id (for instruction)
+                .{ .is_signer = false, .is_writable = false, .index_in_transaction = 5 },
+            },
             .{
                 .accounts = &.{
+                    .{
+                        .pubkey = program_data_account_key,
+                        .data = initial_program_data,
+                        .owner = bpf_loader_program.v3.ID,
+                        .lamports = program_data_lamports,
+                    },
+                    .{
+                        .pubkey = program_account_key,
+                        .data = program_account,
+                        .owner = bpf_loader_program.v3.ID,
+                    },
+                    .{
+                        .pubkey = upgrade_authority_key,
+                        .owner = system_program.ID,
+                    },
+                    .{
+                        .pubkey = system_program.ID,
+                        .owner = ids.NATIVE_LOADER_ID,
+                        .executable = true,
+                    },
+                    .{
+                        .pubkey = payer_account_key,
+                        .lamports = payer_balance,
+                        .owner = system_program.ID,
+                    },
                     .{
                         .pubkey = bpf_loader_program.v3.ID,
                         .owner = ids.NATIVE_LOADER_ID,
                     },
                 },
-                .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+                .compute_meter = compute_units,
                 .sysvar_cache = .{
                     .rent = sysvar.Rent.INIT,
                     .clock = clock,
                 },
-                .feature_set = &.{
-                    .{
-                        .feature = .enable_extend_program_checked,
-                        .slot = 0,
-                    },
-                },
             },
-        );
-        const tc = &tx[1];
-        defer {
-            sig.runtime.testing.deinitTransactionContext(allocator, tc);
-            tx[0].deinit(allocator);
-        }
-
-        const instruction_info = try sig.runtime.testing.createInstructionInfo(
-            tc,
-            bpf_loader_program.v3.ID,
-            bpf_loader_program.v3.Instruction{
-                .extend_program = .{ .additional_bytes = 0 },
-            },
-            &.{},
-        );
-        defer instruction_info.deinit(allocator);
-
-        try std.testing.expectError(
-            InstructionError.InvalidInstructionData,
-            sig.runtime.executor.executeInstruction(allocator, tc, instruction_info),
-        );
-        try std.testing.expectEqual(tc.compute_meter, 0);
-    }
-
-    // Test extend_program_checked disabled when ENABLE_EXTEND_PROGRAM_CHECKED is not present.
-    {
-        var tx = try sig.runtime.testing.createTransactionContext(
-            allocator,
-            prng.random(),
             .{
                 .accounts = &.{
+                    .{
+                        .pubkey = program_data_account_key,
+                        .data = final_program_data,
+                        .owner = bpf_loader_program.v3.ID,
+                        .lamports = program_data_lamports + help_pay,
+                    },
+                    .{
+                        .pubkey = program_account_key,
+                        .data = program_account,
+                        .owner = bpf_loader_program.v3.ID,
+                    },
+                    .{
+                        .pubkey = upgrade_authority_key,
+                        .owner = system_program.ID,
+                    },
+                    .{
+                        .pubkey = system_program.ID,
+                        .owner = ids.NATIVE_LOADER_ID,
+                        .executable = true,
+                    },
+                    .{
+                        .pubkey = payer_account_key,
+                        .lamports = payer_balance - help_pay,
+                        .owner = system_program.ID,
+                    },
                     .{
                         .pubkey = bpf_loader_program.v3.ID,
                         .owner = ids.NATIVE_LOADER_ID,
                     },
                 },
-                .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
-                .sysvar_cache = .{
-                    .rent = sysvar.Rent.INIT,
-                    .clock = clock,
-                },
+                .accounts_resize_delta = additional_bytes,
             },
+            .{},
         );
-        const tc = &tx[1];
-        defer {
-            sig.runtime.testing.deinitTransactionContext(allocator, tc);
-            tx[0].deinit(allocator);
-        }
-
-        const instruction_info = try sig.runtime.testing.createInstructionInfo(
-            tc,
-            bpf_loader_program.v3.ID,
-            bpf_loader_program.v3.Instruction{
-                .extend_program_checked = .{ .additional_bytes = 0 },
-            },
-            &.{},
-        );
-        defer instruction_info.deinit(allocator);
-
-        try std.testing.expectError(
-            InstructionError.InvalidInstructionData,
-            sig.runtime.executor.executeInstruction(allocator, tc, instruction_info),
-        );
-        try std.testing.expectEqual(tc.compute_meter, 0);
     }
 }
 

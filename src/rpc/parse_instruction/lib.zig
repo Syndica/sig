@@ -2102,45 +2102,6 @@ fn parseBpfUpgradeableLoaderInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "migrate" });
         },
-        .extend_program_checked => |ext| {
-            try checkNumBpfUpgradeableLoaderAccounts(instruction.accounts, 3);
-            var info = ObjectMap.init(arena);
-            try info.put("additionalBytes", .{ .integer = @intCast(ext.additional_bytes) });
-            try info.put("programDataAccount", try pubkeyToValue(
-                arena,
-                account_keys.get(@intCast(instruction.accounts[0])).?,
-            ));
-            try info.put("programAccount", try pubkeyToValue(
-                arena,
-                account_keys.get(@intCast(instruction.accounts[1])).?,
-            ));
-            try info.put("authority", try pubkeyToValue(
-                arena,
-                account_keys.get(@intCast(instruction.accounts[2])).?,
-            ));
-            // Optional system program
-            if (instruction.accounts.len > 3) {
-                if (account_keys.get(@intCast(instruction.accounts[3]))) |sys| {
-                    try info.put("systemProgram", try pubkeyToValue(arena, sys));
-                } else {
-                    try info.put("systemProgram", .null);
-                }
-            } else {
-                try info.put("systemProgram", .null);
-            }
-            // Optional payer
-            if (instruction.accounts.len > 4) {
-                if (account_keys.get(@intCast(instruction.accounts[4]))) |payer| {
-                    try info.put("payerAccount", try pubkeyToValue(arena, payer));
-                } else {
-                    try info.put("payerAccount", .null);
-                }
-            } else {
-                try info.put("payerAccount", .null);
-            }
-            try result.put("info", .{ .object = info });
-            try result.put("type", .{ .string = "extendProgramChecked" });
-        },
     }
 
     return .{ .object = result };
