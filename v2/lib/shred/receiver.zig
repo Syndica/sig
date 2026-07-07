@@ -25,8 +25,17 @@ pub const Receiver = struct {
     root_slot: Slot,
     max_slot: Slot,
 
+    features: Features,
+
     in_progress: InProgressSets,
     done: DoneSets,
+
+    /// Per-feature activation slots. A feature is enforced for shreds
+    /// whose slot is `>= activation_slot`; the default `maxInt(Slot)`
+    /// keeps every feature inactive.
+    pub const Features = struct {
+        discard_unexpected_data_complete_shreds: Slot = std.math.maxInt(Slot),
+    };
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -45,6 +54,7 @@ pub const Receiver = struct {
 
             .root_slot = 0,
             .max_slot = std.math.maxInt(Slot),
+            .features = .{},
         };
     }
 
@@ -62,6 +72,7 @@ pub const Receiver = struct {
         self.done.reset();
         self.root_slot = 0;
         self.max_slot = std.math.maxInt(Slot);
+        self.features = .{};
     }
 
     pub fn updateSlotRange(self: *Receiver, root_slot: Slot, max_slot: Slot) void {
@@ -117,6 +128,14 @@ pub const Receiver = struct {
                     return error.BadCodeShredCount;
                 if (shred.code_or_data.code.code_shred_idx >= FecSetCtx.fec_shred_count)
                     return error.BadCodeShredIdx;
+            } else {
+                // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred/filter.rs#L327-L342
+                if (shred.slot >= state.features.discard_unexpected_data_complete_shreds and
+                    shred.code_or_data.data.flags.data_complete and
+                    shred.slot_idx != shred.fec_set_idx + FecSetCtx.fec_shred_count - 1)
+                {
+                    return error.UnexpectedDataCompleteShred;
+                }
             }
 
             if (shred.fec_set_idx % FecSetCtx.fec_shred_count != 0) return error.InvalidFecSetIdx;
