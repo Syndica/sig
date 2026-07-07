@@ -1019,7 +1019,7 @@
         .name = "enable_loader_v4",
         .pubkey = "2aQJYqER2aKyb3cZw22v4SL2xMX7vwXBRWfvS4pTrtED",
         .description = "SIMD-0167: Enable Loader-v4",
-        .status = .supported,
+        .status = .reverted,
     },
     .{
         .name = "require_rent_exempt_split_destination",
