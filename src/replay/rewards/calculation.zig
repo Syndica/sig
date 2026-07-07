@@ -422,7 +422,7 @@ fn calculateValidatorRewards(
 
     const stake_history = &stakes.stake_history;
     var filtered_stake_delegations =
-        try filterStakesDelegations(allocator, slot, feature_set, stakes);
+        try filterStakesDelegations(allocator, stakes);
     defer filtered_stake_delegations.deinit(allocator);
 
     const point_value = try calculateRewardPointsPartitioned(
@@ -454,25 +454,11 @@ const FilteredStakesDelegations = std.MultiArrayList(struct { pubkey: Pubkey, st
 
 fn filterStakesDelegations(
     allocator: Allocator,
-    slot: u64,
-    feature_set: *const FeatureSet,
     stakes: *const Stakes(.stake),
 ) !FilteredStakesDelegations {
     var result = FilteredStakesDelegations{};
-    if (feature_set.active(.stake_minimum_delegation_for_rewards, slot)) {
-        const min_delegation = @max(sig.runtime.program.stake.getMinimumDelegation(
-            slot,
-            feature_set,
-        ), 1_000_000_000); // LAMPORTS_PER_SOL
-
-        for (stakes.stake_accounts.keys(), stakes.stake_accounts.values()) |key, value| {
-            if (value.delegation.stake < min_delegation) continue;
-            try result.append(allocator, .{ .pubkey = key, .stake = value });
-        }
-    } else {
-        for (stakes.stake_accounts.keys(), stakes.stake_accounts.values()) |key, value| {
-            try result.append(allocator, .{ .pubkey = key, .stake = value });
-        }
+    for (stakes.stake_accounts.keys(), stakes.stake_accounts.values()) |key, value| {
+        try result.append(allocator, .{ .pubkey = key, .stake = value });
     }
     return result;
 }
@@ -1076,27 +1062,13 @@ test filterStakesDelegations {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    const slot = 30;
     const stakes = try Stakes(.stake).initRandom(allocator, random, 100);
     defer stakes.deinit(allocator);
 
-    var feature_set = FeatureSet.ALL_DISABLED;
-
     {
-        var result = try filterStakesDelegations(allocator, slot, &feature_set, &stakes);
+        var result = try filterStakesDelegations(allocator, &stakes);
         defer result.deinit(allocator);
         try std.testing.expectEqual(stakes.stake_accounts.count(), result.items(.stake).len);
-    }
-
-    feature_set.setSlot(.stake_minimum_delegation_for_rewards, slot);
-
-    {
-        var result = try filterStakesDelegations(allocator, slot, &feature_set, &stakes);
-        defer result.deinit(allocator);
-
-        for (result.items(.stake)) |stake| {
-            try std.testing.expect(stake.delegation.stake >= 1_000_000_000);
-        }
     }
 }
 
@@ -1105,7 +1077,6 @@ test calculateRewardPointsPartitioned {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    const slot = 32;
     const epoch = 1;
 
     { // Empty returns null point value
@@ -1117,8 +1088,6 @@ test calculateRewardPointsPartitioned {
 
         var filtered_stake_delegations = try filterStakesDelegations(
             allocator,
-            slot,
-            &FeatureSet.ALL_DISABLED,
             &stakes,
         );
         defer filtered_stake_delegations.deinit(allocator);
