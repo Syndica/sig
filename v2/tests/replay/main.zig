@@ -144,7 +144,7 @@ fn resignPackets(
         var merkle_root: lib.solana.Hash = undefined;
         try shred.merkleRoot(&merkle_root);
 
-        const mutable_shred: *lib.shred.Shred = @ptrCast(packet);
+        const mutable_shred = lib.shred.Shred.fromBufferUncheckedMut(&packet.data);
         mutable_shred.signature = try keypair.sign(&merkle_root.data);
     }
 }
