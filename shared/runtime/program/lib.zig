@@ -60,7 +60,6 @@ pub const NATIVE = sig.utils.pht(Program, &.{
     .{ bpf_loader.v1.ID,        .{ .func = bpf_loader.execute } },
     .{ bpf_loader.v2.ID,        .{ .func = bpf_loader.execute } },
     .{ bpf_loader.v3.ID,        .{ .func = bpf_loader.execute } },
-    .{ bpf_loader.v4.ID,        .{ .func = bpf_loader.execute, .gate = .enable_loader_v4 } },
     .{ system.ID,               .{ .func = system.execute } },
     .{ vote.ID,                 .{ .func = vote.execute } },
     .{ address_lookup_table.ID, .{ .func = address_lookup_table.execute } },
