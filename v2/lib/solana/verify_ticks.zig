@@ -37,9 +37,12 @@ pub const VerifyTicksParams = struct {
     /// True if the slot's last data shred carried the LAST_SHRED_IN_SLOT flag,
     /// i.e. all entries for the slot are present.
     slot_is_full: bool,
-    /// Running hash count carried across batches; pass `0` for a single-batch
-    /// call.
-    tick_hash_count: u64 = 0,
+    /// Running hash count carried across batches. `verifyTicks` writes the
+    /// trailing partial count back through this pointer so the next call on
+    /// the same slot resumes correctly. Point at a caller-owned `u64`
+    /// initialised to `0` at the start of the slot; for a single-batch call
+    /// point at a local `u64 = 0`.
+    tick_hash_count: *u64,
 };
 
 /// Count how many entries in `entries` are ticks (zero transactions).
@@ -80,14 +83,15 @@ pub fn verifyTicks(entries: []const Entry, params: VerifyTicksParams) BlockError
     //
     // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/entry/src/entry.rs#L675-L698
     if (params.hashes_per_tick > 0) {
-        var hash_count = params.tick_hash_count;
         for (entries) |entry| {
-            hash_count = hash_count +| entry.num_hashes;
+            params.tick_hash_count.* +|= entry.num_hashes;
             if (entry.isTick()) {
-                if (hash_count != params.hashes_per_tick) return error.InvalidTickHashCount;
-                hash_count = 0;
+                if (params.tick_hash_count.* != params.hashes_per_tick) {
+                    return error.InvalidTickHashCount;
+                }
+                params.tick_hash_count.* = 0;
             }
         }
-        if (hash_count >= params.hashes_per_tick) return error.InvalidTickHashCount;
+        if (params.tick_hash_count.* >= params.hashes_per_tick) return error.InvalidTickHashCount;
     }
 }
