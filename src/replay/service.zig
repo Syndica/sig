@@ -1800,9 +1800,9 @@ test "Execute testnet block single threaded" {
 
     try testExecuteBlock(std.testing.allocator, .{
         .num_threads = 1,
-        .manifest_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/manifest.bin.gz",
-        .shreds_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/shreds.json.gz",
-        .accounts_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/accounts.json.gz",
+        .manifest_path = sig.TEST_DATA_DIR ++ "blocks/testnet-417955322/manifest.bin.gz",
+        .shreds_path = sig.TEST_DATA_DIR ++ "blocks/testnet-417955322/shreds.json.gz",
+        .accounts_path = sig.TEST_DATA_DIR ++ "blocks/testnet-417955322/accounts.json.gz",
     });
 }
 
@@ -1811,9 +1811,9 @@ test "Execute testnet block multi threaded" {
 
     try testExecuteBlock(std.testing.allocator, .{
         .num_threads = 2,
-        .manifest_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/manifest.bin.gz",
-        .shreds_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/shreds.json.gz",
-        .accounts_path = sig.TEST_DATA_DIR ++ "blocks/testnet-356797362/accounts.json.gz",
+        .manifest_path = sig.TEST_DATA_DIR ++ "blocks/testnet-417955322/manifest.bin.gz",
+        .shreds_path = sig.TEST_DATA_DIR ++ "blocks/testnet-417955322/shreds.json.gz",
+        .accounts_path = sig.TEST_DATA_DIR ++ "blocks/testnet-417955322/accounts.json.gz",
     });
 }
 
@@ -2345,24 +2345,11 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
         try dep_stubs.accounts_db_state.db.put(snapshot_slot, address, account);
     }
 
-    // NOTE: The manifests used to run this unit have empty `stakes` and a single epoch stakes for
-    // the current epoch. As a result, when we call `updateEpochStakes` in `trackNewSlots` we will
-    // attempt to create a new `EpochInfo` for the next epoch. This involves a leader schedule
-    // calculation which will fail if `stakes` is empty.
-    //
-    // To get around this for the existing manifests, we copy the current epoch stakes into an entry
-    // for the next epoch in `bank_extra.versioned_epoch_stakes`. This is loaded into `EpochInfo`
-    // in the EpochTracker when initialised from the snapshot, thus preventing `updateEpochStakes`
-    // from attempting to compute an `EpochInfo` entry with empty `stakes`.
-    var epoch_stakes = manifest.bank_extra.versioned_epoch_stakes.get(
-        manifest.bank_fields.epoch,
-    ).?.current;
-    epoch_stakes.stakes.epoch += 1;
-    try manifest.bank_extra.versioned_epoch_stakes.put(
-        fba.allocator(),
-        manifest.bank_fields.epoch + 1,
-        .{ .current = try epoch_stakes.clone(fba.allocator()) },
-    );
+    // NOTE: The manifest has empty `bank_fields.stakes` (the parent stakes cache
+    // does not affect a single mid-epoch block's hash and is dropped by the
+    // fixture generator). Its `versioned_epoch_stakes` carries the current and
+    // next epoch, so `updateEpochStakes` in `trackNewSlots` finds the next epoch
+    // already present and does not recompute a leader schedule from empty stakes.
 
     // init replay
     var replay_state = try dep_stubs.mockedState(
@@ -2390,7 +2377,7 @@ fn testExecuteBlock(allocator: Allocator, config: struct {
         break :tracker_lock ref.state().hash.readCopy().?;
     };
 
-    const expected_slot_hash = sig.core.Hash.parse("4UeCbit4YGY42p9KrDzoD1LL21Vn3htb5N5G9w6L1kUE");
+    const expected_slot_hash = sig.core.Hash.parse("EH3kF42fPEd3FgD86Ubyd4WdYccXMmZ7wx35rFqH1G4d");
 
     try std.testing.expectEqual(expected_slot_hash, actual_slot_hash);
 }

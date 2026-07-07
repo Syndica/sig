@@ -591,9 +591,9 @@ pub const Instruction = union(enum(u32)) {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/programs/vote/src/vote_state/handler.rs#L639-L645
+/// The target version to convert all deserialized vote state into.
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1/programs/vote/src/vote_state/handler.rs#L35
 pub const Version = enum(u32) {
-    v3,
     v4,
 };
 

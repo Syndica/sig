@@ -485,7 +485,7 @@ pub fn parseStakes(
             db_account_data,
             .{},
         );
-        const db_vote_state = try db_versioned_vote_state.convertToVoteState(allocator, null, false);
+        const db_vote_state = try db_versioned_vote_state.convertToVoteState(allocator, null);
         defer db_vote_state.deinit(allocator);
 
         if (!db_vote_state.equals(&cached_vote_state)) return error.InvalidVoteAccount;
