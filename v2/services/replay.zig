@@ -207,10 +207,10 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 continue :task .idle;
             };
 
-            // This is an awful hack, we are treating the first received fec set as our root.
-            // We should instead insert the last fec set of the rooted slot, similarly allocate it
-            // a BlockRef, and call setChildTreeBlockRefs directly after.
-            if (first_slot == null) {
+            // This is an awful hack, we are treating the first received slot-start fec set as our
+            // root. We should instead insert the last fec set of the rooted slot, similarly
+            // allocate it a BlockRef, and call setChildTreeBlockRefs directly after.
+            if (first_slot == null and inserted.id.fec_set_idx == 0) {
                 logger.info().logf("inserting first {f}", .{inserted});
                 std.debug.assert(first_slot == null);
                 first_slot = inserted.id.slot;
@@ -239,6 +239,27 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 std.debug.assert(exec_states[rooted_block_ref.index()].?.finished());
 
                 inserted.block_ref = .init(first_block_ref);
+
+                // NOTE: this is still a hack. We are only propagating the BlockRef from the
+                // synthetic startup root to children that may have arrived before the idx=0 FEC.
+                // The proper fix is to root replay at the last FEC of the rooted slot, then
+                // propagate BlockRefs from there.
+                var maybe_child = if (inserted.child.opt()) |child_id|
+                    child_id.ptr(&forest.pool)
+                else
+                    null;
+                while (maybe_child) |child| {
+                    try setChildTreeBlockRefs(
+                        inserted,
+                        child,
+                        &forest.pool,
+                        rw.block_pool,
+                    );
+                    maybe_child = if (child.sibling.opt()) |sibling_id|
+                        sibling_id.ptr(&forest.pool)
+                    else
+                        null;
+                }
 
                 logger.info().logf("inserted first {f}", .{inserted});
             }
@@ -615,7 +636,7 @@ fn maybeContinueBlockExec(
                 var root = node;
                 while (root.id.fec_set_idx != 0) {
                     // The current node has a BlockRef, therefore it must be possible to reach
-                    // an ancestor with idx=0
+                    // an ancestor with idx=0.
                     root = root.parent.opt().?.ptr(forest_pool);
                 }
 
