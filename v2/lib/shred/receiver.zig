@@ -88,9 +88,9 @@ pub const Receiver = struct {
             if (shred.slot > state.max_slot) return error.ShredTooNew;
 
             // ignore shred with wrong version
-            if (shred.version != network_shred_version) {
-                if (!build_options.debug_skip_shred_checks) return error.ShredVersionMismatch;
-            }
+            if (shred.version != network_shred_version and
+                !build_options.debug_skip_shred_version_check)
+                return error.ShredVersionMismatch;
 
             // reject shreds greater than the max per slot
             // [agave] https://github.com/anza-xyz/agave/blob/ce2b875e7a9587106cb505e14ab769f9356b8238/ledger/src/shred.rs#L772
@@ -195,7 +195,7 @@ pub const Receiver = struct {
             const shred_merkle_root: Hash = blk: {
                 var shred_merkle_root: Hash = undefined;
 
-                if (!build_options.debug_skip_shred_checks) {
+                if (!build_options.debug_skip_shred_sig_verify) {
                     const slot_leader = leader_schedule.get(shred.slot) orelse {
                         logger.warn().logf("slot {} missing?\n", .{shred.slot});
                         return error.UnknownLeader;
