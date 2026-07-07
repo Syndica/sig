@@ -38,54 +38,23 @@ pub const VersionedTransaction = struct {
     /// Inclusive maximum number of top-level instructions per transaction.
     pub const MAX_INSTRUCTIONS: usize = 64;
 
-    /// Total bincode-serialised size in bytes (signatures + message).
-    ///
-    /// Computed analytically (compact-u16 length prefixes + fixed-size
-    /// fields + variable-size payloads) rather than by round-tripping the
-    /// structure through `bincode.write`.
-    pub fn serializedSize(self: VersionedTransaction) usize {
-        var n: usize = 0;
-        n += compactU16Len(self.signatures.items.len);
-        n += 64 * self.signatures.items.len;
-        n += self.message.serializedSize();
-        return n;
-    }
-
-    /// Returns `true` iff the message's static `account_keys` are pairwise
-    /// distinct. Solana rejects transactions whose visible accounts contain
-    /// a duplicate (`AccountLoadedTwice`).
-    ///
-    /// Only the keys carried directly in the message are checked here;
-    /// entries resolved from address-lookup tables are invisible without
-    /// ALUT resolution and must be re-checked once those are loaded.
-    ///
-    /// O(n^2); `account_keys.len ≤ 128` by transaction MTU.
-    ///
-    /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/accounts-db/src/account_locks.rs#L143-L155
-    pub fn validateAccountLocks(self: VersionedTransaction) bool {
-        const keys = switch (self.message) {
-            .legacy => |m| m.account_keys.items,
-            .v0 => |m| m.account_keys.items,
-        };
-        for (0..keys.len - 1) |i| {
-            for (i + 1..keys.len) |j| {
-                if (std.mem.eql(u8, &keys[i].data, &keys[j].data)) return false;
-            }
-        }
-        return true;
-    }
-
-    /// Enumerates the parse-layer structural failures returned by
-    /// `sanitize`. Each variant names exactly one invariant that a
-    /// well-formed transaction must satisfy; see the doc comment on
-    /// `sanitize` for the framing and the checks that are intentionally
-    /// left out.
-    pub const SanitizeError = error{
+    /// Enumerates the structural failures returned by `parseTransaction`.
+    /// Each variant names one invariant of the on-wire encoding; violating
+    /// any means the bytes can't represent a transaction the runtime would
+    /// ever accept.
+    pub const ParseError = error{
+        /// The reader ran out of bytes mid-field. For streamed readers this
+        /// means "need more data"; for slice readers it means the payload
+        /// is truncated.
+        EndOfStream,
         /// `signatures.len == 0` — every transaction must carry at least
         /// the fee payer's signature.
         NoSignatures,
         /// `signatures.len > MAX_SIGNATURES`.
         TooManySignatures,
+        /// Version-prefix byte set (`0x80` bit) but the encoded version is
+        /// not `0`. Only legacy and v0 are recognised.
+        InvalidVersion,
         /// `signatures.len != header.num_required_signatures` — the outer
         /// signature vector must exactly match the message header.
         SignatureCountMismatch,
@@ -127,106 +96,191 @@ pub const VersionedTransaction = struct {
         /// An instruction references an account index that is beyond the
         /// combined `account_keys.len + Σ ALT-loaded` range.
         AccountIndexOutOfBounds,
+        /// The parsed transaction consumed more than `MAX_BYTES` — the
+        /// solana packet MTU — from the source.
+        TransactionTooLarge,
+        /// Two static `account_keys` entries are byte-identical. Solana
+        /// rejects these as `AccountLoadedTwice`; agave enforces it in
+        /// `validate_account_locks`, firedancer in `fd_chkdup_check`.
+        AccountLoadedTwice,
+        /// A `short_u16` count contained a non-canonical zero continuation
+        /// byte (aliasing).
+        AliasEncoding,
+        /// A `short_u16` count set the continuation bit on the third byte,
+        /// which would require a fourth byte the encoding doesn't have.
+        ByteThreeContinues,
+        /// A `short_u16` count decoded to a value that overflows `u16`.
+        Overflow,
     };
 
-    /// Returns success iff the message and signature vector are well-formed
-    /// at the parse layer; otherwise returns the specific `SanitizeError`
-    /// variant naming the violated invariant.
+    /// Structural parse of the on-wire transaction encoding, driven by the
+    /// caller-supplied byte source. Enforces every framing and cross-field
+    /// invariant a well-formed transaction must satisfy and returns the
+    /// number of bytes consumed on success. The parse is byte-only: it
+    /// walks and skips, it never materialises a typed value; the only
+    /// bytes it inspects beyond framing are the 32-byte static account
+    /// keys, which it compares pairwise to enforce `AccountLoadedTwice`.
     ///
-    /// Each invariant is a structural constraint of the Solana wire
-    /// format: violating it means the bytes can't represent a transaction
-    /// the runtime would ever accept — the signature count disagrees with
-    /// the header, an instruction's program index points at the fee payer
-    /// or off the end of the account vector, ALT bookkeeping overflows
-    /// the static caps, etc. Rejecting these here prevents malformed
-    /// transactions from reaching account-locking or message resolution
-    /// and keeps later stages from having to defend against shapes the
-    /// protocol forbids.
+    /// See `ParseError` for the individual failure modes.
     ///
-    /// Two related checks are intentionally not part of this method:
+    /// The `reader` parameter is duck-typed, matching this contract:
     ///
-    ///   * MTU (`serializedSize ≤ MAX_BYTES`). Owned by the caller and
-    ///     usually enforced at the packet boundary; doing it again here
-    ///     would just be defensive.
-    ///   * Duplicate static account keys. Owned by `validateAccountLocks`;
-    ///     the protocol treats `AccountLoadedTwice` as an account-locking
-    ///     concern, not a parse error.
+    ///   - fn readByte(self: *Reader) error{EndOfStream}!u8
+    ///   - fn readSlice(self: *Reader, out: []u8) error{EndOfStream}!void
+    ///   - fn skipBytes(self: *Reader, n: usize) error{EndOfStream}!void
+    ///   - fn bytesConsumed(self: *const Reader) usize
     ///
-    /// See `SanitizeError` for the individual failure modes.
+    /// `SliceReader` below is the flat-bytes adapter; the merkle-linked
+    /// stream walker in `sig/v2/services/replay.zig` is the other one.
     ///
-    /// [firedancer] https://github.com/firedancer-io/firedancer/blob/main/src/ballet/txn/fd_txn_parse.c
-    /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/transaction-view/src/sanitize.rs
-    pub fn sanitize(self: VersionedTransaction) SanitizeError!void {
-        // `header`, `account_keys`, and `instructions` are field-identical
-        // across both message variants; only ALTs are v0-only.
-        const header: MessageHeader, //
-        const account_keys: []const Pubkey, //
-        const instructions: []const CompiledInstruction //
-        = switch (self.message) {
-            inline else => |m| .{ m.header, m.account_keys.items, m.instructions.items },
-        };
-        const address_table_lookups: []const AddressLookup = switch (self.message) {
-            .legacy => &.{},
-            .v0 => |m| m.address_table_lookups.items,
-        };
+    /// [firedancer] https://github.com/firedancer-io/firedancer/blob/94ed904053082d7bf20267c3761e56a1f6c5aa3a/src/ballet/txn/fd_txn_parse.c
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/transaction%40v4.1.1/transaction/src/versioned/mod.rs#L137
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/message%40v4.1.1/message/src/versions/v0/mod.rs#L116
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/message%40v4.1.1/message/src/legacy.rs#L140
+    pub fn parse(reader: anytype) ParseError!usize {
+        const start = reader.bytesConsumed();
 
-        const sig_cnt: usize = self.signatures.items.len;
-        const acct_cnt: usize = account_keys.len;
-        const req_sigs: usize = header.num_required_signatures;
-        const ro_signed: usize = header.num_readonly_signed_accounts;
-        const ro_unsigned: usize = header.num_readonly_unsigned_accounts;
-
+        const sig_cnt = try readShortU16(reader);
         if (sig_cnt < 1) return error.NoSignatures;
         if (sig_cnt > MAX_SIGNATURES) return error.TooManySignatures;
-        if (sig_cnt != req_sigs) return error.SignatureCountMismatch;
-        if (ro_signed >= req_sigs) return error.FeePayerNotWritable;
-        if (acct_cnt < req_sigs) return error.NotEnoughAccountKeys;
-        if (acct_cnt > MAX_ACCOUNT_ADDRESSES) return error.TooManyAccountKeys;
-        if (req_sigs + ro_unsigned > acct_cnt) return error.ReadonlyRegionOverflowsAccountKeys;
-        if (instructions.len > MAX_INSTRUCTIONS) return error.TooManyInstructions;
+        try reader.skipBytes(64 * @as(usize, sig_cnt));
 
+        const first = try reader.readByte();
+        const legacy = (first & 0x80) == 0;
+        const num_req_sig: u8 = if (legacy) first else blk: {
+            if ((first & 0x7f) != 0) return error.InvalidVersion;
+            break :blk try reader.readByte();
+        };
+        if (sig_cnt != num_req_sig) return error.SignatureCountMismatch;
+
+        const ro_signed: u8 = try reader.readByte();
+        const ro_unsigned: u8 = try reader.readByte();
+        if (ro_signed >= num_req_sig) return error.FeePayerNotWritable;
+
+        const acct_cnt = try readShortU16(reader);
+        if (acct_cnt < num_req_sig) return error.NotEnoughAccountKeys;
+        if (acct_cnt > MAX_ACCOUNT_ADDRESSES) return error.TooManyAccountKeys;
+        if (@as(usize, num_req_sig) + ro_unsigned > acct_cnt)
+            return error.ReadonlyRegionOverflowsAccountKeys;
+
+        // Read each static pubkey and check byte-wise against every
+        // earlier one — O(n²), but `acct_cnt ≤ 128` bounds it. Folds in
+        // what agave's harness gates via `validate_account_locks` and
+        // firedancer's `fd_chkdup_check` (bypass-ALUT mode).
+        // NOTE: Consider moving this check to the runtime where ALTs have been resolved.
+        // Running here drops invalid transactions earlier in the pipeline, but the condition
+        // will be rechecked in the runtime once all ALTs have been resolved. If removed we
+        // need to ensure transactions violating this constraint are still rejected by the
+        // shred parse harness for conformance.
+        var static_keys: [MAX_ACCOUNT_ADDRESSES][32]u8 = undefined;
+        for (0..acct_cnt) |i| {
+            try reader.readSlice(&static_keys[i]);
+            for (0..i) |j| {
+                if (std.mem.eql(u8, &static_keys[i], &static_keys[j]))
+                    return error.AccountLoadedTwice;
+            }
+        }
+        try reader.skipBytes(32); // recent_blockhash
+
+        const ix_cnt = try readShortU16(reader);
+        if (ix_cnt > MAX_INSTRUCTIONS) return error.TooManyInstructions;
         // Any instruction needs both a fee payer and a program (which
         // can't be the fee payer per `InvalidProgramIdIndex`), so
         // `account_keys` must have at least 2.
-        if (instructions.len > 0 and acct_cnt < 2) return error.MissingProgramAccount;
+        if (ix_cnt > 0 and acct_cnt < 2) return error.MissingProgramAccount;
 
         // Per-instruction: `program_id_index` is a static account but not
-        // the fee payer. Also collect the max account index referenced,
-        // used for `AccountIndexOutOfBounds` below.
-        var max_acct_idx: u8 = 0;
-        for (instructions) |ix| {
-            const pid: usize = ix.program_id_index;
+        // the fee payer. Track the largest referenced account index for
+        // `AccountIndexOutOfBounds` below.
+        var max_acct: u8 = 0;
+        for (0..ix_cnt) |_| {
+            const pid = try reader.readByte();
             if (pid == 0 or pid >= acct_cnt) return error.InvalidProgramIdIndex;
-            for (ix.accounts.items) |a| {
-                max_acct_idx = @max(max_acct_idx, a);
+            const ax_cnt = try readShortU16(reader);
+            for (0..ax_cnt) |_| max_acct = @max(max_acct, try reader.readByte());
+            const data_len = try readShortU16(reader);
+            try reader.skipBytes(data_len);
+        }
+
+        // v0 ALTs.
+        var alt_loaded: usize = 0;
+        if (!legacy) {
+            const alt_cnt = try readShortU16(reader);
+            if (alt_cnt > V0Message.MAX_ADDR_TABLE_LOOKUPS)
+                return error.TooManyAddressTableLookups;
+            // Subtraction is safe: `acct_cnt` was bounded above.
+            const alt_headroom: usize = MAX_ACCOUNT_ADDRESSES - acct_cnt;
+            for (0..alt_cnt) |_| {
+                try reader.skipBytes(32); // table pubkey
+                const w = try readShortU16(reader);
+                if (w > alt_headroom) return error.AddressTableLookupOverflow;
+                try reader.skipBytes(w);
+                const r = try readShortU16(reader);
+                if (r > alt_headroom) return error.AddressTableLookupOverflow;
+                try reader.skipBytes(r);
+                if (w + r < 1) return error.EmptyAddressTableLookup;
+                alt_loaded += @as(usize, w) + @as(usize, r);
             }
         }
 
-        if (address_table_lookups.len > V0Message.MAX_ADDR_TABLE_LOOKUPS)
-            return error.TooManyAddressTableLookups;
-
-        // Per-ALT bounds + accumulate total ALT-loaded address count for
-        // the total-addresses and index-range checks below. Subtraction
-        // `MAX_ACCOUNT_ADDRESSES - acct_cnt` is safe since `acct_cnt` was
-        // bounded above.
-        const alt_headroom: usize = MAX_ACCOUNT_ADDRESSES - acct_cnt;
-        var alt_loaded: usize = 0;
-        for (address_table_lookups) |alt| {
-            const w = alt.writable_indexes.items.len;
-            const r = alt.readonly_indexes.items.len;
-            if (w + r < 1) return error.EmptyAddressTableLookup;
-            if (w > alt_headroom or r > alt_headroom) return error.AddressTableLookupOverflow;
-            alt_loaded += w + r;
-        }
-
-        if (acct_cnt + alt_loaded > MAX_ACCOUNT_ADDRESSES) return error.TooManyTotalAddresses;
+        if (acct_cnt + alt_loaded > MAX_ACCOUNT_ADDRESSES)
+            return error.TooManyTotalAddresses;
 
         // Every instruction account index must reference either a static
         // account or one of the ALT-loaded accounts. Program indices are
         // not included here because they were already checked against
         // `acct_cnt` above (programs can never come from a lookup table;
         // see https://github.com/solana-labs/solana/issues/25034).
-        if (max_acct_idx >= acct_cnt + alt_loaded) return error.AccountIndexOutOfBounds;
+        if (max_acct >= acct_cnt + alt_loaded) return error.AccountIndexOutOfBounds;
+
+        const consumed = reader.bytesConsumed() - start;
+        if (consumed > MAX_BYTES) return error.TransactionTooLarge;
+
+        return consumed;
+    }
+};
+
+/// Reads a `short_u16` (compact-u16) count from `reader`, rejecting
+/// non-canonical encodings and values that overflow `u16`. Shared between
+/// `parseTransaction` and the merkle-linked stream walker in replay.zig,
+/// so both agree on framing rejects.
+fn readShortU16(reader: anytype) VersionedTransaction.ParseError!u16 {
+    var val: u32 = 0;
+    for (0..3) |nth_byte| {
+        const b = try reader.readByte();
+        if (b == 0 and nth_byte != 0) return error.AliasEncoding;
+        val |= @as(u32, b & 0x7f) << @intCast(nth_byte * 7);
+        if (b & 0x80 == 0) return std.math.cast(u16, val) orelse return error.Overflow;
+        if (nth_byte == 2) return error.ByteThreeContinues;
+    }
+    unreachable;
+}
+
+/// Flat-slice adapter for `parseTransaction`. Wraps a `[]const u8` and
+/// tracks position; `bytesConsumed` returns the current offset.
+pub const SliceReader = struct {
+    bytes: []const u8,
+    pos: usize = 0,
+
+    pub fn readByte(self: *SliceReader) error{EndOfStream}!u8 {
+        if (self.pos >= self.bytes.len) return error.EndOfStream;
+        defer self.pos += 1;
+        return self.bytes[self.pos];
+    }
+
+    pub fn readSlice(self: *SliceReader, out: []u8) error{EndOfStream}!void {
+        if (out.len > self.bytes.len - self.pos) return error.EndOfStream;
+        @memcpy(out, self.bytes[self.pos..][0..out.len]);
+        self.pos += out.len;
+    }
+
+    pub fn skipBytes(self: *SliceReader, n: usize) error{EndOfStream}!void {
+        if (n > self.bytes.len - self.pos) return error.EndOfStream;
+        self.pos += n;
+    }
+
+    pub fn bytesConsumed(self: *const SliceReader) usize {
+        return self.pos;
     }
 };
 
@@ -302,15 +356,6 @@ pub const VersionedMessage = union(enum) {
             },
         }
     }
-
-    /// Total bincode-serialised size of the message in bytes, including the
-    /// `0x80` version-prefix byte for v0 messages.
-    pub fn serializedSize(self: VersionedMessage) usize {
-        return switch (self) {
-            .legacy => |m| m.serializedSize(),
-            .v0 => |m| 1 + m.serializedSize(),
-        };
-    }
 };
 
 pub const LegacyMessage = struct {
@@ -318,15 +363,6 @@ pub const LegacyMessage = struct {
     account_keys: bincode.ShortVec(Pubkey),
     recent_blockhash: Hash,
     instructions: bincode.ShortVec(CompiledInstruction),
-
-    pub fn serializedSize(self: LegacyMessage) usize {
-        var n: usize = 3; // MessageHeader (3 u8 fields)
-        n += compactU16Len(self.account_keys.items.len) + 32 * self.account_keys.items.len;
-        n += 32; // recent_blockhash
-        n += compactU16Len(self.instructions.items.len);
-        for (self.instructions.items) |ix| n += ix.serializedSize();
-        return n;
-    }
 };
 
 pub const V0Message = struct {
@@ -338,19 +374,6 @@ pub const V0Message = struct {
 
     /// Inclusive maximum number of address-table-lookup entries.
     pub const MAX_ADDR_TABLE_LOOKUPS: usize = 127;
-
-    /// Size of the v0 message body, *excluding* the `0x80` version-prefix
-    /// byte (the prefix is owned by `VersionedMessage.serializedSize`).
-    pub fn serializedSize(self: V0Message) usize {
-        var n: usize = 3; // MessageHeader
-        n += compactU16Len(self.account_keys.items.len) + 32 * self.account_keys.items.len;
-        n += 32; // recent_blockhash
-        n += compactU16Len(self.instructions.items.len);
-        for (self.instructions.items) |ix| n += ix.serializedSize();
-        n += compactU16Len(self.address_table_lookups.items.len);
-        for (self.address_table_lookups.items) |alt| n += alt.serializedSize();
-        return n;
-    }
 };
 
 pub const MessageHeader = struct {
@@ -363,42 +386,23 @@ pub const CompiledInstruction = struct {
     program_id_index: u8,
     accounts: bincode.ShortVec(u8),
     data: bincode.ShortVec(u8),
-
-    pub fn serializedSize(self: CompiledInstruction) usize {
-        var n: usize = 1; // program_id_index
-        n += compactU16Len(self.accounts.items.len) + self.accounts.items.len;
-        n += compactU16Len(self.data.items.len) + self.data.items.len;
-        return n;
-    }
 };
 
 pub const AddressLookup = struct {
     account_key: Pubkey,
     writable_indexes: bincode.ShortVec(u8),
     readonly_indexes: bincode.ShortVec(u8),
-
-    pub fn serializedSize(self: AddressLookup) usize {
-        var n: usize = 32; // account_key (Pubkey)
-        n += compactU16Len(self.writable_indexes.items.len) + self.writable_indexes.items.len;
-        n += compactU16Len(self.readonly_indexes.items.len) + self.readonly_indexes.items.len;
-        return n;
-    }
 };
 
-/// Byte length of the compact-u16 (short-vec) length prefix for `n`.
-/// Continuation-bit scheme: < 0x80 → 1 byte, < 0x4000 → 2, else 3.
-fn compactU16Len(n: usize) usize {
-    if (n < 0x80) return 1;
-    if (n < 0x4000) return 2;
-    return 3;
-}
-
 // ---------------------------------------------------------------------------
-// Tests for `VersionedTransaction.sanitize`.
+// Tests for `VersionedTransaction.parseTransaction`.
 //
-// Each case names the `SanitizeError` variant it exercises and asserts that
-// exact error is returned. The shared `Builder` keeps test bodies focused on
-// the single field they are exercising.
+// Each case names the `ParseError` variant it exercises and asserts that
+// exact error is returned. The shared `Builder` produces a typed
+// `VersionedTransaction`, which is serialised via `bincode.write` and fed
+// to `parseTransaction` through a `SliceReader`. Building the typed value
+// first lets each test target one field cleanly; the serialised bytes are
+// what the parser actually inspects.
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -508,46 +512,60 @@ const Builder = struct {
         try b.pushInstr(1, &.{});
         return b;
     }
+
+    /// Serialise this Builder's typed value as `kind` via bincode, then
+    /// feed the bytes through `parseTransaction`. Returns the bytes-consumed
+    /// count on success.
+    fn parse(self: *Builder, kind: std.meta.Tag(VersionedMessage)) !usize {
+        // Enough headroom for every negative test (largest is 129 static
+        // keys + 65 empty instructions + a handful of MAX-sized ALTs, all
+        // well under 32 KiB).
+        var buf: [32 * 1024]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(&buf);
+        try bincode.write(&writer, self.build(kind));
+        var reader: SliceReader = .{ .bytes = writer.buffered() };
+        return VersionedTransaction.parse(&reader);
+    }
 };
 
-test "sanitize: baseline legacy txn passes" {
+test "parseTransaction: baseline legacy txn passes" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
-    try b.build(.legacy).sanitize();
+    _ = try b.parse(.legacy);
 }
 
-test "sanitize: NoSignatures" {
+test "parseTransaction: NoSignatures" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushKeys(1);
     b.header.num_required_signatures = 0;
-    try testing.expectError(error.NoSignatures, b.build(.legacy).sanitize());
+    try testing.expectError(error.NoSignatures, b.parse(.legacy));
 }
 
-test "sanitize: TooManySignatures" {
+test "parseTransaction: TooManySignatures" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(VersionedTransaction.MAX_SIGNATURES + 1);
     try b.pushKeys(VersionedTransaction.MAX_ACCOUNT_ADDRESSES);
     b.header.num_required_signatures = @intCast(VersionedTransaction.MAX_SIGNATURES + 1);
-    try testing.expectError(error.TooManySignatures, b.build(.legacy).sanitize());
+    try testing.expectError(error.TooManySignatures, b.parse(.legacy));
 }
 
-test "sanitize: SignatureCountMismatch" {
+test "parseTransaction: SignatureCountMismatch" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     try b.pushSigs(1); // now 2 signatures, header still says 1
-    try testing.expectError(error.SignatureCountMismatch, b.build(.legacy).sanitize());
+    try testing.expectError(error.SignatureCountMismatch, b.parse(.legacy));
 }
 
-test "sanitize: FeePayerNotWritable" {
+test "parseTransaction: FeePayerNotWritable" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     b.header.num_readonly_signed_accounts = 1; // == num_required_signatures
-    try testing.expectError(error.FeePayerNotWritable, b.build(.legacy).sanitize());
+    try testing.expectError(error.FeePayerNotWritable, b.parse(.legacy));
 }
 
-test "sanitize: NotEnoughAccountKeys" {
+test "parseTransaction: NotEnoughAccountKeys" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     try b.pushSigs(1);
@@ -563,10 +581,10 @@ test "sanitize: NotEnoughAccountKeys" {
     b.allocator.free(b.instructions.items[0].accounts.items);
     b.allocator.free(b.instructions.items[0].data.items);
     b.instructions.shrinkRetainingCapacity(0);
-    try testing.expectError(error.NotEnoughAccountKeys, b.build(.legacy).sanitize());
+    try testing.expectError(error.NotEnoughAccountKeys, b.parse(.legacy));
 }
 
-test "sanitize: TooManyAccountKeys" {
+test "parseTransaction: TooManyAccountKeys" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(1);
@@ -578,49 +596,52 @@ test "sanitize: TooManyAccountKeys" {
         p.data[31] = i % 255;
         try b.account_keys.append(b.allocator, p);
     }
-    try testing.expectError(error.TooManyAccountKeys, b.build(.legacy).sanitize());
+    try testing.expectError(error.TooManyAccountKeys, b.parse(.legacy));
 }
 
-test "sanitize: ReadonlyRegionOverflowsAccountKeys" {
+test "parseTransaction: ReadonlyRegionOverflowsAccountKeys" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     b.header.num_readonly_unsigned_accounts = 2; // 1 + 2 = 3 > 2
-    try testing.expectError(error.ReadonlyRegionOverflowsAccountKeys, b.build(.legacy).sanitize());
+    try testing.expectError(
+        error.ReadonlyRegionOverflowsAccountKeys,
+        b.parse(.legacy),
+    );
 }
 
-test "sanitize: TooManyInstructions" {
+test "parseTransaction: TooManyInstructions" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     var i: usize = 0;
     while (i < VersionedTransaction.MAX_INSTRUCTIONS) : (i += 1) try b.pushInstr(1, &.{}); // total: 1 baseline + MAX
-    try testing.expectError(error.TooManyInstructions, b.build(.legacy).sanitize());
+    try testing.expectError(error.TooManyInstructions, b.parse(.legacy));
 }
 
-test "sanitize: MissingProgramAccount" {
+test "parseTransaction: MissingProgramAccount" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(1);
     try b.pushKeys(1);
     b.header.num_readonly_unsigned_accounts = 0;
     try b.pushInstr(0, &.{}); // any pid is invalid here; MissingProgramAccount fires first
-    try testing.expectError(error.MissingProgramAccount, b.build(.legacy).sanitize());
+    try testing.expectError(error.MissingProgramAccount, b.parse(.legacy));
 }
 
-test "sanitize: InvalidProgramIdIndex (pid == 0)" {
+test "parseTransaction: InvalidProgramIdIndex (pid == 0)" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     b.instructions.items[0].program_id_index = 0;
-    try testing.expectError(error.InvalidProgramIdIndex, b.build(.legacy).sanitize());
+    try testing.expectError(error.InvalidProgramIdIndex, b.parse(.legacy));
 }
 
-test "sanitize: InvalidProgramIdIndex (pid >= account_keys.len)" {
+test "parseTransaction: InvalidProgramIdIndex (pid >= account_keys.len)" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     b.instructions.items[0].program_id_index = 2; // account_keys.len == 2
-    try testing.expectError(error.InvalidProgramIdIndex, b.build(.legacy).sanitize());
+    try testing.expectError(error.InvalidProgramIdIndex, b.parse(.legacy));
 }
 
-test "sanitize: TooManyAddressTableLookups" {
+test "parseTransaction: TooManyAddressTableLookups" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(1);
@@ -628,20 +649,20 @@ test "sanitize: TooManyAddressTableLookups" {
     try b.pushInstr(1, &.{});
     var i: usize = 0;
     while (i < V0Message.MAX_ADDR_TABLE_LOOKUPS + 1) : (i += 1) try b.pushAlt(&.{0}, &.{});
-    try testing.expectError(error.TooManyAddressTableLookups, b.build(.v0).sanitize());
+    try testing.expectError(error.TooManyAddressTableLookups, b.parse(.v0));
 }
 
-test "sanitize: EmptyAddressTableLookup" {
+test "parseTransaction: EmptyAddressTableLookup" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(1);
     try b.pushKeys(2);
     try b.pushInstr(1, &.{});
     try b.pushAlt(&.{}, &.{});
-    try testing.expectError(error.EmptyAddressTableLookup, b.build(.v0).sanitize());
+    try testing.expectError(error.EmptyAddressTableLookup, b.parse(.v0));
 }
 
-test "sanitize: AddressTableLookupOverflow" {
+test "parseTransaction: AddressTableLookupOverflow" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(1);
@@ -651,10 +672,10 @@ test "sanitize: AddressTableLookupOverflow" {
     var writable: [127]u8 = undefined;
     @memset(&writable, 0);
     try b.pushAlt(&writable, &.{});
-    try testing.expectError(error.AddressTableLookupOverflow, b.build(.v0).sanitize());
+    try testing.expectError(error.AddressTableLookupOverflow, b.parse(.v0));
 }
 
-test "sanitize: TooManyTotalAddresses" {
+test "parseTransaction: TooManyTotalAddresses" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(1);
@@ -666,10 +687,10 @@ test "sanitize: TooManyTotalAddresses" {
     @memset(&slot, 0);
     try b.pushAlt(&slot, &.{});
     try b.pushAlt(&slot, &.{});
-    try testing.expectError(error.TooManyTotalAddresses, b.build(.v0).sanitize());
+    try testing.expectError(error.TooManyTotalAddresses, b.parse(.v0));
 }
 
-test "sanitize: AccountIndexOutOfBounds (no ALT)" {
+test "parseTransaction: AccountIndexOutOfBounds (no ALT)" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     // Replace the empty accounts slice with one that references index 2
@@ -677,10 +698,10 @@ test "sanitize: AccountIndexOutOfBounds (no ALT)" {
     b.allocator.free(b.instructions.items[0].accounts.items);
     const accts = try b.allocator.dupe(u8, &.{2});
     b.instructions.items[0].accounts = .{ .items = accts };
-    try testing.expectError(error.AccountIndexOutOfBounds, b.build(.legacy).sanitize());
+    try testing.expectError(error.AccountIndexOutOfBounds, b.parse(.legacy));
 }
 
-test "sanitize: instr account index reachable via ALT accepted" {
+test "parseTransaction: instr account index reachable via ALT accepted" {
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
     try b.pushSigs(1);
@@ -689,14 +710,51 @@ test "sanitize: instr account index reachable via ALT accepted" {
     // exactly one writable account, expanding the addressable range to 3.
     try b.pushInstr(1, &.{2});
     try b.pushAlt(&.{0}, &.{});
-    try b.build(.v0).sanitize();
+    _ = try b.parse(.v0);
 }
 
-test "sanitize: duplicate account keys are NOT rejected (validateAccountLocks owns that)" {
+test "parseTransaction: AccountLoadedTwice" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     b.account_keys.items[1] = b.account_keys.items[0]; // duplicate
-    try b.build(.legacy).sanitize();
+    try testing.expectError(error.AccountLoadedTwice, b.parse(.legacy));
+}
+
+test "parseTransaction: TransactionTooLarge" {
+    var b: Builder = .{ .allocator = testing.allocator };
+    defer b.deinit();
+    try b.pushSigs(1);
+    // 128 static keys is at the `MAX_ACCOUNT_ADDRESSES` cap — the largest
+    // static count that survives every earlier invariant, and the
+    // 32 * 128 = 4096 bytes of pubkey payload already blows past the
+    // 1232-byte MTU. No other check fires first.
+    try b.pushKeys(128);
+    try b.pushInstr(1, &.{});
+    try testing.expectError(error.TransactionTooLarge, b.parse(.legacy));
+}
+
+test "parseTransaction: InvalidVersion" {
+    // Assemble a minimal v0-shaped payload but with the version-prefix
+    // byte's low bits != 0, which is neither legacy nor a recognised
+    // future version.
+    var buf: [256]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try w.writeByte(1); // sig_cnt = 1
+    try w.writeAll(&[_]u8{0} ** 64); // one signature
+    try w.writeByte(0x81); // version prefix set + version = 1 (unrecognised)
+    try w.writeByte(1); // num_required_signatures
+    var reader: SliceReader = .{ .bytes = w.buffered() };
+    try testing.expectError(error.InvalidVersion, VersionedTransaction.parse(&reader));
+}
+
+test "parseTransaction: EndOfStream on truncated payload" {
+    // Header says 1 signature but the buffer stops before the signature bytes.
+    var buf: [8]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try w.writeByte(1); // sig_cnt = 1
+    try w.writeAll(&[_]u8{0} ** 4); // only 4 of the 64 signature bytes
+    var reader: SliceReader = .{ .bytes = w.buffered() };
+    try testing.expectError(error.EndOfStream, VersionedTransaction.parse(&reader));
 }
 
 test "VersionedTransaction: bincode round trip" {
@@ -710,8 +768,6 @@ test "VersionedTransaction: bincode round trip" {
         try bincode.write(&writer, original);
         break :blk writer.buffered();
     };
-
-    try testing.expectEqual(original.serializedSize(), original_serialized.len);
 
     const decoded = blk: {
         var fba_buf: [4096]u8 = undefined;
