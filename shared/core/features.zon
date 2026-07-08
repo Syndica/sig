@@ -1596,7 +1596,7 @@
         .name = "static_instruction_limit",
         .pubkey = "64ixypL1HPu8WtJhNSMb9mSgfFaJvsANuRkTbHyuLfnx",
         .description = "SIMD-0160: static instruction limit",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "vote_state_v4",
