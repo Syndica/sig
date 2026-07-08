@@ -1177,7 +1177,7 @@
         .name = "enable_tower_sync_ix",
         .pubkey = "tSynMCspg4xFiCj1v3TDb4c7crMR5tSBhLz4sF7rrNA",
         .description = "Enable tower sync vote instruction",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "deprecate_unused_legacy_vote_plumbing",
