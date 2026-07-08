@@ -56,14 +56,6 @@ def main():
         action="store_true",
         help="Run with the expectation from the generated fixtures instead of vectors.",
     )
-    parser.add_argument(
-        "--version",
-        choices=["v1", "v2"],
-        default=os.environ.get("SIG_CONFORMANCE_VERSION", "v1"),
-        help="Which conformance backend's denylists to apply. Must match the "
-        "`-Dversion` used to build EXEC_LIB. Defaults to SIG_CONFORMANCE_VERSION "
-        "env var if set, otherwise v1.",
-    )
 
     config = parser.parse_args()
 
@@ -73,7 +65,7 @@ def main():
         for fixture in config.fixtures:
             results.append(run_test(fixture, config, len(fixture)))
     else:
-        TESTS = discover_tests(config.version)
+        TESTS = discover_tests()
         line_length = max(len(test) for test in TESTS)
         for test in TESTS:
             if config.filter and config.filter not in test:
@@ -102,7 +94,7 @@ def main():
             failures.append(os.path.join(result["name"], fixture + ".fix\n"))
     failures.sort()
     
-    with open(f"env/test-outputs/misc_failures.{config.version}.txt", "w") as f:
+    with open("env/test-outputs/misc_failures.txt", "w") as f:
         f.writelines(failures)
 
     print(f"\nDetailed test results saved to env/test-outputs/\n")
@@ -113,12 +105,12 @@ def path(path):
     return os.path.join(conformance_dir, path)
 
 
-def load_excluded(version):
-    """Parse scripts/unimplemented_harnesses.<version>.txt. Skips blank lines and `#` comment
-    lines (with optional leading whitespace); otherwise uses each line verbatim
+def load_excluded():
+    """Parse scripts/unimplemented_harnesses.txt. Skips blank lines and `#` comment lines
+    (with optional leading whitespace); otherwise uses each line verbatim
     as a path prefix."""
     entries = []
-    with open(path(f"scripts/unimplemented_harnesses.{version}.txt")) as f:
+    with open(path("scripts/unimplemented_harnesses.txt")) as f:
         for line in f:
             line = line.rstrip("\n")
             if re.match(r"^\s*(#|$)", line):
@@ -127,11 +119,11 @@ def load_excluded(version):
     return entries
 
 
-def discover_tests(version):
+def discover_tests():
     """Find unique parent directories of all `.fix` files in env/test-vectors/,
-    minus any directory excluded by scripts/unimplemented_harnesses.<version>.txt
-    (matched at directory boundaries)."""
-    excluded = load_excluded(version)
+    minus any directory excluded by scripts/unimplemented_harnesses.txt (matched at directory
+    boundaries)."""
+    excluded = load_excluded()
     root = path("env/test-vectors")
     dirs = set()
     for dirpath, _dirnames, filenames in os.walk(root, followlinks=True):

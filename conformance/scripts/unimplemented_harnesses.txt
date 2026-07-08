@@ -1,0 +1,13 @@
+# Test-vector directories to skip when running conformance fixtures.
+#
+# Used by both scripts/ci-run.sh and run.py as the single source of truth for
+# which fixture categories are NOT supported by the sig conformance runner.
+# Paths are relative to env/test-vectors/. Any fixture whose path equals an
+# entry below or lives under one (matched at a directory boundary) is skipped.
+#
+# scripts/misc_failures.txt is a separate, file-level CI denylist for individual
+# `.fix` files that are known to fail.
+
+# Top-level categories not implemented by the sig runner.
+block
+cost

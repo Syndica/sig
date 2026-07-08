@@ -24,16 +24,6 @@ pub fn build(b: *Build) void {
             "target lacks AVX-512.",
     ) orelse (optimize == .Debug);
 
-    // `-Dversion` picks one root per build because v1 and v2 share several
-    // sources (tracy, zstd, features.zon, ...) and Zig 0.15 rejects one
-    // source file rooting two modules in a single compilation.
-    const ConformanceVersion = enum { v1, v2 };
-    const version = b.option(
-        ConformanceVersion,
-        "version",
-        "Which conformance backend to compile into libsolfuzz_sig: v1 or v2.",
-    ) orelse .v1;
-
     // Logs are on by default; pass `-Ddisable-feature-status-logs` to silence
     // them during noisy full fixture runs.
     const log_feature_status = !(b.option(
@@ -89,45 +79,21 @@ pub fn build(b: *Build) void {
 
     const common_imports = [_]Build.Module.Import{
         .{ .name = "sig", .module = sig_mod },
-        .{ .name = "protobuf", .module = pb_mod },
-        .{ .name = "build-options", .module = build_options.createModule() },
-    };
-
-    // Exposed by name because `src/proto/` lives outside the v2 module root.
-    const proto_mod = b.createModule(.{
-        .root_source_file = b.path("src/proto/org/solana/sealevel/v1.pb.zig"),
-        .imports = &.{
-            .{ .name = "protobuf", .module = pb_mod },
-        },
-    });
-
-    const v2_imports = [_]Build.Module.Import{
         .{ .name = "sig_v2", .module = sig_v2_mod },
         .{ .name = "protobuf", .module = pb_mod },
-        .{ .name = "proto", .module = proto_mod },
         .{ .name = "build-options", .module = build_options.createModule() },
     };
 
     const solfuzz_sig_lib = b.addLibrary(.{
         .name = "solfuzz_sig",
         .linkage = .dynamic,
-        .root_module = b.createModule(switch (version) {
-            .v1 => .{
-                .root_source_file = b.path("src/lib.zig"),
-                .target = target,
-                .optimize = optimize,
-                .omit_frame_pointer = false,
-                .fuzz = enable_fuzz,
-                .imports = &common_imports,
-            },
-            .v2 => .{
-                .root_source_file = b.path("src/v2/lib.zig"),
-                .target = target,
-                .optimize = optimize,
-                .omit_frame_pointer = false,
-                .fuzz = enable_fuzz,
-                .imports = &v2_imports,
-            },
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/lib.zig"),
+            .target = target,
+            .optimize = optimize,
+            .omit_frame_pointer = false,
+            .fuzz = enable_fuzz,
+            .imports = &common_imports,
         }),
     });
     // Self-hosted backend hits issues in the python test suite and can't
@@ -140,32 +106,6 @@ pub fn build(b: *Build) void {
         const solfuzz_sig_install = b.addInstallArtifact(solfuzz_sig_lib, .{});
         solfuzz_sig_step.dependOn(&solfuzz_sig_install.step);
         install_step.dependOn(&solfuzz_sig_install.step);
-    }
-
-    // v2 unit tests run under `zig build test` regardless of `-Dversion`.
-    {
-        const v2_test_exe = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/v2/lib.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &v2_imports,
-            }),
-            .filters = filters,
-        });
-        v2_test_exe.use_llvm = true;
-        test_step.dependOn(&v2_test_exe.step);
-        install_step.dependOn(&v2_test_exe.step);
-
-        if (bin_install) {
-            const v2_test_install = b.addInstallArtifact(v2_test_exe, .{});
-            test_step.dependOn(&v2_test_install.step);
-            install_step.dependOn(&v2_test_install.step);
-        }
-        if (bin_run) {
-            const v2_test_run = b.addRunArtifact(v2_test_exe);
-            test_step.dependOn(&v2_test_run.step);
-        }
     }
 
     const exe = b.addExecutable(.{
@@ -233,6 +173,8 @@ pub fn build(b: *Build) void {
         }),
         .filters = filters,
     });
+    // The self-hosted backend can't lower sig_v2's AVX-512 vector code.
+    test_exe.use_llvm = true;
     test_step.dependOn(&test_exe.step);
     install_step.dependOn(&test_exe.step);
 

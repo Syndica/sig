@@ -20,7 +20,7 @@
 
 const std = @import("std");
 
-const pb = @import("proto");
+const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
 const sig_v2 = @import("sig_v2");
 
 const Allocator = std.mem.Allocator;
