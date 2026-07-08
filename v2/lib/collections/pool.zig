@@ -240,6 +240,14 @@ pub fn Pool(Item: type, IdInt: type) type {
             };
         }
 
+        /// Rebuilds the free list in place, returning every item to the pool
+        /// without freeing or reallocating the backing buffer. The buffer
+        /// contents are clobbered.
+        pub fn reset(self: *PoolSelf) void {
+            const item_buf: []Item = @ptrCast(self.buf[0..self.len]);
+            self.* = init(item_buf);
+        }
+
         // take head off free_list
         pub fn create(self: *PoolSelf) !*Item {
             const head = self.free_list.opt() orelse return error.OutOfSpace;
