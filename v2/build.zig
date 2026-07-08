@@ -118,8 +118,9 @@ const Config = struct {
             .tracy_no_exit = b.option(
                 bool,
                 "tracy-no-exit",
-                "Delays process exit until Tracy has received data",
-            ) orelse true,
+                "Delays process exit until Tracy has received data. Only has an effect if " ++
+                    "tracy is enabled via enable-tracy.",
+            ) orelse false,
             .tracy_on_demand = b.option(
                 bool,
                 "tracy-on-demand",
@@ -179,23 +180,28 @@ const Dependencies = struct {
         rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = .off;
 
         return .{
+            // Options must match the `b.dependency("tracy", ...)` call in
+            // shared/build.zig exactly. Any drift produces two `tracy` Module
+            // instances rooted at the same source file, which Zig 0.15 rejects
+            // when both sig and sig_v2 live in one compilation (e.g. under
+            // conformance/).
             .tracy = b.dependency("tracy", .{
                 .target = config.target,
-                .optimize = .ReleaseFast,
+                .optimize = config.optimize,
                 .tracy_enable = config.tracy_enable,
-                .tracy_no_system_tracing = false,
-                .tracy_no_exit = config.tracy_no_exit,
                 .tracy_on_demand = config.tracy_on_demand,
+                .tracy_no_exit = config.tracy_no_exit,
+                .tracy_no_system_tracing = false,
                 .tracy_callstack = 6,
             }).module("tracy"),
             .base58 = b.dependency("base58", .{
                 .target = config.target,
                 .optimize = config.optimize,
             }).module("base58"),
+            // Options must match shared/build.zig's zstd dep. See tracy comment above.
             .zstd = b.dependency("zstd", .{
                 .target = config.target,
-                // fast to compile once, no need to recompile when changing modes,
-                .optimize = .ReleaseFast,
+                .optimize = config.optimize,
             }).module("zstd"),
             .rocksdb = rocksdb_dep.module("bindings"),
             .rocksdb_c = rocksdb_dep.module("rocksdb"),
@@ -237,31 +243,29 @@ const Sig = struct {
         );
         const build_options_mod = build_options.createModule();
 
-        const features = b.createModule(.{
-            .root_source_file = b.path("../shared/core/features.zon"),
+        // Consume shared's exported modules instead of building our own from
+        // the same source files. Two `b.createModule` calls on features.zon /
+        // the generated feature-set-id.zig produce distinct Module instances
+        // that Zig 0.15 rejects when both sig and sig_v2 live in one
+        // compilation (e.g. under conformance/).
+        //
+        // Options must match the `b.dependency("shared", ...)` call in
+        // sig/build.zig exactly so that Zig deduplicates the two dep chains
+        // into a single `shared` Package instance. Any drift produces two
+        // distinct Packages, each with its own `feature-set-id` module.
+        const shared_dep = b.dependency("shared", .{
+            .target = config.target,
+            .optimize = config.optimize,
+            .@"long-tests" = false,
+            .@"allow-no-sha" = config.allow_no_sha,
+            .@"allow-no-avx512" = config.allow_no_avx512,
+            .@"use-llvm" = config.use_llvm,
+            .@"enable-tracy" = config.tracy_enable,
+            .@"tracy-on-demand" = config.tracy_on_demand,
+            .@"tracy-no-exit" = config.tracy_no_exit,
         });
-        const feature_set_id = b.createModule(.{
-            .root_source_file = b.addRunArtifact(b.addExecutable(.{
-                .name = "gen_feature_set_id",
-                .root_module = b.createModule(.{
-                    // This generator runs on the host at build time, so its dependencies must
-                    // be fetched with default (host) target options, not the cross-compilation
-                    // target used for the main build. This should be repeated for other scripts
-                    // if they import a library in the future.
-                    .target = b.graph.host,
-                    .optimize = .Debug,
-                    .root_source_file = b.path("../shared/scripts/gen_feature_set_id.zig"),
-                    .imports = &.{ .{
-                        .name = "base58",
-                        .module = b.dependency("base58", .{}).module("base58"),
-                    }, .{
-                        .name = "features",
-                        .module = features,
-                    } },
-                }),
-                .use_llvm = config.use_llvm,
-            })).addOutputFileArg("feature-set-id.zig"),
-        });
+        const features = shared_dep.module("features-zon");
+        const feature_set_id = shared_dep.module("feature-set-id");
 
         // Exported by name so downstream packages can `dep.module("sig_v2")`.
         const lib = b.addModule("sig_v2", .{
