@@ -376,11 +376,7 @@ fn sanitizeTransaction(
     preflight_slot_ref: *const SlotTracker.Reference,
     slot_account_reader: SlotAccountReader,
 ) !RuntimeTransaction {
-    const enable_static_ixn_limit = preflight_slot_ref.constants().feature_set.active(
-        .static_instruction_limit,
-        preflight_slot,
-    );
-    if (enable_static_ixn_limit and tx.msg.instructions.len > MAX_INSTRUCTION_TRACE_LENGTH) {
+    if (tx.msg.instructions.len > MAX_INSTRUCTION_TRACE_LENGTH) {
         return error.SanitizeFailure;
     }
 
