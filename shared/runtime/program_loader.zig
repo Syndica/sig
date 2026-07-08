@@ -54,6 +54,23 @@ pub const ProgramMap = struct {
         defer self.lock.unlockShared();
         return self.inner.contains(address);
     }
+
+    /// Insert `program` for `address` if absent. If an entry already exists it
+    /// is left untouched (it may be in use by a concurrent reader) and `program`
+    /// is deinitialized. Never frees or replaces a live map entry.
+    fn putIfAbsent(
+        self: *ProgramMap,
+        allocator: Allocator,
+        address: Pubkey,
+        program: LoadedProgram,
+    ) Allocator.Error!bool {
+        self.lock.lock();
+        defer self.lock.unlock();
+        const gop = try self.inner.getOrPut(allocator, address);
+        if (gop.found_existing) return false;
+        gop.value_ptr.* = program;
+        return true;
+    }
 };
 
 pub const LoadedProgram = union(enum(u8)) {
@@ -99,8 +116,14 @@ pub fn loadIfProgram(
     );
     errdefer loaded_program.deinit(programs_allocator);
 
-    if (try programs.fetchPut(programs_allocator, address, loaded_program)) |old_value| {
-        old_value.deinit(programs_allocator);
+    // NOTE: Two transactions that merely *invoke* the same program are not
+    // serialized by the account-lock scheduler, so a concurrent reader may
+    // already have cached this program and be running its VM against that
+    // entry right now, replacing (and freeing) it would be a use-after-free,
+    // which is why we only insert if still absent. On a lost race we drop our
+    // redundant copy instead of touching the live entry.
+    if (!try programs.putIfAbsent(programs_allocator, address, loaded_program)) {
+        loaded_program.deinit(programs_allocator);
     }
 }
 
@@ -623,7 +646,7 @@ pub fn testLoad(
 //   * fixed put-if-absent: worker B's duplicate is discarded and worker A's program
 //     is left in place, so the pointers match -> PASS.
 
-test "loadIfProgram: concurrent first-load must not evict a program a worker still holds (bankhash UAF regression)" {
+test "loadIfProgram: concurrent first-load must not evict program worker still holds" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
