@@ -138,12 +138,13 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         var blockhashes_in = rw.snapshot_metadata_in.blockhash_queue.hashes.getView(.reader);
         defer blockhashes_in.close();
 
-        var latest_block: ?lib.replay.BlockPool.ItemId = null; // TODO: use this
+        var latest_block: ?lib.replay.BlockPool.ItemId = null;
         while (true) {
             const hashes = try blockhashes_in.getBufferBlocking(runner);
             if (hashes.len == 0) break; // blockhashes_out closed their end
 
             for (hashes) |*hash| {
+                // TODO: initialize the block tree nodes and descend new blocks off these
                 latest_block = try rw.block_pool.createId();
                 blockhash_states[latest_block.?.index()] = hash.*;
             }
