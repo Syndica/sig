@@ -500,10 +500,6 @@ pub fn executeBpfLoaderV3ProgramInstruction(
             ic,
             args.additional_bytes,
         ),
-        .migrate => executeV3Migrate(
-            allocator,
-            ic,
-        ),
     };
 }
 
@@ -1614,18 +1610,6 @@ fn commonExtendProgram(
     });
 
     try ic.tc.log("Extended ProgramData account by {} bytes", .{additional_bytes});
-}
-
-/// Loader-v4 was never activated on mainnet (enable_loader_v4 reverted).
-/// Migration is unconditionally rejected.
-/// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L1346-L1515
-pub fn executeV3Migrate(
-    allocator: std.mem.Allocator,
-    ic: *InstructionContext,
-) (error{OutOfMemory} || InstructionError)!void {
-    _ = allocator;
-    _ = ic;
-    return InstructionError.InvalidInstructionData;
 }
 
 /// TODO: This function depends on syscalls and program cache implementations

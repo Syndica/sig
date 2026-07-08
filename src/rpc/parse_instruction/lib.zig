@@ -2084,24 +2084,6 @@ fn parseBpfUpgradeableLoaderInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "extendProgram" });
         },
-        .migrate => {
-            try checkNumBpfUpgradeableLoaderAccounts(instruction.accounts, 3);
-            var info = ObjectMap.init(arena);
-            try info.put("programDataAccount", try pubkeyToValue(
-                arena,
-                account_keys.get(@intCast(instruction.accounts[0])).?,
-            ));
-            try info.put("programAccount", try pubkeyToValue(
-                arena,
-                account_keys.get(@intCast(instruction.accounts[1])).?,
-            ));
-            try info.put("authority", try pubkeyToValue(
-                arena,
-                account_keys.get(@intCast(instruction.accounts[2])).?,
-            ));
-            try result.put("info", .{ .object = info });
-            try result.put("type", .{ .string = "migrate" });
-        },
     }
 
     return .{ .object = result };
