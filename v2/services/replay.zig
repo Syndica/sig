@@ -438,10 +438,10 @@ const Unrooted = extern struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.fetch" });
         defer zone.deinit();
 
-        var current = block.ptr(block_pool);
+        var current: ?*replay.Node = block.ptr(block_pool);
         while (current) |ancestor_block| : (current = ancestor_block.parent.ptr(block_pool)) {
             const current_map: *const Map =
-                &self.maps[block_pool.ptrToIndex(ancestor_block).index().?];
+                &self.maps[block_pool.ptrToIndex(ancestor_block).index()];
 
             const account_ref = current_map.get(account_pool, key);
             if (account_ref != .invalid) {
