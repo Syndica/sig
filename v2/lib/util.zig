@@ -82,6 +82,56 @@ pub fn assertInterface(comptime InterfaceType: type, comptime ContractStruct: ty
     }
 }
 
+/// A tightly packed optional value for data that can be represented in memory
+/// as an integer.
+///
+/// This is only safe to use if you can be certain that it will never need to
+/// represent the maxInt for the backing integer.
+pub fn Optional(T: type) type {
+    const Int = @as(?type, switch (@typeInfo(T)) {
+        .int => T,
+        .@"enum" => |info| info.tag_type,
+        .@"struct" => |s| s.backing_integer,
+        else => null,
+    }) orelse @compileError("Unsupported type for Optional(_): " ++ @typeName(T));
+
+    return enum(Int) {
+        null = std.math.maxInt(Int),
+        _,
+
+        pub fn init(zig_optional: ?T) Optional(T) {
+            if (zig_optional) |x| {
+                const int = switch (@typeInfo(T)) {
+                    .int => x,
+                    .@"enum" => @intFromEnum(x),
+                    .@"struct" => @as(Int, @bitCast(x)),
+                    else => unreachable,
+                };
+                std.debug.assert(int != std.math.maxInt(Int));
+                return @enumFromInt(int);
+            } else return .null;
+        }
+
+        pub fn opt(self: Optional(T)) ?T {
+            if (self == .null) return null;
+            return switch (@typeInfo(T)) {
+                .int => @intFromEnum(self),
+                .@"enum" => @enumFromInt(@intFromEnum(self)),
+                .@"struct" => @as(T, @bitCast(@intFromEnum(self))),
+                else => unreachable,
+            };
+        }
+    };
+}
+
+test Optional {
+    const T = packed struct { a: u32, b: u32 };
+    const o1: Optional(T) = .init(null);
+    const o2: Optional(T) = .init(T{ .a = 1234, .b = 5678 });
+    try std.testing.expect(o1.opt() == null);
+    try std.testing.expect(o2.opt().? == T{ .a = 1234, .b = 5678 });
+}
+
 /// Convert integer division into multiplication & shift using reciprocals:
 /// https://gist.github.com/B-Y-P/5872dbaaf768c204480109007f64a915
 pub const FastDiv = extern struct {

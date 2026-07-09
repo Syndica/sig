@@ -295,7 +295,7 @@ fn bootstrap(
             for (hashes) |*hash| {
                 latest_block = try block_pool.createId();
                 latest_block.?.ptr(block_pool).* = .{
-                    .slot = 0, // cannot be determined from the snapshot
+                    .slot = .null, // cannot be determined from the snapshot
                     .child = .null,
                     .parent = .init(parent_block),
                 };
@@ -314,7 +314,7 @@ fn bootstrap(
     logger.info().logf("loaded {} blockhashes from accountsdb snapshot data", .{num_hashes});
 
     const root_slot = try snapshot_metadata.getSlotBlocking(runner);
-    root_block.ptr(block_pool).slot = root_slot;
+    root_block.ptr(block_pool).slot = .init(root_slot);
     logger.info().logf("got the root slot from the snapshot: {}", .{root_slot});
 
     // create a synthetic fec-set node that doesn't have all information about
@@ -543,7 +543,7 @@ fn setChildBlockRef(
         const new_block = try block_pool.create();
         new_block.* = .{
             .parent = .init(parent_block_ref),
-            .slot = child.id.slot,
+            .slot = .init(child.id.slot),
         };
 
         break :ref .init(block_pool.ptrToIndex(new_block)); // b)
@@ -557,7 +557,7 @@ fn setChildBlockRef(
         const new_block = try block_pool.create();
         new_block.* = .{
             .parent = .init(parent_block_ref),
-            .slot = child.id.slot,
+            .slot = .init(child.id.slot),
         };
 
         break :ref .init(block_pool.ptrToIndex(new_block)); // c)

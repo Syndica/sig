@@ -1,4 +1,5 @@
 const std = @import("std");
+const util = @import("../util.zig");
 
 /// Fixed capacity pool whose header and item storage are laid out in one contiguous buffer.
 /// Intended for shared memory because every stored reference is an ItemId index. No process
@@ -87,19 +88,7 @@ pub fn SharedPool(Item: type, cap: usize) type {
                 return pool.indexToConstPtr(self);
             }
 
-            pub const Optional = enum(IdInt) {
-                null = std.math.maxInt(IdInt),
-                _,
-
-                pub fn init(zig_optional: ?ItemId) Optional {
-                    return if (zig_optional) |id| @enumFromInt(@intFromEnum(id)) else .null;
-                }
-
-                pub fn opt(self: Optional) ?ItemId {
-                    if (self == .null) return null;
-                    return @enumFromInt(@intFromEnum(self));
-                }
-            };
+            pub const Optional = util.Optional(ItemId);
         };
 
         pub fn size() usize {
@@ -256,19 +245,7 @@ pub fn Pool(Item: type, IdInt: type) type {
                 return pool.indexToPtr(self);
             }
 
-            pub const Optional = enum(IdInt) {
-                null = std.math.maxInt(IdInt),
-                _,
-
-                pub fn init(non_optional: ItemId) Optional {
-                    return @enumFromInt(@intFromEnum(non_optional));
-                }
-
-                pub fn opt(self: Optional) ?ItemId {
-                    if (self == .null) return null;
-                    return @enumFromInt(@intFromEnum(self));
-                }
-            };
+            pub const Optional = util.Optional(ItemId);
         };
 
         pub fn init(item_buf: []Item) PoolSelf {

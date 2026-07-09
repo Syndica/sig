@@ -1,6 +1,7 @@
 const solana = @import("solana.zig");
 const collections = @import("collections.zig");
 const ipc = @import("ipc.zig");
+const util = @import("util.zig");
 
 pub const TransactionPool = collections.SharedPool([1232]u8, 10_000);
 
@@ -18,7 +19,9 @@ pub const Node = extern struct {
     parent: BlockRef.Optional = .null,
     child: BlockRef.Optional = .null,
     sibling: BlockRef.Optional = .null,
-    slot: solana.Slot,
+    /// this is null for blocks older than the bootstrap root. do not unwrap
+    /// unless you are certain the block is not older than the bootstrap root
+    slot: util.Optional(solana.Slot),
 };
 
 pub const ExecReqResponse = extern struct {
