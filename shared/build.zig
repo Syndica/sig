@@ -41,6 +41,12 @@ pub fn build(b: *Build) void {
         "tracy-on-demand",
         "Enables tracy on-demand mode. Only has an effect if tracy is enabled via enable-tracy.",
     ) orelse false;
+    const tracy_no_exit = b.option(
+        bool,
+        "tracy-no-exit",
+        "Delays process exit until Tracy has received data. Only has an effect if " ++
+            "tracy is enabled via enable-tracy.",
+    ) orelse false;
 
     const test_step = b.step("test", "Run shared unit tests");
     const feature_set_id_step = b.step("feature_set_id", "Print the generated feature set ID");
@@ -59,11 +65,16 @@ pub fn build(b: *Build) void {
     const poseidon_mod = b.dependency("poseidon", dep_opts).module("poseidon");
     const secp256k1_mod = b.dependency("secp256k1", dep_opts).module("secp256k1");
     const blst_mod = b.dependency("blst", dep_opts).module("blst");
+    // Options must match the `b.dependency("tracy", ...)` calls in
+    // sig/build.zig and v2/build.zig exactly. Any drift produces two `tracy`
+    // Module instances rooted at the same source file, which Zig 0.15 rejects
+    // when both sig and sig_v2 live in one compilation.
     const tracy_mod = b.dependency("tracy", .{
         .target = target,
         .optimize = optimize,
         .tracy_enable = enable_tracy,
         .tracy_on_demand = tracy_on_demand,
+        .tracy_no_exit = tracy_no_exit,
         .tracy_no_system_tracing = false,
         .tracy_callstack = 6,
     }).module("tracy");
@@ -78,9 +89,23 @@ pub fn build(b: *Build) void {
     const print_feature_set_id = b.addRunArtifact(feature_set_id_exe);
     feature_set_id_step.dependOn(&print_feature_set_id.step);
     const feature_set_id_gen = b.addRunArtifact(feature_set_id_exe);
-    const feature_set_id = b.createModule(.{
+    // Exposed via addModule so external packages (in particular sig_v2) can
+    // consume the same Module instance instead of building their own. Without
+    // this, `b.createModule` on the same features.zon / feature-set-id.zig
+    // from two build subgraphs produces two distinct Modules rooted at the
+    // same file, which Zig 0.15 rejects in one compilation.
+    const feature_set_id = b.addModule("feature-set-id", .{
         .root_source_file = feature_set_id_gen.addOutputFileArg("feature-set-id.zig"),
     });
+    _ = b.addModule("features-zon", .{
+        .root_source_file = b.path("core/features.zon"),
+    });
+    // Consumed by `shared/core/features.zig` via `@import("features-zon")`.
+    // Shared can't relative-import features.zon while the file is also the
+    // root of the `features-zon` module — that would put features.zon in
+    // two Modules at once and Zig 0.15 would reject builds that link sig
+    // and sig_v2 together.
+    const features_zon = b.modules.get("features-zon").?;
     const gh_table = b.createModule(.{
         .root_source_file = generateTable(b, use_llvm),
         .target = target,
@@ -92,6 +117,7 @@ pub fn build(b: *Build) void {
         .{ .name = "blst", .module = blst_mod },
         .{ .name = "build-options", .module = build_options.createModule() },
         .{ .name = "feature-set-id", .module = feature_set_id },
+        .{ .name = "features-zon", .module = features_zon },
         .{ .name = "poseidon", .module = poseidon_mod },
         .{ .name = "secp256k1", .module = secp256k1_mod },
         .{ .name = "std14", .module = std14_mod },

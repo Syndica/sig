@@ -12,6 +12,7 @@ comptime {
 }
 
 pub const Receiver = @import("shred/receiver.zig").Receiver;
+pub const FecSetCtx = @import("shred/receiver.zig").FecSetCtx;
 
 const Hash = solana.Hash;
 const Slot = solana.Slot;

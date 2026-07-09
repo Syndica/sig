@@ -53,7 +53,14 @@ pub const Status = union(enum) {
 
 /// All known features past and present.
 /// Includes features which previously existed in agave but have since been removed.
-pub const all_features: []const ZonInfo = @import("features.zon");
+///
+/// Sourced via the `features-zon` module rather than a relative
+/// `@import("features.zon")` so features.zon is only rooted in one Module
+/// across the whole build graph. Otherwise, when sig and sig_v2 live in one
+/// compilation (e.g. under conformance/), Zig 0.15 rejects features.zon
+/// being both a Module root (features-zon) and a relative import from
+/// inside `shared`.
+pub const all_features: []const ZonInfo = @import("features-zon");
 
 /// All known features which are active, or pending activation (sometimes for a very long time...).
 /// These features form the basis for the `Feature` enum and the `FEATURE_SET_ID` computation.
