@@ -48,8 +48,9 @@ pub const Activity = extern struct {
             const threshold = 1_000_000;
             if (self.consecutive_idles > threshold) {
                 try self.signalIdleImmediate();
+            } else {
+                self.consecutive_idles += 1;
             }
-            self.consecutive_idles += 1;
             std.atomic.spinLoopHint();
         }
 
@@ -184,6 +185,21 @@ pub const Activity = extern struct {
         params.state.store(.canceled, .monotonic);
     }
 };
+
+test "signalIdleSpinning does not overflow" {
+    var activity: Activity = .{};
+    var service = activity.serviceView();
+
+    service.consecutive_idles = std.math.maxInt(u32);
+    try service.signalIdleSpinning();
+
+    try std.testing.expectEqual(std.math.maxInt(u32), service.consecutive_idles);
+    try std.testing.expectEqual(Activity.State.idle, activity.state.load(.monotonic));
+
+    try service.signalActive();
+    try std.testing.expectEqual(0, service.consecutive_idles);
+    try std.testing.expectEqual(Activity.State.active, activity.state.load(.monotonic));
+}
 
 /// This value should be written to before a service exits. Multiple traces (e.g. error return, and
 /// fault) may be written to.

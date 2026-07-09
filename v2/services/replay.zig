@@ -790,6 +790,7 @@ const BlockDeserialState = struct {
     const Reader = struct {
         deserial_state: *BlockDeserialState,
         merkle_pool: *const MerkleForest.NodePool,
+        bytes_consumed: usize = 0,
 
         fn currentReadableSlice(self: *Reader) []const u8 {
             return self.deserial_state.pos_node.payload()[self.deserial_state.pos_offset..];
@@ -815,6 +816,7 @@ const BlockDeserialState = struct {
                     @memcpy(out, current_readable_slice[0..n_bytes]);
                 }
                 self.deserial_state.pos_offset += n_bytes;
+                self.bytes_consumed += n_bytes;
                 return;
             }
 
@@ -836,79 +838,13 @@ const BlockDeserialState = struct {
             }
 
             std.debug.assert(offset == n_bytes); // no overshooting
+            self.bytes_consumed += n_bytes;
         }
 
         fn copyValue(self: *Reader, T: type) !T {
             var tmp: T = undefined;
             try self.advanceBytes(.copy, std.mem.asBytes(&tmp), {});
             return tmp;
-        }
-
-        fn readShortu16(self: *Reader) !u16 {
-            var val: u32 = 0;
-            for (0..3) |nth_byte| {
-                const b = try self.copyValue(u8);
-                if (b == 0 and nth_byte != 0) return error.AliasEncoding;
-                val |= @as(u32, b & 0x7f) << @intCast(nth_byte * 7);
-                if (b & 0x80 == 0) {
-                    return std.math.cast(u16, val) orelse return error.Overflow;
-                }
-                if (nth_byte == 2) return error.ByteThreeContinues;
-            }
-            unreachable;
-        }
-
-        fn skipBytes(self: *Reader, n_bytes: usize) !void {
-            try self.advanceBytes(.no_copy, {}, n_bytes);
-        }
-
-        fn skipTransaction(self: *Reader) !void {
-            const n_signatures = try self.readShortu16();
-            try self.skipBytes(64 * n_signatures);
-
-            const is_legacy: bool = blk: {
-                const first_byte = try self.copyValue(u8);
-
-                if (first_byte & (1 << 7) == 0) {
-                    break :blk true; // num_required_signatures
-                } else {
-                    const version: u8 = first_byte & 0x7f;
-                    if (version != 0) return error.InvalidVersion;
-
-                    try self.skipBytes(1); // num_required_signatures
-                    break :blk false;
-                }
-            };
-
-            try self.skipBytes(2); // num_readonly_signed + num_readonly_unsigned
-
-            const n_account_keys = try self.readShortu16();
-            try self.skipBytes(32 * n_account_keys);
-
-            try self.skipBytes(32); // recent blockhash
-
-            // ShortVec(CompiledInstruction)
-            const n_instructions = try self.readShortu16();
-            for (0..n_instructions) |_| {
-                try self.skipBytes(1); // program_id_index
-
-                const n_accounts = try self.readShortu16();
-                try self.skipBytes(n_accounts);
-
-                const data_len = try self.readShortu16();
-                try self.skipBytes(data_len);
-            }
-
-            if (!is_legacy) {
-                const n_address_table_lookups = try self.readShortu16();
-                for (0..n_address_table_lookups) |_| {
-                    try self.skipBytes(32); // table pubkey
-                    const n_writable_indexes = try self.readShortu16();
-                    try self.skipBytes(n_writable_indexes);
-                    const n_readonly_indices = try self.readShortu16();
-                    try self.skipBytes(n_readonly_indices);
-                }
-            }
         }
 
         fn nextNode(self: *Reader) error{EndOfStream}!void {
@@ -924,6 +860,26 @@ const BlockDeserialState = struct {
 
             self.deserial_state.pos_node = child;
             self.deserial_state.pos_offset = 0;
+        }
+
+        /// `parseTransaction` reader contract.
+        pub fn readByte(self: *Reader) error{EndOfStream}!u8 {
+            return self.copyValue(u8);
+        }
+
+        /// `parseTransaction` reader contract.
+        pub fn readSlice(self: *Reader, out: []u8) error{EndOfStream}!void {
+            try self.advanceBytes(.copy, out, {});
+        }
+
+        /// `parseTransaction` reader contract.
+        pub fn bytesConsumed(self: *const Reader) usize {
+            return self.bytes_consumed;
+        }
+
+        /// `parseTransaction` reader contract.
+        pub fn skipBytes(self: *Reader, n_bytes: usize) error{EndOfStream}!void {
+            try self.advanceBytes(.no_copy, {}, n_bytes);
         }
     };
 
@@ -946,23 +902,6 @@ const BlockDeserialState = struct {
 
     fn getReader(self: *BlockDeserialState, merkle_pool: *const MerkleForest.NodePool) Reader {
         return .{ .deserial_state = self, .merkle_pool = merkle_pool };
-    }
-
-    fn diff(
-        before: BlockDeserialState,
-        after: BlockDeserialState,
-        merkle_pool: *const MerkleForest.NodePool,
-    ) usize {
-        if (before.pos_node == after.pos_node) return after.pos_offset - before.pos_offset;
-
-        const after_parent: *const MerkleNode = after.pos_node.parent.opt().?.constPtr(merkle_pool);
-
-        std.debug.assert(after_parent == before.pos_node);
-
-        const before_bytes_read = before.pos_node.payload_len - before.pos_offset;
-        const after_bytes_read = after.pos_offset;
-
-        return before_bytes_read + after_bytes_read;
     }
 
     fn nextTransaction(
@@ -1052,16 +991,10 @@ const BlockDeserialState = struct {
 
                 var pre_state = self.*;
 
-                try reader.skipTransaction();
+                const tx_bytes_read = try lib.solana.transaction
+                    .VersionedTransaction.parse(&reader);
 
                 self.n_transactions_left.? -= 1;
-
-                const post_state = self.*;
-
-                const tx_bytes_read = diff(pre_state, post_state, merkle_pool);
-
-                // TODO: handle removing invalid blocks
-                if (tx_bytes_read > tx_buf.len) return error.TransactionTooLarge;
 
                 var tx_reader = pre_state.getReader(merkle_pool);
                 try tx_reader.advanceBytes(.copy, tx_buf[0..tx_bytes_read], {});

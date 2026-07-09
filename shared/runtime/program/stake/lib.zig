@@ -708,7 +708,7 @@ fn delegate(
             const stake_amount = validated.stake_amount;
 
             const current_vote_state =
-                try vote_state.convertToVoteState(allocator, vote_pubkey, false);
+                try vote_state.convertToVoteState(allocator, vote_pubkey);
             defer current_vote_state.deinit(allocator);
 
             const new_stake = newStake(
@@ -733,7 +733,7 @@ fn delegate(
             const stake_amount = validated.stake_amount;
 
             const current_vote_state =
-                try vote_state.convertToVoteState(allocator, vote_pubkey, false);
+                try vote_state.convertToVoteState(allocator, vote_pubkey);
             defer current_vote_state.deinit(allocator);
             if (redelegateStake(
                 ic,
@@ -1427,7 +1427,6 @@ fn deactivateDelinquent(
     const delinquent_vote_state = try delinquent_vote_state_raw.convertToVoteState(
         allocator,
         null,
-        false,
     );
     defer delinquent_vote_state.deinit(allocator);
 
@@ -1443,7 +1442,6 @@ fn deactivateDelinquent(
     const reference_vote_state = try reference_vote_state_raw.convertToVoteState(
         allocator,
         null,
-        false,
     );
     defer reference_vote_state.deinit(allocator);
 

@@ -183,7 +183,7 @@
         \\ Inactive on all clusters.
         \\ Hardcoded for compatibility.
         \\ Marked as hardcoded for fuzzing in solfuzz-agave and firedancer.
-        \\ Why not remove this from hardcoded features for fuzzing and mark reverted?  
+        \\ Why not remove this from hardcoded features for fuzzing and mark reverted?
         ,
     },
     .{
@@ -549,7 +549,7 @@
         \\ TODO: Low Priority
         \\ Inactive on all clusters.
         \\ Noted in agave as a 'feature proposal feature id'.
-        \\ Why not remove or mark reverted? What does a 'feature proposal feature id' mean? 
+        \\ Why not remove or mark reverted? What does a 'feature proposal feature id' mean?
         ,
     },
     .{
@@ -560,7 +560,7 @@
         .note =
         \\ TODO: Low Priority
         \\ This feature has never been activated and there is not plan for activation.
-        \\ Why not remove tor mark reverted? 
+        \\ Why not remove tor mark reverted?
         ,
     },
     .{
@@ -1177,7 +1177,7 @@
         .name = "enable_tower_sync_ix",
         .pubkey = "tSynMCspg4xFiCj1v3TDb4c7crMR5tSBhLz4sF7rrNA",
         .description = "Enable tower sync vote instruction",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "deprecate_unused_legacy_vote_plumbing",
@@ -1455,7 +1455,7 @@
         \\ Inactive on all clusters.
         \\ Hardcoded for compatibility.
         \\ Marked as hardcoded for fuzzing in solfuzz-agave, but not in firedancer.
-        \\ Why not remove this from hardcoded features for fuzzing and mark reverted? 
+        \\ Why not remove this from hardcoded features for fuzzing and mark reverted?
         ,
     },
     .{
@@ -1516,7 +1516,7 @@
         .description = "SIMD-0204: Slashable event verification",
         .status = .unsupported,
         .note =
-        \\ TODO: Low priority. 
+        \\ TODO: Low priority.
         \\ Not scheduled for activation.
         ,
     },
@@ -1566,7 +1566,7 @@
         .name = "relax_intrabatch_account_locks",
         .pubkey = "4WeHX6QoXCCwqbSFgi6dxnB6QsPo6YApaNTH7P4MLQ99",
         .description = "SIMD-0083: Allow batched transactions to read/write and write/write the same accounts",
-        .status = .supported,
+        .status = .hardcoded,
     },
     .{
         .name = "provide_instruction_data_offset_in_vm_r2",
@@ -1596,13 +1596,13 @@
         .name = "static_instruction_limit",
         .pubkey = "64ixypL1HPu8WtJhNSMb9mSgfFaJvsANuRkTbHyuLfnx",
         .description = "SIMD-0160: static instruction limit",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "vote_state_v4",
         .pubkey = "Gx4XFcrVMt4HUvPzTpTSVkdDVgcDSjKhDN1RqRS6KDuZ",
         .description = "SIMD-0185: Vote State v4",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "alt_bn128_little_endian",

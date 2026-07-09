@@ -230,38 +230,6 @@ pub fn replaySlotSync(
     }
 
     var svm_gateway = params.svm_gateway;
-    if (!svm_gateway.params.feature_set.active(
-        .relax_intrabatch_account_locks,
-        svm_gateway.params.slot,
-    )) {
-        var locks: sig.replay.AccountLocks = .{};
-        defer locks.deinit(allocator);
-
-        var accounts: std.ArrayListUnmanaged(sig.replay.AccountLocks.LockableAccount) = .{};
-        defer accounts.deinit(allocator);
-
-        var i: usize = 0;
-        for (params.entries) |entry| {
-            const transactions = params.transactions[i..][0..entry.transactions.len];
-            i += entry.transactions.len;
-
-            accounts.clearRetainingCapacity();
-            for (transactions) |transaction| {
-                for (
-                    transaction.accounts.items(.pubkey),
-                    transaction.accounts.items(.is_writable),
-                ) |pubkey, is_writable| {
-                    try accounts.append(allocator, .{ .address = pubkey, .writable = is_writable });
-                }
-            }
-
-            locks.lockStrict(allocator, accounts.items) catch |e| switch (e) {
-                error.LockFailed => return .{ .invalid_transaction = .AccountInUse },
-                error.OutOfMemory => return error.OutOfMemory,
-            };
-            std.debug.assert(0 == locks.unlock(accounts.items));
-        }
-    }
 
     // Running transaction counter mirrors Agave's `progress.num_txs`.
     // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L1726
@@ -760,39 +728,30 @@ test "replaySlot - happy path: partial slot" {
     try testReplaySlot(allocator, null, entries[0 .. entries.len - 1], params, .ALL_DISABLED);
 }
 
-test "replaySlot - conflicting accounts should fail until relax_intrabatch_account_locks is set" {
+test "replaySlot - conflicting accounts within a batch should succeed" {
     const allocator = std.testing.allocator;
 
     const poh, var entry_array = try sig.core.poh.testPoh(true, true);
     defer for (entry_array.slice()) |e| e.deinit(allocator);
     const entries: []sig.core.Entry = entry_array.slice();
 
-    var features = sig.core.FeatureSet.ALL_DISABLED;
-    features.setSlot(.relax_intrabatch_account_locks, 0);
+    var tick_hash_count: u64 = 0;
 
-    for ([2]struct { sig.core.FeatureSet, ?ReplaySlotError }{
-        .{ .ALL_DISABLED, .{ .invalid_transaction = .AccountInUse } },
-        .{ features, null },
-    }) |test_case| {
-        const feature_set, const expected_error = test_case;
-        var tick_hash_count: u64 = 0;
-
-        const params = VerifyTicksParams{
-            .hashes_per_tick = poh.hashes_per_tick,
-            .slot = 0,
-            .max_tick_height = poh.tick_count,
-            .tick_height = 0,
-            .slot_is_full = false,
-            .tick_hash_count = &tick_hash_count,
-        };
-        try testReplaySlot(
-            allocator,
-            expected_error,
-            entries[0 .. entries.len - 1],
-            params,
-            feature_set,
-        );
-    }
+    const params = VerifyTicksParams{
+        .hashes_per_tick = poh.hashes_per_tick,
+        .slot = 0,
+        .max_tick_height = poh.tick_count,
+        .tick_height = 0,
+        .slot_is_full = false,
+        .tick_hash_count = &tick_hash_count,
+    };
+    try testReplaySlot(
+        allocator,
+        null,
+        entries[0 .. entries.len - 1],
+        params,
+        .ALL_DISABLED,
+    );
 }
 
 test "replaySlot - happy path: full slot" {
