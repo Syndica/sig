@@ -1263,9 +1263,7 @@ fn executeProcessVoteWithAccount(
     vote: Vote,
     target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (ic.tc.feature_set.active(.deprecate_legacy_vote_ixs, ic.tc.slot) and
-        ic.tc.feature_set.active(.enable_tower_sync_ix, ic.tc.slot))
-    {
+    if (ic.tc.feature_set.active(.deprecate_legacy_vote_ixs, ic.tc.slot)) {
         return InstructionError.InvalidInstructionData;
     }
 
@@ -1358,9 +1356,7 @@ fn executeUpdateVoteState(
     target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     var vote_state_update_mut = vote_state_update;
-    if (ic.tc.feature_set.active(.deprecate_legacy_vote_ixs, ic.tc.slot) and
-        ic.tc.feature_set.active(.enable_tower_sync_ix, ic.tc.slot))
-    {
+    if (ic.tc.feature_set.active(.deprecate_legacy_vote_ixs, ic.tc.slot)) {
         return InstructionError.InvalidInstructionData;
     }
 
@@ -1430,9 +1426,6 @@ fn executeTowerSync(
     target_version: VoteVersion,
 ) (error{OutOfMemory} || InstructionError)!void {
     var tower_sync_mut = tower_sync;
-    if (!ic.tc.feature_set.active(.enable_tower_sync_ix, ic.tc.slot)) {
-        return InstructionError.InvalidInstructionData;
-    }
 
     const slot_hashes = try ic.tc.sysvar_cache.get(SlotHashes);
     const clock = try ic.tc.sysvar_cache.get(Clock);
@@ -5012,12 +5005,6 @@ test "vote_program: tower sync" {
                 .clock = clock,
                 .slot_hashes = slot_hashes,
             },
-            .feature_set = &.{
-                .{
-                    .feature = .enable_tower_sync_ix,
-                    .slot = 0,
-                },
-            },
         },
         .{
             .accounts = &.{
@@ -5164,12 +5151,6 @@ test "vote_program: tower sync switch" {
             .sysvar_cache = .{
                 .clock = clock,
                 .slot_hashes = slot_hashes,
-            },
-            .feature_set = &.{
-                .{
-                    .feature = .enable_tower_sync_ix,
-                    .slot = 0,
-                },
             },
         },
         .{
@@ -5405,12 +5386,6 @@ test "vote_program: tower sync with v4 feature" {
             .sysvar_cache = .{
                 .clock = clock,
                 .slot_hashes = slot_hashes,
-            },
-            .feature_set = &.{
-                .{
-                    .feature = .enable_tower_sync_ix,
-                    .slot = 0,
-                },
             },
         },
         .{

@@ -99,7 +99,17 @@ pub fn Region(comptime T: type) type {
         ///
         /// You should not initialize this struct directly.
         /// Only create it using `finish`.
-        pub const Initialized = struct { memfd: Memfd };
+        pub const Initialized = struct {
+            memfd: Memfd,
+
+            // Phantom dependency on T so each `Region(T).Initialized` is a distinct type.
+            // Without this, the struct body is `{ memfd: Memfd }` regardless of T and Zig
+            // collapses every instantiation to the same type, which breaks `countRegionShares`
+            // (and any other code that filters topology fields by `Region(X).Initialized`).
+            comptime {
+                _ = &T;
+            }
+        };
     };
 }
 
