@@ -1023,10 +1023,15 @@ fn maybeContinueBlockExec(
                         .block_idx = block_ref,
                         .tx_idx = tx_ref,
                         .n_account_refs = held_accounts,
-                        .account_ref_buf = held_accounts_buf,
+                        .account_ref_buf = undefined,
                     },
                 },
             };
+            @memcpy(
+                request.data.txn_exec.account_ref_buf[0..held_accounts],
+                held_accounts_buf[0..held_accounts],
+            );
+
             exec_request_sender.markUsed();
         }
     }
