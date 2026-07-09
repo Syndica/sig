@@ -87,19 +87,19 @@ pub fn assertInterface(comptime InterfaceType: type, comptime ContractStruct: ty
 ///
 /// This is only safe to use if you can be certain that it will never need to
 /// represent the maxInt for the backing integer.
-pub fn Optional(T: type) type {
+pub fn PackedOptional(T: type) type {
     const Int = @as(?type, switch (@typeInfo(T)) {
         .int => T,
         .@"enum" => |info| info.tag_type,
         .@"struct" => |s| s.backing_integer,
         else => null,
-    }) orelse @compileError("Unsupported type for Optional(_): " ++ @typeName(T));
+    }) orelse @compileError("Unsupported type for PackedOptional(_): " ++ @typeName(T));
 
     return enum(Int) {
         null = std.math.maxInt(Int),
         _,
 
-        pub fn init(zig_optional: ?T) Optional(T) {
+        pub fn init(zig_optional: ?T) PackedOptional(T) {
             if (zig_optional) |x| {
                 const int = switch (@typeInfo(T)) {
                     .int => x,
@@ -112,7 +112,7 @@ pub fn Optional(T: type) type {
             } else return .null;
         }
 
-        pub fn opt(self: Optional(T)) ?T {
+        pub fn opt(self: PackedOptional(T)) ?T {
             if (self == .null) return null;
             return switch (@typeInfo(T)) {
                 .int => @intFromEnum(self),
@@ -124,10 +124,10 @@ pub fn Optional(T: type) type {
     };
 }
 
-test Optional {
+test PackedOptional {
     const T = packed struct { a: u32, b: u32 };
-    const o1: Optional(T) = .init(null);
-    const o2: Optional(T) = .init(T{ .a = 1234, .b = 5678 });
+    const o1: PackedOptional(T) = .init(null);
+    const o2: PackedOptional(T) = .init(T{ .a = 1234, .b = 5678 });
     try std.testing.expect(o1.opt() == null);
     try std.testing.expect(o2.opt().? == T{ .a = 1234, .b = 5678 });
 }

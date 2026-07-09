@@ -21,7 +21,7 @@ pub const Node = extern struct {
     sibling: BlockRef.Optional = .null,
     /// this is null for blocks older than the bootstrap root. do not unwrap
     /// unless you are certain the block is not older than the bootstrap root
-    slot: util.Optional(solana.Slot),
+    slot: util.PackedOptional(solana.Slot),
 };
 
 pub const ExecReqResponse = extern struct {
