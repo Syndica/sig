@@ -57,7 +57,7 @@ Topology is defined in Zig, not ZON:
 
 Changing the service graph requires changing `main.zig`. The runtime config file cannot select a different topology. `config/example.zon` shows how `Config` fields are set and loaded for the topology defined in `init/main.zig`.
 
-Different "mains" (entry points) can be used to create integration tests on services in isolation with a different topology that allows for minimalization of setup.
+Different "mains" (entry points) can be used to create integration tests on services in isolation with a different topology that allows for minimization of setup.
 
 # Adding a New Service
 

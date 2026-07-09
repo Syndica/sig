@@ -346,12 +346,11 @@ pub const bpf = struct {
         };
     }
 
-    /// Builds the shared seccomp filter installed for every sandboxed service .
+    /// Builds the shared seccomp filter installed for every sandboxed service.
     /// The filter allows service runtime basics, telemetry sockets, snapshot file and
     /// io_uring operations, accounts DB fsync, and writes to stderr.
     ///
-    /// TODO(1378):
-    /// per service filter config to restrict syscalls to only what is needed for that service.
+    /// TODO(1378): Per-service filter config to restrict syscalls to only what is needed for that service.
     pub fn seccompFilters(maybe_stderr: ?std.os.linux.fd_t) [66]sock_filter {
         // load syscall number
         const preamble = .{stmt(LD + W + ABS, @offsetOf(SECCOMP.data, "nr"))};

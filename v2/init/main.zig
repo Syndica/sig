@@ -24,7 +24,7 @@ const topology = lib.topology;
 const Region = topology.Region;
 const ServiceRegions = topology.ServiceRegions;
 
-/// Config for Sig, including service specific configured values
+/// Config for Sig, including service-specific configured values.
 const Config = struct {
     sandboxing_mode: SandboxingMode,
 
