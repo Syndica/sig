@@ -164,9 +164,14 @@ pub const Rooted = struct {
 
     const SectorHeader = packed struct(u64) {
         type: enum(u3) {
-            padding, // padding data to get file aligned to block_size for writing
-            account, // holds an actual account
-            blockhashes, // holds a serialized addition to the blockhash queue
+            /// padding data to get file aligned to block_size for writing
+            padding,
+            /// holds an actual account
+            account,
+            /// holds a serialized addition to the blockhash queue
+            blockhashes,
+            /// holds a serialized addition to the block_id queue
+            block_ids,
             _, // TODO: add other types of sections
         },
         info: packed union {
@@ -258,6 +263,7 @@ pub const Rooted = struct {
         var timer = try std.time.Timer.start();
         var n_puts: usize = 0;
         var n_bytes_read: usize = 0;
+        var last_block_id: ?Hash = null;
 
         // read sectors until EOF
         while ((try self.io.reader.getBuffer(.from(logger))).len > 0) {
@@ -326,6 +332,11 @@ pub const Rooted = struct {
                         num_hashes -= take;
                     }
                 },
+                .block_ids => for (0..header.info.count) |_| {
+                    var block_id: Hash = undefined;
+                    try self.readExisting(.from(logger), (&block_id.data).ptr, @sizeOf(Hash));
+                    last_block_id = block_id;
+                },
                 _ => return error.InvalidSector,
             }
 
@@ -348,6 +359,7 @@ pub const Rooted = struct {
                 self.io.reader.io_stalled = 0;
             }
         }
+        runtime_metadata.block_id = last_block_id orelse return error.NoBlockIDs;
 
         // write the slot to commit the RuntimeMetadata stuff
         const slot = self.journal.committed_slot;
@@ -462,6 +474,23 @@ pub const Rooted = struct {
                 blockhash_writer.advance(take);
                 i += take;
             }
+        }
+
+        { // write the block_id sector for this block
+            const block_id = snapshot_iter.manifest.extra_fields.block_id;
+
+            const header: SectorHeader = .{
+                .type = .block_ids,
+                .info = .{ .count = 1 },
+            };
+
+            var r = std.Io.Reader.fixed(std.mem.asBytes(&header));
+            try self.queueWrite(.from(logger), @sizeOf(SectorHeader), &r);
+
+            r = std.Io.Reader.fixed(std.mem.asBytes(&block_id));
+            try self.queueWrite(.from(logger), @sizeOf(Hash), &r);
+
+            runtime_metadata.block_id = block_id;
         }
 
         // write the slot to commit the RuntimeMetadata stuff

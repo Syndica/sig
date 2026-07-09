@@ -429,6 +429,11 @@ pub const AccountsDbFields = struct {
 };
 
 pub const ExtraFields = struct {
+    /// - TowerBFT: the Merkle root of the last FEC set of the block
+    /// - Alpenglow: the "double Merkle root": a Merkle root computed over the
+    ///   sequence of per-FEC-set Merkle roots of the block's shreds.
+    block_id: Hash,
+
     pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !ExtraFields {
         const zone = tracy.Zone.init(@src(), .{ .name = "ExtraFields.read" });
         defer zone.deinit();
@@ -535,12 +540,17 @@ pub const ExtraFields = struct {
         }
 
         // block_id: NullOnEof(Hash)
-        r.discardAll(32) catch |err| switch (err) {
-            error.EndOfStream => {},
-            else => |e| return e,
-        };
+        //
+        // in agave, this field is optional on the deserialize side, but it's
+        // actually always populated. we do not need to handle the null case,
+        // and it's actually not even possible for replay to work if this is
+        // null. so we treat this as a required field.
+        var block_id: [32]u8 = undefined;
+        try r.readSliceAll(&block_id);
 
-        return .{};
+        return .{
+            .block_id = .{ .data = block_id },
+        };
     }
 };
 

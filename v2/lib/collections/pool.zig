@@ -91,8 +91,8 @@ pub fn SharedPool(Item: type, cap: usize) type {
                 null = std.math.maxInt(IdInt),
                 _,
 
-                pub fn init(non_optional: ItemId) Optional {
-                    return @enumFromInt(@intFromEnum(non_optional));
+                pub fn init(zig_optional: ?ItemId) Optional {
+                    return if (zig_optional) |id| @enumFromInt(@intFromEnum(id)) else .null;
                 }
 
                 pub fn opt(self: Optional) ?ItemId {
