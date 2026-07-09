@@ -75,10 +75,14 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                             .block_idx = data.block_idx,
                             .tx_idx = data.tx_idx,
                             .n_account_refs = data.n_account_refs,
-                            .account_ref_buf = data.account_ref_buf,
+                            .account_ref_buf = undefined,
                         },
                     },
                 };
+                @memcpy(
+                    response.data.txn_exec.account_ref_buf[0..data.n_account_refs],
+                    data.account_ref_buf[0..data.n_account_refs],
+                );
                 response_writer.markUsed();
             },
             .txn_sig_verify => return error.SigVerifyExecUnimpl,
