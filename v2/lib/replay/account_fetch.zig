@@ -62,6 +62,10 @@ pub const AccountFetch = struct {
         self.* = undefined;
     }
 
+    // TODO: in the future we would like to have a submitTransactionBatch method to
+    // resolve a batch of transactions at once. A scheduler can take advantage of this to
+    // resolve multiple transactions in parallel (but in the order they are in the batch),
+    // specifically when the batch of transactions are non-conflicting with other batches.
     pub fn submitTransaction(
         self: *AccountFetch,
         block_ref: replay.BlockRef,
@@ -70,14 +74,5 @@ pub const AccountFetch = struct {
     ) !void {
         _ = .{ self, block_ref, tx_ref, tx_bytes };
         @panic("AccountFetch.submitTransaction not implemented");
-    }
-
-    pub fn poll(self: *AccountFetch) !void {
-        _ = self;
-    }
-
-    pub fn nextCompleted(self: *AccountFetch) ?LoadedTransaction {
-        _ = self;
-        return null;
     }
 };

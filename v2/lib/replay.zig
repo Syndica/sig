@@ -2,7 +2,7 @@ const solana = @import("solana.zig");
 const collections = @import("collections.zig");
 const ipc = @import("ipc.zig");
 const accounts_db = @import("accounts_db.zig");
-pub const account_fetch = @import("replay/account_fetch.zig").AccountFetch;
+const account_fetch = @import("replay/account_fetch.zig");
 
 // This is a bit large currently because of the unrooted store
 pub const scratch_buffer_size = 3 * 1024 * 1024 * 1024;
