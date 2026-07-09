@@ -56,8 +56,9 @@ pub const ProgramMap = struct {
     }
 
     /// Insert `program` for `address` if absent. If an entry already exists it
-    /// is left untouched (it may be in use by a concurrent reader) and `program`
-    /// is deinitialized. Never frees or replaces a live map entry.
+    /// is left untouched (it may be in use by a concurrent reader) and the caller
+    /// retains ownership of `program` (typically deinit it). Never frees or replaces
+    /// a live map entry.
     fn putIfAbsent(
         self: *ProgramMap,
         allocator: Allocator,
@@ -615,8 +616,8 @@ pub fn testLoad(
 
 // Regression test for the program-cache use-after-free data race.
 //
-// `loadIfProgram` populates the per-slot shared `ProgramMap` with a check-then-act
-// sequence that is not atomic across its steps:
+// `loadIfProgram` previously populated the per-slot shared `ProgramMap` with a check-then-act
+// sequence that was not atomic across its steps (and used `fetchPut` to replace entries):
 //
 //   if (... or programs.contains(address)) return; // 1. check   (lock released)
 //   var loaded_program = try loadProgram(...);      // 2. load    (no lock held)
@@ -712,7 +713,7 @@ test "loadIfProgram: concurrent first-load must not evict program worker still h
 
     // A one-shot `AccountReader` that simulates worker A publishing its program to
     // the shared cache mid-load: its `get` runs from inside `loadProgram`, i.e.
-    // after `loadIfProgram` passed `contains` but before it reaches `fetchPut`. It
+    // after `loadIfProgram` passed `contains` but before it reaches `putIfAbsent`. It
     // then delegates to a real map-backed reader so worker B's own load succeeds.
     // Same {ctx, getFn} shape that `AccountReader.fromMap`/`noop` build internally.
     var injector = struct {
