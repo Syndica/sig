@@ -59,6 +59,7 @@ pub const AccountFetch = struct {
         @panic("AccountFetch.poll not implemented");
     }
 
+    // TODO: Avoid the copy being made here to return LoadedTransaction.
     pub fn nextCompletedTransaction(self: *AccountFetch) ?LoadedTransaction {
         _ = self;
         @panic("AccountFetch.nextCompletedTransaction not implemented");
@@ -93,10 +94,29 @@ pub const LoadedTransaction = extern struct {
     account_refs: [MAX_TX_ACCOUNTS]AccountRef,
 
     pub const Status = enum(u8) {
+        empty,
         ready,
         missing_account,
         invalid_alt,
         too_many_accounts,
         decode_error,
     };
+
+    pub fn empty() LoadedTransaction {
+        .{
+            .block_ref = .null,
+            .tx_ref = .null,
+            .n_accounts = 0,
+            .status = .empty,
+            .reserved = 0,
+            .account_refs = undefined,
+        };
+    }
+};
+
+pub const PendingTransaction = extern struct {
+    loaded: LoadedTransaction = .empty(),
+    seq: u64 = 0,
+    pending_reads: u16 = 0,
+    completed: bool = false,
 };
