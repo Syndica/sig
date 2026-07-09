@@ -392,11 +392,7 @@ const Tools = struct {
                 .target = config.target,
                 .optimize = config.optimize,
                 .imports = &.{
-                    .{ .name = "ipc-ring", .module = b.createModule(.{
-                        .root_source_file = b.path("lib/ipc/ring.zig"),
-                        .target = config.target,
-                        .optimize = config.optimize,
-                    }) },
+                    .{ .name = "lib", .module = sig.lib },
                     .{ .name = "rocksdb", .module = deps.rocksdb },
                     .{ .name = "rocksdb-c", .module = deps.rocksdb_c },
                 },
