@@ -263,3 +263,64 @@ pub const ExecutionRegistry = extern struct {
         }
     }
 };
+
+pub const BlockhashQueueView = struct {
+    latest_block: BlockRef,
+    pool: *const BlockPool,
+    hashes: *const [BlockPool.capacity]?solana.Hash,
+
+    pub fn getBlockRefIfValidForAge(
+        bhq: BlockhashQueueView,
+        hash: *const solana.Hash,
+        max_age: u64,
+    ) BlockRef.Optional {
+        var current = bhq.latest_block;
+        for (0..max_age) |_| {
+            const current_hash = &(bhq.hashes[current.index()] orelse continue);
+            if (hash.eql(current_hash)) return .init(current);
+            const current_ptr = current.constPtr(bhq.pool);
+            current = current_ptr.parent.opt() orelse break;
+        }
+        return .null;
+    }
+};
+
+pub const TransactionStatus = enum {
+    /// The transaction is recent, and has never been executed in the
+    /// current fork, so it is legal to execute this in the current block.
+    recent_and_unprocessed,
+    /// The transaction was already executed in a recent block on the
+    /// current fork, so it is not legal to include it in the current block.
+    already_processed,
+    /// The recent_blockhash was not found, so it could not be determined
+    /// whether the transaction already exists in a block. This means the
+    /// recent_blockhash is too old or invalid, or the transaction uses a
+    /// durable nonce.
+    unknown_blockhash,
+};
+
+pub fn checkTransactionStatus(
+    params: struct {
+        bhq: BlockhashQueueView,
+        exec_registry: *const ExecutionRegistry,
+        /// Block that's associated with the `recent_blockhash` of interest, with the implied ancestors.
+        recent_blockhash: *const solana.Hash,
+        /// The transaction key.
+        tx_key: *const solana.Hash,
+        max_age: u64,
+    },
+) TransactionStatus {
+    const bhq = params.bhq;
+    const exec_registry = params.exec_registry;
+    const recent_blockhash = params.recent_blockhash;
+    const tx_key = params.tx_key;
+    const max_age = params.max_age;
+    const block_ref = bhq.getBlockRefIfValidForAge(recent_blockhash, max_age).opt() orelse {
+        return .unknown_blockhash;
+    };
+    if (exec_registry.containsTransaction(block_ref, tx_key)) {
+        return .already_processed;
+    } else {
+        return .recent_and_unprocessed;
+    }
+}
