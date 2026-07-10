@@ -186,7 +186,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
             if (exec_state.finished()) {
                 logger.info().logf(
-                    "Slot {} ({}) complete! ({}/{})",
+                    "Slot {f} ({}) complete! ({}/{})",
                     .{
                         rw.block_pool.indexToPtr(block_ref).slot,
                         block_ref,
@@ -786,13 +786,13 @@ fn maybeContinueBlockExec(
     exec_state.all_transactions_requested = true;
 
     logger.info().logf(
-        "requested all transactions for slot {} ({})",
+        "requested all transactions for slot {f} ({})",
         .{ block_ref.ptr(block_pool).slot, block_ref },
     );
 
     if (exec_state.finished()) {
         logger.info().logf(
-            "Slot {} ({}) (already) complete! ({}/{})",
+            "Slot {f} ({}) (already) complete! ({}/{})",
             .{
                 block_ref.ptr(block_pool).slot,
                 block_ref,

@@ -121,6 +121,15 @@ pub fn PackedOptional(T: type) type {
                 else => unreachable,
             };
         }
+
+        pub fn format(self: PackedOptional(T), writer: *std.Io.Writer) !void {
+            const value = self.opt() orelse return writer.writeAll("null");
+            if (comptime std.meta.hasMethod(T, "format")) {
+                try writer.print("{f}", .{value});
+            } else {
+                try writer.print("{any}", .{value});
+            }
+        }
     };
 }
 
@@ -130,6 +139,37 @@ test PackedOptional {
     const o2: PackedOptional(T) = .init(T{ .a = 1234, .b = 5678 });
     try std.testing.expect(o1.opt() == null);
     try std.testing.expect(o2.opt().? == T{ .a = 1234, .b = 5678 });
+}
+
+test "PackedOptional format matches ?T" {
+    const E = enum(u8) { a, b, c };
+    const S = packed struct { a: u16, b: u16 };
+    const F = enum(u8) {
+        x,
+        y,
+        pub fn format(self: @This(), writer: *std.Io.Writer) !void {
+            try writer.print("F({t})", .{self});
+        }
+    };
+
+    inline for (.{
+        .{ "{?any}", @as(?u32, null) },
+        .{ "{?any}", @as(?u32, 12345) },
+        .{ "{?any}", @as(?E, null) },
+        .{ "{?any}", @as(?E, .b) },
+        .{ "{?any}", @as(?S, null) },
+        .{ "{?any}", @as(?S, .{ .a = 1, .b = 2 }) },
+        .{ "{?f}", @as(?F, null) },
+        .{ "{?f}", @as(?F, .x) },
+    }) |case| {
+        const fmt, const value = case;
+        const po: PackedOptional(@typeInfo(@TypeOf(value)).optional.child) = .init(value);
+        var expect_buf: [32]u8 = undefined;
+        var actual_buf: [32]u8 = undefined;
+        const actual = try std.fmt.bufPrint(&actual_buf, "{f}", .{po});
+        const expect = try std.fmt.bufPrint(&expect_buf, fmt, .{value});
+        try std.testing.expectEqualStrings(expect, actual);
+    }
 }
 
 /// Convert integer division into multiplication & shift using reciprocals:
