@@ -636,9 +636,9 @@ pub fn testLoad(
 // Racing real threads would be flaky, so this test drives the interleaving
 // deterministically. It makes one real `loadIfProgram` call whose `AccountReader`
 // inserts a second, already-loaded copy of the program ("worker A") into the cache
-// after `loadIfProgram` passes its `contains` check but before it reaches
-// `fetchPut`. The reader's `get` runs from inside `loadProgram`, which sits between
-// those two steps.
+// after `loadIfProgram` passes its `contains` check but before it reaches the
+// final insert step (`fetchPut` before this fix, now `putIfAbsent`). The reader's
+// `get` runs from inside `loadProgram`, which sits between those two steps.
 //
 // Afterwards the cache must still hand out worker A's program:
 //   * buggy fetchPut-then-free-old: worker A's entry is evicted and freed, and the
