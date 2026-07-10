@@ -395,16 +395,11 @@ pub fn getFeeForMessage(
     };
 
     const bq_lps = maybe_bq_lps orelse {
-        const require_static_nonce_account = slot_ref.constants().feature_set.active(
-            .require_static_nonce_account,
-            slot,
-        );
         const account_reader_adapter = sig.runtime.SlotAccountReaderAdapter{ .reader = slot_reader };
         const nonce_result = check_transactions.loadMessageNonceAccount(
             arena,
             &runtime_txn,
             account_reader_adapter.accountReader(),
-            require_static_nonce_account,
         ) catch return empty_result;
         if (nonce_result) |r| return .{
             .context = .{ .slot = slot },
