@@ -161,6 +161,11 @@ groups:
       # has stopped). The error alert above keeps noDataState: OK, so it can't cover
       # this. `or vector(0)` returns 0 rather than an empty result when there are no
       # logs, so the < 1 threshold fires; noDataState: Alerting is a fallback.
+      #
+      # Intentionally no dashboardUid/panelId link: this is an absence alert, so any
+      # linked panel would just show a flatline (and can't render at all if Loki is the
+      # dead hop). The actionable remediation is the pipeline walk in the summary below,
+      # not a graph. Add a runbook link here only if a real runbook is written.
       - uid: sig-logs-pipeline-check
         title: sig-logs-pipeline-check
         condition: C
