@@ -13,8 +13,8 @@ const vm = sig.vm;
 const Hash = sig.core.Hash;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.Pubkey;
-const RentCollector = sig.core.rent_collector.RentCollector;
-const RentState = sig.core.RentCollector.RentState;
+const RentCollector = sig.runtime.rent_collector.RentCollector;
+const RentState = sig.runtime.RentCollector.RentState;
 
 const AccountReader = sig.runtime.execution_interfaces.AccountReader;
 const TestEpochStakeReaderContext = sig.runtime.execution_interfaces.TestEpochStakeReaderContext;
@@ -850,7 +850,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     const sysvar_cache: SysvarCache = .{};
     defer sysvar_cache.deinit(allocator);
 
-    const rent_collector = sig.core.rent_collector.defaultCollector(10);
+    const rent_collector = sig.runtime.rent_collector.defaultCollector(10);
 
     const epoch_stake_reader_context: TestEpochStakeReaderContext = .{};
 

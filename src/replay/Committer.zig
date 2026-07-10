@@ -104,7 +104,7 @@ pub fn commitTransactions(
         priority_fees += tx_result.fees.prioritization_fee;
 
         const is_simple_vote_tx = transaction.transaction.isSimpleVoteTransaction(
-            transaction.instructions,
+            &sig.runtime.program.vote.ID,
         );
 
         if (!is_simple_vote_tx) {

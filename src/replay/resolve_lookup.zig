@@ -74,7 +74,7 @@ pub const ResolvedTransaction = struct {
             .num_lookup_tables = self.transaction.msg.address_lookups.len,
             .num_static_account_keys = @intCast(self.transaction.msg.account_keys.len),
             .is_simple_vote_transaction = self.transaction.isSimpleVoteTransaction(
-                self.instructions,
+                &sig.runtime.program.vote.ID,
             ),
         };
     }

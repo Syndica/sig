@@ -9,7 +9,7 @@ const AccountReader = sig.runtime.execution_interfaces.AccountReader;
 
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
-const RentCollector = sig.core.rent_collector.RentCollector;
+const RentCollector = sig.runtime.rent_collector.RentCollector;
 const AccountMeta = sig.core.instruction.InstructionAccount;
 
 const account_loader = sig.runtime.account_loader;
@@ -780,7 +780,7 @@ test "checkFeePayer: happy path fee payer only" {
         AccountReader.fromMap(&account_map),
         &ComputeBudgetLimits.DEFAULT,
         null,
-        &sig.core.rent_collector.defaultCollector(10),
+        &sig.runtime.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,
         0,
         5000,
@@ -850,7 +850,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
             .pubkey = transaction.fee_payer,
             .account = nonce_account,
         },
-        &sig.core.rent_collector.defaultCollector(10),
+        &sig.runtime.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,
         0,
         5000,
@@ -921,7 +921,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
             .pubkey = Pubkey.initRandom(prng.random()),
             .account = nonce_account,
         },
-        &sig.core.rent_collector.defaultCollector(10),
+        &sig.runtime.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,
         0,
         5000,

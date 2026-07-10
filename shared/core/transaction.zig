@@ -266,12 +266,9 @@ pub const Transaction = struct {
     /// - That instruction is a Vote program instruction
     /// - 1 or 2 signatures
     /// - No address lookup tables (legacy message)
-    pub fn isSimpleVoteTransaction(
-        self: *const Transaction,
-        instructions: []const sig.runtime.InstructionInfo,
-    ) bool {
+    pub fn isSimpleVoteTransaction(self: *const Transaction, vote_program_id: *const Pubkey) bool {
         // Must have exactly 1 instruction
-        if (instructions.len != 1) return false;
+        if (self.msg.instructions.len != 1) return false;
 
         // Must have 1 or 2 signatures
         if (self.signatures.len == 0 or self.signatures.len > 2) return false;
@@ -280,8 +277,8 @@ pub const Transaction = struct {
         if (self.msg.address_lookups.len > 0) return false;
 
         // First instruction must be vote program
-        const instr = instructions[0];
-        return instr.program_meta.pubkey.equals(&sig.runtime.program.vote.ID);
+        const instr = self.msg.instructions[0];
+        return self.msg.account_keys[instr.program_index].equals(vote_program_id);
     }
 };
 

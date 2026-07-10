@@ -14,6 +14,7 @@ const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/feature-set/src/lib.rs#L2318
 pub const FEATURE_SET_ID: u32 = @import("feature-set-id").FEATURE_SET_ID;
+pub const FEATURE_PROGRAM_ID: Pubkey = .parse("Feature111111111111111111111111111111111111");
 
 /// ZonInfo represents the metadata for a feature, including its name, pubkey, description, status, and an optional note.
 /// It is used to record the history and current state of all features, including those that have been reverted.
@@ -256,33 +257,6 @@ pub const Set = struct {
         }
     };
 };
-
-/// Returns the activation slot from a feature account.
-/// - Returns `.pending` if the feature is pending activation (valid 9-byte account with null slot)
-/// - Returns `.{ .activated = slot }` if already activated
-/// - Returns `.invalid` if the account is not a valid feature account
-const FeatureActivationState = union(enum) {
-    pending,
-    activated: u64,
-    invalid,
-};
-
-/// Feature accounts must have at least 9 bytes of data (bincode-serialized ?u64)
-/// An empty account (0 bytes) is not a valid pending feature
-/// [solana-sdk] https://github.com/anza-xyz/solana-sdk/blob/54449336c03ae8a99bc37745ac97ab90a77eb24b/feature-gate-interface/src/state.rs#L37
-pub fn activationStateFromAccount(owner: Pubkey, data: []const u8) !FeatureActivationState {
-    if (data.len < 9 or
-        !owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) return .invalid;
-
-    const maybe_slot = sig.bincode.readFromSlice(
-        failing_allocator,
-        ?u64,
-        data[0..9],
-        .{},
-    ) catch @panic("failed to deserialize feature account data");
-
-    return if (maybe_slot) |slot| .{ .activated = slot } else .pending;
-}
 
 test "full inflation enabled" {
     var feature_set: Set = .ALL_DISABLED;

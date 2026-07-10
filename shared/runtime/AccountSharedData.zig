@@ -36,7 +36,7 @@ pub const NEW: AccountSharedData = .{
     .data = &.{},
     .owner = Pubkey.ZEROES,
     .executable = false,
-    .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
+    .rent_epoch = sig.runtime.rent_collector.RENT_EXEMPT_RENT_EPOCH,
 };
 
 pub fn isZeroed(self: AccountSharedData) bool {

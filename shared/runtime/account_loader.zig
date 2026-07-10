@@ -10,9 +10,9 @@ const Allocator = std.mem.Allocator;
 
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
-const RentCollector = sig.core.rent_collector.RentCollector;
-const RENT_EXEMPT_RENT_EPOCH = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH;
-const CollectedInfo = sig.core.rent_collector.CollectedInfo;
+const RentCollector = runtime.rent_collector.RentCollector;
+const RENT_EXEMPT_RENT_EPOCH = runtime.rent_collector.RENT_EXEMPT_RENT_EPOCH;
+const CollectedInfo = runtime.rent_collector.CollectedInfo;
 const AccountMeta = sig.core.instruction.InstructionAccount;
 
 const AccountReader = runtime.execution_interfaces.AccountReader;
@@ -432,7 +432,7 @@ const TestingEnv = struct {
 fn newTestingEnv() TestingEnv {
     if (!@import("builtin").is_test) @compileError("newTestingEnv for testing only");
     return .{
-        .rent_collector = sig.core.rent_collector.defaultCollector(0),
+        .rent_collector = runtime.rent_collector.defaultCollector(0),
         .compute_budget_limits = ComputeBudgetLimits{
             .heap_size = 0,
             .compute_unit_limit = 0,
