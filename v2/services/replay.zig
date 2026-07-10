@@ -324,6 +324,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
 /// Holds the accounts mutated for each tracked Block.
 const Unrooted = extern struct {
+    seed: u64,
     maps: [max_blocks]Map, // we could initialise with `= @splat(.{})`, but lld disagrees
 
     // [firedancer] https://github.com/firedancer-io/firedancer/blob/c2050b9c7fb8787b1eaaf9e50cac421a7281f70f/src/flamenco/runtime/fd_cost_tracker.h#L78
@@ -333,7 +334,6 @@ const Unrooted = extern struct {
     const max_blocks = lib.replay.BlockPool.capacity;
 
     const Map = extern struct {
-        seed: u64,
         len: u32 = 0, // only used to assert `max_mutations_per_block` holds true
         data: [N]AccountRef = @splat(.invalid), // ~1.4MiB
 
@@ -350,10 +350,11 @@ const Unrooted = extern struct {
 
         fn entry(
             self: anytype,
+            seed: u64,
             account_pool: *lib.accounts_db.AccountPool,
             pubkey: *const Pubkey,
         ) EntryPtr(@TypeOf(self)) {
-            var i: usize = @intCast(pubkey.hash(self.seed) % N);
+            var i: usize = @intCast(pubkey.hash(seed) % N);
 
             while (true) : (i = (i + 1) % N) {
                 if (self.data[i] == .invalid)
@@ -365,10 +366,11 @@ const Unrooted = extern struct {
 
         fn get(
             self: *const Map,
+            seed: u64,
             account_pool: *lib.accounts_db.AccountPool,
             pubkey: *const Pubkey,
         ) AccountRef {
-            return self.entry(account_pool, pubkey).*;
+            return self.entry(seed, account_pool, pubkey).*;
         }
 
         // The map takes a ref to the new account.
@@ -377,6 +379,7 @@ const Unrooted = extern struct {
         // lint: allow_unused
         fn put(
             self: *Map,
+            seed: u64,
             account_pool: *lib.accounts_db.AccountPool,
             new_account_ref: AccountRef,
         ) AccountRef {
@@ -387,7 +390,7 @@ const Unrooted = extern struct {
             const new_account = account_pool.getAccount(new_account_ref);
             const pubkey: *const Pubkey = &new_account.pubkey;
 
-            const found_entry: *AccountRef = self.entry(account_pool, pubkey);
+            const found_entry: *AccountRef = self.entry(seed, account_pool, pubkey);
 
             // don't "replace" an accountref with itself!
             std.debug.assert(found_entry.* != new_account_ref);
@@ -412,13 +415,10 @@ const Unrooted = extern struct {
     };
 
     fn init(self: *Unrooted) void {
-        for (&self.maps) |*map| map.* = .{
-            // TODO:
-            // 1) create randomly + secretly at startup, to avoid performance degradation from attackers
-            //    using pre-made keys to cause bad clustering
-            // 2) change the seed used per block to avoid possibility of worst-case clustering
-            .seed = 123,
-        };
+        // TODO: create randomly + secretly at startup, to avoid performance degradation from
+        //       attackers using pre-made keys to cause bad clustering
+        self.seed = 123;
+        for (&self.maps) |*map| map.* = .{};
     }
 
     /// Get an account purely from the unrooted store.
@@ -443,7 +443,7 @@ const Unrooted = extern struct {
             const current_map: *const Map =
                 &self.maps[block_pool.ptrToIndex(ancestor_block).index()];
 
-            const account_ref = current_map.get(account_pool, key);
+            const account_ref = current_map.get(self.seed, account_pool, key);
             if (account_ref != .invalid) {
                 const account = account_pool.getAccount(account_ref);
                 account.ref();
