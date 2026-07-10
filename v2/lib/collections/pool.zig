@@ -280,6 +280,18 @@ pub fn Pool(Item: type, IdInt: type) type {
                     if (self == .null) return null;
                     return @enumFromInt(@intFromEnum(self));
                 }
+
+                pub fn ptr(self: Optional, pool: *PoolSelf) ?*Item {
+                    if (self == .null) return null;
+                    const id: ItemId = @enumFromInt(@intFromEnum(self));
+                    return id.ptr(pool);
+                }
+
+                pub fn constPtr(self: Optional, pool: *const PoolSelf) ?*const Item {
+                    if (self == .null) return null;
+                    const id: ItemId = @enumFromInt(@intFromEnum(self));
+                    return id.constPtr(pool);
+                }
             };
         };
 

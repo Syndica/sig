@@ -89,16 +89,21 @@ fn mainInner(
             defer it.markUsed();
 
             // TODO: use std.os.linux.sendmmsg
-            while (it.next()) |p| {
+            while (it.peek()) |p| {
                 timer.reset();
-                const bytes = try std.posix.sendto(
+                const bytes = std.posix.sendto(
                     sock,
                     p.data[0..p.len],
                     std.posix.MSG.NOSIGNAL,
                     &p.addr.any,
                     p.addr.getOsSockLen(),
-                );
+                ) catch |err| switch (err) {
+                    error.WouldBlock => break,
+                    else => |e| return e,
+                };
+
                 std.debug.assert(bytes == p.len);
+                _ = it.next();
                 metrics.send_packets.increment(1);
                 metrics.send_latency.set(timer.read());
             }
