@@ -1632,7 +1632,6 @@ test "applyFeatureActivations: basic activations" {
             err,
         );
     }
-
 }
 
 test "applyFeatureActivations: SIMD-0437 incremental rent reduction" {
