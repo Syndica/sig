@@ -168,10 +168,9 @@ pub const Rooted = struct {
             padding,
             /// holds an actual account
             account,
-            /// holds a serialized addition to the blockhash queue
-            blockhashes,
-            /// holds a serialized addition to the block_id queue
-            block_ids,
+            /// holds the block_id followed by a serialized addition to the blockhash queue.
+            /// body layout: `{ block_id: Hash, [info.count]Hash }`
+            block_metadata,
             _, // TODO: add other types of sections
         },
         info: packed union {
@@ -306,7 +305,13 @@ pub const Rooted = struct {
                     });
                     n_puts += 1;
                 },
-                .blockhashes => {
+                .block_metadata => {
+                    // read block_id
+                    var block_id: Hash = undefined;
+                    try self.readExisting(.from(logger), (&block_id.data).ptr, @sizeOf(Hash));
+                    last_block_id = block_id;
+
+                    // read blockhashes
                     var num_hashes = header.info.count;
                     while (num_hashes > 0) {
                         // get a buffer to write hashes into
@@ -331,11 +336,6 @@ pub const Rooted = struct {
                         blockhash_writer.advance(take);
                         num_hashes -= take;
                     }
-                },
-                .block_ids => for (0..header.info.count) |_| {
-                    var block_id: Hash = undefined;
-                    try self.readExisting(.from(logger), (&block_id.data).ptr, @sizeOf(Hash));
-                    last_block_id = block_id;
                 },
                 _ => return error.InvalidSector,
             }
@@ -438,26 +438,34 @@ pub const Rooted = struct {
             }
         }
 
-        { // write the current blockhash queue
+        { // write the block_id + current blockhash queue
             const blockhash_queue = &snapshot_iter.manifest.bank_fields.blockhash_queue;
             self.journal.blockhash_max_age = std.math.lossyCast(u32, blockhash_queue.max_age);
 
+            const block_id = snapshot_iter.manifest.extra_fields.block_id;
             const num_hashes = blockhash_queue.hashes.count;
             const hashes = blockhash_queue.hashes.array[0..num_hashes];
 
-            // write blockhashes header
+            // write block_metadata header
             const header: SectorHeader = .{
-                .type = .blockhashes,
+                .type = .block_metadata,
                 .info = .{ .count = @intCast(num_hashes) },
             };
 
             var r = std.Io.Reader.fixed(std.mem.asBytes(&header));
             try self.queueWrite(.from(logger), @sizeOf(SectorHeader), &r);
 
+            // write block_id
+            r = std.Io.Reader.fixed(std.mem.asBytes(&block_id));
+            try self.queueWrite(.from(logger), @sizeOf(Hash), &r);
+
+            // write blockhashes
             r = std.Io.Reader.fixed(std.mem.sliceAsBytes(hashes));
             try self.queueWrite(.from(logger), num_hashes * @sizeOf(Hash), &r);
 
-            // send over as metadata
+            runtime_metadata.block_id = block_id;
+
+            // send blockhashes over as metadata
             var blockhash_writer = runtime_metadata.blockhash_queue.hashes.getView(.writer);
             defer {
                 runtime_metadata.blockhash_queue.max_age = self.journal.blockhash_max_age;
@@ -474,23 +482,6 @@ pub const Rooted = struct {
                 blockhash_writer.advance(take);
                 i += take;
             }
-        }
-
-        { // write the block_id sector for this block
-            const block_id = snapshot_iter.manifest.extra_fields.block_id;
-
-            const header: SectorHeader = .{
-                .type = .block_ids,
-                .info = .{ .count = 1 },
-            };
-
-            var r = std.Io.Reader.fixed(std.mem.asBytes(&header));
-            try self.queueWrite(.from(logger), @sizeOf(SectorHeader), &r);
-
-            r = std.Io.Reader.fixed(std.mem.asBytes(&block_id));
-            try self.queueWrite(.from(logger), @sizeOf(Hash), &r);
-
-            runtime_metadata.block_id = block_id;
         }
 
         // write the slot to commit the RuntimeMetadata stuff
