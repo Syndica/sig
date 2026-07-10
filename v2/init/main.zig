@@ -151,14 +151,14 @@ const Config = struct {
 /// a `ServiceLayout` whose `.ro`/`.rw` fields hold the typed regions matching the
 /// service's `ReadOnly`/`ReadWrite` schema in `init/services.zig`.
 const Topology = struct {
-    net: ServiceRegions(services.net),
-    gossip: ServiceRegions(services.gossip),
-    shred_receiver: ServiceRegions(services.shred_receiver),
-    replay: ServiceRegions(services.replay),
-    snapshot: ServiceRegions(services.snapshot),
-    accounts_db: ServiceRegions(services.accounts_db),
-    telemetry: ServiceRegions(services.telemetry),
-    exec: ServiceRegions(services.exec),
+    net: ServiceRegions(.from(services.net)),
+    gossip: ServiceRegions(.from(services.gossip)),
+    shred_receiver: ServiceRegions(.from(services.shred_receiver)),
+    replay: ServiceRegions(.from(services.replay)),
+    snapshot: ServiceRegions(.from(services.snapshot)),
+    accounts_db: ServiceRegions(.from(services.accounts_db)),
+    telemetry: ServiceRegions(.from(services.telemetry)),
+    exec: ServiceRegions(.from(services.exec)),
 };
 
 pub fn main() !void {

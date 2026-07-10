@@ -46,6 +46,14 @@ pub const Mode = enum { sandboxed, threaded };
 pub const ServiceSpec = struct {
     ReadOnly: type,
     ReadWrite: type,
+
+    /// Converts from an opaque namespace into the more structured `ServiceSpec`.
+    pub fn from(S: type) ServiceSpec {
+        return .{
+            .ReadOnly = S.ReadOnly,
+            .ReadWrite = S.ReadWrite,
+        };
+    }
 };
 
 /// Typed handle for a shared-memory region. Created by `Region(T).simple()` or
