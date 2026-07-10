@@ -1,34 +1,35 @@
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../lib.zig");
+const sig = @import("shared");
+const runtime = @import("lib.zig");
 const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 
-const AccountReader = sig.runtime.execution_interfaces.AccountReader;
+const AccountReader = runtime.execution_interfaces.AccountReader;
 
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
-const RentCollector = sig.runtime.rent_collector.RentCollector;
+const RentCollector = runtime.rent_collector.RentCollector;
 const AccountMeta = sig.core.instruction.InstructionAccount;
 
-const account_loader = sig.runtime.account_loader;
-const AccountSharedData = sig.runtime.AccountSharedData;
-const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
-const PreparedAccount = sig.runtime.account_loader.PreparedAccount;
-const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
+const account_loader = runtime.account_loader;
+const AccountSharedData = runtime.AccountSharedData;
+const LoadedAccount = runtime.account_loader.LoadedAccount;
+const PreparedAccount = runtime.account_loader.PreparedAccount;
+const ComputeBudgetLimits = runtime.program.compute_budget.ComputeBudgetLimits;
 const FeatureSet = sig.core.FeatureSet;
-const NonceData = sig.runtime.nonce.Data;
-const NonceState = sig.runtime.nonce.State;
-const NonceVersions = sig.runtime.nonce.Versions;
-const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
-const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
+const NonceData = runtime.nonce.Data;
+const NonceState = runtime.nonce.State;
+const NonceVersions = runtime.nonce.Versions;
+const RuntimeTransaction = runtime.transaction_execution.RuntimeTransaction;
+const TransactionResult = runtime.transaction_execution.TransactionResult;
 
 const TransactionError = sig.core.transaction_error.TransactionError;
 
-const deinitAccountMap = sig.runtime.testing.deinitAccountMap;
+const deinitAccountMap = runtime.testing.deinitAccountMap;
 
-const AccountLoadError = sig.runtime.execution_interfaces.AccountLoadError;
+const AccountLoadError = runtime.execution_interfaces.AccountLoadError;
 
 const NONCED_TX_MARKER_IX_INDEX = 0;
 
@@ -175,7 +176,7 @@ pub const SignatureCounts = struct {
 
     // [agave] https://github.com/anza-xyz/agave/blob/eb416825349ca376fa13249a0267cf7b35701938/svm-transaction/src/svm_message.rs#L139
     pub fn fromTransaction(transaction: *const RuntimeTransaction) SignatureCounts {
-        const precompiles = sig.runtime.program.precompiles;
+        const precompiles = runtime.program.precompiles;
 
         return .{
             .num_ed25519_signatures = sumPrecompileSigs(transaction, &precompiles.ed25519.ID),
@@ -327,7 +328,7 @@ const SystemAccountKind = enum { System, Nonce };
 
 // [agave] https://github.com/anza-xyz/agave/blob/64b616042450fa6553427471f70895f1dfe0cd86/svm/src/account_loader.rs#L293
 fn getSystemAccountKind(account: *const AccountSharedData) ?SystemAccountKind {
-    if (!account.owner.equals(&sig.runtime.program.system.ID)) return null;
+    if (!account.owner.equals(&runtime.program.system.ID)) return null;
     if (account.data.len == 0) return .System;
     if (account.data.len == NonceVersions.SERIALIZED_SIZE) {
         const versions = NonceVersions.fromAccountData(account.data) orelse
@@ -433,7 +434,7 @@ pub fn verifyNonceAccount(
     account_data_reader: anytype,
     recent_blockhash: *const Hash,
 ) ?NonceData {
-    if (!owner.equals(&sig.runtime.program.system.ID)) return null;
+    if (!owner.equals(&runtime.program.system.ID)) return null;
 
     // could probably be smaller
     var deserialize_buf: [@sizeOf(NonceData) * 2]u8 = undefined;
@@ -475,7 +476,7 @@ pub fn getDurableNonce(
     if (program_account_idx >= account_keys.len) return null;
     const program_key = account_keys[program_account_idx];
 
-    if (!program_key.equals(&sig.runtime.program.system.ID)) return null;
+    if (!program_key.equals(&runtime.program.system.ID)) return null;
 
     if (!std.mem.eql(
         u8,
@@ -503,10 +504,10 @@ test "checkLoadAndAdvanceMessageNonceAccount: advances valid nonce" {
 
     const nonce_account = AccountSharedData{
         .lamports = 1,
-        .owner = sig.runtime.program.system.ID,
+        .owner = runtime.program.system.ID,
         .data = try sig.bincode.writeAlloc(
             allocator,
-            sig.runtime.nonce.Versions{ .current = .{
+            runtime.nonce.Versions{ .current = .{
                 .initialized = .{
                     .authority = nonce_authority_key,
                     .durable_nonce = recent_blockhash,
@@ -525,7 +526,7 @@ test "checkLoadAndAdvanceMessageNonceAccount: advances valid nonce" {
 
     const instruction_data = try sig.bincode.writeAlloc(
         allocator,
-        sig.runtime.program.system.Instruction.advance_nonce_account,
+        runtime.program.system.Instruction.advance_nonce_account,
         .{},
     );
     defer allocator.free(instruction_data);
@@ -534,7 +535,7 @@ test "checkLoadAndAdvanceMessageNonceAccount: advances valid nonce" {
     defer accounts.deinit(allocator);
     try accounts.append(
         allocator,
-        .{ .pubkey = sig.runtime.program.system.ID, .is_signer = false, .is_writable = false },
+        .{ .pubkey = runtime.program.system.ID, .is_signer = false, .is_writable = false },
     );
     try accounts.append(
         allocator,
@@ -545,7 +546,7 @@ test "checkLoadAndAdvanceMessageNonceAccount: advances valid nonce" {
         .{ .pubkey = nonce_authority_key, .is_signer = true, .is_writable = false },
     );
 
-    var metas: sig.runtime.InstructionInfo.AccountMetas = .empty;
+    var metas: runtime.InstructionInfo.AccountMetas = .empty;
     defer metas.deinit(allocator);
 
     try metas.appendSlice(allocator, &.{
@@ -569,10 +570,10 @@ test "checkLoadAndAdvanceMessageNonceAccount: advances valid nonce" {
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = recent_blockhash,
         .instructions = &.{.{
-            .program_meta = .{ .pubkey = sig.runtime.program.system.ID, .index_in_transaction = 0 },
+            .program_meta = .{ .pubkey = runtime.program.system.ID, .index_in_transaction = 0 },
             .account_metas = metas,
             .dedupe_map = blk: {
-                var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
+                var dedupe_map: [runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
                 dedupe_map[1] = 1;
                 dedupe_map[2] = 2;
                 break :blk dedupe_map;
@@ -604,7 +605,7 @@ test "checkLoadAndAdvanceMessageNonceAccount: advances valid nonce" {
 
     const nv = try sig.bincode.readFromSlice(
         allocator,
-        sig.runtime.nonce.Versions,
+        runtime.nonce.Versions,
         loaded_nonce.account.data,
         .{},
     );
@@ -640,10 +641,10 @@ test "checkLoadAndAdvanceMessageNonceAccount: SIMD-0242 ALT-resolved nonce" {
 
     const nonce_account_data = AccountSharedData{
         .lamports = 1,
-        .owner = sig.runtime.program.system.ID,
+        .owner = runtime.program.system.ID,
         .data = try sig.bincode.writeAlloc(
             allocator,
-            sig.runtime.nonce.Versions{ .current = .{
+            runtime.nonce.Versions{ .current = .{
                 .initialized = .{
                     .authority = nonce_authority_key,
                     .durable_nonce = recent_blockhash,
@@ -662,7 +663,7 @@ test "checkLoadAndAdvanceMessageNonceAccount: SIMD-0242 ALT-resolved nonce" {
 
     const instruction_data = try sig.bincode.writeAlloc(
         allocator,
-        sig.runtime.program.system.Instruction.advance_nonce_account,
+        runtime.program.system.Instruction.advance_nonce_account,
         .{},
     );
     defer allocator.free(instruction_data);
@@ -674,7 +675,7 @@ test "checkLoadAndAdvanceMessageNonceAccount: SIMD-0242 ALT-resolved nonce" {
     defer accounts.deinit(allocator);
     try accounts.append(
         allocator,
-        .{ .pubkey = sig.runtime.program.system.ID, .is_signer = false, .is_writable = false },
+        .{ .pubkey = runtime.program.system.ID, .is_signer = false, .is_writable = false },
     );
     try accounts.append(
         allocator,
@@ -685,7 +686,7 @@ test "checkLoadAndAdvanceMessageNonceAccount: SIMD-0242 ALT-resolved nonce" {
         .{ .pubkey = nonce_key, .is_signer = false, .is_writable = true },
     );
 
-    var metas: sig.runtime.InstructionInfo.AccountMetas = .empty;
+    var metas: runtime.InstructionInfo.AccountMetas = .empty;
     defer metas.deinit(allocator);
 
     try metas.appendSlice(allocator, &.{
@@ -709,10 +710,10 @@ test "checkLoadAndAdvanceMessageNonceAccount: SIMD-0242 ALT-resolved nonce" {
         .msg_hash = Hash.ZEROES,
         .recent_blockhash = recent_blockhash,
         .instructions = &.{.{
-            .program_meta = .{ .pubkey = sig.runtime.program.system.ID, .index_in_transaction = 0 },
+            .program_meta = .{ .pubkey = runtime.program.system.ID, .index_in_transaction = 0 },
             .account_metas = metas,
             .dedupe_map = blk: {
-                var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
+                var dedupe_map: [runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
                 dedupe_map[2] = 0;
                 dedupe_map[1] = 1;
                 break :blk dedupe_map;
@@ -768,7 +769,7 @@ test "checkFeePayer: happy path fee payer only" {
 
     try account_map.put(allocator, transaction.fee_payer, .{
         .lamports = 1_000_000,
-        .owner = sig.runtime.program.system.ID,
+        .owner = runtime.program.system.ID,
         .data = &.{},
         .executable = false,
         .rent_epoch = 0,
@@ -780,7 +781,7 @@ test "checkFeePayer: happy path fee payer only" {
         AccountReader.fromMap(&account_map),
         &ComputeBudgetLimits.DEFAULT,
         null,
-        &sig.runtime.rent_collector.defaultCollector(10),
+        &runtime.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,
         0,
         5000,
@@ -827,7 +828,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
 
     try account_map.put(allocator, transaction.fee_payer, .{
         .lamports = 1_000_000,
-        .owner = sig.runtime.program.system.ID,
+        .owner = runtime.program.system.ID,
         .data = &.{},
         .executable = false,
         .rent_epoch = 0,
@@ -835,7 +836,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
 
     const nonce_account = AccountSharedData{
         .lamports = 1_000,
-        .owner = sig.runtime.program.system.ID,
+        .owner = runtime.program.system.ID,
         .data = try allocator.dupe(u8, &.{ 0, 0, 0, 0 }),
         .executable = false,
         .rent_epoch = 0,
@@ -850,7 +851,7 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
             .pubkey = transaction.fee_payer,
             .account = nonce_account,
         },
-        &sig.runtime.rent_collector.defaultCollector(10),
+        &runtime.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,
         0,
         5000,
@@ -898,7 +899,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
 
     try account_map.put(allocator, transaction.fee_payer, .{
         .lamports = 1_000_000,
-        .owner = sig.runtime.program.system.ID,
+        .owner = runtime.program.system.ID,
         .data = &.{},
         .executable = false,
         .rent_epoch = 0,
@@ -906,7 +907,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
 
     const nonce_account = AccountSharedData{
         .lamports = 1_000,
-        .owner = sig.runtime.program.system.ID,
+        .owner = runtime.program.system.ID,
         .data = try allocator.dupe(u8, &.{ 0, 0, 0, 0 }),
         .executable = false,
         .rent_epoch = 0,
@@ -921,7 +922,7 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
             .pubkey = Pubkey.initRandom(prng.random()),
             .account = nonce_account,
         },
-        &sig.runtime.rent_collector.defaultCollector(10),
+        &runtime.rent_collector.defaultCollector(10),
         &sig.core.FeatureSet.ALL_DISABLED,
         0,
         5000,

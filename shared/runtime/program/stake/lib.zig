@@ -1,12 +1,12 @@
 const std = @import("std");
-const sig = @import("../../../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
 const bincode = sig.bincode;
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
 const FeatureSet = sig.core.FeatureSet;
-const sysvar = sig.runtime.sysvar;
+const sysvar = runtime.sysvar;
 
 /// Self-referencing namespace for backward-compatible `stake.state.*` paths.
 pub const state = @This();
@@ -581,7 +581,7 @@ pub const AuthorizeCheckedWithSeedArgs = struct {
     authority_seed: []const u8, // is there a fixed upper bound here?
     authority_owner: Pubkey,
 
-    pub const @"!bincode-config:authority_seed" = sig.runtime.program.SEED_FIELD_CONFIG;
+    pub const @"!bincode-config:authority_seed" = runtime.program.SEED_FIELD_CONFIG;
 };
 
 pub const AuthorizeWithSeedArgs = struct {
@@ -590,7 +590,7 @@ pub const AuthorizeWithSeedArgs = struct {
     authority_seed: []const u8, // is there a fixed upper bound here?
     authority_owner: Pubkey,
 
-    pub const @"!bincode-config:authority_seed" = sig.runtime.program.SEED_FIELD_CONFIG;
+    pub const @"!bincode-config:authority_seed" = runtime.program.SEED_FIELD_CONFIG;
 };
 
 pub const LockupCheckedArgs = struct {

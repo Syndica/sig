@@ -1,6 +1,6 @@
 const std = @import("std");
-const sig = @import("../../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("../lib.zig");
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("address_lookup_table/lib.zig");
@@ -34,14 +34,14 @@ pub const vote = @import("vote/lib.zig");
 pub const zk_elgamal = @import("zk_elgamal/lib.zig");
 
 const InstructionError = sig.core.instruction.InstructionError;
-const InstructionContext = sig.runtime.InstructionContext;
+const InstructionContext = runtime.InstructionContext;
 
 /// Program instruction seeds should be no longer than 32 bytes (pubkey_utils.MAX_SEED_LEN).
 /// Agave validates instruction seeds during program execution returning error.Custom if they are
 /// invalid. Enforcing the seed limit during deserialization results in returning
 /// error.InvalidInstructionData for instructions with invalid seeds. This is an issue for
 /// conformance testing as the testing harness expects the same error code.
-// const MAX_SEED_LEN = sig.runtime.pubkey_utils.MAX_SEED_LEN;
+// const MAX_SEED_LEN = runtime.pubkey_utils.MAX_SEED_LEN;
 pub const SEED_FIELD_CONFIG = sig.bincode.utf8StringCodec([]const u8, 1024 * 1024);
 
 const Program = struct {

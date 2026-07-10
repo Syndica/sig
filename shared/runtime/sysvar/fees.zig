@@ -1,7 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const sig = @import("../../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("../lib.zig");
 const Pubkey = sig.core.Pubkey;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/sysvar/src/fees.rs#L43

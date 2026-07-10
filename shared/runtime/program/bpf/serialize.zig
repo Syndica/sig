@@ -1,23 +1,23 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../../../lib.zig");
-
-const program = sig.runtime.program;
-const vm = sig.vm;
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
+const program = runtime.program;
+const vm = runtime.vm;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 
-const InstructionContext = sig.runtime.InstructionContext;
-const BorrowedAccount = sig.runtime.BorrowedAccount;
-const InstructionInfo = sig.runtime.InstructionInfo;
+const InstructionContext = runtime.InstructionContext;
+const BorrowedAccount = runtime.BorrowedAccount;
+const InstructionInfo = runtime.InstructionInfo;
 
 const Region = vm.memory.Region;
 
-const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH;
+const MAX_PERMITTED_DATA_LENGTH = runtime.program.system.MAX_PERMITTED_DATA_LENGTH;
 
-const INPUT_START = sig.vm.memory.INPUT_START;
+const INPUT_START = runtime.vm.memory.INPUT_START;
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/program-entrypoint/src/lib.rs#L316
 /// `assert_eq(std::mem::align_of::<u128>(), 8)` is true for BPF but not for some host machines
@@ -816,10 +816,10 @@ fn deserializeParametersAligned(
 
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L778
 test serializeParameters {
-    const AccountSharedData = sig.runtime.AccountSharedData;
-    const createTransactionContext = sig.runtime.testing.createTransactionContext;
-    const deinitTransactionContext = sig.runtime.testing.deinitTransactionContext;
-    const createInstructionInfo = sig.runtime.testing.createInstructionInfo;
+    const AccountSharedData = runtime.AccountSharedData;
+    const createTransactionContext = runtime.testing.createTransactionContext;
+    const deinitTransactionContext = runtime.testing.deinitTransactionContext;
+    const createInstructionInfo = runtime.testing.createInstructionInfo;
 
     // const allocator = std.testing.allocator;
     const allocator = std.testing.allocator;
@@ -911,7 +911,7 @@ test serializeParameters {
         );
         defer {
             deinitTransactionContext(allocator, &tc);
-            sig.runtime.testing.deinitAccountMap(cache, allocator);
+            runtime.testing.deinitAccountMap(cache, allocator);
         }
 
         var instruction_info = try createInstructionInfo(
@@ -967,7 +967,7 @@ test serializeParameters {
         );
         defer instruction_info.deinit(allocator);
 
-        try sig.runtime.executor.pushInstruction(&tc, instruction_info);
+        try runtime.executor.pushInstruction(&tc, instruction_info);
         const ic = try tc.getCurrentInstructionContext();
 
         { // MaxAccountsExceeded
@@ -1113,7 +1113,7 @@ fn concatRegions(allocator: std.mem.Allocator, regions: []Region) ![]u8 {
 // Exercises both loader variants (v1 unaligned, v3 aligned) and both
 // direct-mapping modes.
 test "writeAccount tags account-data regions with index_in_transaction" {
-    const testing = sig.runtime.testing;
+    const testing = runtime.testing;
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -1183,7 +1183,7 @@ test "writeAccount tags account-data regions with index_in_transaction" {
         );
         defer info.deinit(allocator);
 
-        try sig.runtime.executor.pushInstruction(&tc, info);
+        try runtime.executor.pushInstruction(&tc, info);
         const ic = try tc.getCurrentInstructionContext();
 
         var serialized = try serializeParameters(
@@ -1240,7 +1240,7 @@ test "writeAccount tags account-data regions with index_in_transaction" {
 // return that doesn't produce per-account regions, so no payload is ever set.
 // Locks in that the payload tagging only kicks in under SIMD-0460.
 test "writeAccount does not tag regions when virtual_address_space_adjustments is off" {
-    const testing = sig.runtime.testing;
+    const testing = runtime.testing;
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -1278,7 +1278,7 @@ test "writeAccount does not tag regions when virtual_address_space_adjustments i
     );
     defer info.deinit(allocator);
 
-    try sig.runtime.executor.pushInstruction(&tc, info);
+    try runtime.executor.pushInstruction(&tc, info);
     const ic = try tc.getCurrentInstructionContext();
 
     var serialized = try serializeParameters(
@@ -1307,7 +1307,7 @@ test "writeAccount does not tag regions when virtual_address_space_adjustments i
 // virtual_address_space_adjustments off and on (with direct_mapping off).
 // ABIv0 (loader-v1) must not emit the array even when the flag is on.
 test "direct_account_pointers_in_program_input emits trailing pointer array" {
-    const testing = sig.runtime.testing;
+    const testing = runtime.testing;
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -1364,7 +1364,7 @@ test "direct_account_pointers_in_program_input emits trailing pointer array" {
         );
         defer info.deinit(allocator);
 
-        try sig.runtime.executor.pushInstruction(&tc, info);
+        try runtime.executor.pushInstruction(&tc, info);
         const ic = try tc.getCurrentInstructionContext();
 
         var serialized = try serializeParameters(

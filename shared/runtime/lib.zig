@@ -24,6 +24,8 @@ comptime {
         _ = @import("testing.zig");
         _ = @import("transaction_context.zig");
         _ = @import("transaction_execution.zig");
+        _ = @import("vm/lib.zig");
+        _ = @import("zksdk/lib.zig");
     }
 }
 
@@ -50,6 +52,8 @@ pub const sysvar_cache = @import("sysvar_cache.zig");
 pub const testing = @import("testing.zig");
 pub const transaction_context = @import("transaction_context.zig");
 pub const transaction_execution = @import("transaction_execution.zig");
+pub const vm = @import("vm/lib.zig");
+pub const zksdk = @import("zksdk/lib.zig");
 
 pub const builtin_programs = program.builtin_programs;
 pub const builtin_program_costs = program.builtin_program_costs;

@@ -1,21 +1,21 @@
 const std = @import("std");
 const tracy = @import("tracy");
-const sig = @import("../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("lib.zig");
 const bincode = sig.bincode;
 
 const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
 
-const AccountSharedData = sig.runtime.AccountSharedData;
-const TransactionContext = sig.runtime.TransactionContext;
-const Rent = sig.runtime.sysvar.Rent;
-const WLockGuard = sig.runtime.TransactionContextAccount.WLockGuard;
+const AccountSharedData = runtime.AccountSharedData;
+const TransactionContext = runtime.TransactionContext;
+const Rent = runtime.sysvar.Rent;
+const WLockGuard = runtime.TransactionContextAccount.WLockGuard;
 
 const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION =
-    sig.runtime.program.system.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
+    runtime.program.system.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
 
-const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH;
+const MAX_PERMITTED_DATA_LENGTH = runtime.program.system.MAX_PERMITTED_DATA_LENGTH;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/compute-budget/src/compute_budget.rs#L11-L12
 pub const MAX_INSTRUCTION_STACK_DEPTH: usize = 5;

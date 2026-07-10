@@ -1,48 +1,49 @@
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../lib.zig");
+const sig = @import("shared");
+const runtime = @import("lib.zig");
 const tracy = @import("tracy");
 
-const account_loader = sig.runtime.account_loader;
-const program_loader = sig.runtime.program_loader;
-const executor = sig.runtime.executor;
-const compute_budget_program = sig.runtime.program.compute_budget;
-const cost_model = sig.runtime.cost_model;
-const vm = sig.vm;
+const account_loader = runtime.account_loader;
+const program_loader = runtime.program_loader;
+const executor = runtime.executor;
+const compute_budget_program = runtime.program.compute_budget;
+const cost_model = runtime.cost_model;
+const vm = runtime.vm;
 
 const Hash = sig.core.Hash;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.Pubkey;
-const RentCollector = sig.runtime.rent_collector.RentCollector;
-const RentState = sig.runtime.RentCollector.RentState;
+const RentCollector = runtime.rent_collector.RentCollector;
+const RentState = runtime.RentCollector.RentState;
 
-const AccountReader = sig.runtime.execution_interfaces.AccountReader;
-const TestEpochStakeReaderContext = sig.runtime.execution_interfaces.TestEpochStakeReaderContext;
-const StatusChecker = sig.runtime.execution_interfaces.StatusChecker;
-const EpochStakeReader = sig.runtime.execution_interfaces.EpochStakeReader;
+const AccountReader = runtime.execution_interfaces.AccountReader;
+const TestEpochStakeReaderContext = runtime.execution_interfaces.TestEpochStakeReaderContext;
+const StatusChecker = runtime.execution_interfaces.StatusChecker;
+const EpochStakeReader = runtime.execution_interfaces.EpochStakeReader;
 
-const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
+const LoadedAccount = runtime.account_loader.LoadedAccount;
 const FeatureSet = sig.core.FeatureSet;
-const FeeDetails = sig.runtime.check_transactions.FeeDetails;
-const InstructionInfo = sig.runtime.InstructionInfo;
-const LoadedTransactionAccounts = sig.runtime.account_loader.LoadedTransactionAccounts;
-const LogCollector = sig.runtime.LogCollector;
-const SysvarCache = sig.runtime.SysvarCache;
-const TransactionContext = sig.runtime.TransactionContext;
-const TransactionContextAccount = sig.runtime.TransactionContextAccount;
-const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
+const FeeDetails = runtime.check_transactions.FeeDetails;
+const InstructionInfo = runtime.InstructionInfo;
+const LoadedTransactionAccounts = runtime.account_loader.LoadedTransactionAccounts;
+const LogCollector = runtime.LogCollector;
+const SysvarCache = runtime.SysvarCache;
+const TransactionContext = runtime.TransactionContext;
+const TransactionContextAccount = runtime.TransactionContextAccount;
+const TransactionReturnData = runtime.transaction_context.TransactionReturnData;
 const AccountMeta = sig.core.instruction.InstructionAccount;
-const ProgramMap = sig.runtime.program_loader.ProgramMap;
+const ProgramMap = runtime.program_loader.ProgramMap;
 
 const TransactionError = sig.core.transaction_error.TransactionError;
 const ComputeBudgetLimits = compute_budget_program.ComputeBudgetLimits;
 const ComputeBudgetInstructionDetails = compute_budget_program.ComputeBudgetInstructionDetails;
 const InstructionTrace = TransactionContext.InstructionTrace;
 
-const AccountLoadError = sig.runtime.account_loader.AccountLoadError;
+const AccountLoadError = runtime.account_loader.AccountLoadError;
 
 const checkLoadAndAdvanceMessageNonceAccount =
-    sig.runtime.check_transactions.checkLoadAndAdvanceMessageNonceAccount;
+    runtime.check_transactions.checkLoadAndAdvanceMessageNonceAccount;
 
 // Transaction execution involves logic and validation which occurs in replay
 // and the svm. The location of key processes in Agave are outlined below:
@@ -160,7 +161,7 @@ pub const ProcessedTransaction = struct {
 
     pub const Writes = LoadedTransactionAccounts.Accounts;
     pub const PreBalances = std14.BoundedArray(u64, account_loader.MAX_TX_ACCOUNT_LOCKS);
-    pub const PreTokenBalances = sig.runtime.spl_token.RawTokenBalances;
+    pub const PreTokenBalances = runtime.spl_token.RawTokenBalances;
 
     pub fn deinit(self: *const ProcessedTransaction, allocator: std.mem.Allocator) void {
         for (self.writes.slice()) |account| account.deinit(allocator);
@@ -233,7 +234,7 @@ pub fn loadAndExecuteTransaction(
     };
 
     const fees, var rollbacks, const fee_payer =
-        switch (try sig.runtime.check_transactions.checkFeePayer(
+        switch (try runtime.check_transactions.checkFeePayer(
             tmp_allocator,
             transaction,
             account_reader,
@@ -326,7 +327,7 @@ pub fn loadAndExecuteTransaction(
     }
 
     // Capture pre-execution token balances for SPL Token accounts
-    const pre_token_balances = sig.runtime.spl_token.collectRawTokenBalances(
+    const pre_token_balances = runtime.spl_token.collectRawTokenBalances(
         loaded_accounts.accounts.slice(),
     );
 
@@ -592,7 +593,7 @@ fn transactionAccountsRentState(
             }) catch @panic("Account must exist in transaction context");
             defer account.release();
 
-            if (sig.runtime.ids.NATIVE_LOADER_ID.equals(&account.account.owner)) {
+            if (runtime.ids.NATIVE_LOADER_ID.equals(&account.account.owner)) {
                 // TODO: Native programs should not be writable. Returning null here is correct
                 // with respect to this function. However, we need to fix the is writable bug
                 // and reenable this panic.
@@ -617,9 +618,9 @@ fn getInstructionDatasSliceForPrecompiles(
     instructions: []const InstructionInfo,
 ) !?[]const []const u8 {
     const contains_precompile = for (instructions) |ixn_info| {
-        if (ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.ed25519.ID) or
-            ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.secp256k1.ID) or
-            ixn_info.program_meta.pubkey.equals(&sig.runtime.program.precompiles.secp256r1.ID))
+        if (ixn_info.program_meta.pubkey.equals(&runtime.program.precompiles.ed25519.ID) or
+            ixn_info.program_meta.pubkey.equals(&runtime.program.precompiles.secp256k1.ID) or
+            ixn_info.program_meta.pubkey.equals(&runtime.program.precompiles.secp256r1.ID))
             break true;
     } else false;
 
@@ -688,7 +689,7 @@ test getInstructionDatasSliceForPrecompiles {
             },
             .{
                 .program_meta = .{
-                    .pubkey = sig.runtime.program.precompiles.ed25519.ID,
+                    .pubkey = runtime.program.precompiles.ed25519.ID,
                     .index_in_transaction = 0,
                 },
                 .account_metas = .{},
@@ -721,7 +722,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
 
     const transfer_instruction_data = try sig.bincode.writeAlloc(
         allocator,
-        sig.runtime.program.system.Instruction{
+        runtime.program.system.Instruction{
             .transfer = .{ .lamports = 5_000_000 },
         },
         .{},
@@ -741,12 +742,12 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .is_writable = true,
     });
     try accounts.append(allocator, .{
-        .pubkey = sig.runtime.program.system.ID,
+        .pubkey = runtime.program.system.ID,
         .is_signer = false,
         .is_writable = false,
     });
 
-    var metas: sig.runtime.InstructionInfo.AccountMetas = .empty;
+    var metas: runtime.InstructionInfo.AccountMetas = .empty;
     defer metas.deinit(allocator);
     try metas.appendSlice(allocator, &.{ // sender, receiver, system program
         .{
@@ -770,7 +771,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .recent_blockhash = recent_blockhash,
         .instructions = &.{.{
             .program_meta = .{
-                .pubkey = sig.runtime.program.system.ID,
+                .pubkey = runtime.program.system.ID,
                 .index_in_transaction = 2,
             },
             .account_metas = metas,
@@ -793,15 +794,15 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     transaction.compute_budget_instruction_details.num_non_compute_budget_instructions = 1;
     transaction.compute_budget_instruction_details.num_non_migratable_builtin_instructions = 1;
 
-    var account_map = sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData){};
-    defer sig.runtime.testing.deinitAccountMap(account_map, allocator);
+    var account_map = sig.utils.collections.PubkeyMap(runtime.AccountSharedData){};
+    defer runtime.testing.deinitAccountMap(account_map, allocator);
     try account_map.put(
         allocator,
         sender_key,
         .{
             .lamports = 10_000_000,
             .data = &.{},
-            .owner = sig.runtime.program.system.ID,
+            .owner = runtime.program.system.ID,
             .executable = false,
             .rent_epoch = 0,
         },
@@ -812,18 +813,18 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .{
             .lamports = 10_000_000,
             .data = &.{},
-            .owner = sig.runtime.program.system.ID,
+            .owner = runtime.program.system.ID,
             .executable = false,
             .rent_epoch = 0,
         },
     );
     try account_map.put(
         allocator,
-        sig.runtime.program.system.ID,
+        runtime.program.system.ID,
         .{
             .lamports = 1,
             .data = &.{},
-            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            .owner = runtime.ids.NATIVE_LOADER_ID,
             .executable = true,
             .rent_epoch = 0,
         },
@@ -850,7 +851,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     const sysvar_cache: SysvarCache = .{};
     defer sysvar_cache.deinit(allocator);
 
-    const rent_collector = sig.runtime.rent_collector.defaultCollector(10);
+    const rent_collector = runtime.rent_collector.defaultCollector(10);
 
     const epoch_stake_reader_context: TestEpochStakeReaderContext = .{};
 

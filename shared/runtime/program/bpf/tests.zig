@@ -1,17 +1,17 @@
 const std = @import("std");
-const sig = @import("../../../lib.zig");
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
+const program_loader = runtime.program_loader;
+const vm = runtime.vm;
 
-const program_loader = sig.runtime.program_loader;
-const vm = sig.vm;
-
-const program = sig.runtime.program;
+const program = runtime.program;
 const Pubkey = sig.core.Pubkey;
-const ExecuteContextParams = sig.runtime.testing.ExecuteContextsParams;
+const ExecuteContextParams = runtime.testing.ExecuteContextsParams;
 const AccountParams = ExecuteContextParams.AccountParams;
-const AccountSharedData = sig.runtime.AccountSharedData;
-const ProgramMap = sig.runtime.program_loader.ProgramMap;
-const ComputeBudget = sig.runtime.ComputeBudget;
-const FeatureParams = sig.runtime.testing.ExecuteContextsParams.FeatureParams;
+const AccountSharedData = runtime.AccountSharedData;
+const ProgramMap = runtime.program_loader.ProgramMap;
+const ComputeBudget = runtime.ComputeBudget;
+const FeatureParams = runtime.testing.ExecuteContextsParams.FeatureParams;
 
 const expectProgramExecuteResult = program.testing.expectProgramExecuteResult;
 const expectProgramExecuteError = program.testing.expectProgramExecuteError;
@@ -29,7 +29,7 @@ pub fn prepareBpfV3Test(
     const program_deployment_slot = random.int(u64) -| 1;
     const program_update_authority = null;
 
-    const feature_set = try sig.runtime.testing.createFeatureSet(feature_params);
+    const feature_set = try runtime.testing.createFeatureSet(feature_params);
     var accounts: sig.utils.collections.PubkeyMap(AccountSharedData) = .{};
     defer {
         for (accounts.values()) |account| allocator.free(account.data);
@@ -79,7 +79,7 @@ pub fn prepareBpfV3Test(
 
     const compute_budget = ComputeBudget.DEFAULT;
 
-    const environment = sig.vm.Environment.initV1(
+    const environment = runtime.vm.Environment.initV1(
         &feature_set,
         &compute_budget,
         0,
@@ -467,7 +467,7 @@ test "program_init_vm_not_enough_compute" {
     );
     defer allocator.free(program_account.data);
 
-    var compute_budget = sig.runtime.ComputeBudget.DEFAULT;
+    var compute_budget = runtime.ComputeBudget.DEFAULT;
     // Set heap size so that heap cost is 8
     compute_budget.heap_size = 2 * 32 * 1024;
 

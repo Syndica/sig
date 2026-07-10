@@ -1,22 +1,22 @@
 const std = @import("std");
 const tracy = @import("tracy");
-const sig = @import("../../../lib.zig");
-
-const nonce = sig.runtime.nonce;
-const pubkey_utils = sig.runtime.pubkey_utils;
-const system_program = sig.runtime.program.system;
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
+const nonce = runtime.nonce;
+const pubkey_utils = runtime.pubkey_utils;
+const system_program = runtime.program.system;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 
-const InstructionContext = sig.runtime.InstructionContext;
-const BorrowedAccount = sig.runtime.BorrowedAccount;
+const InstructionContext = runtime.InstructionContext;
+const BorrowedAccount = runtime.BorrowedAccount;
 
 const SystemProgramInstruction = system_program.Instruction;
 const SystemProgramError = system_program.Error;
 
-const RecentBlockhashes = sig.runtime.sysvar.RecentBlockhashes;
-const Rent = sig.runtime.sysvar.Rent;
+const RecentBlockhashes = runtime.sysvar.RecentBlockhashes;
+const Rent = runtime.sysvar.Rent;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
 pub fn execute(
@@ -902,8 +902,8 @@ fn checkSeedAddress(
 }
 
 test "executeCreateAccount" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -950,8 +950,8 @@ test "executeCreateAccount" {
 }
 
 test "executeAssign" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -987,8 +987,8 @@ test "executeAssign" {
 }
 
 test "executeTransfer" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -1027,8 +1027,8 @@ test "executeTransfer" {
 }
 
 test "executeCreateAccountWithSeed" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -1077,8 +1077,8 @@ test "executeCreateAccountWithSeed" {
 }
 
 test "executeCreateAccountAllowPrefund with transfer" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -1135,8 +1135,8 @@ test "executeCreateAccountAllowPrefund with transfer" {
 }
 
 test "executeCreateAccountAllowPrefund no transfer" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -1181,8 +1181,8 @@ test "executeCreateAccountAllowPrefund no transfer" {
 }
 
 test "executeCreateAccountAllowPrefund feature gated" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -1214,8 +1214,8 @@ test "executeCreateAccountAllowPrefund feature gated" {
 }
 
 test "executeAdvanceNonceAccount" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
@@ -1308,8 +1308,8 @@ test "executeAdvanceNonceAccount" {
 }
 
 test "executeWithdrawNonceAccount" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
@@ -1401,8 +1401,8 @@ test "executeWithdrawNonceAccount" {
 // not the data-preservation aspect of the fix. The remaining state-mutation
 // invariant is covered by conformance fixtures.
 test "executeWithdrawNonceAccount: initialized full-withdraw missing signer" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
@@ -1466,8 +1466,8 @@ test "executeWithdrawNonceAccount: initialized full-withdraw missing signer" {
 }
 
 test "executeInitializeNonceAccount" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
@@ -1558,8 +1558,8 @@ test "executeInitializeNonceAccount" {
 }
 
 test "executeAuthorizeNonceAccount" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
@@ -1628,8 +1628,8 @@ test "executeAuthorizeNonceAccount" {
 }
 
 test "executeAllocate" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -1674,8 +1674,8 @@ test "executeAllocate" {
 }
 
 test "executeAllocateWithSeed" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -1728,8 +1728,8 @@ test "executeAllocateWithSeed" {
 }
 
 test "executeAssignWithSeed" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -1773,8 +1773,8 @@ test "executeAssignWithSeed" {
 }
 
 test "executeTransferWithSeed" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -1822,8 +1822,8 @@ test "executeTransferWithSeed" {
 }
 
 test "executeUpgradeNonceAccount" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
     const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;

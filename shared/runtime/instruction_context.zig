@@ -1,19 +1,19 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("lib.zig");
 const bincode = sig.bincode;
-const executor = sig.runtime.executor;
-const system_program = sig.runtime.program.system;
-const bpf_loader_program = sig.runtime.program.bpf_loader;
+const executor = runtime.executor;
+const system_program = runtime.program.system;
+const bpf_loader_program = runtime.program.bpf_loader;
 
 const Pubkey = sig.core.Pubkey;
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionAccount = sig.core.instruction.InstructionAccount;
 
-const InstructionInfo = sig.runtime.InstructionInfo;
-const TransactionContext = sig.runtime.TransactionContext;
-const BorrowedAccount = sig.runtime.BorrowedAccount;
+const InstructionInfo = runtime.InstructionInfo;
+const TransactionContext = runtime.TransactionContext;
+const BorrowedAccount = runtime.BorrowedAccount;
 
 /// `InstructionContext` holds all information required to execute a program instruction; excluding an allocator
 /// it is the only argument passed to the program entrypoint function

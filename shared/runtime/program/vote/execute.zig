@@ -1,9 +1,9 @@
 const std = @import("std");
 const tracy = @import("tracy");
-const sig = @import("../../../lib.zig");
-
-const vote_program = sig.runtime.program.vote;
-const pubkey_utils = sig.runtime.pubkey_utils;
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
+const vote_program = runtime.program.vote;
+const pubkey_utils = runtime.pubkey_utils;
 const vote_instruction = vote_program.vote_instruction;
 
 const Pubkey = sig.core.Pubkey;
@@ -20,14 +20,14 @@ const VoteStateVersions = vote_program.state.VoteStateVersions;
 const VoteAuthorize = vote_program.state.VoteAuthorize;
 const VoteError = vote_program.VoteError;
 
-const bls12_381 = sig.crypto.bls12_381;
+const bls12_381 = runtime.vm.bls12_381;
 
-const InstructionContext = sig.runtime.InstructionContext;
-const BorrowedAccount = sig.runtime.BorrowedAccount;
-const Rent = sig.runtime.sysvar.Rent;
-const Clock = sig.runtime.sysvar.Clock;
+const InstructionContext = runtime.InstructionContext;
+const BorrowedAccount = runtime.BorrowedAccount;
+const Rent = runtime.sysvar.Rent;
+const Clock = runtime.sysvar.Clock;
 const EpochSchedule = sig.core.EpochSchedule;
-const SlotHashes = sig.runtime.sysvar.SlotHashes;
+const SlotHashes = runtime.sysvar.SlotHashes;
 
 const VoteProgramInstruction = vote_instruction.Instruction;
 const VoteVersion = vote_instruction.Version;
@@ -367,7 +367,7 @@ const NewCommissionCollector = union(enum) {
             .vote_account => return vote_account.pubkey,
             .new_account => |collector_account| {
                 // 1. Must be a system program owned account.
-                const system_program = sig.runtime.program.system;
+                const system_program = runtime.program.system;
                 if (!collector_account.account.owner.equals(&system_program.ID)) {
                     return InstructionError.InvalidAccountOwner;
                 }
@@ -1547,7 +1547,7 @@ fn validateIsSigner(
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L1045-L1061
 fn verifyBlsProofOfPossession(
-    tc: *sig.runtime.TransactionContext,
+    tc: *runtime.TransactionContext,
     vote_account_pubkey: *const Pubkey,
     bls_pubkey_compressed: *const [vote_program.state.BLS_PUBLIC_KEY_COMPRESSED_SIZE]u8,
     // zig fmt: off
@@ -1765,8 +1765,8 @@ fn testEpochSchedule(
 }
 
 test "vote_program: executeIntializeAccount" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -1858,8 +1858,8 @@ test "vote_program: executeIntializeAccount" {
 }
 
 test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -1960,8 +1960,8 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
 }
 
 test "vote_program: executeAuthorize voter signed by current withdrawer" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -2064,8 +2064,8 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
 }
 
 test "vote_program: authorizeWithSeed withdrawer" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -2176,8 +2176,8 @@ test "vote_program: authorizeWithSeed withdrawer" {
 }
 
 test "vote_program: authorizeCheckedWithSeed withdrawer" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -2289,8 +2289,8 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
 }
 
 test "vote_program: authorizeChecked withdrawer" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -2389,8 +2389,8 @@ test "vote_program: authorizeChecked withdrawer" {
 }
 
 test "vote_program: update_validator_identity" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -2480,8 +2480,8 @@ test "vote_program: update_validator_identity" {
 }
 
 test "vote_program: update_validator_identity new authority did not sign" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -2574,8 +2574,8 @@ test "vote_program: update_validator_identity new authority did not sign" {
 }
 
 test "vote_program: update_validator_identity current authority did not sign" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -2668,8 +2668,8 @@ test "vote_program: update_validator_identity current authority did not sign" {
 }
 
 test "vote_program: update_commission increasing commission" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -2771,8 +2771,8 @@ test "vote_program: update_commission increasing commission" {
 }
 
 test "vote_program: update_commission decreasing commission" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -2874,8 +2874,8 @@ test "vote_program: update_commission decreasing commission" {
 }
 
 test "vote_program: update_commission commission update too late is always enforced" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -2953,8 +2953,8 @@ test "vote_program: update_commission commission update too late is always enfor
 }
 
 test "vote_program: update_commission too late allowed with delay feature" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3060,8 +3060,8 @@ test "vote_program: update_commission too late allowed with delay feature" {
 }
 
 test "vote_program: update_commission error commission update too late failure" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3167,8 +3167,8 @@ test "vote_program: update_commission error commission update too late failure" 
 }
 
 test "vote_program: update_commission missing signature" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3273,8 +3273,8 @@ test "vote_program: update_commission missing signature" {
 }
 
 test "vote_program: widthdraw no changes" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
     // TODO use constant in other tests.
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
@@ -3357,8 +3357,8 @@ test "vote_program: widthdraw no changes" {
 }
 
 test "vote_program: widthdraw some amount below with balance above rent exempt" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
     // TODO use constant in other tests.
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
@@ -3441,8 +3441,8 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
 }
 
 test "vote_program: widthdraw all and close account with active vote account" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
     // TODO use constant in other tests.
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
@@ -3549,8 +3549,8 @@ test "vote_program: widthdraw all and close account with active vote account" {
 }
 
 test "vote_program: widthdraw some amount below with balance below rent exempt" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
     // TODO use constant in other tests.
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
@@ -3636,8 +3636,8 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
 }
 
 test "vote_program: widthdraw insufficient funds" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
     // TODO use constant in other tests.
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
@@ -3721,8 +3721,8 @@ test "vote_program: widthdraw insufficient funds" {
 }
 
 test "vote_program: widthdraw with missing signature" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
     // TODO use constant in other tests.
     // Do in a clean up PR after all instructions has been added.
     const RENT_EXEMPT_THRESHOLD = 27074400;
@@ -3808,8 +3808,8 @@ test "vote_program: widthdraw with missing signature" {
 }
 
 test "vote_program: vote" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -3928,8 +3928,8 @@ test "vote_program: vote" {
 }
 
 test "vote_program: vote switch" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -4048,8 +4048,8 @@ test "vote_program: vote switch" {
 }
 
 test "vote_program: vote missing signature" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -4171,8 +4171,8 @@ test "vote_program: vote missing signature" {
 }
 
 test "vote_program: empty vote" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -4296,8 +4296,8 @@ test "vote_program: empty vote" {
 }
 
 test "vote_program: vote state update" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -4441,8 +4441,8 @@ test "vote_program: vote state update" {
 }
 
 test "vote_program: vote state update switch" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -4587,8 +4587,8 @@ test "vote_program: vote state update switch" {
 }
 
 test "vote_program: compact vote state update" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -4732,8 +4732,8 @@ test "vote_program: compact vote state update" {
 }
 
 test "vote_program: compact vote state update switch" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -4878,8 +4878,8 @@ test "vote_program: compact vote state update switch" {
 }
 
 test "vote_program: tower sync" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -5024,8 +5024,8 @@ test "vote_program: tower sync" {
 }
 
 test "vote_program: tower sync switch" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -5171,8 +5171,8 @@ test "vote_program: tower sync switch" {
 }
 
 test "vote_program: executeIntializeAccount v4" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -5268,8 +5268,8 @@ test "vote_program: executeIntializeAccount v4" {
 }
 
 test "vote_program: tower sync with v4 feature" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -5406,8 +5406,8 @@ test "vote_program: tower sync with v4 feature" {
 }
 
 test "vote_program: update_validator_identity with v4 feature" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -5502,8 +5502,8 @@ test "vote_program: update_validator_identity with v4 feature" {
 }
 
 test "vote_program: widthdraw all with v4 zeros account data" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -5606,8 +5606,8 @@ test "vote_program: widthdraw all with v4 zeros account data" {
 // which resized the account from 3731 to 3762 bytes and produced an output
 // mismatch against agave (which zeroes in place).
 test "vote_program: widthdraw all with v4 preserves v1_14_11-sized account length" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
     const VoteState1_14_11 = vote_program.state.VoteState1_14_11;
 
     const allocator = std.testing.allocator;
@@ -5708,8 +5708,8 @@ test "vote_program: widthdraw all with v4 preserves v1_14_11-sized account lengt
 }
 
 test "vote_program: widthdraw all with v4 pending rewards fails" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -5792,8 +5792,8 @@ test "vote_program: widthdraw all with v4 pending rewards fails" {
 }
 
 test "vote_program: widthdraw with v4 pending rewards below minimum fails" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -5874,8 +5874,8 @@ test "vote_program: widthdraw with v4 pending rewards below minimum fails" {
 }
 
 test "vote_program: executeAuthorize withdrawer with v4 feature" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -5976,8 +5976,8 @@ test "vote_program: executeAuthorize withdrawer with v4 feature" {
 }
 
 test "vote_program: update_commission with v4 feature" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -6081,8 +6081,8 @@ test "vote_program: update_commission with v4 feature" {
 }
 
 test "vote_program: vote with v4 feature" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -6196,8 +6196,8 @@ test "vote_program: vote with v4 feature" {
 // ── SIMD-0232: UpdateCommissionCollector tests ──────────────────────
 
 test "update_commission_collector inflation_rewards" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -6214,7 +6214,7 @@ test "update_commission_collector inflation_rewards" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
+        .burn_percent = runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6300,7 +6300,7 @@ test "update_commission_collector inflation_rewards" {
                 .{
                     .pubkey = new_collector,
                     .lamports = RENT_EXEMPT_THRESHOLD,
-                    .owner = sig.runtime.program.system.ID,
+                    .owner = runtime.program.system.ID,
                 },
                 .{ .pubkey = withdrawer },
                 .{
@@ -6331,7 +6331,7 @@ test "update_commission_collector inflation_rewards" {
                 .{
                     .pubkey = new_collector,
                     .lamports = RENT_EXEMPT_THRESHOLD,
-                    .owner = sig.runtime.program.system.ID,
+                    .owner = runtime.program.system.ID,
                 },
                 .{ .pubkey = withdrawer },
                 .{
@@ -6346,8 +6346,8 @@ test "update_commission_collector inflation_rewards" {
 }
 
 test "update_commission_collector block_revenue" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -6364,7 +6364,7 @@ test "update_commission_collector block_revenue" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
+        .burn_percent = runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6449,7 +6449,7 @@ test "update_commission_collector block_revenue" {
                 .{
                     .pubkey = new_collector,
                     .lamports = RENT_EXEMPT_THRESHOLD,
-                    .owner = sig.runtime.program.system.ID,
+                    .owner = runtime.program.system.ID,
                 },
                 .{ .pubkey = withdrawer },
                 .{
@@ -6480,7 +6480,7 @@ test "update_commission_collector block_revenue" {
                 .{
                     .pubkey = new_collector,
                     .lamports = RENT_EXEMPT_THRESHOLD,
-                    .owner = sig.runtime.program.system.ID,
+                    .owner = runtime.program.system.ID,
                 },
                 .{ .pubkey = withdrawer },
                 .{
@@ -6495,8 +6495,8 @@ test "update_commission_collector block_revenue" {
 }
 
 test "update_commission_collector feature disabled" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -6513,7 +6513,7 @@ test "update_commission_collector feature disabled" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
+        .burn_percent = runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6578,7 +6578,7 @@ test "update_commission_collector feature disabled" {
                 .{
                     .pubkey = new_collector,
                     .lamports = RENT_EXEMPT_THRESHOLD,
-                    .owner = sig.runtime.program.system.ID,
+                    .owner = runtime.program.system.ID,
                 },
                 .{ .pubkey = withdrawer },
                 .{
@@ -6605,7 +6605,7 @@ test "update_commission_collector feature disabled" {
                 .{
                     .pubkey = new_collector,
                     .lamports = RENT_EXEMPT_THRESHOLD,
-                    .owner = sig.runtime.program.system.ID,
+                    .owner = runtime.program.system.ID,
                 },
                 .{ .pubkey = withdrawer },
                 .{
@@ -6625,8 +6625,8 @@ test "update_commission_collector feature disabled" {
 }
 
 test "update_commission_collector withdrawer not signer" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -6643,7 +6643,7 @@ test "update_commission_collector withdrawer not signer" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
+        .burn_percent = runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6709,7 +6709,7 @@ test "update_commission_collector withdrawer not signer" {
                 .{
                     .pubkey = new_collector,
                     .lamports = RENT_EXEMPT_THRESHOLD,
-                    .owner = sig.runtime.program.system.ID,
+                    .owner = runtime.program.system.ID,
                 },
                 .{ .pubkey = withdrawer },
                 .{
@@ -6740,7 +6740,7 @@ test "update_commission_collector withdrawer not signer" {
                 .{
                     .pubkey = new_collector,
                     .lamports = RENT_EXEMPT_THRESHOLD,
-                    .owner = sig.runtime.program.system.ID,
+                    .owner = runtime.program.system.ID,
                 },
                 .{ .pubkey = withdrawer },
                 .{
@@ -6760,8 +6760,8 @@ test "update_commission_collector withdrawer not signer" {
 }
 
 test "update_commission_collector not system owned" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -6778,7 +6778,7 @@ test "update_commission_collector not system owned" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
+        .burn_percent = runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6895,8 +6895,8 @@ test "update_commission_collector not system owned" {
 }
 
 test "update_commission_collector not rent exempt" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -6913,7 +6913,7 @@ test "update_commission_collector not rent exempt" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
+        .burn_percent = runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -6978,7 +6978,7 @@ test "update_commission_collector not rent exempt" {
                 .{
                     .pubkey = new_collector,
                     .lamports = 1, // not rent exempt
-                    .owner = sig.runtime.program.system.ID,
+                    .owner = runtime.program.system.ID,
                 },
                 .{ .pubkey = withdrawer },
                 .{
@@ -7009,7 +7009,7 @@ test "update_commission_collector not rent exempt" {
                 .{
                     .pubkey = new_collector,
                     .lamports = 1,
-                    .owner = sig.runtime.program.system.ID,
+                    .owner = runtime.program.system.ID,
                 },
                 .{ .pubkey = withdrawer },
                 .{
@@ -7029,8 +7029,8 @@ test "update_commission_collector not rent exempt" {
 }
 
 test "update_commission_collector not writable" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -7047,7 +7047,7 @@ test "update_commission_collector not writable" {
     const rent = Rent{
         .lamports_per_byte_year = 3480,
         .exemption_threshold = 2.0,
-        .burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
+        .burn_percent = runtime.sysvar.DEFAULT_BURN_PERCENT,
     };
 
     const node_pubkey = Pubkey.initRandom(prng.random());
@@ -7113,7 +7113,7 @@ test "update_commission_collector not writable" {
                 .{
                     .pubkey = new_collector,
                     .lamports = RENT_EXEMPT_THRESHOLD,
-                    .owner = sig.runtime.program.system.ID,
+                    .owner = runtime.program.system.ID,
                 },
                 .{ .pubkey = withdrawer },
                 .{
@@ -7144,7 +7144,7 @@ test "update_commission_collector not writable" {
                 .{
                     .pubkey = new_collector,
                     .lamports = RENT_EXEMPT_THRESHOLD,
-                    .owner = sig.runtime.program.system.ID,
+                    .owner = runtime.program.system.ID,
                 },
                 .{ .pubkey = withdrawer },
                 .{
@@ -7170,8 +7170,8 @@ test "update_commission_collector not writable" {
 // the truncated body.
 // [agave] https://github.com/anza-xyz/solana-sdk/blob/ddbf3430b08eb375de695328ae298dd61c2e1471/vote-interface/src/state/vote_state_versions.rs#L155
 test "vote_program: authorize zero-tag short data returns InvalidAccountData" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -7228,8 +7228,8 @@ test "vote_program: authorize zero-tag short data returns InvalidAccountData" {
 // contain a discriminant. The guard is target-independent, so a single
 // fixture (V4 active) covers both code paths.
 test "vote_program: authorize sub-tag-length data returns InvalidAccountData" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -7286,8 +7286,8 @@ test "vote_program: authorize sub-tag-length data returns InvalidAccountData" {
 //
 // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/programs/vote/src/vote_state/mod.rs#L45-L77
 test "vote_program: authorize uninitialized v3-tagged returns UninitializedAccount (v4 target)" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -7348,8 +7348,8 @@ test "vote_program: authorize uninitialized v3-tagged returns UninitializedAccou
 //
 // [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L703-L706
 test "vote_program: authorize voter rejected when bls_pubkey set and SIMD-0387 active" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -7421,8 +7421,8 @@ test "vote_program: authorize voter rejected when bls_pubkey set and SIMD-0387 a
 // (the bincode for the instruction parses fine but the executor refuses
 // to apply it).
 test "vote_program: authorize voter_with_bls rejected when SIMD-0387 inactive" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -7497,8 +7497,8 @@ test "vote_program: authorize voter_with_bls rejected when SIMD-0387 inactive" {
 // The fixture supplies an all-zero pubkey + proof which can never satisfy
 // the PoP pairing check.
 test "vote_program: authorize voter_with_bls bad proof consumes CUs and returns InvalidArgument" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -7641,8 +7641,8 @@ fn alpenglowPopFixtures() [2]PopFixture {
 // VoteStateV4 must carry the BLS pubkey, basis-points commissions and
 // collectors derived from the VoteInitV2 payload.
 test "vote_program: initialize_account_v2 success (escape-hatch collectors)" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -7760,8 +7760,8 @@ test "vote_program: initialize_account_v2 success (escape-hatch collectors)" {
 // with InvalidInstructionData — agave's `if (!is_init_account_v2_enabled)`
 // branch in vote_processor.rs.
 test "vote_program: initialize_account_v2 rejected when gate inactive" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -7821,8 +7821,8 @@ test "vote_program: initialize_account_v2 rejected when gate inactive" {
 // malformed PoP must return InvalidArgument after consuming the 34,500-CU
 // PoP cost (mirrors `verify_bls_proof_of_possession` semantics).
 test "vote_program: initialize_account_v2 bad proof returns InvalidArgument" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -7890,8 +7890,8 @@ test "vote_program: initialize_account_v2 bad proof returns InvalidArgument" {
 // for the absent collector meta. Either way it must reject before touching
 // account state.
 test "vote_program: initialize_account_v2 rejects when too few accounts" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -7958,8 +7958,8 @@ test "vote_program: initialize_account_v2 rejects when too few accounts" {
 // Happy path: V4 + both feature gates active, withdrawer signs, kind =
 // inflation_rewards. inflation_rewards_commission_bps must be updated.
 test "update_commission_bps inflation_rewards" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -8060,8 +8060,8 @@ test "update_commission_bps inflation_rewards" {
 // SIMD-0123 (block_revenue_sharing) is hard-coded off in updateCommissionBps.
 // When that feature lands and is wired up, this test must be updated.
 test "update_commission_bps block_revenue rejected without block_revenue_sharing" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -8127,8 +8127,8 @@ test "update_commission_bps block_revenue rejected without block_revenue_sharing
 
 // commission_rate_in_basis_points feature gate inactive => InvalidInstructionData.
 test "update_commission_bps feature commission_rate_in_basis_points disabled" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -8194,8 +8194,8 @@ test "update_commission_bps feature commission_rate_in_basis_points disabled" {
 
 // delay_commission_updates feature gate inactive => InvalidInstructionData.
 test "update_commission_bps feature delay_commission_updates disabled" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -8261,8 +8261,8 @@ test "update_commission_bps feature delay_commission_updates disabled" {
 
 // Withdrawer not a signer => MissingRequiredSignature.
 test "update_commission_bps withdrawer not signer" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;
@@ -8331,8 +8331,8 @@ test "update_commission_bps withdrawer not signer" {
 // must always fail with InvalidInstructionData since SIMD-0123 is not yet
 // implemented in sig. Update this test when DepositDelegatorRewards lands.
 test "update_commission_bps reserved deposit_delegator_rewards rejected" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
+    const ids = runtime.ids;
+    const testing = runtime.program.testing;
 
     const RENT_EXEMPT_THRESHOLD = 27074400;
     const allocator = std.testing.allocator;

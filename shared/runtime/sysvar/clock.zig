@@ -1,7 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const sig = @import("../../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("../lib.zig");
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;

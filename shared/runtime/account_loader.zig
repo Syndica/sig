@@ -2,9 +2,9 @@
 //! [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L154
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../lib.zig");
+const sig = @import("shared");
+const runtime = @import("lib.zig");
 const tracy = @import("tracy");
-const runtime = sig.runtime;
 
 const Allocator = std.mem.Allocator;
 
@@ -643,7 +643,7 @@ test "load accounts rent paid" {
     var tx = try emptyTxWithKeys(allocator, &.{ fee_payer_address, instruction_address });
     defer tx.accounts.deinit(allocator);
 
-    var metas: sig.runtime.InstructionInfo.AccountMetas = .empty;
+    var metas: runtime.InstructionInfo.AccountMetas = .empty;
     defer metas.deinit(allocator);
     try metas.appendSlice(
         allocator,
@@ -668,7 +668,7 @@ test "load accounts rent paid" {
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 1 },
             .account_metas = metas,
             .dedupe_map = blk: {
-                var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
+                var dedupe_map: [runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
                 dedupe_map[0] = 0;
                 dedupe_map[1] = 1;
                 break :blk dedupe_map;
@@ -792,7 +792,7 @@ test "load accounts with simd 186 and loaderv3 program" {
     });
     defer tx.accounts.deinit(allocator);
 
-    var meta: sig.runtime.InstructionInfo.AccountMetas = .empty;
+    var meta: runtime.InstructionInfo.AccountMetas = .empty;
     defer meta.deinit(allocator);
     try meta.appendSlice(
         allocator,
@@ -823,7 +823,7 @@ test "load accounts with simd 186 and loaderv3 program" {
             .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 1 },
             .account_metas = meta,
             .dedupe_map = blk: {
-                var dedupe_map: [sig.runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
+                var dedupe_map: [runtime.InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
                 dedupe_map[0] = 0;
                 dedupe_map[1] = 1;
                 dedupe_map[2] = 2;
@@ -969,7 +969,7 @@ test "load tx too large" {
         .data = account_data,
         .lamports = 1_000_000,
         .executable = false,
-        .owner = sig.runtime.program.system.ID,
+        .owner = runtime.program.system.ID,
         .rent_epoch = RENT_EXEMPT_RENT_EPOCH,
     };
 

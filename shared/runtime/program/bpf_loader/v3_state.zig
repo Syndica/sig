@@ -1,5 +1,5 @@
-const sig = @import("../../../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
 const Pubkey = sig.core.Pubkey;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/5fb000f27e476add032e08a1de9e89310b0eab4b/sdk/program/src/bpf_loader_upgradeable.rs#L29

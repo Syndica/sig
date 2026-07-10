@@ -1,6 +1,6 @@
 const std = @import("std");
-const sig = @import("../../../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("ed25519.zig");

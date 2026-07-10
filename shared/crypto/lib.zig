@@ -3,7 +3,6 @@ const std = @import("std");
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("benchmark.zig");
-        _ = @import("bls12_381/lib.zig");
         _ = @import("bn254/lib.zig");
         _ = @import("ed25519/lib.zig");
         _ = @import("fnv.zig");
@@ -13,7 +12,6 @@ comptime {
 pub const benchmark = @import("benchmark.zig");
 pub const FnvHasher = @import("fnv.zig").FnvHasher;
 pub const bn254 = @import("bn254/lib.zig");
-pub const bls12_381 = @import("bls12_381/lib.zig");
 pub const ed25519 = @import("ed25519/lib.zig");
 
 /// Extern definition of Ecdsa signature.

@@ -1,10 +1,11 @@
-const sig = @import("../lib.zig");
+const sig = @import("shared");
+const runtime = @import("lib.zig");
 const std = @import("std");
 
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
-const Rent = sig.runtime.sysvar.Rent;
-const AccountSharedData = sig.runtime.AccountSharedData;
+const Rent = runtime.sysvar.Rent;
+const AccountSharedData = runtime.AccountSharedData;
 const EpochSchedule = sig.core.EpochSchedule;
 const TransactionError = sig.core.transaction_error.TransactionError;
 
@@ -90,7 +91,7 @@ pub const RentCollector = struct {
     }
 
     pub fn shouldCollectRent(address: *const Pubkey, executable: bool) bool {
-        return !(executable or address.equals(&sig.runtime.ids.INCINERATOR));
+        return !(executable or address.equals(&runtime.ids.INCINERATOR));
     }
 
     pub fn getRentDue(
@@ -160,7 +161,7 @@ pub const RentCollector = struct {
         address: *const Pubkey,
         index: u8,
     ) ?TransactionError {
-        if (sig.runtime.ids.INCINERATOR.equals(address)) return null;
+        if (runtime.ids.INCINERATOR.equals(address)) return null;
         if (transitionAllowed(pre, post)) return null;
         return .{ .InsufficientFundsForRent = .{ .account_index = index } };
     }
@@ -198,7 +199,7 @@ test "calculate rent result" {
     account.executable = false;
     try std.testing.expectEqual(
         .Exempt,
-        collector.calculateRentResult(&sig.runtime.ids.INCINERATOR, account),
+        collector.calculateRentResult(&runtime.ids.INCINERATOR, account),
     );
 
     // try a few combinations of rent collector rent epoch and collecting rent

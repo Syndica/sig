@@ -1,5 +1,5 @@
-const sig = @import("../../../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
 const Pubkey = sig.core.Pubkey;
 
 pub const Status = enum(u64) {

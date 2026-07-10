@@ -1,17 +1,17 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const tracy = @import("tracy");
-const sig = @import("../../../lib.zig");
-
-const builtin_program_costs = sig.runtime.program.builtin_program_costs;
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
+const builtin_program_costs = runtime.program.builtin_program_costs;
 
 const Message = sig.core.transaction.Message;
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const FeatureSet = sig.core.FeatureSet;
-const InstructionContext = sig.runtime.InstructionContext;
+const InstructionContext = runtime.InstructionContext;
 const TransactionError = sig.core.transaction_error.TransactionError;
-const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
+const TransactionResult = runtime.transaction_execution.TransactionResult;
 
 const MIGRATING_BUILTIN_COSTS = builtin_program_costs.MIGRATING_BUILTIN_COSTS;
 const MAX_TRANSACTION_ACCOUNTS = sig.core.Transaction.MAX_ACCOUNTS;
@@ -67,8 +67,8 @@ pub const ComputeBudgetLimits = struct {
         .loaded_accounts_bytes = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES,
     };
 
-    pub fn intoComputeBudget(self: ComputeBudgetLimits) sig.runtime.ComputeBudget {
-        var default = sig.runtime.ComputeBudget.init(self.compute_unit_limit);
+    pub fn intoComputeBudget(self: ComputeBudgetLimits) runtime.ComputeBudget {
+        var default = runtime.ComputeBudget.init(self.compute_unit_limit);
         default.heap_size = self.heap_size;
         return default;
     }
@@ -543,14 +543,14 @@ fn testCreateEmptyInstruction(program_index: u8) sig.core.transaction.Instructio
 test "compute_budget Instruction" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-    var tx = try sig.runtime.testing.createTransactionContext(
+    var tx = try runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
             .accounts = &.{
                 .{
                     .pubkey = ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
             .compute_meter = COMPUTE_UNITS,
@@ -558,11 +558,11 @@ test "compute_budget Instruction" {
     );
     const tc = &tx[1];
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        runtime.testing.deinitTransactionContext(allocator, tc);
         tx[0].deinit(allocator);
     }
 
-    try sig.runtime.executor.executeInstruction(allocator, tc, .{
+    try runtime.executor.executeInstruction(allocator, tc, .{
         .account_metas = .{},
         .dedupe_map = @splat(0xffff),
         .instruction_data = &.{},

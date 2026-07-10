@@ -1,4 +1,5 @@
 const shared = @import("shared");
+const runtime = @import("runtime");
 
 pub const account = @import("account.zig");
 pub const ancestors = @import("ancestors.zig");
@@ -16,7 +17,7 @@ pub const instruction = shared.core.instruction;
 pub const leader_schedule = @import("leader_schedule.zig");
 pub const poh = @import("poh.zig");
 pub const pubkey = shared.core.pubkey;
-pub const rent_collector = shared.runtime.rent_collector;
+pub const rent_collector = runtime.rent_collector;
 pub const ReservedAccounts = @import("ReservedAccounts.zig");
 pub const shred = @import("shred.zig");
 pub const signature = shared.core.signature;
@@ -69,7 +70,7 @@ pub const Instruction = shared.core.Instruction;
 pub const LtHash = shared.core.LtHash;
 pub const Nonce = shred.Nonce;
 pub const Pubkey = shared.core.Pubkey;
-pub const RentCollector = shared.runtime.RentCollector;
+pub const RentCollector = runtime.RentCollector;
 pub const ShredVersion = shred.ShredVersion;
 pub const Signature = shared.core.Signature;
 pub const SlotConstants = bank.SlotConstants;

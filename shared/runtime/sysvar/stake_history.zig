@@ -1,8 +1,8 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("../lib.zig");
 const bincode = sig.bincode;
 
 const Epoch = sig.core.Epoch;

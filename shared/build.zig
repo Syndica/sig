@@ -112,24 +112,33 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
     });
 
-    const imports: []const Build.Module.Import = &.{
-        .{ .name = "base58", .module = base58_mod },
-        .{ .name = "blst", .module = blst_mod },
-        .{ .name = "build-options", .module = build_options.createModule() },
-        .{ .name = "feature-set-id", .module = feature_set_id },
-        .{ .name = "features-zon", .module = features_zon },
-        .{ .name = "poseidon", .module = poseidon_mod },
-        .{ .name = "secp256k1", .module = secp256k1_mod },
-        .{ .name = "std14", .module = std14_mod },
-        .{ .name = "table", .module = gh_table },
-        .{ .name = "tracy", .module = tracy_mod },
-    };
-
     const shared_mod = b.addModule("shared", .{
         .root_source_file = b.path("lib.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = imports,
+        .imports = &.{
+            .{ .name = "base58", .module = base58_mod },
+            .{ .name = "build-options", .module = build_options.createModule() },
+            .{ .name = "feature-set-id", .module = feature_set_id },
+            .{ .name = "features-zon", .module = features_zon },
+            .{ .name = "std14", .module = std14_mod },
+            .{ .name = "tracy", .module = tracy_mod },
+        },
+    });
+
+    const runtime_mod = b.addModule("runtime", .{
+        .root_source_file = b.path("runtime/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "blst", .module = blst_mod },
+            .{ .name = "poseidon", .module = poseidon_mod },
+            .{ .name = "secp256k1", .module = secp256k1_mod },
+            .{ .name = "shared", .module = shared_mod },
+            .{ .name = "std14", .module = std14_mod },
+            .{ .name = "table", .module = gh_table },
+            .{ .name = "tracy", .module = tracy_mod },
+        },
     });
 
     const shared_tests = b.addTest(.{
@@ -140,6 +149,15 @@ pub fn build(b: *Build) void {
     });
     const run_shared_tests = b.addRunArtifact(shared_tests);
     test_step.dependOn(&run_shared_tests.step);
+
+    const runtime_tests = b.addTest(.{
+        .name = "runtime",
+        .root_module = runtime_mod,
+        .filters = filters orelse &.{},
+        .use_llvm = use_llvm,
+    });
+    const run_runtime_tests = b.addRunArtifact(runtime_tests);
+    test_step.dependOn(&run_runtime_tests.step);
 }
 
 fn generateTable(b: *Build, use_llvm: bool) Build.LazyPath {

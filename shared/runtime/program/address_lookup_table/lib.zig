@@ -1,9 +1,9 @@
 const std = @import("std");
-const sig = @import("../../../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
-const sysvar = sig.runtime.sysvar;
+const sysvar = runtime.sysvar;
 const InstructionError = sig.core.instruction.InstructionError;
 
 /// Self-referencing namespace for backward-compatible `address_lookup_table.state.*` paths.

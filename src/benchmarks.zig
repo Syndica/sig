@@ -99,7 +99,7 @@ fn getBenchmarks(comptime filter: Filter) []const Benchmark {
             .resolution = .nanos,
         }},
         .zksdk => &.{.{
-            .type = @import("shared").zksdk.benchmarks.Benchmark,
+            .type = @import("runtime").zksdk.benchmarks.Benchmark,
             .resolution = .micros,
         }},
         .geyser => &.{},

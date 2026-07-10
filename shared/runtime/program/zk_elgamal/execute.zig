@@ -1,11 +1,11 @@
 const std = @import("std");
 const tracy = @import("tracy");
-const sig = @import("../../../lib.zig");
-
-const zksdk = sig.zksdk;
-const zk_elgamal = sig.runtime.program.zk_elgamal;
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
+const zksdk = runtime.zksdk;
+const zk_elgamal = runtime.program.zk_elgamal;
 const InstructionError = sig.core.instruction.InstructionError;
-const InstructionContext = sig.runtime.InstructionContext;
+const InstructionContext = runtime.InstructionContext;
 
 pub fn execute(
     allocator: std.mem.Allocator,
@@ -270,5 +270,5 @@ fn processCloseContextState(
         &tc.accounts_resize_delta,
         0,
     );
-    try proof_context_account.setOwner(sig.runtime.program.system.ID);
+    try proof_context_account.setOwner(runtime.program.system.ID);
 }

@@ -1,6 +1,6 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("lib.zig");
 const ComputeBudget = @This();
 
 /// Number of compute units that a transaction or individual instruction is
@@ -204,8 +204,8 @@ pub fn poseidonCost(self: ComputeBudget, len: std.math.IntFittingRange(0, 12)) u
 
 pub fn curveGroupOperationCost(
     self: ComputeBudget,
-    comptime curve_id: sig.vm.syscalls.ecc.CurveId,
-    group_op: sig.vm.syscalls.ecc.GroupOp,
+    comptime curve_id: runtime.vm.syscalls.ecc.CurveId,
+    group_op: runtime.vm.syscalls.ecc.GroupOp,
 ) u64 {
     switch (curve_id) {
         inline //

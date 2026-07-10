@@ -1,20 +1,20 @@
 const std = @import("std");
 const tracy = @import("tracy");
-const sig = @import("../lib.zig");
-
-const ids = sig.runtime.ids;
-const program = sig.runtime.program;
-const stable_log = sig.runtime.stable_log;
-const bpf_loader_program = sig.runtime.program.bpf_loader;
+const sig = @import("shared");
+const runtime = @import("lib.zig");
+const ids = runtime.ids;
+const program = runtime.program;
+const stable_log = runtime.stable_log;
+const bpf_loader_program = runtime.program.bpf_loader;
 
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
 
-const InstructionInfo = sig.runtime.InstructionInfo;
-const TransactionContext = sig.runtime.TransactionContext;
+const InstructionInfo = runtime.InstructionInfo;
+const TransactionContext = runtime.TransactionContext;
 
-const deinitAccountMap = sig.runtime.testing.deinitAccountMap;
+const deinitAccountMap = runtime.testing.deinitAccountMap;
 
 /// Execute an instruction described by the instruction info\
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/invoke_context.rs#L477-L488
@@ -98,10 +98,10 @@ pub fn pushInstruction(
     // Firedancer instead opts to append to the trace always (even if it's over the limit), and
     // allocates an extra element into their trace array. We might need to use a similar strategy
     // in the future if there is anything we need to do with the trace before this check.
-    if (tc.instruction_trace.len >= sig.runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH) {
+    if (tc.instruction_trace.len >= runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH) {
         return InstructionError.MaxInstructionTraceLengthExceeded;
     }
-    if (tc.instruction_stack.len >= sig.runtime.transaction_context.MAX_INSTRUCTION_STACK_DEPTH) {
+    if (tc.instruction_stack.len >= runtime.transaction_context.MAX_INSTRUCTION_STACK_DEPTH) {
         return InstructionError.CallDepth;
     }
 
@@ -116,13 +116,13 @@ pub fn pushInstruction(
         .depth = @intCast(tc.instruction_stack.len),
     });
 
-    if (tc.getAccountIndex(sig.runtime.sysvar.instruction.ID)) |index_in_transaction| {
+    if (tc.getAccountIndex(runtime.sysvar.instruction.ID)) |index_in_transaction| {
         const account = tc.getAccountAtIndex(index_in_transaction) orelse
             return InstructionError.MissingAccount;
         // Normally this would never be hit since we setup the sysvar accounts and their owners,
         // however if the validator falls into some sort of corrupt state, it is plausible this
         // could trigger. Should only be seen through fuzzing.
-        if (!account.account.owner.equals(&sig.runtime.sysvar.OWNER_ID)) {
+        if (!account.account.owner.equals(&runtime.sysvar.OWNER_ID)) {
             return InstructionError.InvalidAccountOwner;
         }
 
@@ -375,9 +375,9 @@ pub fn prepareCpiInstructionInfo(
 }
 
 test pushInstruction {
-    const testing = sig.runtime.testing;
-    const system_program = sig.runtime.program.system;
-    const compute_budget_program = sig.runtime.program.compute_budget;
+    const testing = runtime.testing;
+    const system_program = runtime.program.system;
+    const compute_budget_program = runtime.program.compute_budget;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -465,8 +465,8 @@ test pushInstruction {
 }
 
 test "pushInstruction sysvar account data" {
-    const system_program = sig.runtime.program.system;
-    const testing = sig.runtime.testing;
+    const system_program = runtime.program.system;
+    const testing = runtime.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -480,8 +480,8 @@ test "pushInstruction sysvar account data" {
                 .{ .lamports = 2_000 },
                 .{ .lamports = 0 },
                 .{
-                    .pubkey = sig.runtime.sysvar.instruction.ID,
-                    .owner = sig.runtime.sysvar.OWNER_ID,
+                    .pubkey = runtime.sysvar.instruction.ID,
+                    .owner = runtime.sysvar.OWNER_ID,
                     .data = &sysvar_data,
                 },
                 .{ .pubkey = system_program.ID },
@@ -512,8 +512,8 @@ test "pushInstruction sysvar account data" {
 }
 
 test "pushInstruction sysvar account too small" {
-    const system_program = sig.runtime.program.system;
-    const testing = sig.runtime.testing;
+    const system_program = runtime.program.system;
+    const testing = runtime.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -527,8 +527,8 @@ test "pushInstruction sysvar account too small" {
                 .{ .lamports = 2_000 },
                 .{ .lamports = 0 },
                 .{
-                    .pubkey = sig.runtime.sysvar.instruction.ID,
-                    .owner = sig.runtime.sysvar.OWNER_ID,
+                    .pubkey = runtime.sysvar.instruction.ID,
+                    .owner = runtime.sysvar.OWNER_ID,
                     .data = &sysvar_data,
                 },
                 .{ .pubkey = system_program.ID },
@@ -562,8 +562,8 @@ test "pushInstruction sysvar account too small" {
 }
 
 test "processNextInstruction" {
-    const testing = sig.runtime.testing;
-    const system_program = sig.runtime.program.system;
+    const testing = runtime.testing;
+    const system_program = runtime.program.system;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -629,8 +629,8 @@ test "processNextInstruction" {
 }
 
 test popInstruction {
-    const testing = sig.runtime.testing;
-    const system_program = sig.runtime.program.system;
+    const testing = runtime.testing;
+    const system_program = runtime.program.system;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -712,8 +712,8 @@ test popInstruction {
 }
 
 test prepareCpiInstructionInfo {
-    const testing = sig.runtime.testing;
-    const system_program = sig.runtime.program.system;
+    const testing = runtime.testing;
+    const system_program = runtime.program.system;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);

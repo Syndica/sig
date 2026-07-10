@@ -2,27 +2,27 @@ const builtin = @import("builtin");
 const std = @import("std");
 const tracy = @import("tracy");
 const std14 = @import("std14");
-const sig = @import("../../../lib.zig");
-
-const ids = sig.runtime.ids;
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
+const ids = runtime.ids;
 const bincode = sig.bincode;
-const program = sig.runtime.program;
-const pubkey_utils = sig.runtime.pubkey_utils;
-const sysvar = sig.runtime.sysvar;
-const vm = sig.vm;
-const bpf_serialize = sig.runtime.program.bpf.serialize;
-const system_program = sig.runtime.program.system;
-const bpf_loader_program = sig.runtime.program.bpf_loader;
-const stable_log = sig.runtime.stable_log;
+const program = runtime.program;
+const pubkey_utils = runtime.pubkey_utils;
+const sysvar = runtime.sysvar;
+const vm = runtime.vm;
+const bpf_serialize = runtime.program.bpf.serialize;
+const system_program = runtime.program.system;
+const bpf_loader_program = runtime.program.bpf_loader;
+const stable_log = runtime.stable_log;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
-const ExecutionError = sig.vm.ExecutionError;
+const ExecutionError = runtime.vm.ExecutionError;
 
-const InstructionContext = sig.runtime.InstructionContext;
-const TransactionContext = sig.runtime.TransactionContext;
-const V3State = sig.runtime.program.bpf_loader.v3.State;
-const V4State = sig.runtime.program.bpf_loader.v4.State;
+const InstructionContext = runtime.InstructionContext;
+const TransactionContext = runtime.TransactionContext;
+const V3State = runtime.program.bpf_loader.v3.State;
+const V4State = runtime.program.bpf_loader.v4.State;
 
 // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L399-L401
 const migration_authority: Pubkey = .parse("3Scf35jMNk2xXBD6areNjgMtXgp5ZspDhms8vdcbzC42");
@@ -79,11 +79,11 @@ pub fn execute(
             ic.ixn_info.program_meta.pubkey,
             err,
         );
-        const kind = sig.vm.getExecutionErrorKind(err);
+        const kind = runtime.vm.getExecutionErrorKind(err);
         if (kind != .Instruction) {
             return InstructionError.ProgramFailedToComplete;
         } else {
-            return sig.vm.instructionErrorFromExecutionError(err);
+            return runtime.vm.instructionErrorFromExecutionError(err);
         }
     };
 }
@@ -159,7 +159,7 @@ fn executeBpfProgram(
         .direct_mapping = account_data_direct_mapping,
     };
     const result, const compute_consumed = blk: {
-        var state = sig.vm.init(
+        var state = runtime.vm.init(
             allocator,
             ic.tc,
             &executable,
@@ -260,14 +260,14 @@ fn executeBpfProgram(
 }
 
 fn handleExecutionResult(
-    result: sig.vm.interpreter.Result,
+    result: runtime.vm.interpreter.Result,
     custom_error: *?u32,
     compute_meter: *u64,
     deplete_cu_meter: bool,
 ) ?ExecutionError {
     switch (result) {
         .ok => |status| if (status != 0) {
-            switch (sig.vm.executionErrorFromStatusCode(status)) {
+            switch (runtime.vm.executionErrorFromStatusCode(status)) {
                 error.Custom => custom_error.* = @intCast(status),
                 error.GenericError => custom_error.* = 0,
                 else => |err| return err,
@@ -275,7 +275,7 @@ fn handleExecutionResult(
             return error.Custom;
         },
         .err => |err| {
-            const err_kind = sig.vm.getExecutionErrorKind(err);
+            const err_kind = runtime.vm.getExecutionErrorKind(err);
             if (deplete_cu_meter and err_kind != .Syscall)
                 compute_meter.* = 0;
             return err;
@@ -346,7 +346,7 @@ pub const AccessViolationHandlerCtx = struct {
         defer guard.release();
 
         const max_growth =
-            sig.runtime.program.system.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
+            runtime.program.system.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
         const remaining_growth: u64 = @intCast(@max(
             0,
             max_growth -| ctx.tc.accounts_resize_delta,
@@ -362,7 +362,7 @@ pub const AccessViolationHandlerCtx = struct {
             const new_len_u64 = @min(
                 address_space_reserved_for_account,
                 @min(
-                    sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH,
+                    runtime.program.system.MAX_PERMITTED_DATA_LENGTH,
                     old_len +| remaining_growth,
                 ),
             );
@@ -501,7 +501,7 @@ pub fn executeBpfLoaderV4ProgramInstruction(
 fn checkProgramAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-    program_account: *const sig.runtime.BorrowedAccount,
+    program_account: *const runtime.BorrowedAccount,
     authority_address: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!V4State {
     if (!program_account.account.owner.equals(&bpf_loader_program.v4.ID)) {
@@ -1621,7 +1621,7 @@ pub fn executeV3SetAuthority(
                         account_data[e_flags_offset..][0..4],
                         .little,
                     );
-                    if (e_flags < @intFromEnum(sig.vm.sbpf.Version.v3)) {
+                    if (e_flags < @intFromEnum(runtime.vm.sbpf.Version.v3)) {
                         return InstructionError.InvalidAccountData;
                     }
                 }
@@ -2375,8 +2375,8 @@ pub fn verifyProgram(
     data: []const u8,
     slot: sig.core.Slot,
     feature_set: *const sig.core.FeatureSet,
-    compute_budget: *const sig.runtime.ComputeBudget,
-    log_collector: ?*sig.runtime.LogCollector,
+    compute_budget: *const runtime.ComputeBudget,
+    log_collector: ?*runtime.LogCollector,
     disable_sbpf_v0_v1_v2_deployment: bool,
 ) !void {
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
@@ -2392,7 +2392,7 @@ pub fn verifyProgram(
     if (disable_sbpf_v0_v1_v2_deployment) {
         environment.config.minimum_version = @enumFromInt(@max(
             @intFromEnum(environment.config.minimum_version),
-            @intFromEnum(sig.vm.sbpf.Version.v3),
+            @intFromEnum(runtime.vm.sbpf.Version.v3),
         ));
     }
 
@@ -2423,7 +2423,7 @@ pub fn verifyProgram(
 }
 
 test executeV3InitializeBuffer {
-    const testing = sig.runtime.program.testing;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
 
@@ -2493,7 +2493,7 @@ test executeV3InitializeBuffer {
 }
 
 test executeV3Write {
-    const testing = sig.runtime.program.testing;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
 
@@ -2571,7 +2571,7 @@ test executeV3Write {
 }
 
 test executeV3DeployWithMaxDataLen {
-    const testing = sig.runtime.program.testing;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
 
@@ -2767,7 +2767,7 @@ test executeV3DeployWithMaxDataLen {
 }
 
 test executeV3SetAuthority {
-    const testing = sig.runtime.program.testing;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -2822,7 +2822,7 @@ test executeV3SetAuthority {
                 },
                 .{
                     .pubkey = bpf_loader_program.v3.ID, // id of program u wanna run
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
                 },
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
@@ -2842,7 +2842,7 @@ test executeV3SetAuthority {
                 },
                 .{
                     .pubkey = bpf_loader_program.v3.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
         },
@@ -2895,7 +2895,7 @@ test executeV3SetAuthority {
                 },
                 .{
                     .pubkey = bpf_loader_program.v3.ID, // id of program u wanna run
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
                 },
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
@@ -2915,7 +2915,7 @@ test executeV3SetAuthority {
                 },
                 .{
                     .pubkey = bpf_loader_program.v3.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
         },
@@ -2952,7 +2952,7 @@ test executeV3SetAuthority {
                 },
                 .{
                     .pubkey = bpf_loader_program.v3.ID, // id of program u wanna run
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
                 },
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
@@ -2969,7 +2969,7 @@ test executeV3SetAuthority {
                 },
                 .{
                     .pubkey = bpf_loader_program.v3.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
         },
@@ -2978,8 +2978,8 @@ test executeV3SetAuthority {
 }
 
 test "executeV3SetAuthority SIMD-0500 finalize guard" {
-    const testing = sig.runtime.program.testing;
-    const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
+    const testing = runtime.program.testing;
+    const ExecuteContextsParams = runtime.testing.ExecuteContextsParams;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3057,7 +3057,7 @@ test "executeV3SetAuthority SIMD-0500 finalize guard" {
                 .{ .pubkey = present_authority_key },
                 .{
                     .pubkey = bpf_loader_program.v3.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
@@ -3073,7 +3073,7 @@ test "executeV3SetAuthority SIMD-0500 finalize guard" {
                 .{ .pubkey = present_authority_key },
                 .{
                     .pubkey = bpf_loader_program.v3.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
         };
@@ -3153,7 +3153,7 @@ test "executeV3SetAuthority SIMD-0500 finalize guard" {
                     .{ .pubkey = present_authority_key },
                     .{
                         .pubkey = bpf_loader_program.v3.ID,
-                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                        .owner = runtime.ids.NATIVE_LOADER_ID,
                     },
                 },
                 .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
@@ -3171,7 +3171,7 @@ test "executeV3SetAuthority SIMD-0500 finalize guard" {
                     .{ .pubkey = present_authority_key },
                     .{
                         .pubkey = bpf_loader_program.v3.ID,
-                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                        .owner = runtime.ids.NATIVE_LOADER_ID,
                     },
                 },
             },
@@ -3181,7 +3181,7 @@ test "executeV3SetAuthority SIMD-0500 finalize guard" {
 }
 
 test executeV3SetAuthorityChecked {
-    const testing = sig.runtime.program.testing;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3236,7 +3236,7 @@ test executeV3SetAuthorityChecked {
                 },
                 .{
                     .pubkey = bpf_loader_program.v3.ID, // id of program u wanna run
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
                 },
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
@@ -3262,7 +3262,7 @@ test executeV3SetAuthorityChecked {
                 },
                 .{
                     .pubkey = bpf_loader_program.v3.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
         },
@@ -3315,7 +3315,7 @@ test executeV3SetAuthorityChecked {
                 },
                 .{
                     .pubkey = bpf_loader_program.v3.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
@@ -3341,7 +3341,7 @@ test executeV3SetAuthorityChecked {
                 },
                 .{
                     .pubkey = bpf_loader_program.v3.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
         },
@@ -3350,7 +3350,7 @@ test executeV3SetAuthorityChecked {
 }
 
 test executeV3Close {
-    const testing = sig.runtime.program.testing;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3607,7 +3607,7 @@ test executeV3Close {
 }
 
 test executeV3Upgrade {
-    const testing = sig.runtime.program.testing;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3796,7 +3796,7 @@ test executeV3Upgrade {
 }
 
 test executeV3ExtendProgram {
-    const testing = sig.runtime.program.testing;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3992,7 +3992,7 @@ test executeV3ExtendProgram {
 
     // Test extend_program disabled when ENABLE_EXTEND_PROGRAM_CHECKED is enabled
     {
-        var tx = try sig.runtime.testing.createTransactionContext(
+        var tx = try runtime.testing.createTransactionContext(
             allocator,
             prng.random(),
             .{
@@ -4017,11 +4017,11 @@ test executeV3ExtendProgram {
         );
         const tc = &tx[1];
         defer {
-            sig.runtime.testing.deinitTransactionContext(allocator, tc);
+            runtime.testing.deinitTransactionContext(allocator, tc);
             tx[0].deinit(allocator);
         }
 
-        const instruction_info = try sig.runtime.testing.createInstructionInfo(
+        const instruction_info = try runtime.testing.createInstructionInfo(
             tc,
             bpf_loader_program.v3.ID,
             bpf_loader_program.v3.Instruction{
@@ -4033,14 +4033,14 @@ test executeV3ExtendProgram {
 
         try std.testing.expectError(
             InstructionError.InvalidInstructionData,
-            sig.runtime.executor.executeInstruction(allocator, tc, instruction_info),
+            runtime.executor.executeInstruction(allocator, tc, instruction_info),
         );
         try std.testing.expectEqual(tc.compute_meter, 0);
     }
 
     // Test extend_program_checked disabled when ENABLE_EXTEND_PROGRAM_CHECKED is not present.
     {
-        var tx = try sig.runtime.testing.createTransactionContext(
+        var tx = try runtime.testing.createTransactionContext(
             allocator,
             prng.random(),
             .{
@@ -4059,11 +4059,11 @@ test executeV3ExtendProgram {
         );
         const tc = &tx[1];
         defer {
-            sig.runtime.testing.deinitTransactionContext(allocator, tc);
+            runtime.testing.deinitTransactionContext(allocator, tc);
             tx[0].deinit(allocator);
         }
 
-        const instruction_info = try sig.runtime.testing.createInstructionInfo(
+        const instruction_info = try runtime.testing.createInstructionInfo(
             tc,
             bpf_loader_program.v3.ID,
             bpf_loader_program.v3.Instruction{
@@ -4075,7 +4075,7 @@ test executeV3ExtendProgram {
 
         try std.testing.expectError(
             InstructionError.InvalidInstructionData,
-            sig.runtime.executor.executeInstruction(allocator, tc, instruction_info),
+            runtime.executor.executeInstruction(allocator, tc, instruction_info),
         );
         try std.testing.expectEqual(tc.compute_meter, 0);
     }
@@ -4084,7 +4084,7 @@ test executeV3ExtendProgram {
 // SIMD-0431: extending by fewer than 10240 bytes (and not the headroom amount) must be
 // rejected with `InvalidArgument` when `loader_v3_minimum_extend_program_size` is active.
 test "executeV3ExtendProgram SIMD-0431 minimum_extend_program_size" {
-    const testing = sig.runtime.program.testing;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -4129,7 +4129,7 @@ test "executeV3ExtendProgram SIMD-0431 minimum_extend_program_size" {
         sysvar.Rent.INIT.minimumBalance(initial_program_data.len + additional_bytes);
     const payer_balance = prng.random().uintAtMost(u32, 1024);
 
-    const accounts = [_]sig.runtime.testing.ExecuteContextsParams.AccountParams{
+    const accounts = [_]runtime.testing.ExecuteContextsParams.AccountParams{
         .{
             .pubkey = program_data_account_key,
             .data = initial_program_data,
@@ -4199,7 +4199,7 @@ test "executeV3ExtendProgram SIMD-0431 minimum_extend_program_size" {
 }
 
 test executeV3Migrate {
-    const testing = sig.runtime.program.testing;
+    const testing = runtime.program.testing;
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -4452,7 +4452,7 @@ fn createValidProgramData(
 }
 
 test executeV4Write {
-    const testing = sig.runtime.program.testing;
+    const testing = runtime.program.testing;
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -4522,7 +4522,7 @@ test executeV4Write {
 }
 
 test executeV4Retract {
-    const testing = sig.runtime.program.testing;
+    const testing = runtime.program.testing;
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -4598,7 +4598,7 @@ test executeV4Retract {
 }
 
 test executeV4SetProgramLength {
-    const testing = sig.runtime.program.testing;
+    const testing = runtime.program.testing;
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -4731,7 +4731,7 @@ test executeV4SetProgramLength {
 }
 
 test checkProgramAccount {
-    const testing = sig.runtime.testing;
+    const testing = runtime.testing;
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -4762,7 +4762,7 @@ test checkProgramAccount {
     });
     defer {
         testing.deinitTransactionContext(allocator, &tc);
-        sig.runtime.testing.deinitAccountMap(cache, allocator);
+        runtime.testing.deinitAccountMap(cache, allocator);
     }
 
     var info = try testing.createInstructionInfo(
@@ -4776,7 +4776,7 @@ test checkProgramAccount {
     );
     defer info.deinit(allocator);
 
-    try sig.runtime.executor.pushInstruction(&tc, info);
+    try runtime.executor.pushInstruction(&tc, info);
     const ic = try tc.getCurrentInstructionContext();
 
     var account = try ic.borrowInstructionAccount(0);
@@ -4943,7 +4943,7 @@ test handleExecutionResult {
 // region. Exercises each early-return guard plus the successful-grow path under
 // both direct- and non-direct-mapping.
 test "AccessViolationHandlerCtx.handle" {
-    const testing = sig.runtime.testing;
+    const testing = runtime.testing;
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -4958,7 +4958,7 @@ test "AccessViolationHandlerCtx.handle" {
     const cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
             .{ .pubkey = data_account_key, .data = initial_data, .owner = program_id },
-            .{ .pubkey = program_id, .owner = sig.runtime.ids.NATIVE_LOADER_ID },
+            .{ .pubkey = program_id, .owner = runtime.ids.NATIVE_LOADER_ID },
         },
     });
     defer {
@@ -5004,7 +5004,7 @@ test "AccessViolationHandlerCtx.handle" {
         );
 
         try std.testing.expectEqualDeep(
-            sig.runtime.transaction_context.AccessViolationInfo{
+            runtime.transaction_context.AccessViolationInfo{
                 .access_type = .constant,
                 .vm_addr = vm_start + 50,
                 .len = 100,
@@ -5149,7 +5149,7 @@ test "AccessViolationHandlerCtx.handle" {
         const old_end = region.vm_addr_end;
         tc.last_access_violation = null;
         tc.accounts_resize_delta =
-            sig.runtime.program.system.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
+            runtime.program.system.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
 
         AccessViolationHandlerCtx.handle(
             @ptrCast(&ctx),
@@ -5165,7 +5165,7 @@ test "AccessViolationHandlerCtx.handle" {
         try std.testing.expectEqual(account_data_size, tc.accounts[0].account.data.len);
         // resize_delta must not be touched when no resize happens.
         try std.testing.expectEqual(
-            sig.runtime.program.system.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION,
+            runtime.program.system.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION,
             tc.accounts_resize_delta,
         );
     }
@@ -5209,7 +5209,7 @@ test "AccessViolationHandlerCtx.handle" {
 // bpf_loader reports. Each case sets `tc.last_access_violation` and asserts the
 // returned error.
 test remapAccessViolation {
-    const testing = sig.runtime.testing;
+    const testing = runtime.testing;
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -5224,7 +5224,7 @@ test remapAccessViolation {
     const cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
             .{ .pubkey = data_account_key, .data = initial_data, .owner = program_id },
-            .{ .pubkey = program_id, .owner = sig.runtime.ids.NATIVE_LOADER_ID },
+            .{ .pubkey = program_id, .owner = runtime.ids.NATIVE_LOADER_ID },
         },
     });
     defer {
@@ -5242,7 +5242,7 @@ test remapAccessViolation {
     );
     defer info.deinit(allocator);
 
-    try sig.runtime.executor.pushInstruction(&tc, info);
+    try runtime.executor.pushInstruction(&tc, info);
     const ic = try tc.getCurrentInstructionContext();
 
     const vm_data_addr: u64 = 0x4_0000_0000;
@@ -5371,13 +5371,13 @@ test remapAccessViolation {
 }
 
 test "remapAccessViolation ignores stale metadata from handled growth" {
-    const testing = sig.runtime.testing;
+    const testing = runtime.testing;
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     const program_id = Pubkey.initRandom(prng.random());
     const account_data = [_]u8{ 1, 2, 3, 4 };
-    const vm_data_addr = sig.vm.memory.INPUT_START + 0x80;
+    const vm_data_addr = runtime.vm.memory.INPUT_START + 0x80;
 
     const cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
@@ -5394,7 +5394,7 @@ test "remapAccessViolation ignores stale metadata from handled growth" {
     });
     defer {
         testing.deinitTransactionContext(allocator, &tc);
-        sig.runtime.testing.deinitAccountMap(cache, allocator);
+        runtime.testing.deinitAccountMap(cache, allocator);
     }
 
     var info = try testing.createInstructionInfo(
@@ -5407,7 +5407,7 @@ test "remapAccessViolation ignores stale metadata from handled growth" {
     );
     defer info.deinit(allocator);
 
-    try sig.runtime.executor.pushInstruction(&tc, info);
+    try runtime.executor.pushInstruction(&tc, info);
     const ic = try tc.getCurrentInstructionContext();
 
     tc.serialized_accounts.appendAssumeCapacity(.{
@@ -5480,8 +5480,8 @@ test "remapAccessViolation ignores stale metadata from handled growth" {
 // executeV4Retract's fetchPut call and this test will panic with an invalid-free from
 // the GPA during deinit.
 test "executeV4Retract: ProgramMap.fetchPut must use programs_allocator, not per-batch arena" {
-    const executor = sig.runtime.executor;
-    const testing_ = sig.runtime.testing;
+    const executor = runtime.executor;
+    const testing_ = runtime.testing;
 
     const gpa = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);

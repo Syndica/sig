@@ -1,7 +1,8 @@
 //! [agave] Analogous to https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L1
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../../../lib.zig");
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
 const vote_program = @import("lib.zig");
 const builtin = @import("builtin");
 const state_v4 = @import("state_v4.zig");
@@ -15,9 +16,9 @@ const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.hash.Hash;
 const SortedMap = sig.utils.collections.SortedMapUnmanaged;
-const AccountSharedData = sig.runtime.AccountSharedData;
+const AccountSharedData = runtime.AccountSharedData;
 
-const SlotHashes = sig.runtime.sysvar.SlotHashes;
+const SlotHashes = runtime.sysvar.SlotHashes;
 
 pub const VoteStateV4 = state_v4.VoteStateV4;
 pub const createTestVoteStateV4 = state_v4.createTestVoteStateV4;
@@ -2086,7 +2087,7 @@ pub const VoteStateV3 = struct {
         // The maximum number of elements is bounded by the maximum instruction size possible.
         var lockouts_to_filter: std14.BoundedArray(
             u64,
-            sig.vm.syscalls.cpi.MAX_DATA_LEN / @sizeOf(u64),
+            runtime.vm.syscalls.cpi.MAX_DATA_LEN / @sizeOf(u64),
         ) = .{};
 
         // Note:

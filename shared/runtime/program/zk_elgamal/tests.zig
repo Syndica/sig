@@ -1,9 +1,9 @@
 const std = @import("std");
-const sig = @import("../../../lib.zig");
-
-const zksdk = sig.zksdk;
-const zk_elgamal = sig.runtime.program.zk_elgamal;
-const program = sig.runtime.program;
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
+const zksdk = runtime.zksdk;
+const zk_elgamal = runtime.program.zk_elgamal;
+const program = runtime.program;
 const ElGamalKeypair = zksdk.ElGamalKeypair;
 
 const CiphertextCiphertextData = zksdk.CiphertextCiphertextData;
@@ -695,7 +695,7 @@ fn testVerifyProofWithoutContext(
         .{
             .accounts = &.{.{
                 .pubkey = zk_elgamal.ID,
-                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                .owner = runtime.ids.NATIVE_LOADER_ID,
             }},
             .compute_meter = compute_budget,
             .feature_set = &.{.{ .feature = .zk_elgamal_proof_program_enabled }},
@@ -703,7 +703,7 @@ fn testVerifyProofWithoutContext(
         .{
             .accounts = &.{.{
                 .pubkey = zk_elgamal.ID,
-                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                .owner = runtime.ids.NATIVE_LOADER_ID,
             }},
             .compute_meter = 0,
         },
@@ -727,7 +727,7 @@ fn testVerifyProofWithoutContext(
             .{
                 .accounts = &.{.{
                     .pubkey = zk_elgamal.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 }},
                 .compute_meter = 500_000,
                 .feature_set = &.{.{ .feature = .zk_elgamal_proof_program_enabled }},
@@ -761,7 +761,7 @@ fn testVerifyProofWithoutContext(
                 },
                 .{
                     .pubkey = zk_elgamal.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
             .compute_meter = compute_budget,
@@ -777,7 +777,7 @@ fn testVerifyProofWithoutContext(
                 },
                 .{
                     .pubkey = zk_elgamal.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
             .compute_meter = 0,
@@ -798,7 +798,7 @@ fn testVerifyProofWithoutContext(
         .{
             .accounts = &.{.{
                 .pubkey = zk_elgamal.ID,
-                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                .owner = runtime.ids.NATIVE_LOADER_ID,
             }},
             .compute_meter = compute_budget,
             .feature_set = &.{.{ .feature = .zk_elgamal_proof_program_enabled }},
@@ -828,7 +828,7 @@ fn testVerifyProofWithoutContext(
                 },
                 .{
                     .pubkey = zk_elgamal.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
             .compute_meter = compute_budget,
@@ -886,7 +886,7 @@ fn testVerifyProofWithContext(
                 .{ .pubkey = context_authority_key },
                 .{
                     .pubkey = zk_elgamal.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
             .compute_meter = compute_budget,
@@ -916,7 +916,7 @@ fn testVerifyProofWithContext(
                 .{ .pubkey = context_authority_key },
                 .{
                     .pubkey = zk_elgamal.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
             .compute_meter = compute_budget,
@@ -944,7 +944,7 @@ fn testVerifyProofWithContext(
                 .{ .pubkey = context_authority_key },
                 .{
                     .pubkey = zk_elgamal.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
             .compute_meter = compute_budget,
@@ -961,7 +961,7 @@ fn testVerifyProofWithContext(
                 .{ .pubkey = context_authority_key },
                 .{
                     .pubkey = zk_elgamal.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
             .compute_meter = 0,
@@ -1012,7 +1012,7 @@ fn testCloseState(
                 .{ .pubkey = context_authority_key },
                 .{
                     .pubkey = zk_elgamal.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
             .compute_meter = zk_elgamal.CLOSE_CONTEXT_STATE_COMPUTE_UNITS,
@@ -1022,7 +1022,7 @@ fn testCloseState(
             .accounts = &.{
                 .{
                     .pubkey = context_state_key,
-                    .owner = sig.runtime.program.system.ID,
+                    .owner = runtime.program.system.ID,
                     .data = &.{},
                     .lamports = 0,
                 },
@@ -1033,7 +1033,7 @@ fn testCloseState(
                 .{ .pubkey = context_authority_key },
                 .{
                     .pubkey = zk_elgamal.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
             .accounts_resize_delta = -@as(i32, initial_contents.len),

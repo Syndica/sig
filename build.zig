@@ -354,13 +354,15 @@ pub fn build(b: *Build) !void {
     // zig fmt: on
 
     const shared_mod = shared_dep.module("shared");
+    const runtime_mod = shared_dep.module("runtime");
 
     const imports_with_shared = b.allocator.alloc(
         Build.Module.Import,
-        imports.len + 1,
+        imports.len + 2,
     ) catch |err| std.debug.panic("{}", .{err});
     @memcpy(imports_with_shared[0..imports.len], imports);
     imports_with_shared[imports.len] = .{ .name = "shared", .module = shared_mod };
+    imports_with_shared[imports.len + 1] = .{ .name = "runtime", .module = runtime_mod };
 
     const memcpy = b.addObject(.{
         .name = "memcpy",

@@ -1,8 +1,8 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("lib.zig");
 const bincode = sig.bincode;
-const sysvars = sig.runtime.sysvar;
+const sysvars = runtime.sysvar;
 
 const Pubkey = sig.core.Pubkey;
 const Clock = sysvars.Clock;

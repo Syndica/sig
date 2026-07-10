@@ -1,11 +1,11 @@
 //! [SIMD-0185] Vote account state v4: commission in bps, no prior_voters, collectors, BLS key.
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../../../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
 const Allocator = std.mem.Allocator;
 
-const vote_program = sig.runtime.program.vote;
+const vote_program = runtime.program.vote;
 const state = vote_program.state;
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteError = vote_program.VoteError;
@@ -13,7 +13,7 @@ const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.hash.Hash;
-const SlotHashes = sig.runtime.sysvar.SlotHashes;
+const SlotHashes = runtime.sysvar.SlotHashes;
 
 const AuthorizedVoters = state.AuthorizedVoters;
 const BlockTimestamp = state.BlockTimestamp;
@@ -676,7 +676,7 @@ pub const VoteStateV4 = struct {
         // The maximum number of elements is bounded by the maximum instruction size possible.
         var lockouts_to_filter: std14.BoundedArray(
             u64,
-            sig.vm.syscalls.cpi.MAX_DATA_LEN / @sizeOf(u64),
+            runtime.vm.syscalls.cpi.MAX_DATA_LEN / @sizeOf(u64),
         ) = .{};
 
         // Note:

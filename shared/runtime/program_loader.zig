@@ -1,22 +1,22 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const tracy = @import("tracy");
-const sig = @import("../lib.zig");
-
-const bpf_loader = sig.runtime.program.bpf_loader;
-const vm = sig.vm;
+const sig = @import("shared");
+const runtime = @import("lib.zig");
+const bpf_loader = runtime.program.bpf_loader;
+const vm = runtime.vm;
 
 const Allocator = std.mem.Allocator;
 
-const AccountReader = sig.runtime.execution_interfaces.AccountReader;
+const AccountReader = runtime.execution_interfaces.AccountReader;
 
 const Pubkey = sig.core.Pubkey;
-const AccountSharedData = sig.runtime.AccountSharedData;
+const AccountSharedData = runtime.AccountSharedData;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 const assert = std.debug.assert;
 
-const AccountLoadError = sig.runtime.execution_interfaces.AccountLoadError;
+const AccountLoadError = runtime.execution_interfaces.AccountLoadError;
 
 pub const ProgramMap = struct {
     inner: sig.utils.collections.PubkeyMap(LoadedProgram),
@@ -59,7 +59,7 @@ pub const ProgramMap = struct {
 pub const LoadedProgram = union(enum(u8)) {
     failed,
     loaded: struct {
-        executable: sig.vm.Executable,
+        executable: runtime.vm.Executable,
         source: []const u8,
     },
 
@@ -124,7 +124,7 @@ fn loadProgram(
 
     if (maybe_deployment_slot) |ds| if (ds >= slot) return .failed;
 
-    const executable = sig.vm.elf.load(
+    const executable = runtime.vm.elf.load(
         allocator,
         executable_bytes,
         &environment.loader,

@@ -1,7 +1,7 @@
 //! system variables definitions and addresses (clock, slot_history, …)
 const std = @import("std");
-const sig = @import("../../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("../lib.zig");
 const Allocator = std.mem.Allocator;
 
 const Slot = sig.core.Slot;

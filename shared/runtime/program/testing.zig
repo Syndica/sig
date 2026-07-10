@@ -1,12 +1,12 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const sig = @import("../../lib.zig");
-
-const executor = sig.runtime.executor;
-const runtime_testing = sig.runtime.testing;
+const sig = @import("shared");
+const runtime = @import("../lib.zig");
+const executor = runtime.executor;
+const runtime_testing = runtime.testing;
 
 const Pubkey = sig.core.Pubkey;
-const LogCollector = sig.runtime.LogCollector;
+const LogCollector = runtime.LogCollector;
 
 pub const InstructionContextAccountMetaParams = runtime_testing.InstructionInfoAccountMetaParams;
 pub const ExecuteContextsParams = runtime_testing.ExecuteContextsParams;
@@ -79,7 +79,7 @@ pub fn expectProgramExecuteResult(
             }
         }
         deinitTransactionContext(allocator, initial_tc);
-        sig.runtime.testing.deinitAccountMap(initial_cache, allocator);
+        runtime.testing.deinitAccountMap(initial_cache, allocator);
         allocator.destroy(initial_tc);
     }
 
@@ -93,7 +93,7 @@ pub fn expectProgramExecuteResult(
     );
     defer {
         deinitTransactionContext(allocator, expected_tc);
-        sig.runtime.testing.deinitAccountMap(expected_cache, allocator);
+        runtime.testing.deinitAccountMap(expected_cache, allocator);
         allocator.destroy(expected_tc);
     }
 
@@ -133,7 +133,7 @@ test expectProgramExecuteError {
 
 test expectProgramExecuteResult {
     const allocator = std.testing.allocator;
-    const system_program = sig.runtime.program.system;
+    const system_program = runtime.program.system;
 
     var prng = std.Random.DefaultPrng.init(0);
     const src_account = Pubkey.initRandom(prng.random());
@@ -168,7 +168,7 @@ test expectProgramExecuteResult {
                 },
                 .{
                     .pubkey = system_program.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
@@ -188,7 +188,7 @@ test expectProgramExecuteResult {
                 },
                 .{
                     .pubkey = system_program.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                 },
             },
             .log_collector = expected_logger,

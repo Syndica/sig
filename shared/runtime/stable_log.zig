@@ -1,11 +1,11 @@
 // TODO: Consider moving this into the log_collector module?
 
 const std = @import("std");
-const sig = @import("../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("lib.zig");
 const Pubkey = sig.core.Pubkey;
-const LogCollector = sig.runtime.LogCollector;
-const TransactionContext = sig.runtime.TransactionContext;
+const LogCollector = runtime.LogCollector;
+const TransactionContext = runtime.TransactionContext;
 
 pub const BASE_64_ENCODER =
     std.base64.Base64Encoder.init(std.base64.standard_alphabet_chars, '=');
@@ -141,7 +141,7 @@ pub fn programSuccess(tc: *TransactionContext, program_id: Pubkey) !void {
 pub fn programFailure(
     tc: *TransactionContext,
     program_id: Pubkey,
-    err: sig.vm.ExecutionError,
+    err: runtime.vm.ExecutionError,
 ) !void {
     if (tc.log_collector) |*lc| {
         if (err == error.Custom) {
@@ -151,14 +151,14 @@ pub fn programFailure(
                 .{ program_id, tc.custom_error.? },
             );
         } else {
-            const msg = sig.vm.getExecutionErrorMessage(err);
+            const msg = runtime.vm.getExecutionErrorMessage(err);
             try lc.log(tc.allocator, "Program {f} failed: {s}", .{ program_id, msg });
         }
     }
 }
 
 test "stable_log" {
-    const createTransactionContext = sig.runtime.testing.createTransactionContext;
+    const createTransactionContext = runtime.testing.createTransactionContext;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -171,7 +171,7 @@ test "stable_log" {
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
+        runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 

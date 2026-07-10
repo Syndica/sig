@@ -1,6 +1,6 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("lib.zig");
 const bincode = sig.bincode;
 
 const InstructionError = sig.core.instruction.InstructionError;

@@ -1,25 +1,25 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const sig = @import("../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("lib.zig");
 const bincode = sig.bincode;
-const sysvar = sig.runtime.sysvar;
-const vm = sig.vm;
+const sysvar = runtime.sysvar;
+const vm = runtime.vm;
 
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
 const FeatureSet = sig.core.FeatureSet;
-const InstructionInfo = sig.runtime.InstructionInfo;
-const LogCollector = sig.runtime.LogCollector;
-const SysvarCache = sig.runtime.SysvarCache;
-const TransactionContext = sig.runtime.TransactionContext;
-const TransactionContextAccount = sig.runtime.TransactionContextAccount;
-const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
-const Rent = sig.runtime.sysvar.Rent;
-const ComputeBudget = sig.runtime.ComputeBudget;
-const ProgramMap = sig.runtime.program_loader.ProgramMap;
-const TestEpochStakeReaderContext = sig.runtime.execution_interfaces.TestEpochStakeReaderContext;
+const InstructionInfo = runtime.InstructionInfo;
+const LogCollector = runtime.LogCollector;
+const SysvarCache = runtime.SysvarCache;
+const TransactionContext = runtime.TransactionContext;
+const TransactionContextAccount = runtime.TransactionContextAccount;
+const TransactionReturnData = runtime.transaction_context.TransactionReturnData;
+const Rent = runtime.sysvar.Rent;
+const ComputeBudget = runtime.ComputeBudget;
+const ProgramMap = runtime.program_loader.ProgramMap;
+const TestEpochStakeReaderContext = runtime.execution_interfaces.TestEpochStakeReaderContext;
 
 pub const ExecuteContextsParams = struct {
     feature_set: []const FeatureParams = &.{},
@@ -91,7 +91,7 @@ pub fn createTransactionContext(
     random: std.Random,
     params: ExecuteContextsParams,
 ) !struct {
-    sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData),
+    sig.utils.collections.PubkeyMap(runtime.AccountSharedData),
     TransactionContext,
 } {
     var transaction_context: TransactionContext = undefined;
@@ -104,7 +104,7 @@ pub fn createTransactionContextPtr(
     random: std.Random,
     params: ExecuteContextsParams,
 ) !struct {
-    sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData),
+    sig.utils.collections.PubkeyMap(runtime.AccountSharedData),
     *TransactionContext,
 } {
     const transaction_context = try allocator.create(TransactionContext);
@@ -118,7 +118,7 @@ fn initTransactionContext(
     random: std.Random,
     params: ExecuteContextsParams,
     transaction_context: *TransactionContext,
-) !sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData) {
+) !sig.utils.collections.PubkeyMap(runtime.AccountSharedData) {
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
@@ -157,8 +157,8 @@ fn initTransactionContext(
     );
     errdefer accounts.deinit(allocator);
 
-    var account_map = sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData){};
-    errdefer sig.runtime.testing.deinitAccountMap(account_map, allocator);
+    var account_map = sig.utils.collections.PubkeyMap(runtime.AccountSharedData){};
+    errdefer runtime.testing.deinitAccountMap(account_map, allocator);
 
     var account_keys = try std.ArrayListUnmanaged(Pubkey).initCapacity(
         allocator,
@@ -184,7 +184,7 @@ fn initTransactionContext(
 
     for (account_keys.items) |key| {
         const cached_account = account_map.getPtr(key) orelse unreachable;
-        const account = try allocator.create(sig.runtime.AccountSharedData);
+        const account = try allocator.create(runtime.AccountSharedData);
         errdefer allocator.destroy(account);
         account.* = try cached_account.clone(allocator);
         accounts.appendAssumeCapacity(TransactionContextAccount.init(key, account));
@@ -468,7 +468,7 @@ pub fn expectTransactionAccountEqual(
 }
 
 pub fn deinitAccountMap(
-    map: sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData),
+    map: sig.utils.collections.PubkeyMap(runtime.AccountSharedData),
     allocator: std.mem.Allocator,
 ) void {
     for (map.values()) |account| account.deinit(allocator);

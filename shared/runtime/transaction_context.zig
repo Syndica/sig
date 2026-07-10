@@ -1,29 +1,29 @@
 const std = @import("std");
 const tracy = @import("tracy");
 const std14 = @import("std14");
-const sig = @import("../lib.zig");
-
-const program = sig.runtime.program;
-const vm = sig.vm;
+const sig = @import("shared");
+const runtime = @import("lib.zig");
+const program = runtime.program;
+const vm = runtime.vm;
 
 const Hash = sig.core.Hash;
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
-const EpochStakeReader = sig.runtime.execution_interfaces.EpochStakeReader;
+const EpochStakeReader = runtime.execution_interfaces.EpochStakeReader;
 const Pubkey = sig.core.Pubkey;
 
-const AccountSharedData = sig.runtime.AccountSharedData;
-const BorrowedAccount = sig.runtime.BorrowedAccount;
-const BorrowedAccountContext = sig.runtime.BorrowedAccountContext;
+const AccountSharedData = runtime.AccountSharedData;
+const BorrowedAccount = runtime.BorrowedAccount;
+const BorrowedAccountContext = runtime.BorrowedAccountContext;
 const FeatureSet = sig.core.FeatureSet;
-const LogCollector = sig.runtime.LogCollector;
-const SysvarCache = sig.runtime.SysvarCache;
-const InstructionContext = sig.runtime.InstructionContext;
-const InstructionInfo = sig.runtime.InstructionInfo;
-const ComputeBudget = sig.runtime.ComputeBudget;
-const Rent = sig.runtime.sysvar.Rent;
-const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
-const ProgramMap = sig.runtime.program_loader.ProgramMap;
+const LogCollector = runtime.LogCollector;
+const SysvarCache = runtime.SysvarCache;
+const InstructionContext = runtime.InstructionContext;
+const InstructionInfo = runtime.InstructionInfo;
+const ComputeBudget = runtime.ComputeBudget;
+const Rent = runtime.sysvar.Rent;
+const SerializedAccountMetadata = runtime.program.bpf.serialize.SerializedAccountMeta;
+const ProgramMap = runtime.program_loader.ProgramMap;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/transaction-context/src/lib.rs#L17
 pub const MAX_ACCOUNTS_PER_INSTRUCTION = 255;

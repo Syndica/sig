@@ -6,12 +6,12 @@
 /// - https://github.com/anza-xyz/agave/blob/v3.1.8/cost-model/src/block_cost_limits.rs
 /// - https://github.com/anza-xyz/agave/blob/v3.1.8/cost-model/src/cost_model.rs
 const std = @import("std");
-const sig = @import("../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("lib.zig");
 const FeatureSet = sig.core.FeatureSet;
 const Slot = sig.core.Slot;
-const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
-const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
+const RuntimeTransaction = runtime.transaction_execution.RuntimeTransaction;
+const ComputeBudgetLimits = runtime.program.compute_budget.ComputeBudgetLimits;
 
 // Block cost limit constants from Agave's block_cost_limits.rs
 // https://github.com/anza-xyz/agave/blob/v3.1.8/cost-model/src/block_cost_limits.rs
@@ -42,7 +42,7 @@ pub const ACCOUNT_DATA_COST_PAGE_SIZE: u64 = 32 * 1024;
 
 /// Static cost for simple vote transactions (when feature is inactive).
 /// Breakdown: 2100 (vote CUs) + 720 (1 sig) + 600 (2 write locks) + 8 (loaded data)
-pub const SIMPLE_VOTE_USAGE_COST: u64 = sig.runtime.program.vote.COMPUTE_UNITS +
+pub const SIMPLE_VOTE_USAGE_COST: u64 = runtime.program.vote.COMPUTE_UNITS +
     SIGNATURE_COST +
     2 * WRITE_LOCK_UNITS +
     LOADED_ACCOUNTS_DATA_SIZE_COST_PER_32K;
@@ -70,7 +70,7 @@ pub const TransactionCost = union(enum) {
 
     pub fn programsExecutionCost(self: TransactionCost) u64 {
         return switch (self) {
-            .simple_vote => sig.runtime.program.vote.COMPUTE_UNITS,
+            .simple_vote => runtime.program.vote.COMPUTE_UNITS,
             .transaction => |details| details.programs_execution_cost,
         };
     }
@@ -160,7 +160,7 @@ fn getSignatureCost(
     feature_set: *const FeatureSet,
     slot: Slot,
 ) u64 {
-    const precompiles = sig.runtime.program.precompiles;
+    const precompiles = runtime.program.precompiles;
 
     const ed25519_verify_cost = precompiles.ED25519_VERIFY_STRICT_COST;
 
@@ -308,7 +308,7 @@ test "runtime.cost_model.TransactionCost.programsExecutionCost for simple_vote" 
     const cost = TransactionCost{ .simple_vote = {} };
     // Simple vote transactions use a static execution cost of 2100 CU (vote program default)
     try std.testing.expectEqual(
-        @as(u64, sig.runtime.program.vote.COMPUTE_UNITS),
+        @as(u64, runtime.program.vote.COMPUTE_UNITS),
         cost.programsExecutionCost(),
     );
 }

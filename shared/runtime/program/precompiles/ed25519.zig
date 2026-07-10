@@ -1,12 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const sig = @import("../../../lib.zig");
-
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
-const InstructionContext = sig.runtime.InstructionContext;
-const PrecompileProgramError = sig.runtime.program.precompiles.PrecompileProgramError;
-const getInstructionData = sig.runtime.program.precompiles.getInstructionData;
+const InstructionContext = runtime.InstructionContext;
+const PrecompileProgramError = runtime.program.precompiles.PrecompileProgramError;
+const getInstructionData = runtime.program.precompiles.getInstructionData;
 
 const Ed25519 = std.crypto.sign.Ed25519;
 
@@ -176,7 +176,7 @@ fn testCase(
 }
 
 test "execute" {
-    const testing = sig.runtime.program.testing;
+    const testing = runtime.program.testing;
 
     const allocator = std.testing.allocator;
 
@@ -190,7 +190,7 @@ test "execute" {
             .accounts = &.{
                 .{
                     .pubkey = ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    .owner = runtime.ids.NATIVE_LOADER_ID,
                     .executable = true,
                 },
             },

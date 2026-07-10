@@ -9,13 +9,13 @@
 
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../lib.zig");
-
-const account_loader = sig.runtime.account_loader;
+const sig = @import("shared");
+const runtime = @import("lib.zig");
+const account_loader = runtime.account_loader;
 
 const Pubkey = sig.core.Pubkey;
 
-const ids = sig.runtime.ids;
+const ids = runtime.ids;
 
 pub const SPL_MEMO_V1_ID: Pubkey = .parse("Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo");
 pub const SPL_MEMO_V3_ID: Pubkey = .parse("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
@@ -123,7 +123,7 @@ pub const RawTokenBalances = std14.BoundedArray(
 ///
 /// Returns a bounded array of RawTokenBalance entries.
 pub fn collectRawTokenBalances(
-    accounts: []const sig.runtime.account_loader.LoadedAccount,
+    accounts: []const runtime.account_loader.LoadedAccount,
 ) RawTokenBalances {
     var result = RawTokenBalances{};
 
@@ -228,7 +228,7 @@ test "runtime.spl_token.isTokenProgram" {
     try testing.expect(isTokenProgram(ids.TOKEN_PROGRAM_ID));
     try testing.expect(isTokenProgram(ids.TOKEN_2022_PROGRAM_ID));
     try testing.expect(!isTokenProgram(Pubkey.ZEROES));
-    try testing.expect(!isTokenProgram(sig.runtime.program.system.ID));
+    try testing.expect(!isTokenProgram(runtime.program.system.ID));
 }
 
 test "runtime.spl_token.ParsedMint.parse: uninitialized returns null" {
@@ -407,7 +407,7 @@ test "runtime.spl_token.collectRawTokenBalances: non-token accounts skipped" {
         .account = .{
             .lamports = 1_000_000,
             .data = &data,
-            .owner = sig.runtime.program.system.ID, // not a token program
+            .owner = runtime.program.system.ID, // not a token program
             .executable = false,
             .rent_epoch = 0,
         },
@@ -509,7 +509,7 @@ test "runtime.spl_token.collectRawTokenBalances: mixed token and non-token accou
             .account = .{
                 .lamports = 1_000_000,
                 .data = &system_data,
-                .owner = sig.runtime.program.system.ID,
+                .owner = runtime.program.system.ID,
                 .executable = false,
                 .rent_epoch = 0,
             },

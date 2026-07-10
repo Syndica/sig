@@ -1,4 +1,5 @@
 const shared = @import("shared");
+const runtime_mod = @import("runtime");
 
 pub const accounts_db = @import("accountsdb/lib.zig");
 pub const bincode = shared.bincode;
@@ -17,7 +18,7 @@ pub const replay = @import("replay/lib.zig");
 pub const rpc = @import("rpc/lib.zig");
 pub const runtime = @import("runtime/lib.zig");
 pub const shred_network = @import("shred_network/lib.zig");
-pub const vm = shared.vm;
+pub const vm = runtime_mod.vm;
 pub const sync = @import("sync/lib.zig");
 pub const time = @import("time/lib.zig");
 pub const trace = @import("trace/lib.zig");
@@ -26,7 +27,7 @@ pub const MockTransferService = @import("transaction_sender/MockTransferService.
 pub const testing = @import("testing.zig");
 pub const utils = @import("utils/lib.zig");
 pub const version = @import("version/version.zig");
-pub const zksdk = shared.zksdk;
+pub const zksdk = runtime_mod.zksdk;
 pub const build_options = @import("build-options");
 
 pub const VALIDATOR_DIR = "validator/";

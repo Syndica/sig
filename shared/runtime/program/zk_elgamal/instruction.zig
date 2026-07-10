@@ -1,4 +1,5 @@
-const sig = @import("../../../lib.zig");
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
 const Pubkey = sig.core.Pubkey;
 
 pub const ProofInstruction = enum(u8) {

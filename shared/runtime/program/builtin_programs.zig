@@ -1,6 +1,6 @@
-const sig = @import("../../lib.zig");
-
-const program = sig.runtime.program;
+const sig = @import("shared");
+const runtime = @import("../lib.zig");
+const program = runtime.program;
 const features = sig.core.features;
 
 const Feature = features.Feature;
@@ -107,13 +107,13 @@ pub const BUILTINS = [_]BuiltinProgram{
         .core_bpf_migration_config = null,
     },
     .{
-        .program_id = sig.runtime.ids.ZK_TOKEN_PROOF_PROGRAM_ID,
+        .program_id = runtime.ids.ZK_TOKEN_PROOF_PROGRAM_ID,
         .data = "zk_token_proof_program",
         .enable_feature_id = .zk_token_sdk_enabled,
         .core_bpf_migration_config = null,
     },
     .{
-        .program_id = sig.runtime.program.zk_elgamal.ID,
+        .program_id = runtime.program.zk_elgamal.ID,
         .data = "zk_elgamal_proof_program",
         .enable_feature_id = .zk_elgamal_proof_program_enabled,
         .core_bpf_migration_config = null,
@@ -122,10 +122,10 @@ pub const BUILTINS = [_]BuiltinProgram{
 
 pub const STATELESS_BUILTINS = [_]StatelessBuiltinPrototype{
     .{
-        .program_id = sig.runtime.ids.FEATURE_PROGRAM_ID,
+        .program_id = runtime.ids.FEATURE_PROGRAM_ID,
         .core_bpf_migration_config = .{
-            .program_id = sig.runtime.ids.FEATURE_PROGRAM_ID,
-            .source_buffer_address = sig.runtime.ids.FEATURE_PROGRAM_SOURCE_ID,
+            .program_id = runtime.ids.FEATURE_PROGRAM_ID,
+            .source_buffer_address = runtime.ids.FEATURE_PROGRAM_SOURCE_ID,
             .upgrade_authority_address = null,
             .enable_feature_id = .migrate_feature_gate_program_to_core_bpf,
             .verified_build_hash = .{ .data = .{

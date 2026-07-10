@@ -6,7 +6,8 @@
 //! [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/account.rs#L118
 
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("shared");
+const runtime = @import("lib.zig");
 const AccountSharedData = @This();
 
 const Pubkey = sig.core.Pubkey;
@@ -36,7 +37,7 @@ pub const NEW: AccountSharedData = .{
     .data = &.{},
     .owner = Pubkey.ZEROES,
     .executable = false,
-    .rent_epoch = sig.runtime.rent_collector.RENT_EXEMPT_RENT_EPOCH,
+    .rent_epoch = runtime.rent_collector.RENT_EXEMPT_RENT_EPOCH,
 };
 
 pub fn isZeroed(self: AccountSharedData) bool {

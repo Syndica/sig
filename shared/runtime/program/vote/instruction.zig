@@ -1,7 +1,7 @@
 const std = @import("std");
-const sig = @import("../../../lib.zig");
-
-const vote_program = sig.runtime.program.vote;
+const sig = @import("shared");
+const runtime = @import("../../lib.zig");
+const vote_program = runtime.program.vote;
 const vote_state = vote_program.state;
 
 const Pubkey = sig.core.Pubkey;
@@ -9,7 +9,7 @@ const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 const InstructionAccount = sig.core.instruction.InstructionAccount;
 
-const SEED_FIELD_CONFIG = sig.runtime.program.SEED_FIELD_CONFIG;
+const SEED_FIELD_CONFIG = runtime.program.SEED_FIELD_CONFIG;
 
 const BLS_PUBLIC_KEY_COMPRESSED_SIZE = vote_state.BLS_PUBLIC_KEY_COMPRESSED_SIZE;
 const BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE = vote_state.BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE;
@@ -623,8 +623,8 @@ pub fn createInitializeAccount(
     const ix: Instruction = .{ .initialize_account = init_account };
     return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
-        accountMeta(sig.runtime.sysvar.Rent.ID, .none),
-        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(runtime.sysvar.Rent.ID, .none),
+        accountMeta(runtime.sysvar.Clock.ID, .none),
         accountMeta(init_account.node_pubkey, .signer),
     });
 }
@@ -639,7 +639,7 @@ pub fn createAuthorize(
     const ix: Instruction = .{ .authorize = authorize };
     return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
-        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(runtime.sysvar.Clock.ID, .none),
         accountMeta(authorized_pubkey, .signer),
     });
 }
@@ -654,7 +654,7 @@ pub fn createAuthorizeChecked(
     const ix: Instruction = .{ .authorize_checked = vote_authorize };
     return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
-        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(runtime.sysvar.Clock.ID, .none),
         accountMeta(authorized_pubkey, .signer),
         accountMeta(new_authorized_pubkey, .signer),
     });
@@ -676,7 +676,7 @@ pub fn createAuthorizeVoterWithBls(
     } };
     return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
-        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(runtime.sysvar.Clock.ID, .none),
         accountMeta(authorized_pubkey, .signer),
     });
 }
@@ -698,7 +698,7 @@ pub fn createAuthorizeWithSeed(
     } };
     return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
-        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(runtime.sysvar.Clock.ID, .none),
         accountMeta(current_authority_base_key, .signer),
     });
 }
@@ -719,7 +719,7 @@ pub fn createAuthorizeCheckedWithSeed(
     } };
     return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
-        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(runtime.sysvar.Clock.ID, .none),
         accountMeta(current_authority_base_key, .signer),
         accountMeta(new_authority, .signer),
     });
@@ -761,8 +761,8 @@ pub fn createVote(
     const ix: Instruction = .{ .vote = vote };
     return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
-        accountMeta(sig.runtime.sysvar.SlotHashes.ID, .none),
-        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(runtime.sysvar.SlotHashes.ID, .none),
+        accountMeta(runtime.sysvar.Clock.ID, .none),
         accountMeta(authorized_voter_pubkey, .signer),
     });
 }
@@ -776,8 +776,8 @@ pub fn createVoteSwitch(
     const ix: Instruction = .{ .vote_switch = vote_switch };
     return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
-        accountMeta(sig.runtime.sysvar.SlotHashes.ID, .none),
-        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(runtime.sysvar.SlotHashes.ID, .none),
+        accountMeta(runtime.sysvar.Clock.ID, .none),
         accountMeta(authorized_voter_pubkey, .signer),
     });
 }
