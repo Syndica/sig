@@ -545,15 +545,13 @@ pub const ExtraFields = struct {
         // actually always populated. we do not need to handle the null case,
         // and it's actually not even possible for replay to work if this is
         // null. so we treat this as a required field.
-        var block_id: [32]u8 = undefined;
-        r.readSliceAll(&block_id) catch |err| switch (err) {
+        var block_id: Hash = undefined;
+        r.readSliceAll(&block_id.data) catch |err| switch (err) {
             error.EndOfStream => return error.MissingBlockId,
             else => |e| return e,
         };
 
-        return .{
-            .block_id = .{ .data = block_id },
-        };
+        return .{ .block_id = block_id };
     }
 };
 
