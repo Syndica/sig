@@ -1,3 +1,4 @@
+const std = @import("std");
 const solana = @import("solana.zig");
 const collections = @import("collections.zig");
 const ipc = @import("ipc.zig");
@@ -21,7 +22,7 @@ pub const Node = extern struct {
     sibling: BlockRef.Optional = .null,
     /// this is null for blocks older than the bootstrap root. do not unwrap
     /// unless you are certain the block is not older than the bootstrap root
-    slot: util.PackedOptional(solana.Slot),
+    slot: util.PackedOptional(solana.Slot, std.math.maxInt(solana.Slot)),
 };
 
 pub const ExecReqResponse = extern struct {

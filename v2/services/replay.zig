@@ -319,7 +319,7 @@ fn bootstrap(
     // create a synthetic fec-set node that doesn't have all information about
     // the fec set, but it is enough to get started processing the first block
     // after the root
-    const root_node = (try insertFecSet(logger, &.{
+    const root_node = try insertFecSet(logger, &.{
         .merkle_root = snapshot_metadata.block_id,
         .chained_merkle_root = .ZEROES, // cannot be determined from the snapshot
         .id = .{
@@ -330,7 +330,7 @@ fn bootstrap(
         .slot_complete = true,
         .payload_len = 0, // cannot be determined from the snapshot
         .payload_buf = undefined,
-    }, forest, block_pool)).?;
+    }, forest, block_pool) orelse unreachable;
 
     root_node.block_ref = .init(root_block);
 

@@ -86,43 +86,34 @@ pub fn assertInterface(comptime InterfaceType: type, comptime ContractStruct: ty
 /// as an integer.
 ///
 /// This is only safe to use if you can be certain that it will never need to
-/// represent the maxInt for the backing integer.
-pub fn PackedOptional(T: type) type {
-    const Int = @as(?type, switch (@typeInfo(T)) {
-        .int => T,
-        .@"enum" => |info| info.tag_type,
-        .@"struct" => |s| s.backing_integer,
-        else => null,
-    }) orelse @compileError("Unsupported type for PackedOptional(_): " ++ @typeName(T));
-
-    return enum(Int) {
-        null = std.math.maxInt(Int),
+/// represent the sentinel value.
+pub fn PackedOptional(T: type, sentinel: backingInt(T)) type {
+    return enum(backingInt(T)) {
+        null = sentinel,
         _,
 
-        pub fn init(zig_optional: ?T) PackedOptional(T) {
+        pub fn init(zig_optional: ?T) PackedOptional(T, sentinel) {
             if (zig_optional) |x| {
                 const int = switch (@typeInfo(T)) {
                     .int => x,
                     .@"enum" => @intFromEnum(x),
-                    .@"struct" => @as(Int, @bitCast(x)),
                     else => unreachable,
                 };
-                std.debug.assert(int != std.math.maxInt(Int));
+                std.debug.assert(int != sentinel);
                 return @enumFromInt(int);
             } else return .null;
         }
 
-        pub fn opt(self: PackedOptional(T)) ?T {
+        pub fn opt(self: PackedOptional(T, sentinel)) ?T {
             if (self == .null) return null;
             return switch (@typeInfo(T)) {
                 .int => @intFromEnum(self),
                 .@"enum" => @enumFromInt(@intFromEnum(self)),
-                .@"struct" => @as(T, @bitCast(@intFromEnum(self))),
                 else => unreachable,
             };
         }
 
-        pub fn format(self: PackedOptional(T), writer: *std.Io.Writer) !void {
+        pub fn format(self: PackedOptional(T, sentinel), writer: *std.Io.Writer) !void {
             const value = self.opt() orelse return writer.writeAll("null");
             if (comptime std.meta.hasMethod(T, "format")) {
                 try writer.print("{f}", .{value});
@@ -133,17 +124,23 @@ pub fn PackedOptional(T: type) type {
     };
 }
 
+fn backingInt(T: type) type {
+    return @as(?type, switch (@typeInfo(T)) {
+        .int => T,
+        .@"enum" => |info| info.tag_type,
+        else => null,
+    }) orelse @compileError("type not backed by an integer: " ++ @typeName(T));
+}
+
 test PackedOptional {
-    const T = packed struct { a: u32, b: u32 };
-    const o1: PackedOptional(T) = .init(null);
-    const o2: PackedOptional(T) = .init(T{ .a = 1234, .b = 5678 });
+    const o1: PackedOptional(u32, std.math.maxInt(u32)) = .init(null);
+    const o2: PackedOptional(u32, std.math.maxInt(u32)) = .init(1234);
     try std.testing.expect(o1.opt() == null);
-    try std.testing.expect(o2.opt().? == T{ .a = 1234, .b = 5678 });
+    try std.testing.expect(o2.opt().? == 1234);
 }
 
 test "PackedOptional format matches ?T" {
     const E = enum(u8) { a, b, c };
-    const S = packed struct { a: u16, b: u16 };
     const F = enum(u8) {
         x,
         y,
@@ -157,13 +154,12 @@ test "PackedOptional format matches ?T" {
         .{ "{?any}", @as(?u32, 12345) },
         .{ "{?any}", @as(?E, null) },
         .{ "{?any}", @as(?E, .b) },
-        .{ "{?any}", @as(?S, null) },
-        .{ "{?any}", @as(?S, .{ .a = 1, .b = 2 }) },
         .{ "{?f}", @as(?F, null) },
         .{ "{?f}", @as(?F, .x) },
     }) |case| {
         const fmt, const value = case;
-        const po: PackedOptional(@typeInfo(@TypeOf(value)).optional.child) = .init(value);
+        const T = @typeInfo(@TypeOf(value)).optional.child;
+        const po: PackedOptional(T, std.math.maxInt(backingInt(T))) = .init(value);
         var expect_buf: [32]u8 = undefined;
         var actual_buf: [32]u8 = undefined;
         const actual = try std.fmt.bufPrint(&actual_buf, "{f}", .{po});

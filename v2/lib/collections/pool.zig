@@ -88,7 +88,7 @@ pub fn SharedPool(Item: type, cap: usize) type {
                 return pool.indexToConstPtr(self);
             }
 
-            pub const Optional = util.PackedOptional(ItemId);
+            pub const Optional = util.PackedOptional(ItemId, std.math.maxInt(IdInt));
         };
 
         pub fn size() usize {
@@ -245,7 +245,7 @@ pub fn Pool(Item: type, IdInt: type) type {
                 return pool.indexToPtr(self);
             }
 
-            pub const Optional = util.PackedOptional(ItemId);
+            pub const Optional = util.PackedOptional(ItemId, std.math.maxInt(IdInt));
         };
 
         pub fn init(item_buf: []Item) PoolSelf {
