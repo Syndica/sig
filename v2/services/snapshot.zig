@@ -103,7 +103,9 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             // Update the completion value
             const total: f64 = @floatFromInt(zst_reader.file_size);
             const consumed: f64 = @floatFromInt(zst_reader.file_reader.getOffset());
-            rw.ready_snapshot_out.completion.store((consumed * 100) / total, .monotonic);
+            var completion = @min(100.0, (consumed * 100) / total);
+            if (zst_reader.file_size == 0) completion = 100.0; // guard against 0-len snapshots
+            rw.ready_snapshot_out.completion.store(completion, .monotonic);
 
             if (n == 0) break;
             out.advance(n);

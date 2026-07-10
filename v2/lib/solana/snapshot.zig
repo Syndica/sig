@@ -260,6 +260,11 @@ pub const AccountsDbFields = struct {
 
         // account_file_map: HashMap(Slot, Vec(StorageEntry))
         // serialized as u64 len + n * { slot: u64, small_vec_size: u64, id: u64, length: u64 }
+        //
+        // NOTE: agave-built snapshots already have the file_len == tar_file.size for account files
+        // so we can avoid having to parse this out to get their true lengths.
+        // https://github.com/anza-xyz/agave/blob/v4.2/accounts-db/src/account_storage_reader.rs#L91
+        // https://github.com/anza-xyz/agave/blob/v4.2/snapshots/src/archive.rs#L179-L188
         {
             const len = try readInt(u64, r);
             try r.discardAll(len * (8 + // slot: u64
@@ -580,7 +585,7 @@ pub fn SnapshotIter(comptime BufReader: type) type {
 pub fn TarZstIter(comptime BufReader: type) type {
     lib.util.assertInterface(BufReader, struct {
         /// Get a slice of readable memory. Returns empty slice on EOF.
-        pub fn getBuffer(self: BufReader) ?[]const u8 {
+        pub fn getBuffer(self: BufReader) []const u8 {
             _ = .{self};
             return undefined;
         }
