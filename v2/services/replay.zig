@@ -287,27 +287,26 @@ fn bootstrap(
     var root_block = bhq: {
         var blockhashes_in = snapshot_metadata.blockhash_queue.hashes.getView(.reader);
         defer blockhashes_in.close();
-        var latest_block: ?lib.replay.BlockRef = null;
-        var parent_block: ?lib.replay.BlockRef = null;
+        var last_block: ?lib.replay.BlockRef = null;
         while (true) {
             const hashes = try blockhashes_in.getBufferBlocking(runner);
             if (hashes.len == 0) break; // blockhashes_out closed their end
             for (hashes) |*hash| {
-                latest_block = try block_pool.createId();
-                latest_block.?.ptr(block_pool).* = .{
+                const block = try block_pool.createId();
+                block.ptr(block_pool).* = .{
                     .slot = .null, // cannot be determined from the snapshot
                     .child = .null,
-                    .parent = .init(parent_block),
+                    .parent = .init(last_block),
                 };
-                if (parent_block) |p| p.ptr(block_pool).child = .init(latest_block);
-                blockhash_states[latest_block.?.index()] = hash.*;
+                if (last_block) |p| p.ptr(block_pool).child = .init(block);
+                blockhash_states[block.index()] = hash.*;
+                last_block = block;
                 num_hashes += 1;
             }
             blockhashes_in.advance(hashes.len);
-            parent_block = latest_block;
         }
 
-        const root_block = latest_block orelse return error.NoBlockhashesInSnapshot;
+        const root_block = last_block orelse return error.NoBlockhashesInSnapshot;
 
         break :bhq root_block;
     };
@@ -1342,4 +1341,89 @@ test "MerkleForest tree put" {
     try std.testing.expectEqual(null, try insertFecSet(logger, &c, &tree, pool));
     try std.testing.expectEqual(null, try insertFecSet(logger, &d, &tree, pool));
     try std.testing.expectEqual(null, try insertFecSet(logger, &e, &tree, pool));
+}
+
+test "bootstrap creates root block and chains blockhashes" {
+    const allocator = std.testing.allocator;
+
+    var activity: lib.runner.Activity = .{};
+    var service_view = activity.serviceView();
+    const runner: lib.runner.Connection = .{ .activity = &service_view };
+
+    var metadata: lib.accounts_db.RuntimeMetadata = undefined;
+    metadata.init();
+    metadata.block_id = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
+
+    // Prefill the blockhash ring with N > 1 hashes as a single writer batch,
+    // then close the writer end so bootstrap's drain loop terminates.
+    const test_hashes = [_]Hash{
+        .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd"),
+        .parse("2GyMeUytf6fcsfNP2QQ6F5e5qwAUoMtKUbnH6QU6bTNm"),
+        .parse("4UahX8LzYC7xnubvP9QzRHmPPYovtcNYo7rBXKpp3ADM"),
+        .parse("Hh8DjJdpQRGeZ6bUxYyt1PBktnFtNAwZoQuwZqGWLPfB"),
+    };
+    {
+        var writer = metadata.blockhash_queue.hashes.getView(.writer);
+        const buf = writer.getBuffer().?;
+        try std.testing.expect(buf.len >= test_hashes.len);
+        @memcpy(buf[0..test_hashes.len], &test_hashes);
+        writer.advance(test_hashes.len);
+        writer.close();
+    }
+
+    const root_slot: lib.solana.Slot = 100;
+    metadata.populateSlot(root_slot);
+
+    var pool_buf: [lib.replay.BlockPool.size()]u8 align(@alignOf(lib.replay.BlockPool)) = undefined;
+    const pool: *lib.replay.BlockPool = @ptrCast(&pool_buf);
+    pool.init();
+
+    var forest: MerkleForest = try .init(allocator);
+    defer forest.deinit(allocator);
+
+    const exec_states = try allocator.create(BlockExecStates);
+    defer allocator.destroy(exec_states);
+    @memset(exec_states, null);
+
+    const blockhash_states = try allocator.create(BlockHashStates);
+    defer allocator.destroy(blockhash_states);
+    @memset(blockhash_states, null);
+
+    const logger = tel.Logger("main").noop;
+
+    try bootstrap(logger, runner, &metadata, &forest, pool, exec_states, blockhash_states);
+
+    // find root in pool
+    var root_opt: ?lib.replay.BlockRef = null;
+    for (pool.buf(), 0..) |block, i| {
+        if (block.item.slot.opt()) |slot| if (slot == root_slot) {
+            try std.testing.expectEqual(null, root_opt);
+            root_opt = lib.replay.BlockRef.fromInt(@intCast(i));
+        };
+    }
+    const root = root_opt orelse return error.NoRoot;
+
+    try std.testing.expectEqual(root_slot, root.ptr(pool).slot.opt().?);
+    try std.testing.expect(exec_states[root.index()].?.finished());
+
+    // walk backwards from root, checking each block's hash, slot, and that the
+    // parent and child link properly.
+    var current: ?lib.replay.BlockRef = root;
+    var expected_child: ?lib.replay.BlockRef = null;
+    for (0..test_hashes.len) |i| {
+        const block_ref = current orelse return error.ParentNotSpecified;
+        const block = block_ref.ptr(pool);
+        try std.testing.expectEqual(
+            test_hashes[test_hashes.len - 1 - i],
+            blockhash_states[block_ref.index()].?,
+        );
+        try std.testing.expectEqual(
+            if (i == 0) root_slot else null,
+            block.slot.opt(),
+        );
+        try std.testing.expectEqual(expected_child, block.child.opt());
+        expected_child = block_ref;
+        current = block.parent.opt();
+    }
+    try std.testing.expectEqual(null, current);
 }
