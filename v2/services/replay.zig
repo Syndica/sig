@@ -951,7 +951,8 @@ fn maybeContinueBlockExec(
         const tx_ref = try transaction_pool.createId();
         // TODO: this is a major leak risk, should use comptime errdefer unreachable
 
-        const tx_buf: *[1232]u8 = transaction_pool.indexToPtr(tx_ref);
+        // TODO: integrate new zero-copy offset approach with the deserializer.
+        const tx_buf: *[1232]u8 = &transaction_pool.indexToPtr(tx_ref).payload;
 
         const tx = try block_deserial_state.nextTransaction(
             forest_pool,

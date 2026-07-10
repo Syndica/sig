@@ -53,8 +53,10 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                 zone.value(slot);
                 tracy.plot(u48, "exec slot", @intCast(slot));
 
-                var reader =
-                    std.io.Reader.fixed(ro.replay_transaction_pool.indexToConstPtr(data.tx_idx));
+                // TODO: integrate new zero-copy offset approach with the deserialization here (should be able to remove the bincode.read below)
+                var reader = std.io.Reader.fixed(
+                    &ro.replay_transaction_pool.indexToConstPtr(data.tx_idx).payload,
+                );
 
                 const transaction: lib.solana.transaction.VersionedTransaction =
                     try lib.solana.bincode.read(

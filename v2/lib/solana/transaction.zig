@@ -244,7 +244,7 @@ pub const VersionedTransaction = struct {
 /// non-canonical encodings and values that overflow `u16`. Shared between
 /// `parseTransaction` and the merkle-linked stream walker in replay.zig,
 /// so both agree on framing rejects.
-fn readShortU16(reader: anytype) VersionedTransaction.ParseError!u16 {
+pub fn readShortU16(reader: anytype) VersionedTransaction.ParseError!u16 {
     var val: u32 = 0;
     for (0..3) |nth_byte| {
         const b = try reader.readByte();
@@ -282,6 +282,18 @@ pub const SliceReader = struct {
     pub fn bytesConsumed(self: *const SliceReader) usize {
         return self.pos;
     }
+
+    pub fn takeBytes(
+        self: *SliceReader,
+        len: usize,
+    ) error{EndOfStream}![]const u8 {
+        if (len > self.bytes.len - self.pos)
+            return error.EndOfStream;
+
+        const result = self.bytes[self.pos..][0..len];
+        self.pos += len;
+        return result;
+    }
 };
 
 pub const VersionedMessage = union(enum) {
@@ -289,6 +301,22 @@ pub const VersionedMessage = union(enum) {
     legacy: LegacyMessage,
     // first byte & 0x80 != 0
     v0: V0Message,
+
+    /// Compact internal representation of the message format.
+    ///
+    /// Versioned values match the low seven bits of the wire prefix.
+    /// Legacy has no numeric wire version, so `0xff` is a Sig internal sentinel for it.
+    pub const VersionByte = enum(u8) {
+        legacy = 0xff,
+        v0 = 0,
+    };
+
+    pub fn versionInt(self: *const VersionedMessage) VersionByte {
+        return switch (self.*) {
+            .legacy => .legacy,
+            .v0 => .v0,
+        };
+    }
 
     pub fn bincodeRead(
         fba: *std.heap.FixedBufferAllocator,
