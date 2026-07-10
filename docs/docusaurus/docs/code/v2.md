@@ -46,24 +46,21 @@ zig build lint -- --fix
 
 # Topology
 
-v2 runs each service as an isolated process, or as a thread when `.sandboxing_mode = .threaded` is used. The parent process creates shared memory regions before spawning services, then maps each region into the services that need it. Services communicate through those shared regions, but some services also perform runtime I/O, such as telemetry sockets, snapshot download and reads, and accounts DB file access.
+Each service is run as an isolated process, or as a thread when `.sandboxing_mode = .threaded` is used (threaded mode is utilized for tracy). The parent process creates shared memory regions and wires interprocess communication before spawning services; then maps each region into the services that need it. Services communicate through those shared regions. `init/main.zig` is the entry point of the parent process.
 
-Topology is defined in Zig, not ZON:
+`init/services.zig` declares each service's `ReadOnly` and `ReadWrite` region schema.
 
-1. `init/services.zig` declares each service's `ReadOnly` and `ReadWrite` region schema.
-2. `init/main.zig` declares the `Topology` type.
-3. `init/main.zig` creates and initializes shared memory regions.
-4. `init/main.zig` passes initialized regions to `children.spawn(...)`.
+The service graph is defined by `Topology` in `init/main.zig`; the services are configured with the config file, for which `config/example.zon` serves as an example.
 
-Changing the service graph requires changing `main.zig`. The runtime config file cannot select a different topology. `config/example.zon` shows how `Config` fields are set and loaded for the topology defined in `init/main.zig`.
+The parent process acts as a runner, after spawning the child processes it monitors their health. The runner is implemented in `lib/runner.zig` and is used by `init/main.zig` to run the topology (started via `topology.Children.spawn(Topology)`).
 
-Different "mains" (entry points) can be used to create integration tests on services in isolation with a different topology that allows for minimization of setup.
+Integration testing between subsets of services is done using alternative runners that construct the minimal service graph needed.
 
 # Adding a New Service
 
 This walkthrough adds a service called `foo` that reads a config region and logs through telemetry.
 
-Start by defining the data layout that will live in shared memory. The struct must be `extern` so its layout is stable across process boundaries. Since regions are mapped at different virtual addresses in each process, pointer values from one process are invalid in another. Use fixed-size buffers with length fields instead of pointers or slices.
+Start by defining the data layout that will live in shared memory. Structs must be declared `extern` if shared across services to ensure the layout is stable across process boundaries (due to different compilation units). Since regions are mapped at different virtual addresses in each process, pointer values from one process are invalid in another. To have many shared objects of the same type a common pattern is to use a fixed-size buffer and share/pass pointer offsets (array indexes) that allow the reader/receiver to create the pointer from its own base address; we'll define a fixed buffer for example:
 
 ```zig
 // lib/foo.zig
@@ -103,7 +100,6 @@ pub const foo: ServiceSpec = .{
 Write the service in `services/foo.zig`:
 
 ```zig
-const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
 const services = @import("services");
@@ -126,9 +122,9 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     const bar = ro.config.bar_buf[0..ro.config.bar_len];
     logger.info().logf("foo service started with bar: {s}", .{bar});
 
-    try runner.activity.signalIdleImmediate();
-    while (true) : (std.atomic.spinLoopHint()) {
-        try runner.activity.checkCanceled();
+    while (true) {
+        // Just spinning for example, in a real service work would be done here.
+        try runner.activity.signalIdleSpinning();
     }
 }
 ```
