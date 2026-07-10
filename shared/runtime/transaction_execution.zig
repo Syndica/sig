@@ -241,9 +241,6 @@ pub fn loadAndExecuteTransaction(
             &compute_budget_limits,
             maybe_nonce_info,
             env.rent_collector,
-            env.feature_set,
-            env.slot,
-            env.lamports_per_signature,
         )) {
             .ok => |x| x,
             .err => |e| return .{ .err = e },

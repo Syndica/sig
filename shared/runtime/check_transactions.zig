@@ -17,7 +17,6 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const PreparedAccount = sig.runtime.account_loader.PreparedAccount;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
-const FeatureSet = sig.core.FeatureSet;
 const NonceData = sig.runtime.nonce.Data;
 const NonceState = sig.runtime.nonce.State;
 const NonceVersions = sig.runtime.nonce.Versions;
@@ -49,18 +48,11 @@ pub fn checkFeePayer(
     /// Takes ownership of this
     maybe_nonce: ?LoadedAccount,
     rent_collector: *const RentCollector,
-    feature_set: *const FeatureSet,
-    slot: sig.core.Slot,
-    lamports_per_signature: u64,
 ) AccountLoadError!TransactionResult(struct {
     FeeDetails,
     std14.BoundedArray(LoadedAccount, 2),
     PreparedAccount,
 }) {
-    _ = lamports_per_signature; // ignored here - see comment below
-    _ = feature_set; // enable_secp256r1_precompile hardcoded
-    _ = slot; // enable_secp256r1_precompile hardcoded
-
     var zone = tracy.Zone.init(@src(), .{ .name = "checkFeePayer" });
     defer zone.deinit();
 
@@ -803,9 +795,6 @@ test "checkFeePayer: happy path fee payer only" {
         &ComputeBudgetLimits.DEFAULT,
         null,
         &sig.core.rent_collector.defaultCollector(10),
-        &sig.core.FeatureSet.ALL_DISABLED,
-        0,
-        5000,
     );
 
     const fee_details, const rollbacks, const prepared_fee_payer = result.ok;
@@ -873,9 +862,6 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
             .account = nonce_account,
         },
         &sig.core.rent_collector.defaultCollector(10),
-        &sig.core.FeatureSet.ALL_DISABLED,
-        0,
-        5000,
     );
 
     const fee_details, const rollbacks, const prepared_fee_payer = result.ok;
@@ -944,9 +930,6 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
             .account = nonce_account,
         },
         &sig.core.rent_collector.defaultCollector(10),
-        &sig.core.FeatureSet.ALL_DISABLED,
-        0,
-        5000,
     );
 
     const fee_details, const rollbacks, const prepared_fee_payer = result.ok;
