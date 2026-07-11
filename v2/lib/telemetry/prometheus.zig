@@ -54,6 +54,9 @@ pub fn writeBody(
             .histogram => |*histogram| {
                 try writeHistogramBody(histogram, metric_id, w);
             },
+            .latency_histogram => |*latency_histogram| {
+                try writeLatencyHistogramBody(latency_histogram, metric_id, w);
+            },
         }
 
         const buffered = w.buffered();
@@ -87,15 +90,7 @@ pub fn writeHistogramBody(
         try w.print("{d}\n", .{bucket.cumulative_count});
     }
 
-    try w.print("{s}_bucket", .{metric_id.name});
-    try w.writeByte('{');
-    if (metric_id.label_count != 0) {
-        try w.writeAll(metric_id.labels);
-        try w.writeByte(',');
-    }
-    try w.writeAll("le=\"+Inf\"}");
-    try w.writeByte(' ');
-    try w.print("{d}\n", .{snapshot_reader.count});
+    try writeInfBucket(metric_id, snapshot_reader.count, w);
 
     // write the sum
     try w.print("{s}_sum", .{metric_id.name});
@@ -117,6 +112,74 @@ pub fn writeHistogramBody(
     try w.writeByte(' ');
     try w.print("{d}\n", .{snapshot_reader.count});
 }
+
+pub fn writeLatencyHistogramBody(
+    histogram: *const tel.LatencyHistogram,
+    metric_id: tel.metric.Id,
+    w: *std.Io.Writer,
+) std.Io.Writer.Error!void {
+    var snapshot_reader = histogram.swapOutSnapshot();
+    defer snapshot_reader.release();
+
+    while (snapshot_reader.nextBucket()) |bucket| { // write the buckets
+        try w.print("{s}_bucket", .{metric_id.name});
+
+        try w.writeByte('{');
+        if (metric_id.label_count != 0) {
+            try w.writeAll(metric_id.labels);
+            try w.writeByte(',');
+        }
+        try w.print("le=\"{f}\"", .{numberFmt(bucket.upper_bound)});
+        try w.writeByte('}');
+
+        try w.writeByte(' ');
+
+        // Cumulative: each bucket reports observations `<= le`, including the buckets below it.
+        try w.print("{d}\n", .{bucket.cumulative_count});
+    }
+
+    try writeInfBucket(metric_id, snapshot_reader.count, w);
+
+    // write the sum
+    try w.print("{s}_sum", .{metric_id.name});
+    if (metric_id.label_count != 0) {
+        try w.writeByte('{');
+        try w.writeAll(metric_id.labels);
+        try w.writeByte('}');
+    }
+    try w.writeByte(' ');
+    try w.print("{f}\n", .{numberFmt(snapshot_reader.sum)});
+
+    // write the count
+    try w.print("{s}_count", .{metric_id.name});
+    if (metric_id.label_count != 0) {
+        try w.writeByte('{');
+        try w.writeAll(metric_id.labels);
+        try w.writeByte('}');
+    }
+    try w.writeByte(' ');
+    try w.print("{d}\n", .{snapshot_reader.count});
+}
+
+/// Writes the mandatory `{name}_bucket{...,le="+Inf"} <count>` line shared by both histogram
+/// renderers. `count` is the cumulative total (equal to `_count`).
+fn writeInfBucket(
+    metric_id: tel.metric.Id,
+    count: u64,
+    w: *std.Io.Writer,
+) std.Io.Writer.Error!void {
+    try w.print("{s}_bucket", .{metric_id.name});
+    try w.writeByte('{');
+    if (metric_id.label_count != 0) {
+        try w.writeAll(metric_id.labels);
+        try w.writeByte(',');
+    }
+    try w.writeAll("le=\"+Inf\"");
+    try w.writeByte('}');
+    try w.writeByte(' ');
+    try w.print("{d}\n", .{count});
+}
+
 
 test "prometheus: histogram labels are valid" {
     const gpa = std.testing.allocator;

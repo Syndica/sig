@@ -5,6 +5,7 @@ pub const Kind = enum(u8) {
     gauge_int,
     gauge_float,
     histogram,
+    latency_histogram,
 };
 
 /// This represents the metric detail that appears before the metric value in memory.
@@ -263,6 +264,15 @@ pub const Appender = struct {
                     field_config.upper_bounds orelse
                         &tel.Histogram.DEFAULT_UPPER_BOUNDS,
                 ),
+                tel.LatencyHistogram => self.appendLatencyHistogram(
+                    .initNameOnly(id_name),
+                    field_config.layout orelse @compileError(
+                        std.fmt.comptimePrint(
+                            "LatencyHistogram metric '{s}' requires a `.layout`.\n",
+                            .{s_field.name},
+                        ),
+                    ),
+                ),
                 else => blk: {
                     if (isVariantCounter(s_field.type)) {
                         break :blk self.appendVariantCounter(id_name, s_field.type.Value);
@@ -310,6 +320,27 @@ pub const Appender = struct {
         return .{ .elements = self.histogram_data[elem_offs + 1 ..][0..elem_count] };
     }
 
+    pub fn appendLatencyHistogram(
+        self: Appender,
+        comptime id: Id,
+        comptime layout: tel.LatencyHistogram.Layout,
+    ) tel.LatencyHistogram.Raw {
+        const header_words = tel.LatencyHistogram.Layout.header_words;
+        const element_count = layout.elementsFromBucketCount();
+        const elem_offs = self.histogram_data_end.fetchAdd(header_words + element_count, .acq_rel);
+        self.appendId(.{
+            .id = id,
+            .kind = .latency_histogram,
+            .index = elem_offs,
+        });
+        layout.writeHeader(self.histogram_data[elem_offs..][0..header_words]);
+        const raw: tel.LatencyHistogram.Raw = .{
+            .elements = self.histogram_data[elem_offs + header_words ..][0..element_count],
+        };
+        raw.init();
+        return .fromRaw(layout, raw);
+    }
+
     fn appendId(self: Appender, detail: Detail) void {
         const id_mem_len = detail.binaryLength();
         const id_mem_offset = self.id_mem_end.fetchAdd(@intCast(id_mem_len), .acq_rel);
@@ -339,6 +370,14 @@ pub const FieldConfigHistogram = struct {
     };
 };
 
+pub const FieldConfigLatencyHistogram = struct {
+    id_override: ?[]const u8 = null,
+    /// Required: selects the bucket layout & count.
+    layout: ?tel.LatencyHistogram.Layout = null,
+
+    const default: FieldConfigLatencyHistogram = .{};
+};
+
 pub fn FieldsConfig(comptime S: type) type {
     return struct {
         prefix: []const u8,
@@ -355,6 +394,7 @@ pub fn FieldConfigs(comptime S: type) type {
             tel.Counter => FieldConfigBasic,
             tel.Gauge => FieldConfigBasic,
             tel.Histogram => FieldConfigHistogram,
+            tel.LatencyHistogram => FieldConfigLatencyHistogram,
             else => blk: {
                 if (isVariantCounter(s_field.type)) break :blk FieldConfigBasic;
                 @compileError("Unsupported: " ++ @typeName(s_field.type));
@@ -396,6 +436,7 @@ pub const Any = union(Kind) {
     gauge_int: *const std.atomic.Value(u64),
     gauge_float: *const std.atomic.Value(f64),
     histogram: tel.Histogram,
+    latency_histogram: tel.LatencyHistogram,
 };
 
 pub const Map = std.ArrayHashMapUnmanaged(Id, Any, Id.ArrayHashCtx, true);
@@ -437,6 +478,17 @@ pub fn collect(
                     .elements = params.histogram_data[detail.index + 1 ..][0..element_count],
                 };
                 break :histogram .fromRaw(raw);
+            } },
+            .latency_histogram => .{ .latency_histogram = lat: {
+                const header_words = tel.LatencyHistogram.Layout.header_words;
+                const layout: tel.LatencyHistogram.Layout = .initFromHeader(
+                    params.histogram_data[detail.index..][0..header_words],
+                );
+                const element_count = layout.elementsFromBucketCount();
+                const raw: tel.LatencyHistogram.Raw = .{
+                    .elements = params.histogram_data[detail.index + header_words ..][0..element_count],
+                };
+                break :lat .fromRaw(layout, raw);
             } },
         };
     }

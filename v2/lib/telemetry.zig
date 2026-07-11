@@ -764,6 +764,398 @@ pub const Histogram = struct {
     }
 };
 
+pub const LatencyHistogram = struct {
+    layout: Layout,
+    /// Used to ensure reads and writes occur on separate shards.
+    /// Atomic representation of `ShardSync`.
+    shard_sync: *std.atomic.Value(u64),
+    /// One hot shard for writing, one cold shard for reading.
+    shards: [2]Shard,
+
+    pub const Layout = union(enum) {
+        power_of_two: struct {
+            base_ns: u64,
+            octaves: u64,
+        },
+        linear: struct {
+            base_ns: u64,
+            step_ns: u64,
+            octaves: u64,
+        },
+        log_linear: struct {
+            base_ns: u64,
+            sub_bucket_bits: u6,
+            octaves: u64,
+        },
+
+        /// Fixed number of leading `u64` words (at `Detail.index`) encoding `layout` +
+        /// before the `Raw` shard elements. Sized for the largest variant (`linear`, two `u64` params).
+        pub const header_words: u32 = blk: {
+            var max_params: usize = 0;
+            for (@typeInfo(Layout).@"union".fields) |variant| {
+                max_params = @max(max_params, @typeInfo(variant.type).@"struct".fields.len);
+            }
+            break :blk @intCast(1 + max_params); // 1 tag + params
+        };
+
+        pub fn initFromHeader(src: []const u64) Layout {
+            std.debug.assert(src.len == header_words);
+            const kind = @as(std.meta.Tag(Layout), @enumFromInt(src[0]));
+            const base = src[1];
+            const step = src[2];
+            const octaves = src[3];
+            return switch (kind) {
+                .power_of_two => .{ .power_of_two = .{
+                    .base_ns = base,
+                    .octaves = octaves,
+                } },
+                .linear => .{ .linear = .{
+                    .base_ns = base,
+                    .step_ns = step,
+                    .octaves = octaves,
+                } },
+                .log_linear => .{ .log_linear = .{
+                    .base_ns = base,
+                    .sub_bucket_bits = @intCast(step),
+                    .octaves = octaves,
+                } },
+            };
+        }
+
+        pub fn comptimeValidate(comptime self: Layout) void {
+            switch (self) {
+                .power_of_two => |p| {
+                    if (p.octaves == 0) @compileError("power_of_two requires at least one octave");
+                    if (p.base_ns == 0) @compileError("power_of_two requires base_ns > 0");
+                    // Bucket `i`'s upper bound is `base_ns << i`; the top one is `base_ns << (octaves - 1)`.
+                    // Keep the shift in range and the bound within u64.
+                    if (p.octaves - 1 >= 64 or p.base_ns > std.math.maxInt(u64) >> (p.octaves - 1)) @compileError(
+                        "bucket bounds overflow u64: reduce octaves or base_ns",
+                    );
+                },
+                .linear => |l| {
+                    if (l.octaves == 0) @compileError("linear requires at least one octave");
+                    if (l.step_ns == 0) @compileError("linear requires step_ns > 0");
+                    // The top octave's upper bound is `base_ns + octaves * step_ns`; keep it within u64.
+                    if (l.base_ns + l.octaves * l.step_ns > 0xFFFF_FFFF_FFFF_FFFF) @compileError(
+                        "bucket bounds overflow u64: reduce octaves, base_ns, or step_ns",
+                    );
+                },
+                .log_linear => |ll| {
+                    if (ll.octaves == 0) @compileError("log_linear requires at least one octave");
+                    // `base_ns` must be a positive multiple of `2^sub_bucket_bits` so octave 0's
+                    // sub-buckets have an integer width `base_ns >> sub_bucket_bits >= 1`. (This
+                    // generalizes the old `base_exp >= sub_bucket_bits` rule and keeps `bucketIndex`'s
+                    // divide-by-`unit` well defined.)
+                    if (ll.base_ns == 0 or (ll.base_ns & ((@as(u64, 1) << ll.sub_bucket_bits) - 1)) != 0) @compileError(
+                        "log_linear requires base_ns to be a positive multiple of 2^sub_bucket_bits",
+                    );
+                    // The top octave ends at `base_ns << octaves`; keep the shift in range and within u64.
+                    if (ll.octaves >= 64 or ll.base_ns > std.math.maxInt(u64) >> ll.octaves) @compileError(
+                        "bucket bounds overflow u64: reduce octaves or base_ns",
+                    );
+                },
+            }
+        }
+
+        pub fn bucketCount(self: Layout) u64 {
+            return switch (self) {
+                .power_of_two => |p| p.octaves,
+                .linear => |l| l.octaves,
+                .log_linear => |ll| @intCast(ll.octaves << ll.sub_bucket_bits),
+            };
+        }
+
+        pub fn elementsFromBucketCount(self: Layout) u32 {
+            return @intCast(1 + 2 * (2 + self.bucketCount()));
+        }
+
+        /// Serialize `layout` into a `header_words`-length region header.
+        pub fn writeHeader(comptime self: Layout, dst: []u64) void {
+            std.debug.assert(dst.len == header_words);
+            dst[0] = @intFromEnum(std.meta.activeTag(self));
+            switch (self) {
+                .power_of_two => |p| {
+                    dst[1] = p.base_ns;
+                    dst[2] = 0;
+                    dst[3] = p.octaves;
+                },
+                .linear => |l| {
+                    dst[1] = l.base_ns;
+                    dst[2] = l.step_ns;
+                    dst[3] = l.octaves;
+                },
+                .log_linear => |ll| {
+                    dst[1] = ll.base_ns;
+                    dst[2] = ll.sub_bucket_bits;
+                    dst[3] = ll.octaves;
+                },
+            }
+        }
+
+        /// The inclusive `le` upper bound (in ns) for bucket `index`: buckets are `(lo, hi]`, so a
+        /// value equal to `hi` lands in this bucket (matching Prometheus `le` semantics and the float
+        /// `Histogram`). This is the inverse companion to `bucketIndex`; the two are cross-checked in
+        /// tests.
+        pub fn upperBoundNs(self: Layout, index: usize) u64 {
+            const i: u64 = @intCast(index);
+            return switch (self) {
+                .power_of_two => |p| p.base_ns << @intCast(i),
+                .linear => |l| l.base_ns + (i + 1) * l.step_ns,
+                .log_linear => |ll| blk: {
+                    const m = ll.sub_bucket_bits;
+                    const k: u6 = @intCast(i >> m); // octave
+                    const j = i & ((@as(u64, 1) << m) - 1); // sub-bucket within octave
+                    const sub_width = (ll.base_ns >> m) << k; // octave 0's sub-bucket width, scaled by 2^k
+                    break :blk sub_width * ((@as(u64, 1) << m) + j + 1);
+                },
+            };
+        }
+    };
+
+    const ShardSync = Histogram.ShardSync;
+
+    pub const Shard = struct {
+        /// Total of all observed values, in nanoseconds.
+        sum: *std.atomic.Value(u64),
+        /// Total number of observations that have finished being recorded to this shard.
+        count: *std.atomic.Value(u64),
+        /// Cumulative counts for each upper bound.
+        buckets: []std.atomic.Value(u64),
+
+        /// For when `elems` does not already represent a valid shard, see `Shard.init`.
+        /// Assumes `elems.len >= 2`.
+        pub fn fromElements(elems: []u64) Shard {
+            return .{
+                .sum = @ptrCast(&elems[0]),
+                .count = @ptrCast(&elems[1]),
+                .buckets = @ptrCast(elems[2..]),
+            };
+        }
+
+        /// XXX: Not an atomic operation. This method overwrites all pointed-to data directly
+        /// Assumes `self.buckets.len == init_data.buckets.len`.
+        /// Sets all pointed-to data to zero.
+        pub fn initZeroes(self: Shard) void {
+            self.sum.* = .init(0);
+            self.count.* = .init(0);
+            @memset(self.buckets, .init(0));
+        }
+    };
+
+    /// A raw view of a latency histogram's shard storage: `[shard_sync][shard0][shard1]`.
+    /// Unlike `Histogram.Raw`, no bounds are stored — they are derived from the `Layout`.
+    pub const Raw = struct {
+        elements: []u64,
+
+        /// XXX: Not an atomic operation. Zeroes `shard_sync` and both shards.
+        pub fn init(self: Raw) void {
+            self.shardSync().* = .init(0);
+            for (&self.shards()) |shard| shard.initZeroes();
+        }
+
+        pub fn shardSync(self: Raw) *std.atomic.Value(u64) {
+            return @ptrCast(&self.elements[0]);
+        }
+
+        pub fn shards(self: Raw) [2]Shard {
+            const rest = self.elements[1..]; // everything after shard_sync
+            const half = @divExact(rest.len, 2);
+            const shard0: Shard = .fromElements(rest[0..half]);
+            const shard1: Shard = .fromElements(rest[half..]);
+            std.debug.assert(shard0.buckets.len == shard1.buckets.len);
+            return .{ shard0, shard1 };
+        }
+    };
+
+    pub fn fromRaw(layout: Layout, raw: Raw) LatencyHistogram {
+        return .{
+            .layout = layout,
+            .shard_sync = raw.shardSync(),
+            .shards = raw.shards(),
+        };
+    }
+
+    fn bucketIndex(self: *const LatencyHistogram, ns: u64) usize {
+        return switch (self.layout) {
+            .power_of_two => |p| if (ns <= p.base_ns) 0 else 64 - @clz((ns - 1) / p.base_ns),
+            .linear => |l| (ns -| l.base_ns -| 1) / l.step_ns,
+            .log_linear => |ll| blk: {
+                const m = ll.sub_bucket_bits;
+                const unit = ll.base_ns >> m; // octave 0's sub-bucket width (>= 1 by comptimeValidate)
+                // Rescale `ns` into "unit" space, where the bounds form a power-of-two log-linear layout
+                // anchored at `2^m`, then bin with the exponent-space trick. `ns -| 1` makes the upper
+                // bound inclusive (`le` semantics); `@max` floors sub-octave values into octave 0.
+                const anchored = @max((ns -| 1) / unit, @as(u64, 1) << m);
+                const e: u6 = @intCast(63 - @clz(anchored)); // index of highest set bit, 0..63
+                const mask = (@as(u64, 1) << m) - 1;
+                const sub = (anchored >> (e - m)) & mask;
+                break :blk (@as(u64, e - m) << m) + sub;
+            },
+        };
+    }
+
+    /// Writes an observed latency (in nanoseconds) into the histogram.
+    pub fn observe(self: *const LatencyHistogram, ns: u64) void {
+        const shard_sync: ShardSync = @bitCast(self.shard_sync.fetchAdd(1, .acquire)); // acquires lock; must be first
+        const shard = &self.shards[shard_sync.shard];
+        const index = self.bucketIndex(ns);
+        // A value above every bucket bound lands in the implicit `+Inf` bucket: it still
+        // contributes to `sum`/`count` but to no explicit bucket (matches `Histogram.observe`).
+        if (index < shard.buckets.len) {
+            _ = shard.buckets[index].fetchAdd(1, .monotonic);
+        }
+        _ = shard.sum.fetchAdd(ns, .monotonic);
+        _ = shard.count.fetchAdd(1, .release); // releases lock; must be last
+    }
+
+    /// Makes the hot shard cold and vice versa, returning the pre-swap `shard_sync`.
+    fn flipShard(self: *const LatencyHistogram, comptime ordering: std.builtin.AtomicOrder) ShardSync {
+        const shard_sync: ShardSync = .{ .shard = 1 };
+        const data = self.shard_sync.fetchAdd(@bitCast(shard_sync), ordering);
+        return @bitCast(data);
+    }
+
+    /// Swaps the hot and cold shards, then returns a reader over a consistent snapshot of the
+    /// now-cold shard. Mirrors `LatencyHistogram.swapOutSnapshot`.
+    pub fn swapOutSnapshot(self: *const LatencyHistogram) SnapshotReader {
+        // Make the hot shard cold. Some writers may still be writing to it, but no new ones will.
+        const shard_sync = self.flipShard(.acq_rel);
+        const cold_shard = &self.shards[shard_sync.shard];
+        const hot_shard = &self.shards[shard_sync.shard +% 1];
+
+        // Wait until in-flight writers finish draining into the now-cold shard.
+        while (true) {
+            const current_cold_count = cold_shard.count.load(.acquire);
+            if (current_cold_count == shard_sync.count) {
+                cold_shard.count.store(0, .monotonic);
+                break;
+            }
+            std.debug.assert(current_cold_count < shard_sync.count);
+        }
+
+        const cold_shard_sum = cold_shard.sum.load(.monotonic);
+        cold_shard.sum.store(0, .monotonic);
+
+        return .{
+            .count = shard_sync.count,
+            .sum = cold_shard_sum,
+
+            .layout = self.layout,
+            .cold_shard_buckets = cold_shard.buckets,
+            .hot_shard_buckets = hot_shard.buckets,
+            .hot_shard = hot_shard,
+
+            .current_cumulative_count = 0,
+            .current_bucket_index = 0,
+        };
+    }
+
+    /// Iterates a cold-shard snapshot as cumulative prometheus buckets, folding each bucket back
+    /// into the hot shard as it goes. Mirrors `LatencyHistogram.SnapshotReader`, except bucket
+    /// bounds are derived from `layout` via `upperBoundNs` rather than a stored slice.
+    pub const SnapshotReader = struct {
+        /// Total number of events observed by the histogram.
+        count: u63,
+        /// Sum of all values observed by the histogram, in nanoseconds.
+        sum: u64,
+
+        // internal references
+        layout: Layout,
+        cold_shard_buckets: []std.atomic.Value(u64),
+        /// See the NOTE on `LatencyHistogram.SnapshotReader.hot_shard_buckets`.
+        hot_shard_buckets: []std.atomic.Value(u64),
+        hot_shard: *const Shard,
+
+        // mutable state
+        current_cumulative_count: u64,
+        current_bucket_index: usize,
+
+        pub const Bucket = struct {
+            upper_bound: u64,
+            cumulative_count: u64,
+        };
+
+        pub fn finished(self: *const SnapshotReader) bool {
+            std.debug.assert(self.cold_shard_buckets.len == self.hot_shard.buckets.len);
+            return self.current_bucket_index == self.cold_shard_buckets.len;
+        }
+
+        /// Release the snapshot reader, ignoring any unobserved buckets.
+        pub fn release(self: *SnapshotReader) void {
+            if (self.finished()) return;
+            while (self.nextBucket()) |_| {}
+        }
+
+        /// After this returns `null`, the cold shard is fully reset and everything pending in it
+        /// has been aggregated back into the hot shard.
+        pub fn nextBucket(self: *SnapshotReader) ?Bucket {
+            if (self.finished()) {
+                _ = self.hot_shard.sum.fetchAdd(self.sum, .monotonic);
+                _ = self.hot_shard.count.fetchAdd(self.count, .monotonic);
+                return null;
+            }
+            defer self.current_bucket_index += 1;
+
+            const upper_bound = self.layout.upperBoundNs(self.current_bucket_index);
+            const cold_bucket = &self.cold_shard_buckets[self.current_bucket_index];
+            const hot_bucket = &self.hot_shard_buckets[self.current_bucket_index];
+
+            const count = cold_bucket.swap(0, .monotonic);
+            _ = hot_bucket.fetchAdd(count, .monotonic);
+
+            self.current_cumulative_count += count;
+            return .{
+                .cumulative_count = self.current_cumulative_count,
+                .upper_bound = upper_bound,
+            };
+        }
+    };
+
+    /// Used to initialize a latency histogram in-place, backed by a heap allocation.
+    pub fn initForTest(
+        gpa: std.mem.Allocator,
+        layout: Layout,
+    ) std.mem.Allocator.Error!LatencyHistogram {
+        const raw: Raw = .{ .elements = try gpa.alloc(u64, layout.elementsFromBucketCount()) };
+        raw.init();
+        return .fromRaw(layout, raw);
+    }
+
+    /// Only valid if `self` was initialized using `initForTest`.
+    pub fn deinitForTest(self: LatencyHistogram, gpa: std.mem.Allocator) void {
+        const element_count = self.layout.elementsFromBucketCount();
+        const elements: []const u64 = @as([*]const u64, @ptrCast(self.shard_sync))[0..element_count];
+        gpa.free(elements);
+    }
+
+    pub fn testExpectBuckets(
+        self: LatencyHistogram,
+        expected_count: u63,
+        expected_buckets: []const SnapshotReader.Bucket,
+    ) !void {
+        if (!builtin.is_test) @compileError("Not allowed in tests.");
+        const gpa = std.testing.allocator;
+
+        var snap = self.swapOutSnapshot();
+        defer snap.release();
+
+        var actual_buckets: std.ArrayList(SnapshotReader.Bucket) = .empty;
+        defer actual_buckets.deinit(gpa);
+
+        while (snap.nextBucket()) |bucket| {
+            try actual_buckets.append(gpa, bucket);
+        }
+
+        try std.testing.expectEqualSlices(
+            SnapshotReader.Bucket,
+            expected_buckets,
+            actual_buckets.items,
+        );
+        try std.testing.expectEqual(expected_count, snap.count);
+    }
+};
+
 fn initBuckets(
     comptime len: usize,
     upper_bounds: *const [len]f64,
@@ -890,4 +1282,235 @@ test "histogram: totals add up after concurrent reads and writes" {
         &Histogram.DEFAULT_UPPER_BOUNDS,
         &expected,
     ));
+}
+
+/// Asserts that `bucketIndex` is the inverse of `Layout.upperBoundNs` at every bucket boundary.
+/// All variants use inclusive-upper `(lo, hi]` (`le` semantics): `hi` is the last value in bucket
+/// `i`, and `hi + 1` starts the next.
+fn expectBucketBoundaries(hist: LatencyHistogram) !void {
+    const count: usize = @intCast(hist.layout.bucketCount());
+    for (0..count) |i| {
+        const upper_bound = hist.layout.upperBoundNs(i);
+        try std.testing.expectEqual(i, hist.bucketIndex(upper_bound));
+        try std.testing.expectEqual(i + 1, hist.bucketIndex(upper_bound + 1));
+    }
+}
+
+test "latency histogram: layout header round-trips" {
+    const Layout = LatencyHistogram.Layout;
+    const cases = .{
+        Layout{ .power_of_two = .{ .base_ns = 64, .octaves = 10 } },
+        Layout{ .linear = .{ .base_ns = 100, .step_ns = 50, .octaves = 8 } },
+        Layout{ .log_linear = .{ .base_ns = 256, .sub_bucket_bits = 3, .octaves = 5 } },
+    };
+    inline for (cases) |layout| {
+        var header: [Layout.header_words]u64 = undefined;
+        layout.writeHeader(&header);
+        try std.testing.expectEqual(layout, Layout.initFromHeader(&header));
+    }
+}
+
+test "latency histogram: bucketIndex inverts upperBoundNs" {
+    const gpa = std.testing.allocator;
+    const Layout = LatencyHistogram.Layout;
+
+    {
+        const hist: LatencyHistogram =
+            try .initForTest(gpa, Layout{ .power_of_two = .{ .base_ns = 1, .octaves = 8 } });
+        defer hist.deinitForTest(gpa);
+        try expectBucketBoundaries(hist);
+    }
+    {
+        const hist: LatencyHistogram =
+            try .initForTest(gpa, Layout{ .linear = .{ .base_ns = 0, .step_ns = 10, .octaves = 6 } });
+        defer hist.deinitForTest(gpa);
+        try expectBucketBoundaries(hist);
+    }
+    {
+        const hist: LatencyHistogram =
+            try .initForTest(gpa, Layout{ .log_linear = .{ .base_ns = 16, .sub_bucket_bits = 2, .octaves = 2 } });
+        defer hist.deinitForTest(gpa);
+        try expectBucketBoundaries(hist);
+    }
+}
+
+test "latency histogram: observations land in the correct buckets" {
+    const gpa = std.testing.allocator;
+    const Layout = LatencyHistogram.Layout;
+
+    {
+        // linear: inclusive-upper le-bounds 10, 20, 30, 40, 50; then implicit `+Inf`.
+        const hist: LatencyHistogram =
+            try .initForTest(gpa, Layout{ .linear = .{ .base_ns = 0, .step_ns = 10, .octaves = 5 } });
+        defer hist.deinitForTest(gpa);
+
+        hist.observe(5); // bucket 0
+        hist.observe(15); // bucket 1
+        hist.observe(15); // bucket 1
+        hist.observe(25); // bucket 2
+        hist.observe(999); // +Inf
+
+        try hist.testExpectBuckets(5, &.{
+            .{ .upper_bound = 10, .cumulative_count = 1 },
+            .{ .upper_bound = 20, .cumulative_count = 3 },
+            .{ .upper_bound = 30, .cumulative_count = 4 },
+            .{ .upper_bound = 40, .cumulative_count = 4 },
+            .{ .upper_bound = 50, .cumulative_count = 4 },
+        });
+    }
+
+    {
+        // log_linear: 2 octaves x 4 sub-buckets, inclusive-upper `(lo, hi]` bounds; then `+Inf`.
+        const hist: LatencyHistogram =
+            try .initForTest(gpa, Layout{ .log_linear = .{ .base_ns = 16, .sub_bucket_bits = 2, .octaves = 2 } });
+        defer hist.deinitForTest(gpa);
+
+        hist.observe(16); // bucket 0 (le=20)
+        hist.observe(18); // bucket 0 (le=20)
+        hist.observe(22); // bucket 1 (le=24)
+        hist.observe(40); // bucket 4: 40 == le(4), inclusive
+        hist.observe(200); // +Inf
+
+        try hist.testExpectBuckets(5, &.{
+            .{ .upper_bound = 20, .cumulative_count = 2 },
+            .{ .upper_bound = 24, .cumulative_count = 3 },
+            .{ .upper_bound = 28, .cumulative_count = 3 },
+            .{ .upper_bound = 32, .cumulative_count = 3 },
+            .{ .upper_bound = 40, .cumulative_count = 4 },
+            .{ .upper_bound = 48, .cumulative_count = 4 },
+            .{ .upper_bound = 56, .cumulative_count = 4 },
+            .{ .upper_bound = 64, .cumulative_count = 4 },
+        });
+    }
+}
+
+test "latency histogram: values accumulate across snapshots" {
+    const gpa = std.testing.allocator;
+    const Layout = LatencyHistogram.Layout;
+
+    const hist: LatencyHistogram =
+        try .initForTest(gpa, Layout{ .linear = .{ .base_ns = 0, .step_ns = 10, .octaves = 3 } });
+    defer hist.deinitForTest(gpa);
+
+    hist.observe(5); // bucket 0
+    hist.observe(15); // bucket 1
+    try hist.testExpectBuckets(2, &.{
+        .{ .upper_bound = 10, .cumulative_count = 1 },
+        .{ .upper_bound = 20, .cumulative_count = 2 },
+        .{ .upper_bound = 30, .cumulative_count = 2 },
+    });
+
+    // The prior snapshot folds its counts back into the hot shard, so totals accumulate.
+    hist.observe(5); // bucket 0
+    try hist.testExpectBuckets(3, &.{
+        .{ .upper_bound = 10, .cumulative_count = 2 },
+        .{ .upper_bound = 20, .cumulative_count = 3 },
+        .{ .upper_bound = 30, .cumulative_count = 3 },
+    });
+}
+
+// The `Layout` math has unchecked preconditions (there is no `Layout.validate()`): crossing any
+// of the boundaries below triggers a Zig safety panic on the first `observe`/render. Those panics
+// are illegal behavior and abort the test runner, so they cannot be asserted in-process; instead,
+// each test below pins the *tightest still-valid* config, proving the math is correct right at the
+// edge and documenting exactly where the cliff is.
+
+test "latency histogram: linear binning is correct at the smallest valid step (issue #2)" {
+    // `step_ns == 0` divides by zero in `bucketIndex` (`(ns -| base_ns -| 1) / step_ns`).
+    // `step_ns == 1` is the tightest valid divisor.
+    const gpa = std.testing.allocator;
+    const Layout = LatencyHistogram.Layout;
+
+    const hist: LatencyHistogram =
+        try .initForTest(gpa, Layout{ .linear = .{ .base_ns = 0, .step_ns = 1, .octaves = 4 } });
+    defer hist.deinitForTest(gpa);
+
+    hist.observe(0); // bucket 0 (le=1)
+    hist.observe(2); // bucket 1 (le=2, inclusive)
+    hist.observe(3); // bucket 2 (le=3, inclusive)
+    hist.observe(9); // +Inf
+
+    try hist.testExpectBuckets(4, &.{
+        .{ .upper_bound = 1, .cumulative_count = 1 },
+        .{ .upper_bound = 2, .cumulative_count = 2 },
+        .{ .upper_bound = 3, .cumulative_count = 3 },
+        .{ .upper_bound = 4, .cumulative_count = 3 },
+    });
+}
+
+test "latency histogram: log_linear binning is correct at the smallest octave unit (issue #2)" {
+    // `base_ns < 2^sub_bucket_bits` makes `unit = base_ns >> sub_bucket_bits == 0`, a divide-by-zero
+    // in `bucketIndex`. `base_ns == 2^sub_bucket_bits` (here 4 == 2^2) is the tightest valid config:
+    // octave 0's sub-bucket width `unit` is exactly 1.
+    const gpa = std.testing.allocator;
+    const Layout = LatencyHistogram.Layout;
+
+    const hist: LatencyHistogram =
+        try .initForTest(gpa, Layout{ .log_linear = .{ .base_ns = 4, .sub_bucket_bits = 2, .octaves = 2 } });
+    defer hist.deinitForTest(gpa);
+
+    hist.observe(4); // bucket 0 (le=5)
+    hist.observe(6); // bucket 1 (le=6, inclusive)
+    hist.observe(8); // bucket 3 (le=8, inclusive)
+    hist.observe(11); // bucket 5 (le=12)
+    hist.observe(100); // +Inf
+
+    try hist.testExpectBuckets(5, &.{
+        .{ .upper_bound = 5, .cumulative_count = 1 },
+        .{ .upper_bound = 6, .cumulative_count = 2 },
+        .{ .upper_bound = 7, .cumulative_count = 2 },
+        .{ .upper_bound = 8, .cumulative_count = 3 },
+        .{ .upper_bound = 10, .cumulative_count = 3 },
+        .{ .upper_bound = 12, .cumulative_count = 4 },
+        .{ .upper_bound = 14, .cumulative_count = 4 },
+        .{ .upper_bound = 16, .cumulative_count = 4 },
+    });
+}
+
+test "latency histogram: power_of_two bounds are correct at the 2^63 ceiling (issue #2)" {
+    // `upperBoundNs` computes `base_ns << i`; `base_ns << (octaves - 1)` must stay within u64.
+    // base_ns=2^60, octaves=4 → the top bucket's bound is exactly 2^63, the largest valid bound.
+    const gpa = std.testing.allocator;
+    const Layout = LatencyHistogram.Layout;
+    const layout = Layout{ .power_of_two = .{ .base_ns = 1 << 60, .octaves = 4 } };
+
+    try std.testing.expectEqual(@as(u64, 1) << 60, layout.upperBoundNs(0));
+    try std.testing.expectEqual(@as(u64, 1) << 63, layout.upperBoundNs(3));
+
+    // Exercise the same shift through the real render path (`nextBucket` -> `upperBoundNs`).
+    const hist: LatencyHistogram = try .initForTest(gpa, layout);
+    defer hist.deinitForTest(gpa);
+
+    hist.observe(1 << 60); // bucket 0: (2^59, 2^60]
+    hist.observe(1 << 63); // bucket 3: (2^62, 2^63]
+
+    try hist.testExpectBuckets(2, &.{
+        .{ .upper_bound = 1 << 60, .cumulative_count = 1 },
+        .{ .upper_bound = 1 << 61, .cumulative_count = 1 },
+        .{ .upper_bound = 1 << 62, .cumulative_count = 1 },
+        .{ .upper_bound = 1 << 63, .cumulative_count = 2 },
+    });
+}
+
+test "latency histogram: comptimeValidate accepts well-formed layouts" {
+    const Layout = LatencyHistogram.Layout;
+    Layout.comptimeValidate(.{ .power_of_two = .{ .base_ns = 16, .octaves = 8 } });
+    Layout.comptimeValidate(.{ .power_of_two = .{ .base_ns = 100, .octaves = 5 } }); // arbitrary base_ns
+    Layout.comptimeValidate(.{ .linear = .{ .base_ns = 0, .step_ns = 10, .octaves = 6 } });
+    Layout.comptimeValidate(.{ .log_linear = .{ .base_ns = 16, .sub_bucket_bits = 2, .octaves = 2 } });
+    Layout.comptimeValidate(.{ .log_linear = .{ .base_ns = 100, .sub_bucket_bits = 2, .octaves = 2 } }); // arbitrary base_ns
+}
+
+test "latency histogram: arbitrary (non-power-of-two) base_ns bucket bounds" {
+    const Layout = LatencyHistogram.Layout;
+    // power_of_two anchored at 100ns doubles each octave: 100, 200, 400, 800, 1600.
+    const po2 = Layout{ .power_of_two = .{ .base_ns = 100, .octaves = 5 } };
+    try std.testing.expectEqual(@as(u64, 100), po2.upperBoundNs(0));
+    try std.testing.expectEqual(@as(u64, 200), po2.upperBoundNs(1));
+    try std.testing.expectEqual(@as(u64, 400), po2.upperBoundNs(2));
+    try std.testing.expectEqual(@as(u64, 1600), po2.upperBoundNs(4));
+    // log_linear anchored at 100ns with 4 sub-buckets/octave: 125,150,175,200 then 250,300,350,400.
+    const ll = Layout{ .log_linear = .{ .base_ns = 100, .sub_bucket_bits = 2, .octaves = 2 } };
+    const want = [_]u64{ 125, 150, 175, 200, 250, 300, 350, 400 };
+    for (want, 0..) |bound, i| try std.testing.expectEqual(bound, ll.upperBoundNs(i));
 }
