@@ -116,7 +116,7 @@ pub const VersionedTransaction = struct {
     /// Structural parse of the on-wire transaction encoding, driven by the
     /// caller-supplied byte source. Enforces every framing and cross-field
     /// invariant a well-formed transaction must satisfy and returns the
-    /// number of bytes consumed on success. The parse is byte-only: it
+    /// `Layout` on success. The parse is byte-only: it
     /// walks and skips, it never materialises a typed value; the only
     /// bytes it inspects beyond framing are the 32-byte static account
     /// keys, which it compares pairwise to enforce `AccountLoadedTwice`.
@@ -137,16 +137,24 @@ pub const VersionedTransaction = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/transaction%40v4.1.1/transaction/src/versioned/mod.rs#L137
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/message%40v4.1.1/message/src/versions/v0/mod.rs#L116
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/message%40v4.1.1/message/src/legacy.rs#L140
-    pub fn parse(reader: anytype) ParseError!usize {
+    pub fn parse(reader: anytype) ParseError!Layout {
         const start = reader.bytesConsumed();
 
         const sig_cnt = try readShortU16(reader);
         if (sig_cnt < 1) return error.NoSignatures;
         if (sig_cnt > MAX_SIGNATURES) return error.TooManySignatures;
-        try reader.skipBytes(64 * @as(usize, sig_cnt));
+
+        const signatures_off = reader.bytesConsumed() - start;
+
+        try reader.skipBytes(Signature.SIZE * @as(usize, sig_cnt));
+
+        const message_off = reader.bytesConsumed() - start;
 
         const first = try reader.readByte();
         const legacy = (first & 0x80) == 0;
+
+        const version: VersionedMessage.VersionByte = if (legacy) .legacy else .v0;
+
         const num_req_sig: u8 = if (legacy) first else blk: {
             if ((first & 0x7f) != 0) return error.InvalidVersion;
             break :blk try reader.readByte();
@@ -162,6 +170,8 @@ pub const VersionedTransaction = struct {
         if (acct_cnt > MAX_ACCOUNT_ADDRESSES) return error.TooManyAccountKeys;
         if (@as(usize, num_req_sig) + ro_unsigned > acct_cnt)
             return error.ReadonlyRegionOverflowsAccountKeys;
+
+        const static_keys_off = reader.bytesConsumed() - start;
 
         // Read each static pubkey and check byte-wise against every
         // earlier one — O(n²), but `acct_cnt ≤ 128` bounds it. Folds in
@@ -180,7 +190,10 @@ pub const VersionedTransaction = struct {
                     return error.AccountLoadedTwice;
             }
         }
-        try reader.skipBytes(32); // recent_blockhash
+
+        const recent_blockhash_off = reader.bytesConsumed() - start;
+
+        try reader.skipBytes(Hash.SIZE); // recent_blockhash
 
         const ix_cnt = try readShortU16(reader);
         if (ix_cnt > MAX_INSTRUCTIONS) return error.TooManyInstructions;
@@ -188,6 +201,8 @@ pub const VersionedTransaction = struct {
         // can't be the fee payer per `InvalidProgramIdIndex`), so
         // `account_keys` must have at least 2.
         if (ix_cnt > 0 and acct_cnt < 2) return error.MissingProgramAccount;
+
+        const instructions_off = reader.bytesConsumed() - start;
 
         // Per-instruction: `program_id_index` is a static account but not
         // the fee payer. Track the largest referenced account index for
@@ -202,16 +217,25 @@ pub const VersionedTransaction = struct {
             try reader.skipBytes(data_len);
         }
 
+        var address_table_lookups_off = reader.bytesConsumed() - start;
+
         // v0 ALTs.
-        var alt_loaded: usize = 0;
+        var alt_cnt: u16 = 0;
+        var loaded_writable_count: usize = 0;
+        var loaded_readonly_count: usize = 0;
         if (!legacy) {
-            const alt_cnt = try readShortU16(reader);
+            alt_cnt = try readShortU16(reader);
+
             if (alt_cnt > V0Message.MAX_ADDR_TABLE_LOOKUPS)
                 return error.TooManyAddressTableLookups;
+
+            address_table_lookups_off = reader.bytesConsumed() - start;
+
             // Subtraction is safe: `acct_cnt` was bounded above.
-            const alt_headroom: usize = MAX_ACCOUNT_ADDRESSES - acct_cnt;
+            const alt_headroom: usize = MAX_ACCOUNT_ADDRESSES - @as(usize, acct_cnt);
             for (0..alt_cnt) |_| {
-                try reader.skipBytes(32); // table pubkey
+                try reader.skipBytes(Pubkey.SIZE); // table pubkey
+
                 const w = try readShortU16(reader);
                 if (w > alt_headroom) return error.AddressTableLookupOverflow;
                 try reader.skipBytes(w);
@@ -219,11 +243,17 @@ pub const VersionedTransaction = struct {
                 if (r > alt_headroom) return error.AddressTableLookupOverflow;
                 try reader.skipBytes(r);
                 if (w + r < 1) return error.EmptyAddressTableLookup;
-                alt_loaded += @as(usize, w) + @as(usize, r);
+
+                loaded_writable_count += @as(usize, w);
+                loaded_readonly_count += @as(usize, r);
             }
         }
 
-        if (acct_cnt + alt_loaded > MAX_ACCOUNT_ADDRESSES)
+        const total_account_count = @as(usize, acct_cnt) +
+            loaded_writable_count +
+            loaded_readonly_count;
+
+        if (total_account_count > MAX_ACCOUNT_ADDRESSES)
             return error.TooManyTotalAddresses;
 
         // Every instruction account index must reference either a static
@@ -231,12 +261,39 @@ pub const VersionedTransaction = struct {
         // not included here because they were already checked against
         // `acct_cnt` above (programs can never come from a lookup table;
         // see https://github.com/solana-labs/solana/issues/25034).
-        if (max_acct >= acct_cnt + alt_loaded) return error.AccountIndexOutOfBounds;
+        if (@as(usize, max_acct) >= total_account_count)
+            return error.AccountIndexOutOfBounds;
 
         const consumed = reader.bytesConsumed() - start;
         if (consumed > MAX_BYTES) return error.TransactionTooLarge;
 
-        return consumed;
+        return .{
+            .payload_len = @intCast(consumed),
+
+            .signatures_off = @intCast(signatures_off),
+
+            .message_off = @intCast(message_off),
+            .message_len = @intCast(consumed - message_off),
+
+            .static_keys_off = @intCast(static_keys_off),
+            .recent_blockhash_off = @intCast(recent_blockhash_off),
+
+            .instructions_off = @intCast(instructions_off),
+            .address_table_lookups_off = @intCast(address_table_lookups_off),
+
+            .version = version,
+
+            .signature_count = @intCast(sig_cnt),
+            .static_key_count = @intCast(acct_cnt),
+            .instruction_count = @intCast(ix_cnt),
+            .address_table_lookup_count = @intCast(alt_cnt),
+
+            .loaded_writable_count = @intCast(loaded_writable_count),
+            .loaded_readonly_count = @intCast(loaded_readonly_count),
+
+            .num_readonly_signed_accounts = ro_signed,
+            .num_readonly_unsigned_accounts = ro_unsigned,
+        };
     }
 
     /// Reusable metadata extracted while structurally validating a serialized
@@ -288,7 +345,7 @@ pub const VersionedTransaction = struct {
         instruction_count: u8,
         address_table_lookup_count: u8,
 
-        loaded_writeable_count: u8,
+        loaded_writable_count: u8,
         loaded_readonly_count: u8,
 
         num_readonly_signed_accounts: u8,
@@ -767,7 +824,7 @@ const Builder = struct {
     /// Serialise this Builder's typed value as `kind` via bincode, then
     /// feed the bytes through `parseTransaction`. Returns the bytes-consumed
     /// count on success.
-    fn parse(self: *Builder, kind: std.meta.Tag(VersionedMessage)) !usize {
+    fn parse(self: *Builder, kind: std.meta.Tag(VersionedMessage)) !VersionedTransaction.Layout {
         // Enough headroom for every negative test (largest is 129 static
         // keys + 65 empty instructions + a handful of MAX-sized ALTs, all
         // well under 32 KiB).

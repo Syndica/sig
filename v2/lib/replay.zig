@@ -26,10 +26,16 @@ pub const TransactionRecord = extern struct {
     layout: VersionedTransaction.Layout,
     payload: [VersionedTransaction.MAX_BYTES]u8,
 
-    pub fn getView(self: *const TransactionRecord) VersionedTransaction.View {
-        return VersionedTransaction.View{
+    pub fn bytes(self: *const TransactionRecord) []const u8 {
+        const payload_len: usize = self.layout.payload_len;
+        std.debug.assert(payload_len <= self.payload.len);
+        return self.payload[0..payload_len];
+    }
+
+    pub fn view(self: *const TransactionRecord) VersionedTransaction.View {
+        return .{
             .layout = &self.layout,
-            .payload = self.payload[0..self.layout.payload_len],
+            .payload = self.bytes(),
         };
     }
 };

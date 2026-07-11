@@ -951,17 +951,16 @@ fn maybeContinueBlockExec(
         const tx_ref = try transaction_pool.createId();
         // TODO: this is a major leak risk, should use comptime errdefer unreachable
 
-        // TODO: integrate new zero-copy offset approach with the deserializer.
-        const tx_buf: *[1232]u8 = &transaction_pool.indexToPtr(tx_ref).payload;
+        const tx_record = transaction_pool.indexToPtr(tx_ref);
 
-        const tx = try block_deserial_state.nextTransaction(
+        const transaction = try block_deserial_state.nextTransaction(
             forest_pool,
-            tx_buf,
+            tx_record,
         ) orelse {
             transaction_pool.destroyId(tx_ref);
             break;
         };
-        tracy.plot(u16, "transaction size", @intCast(tx.len));
+        tracy.plot(u16, "transaction size", @intCast(transaction.layout.payload_len));
 
         // index within the block
         const tx_index: u32 = exec_state.n_transactions_requested;
@@ -971,29 +970,17 @@ fn maybeContinueBlockExec(
         // NOTE: in the future this should be "sent" to the transaction scheduler, not to exec
         // directly
         {
-            // TODO: replace this with something custom, this is slow - we only need to extract the
-            // accounts (including ALT accounts) here.
-            var deserialised_buf: [16 * 1024]u8 = undefined;
-            var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
-            var reader = std.io.Reader.fixed(tx);
-            const transaction: lib.solana.transaction.VersionedTransaction =
-                try lib.solana.bincode.read(
-                    &deserial_fba,
-                    &reader,
-                    lib.solana.transaction.VersionedTransaction,
-                );
-
             var held_accounts_buf: [128]AccountRef = undefined;
             var held_accounts: u8 = 0;
 
-            const account_keys: []const Pubkey = switch (transaction.message) {
-                inline else => |txn| txn.account_keys.items,
-            };
+            std.debug.assert(
+                transaction.totalAccountCount() <= held_accounts_buf.len,
+            );
 
-            for (account_keys) |*k| {
+            for (transaction.staticAccountKeys()) |*key| {
                 held_accounts_buf[held_accounts] = fetchBlocking(
                     unrooted,
-                    k,
+                    key,
                     block_ref,
                     block_pool,
                     account_pool,
@@ -1001,6 +988,8 @@ fn maybeContinueBlockExec(
                 );
                 held_accounts += 1;
             }
+
+            // TODO(Preston): Integrate ALT iteration (need to use a two-pass iteration here)
 
             const address_lookups: []const lib.solana.transaction.AddressLookup =
                 switch (transaction.message) {
@@ -1286,14 +1275,14 @@ const BlockDeserialState = struct {
     fn nextTransaction(
         self: *BlockDeserialState,
         merkle_pool: *const MerkleForest.NodePool,
-        tx_buf: *[1232]u8,
-    ) !?[]const u8 {
+        tx_record: *lib.replay.TransactionRecord,
+    ) !?lib.solana.transaction.VersionedTransaction.View {
         const zone = tracy.Zone.init(@src(), .{ .name = "nextTransaction" });
         defer zone.deinit();
 
         const backup = self.*;
 
-        return nextTransactionInner(self, merkle_pool, tx_buf) catch |err| switch (err) {
+        return nextTransactionInner(self, merkle_pool, tx_record) catch |err| switch (err) {
             error.EndOfStream => {
                 zone.text("EndOfStream");
                 self.* = backup;
@@ -1306,8 +1295,8 @@ const BlockDeserialState = struct {
     fn nextTransactionInner(
         self: *BlockDeserialState,
         merkle_pool: *const MerkleForest.NodePool,
-        tx_buf: *[1232]u8,
-    ) !?[]const u8 {
+        tx_record: *lib.replay.TransactionRecord,
+    ) !?lib.solana.transaction.VersionedTransaction.View {
         var reader = self.getReader(merkle_pool);
 
         // microblock deserialisation state machine
@@ -1368,17 +1357,26 @@ const BlockDeserialState = struct {
                     continue :loopback .num_hashes;
                 }
 
-                var pre_state = self.*;
+                var transaction_start_state = self.*;
 
-                const tx_bytes_read = try lib.solana.transaction
-                    .VersionedTransaction.parse(&reader);
+                const layout =
+                    try lib.solana.transaction.VersionedTransaction.parse(&reader);
+
+                var copy_reader = transaction_start_state.getReader(merkle_pool);
+
+                try copy_reader.advanceBytes(
+                    .copy,
+                    tx_record.payload[0..layout.payload_len],
+                    {},
+                );
+
+                // publish the layout to the transaction record.
+                tx_record.layout = layout;
 
                 self.n_transactions_left.? -= 1;
-
-                var tx_reader = pre_state.getReader(merkle_pool);
-                try tx_reader.advanceBytes(.copy, tx_buf[0..tx_bytes_read], {});
                 self.next_read = .transaction;
-                return tx_buf[0..tx_bytes_read];
+
+                return tx_record.view();
             },
         }
     }
