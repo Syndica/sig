@@ -29,6 +29,18 @@ pub fn serviceMain(
     const metric_appender = rw.tel.metricAppender();
     const metrics = metric_appender.appendFields(Metrics, .{
         .prefix = @tagName(name),
+        .fields = .{
+            .recv_packet_latency = .{ .layout = .{ .log_linear = .{
+                .base_ns = 512,
+                .sub_bucket_bits = 2,
+                .octaves = 12,
+            } } },
+            .send_packet_latency = .{ .layout = .{ .log_linear = .{
+                .base_ns = 512,
+                .sub_bucket_bits = 2,
+                .octaves = 12,
+            } } },
+        },
     });
     rw.tel.signalReady();
 
@@ -41,11 +53,8 @@ pub fn serviceMain(
 }
 
 const Metrics = struct {
-    recv_packets: tel.Counter,
-    send_packets: tel.Counter,
-
-    recv_latency: tel.Gauge,
-    send_latency: tel.Gauge,
+    recv_packet_latency: tel.LatencyHistogram,
+    send_packet_latency: tel.LatencyHistogram,
 };
 
 const MAX_SOCKETS = 10;
@@ -99,8 +108,7 @@ fn mainInner(
                     p.addr.getOsSockLen(),
                 );
                 std.debug.assert(bytes == p.len);
-                metrics.send_packets.increment(1);
-                metrics.send_latency.set(timer.read());
+                metrics.send_packet_latency.observe(timer.read());
             }
         }
 
@@ -124,8 +132,7 @@ fn mainInner(
                     else => |e| return e,
                 });
                 _ = it.next();
-                metrics.recv_packets.increment(1);
-                metrics.recv_latency.set(timer.read());
+                metrics.recv_packet_latency.observe(timer.read());
             }
         }
     }
