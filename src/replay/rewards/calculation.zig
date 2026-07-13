@@ -421,14 +421,14 @@ fn calculateValidatorRewards(
     defer stakes_lg.unlock();
 
     const stake_history = &stakes.stake_history;
-    var filtered_stake_delegations =
-        try filterStakesDelegations(allocator, stakes);
-    defer filtered_stake_delegations.deinit(allocator);
+    var stake_delegations =
+        try collectStakesDelegations(allocator, stakes);
+    defer stake_delegations.deinit(allocator);
 
     const point_value = try calculateRewardPointsPartitioned(
         rewards,
         &stakes.stake_history,
-        filtered_stake_delegations.items(.stake),
+        stake_delegations.items(.stake),
         cached_vote_accounts.distribution_epoch_vote_accounts,
         new_warmup_and_cooldown_rate_epoch,
     ) orelse return null;
@@ -440,7 +440,7 @@ fn calculateValidatorRewards(
     return try calculateStakeVoteRewards(
         allocator,
         stake_history,
-        filtered_stake_delegations,
+        stake_delegations,
         cached_vote_accounts,
         rewarded_epoch,
         point_value,
@@ -450,15 +450,16 @@ fn calculateValidatorRewards(
     );
 }
 
-const FilteredStakesDelegations = std.MultiArrayList(struct { pubkey: Pubkey, stake: Stake });
+const StakesDelegations = std.MultiArrayList(struct { pubkey: Pubkey, stake: Stake });
 
-fn filterStakesDelegations(
+fn collectStakesDelegations(
     allocator: Allocator,
     stakes: *const Stakes(.stake),
-) !FilteredStakesDelegations {
-    var result = FilteredStakesDelegations{};
+) !StakesDelegations {
+    var result = StakesDelegations{};
+    try result.ensureTotalCapacity(allocator, stakes.stake_accounts.count());
     for (stakes.stake_accounts.keys(), stakes.stake_accounts.values()) |key, value| {
-        try result.append(allocator, .{ .pubkey = key, .stake = value });
+        result.appendAssumeCapacity(.{ .pubkey = key, .stake = value });
     }
     return result;
 }
@@ -515,7 +516,7 @@ const VoteReward = struct {
 fn calculateStakeVoteRewards(
     allocator: Allocator,
     stake_history: *const StakeHistory,
-    stake_delegations: FilteredStakesDelegations,
+    stake_delegations: StakesDelegations,
     cached_vote_accounts: CachedVoteAccounts,
     rewarded_epoch: Epoch,
     point_value: PointValue,
@@ -1057,7 +1058,7 @@ test calculateValidatorRewards {
     defer rewards.?.deinit(allocator);
 }
 
-test filterStakesDelegations {
+test collectStakesDelegations {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
@@ -1066,7 +1067,7 @@ test filterStakesDelegations {
     defer stakes.deinit(allocator);
 
     {
-        var result = try filterStakesDelegations(allocator, &stakes);
+        var result = try collectStakesDelegations(allocator, &stakes);
         defer result.deinit(allocator);
         try std.testing.expectEqual(stakes.stake_accounts.count(), result.items(.stake).len);
     }
@@ -1086,17 +1087,17 @@ test calculateRewardPointsPartitioned {
         var vote_accounts = VoteAccounts{};
         defer vote_accounts.deinit(allocator);
 
-        var filtered_stake_delegations = try filterStakesDelegations(
+        var stake_delegations = try collectStakesDelegations(
             allocator,
             &stakes,
         );
-        defer filtered_stake_delegations.deinit(allocator);
+        defer stake_delegations.deinit(allocator);
 
         const rewards: u64 = 1_000_000_000;
         const point_value = try calculateRewardPointsPartitioned(
             rewards,
             &stakes.stake_history,
-            filtered_stake_delegations.items(.stake),
+            stake_delegations.items(.stake),
             &vote_accounts,
             null,
         );
@@ -1182,7 +1183,7 @@ test calculateStakeVoteRewards {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    var stake_delegations = FilteredStakesDelegations{};
+    var stake_delegations = StakesDelegations{};
     defer stake_delegations.deinit(allocator);
 
     var cached_vote_accounts = VoteAccounts{};
@@ -1302,7 +1303,7 @@ test "calculateStakeVoteRewards with delay_commission_updates" {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    var stake_delegations = FilteredStakesDelegations{};
+    var stake_delegations = StakesDelegations{};
     defer stake_delegations.deinit(allocator);
 
     // Distribution vote accounts with 50% commission (current).
