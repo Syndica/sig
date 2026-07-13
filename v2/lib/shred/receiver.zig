@@ -315,6 +315,14 @@ pub const Receiver = struct {
                 // equivocation problem.
                 return error.MismatchedMerkleRoot;
 
+            // Every shred in a FEC set declares the same `chained_merkle_root`
+            // (the merkle root of the previous FEC set). A mismatch here is a
+            // within-set consistency violation independent of the cross-FEC
+            // chain check; agave rejects the same case in
+            // `Blockstore::check_chained_merkle_root_consistency`.
+            if (!shred.chainedMerkleRoot().eql(&fec_set_ctx.chained_merkle_root))
+                return error.MismatchedChainedMerkleRoot;
+
             break :existing_set fec_set_ctx;
         } else new_set: {
             // fec set is not currently being built (likely finished already)
@@ -336,12 +344,23 @@ pub const Receiver = struct {
                 // TODO: once repair is implemented, repaired shreds should skip these checks to
                 // allow conflicting fec sets to be inside the in-progress map. We will need to do
                 // this to reliably repair when equivocation is detected.
-                .mismatching_signature => return error.EquivocationDifferentHashForSameFecSetId,
+                .mismatching_signature => {
+                    // Same (slot, fec_set_idx) with a different signature is
+                    // either leader equivocation or a fuzz-crafted collision.
+                    // Either way the slot is unrecoverable; agave hits the
+                    // equivalent case via `mark_slot_dead_if_not_full` on
+                    // duplicate detection.
+                    state.markSlotDead(shred.slot);
+                    return error.EquivocationDifferentHashForSameFecSetId;
+                },
             }
 
             // if we have this FecSetId with a different signature, this means equivocation has occured
             if (state.in_progress.containsId(fec_set_id)) {
-                // NOTE: see above note.
+                // Same reasoning as `.mismatching_signature` above: distinct
+                // signatures for one (slot, fec_set_idx) mean the slot cannot
+                // be reconstructed consistently.
+                state.markSlotDead(shred.slot);
                 return error.EquivocationMatchingFecSetWithDifferentSignatureAlreadyInProgress;
             }
 
@@ -386,6 +405,7 @@ pub const Receiver = struct {
                     shred.variant.swapType(),
 
                 .merkle_root = shred_merkle_root,
+                .chained_merkle_root = shred.chainedMerkleRoot().*,
 
                 .data_shreds_received = .initEmpty(),
                 .code_shreds_received = .initEmpty(),
@@ -503,7 +523,7 @@ pub const Receiver = struct {
 
             finished.* = .{
                 .merkle_root = fec_set_ctx.merkle_root,
-                .chained_merkle_root = shred.chainedMerkleRoot().*,
+                .chained_merkle_root = fec_set_ctx.chained_merkle_root,
                 .id = fec_set_id,
                 .data_complete = data_complete,
                 .slot_complete = slot_complete,
@@ -562,6 +582,13 @@ pub const FecSetCtx = extern struct {
 
     // we store the first seen, and make sure later shreds have the same one
     merkle_root: Hash,
+
+    // Pinned on first-shred creation and required to match every subsequent
+    // shred in the FEC set. Every shred in one FEC set carries the same
+    // `chained_merkle_root` (the merkle root of the previous FEC set) by
+    // protocol; agave enforces the same within-set invariant in
+    // `Blockstore::check_chained_merkle_root_consistency`.
+    chained_merkle_root: Hash,
 
     // https://github.com/firedancer-io/firedancer/blob/ecd2d6d8f5b9f926d0b9aa9360efe36ea1550ad6/src/ballet/reedsol/fd_reedsol.h#L23
     // https://github.com/solana-foundation/specs/blob/main/p2p/shred.md
