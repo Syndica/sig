@@ -441,8 +441,9 @@ pub fn createInstrEffects(
     allocator: std.mem.Allocator,
     tc: *const TransactionContext,
     result: ?InstructionError,
+    pb_instr_ctx: pb.InstrContext,
 ) !pb.InstrEffects {
-    const modified_accounts = try modifiedAccounts(allocator, tc);
+    const modified_accounts = try modifiedAccounts(allocator, tc, pb_instr_ctx);
 
     // Match Agave's direct_mapping_handle_cu_exhaustion behavior:
     // When virtual_address_space_adjustments is active and execution failed
@@ -473,21 +474,67 @@ pub fn createInstrEffects(
 fn modifiedAccounts(
     allocator: std.mem.Allocator,
     tc: *const TransactionContext,
+    pb_instr_ctx: pb.InstrContext,
 ) !std.ArrayList(pb.AcctState) {
+    // Agave's InstrHarness only loads the "compiled message" accounts — the
+    // program account plus the accounts referenced by `instr_accounts` — into
+    // the transaction context. Accounts absent from the compiled message are
+    // reported at their INPUT state (unchanged), never their post-execution
+    // state. Sig instead loads every input account into the transaction context,
+    // so runtime-only writes to an *unreferenced* account leak into the effects.
+    // The concrete case: `pushInstruction` stores the current-instruction index
+    // into the instructions sysvar's trailing bytes whenever that sysvar is in
+    // the transaction context; when it is present but unreferenced, agave never
+    // touches it (it isn't in agave's compiled message) while sig rewrites it to
+    // 0. Mirror agave by overlaying the input state for unreferenced accounts.
+    // [agave] `resulting_accounts` overlay in the InstrHarness:
+    // https://github.com/firedancer-io/agave/blob/agave-v4.2-90f63cbb-patches/svm/src/conformance/instr/harness.rs#L136-L146
+    //
+    // Membership in the compiled message is a per-account property (a function
+    // of that account's pubkey alone), so it's decided inline as each account
+    // is emitted — no separate classification pass.
     var accounts: std.ArrayList(pb.AcctState) = .{};
     errdefer accounts.deinit(allocator);
 
-    for (tc.accounts) |acc| {
-        try accounts.append(allocator, .{
-            .address = try allocator.dupe(u8, &acc.pubkey.data),
-            .lamports = acc.account.lamports,
-            .data = try allocator.dupe(u8, acc.account.data),
-            .executable = acc.account.executable,
-            .owner = try allocator.dupe(u8, &acc.account.owner.data),
-        });
+    for (tc.accounts, 0..) |acc, i| {
+        if (isCompiledMessageAccount(acc.pubkey, pb_instr_ctx)) {
+            // In the compiled message: report the post-execution (tc) state.
+            try accounts.append(allocator, .{
+                .address = try allocator.dupe(u8, &acc.pubkey.data),
+                .lamports = acc.account.lamports,
+                .data = try allocator.dupe(u8, acc.account.data),
+                .executable = acc.account.executable,
+                .owner = try allocator.dupe(u8, &acc.account.owner.data),
+            });
+        } else {
+            // Not in the compiled message: report the input state, unchanged.
+            const in = pb_instr_ctx.accounts.items[i];
+            try accounts.append(allocator, .{
+                .address = try allocator.dupe(u8, in.address),
+                .lamports = in.lamports,
+                .data = try allocator.dupe(u8, in.data),
+                .executable = in.executable,
+                .owner = try allocator.dupe(u8, in.owner),
+            });
+        }
     }
 
     return accounts;
+}
+
+/// Whether `pubkey` belongs to the instruction's compiled message — i.e. the
+/// program account, or an account named by `instr_accounts`. Agave loads only
+/// these into its transaction context; sig loads every input account, so
+/// unreferenced accounts must be reported at their input state rather than
+/// their post-execution state.
+fn isCompiledMessageAccount(pubkey: Pubkey, pb_instr_ctx: pb.InstrContext) bool {
+    if (std.mem.eql(u8, &pubkey.data, pb_instr_ctx.program_id)) return true;
+    for (pb_instr_ctx.instr_accounts.items) |ia| {
+        if (ia.index < pb_instr_ctx.accounts.items.len and
+            std.mem.eql(u8, &pubkey.data, pb_instr_ctx.accounts.items[ia.index].address))
+            return true;
+    }
+    return false;
 }
 
 pub fn createSyscallEffect(allocator: std.mem.Allocator, params: struct {

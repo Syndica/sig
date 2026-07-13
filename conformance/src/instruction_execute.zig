@@ -154,5 +154,5 @@ fn executeInstruction(
         }
     }
 
-    return utils.createInstrEffects(allocator, &tc, result);
+    return utils.createInstrEffects(allocator, &tc, result, pb_instr_ctx);
 }
